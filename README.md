@@ -9,7 +9,7 @@ Each extension lives in its own directory under [`spec/`](spec/), with its own s
 | Extension | Description | Spec |
 |-----------|-------------|------|
 | Pagination Schemes | Describes API pagination behaviour (`paginationSchemes`) so clients and tooling can navigate paginated responses without hand-written, API-specific logic. | [`spec/pagination-schemes`](spec/pagination-schemes/README.md) |
-| CRUD Causality | Describes the create/read/update/delete effect of operations (`crudResources`, `x-crud`) — object URLs, server-added fields, and collection membership — so tooling can derive an API's full state-transition behaviour, e.g. to drive a stateful mock server. | [`spec/crud-causality`](spec/crud-causality/README.md) |
+| CRUD Causality | Describes the create/read/update/delete effect of operations (`crudResources`, `x-crud`) — object URLs, server-added fields, collection membership, and cross-resource references — so tooling can derive an API's full state-transition behaviour, e.g. to drive a stateful mock server. | [`spec/crud-causality`](spec/crud-causality/README.md) |
 | Authenticated Principal | Describes the current principal returned for an authenticated operation (`x-authenticated-principal`) — its identity authority, subject, lifecycle guarantees, and optional display claims — so consumers can discover a candidate identity key without guessing from profile data. | [`spec/authenticated-principal`](spec/authenticated-principal/README.md) |
 
 ## Proposals

@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.2.0
+**Spec version:** 0.3.0
 
 ---
 
@@ -10,7 +10,7 @@ Most HTTP APIs are a thin veneer over Create/Read/Update/Delete operations on a 
 
 The OpenAPI CRUD Causality Extension fills that gap. It adds:
 
-* a `crudResources` map under `components`, describing the objects behind the API — their schema, their canonical URL, and the collections they can belong to;
+* a `crudResources` map under `components`, describing the objects behind the API — their schema, their canonical URL, the collections they can belong to, and the other resources their own fields identify;
 * a `crud` field on individual OAS Operation Objects, stating which CRUD action the operation performs and its effect on the resource and its collections.
 
 Together these are enough to derive the full state-transition behaviour of the API: given the spec alone, a tool can build a stateful mock server (or a client-side cache) that creates, lists, reads, updates, and deletes objects exactly the way the real API does — including navigating from a `list` response straight to the `urlTemplate` of one of its elements, via `identity.bindings` (§4.1.2) — see [Reference Implementation](#reference-implementation).
@@ -31,6 +31,12 @@ components:
         bindings:                # Binding Object (§4.1.2) — how to fill in / read back {widgetId}
           widgetId:
             field: id
+      references:                # Reference Object (§4.1.3) — foreign keys to other resources
+        <reference-name>:
+          resource: <other-resource-name>
+          bindings:              # fills the TARGET resource's urlTemplate from THIS object's fields
+            <target-variable>:
+              field: <field-on-this-object>
       collections:
         <collection-name>:      # Collection Object (§4.2)
           urlTemplate: /widgets
@@ -91,6 +97,7 @@ Describes one kind of object behind the API.
 | `schema` | OAS Schema Object | No | The shape of the object. |
 | `description` | string | No | Human-readable description. |
 | `identity` | `IdentityObject` (§4.1.1) | **Yes** | How an object's canonical URL is structured. |
+| `references` | `Record<string, ReferenceObject>` (§4.1.3) | No | Named references from this object's fields to objects of another resource. |
 | `collections` | `Record<string, CollectionObject>` (§4.2) | No | Named collections this resource can be a member of. |
 | `x-*` | any | No | Extension fields. |
 
@@ -130,6 +137,26 @@ collections:
 ```
 
 `widgetId` comes from the `id` field of each widget object; `userId` isn't a field on the widget at all — it's simply carried over unchanged from whichever `/users/{userId}/widgets` request produced the list.
+
+#### 4.1.3 Reference Object
+
+A _reference_ states that an object of this resource identifies an object of another resource, by carrying that object's identifying values in its own fields — a foreign key.
+
+This is the same substitution `identity.bindings` (§4.1.2) already performs in the **Object → URL** direction, with one difference: the URL template being filled is the *target* resource's `identity.urlTemplate`, and the values filling it come from the *referring* object's fields.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `resource` | string | **Yes** | Key into `components.crudResources` — the referenced resource. |
+| `bindings` | `Record<string, BindingObject>` (§4.1.2) | **Yes** | Maps each `{variable}` in the **target** resource's `identity.urlTemplate` that is derivable from the referring object to the referring object field it comes from. |
+| `required` | boolean | No | Whether the reference is always populated. Default: `true`. `false` means the referring fields MAY be absent or null, in which case the reference identifies no object. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+To resolve a reference, substitute each `{variable}` in the target resource's `identity.urlTemplate` with the value at the corresponding `field`'s path in the referring object. A `{variable}` that is not listed in `bindings` MUST be resolvable from the request context the referring object was reached through — the same rule §4.1.2 states for unbound identity variables, and for the same reason: a parent scope such as `{workspaceId}` is usually shared by both resources and carried over unchanged from the request.
+
+A reference asserts **identity only**. It does not assert that the referenced object exists, that it is readable with the same credentials, or that the document describes an operation returning it.
+
+A reference is also not field expansion: an API that embeds the referenced object inline (e.g. `project: { id, name }`), or that offers an `?expand=` parameter to do so, is describing something this version does not cover.
 
 ### 4.2 Collection Object
 
@@ -429,6 +456,49 @@ paths:
 
 To build the item URL for `{ "id": "w1", ... }` reached via `GET /users/42/widgets`: `widgetId` is bound to the object's `id` field (`w1`); `userId` isn't bound to a field, so it's carried over unchanged from the collection request (`42`) — giving `/users/42/widgets/w1`.
 
+### 7.6 An object field that identifies another resource
+
+A time entry carries the bare id of the project it was booked against — not a nested project object, and not a URL:
+
+```json
+{ "id": "te-1", "description": "Spec review", "projectId": "p-9" }
+```
+
+```yaml
+components:
+  crudResources:
+    project:
+      identity:
+        urlTemplate: /workspaces/{workspaceId}/projects/{projectId}
+        bindings:
+          projectId:
+            field: id
+      collections:
+        projects:
+          urlTemplate: /workspaces/{workspaceId}/projects
+
+    timeEntry:
+      identity:
+        urlTemplate: /workspaces/{workspaceId}/time-entries/{timeEntryId}
+        bindings:
+          timeEntryId:
+            field: id
+      references:
+        project:
+          resource: project
+          required: false
+          bindings:
+            projectId:
+              field: projectId
+      collections:
+        timeEntries:
+          urlTemplate: /workspaces/{workspaceId}/time-entries
+```
+
+To resolve the referenced project for the time entry above, reached via `GET /workspaces/42/time-entries`: the target template's `projectId` variable is bound to the referring object's `projectId` field (`p-9`); `workspaceId` is not bound, so it carries over unchanged from the request (`42`) — giving `/workspaces/42/projects/p-9`.
+
+Note the two bindings for the same target variable. `project.identity.bindings.projectId` reads a project's **own** `id` field; `timeEntry.references.project.bindings.projectId` reads the **time entry's** `projectId` field. They fill the same `{projectId}` variable and differ only in which object supplies the value.
+
 ---
 
 ## 8. Validation
@@ -445,6 +515,9 @@ A conforming implementation MUST enforce:
 8. `identity.urlTemplate` (§4.1.1) and any `collections.*.urlTemplate` (§4.2) path parameters MUST be valid OAS path template syntax.
 9. Every key in `identity.bindings` MUST correspond to a `{variable}` present in `identity.urlTemplate`.
 10. Every `{variable}` in `identity.urlTemplate` that is not a key in `identity.bindings` SHOULD also appear, with the same name, in the `urlTemplate` of at least one collection the resource declares under `collections`.
+11. Every `references.*.resource` (§4.1.3) MUST reference a key that exists in `components.crudResources`.
+12. Every key in a `references.*.bindings` map MUST correspond to a `{variable}` present in the **target** resource's `identity.urlTemplate`.
+13. Every `{variable}` in the target resource's `identity.urlTemplate` that is not a key in the reference's `bindings` SHOULD also appear, with the same name, in the `urlTemplate` of at least one collection the **referring** resource declares under `collections` — i.e. it is carried from request context rather than read off the referring object.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
 
