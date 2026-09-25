@@ -5,8 +5,12 @@ import { createController, describe, type ViewState } from './controller.js';
 import { DAY, fakeStore, ONTOLOGY, ROW_CLASS, TABLE } from './fakeStore.js';
 import { listCalendars } from './relay.js';
 import {
+  ALL_DAY,
+  DAY as DAY_FIELD,
   DESCRIPTION,
+  END_DAY,
   NAME,
+  NOTES,
   PARENT,
   PROPERTIES,
   RECOMMENDS,
@@ -36,12 +40,13 @@ function rows(store: Store) {
       out.set(props[id] as string, {
         subject,
         title: props[NAME],
-        description: props[DESCRIPTION],
+        description: props[prop(store, NOTES)],
         location: props[prop(store, 'location')],
         start: props[prop(store, 'start')],
         end: props[prop(store, 'end')],
-        allDay: props[prop(store, 'all-day')],
-        day: props[prop(store, 'day')],
+        allDay: props[prop(store, ALL_DAY)],
+        day: props[prop(store, DAY_FIELD)],
+        endDay: props[prop(store, END_DAY)],
         etag: props[prop(store, 'google-etag')],
       });
 
@@ -126,8 +131,8 @@ suite('Calendar drive app: supported path', () => {
     const state = ready(controller.state());
     expect(state.summary).toMatchObject({
       calendarId: PRIMARY,
-      total: 2,
-      added: 2,
+      total: 3,
+      added: 3,
       updated: 0,
       unchanged: 0,
       skipped: { recurring: 2, cancelled: 1, unreadable: 0 },
@@ -139,7 +144,7 @@ suite('Calendar drive app: supported path', () => {
     );
 
     const byId = rows(store);
-    expect([...byId.keys()].sort()).toEqual(['all-day', 'timed']);
+    expect([...byId.keys()].sort()).toEqual(['all-day', 'timed', 'trip']);
     expect(byId.get('all-day')).toMatchObject({
       title: 'Calendar all-day fixture',
       description: '',
@@ -148,6 +153,17 @@ suite('Calendar drive app: supported path', () => {
       end: '2026-09-25',
       allDay: true,
       day: DAY,
+      // The host Calendar view's end: exclusive, as Google has it.
+      endDay: '2026-09-25',
+    });
+    // Multi-day all-day: 10th to 12th, so the host spans 10, 11 and 12.
+    expect(byId.get('trip')).toMatchObject({
+      title: 'Calendar three-day fixture',
+      start: '2026-09-10',
+      end: '2026-09-13',
+      allDay: true,
+      day: '2026-09-10',
+      endDay: '2026-09-13',
     });
     // Exact strings, offset kept, never re-serialised through a Date.
     expect(byId.get('timed')).toMatchObject({
@@ -159,6 +175,12 @@ suite('Calendar drive app: supported path', () => {
       allDay: false,
       day: DAY,
     });
+    // A timed event within one day has no End day.
+    expect(byId.get('timed')!.endDay).toBeUndefined();
+    // Google's description is the host's Notes, not the core description.
+    expect(
+      store.resources.get(byId.get('timed')!.subject as string)![DESCRIPTION],
+    ).toBeUndefined();
     expect(store.resources.get(TABLE)![NAME]).toBe('Synthetic');
     expect(store.resources.get(TABLE)![prop(store, 'google-calendar-id')]).toBe(
       PRIMARY,
@@ -167,9 +189,8 @@ suite('Calendar drive app: supported path', () => {
     expect(klass[NAME]).toBe('Event');
     expect(klass[RECOMMENDS]).toEqual([
       NAME,
-      DESCRIPTION,
-      ...['location', 'start', 'end', 'all-day', 'day'].map(s =>
-        prop(store, s),
+      ...['location', 'start', 'end', ALL_DAY, DAY_FIELD, END_DAY, NOTES].map(
+        s => prop(store, s),
       ),
     ]);
 
@@ -199,15 +220,38 @@ suite('Calendar drive app: supported path', () => {
     const saves = store.writes.length;
     await controller.refresh();
     const state = ready(controller.state());
-    expect(state.summary).toMatchObject({ added: 0, updated: 1, unchanged: 1 });
+    expect(state.summary).toMatchObject({ added: 0, updated: 1, unchanged: 2 });
     expect(rows(store).get('timed')!.location).toBe('Room 2');
     // One save for the updated row; the unchanged row is not rewritten.
     expect(store.writes.slice(saves).map(w => w.op)).toEqual(['save']);
     await controller.refresh();
     expect(ready(controller.state()).summary).toMatchObject({
       updated: 0,
-      unchanged: 2,
+      unchanged: 3,
     });
+  });
+
+  it('keeps End day with the event: a timed event past midnight gets its end date, and loses it again', async () => {
+    const { store, controller } = await imported();
+    store.google.editRemote('timed', {
+      start: { dateTime: `${DAY}T22:00:00+02:00` },
+      end: { dateTime: '2026-09-25T01:00:00+02:00' },
+    });
+    await controller.refresh();
+    expect(rows(store).get('timed')).toMatchObject({
+      day: DAY,
+      endDay: '2026-09-25',
+    });
+    store.google.editRemote('timed', {
+      end: { dateTime: `${DAY}T23:00:00+02:00` },
+    });
+    await controller.refresh();
+    expect(rows(store).get('timed')!.endDay).toBeUndefined();
+    expect(
+      Object.keys(
+        store.resources.get(rows(store).get('timed')!.subject as string)!,
+      ),
+    ).not.toContain(prop(store, END_DAY));
   });
 
   it('previews a local edit as a minimal patch and sends it only on approval, with If-Match', async () => {
@@ -254,7 +298,7 @@ suite('Calendar drive app: supported path', () => {
     expect(ready(controller.state()).summary).toMatchObject({
       review: [],
       conflicts: [],
-      unchanged: 2,
+      unchanged: 3,
     });
   });
 
