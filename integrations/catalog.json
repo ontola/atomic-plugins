@@ -384,5 +384,22 @@
     "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified: up to 1,000 entries and 5,000,000 bytes (5 MB) per drop; sandbox fuel use per entry has not been measured. Only drops written by willow25 0.7.9 have been tested. Capabilities with delegations and partial payloads are refused, and an imported entry does not remove existing rows whose path it prunes. Timestamps are read as the Willow data model recommends (TAI microseconds since J2000); willow25 0.7.9, via hifitime, reads the same value 86,432.184 s later, which is being reported upstream. The raw timestamp is kept alongside.",
     "https://atomicdata.dev/integrations/properties/keywords": "willow willow25 meadowcap drop sideload earthstar p2p local-first import",
     "https://atomicdata.dev/integrations/properties/version": "0.1.0"
+  },
+  {
+    "@id": "https://atomicdata.dev/integrations/remotestorage",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "remotestorage",
+    "https://atomicdata.dev/properties/name": "remoteStorage",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/integrations/properties/requires": [
+      "persistent-host",
+      "plugin-routes:read-only",
+      "public-origin",
+      "wasm-sandbox"
+    ],
+    "https://atomicdata.dev/integrations/properties/limitation": "Experimental reviewed text imports and public reads only; bearer authentication, HTTP writes and blob storage are not implemented."
   }
 ]
