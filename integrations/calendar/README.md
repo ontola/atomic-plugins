@@ -15,7 +15,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   103,857 bytes for 0.1.0) from GitHub Pages and refuses it unless it
+   104,561 bytes for 0.1.1) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -72,25 +72,52 @@ neither is reachable from the pinned host:
 
 ## Mapping
 
-| Google Calendar                            | Atomic column                                   |
-| ------------------------------------------ | ----------------------------------------------- |
-| `summary`                                  | Name                                            |
-| `description` (missing becomes empty text) | Description                                     |
-| `location` (missing becomes empty text)    | Location                                        |
-| All-day `start.date` / `end.date`          | Start / End (plain `YYYY-MM-DD`; End exclusive) |
-| Timed `start.dateTime` / `end.dateTime`    | Start / End (offset-qualified)                  |
-| whether `start.date` is set                | All day                                         |
-| —                                          | Day: the date part of Start, for calendar views |
+| Google Calendar                            | Atomic column (shortname)                                    |
+| ------------------------------------------ | ------------------------------------------------------------ |
+| `summary`                                  | Name                                                         |
+| `description` (missing becomes empty text) | Notes (`atomic-calendar-notes`)                              |
+| `location` (missing becomes empty text)    | Location (`location`)                                        |
+| All-day `start.date` / `end.date`          | Start / End (plain `YYYY-MM-DD`; End exclusive)              |
+| Timed `start.dateTime` / `end.dateTime`    | Start / End (offset-qualified)                               |
+| whether `start.date` is set                | All day (`atomic-calendar-all-day`)                          |
+| —                                          | Day (`atomic-calendar-day`): the date part of Start          |
+| —                                          | End day (`atomic-calendar-end-day`): see below; may be unset |
 
 Start and End are stored as the exact strings Google sent. They are never
-converted to numbers or to `Date` for storage. Day is a `date` column so the
-host table's own Calendar view can place rows. It is derived on import and
-never read back, so move an event by editing Start and End.
+converted to numbers or to `Date` for storage.
+
+All day, Day, End day and Notes use the host's shared calendar field names,
+`calendarFields` in atomic-server `browser/lib/src/calendar-date.ts` (read
+at the pin in `.atomic-server-ref`). The host table's own Calendar view,
+where Month hands off, places a row on its Day, the first `date` column.
+Only when that column is `atomic-calendar-day` does it treat a row whose
+All day is true as a range, drawn on every day from Day up to but not
+including End day (`isAllDayOnDate`: `start <= day && day < end`). So End
+day is exclusive, like Google's all-day end:
+
+- all-day event: End day is Google's `end.date`, the day after the last day
+  (a one-day event on the 24th has End day the 25th; the fixture's three-day
+  event on the 10th to 12th has End day the 13th);
+- timed event that ends on a later date than it starts: End day is the date
+  part of End, in the event's own offset. The host view ignores it at this
+  pin, and places a timed row on its Day only;
+- timed event within one day: no End day (the property is removed if an
+  edit makes an overnight event fit in one day).
+
+Day and End day are derived on import and on every local edit, and never
+read back, so move an event by editing Start and End. Version 0.1.0 wrote
+the shortnames `day` and `all-day`, no End day, and Google's description to
+the core Description; the host view drew its all-day and multi-day events
+on their first day only. A table first imported by 0.1.0 keeps those old
+Properties (0.1.1 no longer writes them) and gets the new ones on its next
+sync; installs of 0.1.0 were experimental, so nothing migrates the old
+values beyond that re-import.
 
 Each row also carries its binding, outside the table's columns: the Google
 event id, the ETag last read, and the sync baseline. The baseline is JSON of
-the five fields as both sides last agreed. It is what lets a refresh tell a
-local edit from a Google edit.
+the five fields as both sides last agreed, keyed by field (`title`,
+`description`, …), not by column, so the renamed columns leave it as it
+was. It is what lets a refresh tell a local edit from a Google edit.
 
 ## Scope and policies
 
@@ -213,7 +240,9 @@ node --test integrations/localthought/mock-proxy.test.mjs
   through a fake `store.proxy` that behaves like the host's frame client and
   the proxy: a lost response spends nothing, a revoked delegation answers
   `403 not_delegated`. Covered: calendar list and selection; the
-  paged import with its page cap; all-day and timed rows; recurring and
+  paged import with its page cap; all-day, three-day and timed rows with
+  the host's field names, including End day (exclusive for all-day, set
+  and removed again for a timed event across midnight); recurring and
   cancelled skips; refresh; review; `If-Match` on send; `412`; both-changed
   conflicts; a lost response followed by a reconnect; cancellation after
   import; local-only and invalid rows. `app/build.test.ts` checks that the
@@ -229,7 +258,11 @@ node --test integrations/localthought/mock-proxy.test.mjs
   (checking the fixture received that `If-Match`), sends into a `412`, and
   loses a `PATCH` response (Playwright lets the request reach the mock, then
   aborts the response), syncs again, and checks that the preview agrees. A
-  second test renders the imported calendar in 360, 720 and 1200px frames
+  later test follows Month into the host table, adds its Calendar view, and
+  checks that the fixture's three-day all-day event is drawn on the 10th,
+  11th and 12th (not the 9th or 13th), the one-day all-day event on its day
+  only, and the timed event on its day. Another test renders the imported
+  calendar in 360, 720 and 1200px frames
   under the host's light and dark themes: no sideways scroll, no axe
   violations, and the theme switch restyles the frame without a reload.
   Screenshots are attached to the Playwright report.
@@ -238,8 +271,8 @@ node --test integrations/localthought/mock-proxy.test.mjs
   count for it. To verify, with authorized credentials and a disposable
   calendar: deploy or point the host at an integration-proxy with Google
   OAuth configured for `google-calendar`, install the app as above, create
-  one all-day event, one timed event, one weekly series and one cancelled
-  event, then run the e2e's steps by hand and record the outcomes. The one
+  one all-day event, one three-day all-day event, one timed event, one
+  weekly series and one cancelled event, then run the e2e's steps by hand and record the outcomes. The one
   step that can't be forced against Google is the lost response.
 
 ## Design decisions
@@ -254,7 +287,8 @@ Where the implementation of [`design/`](design/) had to choose:
   one preview per calendar.
 - **Month** (§11 decision 1) hands off: "Month ↗" (and `m`) opens this
   app's table in the host with `store.openResource`, where the table's own
-  Calendar view shows the month. The app draws no month grid.
+  Calendar view shows the month, reading the rows by the host's calendar
+  field names (see [Mapping](#mapping)). The app draws no month grid.
 - **Outlook and Apple** are shown as "Not available yet" (§11 decision 2).
 - **"Open in Google Calendar"** uses `store.openExternal`: the frame has no
   popup rights, so the host shows the destination and asks first. The link
