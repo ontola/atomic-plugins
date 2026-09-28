@@ -18,7 +18,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar czf - catalog.json apps) |
   ssh "$@" "$TARGET" 'mkdir -p /srv/catalog && tar xzf - -C /srv/catalog'
-(cd "$HERE" && COPYFILE_DISABLE=1 tar czf - Caddyfile caddy-usertest.conf server.sh) |
+(cd "$HERE" && COPYFILE_DISABLE=1 tar czf - Caddyfile caddy-usertest.conf server.sh collector) |
   ssh "$@" "$TARGET" 'set -e
     test -f /etc/caddy/usertest.env ||
       { echo "create /etc/caddy/usertest.env first (README.md)" >&2; exit 1; }

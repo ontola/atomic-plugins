@@ -22,3 +22,9 @@ catalog.{$BASE_DOMAIN} {
 	header Cache-Control "no-cache"
 	file_server
 }
+
+# The log collector (collector/server.mjs): Sentry envelopes from
+# atomic-server and the data-browser, and /log posts from drive apps.
+logs.{$BASE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8081
+}

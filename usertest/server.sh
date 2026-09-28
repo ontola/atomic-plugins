@@ -7,6 +7,10 @@
 # exposes test-only routes such as /app/prunetests. The image has no built-in
 # HTTPS, so Caddy terminates TLS in front of it (Caddyfile).
 #
+# Errors (and the sidebar Feedback form) are reported to the collector
+# (collector/), in Sentry's format: project 1 is the server, 2 the
+# data-browser.
+#
 # The store lives in the named volume atomic-plugins-store and survives
 # restarts. `docker volume rm atomic-plugins-store` (with the container
 # stopped) resets every tester's drive.
@@ -25,4 +29,7 @@ docker run -d --name atomic-plugins --restart unless-stopped --init \
   -e ATOMIC_DOMAIN="plugins.$BASE_DOMAIN" -e ATOMIC_PORT=80 \
   -e ATOMIC_HOST_MODE=open \
   -e ATOMIC_INTEGRATION_PROXY_URL=https://localthought.io \
+  -e SENTRY_DSN="https://usertest@logs.$BASE_DOMAIN/1" \
+  -e SENTRY_DSN_BROWSER="https://usertest@logs.$BASE_DOMAIN/2" \
+  -e SENTRY_ENVIRONMENT=usertest \
   "$IMAGE"
