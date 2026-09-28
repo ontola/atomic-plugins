@@ -137,6 +137,7 @@ export function project(event: Event): Projection | undefined {
     throw new UnreadableEventError(
       `Calendar event ${event.id} has no start or end`,
     );
+
   if (allDay) {
     if (
       event.start.dateTime !== undefined ||

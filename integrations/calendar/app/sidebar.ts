@@ -223,6 +223,7 @@ export function notShown(
     parts.push(
       `${skipped.cancelled} cancelled ${skipped.cancelled === 1 ? 'event' : 'events'}`,
     );
+
   if (skipped.unreadable) {
     const names = unreadable
       .slice(0, 3)
@@ -232,6 +233,7 @@ export function notShown(
       `${skipped.unreadable} ${skipped.unreadable === 1 ? 'event' : 'events'} with dates this app can’t read${names ? ` (${names}${unreadable.length > 3 ? ', …' : ''})` : ''}`,
     );
   }
+
   const total =
     skipped.recurring + skipped.cancelled + (skipped.unreadable ?? 0);
   const verb = total === 1 ? 'isn’t' : 'aren’t';
