@@ -10,6 +10,7 @@ rebuild it.
 | --- | --- |
 | `https://plugins.<base-domain>` | atomic-server, the published e2e image of the pinned commit (`server.sh`) |
 | `https://catalog.<base-domain>/catalog.json` | the test catalog and the app modules it points at (`catalog.mjs`) |
+| `https://logs.<base-domain>` | the log collector (`collector/`) |
 | `https://localthought.io` | the integration proxy, shared with everyone else (not on the droplet) |
 
 The base domain is currently `178-62-223-35.sslip.io`. sslip.io resolves
@@ -43,6 +44,7 @@ On a fresh Ubuntu 24.04 droplet, as root:
 apt-get update && apt-get install -y docker.io caddy
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
 printf 'BASE_DOMAIN=%s\nACME_EMAIL=%s\n' 178-62-223-35.sslip.io you@example.org > /etc/caddy/usertest.env
+mkdir -p /var/lib/usertest-logs
 ```
 
 Docker publishes the server on `127.0.0.1` only, so ufw's rules are not
@@ -57,6 +59,7 @@ for a in calendar money notion timesheets; do (cd integrations/$a && pnpm instal
 (cd integrations/issue-tracker/app && pnpm install --frozen-lockfile)
 node usertest/catalog.mjs
 sh usertest/deploy.sh root@178.62.223.35
+ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
 ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 ```
 
@@ -82,19 +85,36 @@ Step 2 goes away once the planned `/usertest` page sets it.
 
 ## Logs
 
+The collector (`collector/server.mjs`, no dependencies, run in a
+`node:22-alpine` container by `collector/run.sh`) writes one JSON line per
+event to `/var/lib/usertest-logs/<UTC date>.jsonl`. It has two entrances:
+
+- **Sentry's envelope endpoint.** `server.sh` sets `SENTRY_DSN` (project 1,
+  atomic-server) and `SENTRY_DSN_BROWSER` (project 2, the data-browser, which
+  atomic-server injects into the page at runtime). This reports uncaught
+  errors in the page and the server's `error!` events. It also switches on
+  the sidebar's Feedback form, whose messages arrive as `type: feedback`.
+- **`POST /log`**, a JSON object or an array of them, for anything else. A
+  drive app's errors stay inside its sandboxed frame: the host shows them
+  there and reports nothing. The app has to post them itself.
+
+Verified on 2026-09-28: an error thrown in the data-browser arrived within
+seconds with its stack and URL.
+
 ```sh
+ssh root@178.62.223.35 'tail -f /var/lib/usertest-logs/$(date -u +%F).jsonl'
 ssh root@178.62.223.35 docker logs --since 1h atomic-plugins
 heroku logs -a integration-proxy -n 500   # needs access to the Heroku app
 ```
 
-A plugin's errors happen inside its sandboxed frame and do not reach either
-log yet. Collecting them is the next step (a Sentry-compatible collector on
-the droplet).
+Both endpoints are public, like any Sentry DSN, and nothing checks who
+sends. Bodies over 1 MB are refused.
 
 ## Privacy
 
 Testers connect real accounts. Their data is on the droplet, in the Docker
 volume `atomic-plugins-store`, and their provider tokens are in
-localthought.io's database. Tell testers this before they start. Reset the
+localthought.io's database. Error reports can contain what was on screen
+(titles in messages, URLs), and they stay in `/var/lib/usertest-logs`. Tell testers this before they start. Reset the
 store with `docker rm -f atomic-plugins && docker volume rm atomic-plugins-store`,
 then run `server.sh` again.
