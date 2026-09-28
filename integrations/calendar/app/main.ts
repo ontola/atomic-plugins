@@ -26,7 +26,7 @@ import {
   type ViewState,
 } from './controller.js';
 import { detail, editor } from './drawer.js';
-import { busyDays, nextEvent, type CalEvent } from './events.js';
+import { busyDays, latestEvent, nextEvent, type CalEvent } from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
 import { reportUncaught } from './report.js';
@@ -512,20 +512,24 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
     if (empty && snap.summary) {
       const next = nextEvent(events, addDays(rangeFrom, rangeDays), zone);
+      // Nothing later: point at the most recent earlier event instead, so an
+      // import of past events never ends on an empty week with no way on.
+      const latest = next ? undefined : latestEvent(events, rangeFrom, zone);
+      const target = next ?? latest;
       body = emptyState(doc, {
         muted: true,
         title:
           ui.view === 'week' && days < 7
             ? 'No events these days'
             : 'No events this week',
-        ...(next
+        ...(target
           ? {
-              text: `Your next event is ${next.event.title || '(untitled)'} on ${longDay(next.date)}.`,
+              text: `Your ${next ? 'next' : 'latest'} event is ${target.event.title || '(untitled)'} on ${longDay(target.date)}.`,
             }
           : !ui.visible
             ? { text: `${snap.meta?.summary ?? 'The calendar'} is hidden.` }
             : {}),
-        children: next
+        children: target
           ? [
               h(
                 doc,
@@ -533,9 +537,9 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
                 {
                   class: 'btn btn-primary',
                   'data-key': 'jump',
-                  onclick: () => c.goTo(next.date),
+                  onclick: () => c.goTo(target.date),
                 },
-                'Jump to next event',
+                next ? 'Jump to next event' : 'Jump to latest event',
               ),
             ]
           : [],
