@@ -29,6 +29,7 @@ import { detail, editor } from './drawer.js';
 import { busyDays, nextEvent, type CalEvent } from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
+import { reportUncaught } from './report.js';
 import { anySkipped, notShown, sidebar } from './sidebar.js';
 import type { ViewArgs } from './store.js';
 import type { Choice, Conflict, ImportSummary } from './sync.js';
@@ -96,6 +97,7 @@ const EMPTY_SUMMARY: ImportSummary = {
 };
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
+  reportUncaught(root.ownerDocument.defaultView ?? window);
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
   installTheme(root, `${PLUGIN_CSS}\n${CALENDAR_CSS}`, store);
