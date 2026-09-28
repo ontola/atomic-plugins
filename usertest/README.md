@@ -11,6 +11,7 @@ rebuild it.
 | `https://plugins.<base-domain>` | atomic-server, the published e2e image of the pinned commit (`server.sh`) |
 | `https://catalog.<base-domain>/catalog.json` | the test catalog and the app modules it points at (`catalog.mjs`) |
 | `https://logs.<base-domain>` | the log collector (`collector/`) |
+| `https://plugins.<base-domain>/usertest/` | the moderated-session page (`page/`) and its voice moderator (`moderator/`, at `/usertest/api/`) |
 | `https://localthought.io` | the integration proxy, shared with everyone else (not on the droplet) |
 
 The base domain is currently `178-62-223-35.sslip.io`. sslip.io resolves
@@ -60,6 +61,7 @@ for a in calendar money notion timesheets; do (cd integrations/$a && pnpm instal
 USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
 sh usertest/deploy.sh root@178.62.223.35
 ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
+ssh root@178.62.223.35 sh /opt/usertest/moderator/run.sh   # needs /etc/anthropic.env
 ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 ```
 
@@ -74,15 +76,46 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 Never rebuild into an existing version: the host refuses a module whose bytes
 no longer match the hash in the catalog.
 
-## For testers
+## Moderated sessions
+
+A tester needs only the invite link,
+`https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>`, and Chrome
+or Edge. The code is in `/etc/usertest-moderator.env` on the droplet;
+`moderator/run.sh` creates it on first run. The page:
+
+1. explains the session, what is recorded and where it goes, and asks for
+   consent;
+2. stores the test catalog URL in the browser, opens a fresh drive
+   (`/app/dev-drive`) in a second window, and starts recording the shared
+   screen and the microphone;
+3. listens with the browser's speech recognition (Chrome sends the audio to
+   Google), sends a turn to the moderator after a pause, a minute of silence
+   or a new error in the collector log, and speaks the answer with the
+   browser's speech synthesis.
+
+The moderator (`moderator/server.mjs`) asks Claude (`claude-opus-5`, effort
+`low`, server-side refusal fallback on) for the next line, following the
+interview script in `moderator/script.md`: short spoken questions, mostly
+listening (`[WAIT]`), no help unless the tester is stuck and asks. Each turn
+includes the collector's error, warning, feedback and sync lines since the
+previous turn. Measured on 2026-09-28: about 3 seconds per turn, and the
+script served from the prompt cache after the first turn.
+
+Per session, `/var/lib/usertest-sessions/<id>/` holds `meta.json`,
+`transcript.jsonl` (both sides, with the log lines each turn saw, and token
+usage) and `recording.webm`. Limits: the invite code on every request, at
+most 120 turns per session and 20 sessions per UTC day. The moderator keeps
+sessions in memory, so restarting it ends the sessions in progress.
+
+Not verified yet: a full session by a real tester, and Edge.
+
+## Without the moderator
 
 1. Open `https://plugins.<base-domain>/app/dev-drive`. It creates an agent
    and a drive in the browser, without signup.
 2. In Settings → Integration, set the plugin catalog URL to
    `https://catalog.<base-domain>/catalog.json`.
 3. On Integrations, install an app and connect it with your own account.
-
-Step 2 goes away once the planned `/usertest` page sets it.
 
 ## Logs
 
@@ -119,6 +152,10 @@ sends. Bodies over 1 MB are refused.
 Testers connect real accounts. Their data is on the droplet, in the Docker
 volume `atomic-plugins-store`, and their provider tokens are in
 localthought.io's database. Error reports can contain what was on screen
-(titles in messages, URLs), and they stay in `/var/lib/usertest-logs`. Tell testers this before they start. Reset the
+(titles in messages, URLs), and they stay in `/var/lib/usertest-logs`.
+Moderated sessions add screen and microphone recordings and transcripts in
+`/var/lib/usertest-sessions`; the transcripts also went through Google's
+speech recognition and Anthropic's API. Delete a session's folder after
+analysis. Tell testers this before they start. Reset the
 store with `docker rm -f atomic-plugins && docker volume rm atomic-plugins-store`,
 then run `server.sh` again.

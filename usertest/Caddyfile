@@ -9,8 +9,22 @@
 
 # atomic-server (server.sh), plain HTTP on loopback. It builds its links from
 # ATOMIC_DOMAIN and reads the scheme from X-Forwarded-Proto, which Caddy sets.
+# /usertest/ is the moderated-session page (page/) and /usertest/api/ its
+# moderator (moderator/). They share the data-browser's origin so the page can
+# set the test catalog in the browser's storage.
 plugins.{$BASE_DOMAIN} {
-	reverse_proxy 127.0.0.1:8080
+	redir /usertest /usertest/?{query} 308
+	handle_path /usertest/api/* {
+		reverse_proxy 127.0.0.1:8082
+	}
+	handle_path /usertest/* {
+		root * /opt/usertest/page
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
 }
 
 # The test catalog and the drive app modules it points at (catalog.mjs).

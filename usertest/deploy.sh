@@ -19,7 +19,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # extended attributes that GNU tar on the droplet warns about.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps) |
   ssh "$@" "$TARGET" 'mkdir -p /srv/catalog && tar xzf - -C /srv/catalog'
-(cd "$HERE" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - Caddyfile caddy-usertest.conf server.sh collector) |
+(cd "$HERE" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules -czf - Caddyfile caddy-usertest.conf server.sh collector moderator page) |
   ssh "$@" "$TARGET" 'set -e
     test -f /etc/caddy/usertest.env ||
       { echo "create /etc/caddy/usertest.env first (README.md)" >&2; exit 1; }
