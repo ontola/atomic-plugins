@@ -101,9 +101,39 @@ includes the collector's error, warning, feedback and sync lines since the
 previous turn. Measured on 2026-09-28: about 3 seconds per turn, and the
 script served from the prompt cache after the first turn.
 
+A turn only includes its own tester's log lines. The collector tags each
+line with `client`, a salted hash (`/etc/usertest-salt.env`) of the sender's
+address; the moderator keeps the hashes its tester's page came from. So
+sessions can run at the same time. atomic-server's own lines are always
+included.
+
+### Findings and triage
+
+When a session ends (the tester ends it, or the moderator says `[END]`),
+`moderator/analyze.mjs` sends the transcript, the log lines and up to 12
+screenshots to Claude (`claude-opus-5`, effort `high`). It writes anonymized
+findings, `findings.json` and `findings.md`, into the session folder. No
+name, email address or calendar content goes in; the prompt forbids it and
+`scrub()` removes the tester's name, email addresses and URL queries. With
+`/etc/github-findings.env` it files each finding as an issue in the private
+repo `ontola/usertest-findings`. That token is a fine-grained GitHub token
+with Issues read/write on that one repository only, created and saved by a
+person. Nothing reaches a public repository until Michiel labels it
+`approved` there.
+
+For a session that ended without the page saying so (a closed window):
+
+```sh
+ssh root@178.62.223.35 docker exec usertest-moderator node analyze.mjs <id> [--file]
+```
+
+Measured on 2026-09-28 on session 1 (about 11 minutes): 34 s, about 2,000
+input and 2,400 output tokens, 6 findings.
+
 Per session, `/var/lib/usertest-sessions/<id>/` holds `meta.json`,
 `transcript.jsonl` (both sides, with the log lines each turn saw, and token
-usage) and `recording.webm`. Limits: the invite code on every request, at
+usage), `screen-NNN.jpg` per turn, `recording.webm`, and after the analysis
+`findings.json`, `findings.md` and, when filed, `filed.json`. Limits: the invite code on every request, at
 most 120 turns per session and 20 sessions per UTC day. The moderator keeps
 sessions in memory, so restarting it ends the sessions in progress.
 

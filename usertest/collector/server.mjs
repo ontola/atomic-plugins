@@ -15,10 +15,16 @@
  *   drive app in its sandboxed (null-origin) frame, or the /usertest page.
  *   Stored as sent, under `data`.
  *
- * Every line has `t` (receive time, ISO), `via` and `source`. Nothing checks
- * who sends: like a Sentry DSN, the endpoint is public. Bodies over
- * MAX_BODY bytes are refused, and a stored line is cut at MAX_LINE bytes.
+ * Every line has `t` (receive time, ISO), `via`, `source` and `client`: a
+ * salted hash of the sender's IP address (USERTEST_SALT), so the moderator
+ * can tell one tester's lines from another's without storing addresses.
+ * Credentials in URLs (`token=`, `code=`, `key=`, …) are replaced by
+ * `[redacted]`: stack traces of plugin frames carry the host's view token.
+ *
+ * Nothing checks who sends: like a Sentry DSN, the endpoint is public. Bodies
+ * over MAX_BODY bytes are refused, and a stored line is cut at MAX_LINE bytes.
  */
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -31,11 +37,34 @@ const MAX_LINE = 64 * 1024;
 /** Sentry project ids, as in the DSNs server.sh passes. */
 const PROJECTS = { 1: 'atomic-server', 2: 'data-browser' };
 
+const SALT = process.env.USERTEST_SALT;
+if (!SALT) throw new Error('USERTEST_SALT must be set');
+
 mkdirSync(LOG_DIR, { recursive: true });
+
+/** The same hash the moderator computes for its tester (moderator/server.mjs). */
+const clientOf = req =>
+  createHash('sha256')
+    .update(
+      SALT +
+        (String(req.headers['x-forwarded-for'] ?? '')
+          .split(',')[0]
+          .trim() ||
+          req.socket.remoteAddress ||
+          ''),
+    )
+    .digest('hex')
+    .slice(0, 16);
+
+const SECRET_PARAM =
+  /([?&](?:token|code|key|access_token|refresh_token|secret|signature)=)[^&\s"\\]+/gi;
 
 function write(entry) {
   const t = new Date().toISOString();
-  let line = JSON.stringify({ t, ...entry });
+  let line = JSON.stringify({ t, ...entry }).replace(
+    SECRET_PARAM,
+    '$1[redacted]',
+  );
   if (Buffer.byteLength(line) > MAX_LINE)
     line = JSON.stringify({
       t,
@@ -106,7 +135,7 @@ function* items(body) {
   }
 }
 
-function envelope(project, body) {
+function envelope(project, body, client) {
   const source = PROJECTS[project] ?? `sentry-${project}`;
 
   for (const { header, payload } of items(body)) {
@@ -118,11 +147,12 @@ function envelope(project, body) {
       write({
         via: 'sentry',
         source,
+        client,
         type,
         feedback: item.contexts?.feedback,
         url: item.request?.url ?? item.contexts?.feedback?.url,
       });
-    else write({ via: 'sentry', source, type, ...summarise(item) });
+    else write({ via: 'sentry', source, client, type, ...summarise(item) });
   }
 }
 
@@ -162,6 +192,7 @@ const cors = {
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://collector');
+
   const done = (status, body = '') => {
     res.writeHead(status, { ...cors, 'content-type': 'application/json' });
     res.end(body);
@@ -174,19 +205,22 @@ createServer(async (req, res) => {
 
   try {
     const body = await readBody(req);
+    const client = clientOf(req);
     const sentry = url.pathname.match(/^\/api\/(\d+)\/envelope\/?$/);
 
     if (sentry) {
-      envelope(sentry[1], body);
+      envelope(sentry[1], body, client);
 
       return done(200, '{}');
     }
+
     if (url.pathname === '/log') {
       const parsed = JSON.parse(body.toString());
       for (const data of Array.isArray(parsed) ? parsed : [parsed])
         write({
           via: 'log',
           source: typeof data?.source === 'string' ? data.source : 'unknown',
+          client,
           data,
         });
 

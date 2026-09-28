@@ -15,9 +15,15 @@
  * most MAX_TURNS turns, and at most MAX_SESSIONS_PER_DAY sessions start per
  * UTC day. ANTHROPIC_API_KEY comes from the environment (/etc/anthropic.env
  * on the droplet, passed by run.sh) and never leaves this process.
+ *
+ * A turn only sees its own tester's log lines: the collector tags each line
+ * with a salted hash of the sender's address, and a session remembers the
+ * hashes its page came from (atomic-server's own lines are always included).
+ * When a session ends, analyze.mjs turns it into anonymized findings and, if
+ * a token is configured, files them in the private triage repo.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -29,6 +35,7 @@ import {
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { analyze, fileFindings } from './analyze.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8082);
@@ -43,10 +50,26 @@ const MAX_LOG_LINES = 15;
 
 if (!CODE || CODE.length < 12)
   throw new Error('USERTEST_CODE must be set (at least 12 characters)');
+const SALT = process.env.USERTEST_SALT;
+if (!SALT) throw new Error('USERTEST_SALT must be set');
+
+/** The collector's hash of a request's sender (collector/server.mjs). */
+const clientOf = req =>
+  createHash('sha256')
+    .update(
+      SALT +
+        (String(req.headers['x-forwarded-for'] ?? '')
+          .split(',')[0]
+          .trim() ||
+          req.socket.remoteAddress ||
+          ''),
+    )
+    .digest('hex')
+    .slice(0, 16);
 
 const SCRIPT = readFileSync(join(here, 'script.md'), 'utf8');
 const client = new Anthropic();
-/** id -> { dir, started, cursor, messages, turns, done } */
+/** id -> { dir, started, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
 
 mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -58,9 +81,10 @@ function sessionsToday() {
     .length;
 }
 
-/** The collector's lines after `cursor` (an ISO time), made short enough to
- * read: errors, warnings, feedback and sync outcomes only. */
-function logSince(cursor) {
+/** The collector's lines after `cursor` (an ISO time) from `clients` (and
+ * atomic-server), made short enough to read: errors, warnings, feedback and
+ * sync outcomes only. */
+function logSince(cursor, clients) {
   const days = [...new Set([cursor.slice(0, 10), today()])];
   const lines = [];
 
@@ -79,6 +103,8 @@ function logSince(cursor) {
       }
 
       if (entry.t <= cursor) continue;
+      if (entry.source !== 'atomic-server' && !clients.has(entry.client))
+        continue;
       const data = entry.data ?? {};
       const level = entry.level ?? data.level;
       const message =
@@ -113,7 +139,7 @@ function record(session, entry) {
 /** Asks Claude for the next thing to say. */
 async function nextLine(session, said, screenshot) {
   const now = new Date().toISOString();
-  const log = logSince(session.cursor);
+  const log = logSince(session.cursor, session.clients);
   session.cursor = now;
   const heard = said.trim() || '(silence)';
   const shot =
@@ -198,6 +224,30 @@ async function nextLine(session, said, screenshot) {
   return { say, done };
 }
 
+/** Analyzes a finished session once, in the background: the tester's page
+ * does not wait for it. */
+function finishLater(id, session) {
+  if (session.analyzed) return;
+  session.analyzed = true;
+  // Give the page's last recording chunk a moment to arrive.
+  setTimeout(async () => {
+    try {
+      const findings = await analyze(id, { client });
+      const urls = await fileFindings(id, findings);
+      record(session, {
+        role: 'analysis',
+        findings: findings.length,
+        filed: urls.length,
+      });
+    } catch (error) {
+      record(session, { role: 'analysis', error: String(error) });
+      process.stderr.write(
+        `${new Date().toISOString()} ${error.stack ?? error}\n`,
+      );
+    }
+  }, 5000);
+}
+
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -255,9 +305,11 @@ createServer(async (req, res) => {
         dir,
         started,
         cursor: started,
+        clients: new Set([clientOf(req)]),
         messages: [],
         turns: 0,
         done: false,
+        analyzed: false,
       });
 
       return reply(200, { id });
@@ -268,13 +320,16 @@ createServer(async (req, res) => {
     );
     const session = match && sessions.get(match[1]);
     if (!session) return reply(404, { error: 'Unknown session' });
+    // A tester's address can change during a session (another network).
+    session.clients.add(clientOf(req));
 
     // Errors logged since the last turn, so the page can let the moderator
     // react to them without waiting for the tester to speak.
     if (req.method === 'GET' && match[2] === 'news')
       return reply(200, {
-        errors: logSince(session.cursor).filter(line => / error: /.test(line))
-          .length,
+        errors: logSince(session.cursor, session.clients).filter(line =>
+          / error: /.test(line),
+        ).length,
       });
 
     if (req.method === 'POST' && match[2] === 'turn') {
@@ -285,10 +340,14 @@ createServer(async (req, res) => {
         (await readBody(req, 4 * 1024 * 1024)).toString(),
       );
 
-      return reply(
-        200,
-        await nextLine(session, String(body.said ?? ''), body.screenshot),
+      const next = await nextLine(
+        session,
+        String(body.said ?? ''),
+        body.screenshot,
       );
+      if (next.done) finishLater(match[1], session);
+
+      return reply(200, next);
     }
 
     if (req.method === 'POST' && match[2] === 'recording') {
@@ -303,6 +362,7 @@ createServer(async (req, res) => {
     if (req.method === 'POST' && match[2] === 'end') {
       record(session, { role: 'page', event: 'end' });
       session.done = true;
+      finishLater(match[1], session);
 
       return reply(200, { ok: true });
     }
