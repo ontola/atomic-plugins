@@ -5,6 +5,14 @@
  *
  *   node usertest/catalog.mjs [out]      # default out: usertest/out
  *
+ * With USERTEST_LOG_URL set (deploy it with
+ * USERTEST_LOG_URL=https://logs.<base-domain>/log), every module built here
+ * starts with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
+ * posts what an app hands it to the collector. Apps call it through their
+ * own `report.ts` (calendar so far). The apps themselves make no network
+ * request of their own (their build tests check for `fetch(`); only this
+ * prelude does, and only in these test builds.
+ *
  * It starts from this checkout's integrations/catalog.json and makes every
  * drive app installable and visible without the "Show experimental plugins"
  * toggle, including the ones the published catalog keeps disabled until
@@ -35,7 +43,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 
 /** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
 const VERSIONS = {
-  calendar: 'usertest-2',
+  calendar: 'usertest-3',
   'issue-tracker': 'usertest',
   money: 'usertest',
   notion: 'usertest',
@@ -60,6 +68,15 @@ const APPS = {
   timesheets: { base: 'timesheets', row: ['Time entry', 'Time entries'] },
 };
 
+const LOG_URL = process.env.USERTEST_LOG_URL;
+if (LOG_URL && !/^https:\/\/[^/]+\/log$/.test(LOG_URL))
+  throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
+/** text/plain keeps the post a simple request: no CORS preflight from the
+ * frame's null origin. A failing collector never affects the app. */
+const PRELUDE = LOG_URL
+  ? `globalThis.__USERTEST_REPORT__=e=>{try{fetch(${JSON.stringify(LOG_URL)},{method:"POST",keepalive:!0,headers:{"content-type":"text/plain"},body:JSON.stringify(e)}).catch(()=>{})}catch{}};\n`
+  : '';
+
 const catalog = JSON.parse(
   readFileSync(resolve(repo, 'integrations/catalog.json'), 'utf8'),
 );
@@ -73,6 +90,7 @@ for (const [id, app] of Object.entries(APPS)) {
   const file = resolve(out, 'apps', id, version, 'ui.js');
   mkdirSync(dirname(file), { recursive: true });
   await build({ outfile: file });
+  if (PRELUDE) writeFileSync(file, PRELUDE + readFileSync(file, 'utf8'));
   const bytes = readFileSync(file);
 
   const source = byShortname(app.base);

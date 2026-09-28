@@ -57,7 +57,7 @@ dependencies installed:
 ```sh
 for a in calendar money notion timesheets; do (cd integrations/$a && pnpm install); done
 (cd integrations/issue-tracker/app && pnpm install --frozen-lockfile)
-node usertest/catalog.mjs
+USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
 sh usertest/deploy.sh root@178.62.223.35
 ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
 ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
@@ -66,7 +66,8 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 ## Updating an app
 
 1. Change the app, then bump its entry in `VERSIONS` in `catalog.mjs`.
-2. Run `node usertest/catalog.mjs && sh usertest/deploy.sh root@178.62.223.35`.
+2. Run `USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs`,
+   then `sh usertest/deploy.sh root@178.62.223.35`.
 3. On Integrations, testers who installed the old version see "Update to
    <version>".
 
@@ -96,7 +97,10 @@ event to `/var/lib/usertest-logs/<UTC date>.jsonl`. It has two entrances:
   the sidebar's Feedback form, whose messages arrive as `type: feedback`.
 - **`POST /log`**, a JSON object or an array of them, for anything else. A
   drive app's errors stay inside its sandboxed frame: the host shows them
-  there and reports nothing. The app has to post them itself.
+  there and reports nothing. The calendar app hands its failures, a line
+  per finished sync and anything uncaught to a hook (`app/report.ts`), and
+  `catalog.mjs` prepends the hook that posts here when `USERTEST_LOG_URL`
+  is set. The app itself makes no network request.
 
 Verified on 2026-09-28: an error thrown in the data-browser arrived within
 seconds with its stack and URL.
