@@ -6,8 +6,8 @@
  *   node usertest/catalog.mjs [out]      # default out: usertest/out
  *
  * With USERTEST_LOG_URL set (deploy it with
- * USERTEST_LOG_URL=https://logs.<base-domain>/log), every module built here
- * starts with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
+ * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
+ * marked `report: true` start with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
  * posts what an app hands it to the collector. Apps call it through their
  * own `report.ts` (calendar so far). The apps themselves make no network
  * request of their own (their build tests check for `fetch(`); only this
@@ -55,6 +55,8 @@ const APPS = {
     name: 'Google Calendar',
     emoji: '📅',
     row: ['Event', 'Events'],
+    // Has app/report.ts; gets the collector prelude.
+    report: true,
   },
   'issue-tracker': {
     base: 'devonian-todoist',
@@ -90,7 +92,8 @@ for (const [id, app] of Object.entries(APPS)) {
   const file = resolve(out, 'apps', id, version, 'ui.js');
   mkdirSync(dirname(file), { recursive: true });
   await build({ outfile: file });
-  if (PRELUDE) writeFileSync(file, PRELUDE + readFileSync(file, 'utf8'));
+  if (PRELUDE && app.report)
+    writeFileSync(file, PRELUDE + readFileSync(file, 'utf8'));
   const bytes = readFileSync(file);
 
   const source = byShortname(app.base);
