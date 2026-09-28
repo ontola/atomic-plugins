@@ -7,3 +7,4 @@ node_modules
 /integrations/tooling/test-results
 playwright-report/
 /integrations/*/app/dist
+usertest/out/
