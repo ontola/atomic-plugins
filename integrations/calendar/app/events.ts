@@ -304,6 +304,27 @@ export function nextEvent(
   return best && { event: best.event, date: best.date };
 }
 
+/** The last event starting before `date`, for "Jump to latest event" when
+ * nothing comes later (user testing, 2026-09-28: every imported event was in
+ * the past, and the week showed "No events this week" with nowhere to go). */
+export function latestEvent(
+  events: CalEvent[],
+  before: string,
+  zone: string,
+): { event: CalEvent; date: string } | undefined {
+  let best: { event: CalEvent; date: string; at: number } | undefined;
+
+  for (const event of events) {
+    const b = bounds(event, zone);
+    if (!b) continue;
+    const date = event.allDay ? event.start : wall(b.start, zone).date;
+    if (date >= before) continue;
+    if (!best || b.start > best.at) best = { event, date, at: b.start };
+  }
+
+  return best && { event: best.event, date: best.date };
+}
+
 /** Days in [from, from + days) that have at least one event, for the day strip's dots. */
 export function busyDays(
   events: CalEvent[],
