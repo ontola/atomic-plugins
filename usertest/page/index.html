@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atomic user test</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --fg: #1d1d1b;
+        --muted: #62625d;
+        --card: #ffffff;
+        --line: #deded8;
+        --accent: #2d5bd7;
+        --warn: #9a3412;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161615;
+          --fg: #ececea;
+          --muted: #a3a39c;
+          --card: #1f1f1d;
+          --line: #34342f;
+          --accent: #7ea0ff;
+          --warn: #fdba74;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main { max-width: 38rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin: 1rem 0;
+      }
+      ul { padding-left: 1.2rem; }
+      label { display: block; margin: 0.75rem 0 0.25rem; }
+      input[type='text'], select {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .check { display: flex; gap: 0.5rem; align-items: flex-start; }
+      .check input { margin-top: 0.3rem; }
+      button {
+        font: inherit;
+        padding: 0.6rem 1.1rem;
+        border-radius: 8px;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary { background: transparent; color: var(--accent); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .muted { color: var(--muted); font-size: 0.9rem; }
+      .warn { color: var(--warn); }
+      #status { font-weight: 600; }
+      #log p { margin: 0.4rem 0; }
+      #log .me { color: var(--muted); }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Try Atomic's new plugins</h1>
+
+      <section id="intro" class="card">
+        <p>
+          Thanks for helping! For about 25 minutes you'll try a new part of
+          Atomic while a voice moderator (Claude, an AI) asks you what you
+          see and think. There are no wrong answers: we are testing the app,
+          not you.
+        </p>
+        <ul>
+          <li>Find a quiet place where you can talk, and put on headphones.</li>
+          <li>Use Chrome or Edge on a laptop or desktop.</li>
+          <li>
+            When you start, a second window opens with your own empty Atomic
+            drive. Put it next to this one; keep this window open.
+          </li>
+        </ul>
+        <p id="unsupported" class="warn" hidden>
+          This browser can't do speech recognition. Please open this page in
+          Chrome or Edge.
+        </p>
+      </section>
+
+      <section id="consent" class="card">
+        <p><strong>What is recorded and where it goes</strong></p>
+        <ul>
+          <li>
+            Your screen (the window or screen you choose to share) and your
+            microphone are recorded and stored on our test server.
+          </li>
+          <li>
+            Your browser turns your speech into text; Chrome does this through
+            Google's speech service.
+          </li>
+          <li>
+            That text and the app's error log are sent to Anthropic's Claude
+            API to decide what the moderator says next.
+          </li>
+          <li>
+            If you connect your own accounts (for example Google Calendar),
+            the imported data is stored on the test server too. You can
+            disconnect afterwards.
+          </li>
+          <li>
+            The recordings are only used to improve Atomic and are deleted
+            after analysis.
+          </li>
+        </ul>
+        <label for="name">Your first name (optional)</label>
+        <input id="name" type="text" autocomplete="given-name" />
+        <label for="lang">Language you'll speak</label>
+        <select id="lang">
+          <option value="en-US">English</option>
+          <option value="nl-NL">Nederlands</option>
+        </select>
+        <p class="check">
+          <input id="agree" type="checkbox" />
+          <label for="agree" style="margin: 0">
+            I agree to the recording and processing described above.
+          </label>
+        </p>
+        <button id="start" disabled>Start the session</button>
+        <p id="error" class="warn" hidden></p>
+      </section>
+
+      <section id="session" class="card" hidden>
+        <p>
+          <span id="status">Starting…</span>
+          <span class="muted" id="rec"></span>
+        </p>
+        <p class="muted" id="heard"></p>
+        <div id="log"></div>
+        <button id="end" class="secondary">End the session</button>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
