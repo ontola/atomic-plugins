@@ -113,6 +113,18 @@ function civilDate(value: string): boolean {
   );
 }
 
+/** Google's own writes give an all-day event an exclusive end, the day after
+ * its last day. Events with end == start exist too (seen in user testing,
+ * 2026-09-28: all-day events written with an inclusive end), and Google
+ * Calendar shows them as one day, so they are read as that one day. Any
+ * write-back then sends the exclusive end. */
+function allDayEnd(start: string, end: string): string {
+  if (end !== start) return end;
+  const next = new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000);
+
+  return next.toISOString().slice(0, 10);
+}
+
 function offsetDateTime(value: string): boolean {
   return (
     /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
@@ -146,7 +158,7 @@ export function project(event: Event): Projection | undefined {
       !civilDate(event.start.date) ||
       !event.end.date ||
       !civilDate(event.end.date) ||
-      event.end.date <= event.start.date
+      event.end.date < event.start.date
     )
       throw new UnreadableEventError(
         `Calendar event ${event.id} has an invalid all-day interval (${interval()})`,
@@ -171,7 +183,9 @@ export function project(event: Event): Projection | undefined {
     description: event.description ?? '',
     location: event.location ?? '',
     start: allDay ? event.start.date! : event.start.dateTime!,
-    end: allDay ? event.end.date! : event.end.dateTime!,
+    end: allDay
+      ? allDayEnd(event.start.date!, event.end.date!)
+      : event.end.dateTime!,
     allDay,
   };
 }

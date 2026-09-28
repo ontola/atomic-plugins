@@ -125,11 +125,20 @@ describe('Google Calendar package', () => {
       end: '2026-09-23',
       allDay: true,
     });
-    expect(() =>
+    // end == start, as Google Calendar shows it: one day, exclusive end.
+    expect(
       project(
         timed('e3', {
+          start: { date: '2026-12-31' },
+          end: { date: '2026-12-31' },
+        }),
+      ),
+    ).toMatchObject({ start: '2026-12-31', end: '2027-01-01', allDay: true });
+    expect(() =>
+      project(
+        timed('e3b', {
           start: { date: '2026-09-22' },
-          end: { date: '2026-09-22' },
+          end: { date: '2026-09-21' },
         }),
       ),
     ).toThrow('invalid all-day interval');
@@ -139,11 +148,11 @@ describe('Google Calendar package', () => {
   });
 
   it('skips and lists an unreadable event instead of failing the whole scan', async () => {
-    // Seen in user testing (2026-09-28): one all-day event failed every sync.
+    // In user testing (2026-09-28) one odd all-day event failed every sync.
     const bad = timed('bad', {
       summary: 'testing',
       start: { date: '2026-04-02' },
-      end: { date: '2026-04-02' },
+      end: { date: '2026-04-01' },
     });
     const result = await preview(
       {
@@ -185,7 +194,7 @@ describe('Google Calendar package', () => {
         id: 'bad',
         title: 'testing',
         reason:
-          'Calendar event bad has an invalid all-day interval (start "2026-04-02", end "2026-04-02")',
+          'Calendar event bad has an invalid all-day interval (start "2026-04-02", end "2026-04-01")',
       },
     ]);
     // Its existing row is kept: a conflict, never an inferred deletion.
