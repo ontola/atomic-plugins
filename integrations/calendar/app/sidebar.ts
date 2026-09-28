@@ -164,7 +164,7 @@ export function sidebar(
         ),
       ),
     ),
-    skipped && (skipped.recurring || skipped.cancelled)
+    skipped && anySkipped(skipped)
       ? h(
           doc,
           'section',
@@ -174,7 +174,7 @@ export function sidebar(
             doc,
             'p',
             {},
-            notShown(skipped),
+            notShown(skipped, summary?.unreadable),
             ' ',
             h(
               doc,
@@ -193,7 +193,7 @@ export function sidebar(
                 doc,
                 'p',
                 {},
-                'Recurring events aren’t imported yet, so a series is never mapped in part. Cancelled events are counted, never treated as a deletion here.',
+                'Recurring events aren’t imported yet, so a series is never mapped in part. Cancelled events, and events whose start or end this app can’t read, are counted, never treated as a deletion here.',
               )
             : null,
         )
@@ -201,7 +201,19 @@ export function sidebar(
   );
 }
 
-export function notShown(skipped: { recurring: number; cancelled: number }) {
+/** True when the last scan left any event out of the table. */
+export function anySkipped(skipped: {
+  recurring: number;
+  cancelled: number;
+  unreadable?: number;
+}): boolean {
+  return Boolean(skipped.recurring || skipped.cancelled || skipped.unreadable);
+}
+
+export function notShown(
+  skipped: { recurring: number; cancelled: number; unreadable?: number },
+  unreadable: Array<{ title: string }> = [],
+) {
   const parts: string[] = [];
   if (skipped.recurring)
     parts.push(
@@ -211,7 +223,18 @@ export function notShown(skipped: { recurring: number; cancelled: number }) {
     parts.push(
       `${skipped.cancelled} cancelled ${skipped.cancelled === 1 ? 'event' : 'events'}`,
     );
-  const verb = skipped.recurring + skipped.cancelled === 1 ? 'isn’t' : 'aren’t';
+  if (skipped.unreadable) {
+    const names = unreadable
+      .slice(0, 3)
+      .map(e => `“${e.title.trim() || '(untitled)'}”`)
+      .join(', ');
+    parts.push(
+      `${skipped.unreadable} ${skipped.unreadable === 1 ? 'event' : 'events'} with dates this app can’t read${names ? ` (${names}${unreadable.length > 3 ? ', …' : ''})` : ''}`,
+    );
+  }
+  const total =
+    skipped.recurring + skipped.cancelled + (skipped.unreadable ?? 0);
+  const verb = total === 1 ? 'isn’t' : 'aren’t';
 
   return `${parts.join(' and ')} ${verb} imported yet.`;
 }
