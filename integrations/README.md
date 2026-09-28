@@ -197,6 +197,19 @@ node integrations/tooling/catalog-requires.mjs check   # what CI checks
 `certify.mjs` refuses a gated package whose card lacks it or disagrees. No
 package here has a version-3 manifest yet, so no card carries it today.
 
+### The catalog URL is the format version
+
+`https://ontola.github.io/atomic-plugins/integrations/catalog.json` is the
+URL of catalog format v1. It stays that for as long as any client may read
+it: data-browser uses it as the default catalog URL, and a shipped desktop or
+mobile build keeps it until that build is replaced. So every change to this
+file must still parse in clients that read v1. Adding an optional field is
+fine; renaming, removing or changing the meaning of a field is not.
+
+A change that breaks v1 gets a new URL. It will carry a `v2` segment, and it
+will probably not be on `github.io`. Keep publishing v1 next to it until no
+supported client reads the v1 URL any more.
+
 ## Publishing a drive app
 
 A drive app (an `integrations/<id>/app/` whose `build.mjs` builds one ES
