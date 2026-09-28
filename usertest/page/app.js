@@ -6,9 +6,15 @@
 
 const API = '/usertest/api';
 const CATALOG_URL = `https://catalog.${location.hostname.replace(/^plugins\./, '')}/catalog.json`;
-/** Send a turn this long after the tester stops talking (a question sooner). */
-const PAUSE_AFTER_QUESTION = 3000;
-const PAUSE_AFTER_SPEECH = 9000;
+/** Send a turn this long after the tester stops talking (a question sooner).
+ * Chrome's recognizer adds no punctuation, so questions are recognized by
+ * their words; the moderator answers [WAIT] when nothing needs saying. */
+const PAUSE_AFTER_QUESTION = 2000;
+const PAUSE_AFTER_SPEECH = 5000;
+const QUESTION =
+  /\b(how|what|where|why|which|who|when|can you|could you|should i|do i|is it|is there|are there)\b/i;
+/** Screenshots sent with a turn: at most this wide, as JPEG. */
+const SHOT_WIDTH = 1280;
 /** Ask what's happening after this much silence. */
 const SILENCE = 60000;
 
@@ -34,6 +40,8 @@ let heard = [];
 let lastSpeech = Date.now();
 let lastTurn = Date.now();
 let uploads = Promise.resolve();
+/** Plays the shared screen off-screen, so a turn can grab a frame of it. */
+let screenVideo;
 
 async function api(path, init = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -56,14 +64,49 @@ function status(text) {
   $('status').textContent = text;
 }
 
-function speak(text) {
+/** English only for now: in a Dutch trial (2026-09-28) the moderator switched
+ * language on its own while the voice stayed on the one picked at the start. */
+const LANG = 'en-US';
+
+/** One voice for the whole session. Chrome fills getVoices() only after
+ * `voiceschanged`, so without waiting the first line got the default voice
+ * and later lines another one. */
+let voice;
+
+function pickVoice() {
+  const english = speechSynthesis
+    .getVoices()
+    .filter(v => v.lang.replace('_', '-') === LANG);
+
+  return (
+    english.find(v => /google/i.test(v.name)) ??
+    english.find(v => v.localService) ??
+    english[0]
+  );
+}
+
+function voiceReady() {
+  voice ??= pickVoice();
+  if (voice) return Promise.resolve();
+
+  return new Promise(resolve => {
+    const done = () => {
+      voice ??= pickVoice();
+      resolve();
+    };
+
+    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
+    // Some browsers never fire it; go on with the default voice.
+    setTimeout(done, 2000);
+  });
+}
+
+async function speak(text) {
+  await voiceReady();
+
   return new Promise(resolve => {
     const utterance = new SpeechSynthesisUtterance(text);
-    const lang = $('lang').value;
-    utterance.lang = lang;
-    const voice = speechSynthesis
-      .getVoices()
-      .find(v => v.lang.replace('_', '-').startsWith(lang.slice(0, 2)));
+    utterance.lang = LANG;
     if (voice) utterance.voice = voice;
     speaking = true;
     // The recognizer would otherwise hear the moderator (without headphones).
@@ -79,10 +122,24 @@ function speak(text) {
   });
 }
 
+/** The shared screen as it is now: base64 JPEG, or undefined. */
+function screenshot() {
+  const video = screenVideo;
+  if (!video?.videoWidth) return undefined;
+  const scale = Math.min(1, SHOT_WIDTH / video.videoWidth);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+}
+
 async function turn(said) {
   if (busy || ended) return;
   busy = true;
   heard = [];
+  $('heard').textContent = '';
   lastTurn = Date.now();
   if (said) show('me', said);
   status('Thinking…');
@@ -90,7 +147,7 @@ async function turn(said) {
   try {
     const { say, done } = await api(`/sessions/${session}/turn`, {
       method: 'POST',
-      body: JSON.stringify({ said }),
+      body: JSON.stringify({ said, screenshot: screenshot() }),
     });
 
     if (say) {
@@ -121,7 +178,7 @@ function listen() {
 
 function setupRecognition() {
   recognition = new Recognition();
-  recognition.lang = $('lang').value;
+  recognition.lang = LANG;
   recognition.continuous = true;
   recognition.interimResults = true;
 
@@ -156,7 +213,7 @@ function tick() {
   const text = heard.join(' ').trim();
 
   if (text) {
-    const wait = /\?\s*$/.test(text)
+    const wait = QUESTION.test(heard.at(-1) ?? '')
       ? PAUSE_AFTER_QUESTION
       : PAUSE_AFTER_SPEECH;
     if (now - lastSpeech > wait) turn(text);
@@ -201,6 +258,10 @@ async function startRecording() {
   };
 
   recorder.start(10000);
+  screenVideo = document.createElement('video');
+  screenVideo.muted = true;
+  screenVideo.srcObject = new MediaStream(screen.getVideoTracks());
+  await screenVideo.play();
   $('rec').textContent = '● recording';
   // Stopping the share from the browser's bar ends the session.
   screen.getVideoTracks()[0].addEventListener('ended', () => finish());
@@ -238,7 +299,7 @@ async function start() {
   try {
     ({ id: session } = await api('/sessions', {
       method: 'POST',
-      body: JSON.stringify({ name: $('name').value, lang: $('lang').value }),
+      body: JSON.stringify({ name: $('name').value, lang: LANG }),
     }));
     await startRecording();
   } catch (error) {
@@ -274,3 +335,7 @@ $('agree').addEventListener('change', () => {
 });
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
+// Hands over at once, with whatever was heard so far.
+$('ask').addEventListener('click', () => {
+  if (!speaking) turn(heard.join(' ').trim());
+});

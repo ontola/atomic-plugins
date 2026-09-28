@@ -111,18 +111,50 @@ function record(session, entry) {
 }
 
 /** Asks Claude for the next thing to say. */
-async function nextLine(session, said) {
+async function nextLine(session, said, screenshot) {
   const now = new Date().toISOString();
   const log = logSince(session.cursor);
   session.cursor = now;
   const heard = said.trim() || '(silence)';
+  const shot =
+    typeof screenshot === 'string' && /^[A-Za-z0-9+/=]+$/.test(screenshot)
+      ? screenshot
+      : undefined;
   const content = [
     log.length ? `[Log]\n${log.join('\n')}` : '[Log]\n(nothing new)',
     `[Tester]\n${session.turns === 0 ? '(the session starts now)' : heard}`,
   ].join('\n\n');
 
-  session.messages.push({ role: 'user', content });
-  record(session, { role: 'tester', said: heard, log });
+  // History keeps the text only; the screenshot goes with this turn alone,
+  // so the conversation does not grow by an image per turn.
+  session.messages.push({
+    role: 'user',
+    content: shot
+      ? `[Screen] (screenshot shown at the time)\n\n${content}`
+      : content,
+  });
+  if (shot)
+    writeFileSync(
+      join(session.dir, `screen-${String(session.turns).padStart(3, '0')}.jpg`),
+      Buffer.from(shot, 'base64'),
+    );
+  record(session, { role: 'tester', said: heard, log, screenshot: !!shot });
+
+  const messages = shot
+    ? [
+        ...session.messages.slice(0, -1),
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/jpeg', data: shot },
+            },
+            { type: 'text', text: `[Screen] (the image above)\n\n${content}` },
+          ],
+        },
+      ]
+    : session.messages;
 
   const response = await client.beta.messages.create({
     model: MODEL,
@@ -134,7 +166,7 @@ async function nextLine(session, said) {
     output_config: { effort: 'low' },
     cache_control: { type: 'ephemeral' },
     system: SCRIPT,
-    messages: session.messages,
+    messages,
   });
 
   const text =
@@ -248,9 +280,15 @@ createServer(async (req, res) => {
     if (req.method === 'POST' && match[2] === 'turn') {
       if (session.done || session.turns >= MAX_TURNS)
         return reply(200, { say: '', done: true });
-      const body = JSON.parse((await readBody(req, 64 * 1024)).toString());
+      // Room for a 1280-pixel JPEG screenshot, base64-encoded.
+      const body = JSON.parse(
+        (await readBody(req, 4 * 1024 * 1024)).toString(),
+      );
 
-      return reply(200, await nextLine(session, String(body.said ?? '')));
+      return reply(
+        200,
+        await nextLine(session, String(body.said ?? ''), body.screenshot),
+      );
     }
 
     if (req.method === 'POST' && match[2] === 'recording') {
