@@ -76,8 +76,16 @@ export interface Preview {
   }>;
   /** Events read but not imported, by reason. A cancelled instance of a
    * series counts as recurring. */
-  skipped: { recurring: number; cancelled: number };
+  skipped: { recurring: number; cancelled: number; unreadable: number };
+  /** The events counted in `skipped.unreadable`: Google returned them with a
+   * start/end this app cannot map. Listed with the raw values so a person (or
+   * a log) can see what Google sent. Their rows, if any, are left as is. */
+  unreadable: Array<{ id: string; title: string; reason: string }>;
 }
+
+/** An event whose start/end cannot be mapped. The preview skips and lists it
+ * instead of failing the whole scan over one event. */
+export class UnreadableEventError extends Error {}
 
 /** Google answered a conditional write with 412: the event changed after the
  * preview that the edit was planned from. Nothing was written. */
@@ -120,7 +128,15 @@ export function project(event: Event): Projection | undefined {
   if (event.status === 'cancelled') return undefined;
   if (typeof event.id !== 'string' || !event.id)
     throw new Error('Google returned an invalid event');
-  const allDay = typeof event.start.date === 'string';
+  const allDay = typeof event.start?.date === 'string';
+  const raw = (time: EventTime | undefined) =>
+    JSON.stringify(time?.date ?? time?.dateTime ?? null);
+  const interval = () => `start ${raw(event.start)}, end ${raw(event.end)}`;
+
+  if (!event.start || !event.end)
+    throw new UnreadableEventError(
+      `Calendar event ${event.id} has no start or end`,
+    );
 
   if (allDay) {
     if (
@@ -132,8 +148,8 @@ export function project(event: Event): Projection | undefined {
       !civilDate(event.end.date) ||
       event.end.date <= event.start.date
     )
-      throw new Error(
-        `Calendar event ${event.id} has an invalid all-day interval`,
+      throw new UnreadableEventError(
+        `Calendar event ${event.id} has an invalid all-day interval (${interval()})`,
       );
   } else {
     if (
@@ -145,8 +161,8 @@ export function project(event: Event): Projection | undefined {
       !offsetDateTime(event.end.dateTime) ||
       Date.parse(event.end.dateTime) <= Date.parse(event.start.dateTime)
     )
-      throw new Error(
-        `Calendar event ${event.id} has an invalid timed interval`,
+      throw new UnreadableEventError(
+        `Calendar event ${event.id} has an invalid timed interval (${interval()})`,
       );
   }
 
@@ -316,7 +332,8 @@ export async function preview(
   const events = new Map<string, Projection>();
   const etags = new Map<string, string>();
   const links = new Map<string, string>();
-  const skipped = { recurring: 0, cancelled: 0 };
+  const skipped = { recurring: 0, cancelled: 0, unreadable: 0 };
+  const unreadable: Preview['unreadable'] = [];
   let pageToken: string | undefined;
   let pages = 0;
 
@@ -335,7 +352,22 @@ export async function preview(
       throw new Error('Google Calendar event page must include an items array');
 
     for (const event of page.items) {
-      const projection = project(event);
+      let projection: Projection | undefined;
+
+      try {
+        projection = project(event);
+      } catch (error) {
+        if (!(error instanceof UnreadableEventError)) throw error;
+        // Not added to `events`, so a row bound to it becomes a "no deletion
+        // inferred" conflict below, never a deletion.
+        skipped.unreadable++;
+        unreadable.push({
+          id: event.id,
+          title: event.summary ?? '',
+          reason: error.message,
+        });
+        continue;
+      }
 
       if (projection) {
         events.set(event.id, projection);
@@ -372,6 +404,7 @@ export async function preview(
     changes: [],
     conflicts: [],
     skipped,
+    unreadable,
   };
 
   for (const [id, remote] of events) {

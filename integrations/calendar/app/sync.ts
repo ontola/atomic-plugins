@@ -506,6 +506,8 @@ export interface ImportSummary {
   updated: number;
   unchanged: number;
   skipped: Preview['skipped'];
+  /** Events Google returned that the app cannot map; see `Preview`. */
+  unreadable: Preview['unreadable'];
   conflicts: Conflict[];
   localOnly: number;
   invalid: Array<{ title: string; reason: string }>;
@@ -607,6 +609,7 @@ export async function refresh(
     updated: 0,
     unchanged: 0,
     skipped: result.skipped,
+    unreadable: result.unreadable,
     conflicts: result.conflicts.map(c => {
       const kind: ConflictKind = c.remote
         ? 'both'

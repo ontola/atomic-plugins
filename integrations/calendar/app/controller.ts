@@ -114,7 +114,7 @@ export function describe(state: ViewState): string {
       const s = state.summary;
       const parts = [
         `Last refreshed ${state.at.toLocaleTimeString()}: ${plural(s.total, 'event')} (${s.added} added, ${s.updated} updated, ${s.unchanged} unchanged).`,
-        `Not imported: ${s.skipped.recurring} recurring, ${s.skipped.cancelled} cancelled.`,
+        `Not imported: ${s.skipped.recurring} recurring, ${s.skipped.cancelled} cancelled${s.skipped.unreadable ? `, ${s.skipped.unreadable} unreadable` : ''}.`,
       ];
       if (s.conflicts.length)
         parts.push(`${plural(s.conflicts.length, 'conflict')} left as is.`);

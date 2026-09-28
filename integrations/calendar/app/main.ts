@@ -29,7 +29,7 @@ import { detail, editor } from './drawer.js';
 import { busyDays, nextEvent, type CalEvent } from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
-import { notShown, sidebar } from './sidebar.js';
+import { anySkipped, notShown, sidebar } from './sidebar.js';
 import type { ViewArgs } from './store.js';
 import type { Choice, Conflict, ImportSummary } from './sync.js';
 import {
@@ -87,7 +87,8 @@ const EMPTY_SUMMARY: ImportSummary = {
   added: 0,
   updated: 0,
   unchanged: 0,
-  skipped: { recurring: 0, cancelled: 0 },
+  skipped: { recurring: 0, cancelled: 0, unreadable: 0 },
+  unreadable: [],
   conflicts: [],
   localOnly: 0,
   invalid: [],
@@ -544,9 +545,8 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         c,
         events,
         ui.anchor,
-        snap.summary &&
-          (snap.summary.skipped.recurring || snap.summary.skipped.cancelled)
-          ? notShown(snap.summary.skipped)
+        snap.summary && anySkipped(snap.summary.skipped)
+          ? notShown(snap.summary.skipped, snap.summary.unreadable)
           : undefined,
       );
 

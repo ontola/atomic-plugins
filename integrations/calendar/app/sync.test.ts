@@ -130,7 +130,7 @@ suite('Calendar drive app: supported path', () => {
       added: 2,
       updated: 0,
       unchanged: 0,
-      skipped: { recurring: 2, cancelled: 1 },
+      skipped: { recurring: 2, cancelled: 1, unreadable: 0 },
       conflicts: [],
       review: [],
     });
