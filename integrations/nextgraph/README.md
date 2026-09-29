@@ -44,11 +44,11 @@ again.
 
 ## Modes
 
-| `mode` | Reads | Proposes |
-| --- | --- | --- |
-| `import` | `result`: pasted SPARQL Results JSON | a PlainText resource holding it |
-| `pull` | the `document` NURI, through the sidecar's `query` operation | a PlainText resource holding the answer |
-| `export` | `sourceSubject`: a stored snapshot, with `ctx.read` | a PlainText resource holding `INSERT DATA { … }` |
+| `mode`   | Reads                                                        | Proposes                                         |
+| -------- | ------------------------------------------------------------ | ------------------------------------------------ |
+| `import` | `result`: pasted SPARQL Results JSON                         | a PlainText resource holding it                  |
+| `pull`   | the `document` NURI, through the sidecar's `query` operation | a PlainText resource holding the answer          |
+| `export` | `sourceSubject`: a stored snapshot, with `ctx.read`          | a PlainText resource holding `INSERT DATA { … }` |
 
 Config (declared in the manifest): `mode`, `parent`, `id`, `name` are always
 required; `result` for import, `document` for pull, `sourceSubject` for
@@ -100,10 +100,15 @@ Grants live in `/srv/ng-sidecar/scopes.json`, written by the operator and
 re-read on every request (a revocation applies to the next call):
 
 ```json
-{ "grants": [
-  { "installation": "<Atomic installation or plugin subject>",
-    "document": "did:ng:o:…", "access": "read" }
-] }
+{
+  "grants": [
+    {
+      "installation": "<Atomic installation or plugin subject>",
+      "document": "did:ng:o:…",
+      "access": "read"
+    }
+  ]
+}
 ```
 
 Operations (loopback HTTP; the host is the only intended client):
@@ -111,7 +116,7 @@ Operations (loopback HTTP; the host is the only intended client):
 - `GET /v1/health`
 - `POST /v1/query` `{document}` → SPARQL Results JSON; needs `read`.
 - `POST /v1/update` `{document, key, update}` → `{ack: {key, document,
-  commits, appliedAt}, replayed}`; needs `read-write`. Only `INSERT DATA` into
+commits, appliedAt}, replayed}`; needs `read-write`. Only `INSERT DATA` into
   the document's default graph (parsed with NextGraph's own SPARQL parser),
   at most 131,072 bytes. The key is reserved on disk (fsync, rename) before
   the NextGraph write and the acknowledgement stored before it is returned.

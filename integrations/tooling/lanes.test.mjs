@@ -365,8 +365,15 @@ test('only a run with a pluginRoutes lane asks for the plugin-routes build', () 
 
 test('sidecars need read-write and one name, at the lane sidecar port', () => {
   const e2e = { tiers: ['e2e'], e2e: ['integrations/p/e2e/p.spec.ts'] };
-  const ported = l => ({ ...cfg(l), roleOffsets: { atomicServer: 0, sidecar: 3 } });
-  const ok = lane({ ...e2e, pluginRoutes: 'read-write', sidecars: ['nextgraph'] });
+  const ported = l => ({
+    ...cfg(l),
+    roleOffsets: { atomicServer: 0, sidecar: 3 },
+  });
+  const ok = lane({
+    ...e2e,
+    pluginRoutes: 'read-write',
+    sidecars: ['nextgraph'],
+  });
   assert.doesNotThrow(() => validateConfig(ported(ok)));
   assert.throws(() => validateConfig(cfg(ok)), /roleOffsets.sidecar/);
   for (const [extra, message] of [
@@ -376,10 +383,16 @@ test('sidecars need read-write and one name, at the lane sidecar port', () => {
     [{ pluginRoutes: 'read-write', sidecars: ['Next'] }, /one sidecar name/],
     [{ pluginRoutes: 'read-write', sidecars: ['a', 'b'] }, /one sidecar name/],
   ])
-    assert.throws(() => validateConfig(ported(lane({ ...e2e, ...extra }))), message);
+    assert.throws(
+      () => validateConfig(ported(lane({ ...e2e, ...extra }))),
+      message,
+    );
   const ng = config.lanes.find(l => l.id === 'nextgraph');
   assert.deepEqual(ng.sidecars, ['nextgraph']);
-  assert.equal(lanePorts(ng, config).sidecar, lanePorts(ng, config).atomicServer + 3);
+  assert.equal(
+    lanePorts(ng, config).sidecar,
+    lanePorts(ng, config).atomicServer + 3,
+  );
 });
 
 test('the plugin-routes lane runs its e2e at read-only, then off', () => {

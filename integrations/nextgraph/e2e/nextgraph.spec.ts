@@ -80,7 +80,10 @@ const SEED = `INSERT DATA {
 }
 `;
 
-type Binding = Record<string, { type: string; value: string } & Record<string, string>>;
+type Binding = Record<
+  string,
+  { type: string; value: string } & Record<string, string>
+>;
 
 function docker(args: string[], timeout = 120_000) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout });
@@ -186,15 +189,7 @@ test.describe('nextgraph integration', () => {
     // Operator: build the sidecar, create a wallet and two documents, and
     // grant this plugin read on the first and read-write on the second.
     if (!process.env.NG_SIDECAR_IMAGE)
-      docker(
-        [
-          'build',
-          '-t',
-          IMAGE,
-          resolve(here, '../sidecar'),
-        ],
-        3_000_000,
-      );
+      docker(['build', '-t', IMAGE, resolve(here, '../sidecar')], 3_000_000);
     dir = mkdtempSync(resolve(tmpdir(), 'ng-sidecar-'));
     writeFileSync(resolve(dir, 'seed.sparql'), SEED);
     const init = JSON.parse(
@@ -380,7 +375,10 @@ async function runPlugin(
   const response = await post(agent, '/plugin-run', {
     ...target,
     source,
-    input: JSON.stringify({ trigger: { kind: 'manual', at: Date.now() }, config }),
+    input: JSON.stringify({
+      trigger: { kind: 'manual', at: Date.now() },
+      config,
+    }),
   });
   expect(response.status, response.text).toBe(200);
   const { verdict, error } = response.json as {
