@@ -212,8 +212,10 @@ the change for atomic-server#1653), with this package at version 0.2.0
 the bundle with the annotations, structured errors and the statements
 table). Version 0.3.0 is that bundle with only the manifest's `version`
 changed (#148 changed the importer's behaviour at 0.2.0: the statements
-table and `tables` in `config.required`); the E2E runs at 0.3.0 are listed
-in the pull request that bumped it. The
+table and `tables` in `config.required`). At 0.3.0 (`plugin.js` sha256
+`5d5ab941d41734d088e7be6da528b3decbfbf3db81e56cfae59e69558054733b`) both
+E2E tests passed once on 2026-09-29 against pin `2567fc30b` (the published
+e2e image). The
 spec picks the release it just published by its id, so it also passes on a
 lane store kept from earlier runs (checked twice in a row). It covers these
 steps, all with the synthetic files in `fixtures/` and generated variants:
