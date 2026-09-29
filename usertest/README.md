@@ -83,9 +83,13 @@ Server plugins answer HTTP requests themselves (plugin routes). This
 section is for trying [remoteStorage](../integrations/remotestorage/README.md)
 by hand; testers don't need it, and it is off unless `server.sh` is started
 with `USERTEST_PLUGIN_ROUTES`. As of 2026-09-29 none of this has run on the
-droplet yet: the Caddy part was checked locally in Docker (Caddy 2.11.4,
-see below), and the host requirements were read from the atomic-server
-source at candidate15, not run there with this plugin.
+droplet yet. Checked locally: the Caddyfile in Docker with Caddy 2.11.4 (a
+certificate for an allowlisted routes host, a refused handshake for any
+other; not with Ubuntu 24.04's packaged Caddy 2.6.2, which `deploy.sh`
+validates against on the droplet), and that the `-plugin-routes` image of
+the previous pin (`2567fc30b`) starts with these settings. That
+candidate15 has what remoteStorage needs from the host was read from its
+source, not run.
 
 ### What changes
 
