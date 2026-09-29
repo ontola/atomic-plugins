@@ -12,13 +12,15 @@ Two ways in:
 - **Pasted** (`mode: "import"`): works on any host. A person pastes a SPARQL
   Results JSON answer from their own NextGraph client.
 - **Live** (`mode: "pull"`, plus a pushed export): needs atomic-server with
-  `atomic-sidecar:` operations (branch `claude/plugin-nextgraph-host`, not yet
-  in the pinned `.atomic-server-ref`), built with `plugin-routes`, started at
+  `atomic-sidecar:` operations (pin candidate17, `7dbd054a`, the
+  `.atomic-server-ref` of this branch), built with `plugin-routes`, started at
   `--plugin-routes read-write` with `--plugin-sidecars nextgraph=http://127.0.0.1:<port>`,
   and the sidecar in [`sidecar/`](sidecar/) running on that port. The
   sidecar also needs the host to sign its requests and to name each
-  installation's app agent (atomic-server pin candidate17, **pending**; see
-  [Host-to-sidecar trust](#host-to-sidecar-trust)).
+  installation's app agent (also candidate17; see
+  [Host-to-sidecar trust](#host-to-sidecar-trust)). The host signs only for
+  an installed, active Installation: a Plugin draft has no app agent on the
+  node, and its sidecar calls are refused before they are sent.
 
 What has been **verified** and what is only **declared** is listed under
 [Evidence](#evidence).
@@ -197,16 +199,16 @@ check (`sidecar/src/auth.rs`), in order:
    request, so revoking an app agent applies to the next call. A host that
    cannot be reached is a 503, never a pass.
 
-**Pending**: the host side (signing sidecar requests, serving
-`/plugin-runtime?installation=`) is atomic-server pin candidate17, which
-does not exist yet. The exact message format and the lookup's path and
-answer shape are this sidecar's proposal, and must match what the host
-ships. Until then, `serve` against any released host refuses every
-operation, and the e2e test skips itself on the first 401. The sidecar
-checks were exercised with a stub lookup: cargo unit tests, and a manual run
-of the real container against a node script that signs requests and serves
-the lookup (signed: 200; replayed, unsigned, forged installation,
-unregistered installation and expired: 401).
+The host side (signing sidecar requests, serving
+`/plugin-runtime?installation=`) is in atomic-server pin candidate17
+(`7dbd054a`), and its golden vector is the one `auth::tests::golden_vector`
+checks. The e2e test passed against it (see [Evidence](#evidence)). Against
+a released host, `serve` refuses every operation, and the e2e test skips
+itself on the first 401. Before candidate17 existed the sidecar checks were
+also exercised with a stub lookup: cargo unit tests, and a manual run of the
+real container against a node script that signs requests and serves the
+lookup (signed: 200; replayed, unsigned, forged installation, unregistered
+installation and expired: 401).
 
 The lookup is plain HTTP/1.0 to `--atomic-server` and is not itself
 authenticated: whoever controls that address decides which agent speaks for
@@ -250,9 +252,16 @@ node integrations/tooling/run-lane.mjs nextgraph --tier e2e    # real host + rea
 - e2e (`e2e/nextgraph.spec.ts`): see the spec header for exactly what it
   checks. It is skipped, saying why, on a host without `atomic-sidecar:`
   operations (which includes the current pin), or on one that does not sign
-  sidecar requests (everything before candidate17). **Pending**: it has not
-  run against a signing host. The last passing run, before signatures, was
-  on `claude/plugin-nextgraph-host` at a68427c14.
+  sidecar requests (everything before candidate17). **Passed** on 2026-09-29
+  (1 test, 21 s, with the sidecar image built by the spec) against pin
+  candidate17 `7dbd054a` built with `plugin-routes` by
+  `integrations/tooling/server-build.mjs`: the release installed through the
+  review, then the signed pull, the approved push with its journaled
+  receipt, the read-back, the restart with the replayed acknowledgement, the
+  forged unsigned request (401) and the revoked grant (403). The run found
+  that the host signs only for an Installation's app agent, so the spec now
+  installs the release instead of running the Plugin draft, and grants that
+  agent read on the stored snapshot, which `export` reads with `ctx.read`.
 
 `fixtures/select.json` is hand-authored, not a NextGraph capture. No broker,
 no other NextGraph client and no NextGraph app have been used against these
