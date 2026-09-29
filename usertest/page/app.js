@@ -299,7 +299,12 @@ async function start() {
   try {
     ({ id: session } = await api('/sessions', {
       method: 'POST',
-      body: JSON.stringify({ name: $('name').value, lang: LANG }),
+      body: JSON.stringify({
+        name: $('name').value,
+        lang: LANG,
+        // Which session plan (moderator/sessions/<name>.md); none = calendar.
+        session: params.get('session') ?? undefined,
+      }),
     }));
     await startRecording();
   } catch (error) {

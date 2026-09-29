@@ -3,8 +3,9 @@
  * The voice moderator of a user-testing session (../page/ is its front end).
  * Each turn gets what the tester said (speech-to-text in their browser) plus
  * the collector's log lines since the previous turn, asks Claude for the next
- * thing to say (script.md is the interview script), and returns it for the
- * browser to speak.
+ * thing to say, and returns it for the browser to speak. The system prompt is
+ * script.md (how to moderate) followed by one session plan from sessions/
+ * (which tasks), picked by the invite link's `session` parameter.
  *
  * Per session it keeps, under SESSIONS_DIR/<id>/: meta.json, transcript.jsonl
  * (both sides, with the log lines each turn saw) and recording.webm (screen
@@ -68,8 +69,21 @@ const clientOf = req =>
     .slice(0, 16);
 
 const SCRIPT = readFileSync(join(here, 'script.md'), 'utf8');
+/** Session plans by name: sessions/<name>.md (README.md is not a plan). */
+const PLANS = Object.fromEntries(
+  readdirSync(join(here, 'sessions'))
+    .filter(file => file.endsWith('.md') && file !== 'README.md')
+    .map(file => [
+      file.slice(0, -3),
+      readFileSync(join(here, 'sessions', file), 'utf8'),
+    ]),
+);
+/** The plan an invite link without `session` gets: the first one we ran. */
+const DEFAULT_PLAN = 'calendar';
+if (!PLANS[DEFAULT_PLAN])
+  throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
 const client = new Anthropic();
-/** id -> { dir, started, cursor, clients, messages, turns, done, analyzed } */
+/** id -> { dir, started, plan, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
 
 mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -191,7 +205,7 @@ async function nextLine(session, said, screenshot) {
     // short too.
     output_config: { effort: 'low' },
     cache_control: { type: 'ephemeral' },
-    system: SCRIPT,
+    system: `${SCRIPT}\n\n${PLANS[session.plan]}`,
     messages,
   });
 
@@ -282,6 +296,12 @@ createServer(async (req, res) => {
       if (sessionsToday() >= MAX_SESSIONS_PER_DAY)
         return reply(429, { error: 'No more sessions today' });
       const body = JSON.parse((await readBody(req, 64 * 1024)).toString());
+      const plan = body.session ?? DEFAULT_PLAN;
+      // A mistyped link fails here, not by silently running another plan.
+      if (typeof plan !== 'string' || !Object.hasOwn(PLANS, plan))
+        return reply(400, {
+          error: `Unknown session plan; known: ${Object.keys(PLANS).join(', ')}`,
+        });
       const id = `${today()}-${randomBytes(4).toString('hex')}`;
       const dir = join(SESSIONS_DIR, id);
       mkdirSync(dir);
@@ -294,6 +314,7 @@ createServer(async (req, res) => {
             started,
             name: String(body.name ?? '').slice(0, 80),
             lang: String(body.lang ?? '').slice(0, 20),
+            plan,
             userAgent: req.headers['user-agent'],
             model: MODEL,
           },
@@ -304,6 +325,7 @@ createServer(async (req, res) => {
       sessions.set(id, {
         dir,
         started,
+        plan,
         cursor: started,
         clients: new Set([clientOf(req)]),
         messages: [],

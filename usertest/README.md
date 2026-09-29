@@ -79,8 +79,10 @@ no longer match the hash in the catalog.
 ## Moderated sessions
 
 A tester needs only the invite link,
-`https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>`, and Chrome
-or Edge. The code is in `/etc/usertest-moderator.env` on the droplet;
+`https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>&session=<plan>`,
+and Chrome or Edge. `<plan>` names a session plan in
+[`moderator/sessions/`](moderator/sessions/): which app to test and which
+tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest-moderator.env` on the droplet;
 `moderator/run.sh` creates it on first run. The page:
 
 1. explains the session, what is recorded and where it goes, and asks for
@@ -95,7 +97,7 @@ or Edge. The code is in `/etc/usertest-moderator.env` on the droplet;
 
 The moderator (`moderator/server.mjs`) asks Claude (`claude-opus-5`, effort
 `low`, server-side refusal fallback on) for the next line, following the
-interview script in `moderator/script.md`: short spoken questions, mostly
+interview script in `moderator/script.md` and the session's plan: short spoken questions, mostly
 listening (`[WAIT]`), no help unless the tester is stuck and asks. Each turn
 includes the collector's error, warning, feedback and sync lines since the
 previous turn. Measured on 2026-09-28: about 3 seconds per turn, and the
