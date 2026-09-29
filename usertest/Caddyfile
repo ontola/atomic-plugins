@@ -5,6 +5,12 @@
 # loads (see README.md).
 {
 	email {$ACME_EMAIL}
+	# Certificates for plugin-route hosts are fetched on the first TLS
+	# handshake (see *.routes below), but only for a host the ask endpoint
+	# answers 200 for.
+	on_demand_tls {
+		ask http://127.0.0.1:8083/routes-host
+	}
 }
 
 # atomic-server (server.sh), plain HTTP on loopback. It builds its links from
@@ -41,4 +47,35 @@ catalog.{$BASE_DOMAIN} {
 # atomic-server and the data-browser, and /log posts from drive apps.
 logs.{$BASE_DOMAIN} {
 	reverse_proxy 127.0.0.1:8081
+}
+
+# Server plugins' installation origins, https://<slug>.routes.<base-domain>
+# (server.sh with USERTEST_PLUGIN_ROUTES). atomic-server picks the
+# Installation by the Host header, which reverse_proxy passes on unchanged.
+# sslip.io offers no wildcard certificate, so each host gets its own, on
+# demand. With plugin routes off, atomic-server serves nothing on these hosts.
+*.routes.{$BASE_DOMAIN} {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8080
+}
+
+# The on_demand_tls ask endpoint, on loopback only. A host is allowed when it
+# is <32 hex>.routes.<something> and a file of that name exists in
+# /etc/caddy/routes-allowed/ (README.md, "Trying server plugins"). The
+# allowlist keeps anyone from making Caddy request certificates for made-up
+# slugs and using up the Let's Encrypt rate limits the other hosts share.
+http://127.0.0.1:8083 {
+	bind 127.0.0.1
+	@allowed {
+		path /routes-host
+		expression `{query.domain}.matches("^[0-9a-f]{32}\\.routes\\.[a-z0-9.-]+$")`
+		file {
+			root /etc/caddy/routes-allowed
+			try_files /{query.domain}
+		}
+	}
+	respond @allowed 200
+	respond 404
 }
