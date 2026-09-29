@@ -254,6 +254,38 @@ suite('Calendar drive app: supported path', () => {
     ).not.toContain(prop(store, END_DAY));
   });
 
+  it('gives an all-day event with end == start (#184) the exclusive End day of its one day', async () => {
+    const { store, controller } = await imported();
+    // project() reads end == start as that one day with an exclusive end, so
+    // the imported one-day event (DAY to the 25th) is the same event.
+    store.google.editRemote('all-day', { end: { date: DAY } });
+    await controller.refresh();
+    expect(ready(controller.state()).summary).toMatchObject({
+      updated: 0,
+      unreadable: [],
+    });
+    expect(rows(store).get('all-day')!.endDay).toBe('2026-09-25');
+
+    // Moved to the 20th, end == start: the host Calendar view
+    // (start <= day < End day) draws it on the 20th only.
+    store.google.editRemote('all-day', {
+      start: { date: '2026-09-20' },
+      end: { date: '2026-09-20' },
+    });
+    await controller.refresh();
+    expect(ready(controller.state()).summary).toMatchObject({
+      updated: 1,
+      unreadable: [],
+    });
+    expect(rows(store).get('all-day')).toMatchObject({
+      start: '2026-09-20',
+      end: '2026-09-21',
+      allDay: true,
+      day: '2026-09-20',
+      endDay: '2026-09-21',
+    });
+  });
+
   it('previews a local edit as a minimal patch and sends it only on approval, with If-Match', async () => {
     const { store, controller } = await imported();
     const etag = rows(store).get('timed')!.etag;
