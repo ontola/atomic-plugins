@@ -11,8 +11,11 @@
  *   saves to disk. `init` creates the wallet and two documents and seeds the
  *   first one with invented triples.
  *
- * What runs where: the committed plugin.mjs runs in the server's QuickJS
- * sandbox (`/plugin-run`); its `pull` reads a document through the declared
+ * What runs where: the release is published, pinned and installed through
+ * the store's review, so the Installation has an app agent on this node (the
+ * host signs sidecar requests as that agent, and refuses to for a Plugin
+ * draft, which has none). The committed plugin.mjs runs in the server's
+ * QuickJS sandbox (`/plugin-run`) as that Installation; its `pull` reads a document through the declared
  * `atomic-sidecar:` read operation; the snapshot is stored as an ordinary
  * Atomic PlainText resource (the create the review would apply, committed
  * here with @tomic/lib); `export` turns it into INSERT DATA; the push is an
@@ -25,10 +28,10 @@
  * Not covered: a NextGraph broker (ngd). The wallet is created without one,
  * so nothing here syncs between NextGraph peers.
  *
- * Needs a host with `atomic-sidecar:` operations (atomic-server branch
- * claude/plugin-nextgraph-host) that also signs its requests to sidecars as
- * the installation's app agent and serves `/plugin-runtime?installation=`
- * (atomic-server pin candidate17, PENDING: not yet run against it). On a host
+ * Needs a host with `atomic-sidecar:` operations that also signs its
+ * requests to sidecars as the installation's app agent and serves
+ * `/plugin-runtime?installation=`: atomic-server pin candidate17
+ * (`7dbd054a`), where it passed on 2026-09-29. On a host
  * without operations publishing the release is refused on the operation URL;
  * on a host that does not sign, the sidecar refuses the first pull with 401.
  * Either way the test is skipped saying so.
@@ -48,6 +51,7 @@ import {
   getDevDriveSecret,
   SERVER_URL,
 } from '../../../browser/e2e/tests/test-utils';
+import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 // Playwright may load this spec as CommonJS: __dirname, and a native
 // dynamic import for the ES module under test.
@@ -174,6 +178,9 @@ test.describe('nextgraph integration', () => {
     'run through run-lane.mjs, which starts the server with the nextgraph sidecar',
   );
   test.beforeEach(before);
+  test.beforeEach(async ({ page }) => {
+    await enableIntegrationDiscovery(page);
+  });
 
   let dir: string | undefined;
   test.afterEach(() => {
@@ -185,13 +192,13 @@ test.describe('nextgraph integration', () => {
     page,
   }) => {
     test.setTimeout(3_600_000);
-    const { drive, plugin } = await createPlugin(page);
+    const draft = await createPlugin(page);
+    const { drive } = draft;
     const agent = Agent.fromSecret(await getDevDriveSecret(page), 'js');
-    const target = { drive, plugin };
 
     // Maintainer: publish the release; a host without `atomic-sidecar:`
     // operations refuses the manifest here.
-    const published = await post(agent, '/plugin-release', target);
+    const published = await post(agent, '/plugin-release', draft);
     test.skip(
       published.status !== 200 &&
         published.text.includes('operation URLs must be HTTP endpoints'),
@@ -199,6 +206,25 @@ test.describe('nextgraph integration', () => {
     );
     expect(published.status, published.text).toBe(200);
     const release = (published.json as { id: string }).id;
+    const pinned = await post(agent, '/plugin-release-pin', draft);
+    expect(pinned.status, pinned.text).toBe(200);
+
+    // Install it through the store's review. The host signs sidecar requests
+    // as the Installation's app agent on this node, which only an activated
+    // Installation has (a Plugin draft has none, and candidate17 refuses to
+    // call a sidecar for it).
+    const dialog = await openReview(page, release);
+    const reviewUrl = page.url();
+    await dialog.getByRole('button', { name: 'Install', exact: true }).click();
+    await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
+    const plugin = subjectOf(page.url());
+    const target = { drive, plugin };
+    // The agent the host signs as, from the lookup the sidecar uses too.
+    const runtime = await fetch(
+      `${SERVER_URL}/plugin-runtime?installation=${encodeURIComponent(plugin)}`,
+    );
+    expect(runtime.status, await runtime.clone().text()).toBe(200);
+    const appAgent = ((await runtime.json()) as { agent: string }).agent;
 
     // Operator: build the sidecar, create a wallet and two documents, and
     // grant this plugin read on the first and read-write on the second.
@@ -279,7 +305,9 @@ test.describe('nextgraph integration', () => {
 
     // 2. The snapshot becomes an ordinary Atomic resource (what approving
     // the reviewed create does), then 3. export reads it back with ctx.read.
-    const stored = await applyCreate(page, snapshot);
+    // Reads are bounded by the Installation's app agent, so the snapshot
+    // grants it read.
+    const stored = await applyCreate(page, snapshot, appAgent);
     const exportId = `export-${Date.now()}`;
     const exported = await runPlugin(agent, target, {
       mode: 'export',
@@ -435,14 +463,21 @@ function verdictOf(response: Awaited<ReturnType<typeof post>>): {
 }
 
 /** Commits a reviewed create intent the way the browser applies one. */
-async function applyCreate(page: Page, intent: Intent) {
-  return page.evaluate(async ({ parent, isA, set }) => {
-    const store = window.store!;
-    const resource = await store.newResource({ parent, isA, propVals: set });
-    await resource.save();
+async function applyCreate(page: Page, intent: Intent, reader: string) {
+  return page.evaluate(
+    async ({ parent, isA, set, readers }) => {
+      const store = window.store!;
+      const resource = await store.newResource({
+        parent,
+        isA,
+        propVals: { ...set, 'https://atomicdata.dev/properties/read': readers },
+      });
+      await resource.save();
 
-    return resource.subject;
-  }, intent);
+      return resource.subject;
+    },
+    { ...intent, readers: [reader] },
+  );
 }
 
 /** A Plugin draft in the test's drive whose source is plugin.mjs. */
@@ -475,6 +510,25 @@ async function createPlugin(page: Page) {
     // Unique per run, as in plugin-routes.spec.ts: a release id hashes the
     // content, and a rerun on an old store would find it listed already.
     { code: `${pluginSource}\n// run ${Date.now()}\n` },
+  );
+}
+
+async function openReview(page: Page, releaseId: string) {
+  await page.goto(new URL('/app/integrations', SERVER_URL).href);
+  const card = page.locator(`[data-release="${releaseId}"]`);
+  await expect(card).toBeVisible({ timeout: 45_000 });
+  await card.getByRole('button', { name: 'Open', exact: true }).click();
+  const dialog = page.locator('dialog[open]');
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+
+  return dialog;
+}
+
+function subjectOf(url: string) {
+  const parsed = new URL(url);
+
+  return (
+    parsed.searchParams.get('subject') ?? `${parsed.origin}${parsed.pathname}`
   );
 }
 
