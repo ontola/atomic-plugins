@@ -1,0 +1,9 @@
+{
+  "name": "@atomic-integrations/solid-e2e",
+  "private": true,
+  "description": "The Solid lane's e2e dependencies: a published Solid client library reads and writes the pod.",
+  "type": "module",
+  "devDependencies": {
+    "@inrupt/solid-client": "4.0.0"
+  }
+}

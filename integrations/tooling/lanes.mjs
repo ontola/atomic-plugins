@@ -22,6 +22,23 @@ export const TIERS = ['contract', 'node', 'typecheck', 'unit', 'live', 'e2e'];
 export const PLUGIN_ROUTES_LEVELS = ['off', 'read-only', 'read-write'];
 
 /**
+ * What a lane's `serverEnv` may not set: the plugin-routes gates (from
+ * `pluginRoutes`) and what serve.mjs derives from the lane's ports and store.
+ */
+export const SERVER_ENV_RESERVED = [
+  'ATOMIC_PLUGIN_ROUTES',
+  'ATOMIC_ROUTES_ORIGIN',
+  'ATOMIC_PLUGIN_LISTENERS',
+  'ATOMIC_PLUGIN_SIDECARS',
+  'ATOMIC_DATA_DIR',
+  'ATOMIC_CONFIG_DIR',
+  'ATOMIC_CACHE_DIR',
+  'ATOMIC_PORT',
+  'ATOMIC_DOMAIN',
+  'ATOMIC_INTEGRATION_PROXY_URL',
+];
+
+/**
  * A tooling lane tests shared tooling rather than one plugin, so it owns a
  * directory here (this one, or one under it) instead of integrations/<id>/
  * (`dir` in lanes.json).
@@ -127,6 +144,27 @@ export function validateConfig(config) {
       if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
         throw new Error(
           `lane ${lane.id}: pluginRoutes only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
+    if (lane.serverEnv !== undefined) {
+      if (
+        !lane.serverEnv ||
+        typeof lane.serverEnv !== 'object' ||
+        Array.isArray(lane.serverEnv) ||
+        Object.entries(lane.serverEnv).some(
+          ([key, value]) =>
+            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
+            SERVER_ENV_RESERVED.includes(key) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
         );
     }
 

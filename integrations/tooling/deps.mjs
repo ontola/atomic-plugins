@@ -25,12 +25,15 @@ import { root } from './lanes.mjs';
 
 /**
  * The folders, relative to `base`, that hold one plugin's own lockfiles: the
- * plugin folder itself and its drive app, the same two globs CI installs
- * (`integrations/*\/pnpm-lock.yaml`, `integrations/*\/app/pnpm-lock.yaml`).
+ * plugin folder itself, its drive app and its e2e specs' own client
+ * libraries, the same three globs CI installs
+ * (`integrations/*\/pnpm-lock.yaml`, `integrations/*\/app/pnpm-lock.yaml`,
+ * `integrations/*\/e2e/pnpm-lock.yaml`).
  */
 export const pluginDependencyDirs = id => [
   `integrations/${id}`,
   `integrations/${id}/app`,
+  `integrations/${id}/e2e`,
 ];
 
 /**

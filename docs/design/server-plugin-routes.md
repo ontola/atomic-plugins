@@ -571,6 +571,18 @@ Authentication (`auth`) is verified in Rust before the sandbox starts:
 A request that fails verification gets a 401 from the host. The sandbox never
 runs, so floods of failed-auth requests cost no fuel.
 
+*Implemented for Solid-OIDC on atomic-server `claude/plugin-solid-host` (not
+yet in a pin; atomic-plugins#167 section 3):* issuers come from the
+operator's `--solid-oidc-issuers` list only; the proof's `htu` is compared
+with the URL built from the node's configured origins, not from `Host` or
+`Forwarded`; `jti` is single-use in memory; the WebID's Turtle profile must
+list the issuer. Unlike the other modes, a `dpop` route also answers a
+request with **no** token: it runs as the public principal with
+`caller: null`, and the host refuses any write or enqueue it proposes, so a
+resource server can serve public reads and answer `401` itself.
+`caller = { scheme: "dpop", webid, issuer, clientId, jkt }`. atproto OAuth
+is not covered.
+
 The principal (`principal`) decides who `ctx.read`, `ctx.query` and intents
 act as:
 

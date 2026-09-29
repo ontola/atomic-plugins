@@ -344,11 +344,28 @@ async function waitFor(url, what) {
  * never touch the shared mock — does not start the mock at all. See §4 of
  * integrations/PARALLEL_LANES.md.
  */
+/**
+ * A lane's own atomic-server environment (lanes.json `serverEnv`), with
+ * `{atomicServer}`, `{devServer}` and `{mockProxy}` replaced by that lane's
+ * ports. Validated in lanes.mjs: only `ATOMIC_*` names, never the
+ * plugin-routes options, whose values come from `pluginRoutes`.
+ */
+export const laneServerEnv = (serverEnv, ports) =>
+  Object.fromEntries(
+    Object.entries(serverEnv ?? {}).map(([key, value]) => [
+      key,
+      value.replace(/\{(atomicServer|devServer|mockProxy)\}/g, (_, role) =>
+        String(ports[role]),
+      ),
+    ]),
+  );
+
 export async function bringUp({
   ports,
   platforms,
   label = 'shared',
   pluginRoutes,
+  serverEnv: extraEnv,
 }) {
   const config = loadLanes();
   let image = serverImage();
@@ -413,7 +430,7 @@ export async function bringUp({
         name: container,
         ports,
         label,
-        env: serverEnv(ports, IMAGE_STORE),
+        env: { ...serverEnv(ports, IMAGE_STORE), ...laneServerEnv(extraEnv, ports) },
         command: pluginRoutesArgs(pluginRoutes, ports),
       }),
     );
@@ -422,7 +439,10 @@ export async function bringUp({
       'atomic-server',
       binary,
       pluginRoutesArgs(pluginRoutes, ports),
-      serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      {
+        ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+        ...laneServerEnv(extraEnv, ports),
+      },
     );
   }
 

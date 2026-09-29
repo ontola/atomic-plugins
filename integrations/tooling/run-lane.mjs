@@ -35,7 +35,12 @@ import {
   root,
   TIERS,
 } from './lanes.mjs';
-import { bringUp, mockProxyOrigin, routesOrigin } from './serve.mjs';
+import {
+  bringUp,
+  laneServerEnv,
+  mockProxyOrigin,
+  routesOrigin,
+} from './serve.mjs';
 import { layoutProblems } from './link-atomic-server.mjs';
 import {
   installMissing,
@@ -229,6 +234,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        serverEnv: lane.serverEnv,
       });
       status = run(
         requireTool(`${bin}/vitest`, 'run pnpm install in browser/'),
@@ -255,6 +261,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        serverEnv: lane.serverEnv,
       });
       status = runE2e(level);
       await stopStack();
@@ -288,6 +295,9 @@ function runE2e(level) {
       INTEGRATION_PROXY_URL: mockProxyOrigin(ports),
       ATOMIC_MOCK_INTEGRATION_PROXY: '1',
       ...levelEnv(level),
+      // What the lane told its server (lanes.json `serverEnv`), so its
+      // specs can serve what that names, e.g. the Solid lane's test issuer.
+      ...laneServerEnv(lane.serverEnv, ports),
     },
   );
 }

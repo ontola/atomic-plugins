@@ -581,7 +581,7 @@ jobs:
       - name: Install plugin npm dependencies
         working-directory: atomic-plugins
         run: |
-          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do
+          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml integrations/*/e2e/pnpm-lock.yaml; do
             [ -e "$lock" ] || continue
             (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile)
           done
@@ -747,7 +747,7 @@ jobs:
       - name: Install plugin npm dependencies
         working-directory: atomic-plugins
         run: |
-          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do
+          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml integrations/*/e2e/pnpm-lock.yaml; do
             [ -e "$lock" ] || continue
             (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile)
           done

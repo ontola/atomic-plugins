@@ -20,6 +20,7 @@ import {
   PLUGIN_BUILD_DEPENDENCIES,
   SHARED_PACKAGES,
 } from './lanes.mjs';
+import { laneServerEnv } from './serve.mjs';
 
 const config = loadLanes();
 
@@ -377,6 +378,48 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  assert.equal(needsPluginRoutesBuild(config, ['shared']), false);
+  // Only lanes that declare pluginRoutes need that build: a plugin lane
+  // without it does not, the Solid lane (which a shared change also runs)
+  // does.
+  assert.equal(needsPluginRoutesBuild(config, ['open-cloud-mesh']), false);
+  assert.equal(needsPluginRoutesBuild(config, ['solid']), true);
   assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
+});
+
+test('serverEnv takes ATOMIC_* strings and never the gates or the stack settings', () => {
+  const lane = {
+    id: 'demo',
+    index: 90,
+    platforms: [],
+    tiers: ['e2e'],
+    e2e: ['integrations/demo/e2e/demo.spec.ts'],
+  };
+  const check = serverEnv =>
+    validateConfig({ ...config, lanes: [{ ...lane, serverEnv }] });
+  assert.doesNotThrow(() =>
+    check({ ATOMIC_SOLID_OIDC_ISSUERS: 'http://127.0.0.1:{mockProxy}' }),
+  );
+  for (const bad of [
+    { SOLID_ISSUER: 'x' },
+    { ATOMIC_PLUGIN_ROUTES: 'read-write' },
+    { ATOMIC_PORT: '1' },
+    { ATOMIC_X: 1 },
+    [],
+  ])
+    assert.throws(() => check(bad), /serverEnv/, JSON.stringify(bad));
+  assert.throws(
+    () =>
+      validateConfig({
+        ...config,
+        lanes: [{ ...lane, tiers: [], serverEnv: { ATOMIC_X: 'y' } }],
+      }),
+    /serverEnv only affects/,
+  );
+  assert.deepEqual(
+    laneServerEnv(
+      { ATOMIC_A: 'http://127.0.0.1:{mockProxy}/{atomicServer}' },
+      { mockProxy: 1, atomicServer: 2, devServer: 3 },
+    ),
+    { ATOMIC_A: 'http://127.0.0.1:1/2' },
+  );
 });
