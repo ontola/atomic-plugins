@@ -218,7 +218,11 @@ test.describe('nextgraph integration', () => {
           '/data/seed.sparql',
         ],
         600_000,
-      ),
+      )
+        // NextGraph logs INFO lines to stdout; the result is the last line.
+        .trim()
+        .split('\n')
+        .pop()!,
     ) as { documents: string[] };
     const [source, destination] = init.documents;
     // The wallet secret stays with the operator, never on stdout.
