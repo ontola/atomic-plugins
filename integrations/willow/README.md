@@ -10,8 +10,8 @@ Status: **experimental**, in QuickJS JavaScript. This package has two parts:
   [Meadowcap](https://willowprotocol.org/specs/meadowcap/) capability. Any
   Willow'25 peer that reads drops can ingest it. It needs atomic-server with
   the `plugin-routes` feature at `--plugin-routes read-write`, and the host
-  pieces on atomic-server `claude/plugin-willow-host`, which are **not in the
-  pin yet** (see [Host contract](#host-contract));
+  pieces from atomic-server `claude/plugin-willow-host`, which are in pin
+  candidate17 (`7dbd054a`, see [Host contract](#host-contract));
 - the earlier **unsigned-candidate job** (#164), unchanged: it stages exact
   `encode_entry` bytes as reviewed Atomic resources and signs nothing.
 
@@ -175,7 +175,8 @@ the older one.
 ### Host contract
 
 On atomic-server `claude/plugin-willow-host` (branched from candidate14
-`1432e244a`), all behind the `plugin-routes` feature:
+`1432e244a`, folded into pin candidate17 `7dbd054a`), all behind the
+`plugin-routes` feature:
 
 - `http.keys[].willow = { namespace, pathPrefix }` makes an `ed25519` key a
   Willow subspace key. Each value is `config:<key>` or a literal. The install
@@ -228,7 +229,7 @@ Requires Node 22.13+ for the build-time TypeScript stripping API:
 ```sh
 node integrations/willow/build.mjs
 node integrations/tooling/run-lane.mjs willow --tier node
-node integrations/tooling/run-lane.mjs willow --tier e2e   # needs claude/plugin-willow-host, see below
+node integrations/tooling/run-lane.mjs willow --tier e2e   # needs pin candidate17 or later, see below
 cargo run --release --manifest-path integrations/willow/fixtures/verify-drop/Cargo.toml -- integrations/willow/fixtures/exported.drop
 ```
 
@@ -271,7 +272,10 @@ selected property only, one host-generated subspace, a timestamp from the
 commit time); a second request gives the same bytes; after an edit, the entry
 is newer and carries the new value; configuring a private resource answers
 `503` without naming it. The first drop that run served was then accepted by
-willow25 0.7.9's `DropDecoder` (`fixtures/verify-drop`), by hand.
+willow25 0.7.9's `DropDecoder` (`fixtures/verify-drop`), by hand. Rerun on
+2026-09-29 against pin candidate17 (`7dbd054a`, built with `plugin-routes`
+by `integrations/tooling/server-build.mjs`): passed, 11 s (the `DropDecoder`
+check was not repeated).
 
 Not verified in CI yet: the lane needs that host branch in the pin, so on the
 current pin (candidate14) the e2e fails at publishing (the `willow` key field

@@ -144,7 +144,7 @@
         "integrations/willow-drop/plugin.js",
         "integrations/willow-drop/fixtures/expected.json"
       ],
-      "note": "Willow25 Entry codecs, unsigned signing-candidate job, and the drop route: `GET /_routes/<slug>/willow.drop` answers selected public resources as a Willow drop whose entries the host signs with the installation's Ed25519 subspace key (communal namespace, no delegations). The node tier decodes our drops with the willow-drop importer bundle, which verifies every signature and WILLIAM3 digest. The e2e tier runs at --plugin-routes read-write and needs atomic-server's Willow key bindings, ctx.willow and bodyBase64 (branch claude/plugin-willow-host, not yet in the pin); it fails on a host without them. No WGPS, owned namespaces, delegations or live peer.",
+      "note": "Willow25 Entry codecs, unsigned signing-candidate job, and the drop route: `GET /_routes/<slug>/willow.drop` answers selected public resources as a Willow drop whose entries the host signs with the installation's Ed25519 subspace key (communal namespace, no delegations). The node tier decodes our drops with the willow-drop importer bundle, which verifies every signature and WILLIAM3 digest. The e2e tier runs at --plugin-routes read-write and needs atomic-server's Willow key bindings, ctx.willow and bodyBase64 (branch claude/plugin-willow-host, in pin candidate17 7dbd054a, where it passes); it fails on a host without them. No WGPS, owned namespaces, delegations or live peer.",
       "e2e": ["integrations/willow/e2e/willow.spec.ts"]
     },
     {
