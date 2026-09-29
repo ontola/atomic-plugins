@@ -8,6 +8,7 @@ import {
   utf8,
 } from './codec.mjs';
 import { william3 } from '../willow-drop/william3.ts';
+import { base64, encodeDrop, willowTime } from './drop.mjs';
 
 export const P = Object.freeze({
   parent: 'https://atomicdata.dev/properties/parent',
@@ -15,19 +16,46 @@ export const P = Object.freeze({
   description: 'https://atomicdata.dev/properties/description',
   localId: 'https://atomicdata.dev/properties/localId',
   baseline: 'https://atomicdata.dev/properties/importBaseline',
+  lastCommit: 'https://atomicdata.dev/properties/lastCommit',
+  createdAt: 'https://atomicdata.dev/properties/createdAt',
 });
+/** The host-held Ed25519 key whose public half is this installation's subspace. */
+export const WILLOW_KEY = 'willow';
 const MAX_SUBJECTS = 32,
   MAX_PAYLOAD_BYTES = 65536;
 
 export const manifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   name: 'willow',
   namespace: 'atomic-plugins',
-  version: '0.2.0',
+  version: '0.3.0',
   description:
-    'Prepare exact unsigned Willow Entry signing bytes from explicitly selected Atomic properties.',
+    'Publish explicitly selected public Atomic properties as a Willow drop of host-signed, Meadowcap-authorised entries.',
   operations: [],
   secrets: [],
+  http: {
+    mount: 'drive-prefix',
+    routes: [
+      {
+        id: 'drop',
+        path: '/willow.drop',
+        methods: ['GET'],
+        principal: 'anonymous',
+        auth: 'none',
+      },
+    ],
+    keys: [
+      {
+        name: WILLOW_KEY,
+        alg: 'ed25519',
+        willow: { namespace: 'config:namespace', pathPrefix: 'config:pathPrefix' },
+        reason:
+          "This installation's Willow subspace key. The host signs Willow entries with it, only in the configured communal namespace and under the configured path prefix.",
+      },
+    ],
+    reason:
+      'Serves the selected resources, as far as anyone may read them, as a Willow drop that other Willow peers can import.',
+  },
   capabilities: [
     {
       name: 'storage',
@@ -51,15 +79,18 @@ export const manifest = {
       },
       outputParent: {
         type: 'string',
-        description: 'Atomic parent for reviewed unsigned export candidates',
+        description:
+          'Unsigned candidate job only: Atomic parent for reviewed unsigned export candidates',
       },
       namespace: {
         type: 'string',
-        description: 'Willow namespace public key, 64 hex characters',
+        description:
+          'Willow namespace id, 64 hex characters. The drop route needs a communal one (last byte even).',
       },
       subspace: {
         type: 'string',
-        description: 'Willow subspace public key, 64 hex characters',
+        description:
+          "Unsigned candidate job only: Willow subspace id, 64 hex characters. The drop route uses the installation's own key.",
       },
       pathPrefix: {
         type: 'array',
@@ -69,18 +100,10 @@ export const manifest = {
       timestamp: {
         type: 'string',
         description:
-          'Explicit logical Willow U64 timestamp as decimal text; increase after source changes',
+          'Unsigned candidate job only: explicit logical Willow U64 timestamp as decimal text; increase after source changes',
       },
     },
-    required: [
-      'subjects',
-      'properties',
-      'outputParent',
-      'namespace',
-      'subspace',
-      'pathPrefix',
-      'timestamp',
-    ],
+    required: ['subjects', 'properties', 'namespace', 'pathPrefix'],
   },
 };
 
@@ -343,6 +366,117 @@ export function run(ctx) {
   } catch (error) {
     return {
       intents: [],
+      problems: [{ severity: 'error', message: error.message }],
+    };
+  }
+}
+
+function routeConfig(raw) {
+  if (!raw) throw Error('The plugin is not configured');
+
+  for (const field of ['subjects', 'properties']) {
+    if (
+      !Array.isArray(raw[field]) ||
+      !raw[field].length ||
+      raw[field].length > MAX_SUBJECTS ||
+      !raw[field].every(subjectId) ||
+      new Set(raw[field]).size !== raw[field].length
+    )
+      throw Error('Configure bounded unique ' + field);
+  }
+
+  if (!/^[a-fA-F0-9]{64}$/.test(raw.namespace))
+    throw Error('The Willow namespace must be 64 hex characters');
+  if (!Array.isArray(raw.pathPrefix))
+    throw Error('Configure binary path prefix');
+
+  return { ...raw, prefix: validatePath(raw.pathPrefix.map(unhex)) };
+}
+
+/** The JSON-AD payload of the selected properties, as exportCandidate makes it. */
+function payloadOf(subject, resource, properties) {
+  const selected = Object.create(null);
+  selected['@id'] = subject;
+
+  for (const property of properties) {
+    if (Object.prototype.hasOwnProperty.call(resource, property))
+      selected[property] = resource[property];
+  }
+
+  const payload = utf8(canonicalJson(selected));
+  if (payload.length > MAX_PAYLOAD_BYTES) throw Error('Payload exceeds 64 KiB');
+
+  return payload;
+}
+
+/**
+ * One source as a host-authorised Willow entry. The timestamp is the
+ * source's last commit time, read as the data model recommends, so an
+ * unchanged source yields the same entry (and the host the same signature),
+ * and an edit a newer one. The host refuses to sign unless the source is
+ * still at the commit read here and readable by this route's principal.
+ */
+export function authorisedEntry(ctx, c, subspace, subject) {
+  const resource = ctx.read(subject);
+  const commit = resource[P.lastCommit];
+  if (typeof commit !== 'string' || !commit)
+    throw Error('A selected resource has no last commit');
+  const createdAt = ctx.read(commit)[P.createdAt];
+  if (!Number.isSafeInteger(createdAt) || createdAt < 0)
+    throw Error("A selected resource's last commit has no creation time");
+  const payload = payloadOf(subject, resource, c.properties);
+  const entry = {
+    namespace: unhex(c.namespace),
+    subspace,
+    path: validatePath([...c.prefix, utf8(subject)]),
+    timestamp: willowTime(BigInt(createdAt)),
+    payloadLength: BigInt(payload.length),
+    payloadDigest: william3(payload),
+  };
+  const entryHex = hex(encodeEntry(entry));
+  const signed = ctx.willow.authorise({
+    key: WILLOW_KEY,
+    entry: entryHex,
+    source: { subject, commit },
+  });
+  if (signed.entry !== entryHex)
+    throw Error('The host signed other bytes than the ones asked for');
+
+  return { entry, signature: unhex(signed.signature), payload };
+}
+
+/**
+ * `GET /willow.drop`: every selected resource the public may read, as one
+ * Willow drop (raw bytes). Anonymous, so it exports nothing a visitor could
+ * not read anyway. All or nothing: a resource that cannot be read or signed
+ * fails the request, and the reason goes to the run log, not the response.
+ */
+export function handle(ctx) {
+  try {
+    const c = routeConfig(ctx.config);
+    const { subspace } = ctx.willow.subspace(WILLOW_KEY);
+    const items = c.subjects.map(subject =>
+      authorisedEntry(ctx, c, unhex(subspace), subject),
+    );
+
+    return {
+      response: {
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream',
+          'cache-control': 'no-cache',
+        },
+        bodyBase64: base64(encodeDrop(items)),
+      },
+      problems: [],
+    };
+  } catch (error) {
+    return {
+      response: {
+        status: 503,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        body: 'This Willow drop cannot be built right now; the installation run log says why.',
+      },
       problems: [{ severity: 'error', message: error.message }],
     };
   }

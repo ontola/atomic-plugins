@@ -197,10 +197,18 @@ export const SHARED_PACKAGES = [
   'ontology-kit',
 ];
 
-// Reviewed exact build dependency: reuse the existing WILLIAM3 primitive without
+// Reviewed exact build dependencies: reuse the existing WILLIAM3 primitive without
 // duplicating cryptographic source or granting arbitrary sibling-folder globs.
+// Willow's tests also decode its drops with the willow-drop importer's
+// committed bundle (an independent verifier) and pin the hifitime offset
+// against that importer's willow25 expectations, so a change to either
+// reruns the willow lane.
 export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
-  willow: ['integrations/willow-drop/william3.ts'],
+  willow: [
+    'integrations/willow-drop/william3.ts',
+    'integrations/willow-drop/plugin.js',
+    'integrations/willow-drop/fixtures/expected.json',
+  ],
 });
 
 /**

@@ -377,6 +377,11 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  assert.equal(needsPluginRoutesBuild(config, ['shared']), false);
+  // A shared change runs every plugin lane, so it needs the plugin-routes
+  // build exactly when some plugin lane (not a tooling lane) declares a level.
+  assert.equal(
+    needsPluginRoutesBuild(config, ['shared']),
+    config.lanes.some(l => l.dir === undefined && pluginRoutesLevels(l).length),
+  );
   assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
 });
