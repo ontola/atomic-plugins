@@ -214,7 +214,8 @@ table). Version 0.3.0 is that bundle with only the manifest's `version`
 changed (#148 changed the importer's behaviour at 0.2.0: the statements
 table and `tables` in `config.required`). At 0.3.0 (`plugin.js` sha256
 `5d5ab941d41734d088e7be6da528b3decbfbf3db81e56cfae59e69558054733b`) both
-E2E tests passed once on 2026-09-29 against pin `2567fc30b` (the published
+E2E tests passed once on 2026-09-29 against pin `2567fc30b` and once
+against pin `1432e244a`, which fixes atomic-server#1846 (both the published
 e2e image). The
 spec picks the release it just published by its id, so it also passes on a
 lane store kept from earlier runs (checked twice in a row). It covers these
