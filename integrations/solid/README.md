@@ -159,11 +159,26 @@ the pod with [@inrupt/solid-client](https://www.npmjs.com/package/@inrupt/solid-
 4.0.0 using DPoP-bound tokens from a test issuer (`e2e/issuer.ts`), which
 serves issuer metadata, JWKS and WebID profiles and mints tokens in process;
 it is not an identity provider. The lane passes the issuer to the server
-through `serverEnv` in `integrations/lanes.json`. Verified there against
-atomic-server `claude/plugin-solid-host` only; against the pinned host the
-spec skips. Not verified: browser-based Solid apps, a real identity
-provider's login, other Solid client libraries, and the Solid conformance
-test harness.
+through `serverEnv` in `integrations/lanes.json`.
+
+**Verified** (2026-09-29, `node integrations/tooling/run-lane.mjs solid`,
+node and e2e tiers passing) against atomic-server `claude/plugin-solid-host`
+at `6beefd276` (the DPoP code as later reformatted in `21ec49767`), built with
+`--features wasm-plugins,plugin-routes`: root container with public read and
+CORS, `createContainerAt`, `saveSolidDatasetAt` (PUT with `If-None-Match: *`,
+then a SPARQL Update PATCH), `getSolidDataset` and `getContainedResourceUrlAll`,
+`getEffectiveAccess`, `saveFileInContainer` with a Slug and `getFile`, N3
+Patch with `solid:where`, JSON-LD negotiation, 412/304 on ETags, 403 for a
+reader's write, 401 for anonymous writes and for tokens with a wrong
+audience, an expired token, a WebID whose profile does not name the issuer,
+and a Bearer token; deletes, including 409 for a non-empty container; and
+the stored atoms listed by path in the data browser's folder view.
+
+**Declared, not verified**: the skip against a host without `auth: dpop`
+(no plugin-routes build of the previous pin was at hand), browser-based
+Solid apps (their preflights go through the host's CORS layer), a real
+identity provider's login, other Solid client libraries, and the Solid
+conformance test harness.
 
 The manifest declares every consumed configuration field with the
 host-supported string/object schema; none is globally required, because

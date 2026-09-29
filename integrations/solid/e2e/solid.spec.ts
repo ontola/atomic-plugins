@@ -260,7 +260,9 @@ _:p a solid:InsertDeletePatch;
       new URL(`/app/show?subject=${encodeURIComponent(storage)}`, SERVER_URL)
         .href,
     );
-    await expect(page.getByText('/notes/hello.ttl')).toBeVisible({
+    await expect(
+      page.getByRole('main').getByRole('link', { name: '/notes/hello.ttl' }),
+    ).toBeVisible({
       timeout: 30_000,
     });
 
