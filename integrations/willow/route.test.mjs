@@ -58,8 +58,12 @@ function fixture() {
       s2,
       { [name]: 'Second', [P.lastCommit]: 'https://atomic.example/commits/b' },
     ],
-    ['https://atomic.example/commits/a', { [P.createdAt]: 1790208000000 }],
-    ['https://atomic.example/commits/b', { [P.createdAt]: 1790208060000 }],
+  ]);
+  // What the host knows from its signed commit envelopes; commits are not
+  // readable resources.
+  const committedAt = new Map([
+    ['https://atomic.example/commits/a', 1790208000000],
+    ['https://atomic.example/commits/b', 1790208060000],
   ]);
   const authorised = [];
   const ctx = {
@@ -85,6 +89,20 @@ function fixture() {
           pathPrefix: [ATOMIC],
         };
       },
+      source: (k2, subject) => {
+        assert.equal(k2, 'willow');
+        const commit = ctx.read(subject)[P.lastCommit];
+        if (!commit) throw Error('the source has no last commit');
+        if (!committedAt.has(commit))
+          throw Error('no envelope of the last commit');
+
+        return {
+          subject,
+          commit,
+          committedAt: committedAt.get(commit),
+          timestamp: willowTime(BigInt(committedAt.get(commit))).toString(),
+        };
+      },
       authorise: request => {
         const entry = decodeEntry(unhex(request.entry), { canonical: true });
         assert.equal(request.key, 'willow');
@@ -107,7 +125,7 @@ function fixture() {
     },
   };
 
-  return { ctx, resources, authorised, key: k };
+  return { ctx, resources, committedAt, authorised, key: k };
 }
 
 const properties = Object.fromEntries(
@@ -196,9 +214,7 @@ test('unchanged sources give the same bytes; an edit gives a newer entry', () =>
   assert.equal(handle(f.ctx).response.bodyBase64, first);
   f.resources.get(s1)[name] = 'Edited';
   f.resources.get(s1)[P.lastCommit] = 'https://atomic.example/commits/c';
-  f.resources.set('https://atomic.example/commits/c', {
-    [P.createdAt]: 1790208120000,
-  });
+  f.committedAt.set('https://atomic.example/commits/c', 1790208120000);
   const rows = importRows(handle(f.ctx).response);
   assert.equal(
     value(rows[0], 'willow-timestamp'),
@@ -211,7 +227,18 @@ test('an unreadable, uncommitted or host-refused source fails the whole drop wit
   for (const [breakIt, why] of [
     [f => f.resources.delete(s2), /Denied/],
     [f => delete f.resources.get(s2)[P.lastCommit], /no last commit/],
-    [f => f.resources.delete('https://atomic.example/commits/b'), /Denied/],
+    [
+      f => f.committedAt.delete('https://atomic.example/commits/b'),
+      /no envelope/,
+    ],
+    [
+      f => {
+        const source = f.ctx.willow.source;
+
+        f.ctx.willow.source = (k, s) => ({ ...source(k, s), timestamp: '1' });
+      },
+      /reads the commit time differently/,
+    ],
     [
       f => {
         const authorise = f.ctx.willow.authorise;

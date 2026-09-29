@@ -23,7 +23,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { Agent, signRequest } from '@tomic/lib';
+import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
   createFromCatalog,
@@ -85,9 +85,11 @@ test.describe('willow export route', () => {
     );
     expect(entry.requires).toContain('plugin-routes:read-write');
 
-    // Install through the store's review, which lists the key.
+    // Install through the store's review, which lists the key and its reason
+    // (it does not render the Willow binding itself; the config shows it).
     const dialog = await openReview(page, releaseId);
-    await expect(dialog).toContainText('Willow signing key');
+    await expect(dialog).toContainText('Signing key: willow (ed25519)');
+    await expect(dialog).toContainText('Willow subspace key');
     const reviewUrl = page.url();
     await dialog.getByRole('button', { name: 'Install', exact: true }).click();
     await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
@@ -188,6 +190,7 @@ test.describe('willow export route', () => {
       { subject: hello, property: NAME },
     );
     const edited = await fetch(url);
+    expect(edited.status, await edited.clone().text()).toBe(200);
     const editedRows = importRows(new Uint8Array(await edited.arrayBuffer()));
     expect(JSON.parse(editedRows[0]['willow-payload'])[NAME]).toBe(
       'Hello again',
@@ -317,16 +320,17 @@ function routeSlug(subject: string) {
     .slice(0, 32);
 }
 
+/** A POST with a fresh version 2 request signature (atomic-server#1832). */
 async function post(agent: Agent, path: string, body: unknown) {
   const url = `${SERVER_URL}${path}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(await signRequest(url, agent, {})),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(
+    url,
+    await signedRequestInit(url, agent, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
   const text = await response.text();
   let json: unknown;
 

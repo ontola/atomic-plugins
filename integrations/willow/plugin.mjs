@@ -17,7 +17,6 @@ export const P = Object.freeze({
   localId: 'https://atomicdata.dev/properties/localId',
   baseline: 'https://atomicdata.dev/properties/importBaseline',
   lastCommit: 'https://atomicdata.dev/properties/lastCommit',
-  createdAt: 'https://atomicdata.dev/properties/createdAt',
 });
 /** The host-held Ed25519 key whose public half is this installation's subspace. */
 export const WILLOW_KEY = 'willow';
@@ -416,23 +415,31 @@ function payloadOf(subject, resource, properties) {
  * One source as a host-authorised Willow entry. The timestamp is the
  * source's last commit time, read as the data model recommends, so an
  * unchanged source yields the same entry (and the host the same signature),
- * and an edit a newer one. The host refuses to sign unless the source is
- * still at the commit read here and readable by this route's principal.
+ * and an edit a newer one. The host tells that time (`ctx.willow.source`:
+ * commits are not always readable resources) and refuses to sign unless the
+ * source is still at that commit and readable by this route's principal.
  */
 export function authorisedEntry(ctx, c, subspace, subject) {
+  const revision = ctx.willow.source(WILLOW_KEY, subject);
   const resource = ctx.read(subject);
   const commit = resource[P.lastCommit];
   if (typeof commit !== 'string' || !commit)
     throw Error('A selected resource has no last commit');
-  const createdAt = ctx.read(commit)[P.createdAt];
-  if (!Number.isSafeInteger(createdAt) || createdAt < 0)
-    throw Error("A selected resource's last commit has no creation time");
+  if (commit !== revision.commit)
+    throw Error('A selected resource changed while it was read; try again');
+  const timestamp = decimal(revision.timestamp);
+  // The host's reading of the commit time must be the data model's.
+  if (
+    !Number.isSafeInteger(revision.committedAt) ||
+    willowTime(BigInt(revision.committedAt)) !== timestamp
+  )
+    throw Error('The host reads the commit time differently');
   const payload = payloadOf(subject, resource, c.properties);
   const entry = {
     namespace: unhex(c.namespace),
     subspace,
     path: validatePath([...c.prefix, utf8(subject)]),
-    timestamp: willowTime(BigInt(createdAt)),
+    timestamp,
     payloadLength: BigInt(payload.length),
     payloadDigest: william3(payload),
   };

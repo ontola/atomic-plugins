@@ -153,7 +153,7 @@ For each subject, in order, `handle(ctx)`:
    selected properties plus `@id`), its WILLIAM3 digest, and the path
    `pathPrefix ‖ UTF-8(subject)`;
 4. asks `ctx.willow.authorise({ key: "willow", entry, source: { subject,
-   commit } })` to sign the exact `encode_entry` bytes, and checks the host
+commit } })` to sign the exact `encode_entry` bytes, and checks the host
    answers for those bytes.
 
 It answers `200`, `application/octet-stream`, the drop as raw bytes
@@ -243,8 +243,7 @@ Verified by the node tier (35 tests):
 Verified by hand with willow25 itself: `fixtures/verify-drop` (willow25
 0.7.9's `DropDecoder`, which verifies each authorisation token) accepted both
 entries of `fixtures/exported.drop` on 2026-09-29, and reported the first
-timestamp as Unix milliseconds 1790294432184 where the data model reads
-1790208000000. CI does not run it.
+timestamp as Unix milliseconds 1790294432184 where the data model reads 1790208000000. CI does not run it.
 
 Verified by the host's Rust tests on `claude/plugin-willow-host`: all
 accepted `encode_entry` vectors of at most 512 bytes (74) round-trip and all
