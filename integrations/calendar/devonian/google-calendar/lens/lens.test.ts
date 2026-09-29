@@ -1,6 +1,9 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
+import { Datatype, isAllDayOnDate } from '@tomic/lib';
 import { planCalendarValues } from './edit.js';
+import { calendarFields, calendarProjection } from './projection.js';
+import type { FetchedPlatform, JSONValue } from './types.js';
 import { applyCalendarEdit, planCalendarEdit } from '../sync.js';
 
 // Moved from devonian/__tests__/unit/platformLenses.test.ts with the lens.
@@ -132,5 +135,79 @@ describe('Calendar runtime after lens extraction', () => {
     );
     expect(writes).toBe(0);
     expect(checkpoint).toMatchObject({ [name]: 'After', summary: 'After' });
+  });
+});
+
+describe('calendarProjection: the host Calendar view’s format', () => {
+  const fetched = (start: JSONValue, end: JSONValue): FetchedPlatform => ({
+    platform: 'google-calendar',
+    ontology: {
+      description: 'Google Calendar',
+      terms: [
+        {
+          path: 'urn:event',
+          kind: 'class',
+          shortname: 'event',
+          description: 'An event',
+          datatype: Datatype.STRING,
+          requires: [],
+          recommends: [],
+        },
+      ],
+    },
+    records: [
+      {
+        resource: 'event',
+        namespace: 'primary',
+        id: 'e1',
+        name: 'Invented event',
+        values: { start, end },
+      },
+    ],
+  });
+  const projected = (start: JSONValue, end: JSONValue) =>
+    calendarProjection(fetched(start, end)).records[0].values;
+
+  it('keeps Google’s exclusive all-day end as End day', () => {
+    expect(
+      projected({ date: '2026-11-16' }, { date: '2026-11-19' }),
+    ).toMatchObject({
+      [calendarFields.day]: '2026-11-16',
+      [calendarFields.allDay]: true,
+      [calendarFields.endDay]: '2026-11-19',
+    });
+  });
+
+  it('reads end.date == start.date as one day, not as an empty range (#184)', () => {
+    const values = projected({ date: '2026-12-31' }, { date: '2026-12-31' });
+    expect(values).toMatchObject({
+      [calendarFields.day]: '2026-12-31',
+      [calendarFields.endDay]: '2027-01-01',
+    });
+    // Google's own start/end stay as sent, for write-back.
+    expect(values.end).toEqual({ date: '2026-12-31' });
+    expect(
+      isAllDayOnDate(
+        values[calendarFields.day],
+        values[calendarFields.endDay],
+        '2026-12-31',
+      ),
+    ).toBe(true);
+  });
+
+  it('still refuses an all-day end before its start', () => {
+    expect(() =>
+      projected({ date: '2026-12-31' }, { date: '2026-12-30' }),
+    ).toThrow('invalid all-day interval');
+  });
+
+  it('gives a timed event its Day in the supplied offset and no End day', () => {
+    const values = projected(
+      { dateTime: '2026-09-24T23:30:00-04:00' },
+      { dateTime: '2026-09-25T00:30:00-04:00' },
+    );
+    expect(values[calendarFields.day]).toBe('2026-09-24');
+    expect(values[calendarFields.allDay]).toBe(false);
+    expect(values[calendarFields.endDay]).toBeUndefined();
   });
 });

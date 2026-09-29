@@ -3,6 +3,7 @@ import {
   Datatype,
   calendarFields,
   isCalendarDate as validDay,
+  nextCalendarDate,
 } from '@tomic/lib';
 import type { JSONValue, FetchedPlatform, Term } from './types.js';
 
@@ -11,7 +12,11 @@ export { calendarFields } from '@tomic/lib';
 /** An additional projection, never a replacement for the provider's fields.
  * One DATE column supports both all-day dates and timed events in a single view.
  * Timed events use the date in Google's supplied offset; raw start/end retain
- * the instant and zone. All-day ends are also projected for range rendering.
+ * the instant and zone. All-day ends are also projected for range rendering,
+ * in the host's exclusive form. An all-day event whose end.date equals its
+ * start.date (Google's UI shows it as one day; its own writes use the day
+ * after) gets the day after as its End day, as the drive app's `project()`
+ * does (#184): the host view would draw End day == Day on no day at all.
  */
 export function calendarProjection(fetched: FetchedPlatform): FetchedPlatform {
   if (fetched.platform !== 'google-calendar') return fetched;
@@ -112,7 +117,7 @@ export function calendarProjection(fetched: FetchedPlatform): FetchedPlatform {
           (start.dateTime !== undefined ||
             end.dateTime !== undefined ||
             !validDay(end.date) ||
-            end.date <= start.date!)) ||
+            end.date < start.date!)) ||
           (!allDay && end.date !== undefined))
       )
         throw new Error(
@@ -149,7 +154,8 @@ export function calendarProjection(fetched: FetchedPlatform): FetchedPlatform {
         values[calendarFields.day] = date.slice(0, 10);
         values[calendarFields.allDay] = allDay;
         if (allDay && validDay(end.date))
-          values[calendarFields.endDay] = end.date;
+          values[calendarFields.endDay] =
+            end.date === start.date ? nextCalendarDate(end.date) : end.date;
       }
 
       return { ...row, values };

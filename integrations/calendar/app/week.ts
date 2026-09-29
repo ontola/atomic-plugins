@@ -6,7 +6,7 @@
  * `<section>` with a list of event buttons; a visually hidden "Switch to
  * agenda view" link comes first.
  */
-import { accessibleName, type Ctx } from './context.js';
+import { accessibleName, endClock, type Ctx } from './context.js';
 import { packWeek, type Block, type CalEvent } from './events.js';
 import { h } from './ui/dom.js';
 import { hhmm, longDay, offsetLabel, wall, weekdayShort } from './time.js';
@@ -46,7 +46,7 @@ function block(ctx: Ctx, b: Block, lanes: number, left: number): HTMLElement {
   // Under 75 minutes there is room for one title line and the time.
   const oneLine = s.endMin - s.startMin < 75;
   const width = `calc(${100 / lanes}% - 4px)`;
-  const meta = [`${hhmm(s.startMin)}–${hhmm(s.endMin)}`, e.location]
+  const meta = [`${hhmm(s.startMin)}–${endClock(s, true)}`, e.location]
     .filter(Boolean)
     .join(' · ');
 
@@ -168,7 +168,7 @@ export function week(
   gridWidth: number,
 ): HTMLElement {
   const { doc } = ctx;
-  const layout = packWeek(events, from, count, ctx.zone);
+  const layout = packWeek(events, from, count);
   const colWidth = (gridWidth - GUTTER) / count;
   const maxLanes = Math.max(1, Math.floor(colWidth / MIN_LANE));
   const template = `--n:${count}`;

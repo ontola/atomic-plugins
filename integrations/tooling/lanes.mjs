@@ -22,8 +22,13 @@ export const TIERS = ['contract', 'node', 'typecheck', 'unit', 'live', 'e2e'];
 export const PLUGIN_ROUTES_LEVELS = ['off', 'read-only', 'read-write'];
 
 /**
- * What a lane's `serverEnv` may not set: the plugin-routes gates (from
- * `pluginRoutes`) and what serve.mjs derives from the lane's ports and store.
+ * What a lane's `serverEnv` (lanes.json) may not set on its atomic-server:
+ * the plugin-routes gates, which come from `pluginRoutes` only, and what
+ * serve.mjs derives from the lane's ports and store (serve.mjs `serverEnv`).
+ * Anything else named `ATOMIC_*` is allowed: the debug-build test seams
+ * (`ATOMIC_PLUGIN_E2E_*`, which atomic-server ignores in release builds)
+ * and host settings a lane's e2e needs, such as `ATOMIC_SOLID_OIDC_ISSUERS`.
+ * serve.test.mjs checks this list covers both.
  */
 export const SERVER_ENV_RESERVED = [
   'ATOMIC_PLUGIN_ROUTES',
@@ -35,7 +40,9 @@ export const SERVER_ENV_RESERVED = [
   'ATOMIC_CACHE_DIR',
   'ATOMIC_PORT',
   'ATOMIC_DOMAIN',
+  'ATOMIC_REPOPULATE_DEFAULTS',
   'ATOMIC_INTEGRATION_PROXY_URL',
+  'ATOMIC_INTEGRATION_FRONTEND_ORIGIN',
 ];
 
 /**
@@ -131,6 +138,31 @@ export function validateConfig(config) {
         );
     }
 
+    if (lane.serverEnv !== undefined) {
+      const entries =
+        lane.serverEnv &&
+        typeof lane.serverEnv === 'object' &&
+        !Array.isArray(lane.serverEnv)
+          ? Object.entries(lane.serverEnv)
+          : [];
+      if (
+        !entries.length ||
+        entries.some(
+          ([key, value]) =>
+            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
+            SERVER_ENV_RESERVED.includes(key) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
     if (lane.pluginRoutes !== undefined) {
       const levels = pluginRoutesLevels(lane);
       if (
@@ -144,27 +176,6 @@ export function validateConfig(config) {
       if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
         throw new Error(
           `lane ${lane.id}: pluginRoutes only affects the live and e2e tiers, and it has neither`,
-        );
-    }
-
-    if (lane.serverEnv !== undefined) {
-      if (
-        !lane.serverEnv ||
-        typeof lane.serverEnv !== 'object' ||
-        Array.isArray(lane.serverEnv) ||
-        Object.entries(lane.serverEnv).some(
-          ([key, value]) =>
-            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
-            SERVER_ENV_RESERVED.includes(key) ||
-            typeof value !== 'string',
-        )
-      )
-        throw new Error(
-          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
-        );
-      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
-        throw new Error(
-          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
         );
     }
 

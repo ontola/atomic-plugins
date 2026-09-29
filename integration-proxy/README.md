@@ -92,7 +92,11 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   consent page therefore allows form submissions to the proxy only. 0.2.2
   and later; 0.2.1 redirected (`303`). For an API-key platform (`type:
   apiKey` in the composed document) the consent page asks for the key, and
-  this seals it and redirects (`303`) to `redirect_uri`. Approving the same
+  this seals it and redirects (`303`) to `redirect_uri`. For a platform whose
+  composed document declares top-level `security: []` and no security scheme
+  (0.2.3 and later), the consent page asks for nothing, and this hands off a
+  connection that holds no credential and redirects (`303`) to
+  `redirect_uri`; requests are forwarded with none. Approving the same
   consent page twice answers `400` "You already approved this connection …"
   rather than "expired"; the page's one inline script (allowed by its hash)
   disables the button after the first click.
@@ -382,7 +386,7 @@ git tag integration-proxy-v0.1.1 && git push origin integration-proxy-v0.1.1
 ```
 
 Only `src/`, `static/index.html`, `static/logo.png`, `Cargo.toml`,
-`Cargo.lock`, `README.md`, `SECURITY.md` and `LICENSE` are packaged
+`Cargo.lock`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `LICENSE` are packaged
 (`cargo package --list` shows the exact list). `tests/` fixtures are not, so
 `cargo test` only works from a checkout of this repository.
 

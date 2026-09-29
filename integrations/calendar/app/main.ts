@@ -93,6 +93,7 @@ const EMPTY_SUMMARY: ImportSummary = {
   conflicts: [],
   localOnly: 0,
   invalid: [],
+  unmapped: [],
   review: [],
 };
 
@@ -507,14 +508,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
     const rangeDays = ui.view === 'week' ? days : 7;
     const rangeFrom = ui.view === 'week' ? from : mondayOf(ui.anchor);
-    const empty = busyDays(events, rangeFrom, rangeDays, zone).size === 0;
+    const empty = busyDays(events, rangeFrom, rangeDays).size === 0;
     let body: HTMLElement;
 
     if (empty && snap.summary) {
-      const next = nextEvent(events, addDays(rangeFrom, rangeDays), zone);
+      const next = nextEvent(events, addDays(rangeFrom, rangeDays));
       // Nothing later: point at the most recent earlier event instead, so an
       // import of past events never ends on an empty week with no way on.
-      const latest = next ? undefined : latestEvent(events, rangeFrom, zone);
+      const latest = next ? undefined : latestEvent(events, rangeFrom);
       const target = next ?? latest;
       body = emptyState(doc, {
         muted: true,

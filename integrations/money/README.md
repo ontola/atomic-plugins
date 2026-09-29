@@ -184,7 +184,19 @@ read-only view through Add view, imports the synthetic MT940 from inside
 the app through the host's review, checks the strip's closing balance and
 the Imports tab, saves a category after clicking the host's "Allow
 editing", and checks the in-app check (nothing new; a changed transaction
-blocks). Not yet: installing from the catalog (no catalog entry).
+blocks).
+
+Catalog: the `money` entry in `integrations/catalog.json` carries the app
+(`app-module` `apps/money/<version>/ui.js`, the same version as this
+package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
+with `enabled: false`, so the Integrations page does not offer it. Not yet
+a working install path, and not tested: at pin `2567fc30b` a catalog
+Install creates the app with a row class and table of its own
+(`createApp`), the importer's table offers under Add view only apps whose
+`renders` lists its row class (`useDriveApps.ts` `appsForClass`), and
+`store.importer.run` refuses an app that is not a view of an importer's
+table (`hostStore.ts`). The E2E adds the Bank transaction class to the
+app's `renders` test-side instead.
 
 Build: `node integrations/money/app/build.mjs` (writes `app/dist/ui.js`,
 minified, one module). Screenshots, axe and the render budget:
@@ -198,7 +210,13 @@ minified, one module). Screenshots, axe and the render budget:
 the change for atomic-server#1653), with this package at version 0.2.0
 (`plugin.js` sha256 `a8f84cd07899984529b505d2719e83b1ec4bed805c9e2459e895c0956f784efe`,
 the bundle with the annotations, structured errors and the statements
-table). The
+table). Version 0.3.0 is that bundle with only the manifest's `version`
+changed (#148 changed the importer's behaviour at 0.2.0: the statements
+table and `tables` in `config.required`). At 0.3.0 (`plugin.js` sha256
+`5d5ab941d41734d088e7be6da528b3decbfbf3db81e56cfae59e69558054733b`) both
+E2E tests passed once on 2026-09-29 against pin `2567fc30b` and once
+against pin `1432e244a`, which fixes atomic-server#1846 (both the published
+e2e image). The
 spec picks the release it just published by its id, so it also passes on a
 lane store kept from earlier runs (checked twice in a row). It covers these
 steps, all with the synthetic files in `fixtures/` and generated variants:

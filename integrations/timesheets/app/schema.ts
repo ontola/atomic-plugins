@@ -4,10 +4,12 @@ import {
   LOG_FIELDS,
   ROW_FIELDS,
   SETTING_FIELDS,
+  SYNC_FIELDS,
   type Field,
   type LogKey,
   type RowKey,
   type SettingKey,
+  type SyncKey,
 } from './ontology.js';
 import type { JSONValue, PluginResource, PluginStore } from './store.js';
 
@@ -19,12 +21,15 @@ export interface Schema {
   row: Partial<Record<RowKey, string>>;
   settings: Partial<Record<SettingKey, string>>;
   log: Partial<Record<LogKey, string>>;
+  /** Per-row sync bookkeeping (#123 M3): not table columns. */
+  sync: Partial<Record<SyncKey, string>>;
 }
 
 export type CompleteSchema = Schema & {
   row: Record<RowKey, string>;
   settings: Record<SettingKey, string>;
   log: Record<LogKey, string>;
+  sync: Record<SyncKey, string>;
 };
 
 const list = (value: JSONValue): string[] =>
@@ -78,6 +83,7 @@ export async function findSchema(store: PluginStore): Promise<Schema> {
     row: bind(ROW_FIELDS, byShortname),
     settings: bind(SETTING_FIELDS, byShortname),
     log: bind(LOG_FIELDS, byShortname),
+    sync: bind(SYNC_FIELDS, byShortname),
   };
 }
 
@@ -132,6 +138,9 @@ export async function ensureSchema(
   const log = {} as Record<LogKey, string>;
   for (const key of Object.keys(LOG_FIELDS) as LogKey[])
     log[key] = await ensure(LOG_FIELDS[key]);
+  const sync = {} as Record<SyncKey, string>;
+  for (const key of Object.keys(SYNC_FIELDS) as SyncKey[])
+    sync[key] = await ensure(SYNC_FIELDS[key]);
 
   if (added.length) {
     ontology.set(atomic.properties, [
@@ -157,5 +166,6 @@ export async function ensureSchema(
     row,
     settings,
     log,
+    sync,
   };
 }

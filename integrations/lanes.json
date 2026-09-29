@@ -12,17 +12,39 @@
       "id": "open-cloud-mesh",
       "index": 16,
       "platforms": [],
-      "tiers": ["node"],
-      "nodeTests": ["integrations/open-cloud-mesh/plugin.test.mjs"],
-      "note": "Executable OCM discovery, bounded metadata parser and reviewed Atomic document receipt importer. Network receipt remains unavailable pending host authorization and writes; no live interoperability claim."
+      "tiers": ["node", "e2e"],
+      "nodeTests": [
+        "integrations/open-cloud-mesh/plugin.test.mjs",
+        "integrations/open-cloud-mesh/peer.test.mjs"
+      ],
+      "pluginRoutes": "read-write",
+      "serverEnv": {
+        "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
+        "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/open-cloud-mesh/e2e/.peer/ca.pem"
+      },
+      "e2e": ["integrations/open-cloud-mesh/e2e/ocm.spec.ts"],
+      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams, and the route field `fetches` of pin candidate16); the e2e is pending on candidate16 and fails at a pin without these. No interoperability claim with a real Nextcloud/ownCloud peer."
     },
     {
       "id": "calendar",
       "index": 0,
       "platforms": ["google-calendar"],
       "tiers": ["typecheck", "unit", "e2e"],
-      "note": "e2e drives the Calendar drive app (integrations/calendar/app/) in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers.",
+      "note": "e2e installs the Calendar drive app from the catalog (Integrations, Drive apps; the dev-server serves the committed apps/calendar/<version>/ui.js in place of GitHub Pages) and drives it in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers.",
       "e2e": ["integrations/calendar/e2e/calendar.spec.ts"]
+    },
+    {
+      "id": "remotestorage",
+      "index": 10,
+      "platforms": [],
+      "tiers": ["node", "e2e"],
+      "pluginRoutes": "read-write",
+      "nodeTests": ["integrations/remotestorage/plugin.test.mjs"],
+      "e2e": [
+        "integrations/remotestorage/e2e/server.spec.ts",
+        "integrations/remotestorage/e2e/import.spec.ts"
+      ],
+      "note": "A remoteStorage server (draft-dejong-remotestorage-22) on the installation-origin mount. The e2e runs atomic-server built with the plugin-routes feature at --plugin-routes read-write: server.spec.ts installs the unchanged bundle through the store's review dialog and drives remotestorage.js (npm remotestoragejs, pinned in e2e/package.json) through WebFinger, the host consent page and the storage API; import.spec.ts runs the reviewed text importer through /plugin-run. Needs a host with authOptional bearer routes, trailing-slash {*rest} matches redirects to a consented client and handler CORS expose headers (atomic-server branch claude/plugin-remotestorage-host, on candidate14); the node tier needs no server."
     },
     {
       "id": "issue-tracker",
@@ -34,7 +56,7 @@
         "devonian/package.json",
         "devonian/pnpm-lock.yaml"
       ],
-      "note": "paths: devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. The e2e drives the GitHub issues drive app (app/, npm devonian from app/package.json) through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository.",
+      "note": "paths: devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. The e2e installs the GitHub issues drive app (app/, npm devonian from app/package.json) from the catalog's Drive apps section, as the committed apps/issue-tracker/<version>/ui.js, and drives it through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository.",
       "e2e": ["integrations/issue-tracker/e2e/issue-tracker.spec.ts"]
     },
     {
@@ -72,15 +94,29 @@
       "index": 3,
       "platforms": ["moneybird"],
       "tiers": ["e2e"],
-      "note": "e2e drives the Bank statements importer through the host's generic file entry point (atomic-server#1653: manifest accepts/destination, PluginPage Import tab): publish, discover, set up, MT940 and camt.053 import, reload, reimport, local edit, conflict and refused files. The pin includes that change (atomic-server#1691); against an older host, publishing the bundle fails on the unknown manifest field. No typecheck/unit tier: money has an atomicCertification block, so the unsharded certification step in shared-checks already runs exactly its typecheck (tsconfig.json) and unit (vitest.config.ts) on every integrations/** change, plus bundle reproducibility. moneybird is listed for a future Moneybird fixture in integrations/money/fixtures/moneybird/ (plugin-specific files stay in the plugin folder); integrations/money/ has no Moneybird runtime code.",
+      "note": "e2e drives the Bank statements importer through the host's generic file entry point (atomic-server#1653: manifest accepts/destination, PluginPage Import tab): publish, discover, set up, MT940 and camt.053 import, reload, reimport, local edit, conflict and refused files. A second test installs the Money drive app (integrations/money/app/) test-side as an app rendering the Bank transaction class, adds it through the table's Add view as a read-only view, imports an MT940 from inside the app through the host's review (store.importer.run, atomic-server#1774), and saves a category after the host's Allow editing (atomic-server#1788). The pin includes that change (atomic-server#1691); against an older host, publishing the bundle fails on the unknown manifest field. Host bug atomic-server#1846, fixed at pin 1432e244a (atomic-server#1847, atomic-plugins #179): at pin 2567fc30b Add view read the drive's apps once on mount, so when the app's save synced in after navigating, 'New app' never appeared and the second test failed. No typecheck/unit tier: money has an atomicCertification block, so the unsharded certification step in shared-checks already runs exactly its typecheck (tsconfig.json) and unit (vitest.config.ts) on every integrations/** change, plus bundle reproducibility. moneybird is listed for a future Moneybird fixture in integrations/money/fixtures/moneybird/ (plugin-specific files stay in the plugin folder); integrations/money/ has no Moneybird runtime code.",
       "e2e": ["integrations/money/e2e/money.spec.ts"]
+    },
+    {
+      "id": "fediverse",
+      "index": 13,
+      "platforms": [],
+      "tiers": ["node", "e2e"],
+      "nodeTests": ["integrations/fediverse/plugin.test.mjs"],
+      "pluginRoutes": "read-write",
+      "serverEnv": {
+        "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
+        "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/fediverse/e2e/.peer/ca.pem"
+      },
+      "e2e": ["integrations/fediverse/e2e/fediverse.spec.ts"],
+      "note": "node: the handler's decisions against an in-memory host (projection, WebFinger, NodeInfo, publish, Follow/Accept, Undo, replies, Delete) and bundle reproducibility. e2e: the bundle on atomic-server built with plugin-routes at read-write, federating with the ActivityPub peer fixture in integrations/fediverse/e2e/peer.ts (HTTPS on loopback, self-signed): WebFinger and NodeInfo through /.well-known/, a host-verified signed Follow answered by a signed Accept from the host delivery queue, a publish over auth: atomic delivered as a signed Create, a reply stored as an Atomic Message, and Undo. The e2e needs atomic-server branch claude/plugin-fediverse-host (auth: atomic, request.caller.actor, WebFinger rels, and the debug-build ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS and ATOMIC_PLUGIN_E2E_PEER_CA seams that serverEnv turns on: loopback peers, with the peer's throwaway test CA as the only trusted root there); at a pin without it, the e2e tier fails."
     },
     {
       "id": "notion",
       "index": 4,
       "platforms": ["notion"],
       "tiers": ["live", "e2e"],
-      "note": "The e2e drives the Notion drive plugin (integrations/notion/app/) through the host's integration-proxy relay (store.proxy, consent bar and connect return) from ontola/atomic-server#1657, against the shared mock proxy's notion fixture. The live tier stubs fetch in-process.",
+      "note": "The e2e installs the Notion drive app (integrations/notion/app/) from the catalog's Drive apps section, as the committed apps/notion/<version>/ui.js, and drives it through the host's integration-proxy relay (store.proxy, consent bar and connect return) from ontola/atomic-server#1657, against the shared mock proxy's notion fixture. The live tier stubs fetch in-process.",
       "e2e": ["integrations/notion/e2e/notion.spec.ts"],
       "liveEnv": "ATOMIC_NOTION_TEST_SERVER"
     },
@@ -101,7 +137,7 @@
       "index": 5,
       "platforms": ["pets"],
       "tiers": ["e2e"],
-      "note": "e2e drives the Pets drive app (integrations/pets/app/) in its plugin iframe: connect through the host's consent bar and the mock proxy, then import through the host proxy relay (#52). It needs an .atomic-server-ref that includes the relay (atomic-server#1657, for #1624, merged into feat/plugin-debug; the pin has it); against an older pin the app reports that the host cannot reach the proxy and the spec fails at 'Not connected'.",
+      "note": "e2e installs the Pets drive app from the catalog (Integrations, Drive apps; the committed apps/pets/<version>/ui.js), updates it from an older recorded version, and drives it in its plugin iframe: connect through the host's consent bar and the mock proxy, then import through the host proxy relay (#52). It needs an .atomic-server-ref that includes the relay (atomic-server#1657, for #1624, merged into feat/plugin-debug; the pin has it); against an older pin the app reports that the host cannot reach the proxy and the spec fails at 'Not connected'.",
       "e2e": ["integrations/pets/e2e/pets.spec.ts"]
     },
     {
@@ -117,7 +153,7 @@
       "index": 6,
       "platforms": ["clockify"],
       "tiers": ["typecheck", "unit", "e2e"],
-      "note": "The e2e drives the timesheets drive app (integrations/timesheets/app/) in its plugin iframe: connect through the host's consent bar and the mock proxy, set up workspace and look-back in the frame, then import, reload, refresh and recover from a proxy failure through the host relay (atomic-server#1657; the pin has it). Provider changes and failures go through the mock proxy's local-only fixture driver (POST /__fixture/clockify). The install is test-side (New app + replaced source) until #94. The old upstream Clockify tests were deleted in atomic-server 4bab16ee6 with the UI they drove (#44).",
+      "note": "The e2e installs the timesheets drive app from the catalog (Integrations, Drive apps; the committed apps/timesheets/<version>/ui.js) and drives it in its plugin iframe: connect through the host's consent bar and the mock proxy, set up workspace and look-back in the frame, then import, reload, refresh and recover from a proxy failure through the host relay (atomic-server#1657; the pin has it). Provider changes and failures go through the mock proxy's local-only fixture driver (POST /__fixture/clockify). It also checks an M2 conflict and not-loaded time in the #89 views. The old upstream Clockify tests were deleted in atomic-server 4bab16ee6 with the UI they drove (#44).",
       "e2e": ["integrations/timesheets/e2e/clockify.spec.ts"]
     },
     {
