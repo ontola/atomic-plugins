@@ -146,9 +146,13 @@ For each subject, in order, `handle(ctx)`:
 
 1. reads it with `ctx.read` as the route's principal, which is `anonymous`:
    only what the public may read is exported;
-2. reads its `lastCommit` and that commit's `createdAt` (Unix milliseconds),
-   and converts that to the data model's recommended timestamp,
-   microseconds of TAI since J2000, with the leap seconds up to 2017-01-01;
+2. asks `ctx.willow.source("willow", subject)` for its revision: the
+   `lastCommit`, that commit's `createdAt` (Unix milliseconds, from the
+   host's retained signed commit envelope; a later commit is not a readable
+   resource) and the matching Willow timestamp. The plugin checks the
+   resource it read is at that commit, and that the timestamp is the data
+   model's reading of `createdAt`: microseconds of TAI since J2000, with the
+   leap seconds up to 2017-01-01;
 3. builds the payload exactly as the job does (deterministic JSON-AD of the
    selected properties plus `@id`), its WILLIAM3 digest, and the path
    `pathPrefix ‖ UTF-8(subject)`;
@@ -179,11 +183,15 @@ On atomic-server `claude/plugin-willow-host` (branched from candidate14
   Such a key never signs HTTP requests, and other keys never sign entries.
 - `ctx.willow.subspace(key)` answers the key's public half (the subspace id)
   and the resolved namespace and prefix.
+- `ctx.willow.source(key, subject)` answers the source's `commit`,
+  `committedAt` and Willow `timestamp` (decimal text), if the route's
+  principal can read it and the host kept that commit's envelope.
 - `ctx.willow.authorise({ key, entry, source })` signs only a canonical
   Willow'25 Entry whose namespace is the bound communal one, whose subspace is
-  the key, whose path starts with the bound prefix, whose timestamp is at most
-  10 minutes ahead of the host clock (on the same data-model reading), and
-  whose source the route's principal can read at exactly the named commit.
+  the key, whose path starts with the bound prefix, whose source the route's
+  principal can read at exactly the named commit, and whose timestamp is
+  exactly that commit's time (and so at most 10 minutes ahead of the host
+  clock, on the same data-model reading).
   It records the authorised entry per namespace, subspace and path, answers
   the recorded signature for the same bytes, and refuses an entry older than
   the recorded one. `ctx.willow.list(key)` lists the records (at most 256).
@@ -191,7 +199,8 @@ On atomic-server `claude/plugin-willow-host` (branched from candidate14
 
 The host signs the payload digest the plugin states; it does not recompute
 WILLIAM3 over the payload. What ties an entry to Atomic data is the source
-subject and commit, checked at signing time and recorded with the signature.
+subject, commit and commit time, checked at signing time and recorded with the
+signature.
 
 ### Not done, and why
 
@@ -251,7 +260,22 @@ such refused ones (55) are refused; each refusal of `ctx.willow.authorise`;
 `ed25519-dalek`'s `verify_strict` accepts the host's signature; records are
 erased with the keys; `bodyBase64` bodies and their refusals.
 
-E2E_EVIDENCE
+Verified by the e2e tier (`e2e/willow.spec.ts`), passed locally on
+2026-09-29 in 10 s against atomic-server `claude/plugin-willow-host`
+`fe2937474` built with `plugin-routes` and started at `--plugin-routes
+read-write`: the release publishes and pins with the `willow` key binding, the
+install review lists the signing key, and after the Installation's config is
+set, `GET /_routes/<slug>/willow.drop` answers `application/octet-stream`.
+The willow-drop importer bundle decodes and verifies both entries (the
+selected property only, one host-generated subspace, a timestamp from the
+commit time); a second request gives the same bytes; after an edit, the entry
+is newer and carries the new value; configuring a private resource answers
+`503` without naming it. The first drop that run served was then accepted by
+willow25 0.7.9's `DropDecoder` (`fixtures/verify-drop`), by hand.
+
+Not verified in CI yet: the lane needs that host branch in the pin, so on the
+current pin (candidate14) the e2e fails at publishing (the `willow` key field
+is unknown there) rather than skipping.
 
 Declared, not verified: interoperability with any Willow implementation
 other than willow25 0.7.9 and our own importer; fuel use per signed entry;

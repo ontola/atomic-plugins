@@ -233,9 +233,12 @@ test('an unreadable, uncommitted or host-refused source fails the whole drop wit
     ],
     [
       f => {
-        const source = f.ctx.willow.source;
+        const hostSource = f.ctx.willow.source;
 
-        f.ctx.willow.source = (k, s) => ({ ...source(k, s), timestamp: '1' });
+        f.ctx.willow.source = (k, s) => ({
+          ...hostSource(k, s),
+          timestamp: '1',
+        });
       },
       /reads the commit time differently/,
     ],

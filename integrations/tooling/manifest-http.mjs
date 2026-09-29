@@ -373,6 +373,7 @@ export function validateHttp(raw, context) {
         `key \`${key.name}\`: willow.namespace must be \`config:<key>\` or 64 hex characters, and willow.pathPrefix \`config:<key>\` or hex components joined by \`/\``,
       );
   }
+
   uniqueNames(
     tokens.map(t => t.name),
     'token names',
