@@ -363,6 +363,25 @@ test('only a run with a pluginRoutes lane asks for the plugin-routes build', () 
   assert.equal(needsPluginRoutesBuild(both, []), false);
 });
 
+test('sidecars need read-write and one name, at the lane sidecar port', () => {
+  const e2e = { tiers: ['e2e'], e2e: ['integrations/p/e2e/p.spec.ts'] };
+  const ported = l => ({ ...cfg(l), roleOffsets: { atomicServer: 0, sidecar: 3 } });
+  const ok = lane({ ...e2e, pluginRoutes: 'read-write', sidecars: ['nextgraph'] });
+  assert.doesNotThrow(() => validateConfig(ported(ok)));
+  assert.throws(() => validateConfig(cfg(ok)), /roleOffsets.sidecar/);
+  for (const [extra, message] of [
+    [{ pluginRoutes: 'read-only', sidecars: ['nextgraph'] }, /read-write/],
+    [{ sidecars: ['nextgraph'] }, /read-write/],
+    [{ pluginRoutes: 'read-write', sidecars: [] }, /one sidecar name/],
+    [{ pluginRoutes: 'read-write', sidecars: ['Next'] }, /one sidecar name/],
+    [{ pluginRoutes: 'read-write', sidecars: ['a', 'b'] }, /one sidecar name/],
+  ])
+    assert.throws(() => validateConfig(ported(lane({ ...e2e, ...extra }))), message);
+  const ng = config.lanes.find(l => l.id === 'nextgraph');
+  assert.deepEqual(ng.sidecars, ['nextgraph']);
+  assert.equal(lanePorts(ng, config).sidecar, lanePorts(ng, config).atomicServer + 3);
+});
+
 test('the plugin-routes lane runs its e2e at read-only, then off', () => {
   const routes = config.lanes.find(l => l.id === 'plugin-routes');
   // read-only first: the off run checks that its installation is degraded.
@@ -377,6 +396,9 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  assert.equal(needsPluginRoutesBuild(config, ['shared']), false);
-  assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
+  // A shared change alone does not select this tooling lane (plugin lanes
+  // that declare pluginRoutes, like nextgraph, still need the build then).
+  const toolingOnly = { ...config, lanes: [routes] };
+  assert.equal(needsPluginRoutesBuild(toolingOnly, ['shared']), false);
+  assert.equal(needsPluginRoutesBuild(toolingOnly, ['shared', 'all']), true);
 });

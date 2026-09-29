@@ -35,7 +35,12 @@ import {
   root,
   TIERS,
 } from './lanes.mjs';
-import { bringUp, mockProxyOrigin, routesOrigin } from './serve.mjs';
+import {
+  bringUp,
+  mockProxyOrigin,
+  routesOrigin,
+  sidecarUrl,
+} from './serve.mjs';
 import { layoutProblems } from './link-atomic-server.mjs';
 import {
   installMissing,
@@ -184,6 +189,11 @@ const levelEnv = level =>
     : {
         PLUGIN_ROUTES_LEVEL: level,
         PLUGIN_ROUTES_ORIGIN: routesOrigin(ports),
+        // Where the server expects the lane's sidecar (lanes.json
+        // `sidecars`); the spec starts it there.
+        ...(lane.sidecars?.length
+          ? { PLUGIN_SIDECAR_URL: sidecarUrl(ports) }
+          : {}),
       };
 
 for (const tier of order.filter(t => tiers.includes(t))) {
@@ -229,6 +239,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        sidecars: lane.sidecars,
       });
       status = run(
         requireTool(`${bin}/vitest`, 'run pnpm install in browser/'),
@@ -255,6 +266,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        sidecars: lane.sidecars,
       });
       status = runE2e(level);
       await stopStack();
