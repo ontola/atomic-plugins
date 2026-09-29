@@ -181,12 +181,15 @@ check (`sidecar/src/auth.rs`), in order:
    signature.
 
 3. The timestamp is at most 5 minutes old and at most 10 seconds ahead
-   (atomic_lib's `AUTH_MAX_AGE_MS` and `ACCEPTABLE_TIME_DIFFERENCE`).
-4. The signature has not been seen before within that window. The replay
-   cache is in memory (at most 100,000 live proofs; when it is full, new
-   proofs are refused): a proof captured before a sidecar restart can be
-   replayed once within its 5 minutes. A replayed write still meets the
-   idempotency key.
+   (atomic_lib's `AUTH_MAX_AGE_MS` and `ACCEPTABLE_TIME_DIFFERENCE`), and
+   not earlier than the moment this `serve` process started (recorded before
+   it reads its first request; refused as `before-start`).
+4. The signature has not been seen before. The replay cache is in memory
+   (at most 100,000 live proofs; when it is full, new proofs are refused).
+   Because of the start-time check it only has to remember proofs signed
+   since startup, so a restart does not reopen a replay window, and nothing
+   is persisted. The host signs every request afresh, so a request it
+   signed just before a restart and sent after it is refused, not retried.
 5. The host says the signer is that installation's app agent:
    `GET {--atomic-server}/plugin-runtime?installation=<urlencoded>` answers
    `{"agent": "...", "publicKey": "..."}` (or 404), and both must match the
@@ -238,8 +241,8 @@ node integrations/tooling/run-lane.mjs nextgraph --tier e2e    # real host + rea
   signature; unsigned; tampered body, method, URL, installation or drive; an
   added or doubled `x-atomic-*` header; a replayed proof; another agent, an
   unregistered installation, the right agent subject with another key; an
-  expired or future timestamp; version 1; an unreachable lookup (503); a
-  golden message.
+  expired or future timestamp; a proof signed before the sidecar started;
+  version 1; an unreachable lookup (503); a golden message.
 - Host tests (atomic-server `claude/plugin-nextgraph-host`,
   `plugins::host_core`, shared manifest fixtures in Rust and TypeScript): only
   declared `atomic-sidecar:` operations reach only the configured sidecar,

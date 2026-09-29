@@ -25,8 +25,9 @@
 //! A request is accepted only when, in this order:
 //! 1. the proof headers are all present and version is `2`;
 //! 2. the Ed25519 signature verifies strictly over that message;
-//! 3. the timestamp is at most [`MAX_AGE_MS`] old and at most
-//!    [`MAX_FUTURE_MS`] ahead;
+//! 3. the timestamp is at most [`MAX_AGE_MS`] old, at most
+//!    [`MAX_FUTURE_MS`] ahead, and not before this process started
+//!    ([`ReplayCache::started_at`]);
 //! 4. the proof was not seen before within that window (the replay cache);
 //! 5. the operator's registry says the claimed installation's app agent is
 //!    the one that signed: same agent subject and same public key.
@@ -183,9 +184,21 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Result<&'a str, Re
 #[derive(Default)]
 pub struct ReplayCache {
     seen: HashMap<Vec<u8>, i64>,
+    /// When `serve` started, in Unix ms. The cache is in memory, so it only
+    /// knows the proofs seen since then; a proof signed earlier is refused
+    /// outright, and a restart never reopens a replay window.
+    pub started_at: i64,
 }
 
 impl ReplayCache {
+    /// An empty cache that accepts only proofs signed at or after `started_at`.
+    pub fn new(started_at: i64) -> Self {
+        Self {
+            seen: HashMap::new(),
+            started_at,
+        }
+    }
+
     /// Records the proof; false when it was already seen (or the cache is
     /// full of proofs that are still live).
     fn first_use(&mut self, signature: &[u8], timestamp: i64, now: i64) -> bool {
@@ -272,6 +285,12 @@ pub fn verify(
 
     if timestamp < now_ms - MAX_AGE_MS {
         return Err(refuse("expired", "the request signature is too old"));
+    }
+    if timestamp < cache.started_at {
+        return Err(refuse(
+            "before-start",
+            "the request was signed before this sidecar started; the host signs every request afresh",
+        ));
     }
     if timestamp > now_ms + MAX_FUTURE_MS {
         return Err(refuse(
@@ -630,6 +649,20 @@ pub mod tests {
                 "{ts}"
             );
         }
+    }
+
+    #[test]
+    fn a_proof_signed_before_the_start_is_refused() {
+        // Fresh by skew (one second old), but older than this process: it may
+        // have been used before a restart, which the in-memory cache forgot.
+        let mut started = ReplayCache::new(NOW - 500);
+        let headers = sign(&keypair(1), "POST", URL, BODY, INSTALLATION, NOW - 1000);
+        assert_eq!(
+            kind(check(&headers, BODY, &mut started)),
+            (401, "before-start")
+        );
+        let signed_after = sign(&keypair(1), "POST", URL, BODY, INSTALLATION, NOW - 500);
+        assert!(check(&signed_after, BODY, &mut ReplayCache::new(NOW - 500)).is_ok());
     }
 
     #[test]

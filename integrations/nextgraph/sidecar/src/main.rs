@@ -102,7 +102,9 @@ fn serve(args: &[String]) -> Result<(), String> {
         registry: Box::new(auth::HttpRegistry {
             base: atomic_server.trim_end_matches('/').to_string(),
         }),
-        replay: auth::ReplayCache::default(),
+        // Recorded before the first request is read: proofs signed earlier
+        // are refused, so a restart cannot reopen a replay window.
+        replay: auth::ReplayCache::new(now_ms() as i64),
     };
     let server = tiny_http::Server::http(&listen).map_err(|e| e.to_string())?;
     eprintln!("ng-atomic-sidecar: listening on {listen}");
