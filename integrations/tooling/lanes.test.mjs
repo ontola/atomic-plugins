@@ -339,6 +339,33 @@ test('pluginRoutes takes one level or a list of distinct levels, for live or e2e
   );
 });
 
+test('serverEnv sets only debug-build test seams, for live or e2e tiers', () => {
+  const e2e = { tiers: ['e2e'], e2e: ['x.spec.ts'] };
+  assert.doesNotThrow(() =>
+    validateConfig(
+      cfg(lane({ ...e2e, serverEnv: { ATOMIC_PLUGIN_E2E_X: 'true' } })),
+    ),
+  );
+  for (const serverEnv of [
+    {},
+    { ATOMIC_PLUGIN_ROUTES: 'read-write' },
+    { ATOMIC_DATA_DIR: '/tmp' },
+    { ATOMIC_PLUGIN_E2E_X: true },
+    'ATOMIC_PLUGIN_E2E_X',
+  ])
+    assert.throws(
+      () => validateConfig(cfg(lane({ ...e2e, serverEnv }))),
+      /serverEnv names test seams only/,
+    );
+  assert.throws(
+    () =>
+      validateConfig(
+        cfg(lane({ tiers: ['unit'], serverEnv: { ATOMIC_PLUGIN_E2E_X: '1' } })),
+      ),
+    /serverEnv only affects the live and e2e tiers/,
+  );
+});
+
 test('only a run with a pluginRoutes lane asks for the plugin-routes build', () => {
   const routes = lane({
     id: 'routes',
@@ -377,14 +404,13 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  // A shared change runs every plugin lane, and a plugin lane may declare
-  // pluginRoutes too (open-cloud-mesh): then it needs the build as well.
-  const pluginLaneWithRoutes = config.lanes.some(
-    l => l.dir === undefined && pluginRoutesLevels(l).length,
-  );
+  // A shared change asks for the feature build only through a plugin lane
+  // that declares pluginRoutes (fediverse), never through this tooling lane.
   assert.equal(
     needsPluginRoutesBuild(config, ['shared']),
-    pluginLaneWithRoutes,
+    config.lanes.some(
+      l => l.dir === undefined && pluginRoutesLevels(l).length > 0,
+    ),
   );
   assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
 });

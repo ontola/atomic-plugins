@@ -132,14 +132,6 @@ Two optional fields came later ([#134](https://github.com/ontola/atomic-plugins/
   workflow's second variant) and builds from source only without it.
   `build-server` and the `:<sha>` image stay the default build. Lanes
   without the field are unchanged.
-- `protocolPeer: true` (open-cloud-mesh): the lane's e2e starts a protocol
-  peer of its own on the lane's `protocolPeer` port (role offset 3), which
-  it reads from `PROTOCOL_PEER_PORT`. The server is started with
-  `--plugin-egress-loopback http://127.0.0.1:<that port>` so plugin egress
-  (key and discovery fetches, `blobs.fetch`, deliveries) may reach it; the
-  option needs `pluginRoutes` `read-write` and an atomic-server with
-  `claude/plugin-ocm-host`. With the image instead of the binary,
-  127.0.0.1 is the container itself, so such a lane needs the binary.
 - `dir`: a tooling lane (not a plugin) lives in `integrations/tooling` or a
   directory under it instead of `integrations/<id>`. Its filter is only its
   `paths`, which must be listed and may name files under

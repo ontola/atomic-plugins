@@ -332,28 +332,17 @@ test('unsupported share shapes answer 501 and fetch nothing', () => {
   }
 });
 
-test('plain-http WebDAV URIs are only accepted on the verified sender origin', () => {
+test('plain-http WebDAV URIs are refused', () => {
   const dav = share().protocol.webdav;
-  const http = uri =>
-    share({ protocol: { name: 'multi', webdav: { ...dav, uri } } });
-  assert.equal(post('shares', http(`http://${PEER}/dav/x`), {}).status, 400);
-  // A peer the operator allowed on loopback: the host reports its
-  // discovery origin as `owner`.
-  const local = { domain: '127.0.0.1:19143', owner: 'http://127.0.0.1:19143' };
   const body = share({
-    sender: 'alice@127.0.0.1:19143',
-    owner: 'alice@127.0.0.1:19143',
     protocol: {
       name: 'multi',
-      webdav: { ...dav, uri: 'http://127.0.0.1:19143/dav/x' },
+      webdav: { ...dav, uri: `http://${PEER}/dav/x` },
     },
   });
-  assert.equal(
-    post('shares', body, local, {
-      config: { allowedPeers: { '127.0.0.1:19143': true } },
-    }).status,
-    201,
-  );
+  const { status, calls } = post('shares', body, {});
+  assert.equal(status, 400);
+  assert.equal(calls.fetch.length, 0);
 });
 
 test('a failed fetch stores and sends nothing', () => {

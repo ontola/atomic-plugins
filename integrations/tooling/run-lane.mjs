@@ -35,12 +35,7 @@ import {
   root,
   TIERS,
 } from './lanes.mjs';
-import {
-  bringUp,
-  mockProxyOrigin,
-  protocolPeerOrigin,
-  routesOrigin,
-} from './serve.mjs';
+import { bringUp, mockProxyOrigin, routesOrigin } from './serve.mjs';
 import { layoutProblems } from './link-atomic-server.mjs';
 import {
   installMissing,
@@ -189,13 +184,7 @@ const levelEnv = level =>
     : {
         PLUGIN_ROUTES_LEVEL: level,
         PLUGIN_ROUTES_ORIGIN: routesOrigin(ports),
-        ...(lane.protocolPeer
-          ? { PROTOCOL_PEER_PORT: String(ports.protocolPeer) }
-          : {}),
       };
-// A lane's protocol peer (lanes.json `protocolPeer`) runs on loopback, which
-// the host's egress guard refuses unless the operator allows it.
-const egressLoopback = lane.protocolPeer ? [protocolPeerOrigin(ports)] : [];
 
 for (const tier of order.filter(t => tiers.includes(t))) {
   console.log(`\n=== ${lane.id}: ${tier} ===`);
@@ -240,7 +229,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
-        egressLoopback,
+        extraServerEnv: lane.serverEnv,
       });
       status = run(
         requireTool(`${bin}/vitest`, 'run pnpm install in browser/'),
@@ -267,7 +256,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
-        egressLoopback,
+        extraServerEnv: lane.serverEnv,
       });
       status = runE2e(level);
       await stopStack();

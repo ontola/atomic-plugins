@@ -95,32 +95,11 @@ export function serverEnv(ports, store) {
 export const routesOrigin = ports =>
   `http://routes.localhost:${ports.atomicServer}`;
 
-/**
- * Where a lane's protocol peer listens (lanes.json `protocolPeer`): an OCM
- * server, a fediverse instance, ... that the lane's e2e starts itself, on
- * the lane's own `protocolPeer` port.
- */
-export const protocolPeerOrigin = ports =>
-  `http://127.0.0.1:${ports.protocolPeer}`;
-
-/**
- * atomic-server's arguments for a lane at one `--plugin-routes` level.
- * `egressLoopback`: loopback origins plugin egress may reach
- * (`--plugin-egress-loopback`, read-write only), for a protocol peer on this
- * machine.
- */
-export const pluginRoutesArgs = (level, ports, egressLoopback = []) =>
+/** atomic-server's arguments for a lane at one `--plugin-routes` level. */
+export const pluginRoutesArgs = (level, ports) =>
   level === undefined
     ? []
-    : [
-        '--plugin-routes',
-        level,
-        '--routes-origin',
-        routesOrigin(ports),
-        ...(level === 'read-write' && egressLoopback.length
-          ? ['--plugin-egress-loopback', egressLoopback.join(',')]
-          : []),
-      ];
+    : ['--plugin-routes', level, '--routes-origin', routesOrigin(ports)];
 
 /**
  * The plugin-routes options atomic-server reads from its environment. A build
@@ -133,7 +112,6 @@ export const PLUGIN_ROUTES_ENV = [
   'ATOMIC_ROUTES_ORIGIN',
   'ATOMIC_PLUGIN_LISTENERS',
   'ATOMIC_PLUGIN_SIDECARS',
-  'ATOMIC_PLUGIN_EGRESS_LOOPBACK',
 ];
 
 const withoutPluginRoutesEnv = env =>
@@ -371,7 +349,7 @@ export async function bringUp({
   platforms,
   label = 'shared',
   pluginRoutes,
-  egressLoopback = [],
+  extraServerEnv = {},
 }) {
   const config = loadLanes();
   let image = serverImage();
@@ -436,17 +414,15 @@ export async function bringUp({
         name: container,
         ports,
         label,
-        env: serverEnv(ports, IMAGE_STORE),
-        command: pluginRoutesArgs(pluginRoutes, ports, egressLoopback),
+        env: { ...serverEnv(ports, IMAGE_STORE), ...extraServerEnv },
+        command: pluginRoutesArgs(pluginRoutes, ports),
       }),
     );
   } else {
-    start(
-      'atomic-server',
-      binary,
-      pluginRoutesArgs(pluginRoutes, ports, egressLoopback),
-      serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
-    );
+    start('atomic-server', binary, pluginRoutesArgs(pluginRoutes, ports), {
+      ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      ...extraServerEnv,
+    });
   }
 
   // MOCK_FRONTEND_ORIGIN must match wherever the browser actually loads the
@@ -535,6 +511,7 @@ if (
     platforms: lane?.platforms,
     label: lane?.id ?? 'shared',
     pluginRoutes,
+    extraServerEnv: lane?.serverEnv,
   });
   console.log(`serving ${JSON.stringify(ports)} — ctrl-c to stop`);
   for (const signal of ['SIGINT', 'SIGTERM'])

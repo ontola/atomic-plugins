@@ -2,8 +2,8 @@
 /**
  * Open Cloud Mesh, end to end on a real atomic-server built with the
  * `plugin-routes` feature at `--plugin-routes read-write`, with an invented
- * OCM 1.5 peer (./peer.mjs) on the lane's `protocolPeer` port, which
- * run-lane.mjs allows with `--plugin-egress-loopback`:
+ * OCM 1.5 peer (./peer.mjs) serving HTTPS on loopback, which the lane's
+ * debug-build seams (lanes.json `serverEnv`) let the server reach:
  *
  *   node integrations/tooling/run-lane.mjs open-cloud-mesh --tier e2e
  *
@@ -43,7 +43,6 @@ type PeerModule = typeof import('./peer.mjs');
 let peerModule: PeerModule;
 
 const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
-const PEER_PORT = Number(process.env.PROTOCOL_PEER_PORT ?? 0);
 const ROUTES_ORIGIN = process.env.PLUGIN_ROUTES_ORIGIN ?? '';
 const source = readFileSync(resolve(__dirname, '../plugin.js'), 'utf8');
 const FOLDER = 'https://atomicdata.dev/classes/Folder';
@@ -54,8 +53,8 @@ const SECRET = `invented-secret-${Date.now()}`;
 
 test.describe('Open Cloud Mesh receiver', () => {
   test.skip(
-    LEVEL !== 'read-write' || !PEER_PORT,
-    'run through run-lane.mjs, which sets PLUGIN_ROUTES_LEVEL=read-write and PROTOCOL_PEER_PORT',
+    LEVEL !== 'read-write',
+    'run through run-lane.mjs, which sets PLUGIN_ROUTES_LEVEL=read-write and the loopback seams',
   );
   test.beforeEach(before);
   test.beforeEach(async ({ page }) => {
@@ -68,7 +67,6 @@ test.describe('Open Cloud Mesh receiver', () => {
     test.setTimeout(300_000);
     peerModule = (await import('./peer.mjs')) as PeerModule;
     const peer = await peerModule.startPeer({
-      port: PEER_PORT,
       files: {
         'spec.txt': { body: FILE_BODY, type: 'text/plain', secret: SECRET },
       },
@@ -239,7 +237,7 @@ async function createPluginAndFolder(page: Page) {
   ).toBeVisible({ timeout: 45_000 });
 
   return page.evaluate(
-    async ({ code, FOLDER, NAME, DESCRIPTION }) => {
+    async ({ code, folderClass, nameProp, descriptionProp }) => {
       const store = window.store!;
       const plugin = new URL(location.href).searchParams.get('subject')!;
       const resource = await store.getResource(plugin);
@@ -249,22 +247,27 @@ async function createPluginAndFolder(page: Page) {
       )?.[0];
       if (!sourceProp) throw new Error('plugin has no source property');
       await resource.set(sourceProp, code);
-      await resource.set(NAME, 'Open Cloud Mesh');
-      await resource.set(DESCRIPTION, 'OCM receiver under e2e test.');
+      await resource.set(nameProp, 'Open Cloud Mesh');
+      await resource.set(descriptionProp, 'OCM receiver under e2e test.');
       await resource.save();
       const drive = store.getDrive();
       if (!drive) throw new Error('no drive');
       const folder = await store.newResource({
         parent: drive,
-        isA: FOLDER,
-        propVals: { [NAME]: `OCM shares ${Date.now()}` },
+        isA: folderClass,
+        propVals: { [nameProp]: `OCM shares ${Date.now()}` },
       });
       await folder.save();
 
       return { drive, plugin, folder: folder.subject };
     },
     // Unique per run: a release id is a hash of its content.
-    { code: `${source}\n// run ${Date.now()}\n`, FOLDER, NAME, DESCRIPTION },
+    {
+      code: `${source}\n// run ${Date.now()}\n`,
+      folderClass: FOLDER,
+      nameProp: NAME,
+      descriptionProp: DESCRIPTION,
+    },
   );
 }
 

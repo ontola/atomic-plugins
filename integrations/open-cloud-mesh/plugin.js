@@ -75,6 +75,7 @@ export function domain(value, field = 'domain') {
       .some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
   )
     refuse(400, `Invalid ${field}`);
+
   if (match[2] !== undefined) {
     const port = Number(match[2]);
     if (port < 1 || port > 65535) refuse(400, `Invalid ${field}`);
@@ -91,7 +92,10 @@ export function address(value, field) {
   const at = value.lastIndexOf('@');
   if (at < 1) refuse(400, `Invalid ${field}`);
 
-  return { user: value.slice(0, at), domain: domain(value.slice(at + 1), field) };
+  return {
+    user: value.slice(0, at),
+    domain: domain(value.slice(at + 1), field),
+  };
 }
 
 /** The host (and port) of a `scheme://host[:port]/...` URL, lowercased. */
@@ -112,11 +116,13 @@ function allowedPeer(policy, peer) {
 
   for (const [raw, decision] of Object.entries(policy)) {
     let canonical;
+
     try {
       canonical = domain(raw, 'allowed peer');
     } catch {
       continue;
     }
+
     if (canonical === peer) {
       if (decision !== true) return false;
       allowed = true;
@@ -185,8 +191,7 @@ export function parseShare(body) {
     );
   const secret = text(dav.sharedSecret, 'sharedSecret', 4096);
   const requirements = dav.requirements ?? [];
-  if (!Array.isArray(requirements))
-    refuse(400, 'Invalid WebDAV requirements');
+  if (!Array.isArray(requirements)) refuse(400, 'Invalid WebDAV requirements');
   if (requirements.length)
     refuse(
       501,
@@ -223,7 +228,13 @@ export function parseShare(body) {
       shareWith: text(value.shareWith, 'shareWith'),
       ...(value.ownerDisplayName === undefined
         ? {}
-        : { ownerDisplayName: text(value.ownerDisplayName, 'ownerDisplayName', 255) }),
+        : {
+            ownerDisplayName: text(
+              value.ownerDisplayName,
+              'ownerDisplayName',
+              255,
+            ),
+          }),
       ...(value.senderDisplayName === undefined
         ? {}
         : {
@@ -271,8 +282,13 @@ export function parseNotification(body) {
   const file = details?.file;
   if (file !== undefined && !isRecord(file))
     refuse(400, 'Invalid notification file');
-  const providerId = text(file?.providerId ?? value.providerId, 'providerId', 255);
+  const providerId = text(
+    file?.providerId ?? value.providerId,
+    'providerId',
+    255,
+  );
   let permissions;
+
   if (value.notificationType === 'SHARE_CHANGE_PERMISSION') {
     permissions = file?.permissions;
     if (
@@ -371,7 +387,11 @@ export function discovery(ctx, request) {
 /** The verified OCM signer, or a 401. */
 function signer(request) {
   const caller = request.caller;
-  if (!isRecord(caller) || caller.tag !== 'ocm' || typeof caller.domain !== 'string')
+  if (
+    !isRecord(caller) ||
+    caller.tag !== 'ocm' ||
+    typeof caller.domain !== 'string'
+  )
     refuse(401, 'An OCM HTTP Message Signature (tag="ocm") is required');
 
   return domain(caller.domain, 'signing server');
@@ -395,16 +415,17 @@ function receiveShare(ctx, request) {
     refuse(403, 'This server does not accept shares from the signing server');
   const recipient = address(share.shareWith, 'shareWith');
   const displayName = c.recipients[recipient.user];
-  if (recipient.domain !== ownDomain(request) || typeof displayName !== 'string')
+  if (
+    recipient.domain !== ownDomain(request) ||
+    typeof displayName !== 'string'
+  )
     refuse(400, 'Unknown recipient');
-  if (share.expiration !== undefined && Number(share.expiration) * 1000 <= Date.now())
+  if (
+    share.expiration !== undefined &&
+    Number(share.expiration) * 1000 <= Date.now()
+  )
     refuse(400, 'The share has already expired');
-  // The WebDAV URI: https, or on the verified sender's own origin (which is
-  // plain http only for a peer the operator allowed on loopback).
-  const owned =
-    typeof request.caller.owner === 'string' &&
-    access.uri.startsWith(`${request.caller.owner.replace(/\/$/, '')}/`);
-  if (!/^https:\/\//i.test(access.uri) && !owned)
+  if (!/^https:\/\//i.test(access.uri))
     refuse(400, 'The WebDAV URI must use HTTPS');
 
   const key = identity(peer, share.providerId);
@@ -415,6 +436,7 @@ function receiveShare(ctx, request) {
     return { response: response(201, { recipientDisplayName: displayName }) };
 
   let fetched;
+
   try {
     fetched = ctx.blobs.fetch({
       operation: 'fetch-file',
@@ -422,8 +444,12 @@ function receiveShare(ctx, request) {
       headers: { authorization: `Bearer ${access.secret}` },
     });
   } catch (error) {
-    refuse(503, `The shared file could not be fetched: ${String(error.message ?? error)}`);
+    refuse(
+      503,
+      `The shared file could not be fetched: ${String(error.message ?? error)}`,
+    );
   }
+
   if (!fetched?.blob)
     refuse(
       400,
@@ -457,6 +483,7 @@ function receiveShare(ctx, request) {
   ];
   const enqueue = [];
   const problems = [];
+
   if (typeof request.caller.endPoint === 'string' && request.caller.endPoint) {
     enqueue.push({
       operation: 'notify',
@@ -498,7 +525,10 @@ function receiveNotification(ctx, request) {
   if (notification.senderDomain !== peer)
     refuse(403, 'senderDomain must be the signing server');
   if (!allowedPeer(c.allowedPeers, peer))
-    refuse(403, 'This server does not accept notifications from the signing server');
+    refuse(
+      403,
+      'This server does not accept notifications from the signing server',
+    );
   const key = identity(peer, notification.providerId);
   const matches = ctx.query(P.localId, key);
   if (!Array.isArray(matches) || !matches.length) refuse(404, 'Unknown share');
@@ -517,13 +547,16 @@ function receiveNotification(ctx, request) {
   if (state === undefined)
     refuse(409, 'The received share was edited; review required');
   let next = description;
+
   if (notification.notificationType === 'SHARE_UNSHARED') {
-    if (state === 'unshared')
-      return { response: response(201, {}) };
+    if (state === 'unshared') return { response: response(201, {}) };
     next = description.replace(/^- State: .*$/m, '- State: unshared');
   } else {
     const escaped = notification.permissions.join(', ');
-    next = description.replace(/^- Permissions: .*$/m, `- Permissions: ${escaped}`);
+    next = description.replace(
+      /^- Permissions: .*$/m,
+      `- Permissions: ${escaped}`,
+    );
     if (next === description) return { response: response(201, {}) };
   }
 
@@ -545,6 +578,7 @@ function jwks(ctx, request) {
 export function handle(ctx, request) {
   const method = request.method;
   const head = method === 'HEAD';
+
   try {
     switch (ctx.trigger?.route) {
       case 'discovery':
@@ -567,6 +601,7 @@ export function handle(ctx, request) {
   } catch (error) {
     if (error instanceof Refusal)
       return response(error.status, { message: error.message }, head);
+
     // Never echo request data (it may hold the shared secret).
     return response(500, { message: 'The receiver failed' }, head);
   }

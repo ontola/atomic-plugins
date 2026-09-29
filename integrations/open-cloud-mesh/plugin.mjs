@@ -423,12 +423,7 @@ function receiveShare(ctx, request) {
     Number(share.expiration) * 1000 <= Date.now()
   )
     refuse(400, 'The share has already expired');
-  // The WebDAV URI: https, or on the verified sender's own origin (which is
-  // plain http only for a peer the operator allowed on loopback).
-  const owned =
-    typeof request.caller.owner === 'string' &&
-    access.uri.startsWith(`${request.caller.owner.replace(/\/$/, '')}/`);
-  if (!/^https:\/\//i.test(access.uri) && !owned)
+  if (!/^https:\/\//i.test(access.uri))
     refuse(400, 'The WebDAV URI must use HTTPS');
 
   const key = identity(peer, share.providerId);

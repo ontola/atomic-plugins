@@ -2,12 +2,7 @@
   "//": "One source of truth for the per-plugin CI lanes. Read by integrations/tooling/lanes.mjs, which .github/workflows/ci.yml and integrations/tooling/run-lane.mjs both go through. See integrations/PARALLEL_LANES.md.",
 
   "portBase": 19100,
-  "roleOffsets": {
-    "atomicServer": 0,
-    "devServer": 1,
-    "mockProxy": 2,
-    "protocolPeer": 3
-  },
+  "roleOffsets": { "atomicServer": 0, "devServer": 1, "mockProxy": 2 },
 
   "sharedIndexNote": "Port block for the CI jobs that are not a plugin lane — the hosting-surface check and the generic plugin-system e2e suite. A reserved index rather than a separate fixed block, so there is one port formula and lanes.test.mjs can prove it collides with nothing. No lane may take index 9.",
   "sharedIndex": 9,
@@ -23,9 +18,12 @@
         "integrations/open-cloud-mesh/peer.test.mjs"
       ],
       "pluginRoutes": "read-write",
-      "protocolPeer": true,
+      "serverEnv": {
+        "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
+        "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/open-cloud-mesh/e2e/.peer/ca.pem"
+      },
       "e2e": ["integrations/open-cloud-mesh/e2e/ocm.spec.ts"],
-      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs) on the lane's protocolPeer port, allowed with --plugin-egress-loopback. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, blobs.fetch, the loopback option); no interoperability claim with a real Nextcloud/ownCloud peer."
+      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams); at a pin without it the e2e tier fails. No interoperability claim with a real Nextcloud/ownCloud peer."
     },
     {
       "id": "calendar",

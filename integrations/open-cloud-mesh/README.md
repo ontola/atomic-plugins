@@ -28,8 +28,8 @@ Reference: [OCM 1.5.0](https://github.com/cs3org/OCM-API/tree/v1.5.0)
 Refused, with the status OCM names: unsigned or non-`tag="ocm"` requests
 (`401`, from the host or the plugin); a signing server that is not in
 `allowedPeers`, or a `sender`/`owner` that is not an account of the signing
-server (`403`); an unknown recipient, an expired share, an `http:` WebDAV URI
-that is not on the verified sender's own origin, a file the sender refuses
+server (`403`); an unknown recipient, an expired share, an `http:` WebDAV URI,
+a file the sender refuses
 to serve (`400`); groups, folders, encryption, relative WebDAV URIs,
 `webapp`/`ssh`, and any `requirements` such as `must-exchange-token` or
 `must-use-mfa` (`501`). Nothing is stored and nothing is sent for a refused
@@ -86,8 +86,8 @@ the install review's route-write approval for `sharesFolder`.
 
 All from atomic-server's plugin-routes work (ontola/atomic-plugins#167),
 plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
-(on top of `claude/atomic-plugins-pin-candidate14`), which no pin contains
-yet:
+(on top of `claude/plugin-fediverse-host`, itself one commit on
+`claude/atomic-plugins-pin-candidate14`), which no pin contains yet:
 
 - **OCM key discovery for `auth: http-signature`** (new). A request whose
   RFC 9421 signature carries `tag="ocm"` is verified the OCM way: exactly
@@ -103,10 +103,11 @@ yet:
   blob store, through the egress guard, for an operation listed in the
   route's `enqueues` (wildcard host and trailing `{*rest}` path allowed).
   The plugin only gets `{ status, blob }`.
-- **`--plugin-egress-loopback`** (new, development and tests only): exact
-  loopback origins that key/discovery fetches, `blobs.fetch` and deliveries
-  may reach, with `http` URLs on them matched as `https` against declared
-  operations. Only the e2e lane uses it.
+- The Fediverse worker's debug-build test seams
+  (`ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS`, `ATOMIC_PLUGIN_E2E_PEER_CA`): key and
+  discovery fetches, deliveries and (here) `blobs.fetch` may reach loopback,
+  trusting only the peer's test CA there. Release builds ignore them. Only
+  the e2e lane sets them (lanes.json `serverEnv`).
 - Existing: route writes into `writeTargets` under the route grant, the
   durable delivery queue, host-held installation keys, the `ocm`
   well-known claim.
@@ -126,6 +127,8 @@ a route `enqueues`; `fetch-file` is a read in HTTP terms.
 - Relative WebDAV URIs (would need an inline read of the sender's
   discovery, which the host only allows for fixed endpoints), and a
   `PROPFIND` before the `GET`.
+- Discovery over plain `http` (OCM's testing-setup fallback): the host
+  fetches `https://<domain>/.well-known/ocm` only.
 - Draft-cavage signatures and the pre-1.4 `publicKey` discovery field that
   older Nextcloud releases use. The host still verifies cavage signatures
   against a fetched `keyId` document, but this plugin only accepts
@@ -152,8 +155,9 @@ secret handling, the bundle) and `peer.test.mjs` (the e2e peer's own RFC
 
 The e2e tier runs `e2e/ocm.spec.ts` on atomic-server built with the
 `plugin-routes` feature at `--plugin-routes read-write`, with the invented
-OCM peer in `e2e/peer.mjs` on the lane's `protocolPeer` port, allowed with
-`--plugin-egress-loopback`. It installs the plugin through the store's
+OCM peer in `e2e/peer.mjs`, serving HTTPS on loopback with a throwaway
+test CA (made with `openssl`), which the lane's `serverEnv` seams let the
+server reach. It installs the plugin through the store's
 review dialog, checks discovery, sends a signed share, sees the File (and
 its text preview) in the drive, has the peer verify the `SHARE_ACCEPTED`
 notification against the installation's JWK Set, sends `SHARE_UNSHARED`,
@@ -162,4 +166,5 @@ from atomic-server's code, but it is still ours: it is not interoperability
 evidence with any deployed OCM server.
 
 Needs an `.atomic-server-ref` that contains `claude/plugin-ocm-host`; on the
-current pin the server refuses to start with `--plugin-egress-loopback`.
+current pin the signed share is refused (no OCM key discovery) and the e2e
+fails.

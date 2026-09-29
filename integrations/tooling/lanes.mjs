@@ -37,6 +37,13 @@ export const laneDir = lane => lane.dir ?? `integrations/${lane.id}`;
  * `plugin-routes` tooling lane: `off` and `read-only`) runs each such tier
  * once per level, on a fresh server.
  */
+/**
+ * What a lane's `serverEnv` may set on its atomic-server: only switches a
+ * debug build reads for tests (atomic-server ignores them in release
+ * builds), never the gates or the store.
+ */
+export const SERVER_ENV_PREFIXES = ['ATOMIC_PLUGIN_E2E_'];
+
 export const pluginRoutesLevels = lane =>
   lane.pluginRoutes === undefined ? [] : [lane.pluginRoutes].flat();
 
@@ -114,6 +121,28 @@ export function validateConfig(config) {
         );
     }
 
+    if (lane.serverEnv !== undefined) {
+      const entries =
+        lane.serverEnv && typeof lane.serverEnv === 'object'
+          ? Object.entries(lane.serverEnv)
+          : [];
+      if (
+        !entries.length ||
+        entries.some(
+          ([key, value]) =>
+            !SERVER_ENV_PREFIXES.some(prefix => key.startsWith(prefix)) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv names test seams only (${SERVER_ENV_PREFIXES.join(', ')}*), with string values`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
     if (lane.pluginRoutes !== undefined) {
       const levels = pluginRoutesLevels(lane);
       if (
@@ -127,17 +156,6 @@ export function validateConfig(config) {
       if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
         throw new Error(
           `lane ${lane.id}: pluginRoutes only affects the live and e2e tiers, and it has neither`,
-        );
-    }
-
-    // A protocol peer on loopback needs `--plugin-egress-loopback`, which
-    // only a read-write node accepts.
-    if (lane.protocolPeer !== undefined) {
-      if (lane.protocolPeer !== true)
-        throw new Error(`lane ${lane.id}: protocolPeer must be true or absent`);
-      if (!pluginRoutesLevels(lane).includes('read-write'))
-        throw new Error(
-          `lane ${lane.id}: protocolPeer needs pluginRoutes read-write`,
         );
     }
 
@@ -172,11 +190,7 @@ export function loadLanes(base = root) {
   );
 }
 
-/**
- * Every lane's listeners (one per `roleOffsets` role: atomic-server, the
- * dev-server, the mock proxy, and a protocol peer a lane's e2e may start),
- * derived so CI logs and local runs agree.
- */
+/** Every lane's three listeners, derived so CI logs and local runs agree. */
 export function lanePorts(lane, config) {
   const base = config.portBase + lane.index * 10;
 

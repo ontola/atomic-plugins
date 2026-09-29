@@ -12,8 +12,14 @@
  * the specification's appendix B describes: the signer's domain from
  * `senderDomain`, its discovery, its `jwksUri`, the JWK with the `kid`.
  *
- * Plain http on 127.0.0.1 (OCM's "testing setups" fallback). Not a WebDAV
- * server: no PROPFIND, only the one `GET`. Invented data only.
+ * HTTPS on 127.0.0.1 with a `localhost` certificate from a throwaway test
+ * CA made with `openssl` (the CA certificate is written to
+ * `integrations/open-cloud-mesh/e2e/.peer/ca.pem`, which the lane's
+ * `ATOMIC_PLUGIN_E2E_PEER_CA` seam makes the server trust for loopback
+ * only). Discovery of the other side falls back to plain http, as OCM
+ * allows in testing setups, because the atomic-server routes origin in the
+ * lanes is `http://*.routes.localhost`. Not a WebDAV server: no PROPFIND,
+ * only the one `GET`. Invented data only.
  */
 import {
   createHash,
@@ -22,7 +28,118 @@ import {
   verify,
   createPublicKey,
 } from 'node:crypto';
-import { createServer, request as httpRequest } from 'node:http';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { request as httpRequest } from 'node:http';
+import { createServer, request as httpsRequest } from 'node:https';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Where the peer's test CA certificate goes (lanes.json `serverEnv`). */
+export const PEER_CA_PATH = resolvePath(
+  dirname(fileURLToPath(import.meta.url)),
+  '.peer/ca.pem',
+);
+
+/** The CA the peer's certificate chains to, once a peer has started. */
+let trusted;
+
+/**
+ * A throwaway CA and a `localhost`/`127.0.0.1` certificate it issued, made
+ * with `openssl`. The CA certificate is written to `caPath`; its key never
+ * leaves a temporary directory.
+ */
+export function issueCertificate(caPath = PEER_CA_PATH) {
+  const dir = mkdtempSync(join(tmpdir(), 'ocm-peer-'));
+  const at = name => join(dir, name);
+  const run = args => execFileSync('openssl', args, { stdio: 'ignore' });
+
+  try {
+    writeFileSync(
+      at('ca.cnf'),
+      'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n',
+    );
+    writeFileSync(
+      at('leaf.cnf'),
+      'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n',
+    );
+    run([
+      'req',
+      '-new',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      at('ca.key'),
+      '-out',
+      at('ca.csr'),
+      '-subj',
+      '/CN=OCM e2e test CA',
+    ]);
+    run([
+      'x509',
+      '-req',
+      '-in',
+      at('ca.csr'),
+      '-signkey',
+      at('ca.key'),
+      '-out',
+      at('ca.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      at('ca.cnf'),
+    ]);
+    run([
+      'req',
+      '-new',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      at('key.pem'),
+      '-out',
+      at('leaf.csr'),
+      '-subj',
+      '/CN=localhost',
+    ]);
+    run([
+      'x509',
+      '-req',
+      '-in',
+      at('leaf.csr'),
+      '-CA',
+      at('ca.pem'),
+      '-CAkey',
+      at('ca.key'),
+      '-CAcreateserial',
+      '-out',
+      at('cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      at('leaf.cnf'),
+    ]);
+    mkdirSync(dirname(caPath), { recursive: true });
+    const ca = readFileSync(at('ca.pem'));
+    writeFileSync(caPath, ca);
+
+    return {
+      ca,
+      key: readFileSync(at('key.pem')),
+      cert: readFileSync(at('cert.pem')),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 const b64 = bytes => Buffer.from(bytes).toString('base64');
 
@@ -121,7 +238,7 @@ export async function verifyOcm({
   if (Number(headers['content-length']) !== Buffer.byteLength(body))
     throw new Error('content-length mismatch');
   const signerDomain = JSON.parse(body.toString()).senderDomain;
-  const discovery = await fetchJson(`http://${signerDomain}/.well-known/ocm`);
+  const discovery = await discover(signerDomain, fetchJson);
   if (!discovery.capabilities?.includes('http-sig') || !discovery.jwksUri)
     throw new Error('the signer does not advertise http-sig with a jwksUri');
   const set = await fetchJson(discovery.jwksUri);
@@ -159,12 +276,15 @@ export async function verifyOcm({
  */
 export function send(url, { method = 'GET', headers = {}, body } = {}) {
   const target = new URL(url);
+  const secure = target.protocol === 'https:';
 
   return new Promise((resolve, reject) => {
-    const req = httpRequest(
+    const req = (secure ? httpsRequest : httpRequest)(
       {
         host: '127.0.0.1',
-        port: target.port || 80,
+        port: target.port || (secure ? 443 : 80),
+        servername: secure ? target.hostname : undefined,
+        ca: secure ? trusted : undefined,
         method,
         path: target.pathname + target.search,
         headers: { host: target.host, ...headers },
@@ -187,6 +307,20 @@ export function send(url, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 
+/**
+ * OCM discovery of `domain`: `https://<domain>/.well-known/ocm`, and plain
+ * http when that cannot connect (OCM 1.5 "Process", step 4, testing setups).
+ */
+export async function discover(domain, fetch = fetchJson) {
+  try {
+    return await fetch(`https://${domain}/.well-known/ocm`);
+  } catch (error) {
+    if (/answered/.test(error.message)) throw error;
+
+    return fetch(`http://${domain}/.well-known/ocm`);
+  }
+}
+
 export const fetchJson = async url => {
   const res = await send(url, { headers: { accept: 'application/json' } });
   if (res.status !== 200) throw new Error(`${url} answered ${res.status}`);
@@ -198,13 +332,15 @@ export const fetchJson = async url => {
  * Starts the peer on 127.0.0.1:`port` (0 for any). `files` maps a WebDAV
  * path under `/dav/` to `{ body, type, secret }`.
  */
-export async function startPeer({ port = 0, files = {} } = {}) {
+export async function startPeer({ port = 0, files = {}, caPath } = {}) {
+  const tls = issueCertificate(caPath);
+  trusted = tls.ca;
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const received = [];
   let origin;
   let domain;
   const keyId = () => `${domain}#peer-key`;
-  const server = createServer((req, res) => {
+  const server = createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     const chunks = [];
     req.on('data', c => chunks.push(c));
     req.on('end', async () => {
@@ -283,8 +419,8 @@ export async function startPeer({ port = 0, files = {} } = {}) {
   });
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
-  domain = `127.0.0.1:${address.port}`;
-  origin = `http://${domain}`;
+  domain = `localhost:${address.port}`;
+  origin = `https://${domain}`;
 
   return {
     origin,

@@ -4,6 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   signOcm,
   verifyOcm,
@@ -20,11 +23,11 @@ const jwk = {
   kid: 'signer.test#k',
 };
 const docs = {
-  'http://signer.test/.well-known/ocm': {
+  'https://signer.test/.well-known/ocm': {
     capabilities: ['http-sig'],
-    jwksUri: 'http://signer.test/jwks',
+    jwksUri: 'https://signer.test/jwks',
   },
-  'http://signer.test/jwks': { keys: [jwk] },
+  'https://signer.test/jwks': { keys: [jwk] },
 };
 const fetchDocs = async url => docs[url];
 const body = JSON.stringify({
@@ -108,6 +111,7 @@ test('signature inputs parse the way atomic-server serializes them', () => {
 
 test('the peer serves discovery, its JWK Set and a secret-guarded file', async () => {
   const peer = await startPeer({
+    caPath: join(mkdtempSync(join(tmpdir(), 'ocm-peer-test-')), 'ca.pem'),
     files: {
       'spec.txt': {
         body: 'invented file',
@@ -123,6 +127,7 @@ test('the peer serves discovery, its JWK Set and a secret-guarded file', async (
     assert.equal(discovery.jwksUri, `${peer.origin}/ocm/jwks`);
     const set = await fetchJson(discovery.jwksUri);
     assert.equal(set.keys[0].kid, `${peer.domain}#peer-key`);
+    assert.match(peer.origin, /^https:\/\/localhost:\d+$/);
     assert.equal((await send(`${peer.origin}/dav/spec.txt`)).status, 401);
     const file = await send(`${peer.origin}/dav/spec.txt`, {
       headers: { authorization: 'Bearer invented' },
