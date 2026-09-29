@@ -198,12 +198,16 @@
     "https://atomicdata.dev/integrations/properties/enabled": false,
     "https://atomicdata.dev/properties/name": "Bank statements",
     "https://atomicdata.dev/properties/emoji": "🏦",
-    "https://atomicdata.dev/properties/description": "Import bank transactions from MT940 and camt.053 statement exports.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Preview exact amounts, dates, account references and original descriptions in a Bank transactions table.",
-    "https://atomicdata.dev/integrations/properties/events": "Upload an MT940 or camt.053 statement when you need it. No bank token required.",
-    "https://atomicdata.dev/integrations/properties/limitation": "MT940 (up to 512 KB) and camt.053 XML (up to 5 MB) files only, up to 500 transactions. No payment initiation or live bank sync. Bank-specific formats may need additional support.",
+    "https://atomicdata.dev/properties/description": "Import bank transactions from MT940 and camt.053 statement exports, and read them as a ledger in the Money drive app.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "The importer checks that each statement's opening balance, transactions and closing balance add up, previews which transactions are new or already imported with exact amounts, dates, references and the bank's own descriptions, and writes nothing until you apply the host's review. It writes a Bank transactions table and an Imported statements table (one row per statement, with its opening and closing balance). The Money app shows the Bank transactions table as a ledger per account and currency, with the latest closing balance from a stored statement, search, period and direction filters, your own category and note per transaction, and an import from inside the app through the same review.",
+    "https://atomicdata.dev/integrations/properties/events": "Upload an MT940 or camt.053 statement when you need it, on the importer's Import tab or from the Money app. No bank token and no live bank connection; nothing runs in the background.",
+    "https://atomicdata.dev/integrations/properties/limitation": "MT940 (up to 512 KB) and camt.053 XML (up to 5 MB) files only, up to 500 transactions per file. No CSV or PDF, no payment initiation or live bank sync; bank-specific formats may need additional support. Saving a category or note needs you to allow the app to edit the table. The Money app works only as a view of the importer's Bank transactions table: installed from Drive apps it gets an empty table of its own with no importer, and the importer's table does not offer it under Add view, so installing it from here does not yet give a working Money app. Declared, and tested with synthetic statement files only at this version.",
     "https://atomicdata.dev/integrations/properties/keywords": "bank bunq banking finance accounting statement mt940 camt camt.053 iso20022 xml sepa import swift",
-    "https://atomicdata.dev/integrations/properties/version": "0.2.0"
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Bank transaction",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bank transactions",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.3.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-0hyIn/cvSZBd4KDoIKEoNSR8gcaMayybwO8p5tn6e1tHwI5c7EVVf74tTgipigvv"
   },
   {
     "https://atomicdata.dev/properties/localId": "moneybird",
