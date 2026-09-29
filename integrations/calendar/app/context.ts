@@ -11,6 +11,7 @@ import {
   addDays,
   formatOffset,
   hhmm,
+  isDate,
   longDay,
   offsetAt,
   shortDay,
@@ -40,11 +41,25 @@ export function relativeDay(ctx: Ctx, date: string, long: string): string {
   return long;
 }
 
-/** `10:00 to 11:00`, or `All day`, for one segment. */
+/**
+ * `10:00 to 11:00`, `22:00 to 01:30 on Friday 25 September`, `All day`, or
+ * `No time set`, for one segment.
+ */
 export function spoken(segment: Segment): string {
+  if (segment.untimed) return 'No time set';
   if (segment.allDay) return 'All day';
 
-  return `${hhmm(segment.startMin)} to ${hhmm(segment.endMin)}`;
+  return `${hhmm(segment.startMin)} to ${endClock(segment)}`;
+}
+
+/** The end as the views label it: its own clock, and its date when later. */
+export function endClock(segment: Segment, short = false): string {
+  if (!segment.until) return hhmm(segment.endMin);
+  const time = hhmm(segment.until.minutes);
+
+  return short
+    ? `${time} ${shortDay(segment.until.date)}`
+    : `${time} on ${longDay(segment.until.date)}`;
 }
 
 /**
@@ -66,9 +81,19 @@ export function accessibleName(segment: Segment): string {
 
 /** When an event is, in the viewer's zone: a day line and a time line. */
 export function when(
-  event: Projection,
+  event: Projection & { day?: unknown },
   zone: string,
 ): { day: string; time?: string; own?: string } {
+  // A row made in the host table can have a Day but no Start or End.
+  const day =
+    typeof event.day === 'string' && isDate(event.day.slice(0, 10))
+      ? longDay(event.day.slice(0, 10))
+      : 'No date set';
+  if (event.allDay && (!isDate(event.start) || !isDate(event.end)))
+    return { day, time: 'All day' };
+  if (!event.allDay && (!event.start || !event.end))
+    return { day, time: 'No time set' };
+
   if (event.allDay) {
     const last = addDays(event.end, -1);
 

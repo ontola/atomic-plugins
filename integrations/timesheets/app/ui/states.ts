@@ -45,7 +45,7 @@ export function firstRun(h: H, onConnect: () => void) {
       ),
       item(
         false,
-        'Nothing is written to Clockify. Running timers, tags and rates are not copied.',
+        'Nothing is written to Clockify until you send a change you made. Running timers, tags and rates are not copied.',
       ),
     ),
     h(

@@ -119,6 +119,28 @@ ontology; one row per issue in the app's table, the body in Atomic's own
 comments" folder under the app; and one sync resource holding the bound
 repository and the sync state as JSON text.
 
+**First import (#206).** An issue or comment that is on GitHub, never
+synced and not in the table is created from the list page GitHub returned
+(`GET …/issues?state=all&per_page=100`, `GET …/issues/{n}/comments`): no
+per-item GET, and no pending operation is checkpointed first. Pull requests
+come back in the issue list and are skipped there, so neither they nor their
+comments are fetched. The sync state holds every imported issue's text
+(about 1.26 MB for 65 issues of about 4 KB and 106 comments), so it is
+written every 25 imported records or 10 s, not before each one. Rows show on
+the board as they are imported ("Importing… 40 issues so far"). After a
+reload the import resumes: rows imported after the last state write bind
+back by their issue number column, and comment Messages by the comment id
+in their GitHub source, even when the host reads back an older sync state.
+In `app/import.test.ts` (fake host, 65 issues + 141 pull requests + 106
+comments), the import went from 581 proxy calls, 343 state writes and
+280,004,627 bytes of state written to 68 proxy calls, 7 state writes and
+6,186,807 bytes; the 187 table writes (one per imported row or Message,
+plus set-up) are unchanged. How long one `/app-write` takes on the droplet
+is not measured here. Later passes that bring in GitHub changes to issues
+already in the table still read each changed item back and checkpoint
+before writing it; for a few changed items that is fine, for hundreds it is
+slow.
+
 **Review before provider writes.** A pass never sends a create or update to
 GitHub on its own. An edit in the app (a moved card, a title, a
 description, a comment, a new issue) is written into the table at once and
@@ -183,9 +205,11 @@ read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 **Not verified, or not supported:**
 
 - Only against the mock proxy's seeded repository (`atomic-fixture/tracker`:
-  two issues, one comment), and once, by hand, against its synthetic
+  two issues, one comment); once, by hand, against its synthetic
   `user-testing` scenario (see [Mock data for user
-  testing](#mock-data-for-user-testing)). Nothing has run against live GitHub, the real
+  testing](#mock-data-for-user-testing)); and, in `app/import.test.ts`, a
+  synthetic 206-item repository against the in-memory fake host only.
+  Nothing has run against live GitHub, the real
   integration proxy, or a repository beyond a handful of issues. The
   Collection pages at 500; larger repositories are not tested.
 - Two tabs or devices syncing the same app at once are not guarded: the sync
