@@ -63,7 +63,10 @@ import type { CompleteSchema } from './schema.js';
 import type { JSONValue, PluginResource, PluginStore } from './store.js';
 import { ProxyRefusal, type WriteInit } from './transport.js';
 
-export type { EntryField, EntryValues } from '../devonian/clockify/lens/index.js';
+export type {
+  EntryField,
+  EntryValues,
+} from '../devonian/clockify/lens/index.js';
 
 /** What a row says about its sync, read from its values and extras. */
 export interface RowState {
@@ -149,7 +152,8 @@ export interface SendOutcome {
 const text = (value: JSONValue) =>
   typeof value === 'string' && value ? value : null;
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const same = (a: unknown, b: unknown) =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 const ordered = (v: EntryValues): EntryValues => ({
   name: v.name,
@@ -274,6 +278,7 @@ function setBookkeeping(
   p: { baseline?: EntryValues; outbox?: OutboxMarker | null; delete?: boolean },
 ): boolean {
   let changed = false;
+
   const put = (property: string, value: JSONValue) => {
     const current = row.get(property);
     if (current === value || (value === '' && current === undefined)) return;
@@ -452,14 +457,16 @@ export function reconcileRow(
   for (const conflict of decision.conflicts) {
     const key = conflict.property as EntryField;
     (values as Record<string, unknown>)[key] = remote[key];
-    if ((ENTRY_FIELDS as readonly string[]).includes(key)) providerWon.push(key);
+    if ((ENTRY_FIELDS as readonly string[]).includes(key))
+      providerWon.push(key);
   }
 
   return {
     values,
     baseline: remote,
     providerWon,
-    deleteDropped: state.deleteRequested && !same(ordered(base), ordered(remote)),
+    deleteDropped:
+      state.deleteRequested && !same(ordered(base), ordered(remote)),
   };
 }
 
@@ -677,7 +684,10 @@ async function sendOne(
 
   const remote = entryValues(fresh, names);
   if (!remote)
-    return { status: 'refused', message: blockers(fresh, context.write).join(' ') };
+    return {
+      status: 'refused',
+      message: blockers(fresh, context.write).join(' '),
+    };
 
   let desired = change.desired;
 
@@ -716,8 +726,7 @@ async function sendOne(
         ...Object.keys(decision.local),
         ...decision.conflicts.map(c => c.property),
       ])
-        (values as Record<string, unknown>)[key] =
-          remote[key as EntryField];
+        (values as Record<string, unknown>)[key] = remote[key as EntryField];
       setRowValues(row, schema, values);
       setBookkeeping(row, schema, { baseline: remote });
       await row.save();
@@ -809,6 +818,7 @@ async function sendOne(
         message: 'Clockify still has the entry after the delete.',
       };
     }
+
     await row.destroy();
 
     return { status: 'sent' };
@@ -840,7 +850,8 @@ async function sendOne(
     ? {
         status: 'adjusted',
         fields: differs,
-        message: 'Clockify stored other values than were sent; the row has them.',
+        message:
+          'Clockify stored other values than were sent; the row has them.',
       }
     : { status: 'sent' };
 }
@@ -927,6 +938,5 @@ export async function planAll(
 
 export const sortChanges = (changes: PendingChange[]) =>
   [...changes].sort(
-    (a, b) =>
-      a.base.start - b.base.start || (a.entryId < b.entryId ? -1 : 1),
+    (a, b) => a.base.start - b.base.start || (a.entryId < b.entryId ? -1 : 1),
   );

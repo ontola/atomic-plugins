@@ -556,20 +556,22 @@ export function createController(
       if (!input) return undefined;
       const settings = settingsOf(current);
 
-      return withPending(timesheetFromMirror({
-        mirror: input.mirror,
-        ...(input.projects ? { projects: input.projects } : {}),
-        ...(input.members ? { members: input.members } : {}),
-        ...(settings ? { settings } : {}),
-        now: at,
-        // Clockify's profile zone once a sync has read it; the browser's
-        // until then (and without a relay).
-        timeZone: input.timeZone ?? timeZone,
-        ...(input.weekStart ? { weekStart: input.weekStart } : {}),
-        ...(input.forceProjects !== undefined
-          ? { forceProjects: input.forceProjects }
-          : {}),
-      }));
+      return withPending(
+        timesheetFromMirror({
+          mirror: input.mirror,
+          ...(input.projects ? { projects: input.projects } : {}),
+          ...(input.members ? { members: input.members } : {}),
+          ...(settings ? { settings } : {}),
+          now: at,
+          // Clockify's profile zone once a sync has read it; the browser's
+          // until then (and without a relay).
+          timeZone: input.timeZone ?? timeZone,
+          ...(input.weekStart ? { weekStart: input.weekStart } : {}),
+          ...(input.forceProjects !== undefined
+            ? { forceProjects: input.forceProjects }
+            : {}),
+        }),
+      );
     },
 
     changes: () => changes,
@@ -605,10 +607,10 @@ export function createController(
           project:
             projectId === local.projectId
               ? local.project
-              : ((projectId &&
+              : (projectId &&
                   (input?.projects ?? []).find(p => p.id === projectId)
                     ?.name) ||
-                null),
+                null,
         };
         if (setRowValues(row, schema, next)) await row.save();
       });

@@ -64,6 +64,7 @@ async function setup(options: { forceProjects?: boolean } = {}) {
 
     return store.getResource(subject);
   };
+
   const entry = (id: string) =>
     proxy.fixture.state.entries.find((e: { id: string }) => e.id === id);
   const sleeps: number[] = [];
@@ -95,6 +96,7 @@ async function setup(options: { forceProjects?: boolean } = {}) {
 
     return { outcomes: await sendChanges(context, changes), log };
   };
+
   const writes = () =>
     proxy.fixture.state.writes as Array<{
       method: string;
@@ -276,9 +278,9 @@ describe('sending (review first)', () => {
     expect(row.get(t.schema.sync.outbox)).toBe('');
     expect(row.get(t.schema.row.projectName)).toBe(PROJECT_2.name);
     // The log saw it: the views follow without another sync.
-    expect(
-      log.mirror.records[`timeEntry/entry-2`].fields.description,
-    ).toBe('Weekly sync (notes)');
+    expect(log.mirror.records[`timeEntry/entry-2`].fields.description).toBe(
+      'Weekly sync (notes)',
+    );
     expect(await t.plan()).toEqual([]);
     expect((await t.sync()).review).toEqual([]);
   });
@@ -429,7 +431,12 @@ describe('sending (review first)', () => {
     // One 429 on the first request after the fresh read: the PUT.
     const request = t.proxy.fixture.request;
     let reads = 0;
-    t.proxy.fixture.request = async (method: string, url: URL, body: unknown) => {
+
+    t.proxy.fixture.request = async (
+      method: string,
+      url: URL,
+      body: unknown,
+    ) => {
       const response = await request(method, url, body);
       if (
         method === 'GET' &&

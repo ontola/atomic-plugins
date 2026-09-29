@@ -50,7 +50,9 @@ describe('entryValues (get)', () => {
 
   it('has no row for a running timer, a break or a broken interval', () => {
     expect(
-      entryValues(clockifyEntry('r', 'x', NOW - HOUR, null) as ClockifyTimeEntry),
+      entryValues(
+        clockifyEntry('r', 'x', NOW - HOUR, null) as ClockifyTimeEntry,
+      ),
     ).toBeUndefined();
     expect(entryValues(entry({ type: 'BREAK' }))).toBeUndefined();
     expect(
@@ -114,7 +116,10 @@ describe('putBody (put)', () => {
 
   it('leaves out a project that is cleared', () => {
     const current = entry();
-    const body = putBody(current, { ...entryValues(current)!, projectId: null });
+    const body = putBody(current, {
+      ...entryValues(current)!,
+      projectId: null,
+    });
 
     expect(body).not.toHaveProperty('projectId');
     expect(body).not.toHaveProperty('taskId');
@@ -123,6 +128,7 @@ describe('putBody (put)', () => {
   it('PutGet: what the mock stores for a put body reads back as the values put', async () => {
     // Seeded, so a failure is reproducible.
     let seed = 7;
+
     const random = () => {
       seed = (seed * 1103515245 + 12345) % 2 ** 31;
 
@@ -196,12 +202,12 @@ describe('blockers', () => {
   });
 
   it('refuses an empty or reversed range, an end in the future, and archived or unknown projects', () => {
-    expect(blockers(entry(), context, { ...values, end: values.start })).toEqual([
-      'Start has to be before end.',
-    ]);
-    expect(blockers(entry(), context, { ...values, end: NOW + 60_000 })).toEqual([
-      'End is in the future.',
-    ]);
+    expect(
+      blockers(entry(), context, { ...values, end: values.start }),
+    ).toEqual(['Start has to be before end.']);
+    expect(
+      blockers(entry(), context, { ...values, end: NOW + 60_000 }),
+    ).toEqual(['End is in the future.']);
     expect(
       blockers(entry(), context, { ...values, projectId: ARCHIVED_PROJECT.id }),
     ).toEqual(['The project Old project is archived.']);

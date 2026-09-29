@@ -733,8 +733,10 @@ export function mountShell(
         timeZone,
         projects,
         projectRequired: required,
+        // Saved: the drawer closes on the "Changes to send" list.
         onSave: (edit: EntryEdit) => {
           ui.editing = undefined;
+          ui.entryId = undefined;
           void controller.editEntry(entryId, edit);
         },
         onCancel: back,
@@ -747,6 +749,7 @@ export function mountShell(
       }),
       onConfirmDelete: () => {
         ui.editing = undefined;
+        ui.entryId = undefined;
         void controller.deleteEntry(entryId);
       },
       onCancelDelete: back,

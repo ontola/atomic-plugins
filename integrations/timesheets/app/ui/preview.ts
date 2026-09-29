@@ -159,14 +159,25 @@ function sampleChanges(sheet: Timesheet): ChangesState {
       {
         entryId: 'e-kept',
         title: 'Client call',
-        fields: [{ field: 'name', yours: 'Client call (notes)', clockify: 'Client call' }],
+        fields: [
+          {
+            field: 'name',
+            yours: 'Client call (notes)',
+            clockify: 'Client call',
+          },
+        ],
       },
     ],
     recovered: [],
     outcomes: {
       at: SAMPLE_NOW - 60_000,
       results: [
-        { entryId: 'e-sent', title: 'Wireframes', kind: 'update', status: 'sent' },
+        {
+          entryId: 'e-sent',
+          title: 'Wireframes',
+          kind: 'update',
+          status: 'sent',
+        },
       ],
     },
   };
@@ -232,8 +243,9 @@ function stub(
     projectChoices: () => ({
       projects: (sheet?.entries ?? [])
         .map(e => e.project)
-        .filter((p, i, all): p is NonNullable<typeof p> =>
-          !!p?.name && all.findIndex(q => q?.id === p.id) === i,
+        .filter(
+          (p, i, all): p is NonNullable<typeof p> =>
+            !!p?.name && all.findIndex(q => q?.id === p.id) === i,
         )
         .map(p => ({ id: p.id, name: p.name! })),
       required: false,

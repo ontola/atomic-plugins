@@ -56,7 +56,9 @@ export function valueText(
     case 'name':
       return values.name;
     case 'projectId':
-      return values.project ?? (values.projectId ? values.projectId : 'No project');
+      return (
+        values.project ?? (values.projectId ? values.projectId : 'No project')
+      );
     case 'billable':
       return values.billable ? 'Yes' : 'No';
     case 'start':
@@ -89,7 +91,10 @@ const OUTCOME_TEXT: Record<SendOutcome['status'], string> = {
 };
 
 export function outcomeText(outcome: SendOutcome): string {
-  const what = outcome.kind === 'delete' ? `Delete “${outcome.title}”` : `“${outcome.title}”`;
+  const what =
+    outcome.kind === 'delete'
+      ? `Delete “${outcome.title}”`
+      : `“${outcome.title}”`;
 
   return `${what}: ${OUTCOME_TEXT[outcome.status]}${outcome.message ? `. ${outcome.message}` : ''}`;
 }
@@ -200,7 +205,11 @@ export function renderChanges(
     parts.push(
       h(
         'div',
-        { class: 'chg-notes', role: 'note', 'aria-label': 'Kept from Clockify' },
+        {
+          class: 'chg-notes',
+          role: 'note',
+          'aria-label': 'Kept from Clockify',
+        },
         h(
           'strong',
           null,

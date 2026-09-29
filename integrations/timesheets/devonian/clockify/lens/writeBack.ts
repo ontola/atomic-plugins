@@ -160,10 +160,7 @@ export function blockers(
   if (type !== 'REGULAR')
     reasons.push(`It is a ${type.toLowerCase().replace('_', ' ')} entry.`);
   if (entry.isLocked === true) reasons.push('It is locked in Clockify.');
-  if (
-    Array.isArray(entry.customFieldValues) &&
-    entry.customFieldValues.length
-  )
+  if (Array.isArray(entry.customFieldValues) && entry.customFieldValues.length)
     reasons.push(
       'It has custom field values, which this app cannot write back yet.',
     );

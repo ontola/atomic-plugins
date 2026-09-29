@@ -528,12 +528,12 @@ describe('view() against the fake store and the Clockify mock', () => {
     expect(text(root.querySelector('.entry .tag-pending'))).toBe('Not sent');
 
     buttons(root, 'Send 1 to Clockify')[0].click();
-    await expect
-      .poll(() => text(changes()))
-      .toContain('“Weekly sync”: Sent');
+    await expect.poll(() => text(changes())).toContain('“Weekly sync”: Sent');
     expect(proxy.fixture.state.writes).toHaveLength(1);
     expect(
-      proxy.fixture.state.entries.find((e: { id: string }) => e.id === 'entry-2'),
+      proxy.fixture.state.entries.find(
+        (e: { id: string }) => e.id === 'entry-2',
+      ),
     ).toMatchObject({ description: 'Weekly sync (notes)', billable: true });
     expect(root.querySelector('.entry .tag-pending')).toBeNull();
   }, 60_000);
@@ -561,9 +561,8 @@ describe('#123 M3 frames', () => {
     expect(text(form.querySelector('label[for="ed-start"]'))).toContain(
       'Europe/Amsterdam',
     );
-    expect(
-      (form.querySelector('#ed-desc') as HTMLInputElement).value,
-    ).toBe('Homepage hero, responsive pass');
+    expect((form.querySelector('#ed-desc') as HTMLInputElement).value).toBe(
+      'Homepage hero, responsive pass',
+    );
   });
 });
-
