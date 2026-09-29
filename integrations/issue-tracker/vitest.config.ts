@@ -45,6 +45,11 @@ export default {
     // The drive app imports its stylesheets as text (`./x.css?raw`);
     // Vitest otherwise empties every .css import, `?raw` included.
     css: true,
-    include: ['*.test.ts', 'app/**/*.test.ts', 'devonian/**/*.test.{ts,mjs}'],
+    include: [
+      '*.test.ts',
+      'app/**/*.test.ts',
+      'devonian/**/*.test.{ts,mjs}',
+      'fixtures/**/*.test.ts',
+    ],
   },
 };

@@ -180,7 +180,9 @@ read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 **Not verified, or not supported:**
 
 - Only against the mock proxy's seeded repository (`atomic-fixture/tracker`:
-  two issues, one comment). Nothing has run against live GitHub, the real
+  two issues, one comment), and once, by hand, against its synthetic
+  `user-testing` scenario (see [Mock data for user
+  testing](#mock-data-for-user-testing)). Nothing has run against live GitHub, the real
   integration proxy, or a repository beyond a handful of issues. The
   Collection pages at 500; larger repositories are not tested.
 - Two tabs or devices syncing the same app at once are not guarded: the sync
@@ -223,6 +225,38 @@ rather than here because `certify.mjs` treats a `package.json` in a plugin
 folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
 syncables would only add size.
+
+## Mock data for user testing
+
+The mock proxy's github-issues fixture has a second, opt-in scenario for
+trying the app by hand: start `integrations/localthought/mock-proxy.mjs`
+with `MOCK_SCENARIO=user-testing`. Its data, in
+`fixtures/github-issues/user-testing.mjs`, is synthetic: an invented studio's
+repositories, none of it recorded from GitHub.
+
+- `GET /user/repos` lists `acme-studio/website` (16 issues: 9 Todo, 3 Doing,
+  4 Done; 7 comments by four invented people), `acme-studio/brand-guide`
+  (2 issues) and `acme-studio/old-site` (issues turned off). The
+  `atomic-fixture/*` repositories are not listed in this scenario.
+- Labels are GitHub's `{ name, color }` objects (bug, enhancement, design,
+  docs, maintenance, good first issue, planning); `atomic:doing` stays a
+  plain name, as the fixture's label routes add it. Issues carry authors,
+  assignees and dates spread over the past 50 days. It includes one title of
+  about 160 characters, Markdown bodies with a task list, code blocks and
+  links, and one issue with no body (`null`).
+- The default scenario, which the e2e asserts, is unchanged.
+
+Drivers for changes on the GitHub side mid-session, as
+`POST /fixture/github-issues/<driver>` with a JSON array of arguments:
+`updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
+`commentAs` (`[repo, number, login, body]`, a comment by someone else) and
+`failNext` (`[status, count]`: the next `count` proxied requests answer 503,
+429/403 as a rate limit, or 401).
+
+Checked once, on 2026-09-25, against atomic-server `bc39dac4b` served by a
+Vite dev build: connect, the picker and importing `acme-studio/website` all
+worked. The import took about 33 s. `scenario.test.ts` covers the scenario
+and the drivers.
 
 ## Verification
 
