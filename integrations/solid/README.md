@@ -167,11 +167,12 @@ serves issuer metadata, JWKS and WebID profiles and mints tokens in process;
 it is not an identity provider. The lane passes the issuer to the server
 through `serverEnv` in `integrations/lanes.json`.
 
-**Pending candidate16**: the e2e below ran against the branch alone, where a
-token-less dpop request was public implicitly; with candidate16 that needs
-`authOptional`, which the manifest now declares. The spec itself is
-unchanged (its anonymous reads and 401 checks rely on exactly that); it has
-not been rerun against candidate16, which does not exist yet.
+**Rerun on candidate16** (2026-09-29): the e2e below first ran against the
+branch alone, where a token-less dpop request was public implicitly; with
+candidate16 that needs `authOptional`, which the manifest now declares. The
+unchanged spec (its anonymous reads and 401 checks rely on exactly that)
+passed against pin candidate16 (`38306758`) built with
+`--features wasm-plugins,plugin-routes`.
 
 **Verified** (2026-09-29, `node integrations/tooling/run-lane.mjs solid`,
 node and e2e tiers passing) against atomic-server `claude/plugin-solid-host`
