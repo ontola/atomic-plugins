@@ -253,6 +253,15 @@ Drivers for changes on the GitHub side mid-session, as
 `failNext` (`[status, count]`: the next `count` proxied requests answer 503,
 429/403 as a rate limit, or 401).
 
+For live GitHub, `fixtures/github-issues/seed-live-repo.mjs --repo
+<owner>/<name> [--yes]` puts the same `acme-studio/website` issues, labels
+(with `atomic:doing`) and comments into an empty, disposable repository. It
+runs `gh api` as whichever account the GitHub CLI is signed in as, which
+should be a dedicated test account. Everything is then authored by that
+account, and nothing is assigned. Without `--yes` it only prints what it
+would do. It was checked only for its refusals (bad arguments, a repository
+that already has issues); no repository has been seeded with it yet.
+
 Checked once, on 2026-09-25, against atomic-server `bc39dac4b` served by a
 Vite dev build: connect, the picker and importing `acme-studio/website` all
 worked. The import took about 33 s. `scenario.test.ts` covers the scenario
