@@ -430,20 +430,18 @@ export async function bringUp({
         name: container,
         ports,
         label,
-        env: { ...serverEnv(ports, IMAGE_STORE), ...laneServerEnv(extraEnv, ports) },
+        env: {
+          ...serverEnv(ports, IMAGE_STORE),
+          ...laneServerEnv(extraEnv, ports),
+        },
         command: pluginRoutesArgs(pluginRoutes, ports),
       }),
     );
   } else {
-    start(
-      'atomic-server',
-      binary,
-      pluginRoutesArgs(pluginRoutes, ports),
-      {
-        ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
-        ...laneServerEnv(extraEnv, ports),
-      },
-    );
+    start('atomic-server', binary, pluginRoutesArgs(pluginRoutes, ports), {
+      ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      ...laneServerEnv(extraEnv, ports),
+    });
   }
 
   // MOCK_FRONTEND_ORIGIN must match wherever the browser actually loads the

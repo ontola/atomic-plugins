@@ -46,7 +46,9 @@ const context = (body = turtle, media = 'text/turtle') => ({
     document: { id: 'alice', name: 'Alice', body, mediaType: media },
   },
   query: (property, value) =>
-    property === P.localId && value === 'solid:/alice' ? ['https://atomic.example/alice'] : [],
+    property === P.localId && value === 'solid:/alice'
+      ? ['https://atomic.example/alice']
+      : [],
   read: () => ({
     [P.description]: body,
     [P.media]: media,
@@ -158,11 +160,22 @@ test('unsupported valid Turtle forms fail closed without claiming full Turtle co
 test('base IRIs, blank nodes and long strings, which Solid documents use', () => {
   assert.deepEqual(
     parseTurtle('@base <https://example.org/dir/doc> . <a> <#b> <../c> .'),
-    [{ '@id': 'https://example.org/dir/a', 'https://example.org/dir/doc#b': [{ '@id': 'https://example.org/c' }] }],
+    [
+      {
+        '@id': 'https://example.org/dir/a',
+        'https://example.org/dir/doc#b': [{ '@id': 'https://example.org/c' }],
+      },
+    ],
   );
-  assert.deepEqual(parseTurtle('<#me> <urn:p> <> .', { base: 'https://pod.example/card' }), [
-    { '@id': 'https://pod.example/card#me', 'urn:p': [{ '@id': 'https://pod.example/card' }] },
-  ]);
+  assert.deepEqual(
+    parseTurtle('<#me> <urn:p> <> .', { base: 'https://pod.example/card' }),
+    [
+      {
+        '@id': 'https://pod.example/card#me',
+        'urn:p': [{ '@id': 'https://pod.example/card' }],
+      },
+    ],
+  );
   assert.deepEqual(
     parseTurtle('_:x <urn:p> [ <urn:q> """two\nlines""" ], _:x .'),
     [
@@ -170,7 +183,9 @@ test('base IRIs, blank nodes and long strings, which Solid documents use', () =>
       { '@id': '_:b0', 'urn:p': [{ '@id': '_:g1' }, { '@id': '_:b0' }] },
     ],
   );
-  assert.deepEqual(parseTurtle('[ <urn:p> "x" ] .'), [{ '@id': '_:g1', 'urn:p': [{ '@value': 'x' }] }]);
+  assert.deepEqual(parseTurtle('[ <urn:p> "x" ] .'), [
+    { '@id': '_:g1', 'urn:p': [{ '@value': 'x' }] },
+  ]);
 });
 test('malformed escapes, literal suffixes and trailing syntax are rejected', () => {
   for (const text of [

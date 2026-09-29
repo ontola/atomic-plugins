@@ -78,6 +78,7 @@ test.describe('Solid pod', () => {
 
     // Probe: a host without `auth: dpop` refuses every request.
     const probe = await fetch(pod);
+
     if (probe.status === 501) {
       const body = await probe.text();
       test.skip(
@@ -102,7 +103,10 @@ test.describe('Solid pod', () => {
     const hello = `${notes}hello.ttl`;
     const me = solid
       .buildThing(solid.createThing({ name: 'me' }))
-      .addUrl('http://www.w3.org/1999/02/22-rdf-syntax-ns#type', `${FOAF}Person`)
+      .addUrl(
+        'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
+        `${FOAF}Person`,
+      )
       .addStringNoLocale(`${FOAF}name`, 'Alice')
       .build();
     await solid.saveSolidDatasetAt(
@@ -114,11 +118,14 @@ test.describe('Solid pod', () => {
     // Anyone reads it back through the same library.
     const stored = await solid.getSolidDataset(hello);
     expect(
-      solid.getStringNoLocale(solid.getThing(stored, `${hello}#me`)!, `${FOAF}name`),
+      solid.getStringNoLocale(
+        solid.getThing(stored, `${hello}#me`)!,
+        `${FOAF}name`,
+      ),
     ).toBe('Alice');
-    expect(solid.getContainedResourceUrlAll(await solid.getSolidDataset(notes))).toEqual([
-      hello,
-    ]);
+    expect(
+      solid.getContainedResourceUrlAll(await solid.getSolidDataset(notes)),
+    ).toEqual([hello]);
 
     // An update is a SPARQL Update PATCH; the owner gets every WAC mode.
     const mine = await solid.getSolidDataset(hello, { fetch: alice });
@@ -151,7 +158,9 @@ test.describe('Solid pod', () => {
     );
     const fileUrl = solid.getSourceUrl(file);
     expect(fileUrl).toBe(`${notes}words.txt`);
-    expect(await (await solid.getFile(fileUrl)).text()).toBe('Plain words from Alice.');
+    expect(await (await solid.getFile(fileUrl)).text()).toBe(
+      'Plain words from Alice.',
+    );
 
     // N3 Patch, as the Solid Protocol requires servers to accept it.
     const patched = await alice(hello, {
@@ -163,7 +172,9 @@ _:p a solid:InsertDeletePatch;
   solid:inserts { ?me foaf:nick "al" }.`,
     });
     expect(patched.status, await patched.text()).toBe(204);
-    const card = await fetch(hello, { headers: { accept: 'application/ld+json' } });
+    const card = await fetch(hello, {
+      headers: { accept: 'application/ld+json' },
+    });
     expect(card.headers.get('content-type')).toBe('application/ld+json');
     expect(JSON.stringify(await card.json())).toContain(`"${FOAF}nick"`);
 
@@ -176,7 +187,9 @@ _:p a solid:InsertDeletePatch;
       body: '<#me> <http://xmlns.com/foaf/0.1/name> "Mallory" .',
     });
     expect(stale.status).toBe(412);
-    expect((await fetch(hello, { headers: { 'if-none-match': current } })).status).toBe(304);
+    expect(
+      (await fetch(hello, { headers: { 'if-none-match': current } })).status,
+    ).toBe(304);
 
     // Bob may read, not write; nobody anonymous may write.
     expect((await bob(hello)).headers.get('wac-allow')).toBe(
@@ -206,24 +219,34 @@ _:p a solid:InsertDeletePatch;
       expect(refused.status, JSON.stringify(claims)).toBe(401);
       expect((await refused.json()).type).toBe('route-unauthorized');
     }
+
     const bearer = await fetch(hello, {
       headers: { authorization: 'Bearer not-a-dpop-token' },
     });
     expect(bearer.status).toBe(401);
 
     // What Alice stored is PlainText atoms in the drive, named by path.
-    await page.goto(new URL(`/app/show?subject=${encodeURIComponent(storage)}`, SERVER_URL).href);
-    await expect(page.getByText('/notes/hello.ttl')).toBeVisible({ timeout: 30_000 });
+    await page.goto(
+      new URL(`/app/show?subject=${encodeURIComponent(storage)}`, SERVER_URL)
+        .href,
+    );
+    await expect(page.getByText('/notes/hello.ttl')).toBeVisible({
+      timeout: 30_000,
+    });
 
     // Deletes: the file, the document, then the empty container.
     await solid.deleteFile(fileUrl, { fetch: alice });
-    await expect(solid.deleteContainer(notes, { fetch: alice })).rejects.toMatchObject({
+    await expect(
+      solid.deleteContainer(notes, { fetch: alice }),
+    ).rejects.toMatchObject({
       statusCode: 409,
     });
     await solid.deleteSolidDataset(hello, { fetch: alice });
     await solid.deleteContainer(notes, { fetch: alice });
     expect((await fetch(hello)).status).toBe(404);
-    expect(solid.getContainedResourceUrlAll(await solid.getSolidDataset(pod))).toEqual([]);
+    expect(
+      solid.getContainedResourceUrlAll(await solid.getSolidDataset(pod)),
+    ).toEqual([]);
     const rootTypes = solid.getUrlAll(
       solid.getThing(await solid.getSolidDataset(pod), pod)!,
       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
@@ -240,7 +263,9 @@ _:p a solid:InsertDeletePatch;
 async function installPod(page: import('@playwright/test').Page) {
   await createFromCatalog(page, 'Plugin');
   await expect(
-    page.getByRole('main').getByRole('heading', { name: 'New plugin', level: 1 }),
+    page
+      .getByRole('main')
+      .getByRole('heading', { name: 'New plugin', level: 1 }),
   ).toBeVisible({ timeout: 45_000 });
   const target = await page.evaluate(
     async ({ code }) => {
@@ -248,7 +273,8 @@ async function installPod(page: import('@playwright/test').Page) {
       const plugin = new URL(location.href).searchParams.get('subject')!;
       const resource = await store.getResource(plugin);
       const sourceProp = Object.entries(resource.getPropVals()).find(
-        ([, value]) => typeof value === 'string' && value.includes('export function run'),
+        ([, value]) =>
+          typeof value === 'string' && value.includes('export function run'),
       )?.[0];
       if (!sourceProp) throw new Error('plugin has no source property');
       await resource.set(sourceProp, code);
@@ -355,6 +381,7 @@ async function post(agent: Agent, path: string, body: unknown) {
   });
   const text = await response.text();
   let json: unknown;
+
   try {
     json = JSON.parse(text);
   } catch {

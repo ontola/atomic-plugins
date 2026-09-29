@@ -17,7 +17,8 @@ import {
 } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 
-const b64url = (data: Buffer | string) => Buffer.from(data).toString('base64url');
+const b64url = (data: Buffer | string) =>
+  Buffer.from(data).toString('base64url');
 
 interface Jwk {
   kty: string;
@@ -44,9 +45,7 @@ class Es256 {
     const { crv, kty, x, y } = this.jwk;
 
     return b64url(
-      createHash('sha256')
-        .update(JSON.stringify({ crv, kty, x, y }))
-        .digest(),
+      createHash('sha256').update(JSON.stringify({ crv, kty, x, y })).digest(),
     );
   }
 
@@ -82,10 +81,12 @@ export async function startIssuer(origin: string): Promise<TestIssuer> {
 
   const server: Server = createServer((req, res) => {
     const path = new URL(req.url ?? '/', issuer).pathname;
+
     const json = (body: unknown) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
+
     if (path === '/.well-known/openid-configuration')
       return json({
         issuer,
@@ -101,6 +102,7 @@ export async function startIssuer(origin: string): Promise<TestIssuer> {
         keys: [{ ...signing.jwk, kid, alg: 'ES256', use: 'sig' }],
       });
     const profile = /^\/([a-z]+)\/profile\/card$/.exec(path);
+
     if (profile) {
       const storage = storages.get(profile[1]);
       res.writeHead(200, { 'content-type': 'text/turtle' });
@@ -115,6 +117,7 @@ export async function startIssuer(origin: string): Promise<TestIssuer> {
 
       return;
     }
+
     res.writeHead(404);
     res.end();
   });

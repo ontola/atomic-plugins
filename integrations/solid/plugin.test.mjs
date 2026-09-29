@@ -30,7 +30,10 @@ const LDP = 'http://www.w3.org/ns/ldp#';
  * intent shapes; it is not the host.
  */
 class Host {
-  constructor(access = { owners: [ALICE], public: ['read'] }, publicAtoms = true) {
+  constructor(
+    access = { owners: [ALICE], public: ['read'] },
+    publicAtoms = true,
+  ) {
     this.atoms = new Map();
     this.config = { storage: STORAGE, access };
     this.publicAtoms = publicAtoms;
@@ -45,7 +48,9 @@ class Host {
       config: this.config,
       query: (property, value) =>
         visible()
-          ? [...this.atoms].filter(([, a]) => a[property] === value).map(([s]) => s)
+          ? [...this.atoms]
+              .filter(([, a]) => a[property] === value)
+              .map(([s]) => s)
           : [],
       read: subject => {
         const atom = this.atoms.get(subject);
@@ -60,7 +65,9 @@ class Host {
     for (const intent of intents) {
       if (intent.op === 'create') {
         assert.equal(intent.parent, STORAGE);
-        assert.deepEqual(intent.isA, ['https://atomicdata.dev/classes/PlainText']);
+        assert.deepEqual(intent.isA, [
+          'https://atomicdata.dev/classes/PlainText',
+        ]);
         this.atoms.set(`https://atomic.example/atoms/${++this.count}`, {
           ...intent.set,
           [P.parent]: intent.parent,
@@ -85,9 +92,13 @@ class Host {
       receivedAt: 1_800_000_000_000 + this.count,
     });
     const response = verdict.response ?? verdict;
+
     if (verdict.intents) {
       assert.ok(caller, 'an anonymous request never writes');
-      assert.ok(response.status < 300, `writes come with a 2xx, not ${response.status}`);
+      assert.ok(
+        response.status < 300,
+        `writes come with a 2xx, not ${response.status}`,
+      );
       this.applied.push(...verdict.intents);
       this.apply(verdict.intents);
     }
@@ -100,7 +111,8 @@ class Host {
   }
 }
 
-const turtle = '@prefix ex: <https://example.org/> .\n<#it> ex:name "Alice"@en ; a ex:Person .';
+const turtle =
+  '@prefix ex: <https://example.org/> .\n<#it> ex:name "Alice"@en ; a ex:Person .';
 
 test('manifest: an installation-origin pod whose routes need DPoP and write only into storage', () => {
   assert.equal(manifest.http.mount, 'installation-origin');
@@ -111,12 +123,14 @@ test('manifest: an installation-origin pod whose routes need DPoP and write only
       classes: ['https://atomicdata.dev/classes/PlainText'],
     },
   ]);
+
   for (const route of manifest.http.routes) {
     assert.equal(route.auth, 'dpop');
     assert.equal(route.principal, 'installation');
     assert.deepEqual(route.writes, ['storage']);
     assert.equal(route.cors, 'any-origin-no-credentials');
   }
+
   assert.deepEqual(manifest.http.routes[0].methods, ['GET', 'HEAD', 'POST']);
 });
 
@@ -160,13 +174,24 @@ test('the owner creates a resource and its containers; anyone reads it', () => {
 
   const container = host.send('GET', '/notes/', { caller: ALICE });
   assert.equal(container.status, 200);
-  assert.equal(container.headers['wac-allow'], 'user="read append write",public="read"');
-  assert.ok(container.headers.link.includes(`<${LDP}BasicContainer>; rel="type"`));
+  assert.equal(
+    container.headers['wac-allow'],
+    'user="read append write",public="read"',
+  );
+  assert.ok(
+    container.headers.link.includes(`<${LDP}BasicContainer>; rel="type"`),
+  );
   const graph = parseTurtle(container.body);
-  assert.deepEqual(graph[0][`${LDP}contains`], [{ '@id': `${BASE}/notes/2026/` }]);
+  assert.deepEqual(graph[0][`${LDP}contains`], [
+    { '@id': `${BASE}/notes/2026/` },
+  ]);
 
   const root = host.send('GET', '/');
-  assert.ok(root.headers.link.includes('<http://www.w3.org/ns/pim/space#Storage>; rel="type"'));
+  assert.ok(
+    root.headers.link.includes(
+      '<http://www.w3.org/ns/pim/space#Storage>; rel="type"',
+    ),
+  );
   assert.deepEqual(parseTurtle(root.body)[0][`${LDP}contains`], [
     { '@id': `${BASE}/notes/` },
   ]);
@@ -183,7 +208,13 @@ test('WAC: anonymous callers get 401, other WebIDs 403, readers read only', () =
   assert.equal(anonymous.status, 401);
   assert.match(anonymous.headers['www-authenticate'], /^DPoP /);
   assert.equal(anonymous.headers['wac-allow'], 'user="",public=""');
-  assert.equal(host.send('PUT', '/b.txt', { headers: { 'content-type': 'text/plain' }, body: 'x' }).status, 401);
+  assert.equal(
+    host.send('PUT', '/b.txt', {
+      headers: { 'content-type': 'text/plain' },
+      body: 'x',
+    }).status,
+    401,
+  );
 
   const bob = host.send('GET', '/a.txt', { caller: BOB });
   assert.equal(bob.status, 200);
@@ -196,7 +227,10 @@ test('WAC: anonymous callers get 401, other WebIDs 403, readers read only', () =
   });
   assert.equal(denied.status, 403);
   assert.equal(host.send('DELETE', '/a.txt', { caller: BOB }).status, 403);
-  assert.equal(host.send('GET', '/a.txt', { caller: 'https://id.example/eve#me' }).status, 403);
+  assert.equal(
+    host.send('GET', '/a.txt', { caller: 'https://id.example/eve#me' }).status,
+    403,
+  );
   assert.deepEqual(host.paths(), ['solid:/a.txt']);
   assert.deepEqual(
     [...accessModes({ access: { appenders: [BOB] } }, { webid: BOB }).user],
@@ -226,7 +260,10 @@ test('conditional writes: If-None-Match * creates only, If-Match needs the curre
     200,
   );
   const now = host.send('GET', '/doc.ttl').headers.etag;
-  assert.equal(host.send('GET', '/doc.ttl', { headers: { 'if-none-match': now } }).status, 304);
+  assert.equal(
+    host.send('GET', '/doc.ttl', { headers: { 'if-none-match': now } }).status,
+    304,
+  );
   assert.equal(host.send('HEAD', '/doc.ttl').body, '');
 });
 
@@ -254,8 +291,18 @@ test('POST names new resources from Slug, and makes containers on request', () =
   });
   assert.equal(container.headers.location, `${BASE}/photos/`);
   assert.equal(host.send('GET', '/photos/').status, 200);
-  assert.equal(host.send('POST', '/missing/', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'x' }).status, 404);
-  assert.equal(host.send('POST', '/', { caller: ALICE, body: 'x' }).status, 415);
+  assert.equal(
+    host.send('POST', '/missing/', {
+      caller: ALICE,
+      headers: { 'content-type': 'text/plain' },
+      body: 'x',
+    }).status,
+    404,
+  );
+  assert.equal(
+    host.send('POST', '/', { caller: ALICE, body: 'x' }).status,
+    415,
+  );
   assert.equal(
     host.send('POST', '/', {
       caller: ALICE,
@@ -286,7 +333,9 @@ _:rename a solid:InsertDeletePatch;
   solid:deletes { ?person ex:givenName "Claudia". }.`;
   assert.equal(patch(rename).status, 204);
   const graph = parseTurtle(host.send('GET', '/card.ttl').body);
-  assert.deepEqual(graph[0]['https://example.org/givenName'], [{ '@value': 'Alex' }]);
+  assert.deepEqual(graph[0]['https://example.org/givenName'], [
+    { '@value': 'Alex' },
+  ]);
   // The delete is no longer there: 409, nothing changes.
   const before = host.send('GET', '/card.ttl').body;
   assert.equal(patch(rename).status, 409);
@@ -307,7 +356,11 @@ _:p a solid:InsertDeletePatch; solid:inserts { <#a> <urn:p> "o", [ <urn:q> 1 ] }
   assert.equal(created.status, 201);
   assert.equal(parseTriples(host.send('GET', '/new.ttl').body).length, 3);
   // Plain text is not RDF.
-  host.send('PUT', '/t.txt', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'x' });
+  host.send('PUT', '/t.txt', {
+    caller: ALICE,
+    headers: { 'content-type': 'text/plain' },
+    body: 'x',
+  });
   assert.equal(
     host.send('PATCH', '/t.txt', {
       caller: ALICE,
@@ -337,39 +390,82 @@ test('SPARQL Update INSERT DATA / DELETE DATA, as solid-client sends them', () =
       'https://example.org/p': [{ '@value': 'new', '@language': 'en' }],
     },
   ]);
-  assert.throws(() => parseSparqlUpdate('DELETE WHERE { ?s ?p ?o }', BASE), /INSERT DATA/);
-  assert.throws(() => parseSparqlUpdate('DELETE DATA { _:b <urn:p> "o" }', BASE), /blank/);
+  assert.throws(
+    () => parseSparqlUpdate('DELETE WHERE { ?s ?p ?o }', BASE),
+    /INSERT DATA/,
+  );
+  assert.throws(
+    () => parseSparqlUpdate('DELETE DATA { _:b <urn:p> "o" }', BASE),
+    /blank/,
+  );
   // A reader cannot patch; an appender may insert but not delete.
   const appender = new Host({ owners: [ALICE], appenders: [BOB] });
-  appender.send('PUT', '/l.ttl', { caller: ALICE, headers: { 'content-type': 'text/turtle' }, body: '<urn:s> <urn:p> "o" .' });
+  appender.send('PUT', '/l.ttl', {
+    caller: ALICE,
+    headers: { 'content-type': 'text/turtle' },
+    body: '<urn:s> <urn:p> "o" .',
+  });
   const insert = 'INSERT DATA { <urn:s> <urn:p> "x" . }';
   assert.equal(
-    appender.send('PATCH', '/l.ttl', { caller: BOB, headers: { 'content-type': 'application/sparql-update' }, body: insert }).status,
+    appender.send('PATCH', '/l.ttl', {
+      caller: BOB,
+      headers: { 'content-type': 'application/sparql-update' },
+      body: insert,
+    }).status,
     204,
   );
   assert.equal(
-    appender.send('PATCH', '/l.ttl', { caller: BOB, headers: { 'content-type': 'application/sparql-update' }, body: 'DELETE DATA { <urn:s> <urn:p> "x" . }' }).status,
+    appender.send('PATCH', '/l.ttl', {
+      caller: BOB,
+      headers: { 'content-type': 'application/sparql-update' },
+      body: 'DELETE DATA { <urn:s> <urn:p> "x" . }',
+    }).status,
     403,
   );
 });
 
 test('DELETE removes resources and only empty containers; the root stays', () => {
   const host = new Host();
-  host.send('PUT', '/box/a.txt', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'a' });
+  host.send('PUT', '/box/a.txt', {
+    caller: ALICE,
+    headers: { 'content-type': 'text/plain' },
+    body: 'a',
+  });
   assert.equal(host.send('DELETE', '/box/', { caller: ALICE }).status, 409);
-  assert.equal(host.send('DELETE', '/box/a.txt', { caller: ALICE }).status, 204);
+  assert.equal(
+    host.send('DELETE', '/box/a.txt', { caller: ALICE }).status,
+    204,
+  );
   assert.equal(host.send('GET', '/box/a.txt').status, 404);
   assert.equal(host.send('DELETE', '/box/', { caller: ALICE }).status, 204);
   assert.equal(host.send('DELETE', '/', { caller: ALICE }).status, 405);
   assert.deepEqual(host.paths(), []);
   // A document and a container cannot share a name.
-  host.send('PUT', '/x', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'x' });
-  assert.equal(host.send('PUT', '/x/y', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'y' }).status, 409);
+  host.send('PUT', '/x', {
+    caller: ALICE,
+    headers: { 'content-type': 'text/plain' },
+    body: 'x',
+  });
+  assert.equal(
+    host.send('PUT', '/x/y', {
+      caller: ALICE,
+      headers: { 'content-type': 'text/plain' },
+      body: 'y',
+    }).status,
+    409,
+  );
   assert.equal(host.send('PUT', '/x/', { caller: ALICE }).status, 409);
 });
 
 test('paths are validated before anything is looked up', () => {
-  for (const bad of ['/a//b', '/a/../b', '/a/%2e%2e/b', '/a b', '/%zz', `/${'a/'.repeat(17)}`])
+  for (const bad of [
+    '/a//b',
+    '/a/../b',
+    '/a/%2e%2e/b',
+    '/a b',
+    '/%zz',
+    `/${'a/'.repeat(17)}`,
+  ])
     assert.throws(() => podPath(bad), bad);
   assert.equal(podPath('/a/b/'), '/a/b/');
   assert.equal(new Host().send('GET', '/a//b').status, 400);
@@ -383,7 +479,11 @@ test('an unconfigured pod refuses instead of guessing a folder', () => {
 
 test('a private pod hides its atoms from anonymous reads even when public read is configured', () => {
   const host = new Host({ owners: [ALICE], public: ['read'] }, false);
-  host.send('PUT', '/a.txt', { caller: ALICE, headers: { 'content-type': 'text/plain' }, body: 'hi' });
+  host.send('PUT', '/a.txt', {
+    caller: ALICE,
+    headers: { 'content-type': 'text/plain' },
+    body: 'hi',
+  });
   // The host's public principal cannot read the atom: the plugin sees nothing.
   assert.equal(host.send('GET', '/a.txt').status, 404);
   assert.equal(host.send('GET', '/a.txt', { caller: ALICE }).status, 200);
@@ -410,7 +510,10 @@ test('SHA-256 matches FIPS 180-4 vectors (strong ETags)', () => {
     '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
   );
   for (const text of ['', 'é', '😀 over the 64-byte block boundary '.repeat(9)])
-    assert.equal(sha256hex(text), createHash('sha256').update(text).digest('hex'));
+    assert.equal(
+      sha256hex(text),
+      createHash('sha256').update(text).digest('hex'),
+    );
 });
 
 test('reviewed import emits a create intent that the pod then serves', () => {
@@ -418,7 +521,12 @@ test('reviewed import emits a create intent that the pod then serves', () => {
   host.config = {
     ...host.config,
     parent: STORAGE,
-    document: { id: 'hello', name: 'Hello', mediaType: 'text/plain', body: 'Hello from Solid' },
+    document: {
+      id: 'hello',
+      name: 'Hello',
+      mediaType: 'text/plain',
+      body: 'Hello from Solid',
+    },
   };
   const verdict = run(host.ctx(null));
   assert.equal(verdict.intents[0].set[P.localId], 'solid:/hello');

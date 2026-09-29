@@ -20,13 +20,13 @@ configured `storage` folder: `localId` holds `solid:<path>`, `name` the path,
 `mimetype` the media type and `description` the exact bytes. Containers are
 atoms whose path ends in `/`; the root is implicit.
 
-| Method | Resource | Container |
-| --- | --- | --- |
-| GET, HEAD | stored bytes; RDF negotiated between `text/turtle` and expanded `application/ld+json` | generated `ldp:BasicContainer` with `ldp:contains`, Turtle or JSON-LD; the root is also `pim:Storage` |
-| PUT | create (201, with missing parent containers) or replace (204) | create an empty container (201); replacing one answers 409 |
-| POST | — | create a child named by `Slug` (sanitized, made unique), a container with `Link: <ldp:BasicContainer>; rel="type"`; 201 with `Location` |
-| PATCH | `text/n3` (N3 Patch: one `solid:InsertDeletePatch` with `solid:where`/`inserts`/`deletes`) and `application/sparql-update` (`INSERT DATA`/`DELETE DATA` only); may create; RDF resources only | 409 |
-| DELETE | 204 | only when empty (409 otherwise); the root answers 405 |
+| Method    | Resource                                                                                                                                                                                      | Container                                                                                                                               |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| GET, HEAD | stored bytes; RDF negotiated between `text/turtle` and expanded `application/ld+json`                                                                                                         | generated `ldp:BasicContainer` with `ldp:contains`, Turtle or JSON-LD; the root is also `pim:Storage`                                   |
+| PUT       | create (201, with missing parent containers) or replace (204)                                                                                                                                 | create an empty container (201); replacing one answers 409                                                                              |
+| POST      | —                                                                                                                                                                                             | create a child named by `Slug` (sanitized, made unique), a container with `Link: <ldp:BasicContainer>; rel="type"`; 201 with `Location` |
+| PATCH     | `text/n3` (N3 Patch: one `solid:InsertDeletePatch` with `solid:where`/`inserts`/`deletes`) and `application/sparql-update` (`INSERT DATA`/`DELETE DATA` only); may create; RDF resources only | 409                                                                                                                                     |
+| DELETE    | 204                                                                                                                                                                                           | only when empty (409 otherwise); the root answers 405                                                                                   |
 
 Every response carries `Link` (`ldp:Resource`, and `Container`/`BasicContainer`,
 `RDFSource`/`NonRDFSource`, `pim:Storage` as they apply, one header line

@@ -132,7 +132,8 @@ function iri(value) {
   );
 }
 
-const blank = value => typeof value === 'string' && /^_:[A-Za-z0-9_-]+$/.test(value);
+const blank = value =>
+  typeof value === 'string' && /^_:[A-Za-z0-9_-]+$/.test(value);
 const node = value => iri(value) || blank(value);
 
 export function bytes(text) {
@@ -150,11 +151,13 @@ function bounded(body) {
 
 function removeDots(path) {
   const out = [];
+
   for (const segment of path.split('/')) {
     if (segment === '..') {
       if (out.length > 1) out.pop();
     } else if (segment !== '.') out.push(segment);
   }
+
   let result = out.join('/');
   if (/\/\.\.?$/.test(path) && !result.endsWith('/')) result += '/';
 
@@ -264,11 +267,14 @@ function parser(body, options = {}) {
     let value = '';
 
     while (offset < body.length) {
-      if (long ? body.startsWith(close.repeat(3), offset) : body[offset] === close) {
+      if (
+        long ? body.startsWith(close.repeat(3), offset) : body[offset] === close
+      ) {
         offset += long ? 3 : 1;
 
         return value;
       }
+
       const char = body[offset++];
 
       if (char === '\\') value += escape(iriMode);
@@ -330,12 +336,14 @@ function parser(body, options = {}) {
 
   function subjectTerm(triples) {
     space();
+
     if (body.startsWith('_:', offset)) {
       const name = take(/^_:[A-Za-z0-9_][A-Za-z0-9_-]*/);
       if (!name) error();
 
       return { t: 'bnode', v: label(name) };
     }
+
     if (body[offset] === '[') return blankList(triples);
     if (n3 && body[offset] === '?') return variable();
     if (body[offset] === '(') error();
@@ -347,11 +355,13 @@ function parser(body, options = {}) {
     offset++;
     const subject = { t: 'bnode', v: fresh() };
     space();
+
     if (body[offset] === ']') {
       offset++;
 
       return subject;
     }
+
     predicateObjects(subject, triples);
     punctuation(']');
 
@@ -380,6 +390,7 @@ function parser(body, options = {}) {
 
       return result;
     }
+
     if (n3 && quote === '{') return formula();
 
     const boolean = take(new RegExp(`^(?:true|false)${END}`));
@@ -409,10 +420,12 @@ function parser(body, options = {}) {
       bytes(s.v) + bytes(p.v) + bytes(JSON.stringify(o)) + 32;
     if (counters.expandedBytes > MAX_BYTES)
       fail('Expanded Turtle exceeds 32768 bytes');
+
     if (!counters.subjects.has(s.v)) {
       if (counters.subjects.size >= 128) fail('At most 128 RDF nodes');
       counters.subjects.add(s.v);
     }
+
     triples.push({ s, p, o });
   }
 
@@ -464,6 +477,7 @@ function parser(body, options = {}) {
       if (body[offset] !== '<') error();
       prefixes.set(prefix.slice(0, -1), reference());
     }
+
     if (found.startsWith('@')) punctuation('.');
 
     return true;
@@ -615,6 +629,7 @@ export function graphToTriples(graph) {
       for (const value of values) {
         const p = { t: 'iri', v: predicate === '@type' ? RDF_TYPE : predicate };
         let o;
+
         if (predicate === '@type') o = term(value);
         else if ('@id' in value) o = term(value['@id']);
         else {
@@ -622,6 +637,7 @@ export function graphToTriples(graph) {
           if (value['@language']) o.lang = value['@language'];
           else if (value['@type']) o.dt = value['@type'];
         }
+
         triples.push({ s: term(n['@id']), p, o });
       }
     }
@@ -698,6 +714,7 @@ export function parseN3Patch(body, base) {
   if (patches.length !== 1)
     fail('An N3 Patch needs exactly one solid:InsertDeletePatch');
   const subject = patches[0].s;
+
   const formula = name => {
     const found = triples.filter(
       t => sameTerm(t.s, subject) && t.p.v === SOLID + name,
@@ -708,9 +725,13 @@ export function parseN3Patch(body, base) {
 
     return found.length ? found[0].o.triples : [];
   };
+
   const where = formula('where');
   const variables = new Set(
-    where.flatMap(termsOf).filter(t => t.t === 'var').map(termId),
+    where
+      .flatMap(termsOf)
+      .filter(t => t.t === 'var')
+      .map(termId),
   );
   checkPatchTerms(where, 'solid:where', { blanks: false, variables });
   const inserts = formula('inserts');
@@ -750,6 +771,7 @@ export function parseSparqlUpdate(body, base) {
       inserts: insert ? triples : [],
     });
   }
+
   if (!operations.length) fail('The SPARQL Update has no operations');
 
   return operations;
@@ -769,11 +791,13 @@ function bindingsOf(patterns, graph) {
 
   function walk(i, binding) {
     if (found.length > 1) return;
+
     if (i === patterns.length) {
       found.push(binding);
 
       return;
     }
+
     for (const triple of graph) {
       let b = unify(patterns[i].s, triple.s, binding);
       if (b) b = unify(patterns[i].p, triple.p, b);
@@ -797,6 +821,7 @@ export function applyPatch(graph, operations, salt = 'p') {
 
   for (const { where, deletes, inserts } of operations) {
     let binding = {};
+
     if (where.length) {
       const bindings = bindingsOf(where, triples);
       if (bindings.length !== 1)
@@ -806,9 +831,12 @@ export function applyPatch(graph, operations, salt = 'p') {
         );
       binding = bindings[0];
     }
+
     const blanks = new Map();
+
     const instance = term => {
       if (term.t === 'var') return binding[term.v];
+
       if (term.t === 'bnode') {
         if (!blanks.has(term.v)) blanks.set(term.v, `_:${salt}${counter++}`);
 
@@ -817,17 +845,28 @@ export function applyPatch(graph, operations, salt = 'p') {
 
       return term;
     };
+
     for (const pattern of deletes) {
-      const triple = { s: instance(pattern.s), p: instance(pattern.p), o: instance(pattern.o) };
+      const triple = {
+        s: instance(pattern.s),
+        p: instance(pattern.p),
+        o: instance(pattern.o),
+      };
       const index = triples.findIndex(t => sameTriple(t, triple));
       if (index < 0) refuse(409, 'A triple to delete is not in the resource');
       triples.splice(index, 1);
     }
+
     for (const pattern of inserts) {
-      const triple = { s: instance(pattern.s), p: instance(pattern.p), o: instance(pattern.o) };
+      const triple = {
+        s: instance(pattern.s),
+        p: instance(pattern.p),
+        o: instance(pattern.o),
+      };
       if (!triples.some(t => sameTriple(t, triple))) triples.push(triple);
     }
   }
+
   if (triples.length > 512) refuse(413, 'At most 512 RDF statements');
 
   return triples;
@@ -851,6 +890,7 @@ const K = [
 
 function utf8(text) {
   const out = [];
+
   for (const char of text) {
     const c = char.codePointAt(0);
     if (c < 0x80) out.push(c);
@@ -876,7 +916,11 @@ export function sha256hex(text) {
   while (data.length % 64 !== 56) data.push(0);
   const bits = length * 8;
   for (let i = 7; i >= 0; i--)
-    data.push(i >= 4 ? Math.floor(bits / 2 ** (8 * i)) & 0xff : (bits >>> (8 * i)) & 0xff);
+    data.push(
+      i >= 4
+        ? Math.floor(bits / 2 ** (8 * i)) & 0xff
+        : (bits >>> (8 * i)) & 0xff,
+    );
   const h = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
     0x1f83d9ab, 0x5be0cd19,
@@ -891,12 +935,15 @@ export function sha256hex(text) {
         (data[chunk + 4 * i + 1] << 16) |
         (data[chunk + 4 * i + 2] << 8) |
         data[chunk + 4 * i + 3];
+
     for (let i = 16; i < 64; i++) {
       const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
       const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
       w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
     }
+
     let [a, b, c, d, e, f, g, hh] = h;
+
     for (let i = 0; i < 64; i++) {
       const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
       const t1 = (hh + S1 + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
@@ -911,6 +958,7 @@ export function sha256hex(text) {
       b = a;
       a = (t1 + t2) | 0;
     }
+
     h[0] = (h[0] + a) | 0;
     h[1] = (h[1] + b) | 0;
     h[2] = (h[2] + c) | 0;
@@ -1067,6 +1115,7 @@ export function accessModes(config, caller) {
     ])
       if (list(access[key]).includes(webid)) user.add(mode);
   }
+
   if (user.has('write')) user.add('append');
 
   return { user, public: pub };
@@ -1077,7 +1126,10 @@ const wacAllow = modes =>
 
 function mediaOf(value) {
   const essence = (value || '').split(';')[0].trim().toLowerCase();
-  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence) || essence.length > 128)
+  if (
+    !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence) ||
+    essence.length > 128
+  )
     return undefined;
 
   return essence;
@@ -1088,7 +1140,8 @@ class Pod {
   constructor(ctx, request) {
     this.ctx = ctx;
     this.storage = ctx.config && ctx.config.storage;
-    if (!iri(this.storage)) refuse(503, 'This pod has no storage folder configured');
+    if (!iri(this.storage))
+      refuse(503, 'This pod has no storage folder configured');
     this.base = String(request.base || '').replace(/\/$/, '');
     this.cache = new Map();
   }
@@ -1116,22 +1169,29 @@ class Pod {
     } catch {
       subjects = [];
     }
+
     for (const subject of subjects) {
       let resource;
+
       try {
         resource = this.ctx.read(subject);
       } catch {
         continue;
       }
+
       if (resource && resource[P.localId] === id && this.inStorage(resource)) {
         found = {
           subject,
           media: resource[P.media] || 'application/octet-stream',
-          body: typeof resource[P.description] === 'string' ? resource[P.description] : '',
+          body:
+            typeof resource[P.description] === 'string'
+              ? resource[P.description]
+              : '',
         };
         break;
       }
     }
+
     this.cache.set(path, found);
 
     return found;
@@ -1144,19 +1204,24 @@ class Pod {
   /** Paths directly inside container `path`. */
   children(path) {
     let subjects = [];
+
     try {
       subjects = this.ctx.query(P.parent, this.storage);
     } catch {
       subjects = [];
     }
+
     const out = [];
+
     for (const subject of subjects) {
       let resource;
+
       try {
         resource = this.ctx.read(subject);
       } catch {
         continue;
       }
+
       const id = resource && resource[P.localId];
       if (typeof id !== 'string' || !id.startsWith(`solid:${path}`)) continue;
       const child = id.slice('solid:'.length);
@@ -1164,6 +1229,7 @@ class Pod {
       if (!rest || rest.slice(0, -1).includes('/')) continue;
       out.push(child);
     }
+
     out.sort();
 
     return out;
@@ -1174,7 +1240,10 @@ function headersFor(pod, path, modes, extra = {}) {
   const container = isContainer(path);
   const link = [`<${LDP}Resource>; rel="type"`];
   if (container)
-    link.push(`<${LDP}Container>; rel="type"`, `<${LDP}BasicContainer>; rel="type"`);
+    link.push(
+      `<${LDP}Container>; rel="type"`,
+      `<${LDP}BasicContainer>; rel="type"`,
+    );
   if (path === '/') link.push(`<${PIM}Storage>; rel="type"`);
   const methods = container
     ? path === '/'
@@ -1190,7 +1259,9 @@ function headersFor(pod, path, modes, extra = {}) {
     link,
     ...extra,
   };
-  if (container) out['accept-post'] = 'text/turtle, application/ld+json, text/plain, */*';
+
+  if (container)
+    out['accept-post'] = 'text/turtle, application/ld+json, text/plain, */*';
   else {
     out['accept-put'] = '*/*';
     out['accept-patch'] = PATCH_TYPES;
@@ -1203,7 +1274,8 @@ function unauthorized(caller) {
   return caller
     ? refuse(403, 'Your WebID may not do this on this pod')
     : refuse(401, 'Authenticate with a Solid-OIDC DPoP-bound access token', {
-        'www-authenticate': 'DPoP realm="solid", algs="ES256 RS256 PS256 EdDSA"',
+        'www-authenticate':
+          'DPoP realm="solid", algs="ES256 RS256 PS256 EdDSA"',
       });
 }
 
@@ -1241,13 +1313,21 @@ function containerTriples(pod, path, found) {
   const url = pod.url(path);
   const s = { t: 'iri', v: url };
   const type = v => ({ s, p: { t: 'iri', v: RDF_TYPE }, o: { t: 'iri', v } });
-  const triples = [type(LDP + 'BasicContainer'), type(LDP + 'Container'), type(LDP + 'Resource')];
+  const triples = [
+    type(LDP + 'BasicContainer'),
+    type(LDP + 'Container'),
+    type(LDP + 'Resource'),
+  ];
   if (path === '/') triples.push(type(PIM + 'Storage'));
   const children = pod.children(path);
   if (children.length > MAX_CHILDREN)
     refuse(507, `This container has more than ${MAX_CHILDREN} children`);
   for (const child of children)
-    triples.push({ s, p: { t: 'iri', v: LDP + 'contains' }, o: { t: 'iri', v: pod.url(child) } });
+    triples.push({
+      s,
+      p: { t: 'iri', v: LDP + 'contains' },
+      o: { t: 'iri', v: pod.url(child) },
+    });
   if (found && found.body && RDF_TYPES.includes(found.media))
     triples.push(...storedTriples(found, url));
 
@@ -1265,8 +1345,7 @@ function negotiate(accept, choices) {
   const selected = choices
     .map(type => ({ type, quality: qualityFor(accept, type) }))
     .sort((a, b) => b.quality - a.quality)[0];
-  if (!selected || selected.quality <= 0)
-    refuse(406, '', { vary: 'Accept' });
+  if (!selected || selected.quality <= 0) refuse(406, '', { vary: 'Accept' });
 
   return selected.type;
 }
@@ -1281,6 +1360,7 @@ function read(pod, path, request, modes) {
   if (isContainer(path)) {
     const triples = containerTriples(pod, path, found);
     media = negotiate(headers.accept, RDF_TYPES);
+
     try {
       body = represent(triples, media);
     } catch {
@@ -1302,30 +1382,45 @@ function read(pod, path, request, modes) {
         if (e instanceof HttpError) throw e;
         refuse(406, '', { vary: 'Accept' });
       }
+
       media = selected;
     } else if (rdf) storedTriples(found, pod.url(path));
   }
 
   const tag = etag(media, body);
-  const out = headersFor(pod, path, modes, { 'content-type': media, etag: tag });
+  const out = headersFor(pod, path, modes, {
+    'content-type': media,
+    etag: tag,
+  });
   if (!isContainer(path))
     out.link.push(
       `<${LDP}${RDF_TYPES.includes(found.media) ? 'RDFSource' : 'NonRDFSource'}>; rel="type"`,
     );
-  if (headers['if-match'] && headers['if-match'].trim() !== '*' && !listHas(headers['if-match'], tag))
+  if (
+    headers['if-match'] &&
+    headers['if-match'].trim() !== '*' &&
+    !listHas(headers['if-match'], tag)
+  )
     return { status: 412, headers: out, body: '' };
   const none = headers['if-none-match'];
   if (none && (none.trim() === '*' || listHas(none, tag)))
     return { status: 304, headers: out, body: '' };
 
-  return { status: 200, headers: out, body: request.method === 'HEAD' ? '' : body };
+  return {
+    status: 200,
+    headers: out,
+    body: request.method === 'HEAD' ? '' : body,
+  };
 }
 
 /** The current strong validator of a stored resource, in its stored media type. */
 function currentTag(pod, path, found) {
   if (!found && path !== '/') return undefined;
   if (isContainer(path))
-    return etag('text/turtle', serializeTriples(containerTriples(pod, path, found)));
+    return etag(
+      'text/turtle',
+      serializeTriples(containerTriples(pod, path, found)),
+    );
 
   return etag(found.media, found.body);
 }
@@ -1334,6 +1429,7 @@ function checkedBody(request, url) {
   const media = mediaOf(request.headers && request.headers['content-type']);
   if (!media) refuse(415, 'A Content-Type is required');
   const body = request.body || '';
+
   try {
     bounded(body);
     if (RDF_TYPES.includes(media)) validate(body, media, url);
@@ -1345,6 +1441,7 @@ function checkedBody(request, url) {
 }
 
 let sequence = 0;
+
 function localId(prefix) {
   sequence++;
 
@@ -1371,10 +1468,12 @@ function createIntent(pod, path, media, body) {
 /** Creates for the containers `path` needs, or a 409 when a document is in the way. */
 function containersFor(pod, path) {
   const intents = [];
+
   for (const container of ancestors(path)) {
     if (pod.find(container.slice(0, -1)))
       refuse(409, `${container.slice(0, -1)} is a document, not a container`);
-    if (!pod.find(container)) intents.push(createIntent(pod, container, 'text/turtle', ''));
+    if (!pod.find(container))
+      intents.push(createIntent(pod, container, 'text/turtle', ''));
   }
 
   return intents;
@@ -1390,21 +1489,35 @@ function put(pod, path, request, modes) {
   const found = pod.find(path);
   need(modes, 'write', request.caller);
   preconditions(request.headers || {}, currentTag(pod, path, found));
+
   if (isContainer(path)) {
     if (found) refuse(409, 'Replacing a container is not supported');
-    if (pod.find(path.slice(0, -1))) refuse(409, 'A document already has this path');
-    const intents = [...containersFor(pod, path), createIntent(pod, path, 'text/turtle', '')];
+    if (pod.find(path.slice(0, -1)))
+      refuse(409, 'A document already has this path');
+    const intents = [
+      ...containersFor(pod, path),
+      createIntent(pod, path, 'text/turtle', ''),
+    ];
 
     return {
-      response: { status: 201, headers: headersFor(pod, path, modes), body: '' },
+      response: {
+        status: 201,
+        headers: headersFor(pod, path, modes),
+        body: '',
+      },
       intents,
     };
   }
+
   if (pod.find(path + '/')) refuse(409, 'A container already has this path');
   const { media, body } = checkedBody(request, pod.url(path));
   if (found)
     return {
-      response: { status: 204, headers: headersFor(pod, path, modes), body: '' },
+      response: {
+        status: 204,
+        headers: headersFor(pod, path, modes),
+        body: '',
+      },
       intents: [
         {
           op: 'set',
@@ -1416,17 +1529,22 @@ function put(pod, path, request, modes) {
 
   return {
     response: { status: 201, headers: headersFor(pod, path, modes), body: '' },
-    intents: [...containersFor(pod, path), createIntent(pod, path, media, body)],
+    intents: [
+      ...containersFor(pod, path),
+      createIntent(pod, path, media, body),
+    ],
   };
 }
 
 function post(pod, path, request, modes) {
   need(modes, 'append', request.caller);
-  if (!isContainer(path)) refuse(405, 'POST creates resources in containers only');
+  if (!isContainer(path))
+    refuse(405, 'POST creates resources in containers only');
   if (!pod.exists(path)) refuse(404, '');
   const headers = request.headers || {};
   const container = wantsContainer(headers.link);
-  const unique = String((request.receivedAt ?? Date.now()) % 1e9) + '-' + sequence;
+  const unique =
+    String((request.receivedAt ?? Date.now()) % 1e9) + '-' + sequence;
   let slug = String(headers.slug || '')
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^[.-]+/, '')
@@ -1438,6 +1556,7 @@ function post(pod, path, request, modes) {
   podPath(child);
   const location = pod.url(child);
   const intents = [];
+
   if (container) intents.push(createIntent(pod, child, 'text/turtle', ''));
   else {
     const { media, body } = checkedBody(request, location);
@@ -1460,22 +1579,27 @@ function patch(pod, path, request, modes) {
   const type = mediaOf(headers['content-type']);
   const url = pod.url(path);
   let operations;
+
   try {
     if (type === 'text/n3') operations = parseN3Patch(request.body || '', url);
     else if (type === 'application/sparql-update')
       operations = parseSparqlUpdate(request.body || '', url);
     else
-      refuse(415, `PATCH takes ${PATCH_TYPES}`, { 'accept-patch': PATCH_TYPES });
+      refuse(415, `PATCH takes ${PATCH_TYPES}`, {
+        'accept-patch': PATCH_TYPES,
+      });
   } catch (e) {
     if (e instanceof HttpError) throw e;
     refuse(422, e.message);
   }
+
   const deletes = operations.some(o => o.deletes.length);
   const wheres = operations.some(o => o.where.length);
   need(modes, deletes ? 'write' : 'append', request.caller);
   if (deletes || wheres) need(modes, 'read', request.caller);
   const found = pod.find(path);
-  if (!found && pod.find(path + '/')) refuse(409, 'A container already has this path');
+  if (!found && pod.find(path + '/'))
+    refuse(409, 'A container already has this path');
   preconditions(headers, currentTag(pod, path, found));
   if (found && !RDF_TYPES.includes(found.media))
     refuse(415, 'Only RDF resources can be patched');
@@ -1486,12 +1610,14 @@ function patch(pod, path, request, modes) {
     `p${String(request.receivedAt ?? 0).slice(-6)}n`,
   );
   let body;
+
   try {
     body = represent(triples, media);
     bounded(body);
   } catch (e) {
     refuse(413, e.message);
   }
+
   const out = headersFor(pod, path, modes);
   if (found)
     return {
@@ -1503,7 +1629,10 @@ function patch(pod, path, request, modes) {
 
   return {
     response: { status: 201, headers: out, body: '' },
-    intents: [...containersFor(pod, path), createIntent(pod, path, media, body)],
+    intents: [
+      ...containersFor(pod, path),
+      createIntent(pod, path, media, body),
+    ],
   };
 }
 
@@ -1537,12 +1666,15 @@ function problem(error, modes) {
 
 export function handle(ctx, request) {
   let modes;
+
   try {
-    const caller = request.caller && request.caller.webid ? request.caller : null;
+    const caller =
+      request.caller && request.caller.webid ? request.caller : null;
     request = { ...request, caller };
     modes = accessModes(ctx.config, caller);
     const path = podPath(request.path);
     const pod = new Pod(ctx, request);
+
     switch (request.method) {
       case 'GET':
       case 'HEAD':
