@@ -48,7 +48,10 @@ export const manifest = {
       {
         name: WILLOW_KEY,
         alg: 'ed25519',
-        willow: { namespace: 'config:namespace', pathPrefix: 'config:pathPrefix' },
+        willow: {
+          namespace: 'config:namespace',
+          pathPrefix: 'config:pathPrefix',
+        },
         reason:
           "This installation's Willow subspace key. The host signs Willow entries with it, only in the configured communal namespace and under the configured path prefix.",
       },

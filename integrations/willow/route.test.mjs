@@ -32,7 +32,10 @@ function key(seed) {
     format: 'der',
     type: 'pkcs8',
   });
-  const spki = createPublicKey(privateKey).export({ format: 'der', type: 'spki' });
+  const spki = createPublicKey(privateKey).export({
+    format: 'der',
+    type: 'spki',
+  });
 
   return {
     public: hex(new Uint8Array(spki.subarray(spki.length - 32))),
@@ -43,8 +46,18 @@ function key(seed) {
 function fixture() {
   const k = key(5);
   const resources = new Map([
-    [s1, { [name]: 'Hello', [secret]: 'not selected', [P.lastCommit]: 'https://atomic.example/commits/a' }],
-    [s2, { [name]: 'Second', [P.lastCommit]: 'https://atomic.example/commits/b' }],
+    [
+      s1,
+      {
+        [name]: 'Hello',
+        [secret]: 'not selected',
+        [P.lastCommit]: 'https://atomic.example/commits/a',
+      },
+    ],
+    [
+      s2,
+      { [name]: 'Second', [P.lastCommit]: 'https://atomic.example/commits/b' },
+    ],
     ['https://atomic.example/commits/a', { [P.createdAt]: 1790208000000 }],
     ['https://atomic.example/commits/b', { [P.createdAt]: 1790208060000 }],
   ]);
@@ -65,7 +78,12 @@ function fixture() {
       subspace: k2 => {
         assert.equal(k2, 'willow');
 
-        return { subspace: k.public, namespace: NAMESPACE, communal: true, pathPrefix: [ATOMIC] };
+        return {
+          subspace: k.public,
+          namespace: NAMESPACE,
+          communal: true,
+          pathPrefix: [ATOMIC],
+        };
       },
       authorise: request => {
         const entry = decodeEntry(unhex(request.entry), { canonical: true });
@@ -73,11 +91,18 @@ function fixture() {
         assert.equal(hex(entry.namespace), NAMESPACE);
         assert.equal(hex(entry.subspace), k.public);
         assert.equal(hex(entry.path[0]), ATOMIC);
-        if (resources.get(request.source.subject)?.[P.lastCommit] !== request.source.commit)
+        if (
+          resources.get(request.source.subject)?.[P.lastCommit] !==
+          request.source.commit
+        )
           throw Error('the source changed since it was read');
         authorised.push(request);
 
-        return { entry: request.entry, signature: k.sign(unhex(request.entry)), status: 'authorised' };
+        return {
+          entry: request.entry,
+          signature: k.sign(unhex(request.entry)),
+          status: 'authorised',
+        };
       },
     },
   };
@@ -97,23 +122,41 @@ function importRows(response) {
   assert.equal(response.headers['content-type'], 'application/octet-stream');
   const verdict = importer.run({
     upload: { name: 'willow.drop.b64', text: response.bodyBase64 },
-    config: { table: 'https://example.com/t', rowClass: 'https://example.com/c', properties },
+    config: {
+      table: 'https://example.com/t',
+      rowClass: 'https://example.com/c',
+      properties,
+    },
     query: () => [],
     read: () => ({}),
   });
 
   return verdict.intents.map(i => i.set);
 }
+
 const value = (row, n) => row[properties[n]];
 
 test('the manifest asks for one anonymous GET route and one bound Willow key', () => {
   assert.equal(manifest.schemaVersion, 3);
   assert.deepEqual(manifest.http.routes, [
-    { id: 'drop', path: '/willow.drop', methods: ['GET'], principal: 'anonymous', auth: 'none' },
+    {
+      id: 'drop',
+      path: '/willow.drop',
+      methods: ['GET'],
+      principal: 'anonymous',
+      auth: 'none',
+    },
   ]);
-  assert.deepEqual(manifest.http.keys.map(k => [k.name, k.alg, k.willow]), [
-    ['willow', 'ed25519', { namespace: 'config:namespace', pathPrefix: 'config:pathPrefix' }],
-  ]);
+  assert.deepEqual(
+    manifest.http.keys.map(k => [k.name, k.alg, k.willow]),
+    [
+      [
+        'willow',
+        'ed25519',
+        { namespace: 'config:namespace', pathPrefix: 'config:pathPrefix' },
+      ],
+    ],
+  );
   assert.equal(manifest.http.mount, 'drive-prefix');
   assert.deepEqual(manifest.operations, []);
   assert.deepEqual(manifest.secrets, []);
@@ -127,10 +170,16 @@ test('the route answers a drop of host-authorised entries of the selected proper
   assert.equal(rows.length, 2);
   assert.equal(value(rows[0], 'willow-subspace'), f.key.public);
   assert.equal(value(rows[0], 'willow-namespace'), NAMESPACE);
-  assert.deepEqual(JSON.parse(value(rows[0], 'willow-payload')), { '@id': s1, [name]: 'Hello' });
+  assert.deepEqual(JSON.parse(value(rows[0], 'willow-payload')), {
+    '@id': s1,
+    [name]: 'Hello',
+  });
   assert.doesNotMatch(value(rows[0], 'willow-payload'), /not selected/);
   // The commit time, read as the data model recommends.
-  assert.equal(value(rows[0], 'willow-timestamp'), willowTime(1790208000000n).toString());
+  assert.equal(
+    value(rows[0], 'willow-timestamp'),
+    willowTime(1790208000000n).toString(),
+  );
   assert.equal(value(rows[0], 'willow-time'), '2026-09-24T00:00:00.000000Z');
   assert.deepEqual(
     f.authorised.map(a => a.source),
@@ -147,9 +196,14 @@ test('unchanged sources give the same bytes; an edit gives a newer entry', () =>
   assert.equal(handle(f.ctx).response.bodyBase64, first);
   f.resources.get(s1)[name] = 'Edited';
   f.resources.get(s1)[P.lastCommit] = 'https://atomic.example/commits/c';
-  f.resources.set('https://atomic.example/commits/c', { [P.createdAt]: 1790208120000 });
+  f.resources.set('https://atomic.example/commits/c', {
+    [P.createdAt]: 1790208120000,
+  });
   const rows = importRows(handle(f.ctx).response);
-  assert.equal(value(rows[0], 'willow-timestamp'), willowTime(1790208120000n).toString());
+  assert.equal(
+    value(rows[0], 'willow-timestamp'),
+    willowTime(1790208120000n).toString(),
+  );
   assert.match(value(rows[0], 'willow-payload'), /Edited/);
 });
 
@@ -161,8 +215,10 @@ test('an unreadable, uncommitted or host-refused source fails the whole drop wit
     [
       f => {
         const authorise = f.ctx.willow.authorise;
+
         f.ctx.willow.authorise = r => {
-          f.resources.get(s1)[P.lastCommit] = 'https://atomic.example/commits/moved';
+          f.resources.get(s1)[P.lastCommit] =
+            'https://atomic.example/commits/moved';
 
           return authorise(r);
         };
@@ -185,7 +241,10 @@ test('an unreadable, uncommitted or host-refused source fails the whole drop wit
 test('the host signing other bytes than asked is caught', () => {
   const f = fixture();
   const authorise = f.ctx.willow.authorise;
-  f.ctx.willow.authorise = r => ({ ...authorise(r), entry: r.entry.slice(0, -2) + '00' });
+  f.ctx.willow.authorise = r => ({
+    ...authorise(r),
+    entry: r.entry.slice(0, -2) + '00',
+  });
   assert.match(handle(f.ctx).problems[0].message, /other bytes/);
 });
 

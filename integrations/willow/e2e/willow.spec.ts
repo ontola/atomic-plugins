@@ -99,6 +99,7 @@ test.describe('willow export route', () => {
       async ({ publicAgent }) => {
         const store = window.store!;
         const drive = store.getDrive()!;
+
         const make = async (name: string, isPublic: boolean) => {
           const resource = await store.newResource({
             parent: drive,
@@ -126,13 +127,13 @@ test.describe('willow export route', () => {
     );
     const configure = (subjects: string[]) =>
       page.evaluate(
-        async ({ installation, config, property }) => {
-          const resource = await window.store!.getResource(installation);
+        async ({ subject, config, property }) => {
+          const resource = await window.store!.getResource(subject);
           await resource.set(property, config);
           await resource.save();
         },
         {
-          installation,
+          subject: installation,
           property: CONFIG,
           config: {
             subjects,
@@ -156,7 +157,10 @@ test.describe('willow export route', () => {
     expect(rows).toHaveLength(2);
     const subspace = rows[0]['willow-subspace'];
     expect(subspace).toMatch(/^[0-9a-f]{64}$/);
-    expect(rows.map(r => r['willow-namespace'])).toEqual([NAMESPACE, NAMESPACE]);
+    expect(rows.map(r => r['willow-namespace'])).toEqual([
+      NAMESPACE,
+      NAMESPACE,
+    ]);
     expect(rows.map(r => r['willow-subspace'])).toEqual([subspace, subspace]);
     expect(JSON.parse(rows[0]['willow-payload'])).toEqual({
       '@id': hello,
@@ -185,7 +189,9 @@ test.describe('willow export route', () => {
     );
     const edited = await fetch(url);
     const editedRows = importRows(new Uint8Array(await edited.arrayBuffer()));
-    expect(JSON.parse(editedRows[0]['willow-payload'])[NAME]).toBe('Hello again');
+    expect(JSON.parse(editedRows[0]['willow-payload'])[NAME]).toBe(
+      'Hello again',
+    );
     expect(editedRows[0]['willow-subspace']).toBe(subspace);
     expect(BigInt(editedRows[0]['willow-timestamp'])).toBeGreaterThan(
       BigInt(rows[0]['willow-timestamp']),
@@ -244,7 +250,10 @@ function importRows(bytes: Uint8Array): Record<string, string>[] {
   const importer = require('../../willow-drop/plugin.js');
   const properties = Object.fromEntries(
     importer.manifest.destination.schema.properties.map(
-      (p: { shortname: string }) => [p.shortname, `https://example.com/${p.shortname}`],
+      (p: { shortname: string }) => [
+        p.shortname,
+        `https://example.com/${p.shortname}`,
+      ],
     ),
   );
   const verdict = importer.run({

@@ -495,7 +495,8 @@ const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
  * 1 means 2, 2 means 4 and 3 means 8. */
 function tag2(value) {
   u64(value);
-  const size = value < 256n ? 1 : value < 65536n ? 2 : value < 4294967296n ? 4 : 8;
+  const size =
+    value < 256n ? 1 : value < 65536n ? 2 : value < 4294967296n ? 4 : 8;
   const out = [];
   for (let i = size - 1; i >= 0; i--)
     out.push(Number((value >> BigInt(i * 8)) & 255n));
@@ -540,12 +541,23 @@ export function encodeDrop(items) {
     // 01: an entry header; 0x20/0x10: namespace/subspace included; the
     // timestamp's tag; 01: the whole payload follows.
     out.push(
-      0x40 | (namespace ? 0x20 : 0) | (subspace ? 0x10 : 0) | (time.tag << 2) | 0x01,
+      0x40 |
+        (namespace ? 0x20 : 0) |
+        (subspace ? 0x10 : 0) |
+        (time.tag << 2) |
+        0x01,
     );
     if (namespace) out.push(...entry.namespace);
     if (subspace) out.push(...entry.subspace);
-    out.push(...compact(BigInt(prefix)), ...encodePath(entry.path.slice(prefix)));
-    out.push(...time.bytes, ...compact(entry.payloadLength), ...entry.payloadDigest);
+    out.push(
+      ...compact(BigInt(prefix)),
+      ...encodePath(entry.path.slice(prefix)),
+    );
+    out.push(
+      ...time.bytes,
+      ...compact(entry.payloadLength),
+      ...entry.payloadDigest,
+    );
     // A communal capability without delegations: an all-zero header.
     out.push(0x00, ...signature, ...payload);
     previous = entry;
@@ -577,7 +589,8 @@ const LEAP_SECONDS = [
  * TAI), 86,432.184 s away from this reading (worm-blossom/willow_rs#62).
  */
 export function willowTime(unixMillis) {
-  if (typeof unixMillis !== 'bigint') throw Error('Expected bigint milliseconds');
+  if (typeof unixMillis !== 'bigint')
+    throw Error('Expected bigint milliseconds');
   const us = unixMillis * 1000n;
   const [, offset] = LEAP_SECONDS.find(([start]) => us >= start);
   const value = us + offset * 1_000_000n - J2000_TAI_US;
@@ -643,7 +656,10 @@ export const manifest = {
       {
         name: WILLOW_KEY,
         alg: 'ed25519',
-        willow: { namespace: 'config:namespace', pathPrefix: 'config:pathPrefix' },
+        willow: {
+          namespace: 'config:namespace',
+          pathPrefix: 'config:pathPrefix',
+        },
         reason:
           "This installation's Willow subspace key. The host signs Willow entries with it, only in the configured communal namespace and under the configured path prefix.",
       },
