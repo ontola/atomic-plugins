@@ -179,6 +179,30 @@ export function validateConfig(config) {
         );
     }
 
+    // Operator sidecars (ATOMIC_PLUGIN_SIDECARS) the lane's server is started
+    // with, all at the lane's one `sidecar` port. atomic-server accepts them
+    // only at `read-write`; the lane's own spec starts the daemon.
+    if (lane.sidecars !== undefined) {
+      if (
+        !Array.isArray(lane.sidecars) ||
+        lane.sidecars.length !== 1 ||
+        !lane.sidecars.every(
+          name => typeof name === 'string' && /^[a-z0-9-]{1,64}$/.test(name),
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: sidecars must list one sidecar name (lowercase letters, digits and -)`,
+        );
+      if (!pluginRoutesLevels(lane).includes('read-write'))
+        throw new Error(
+          `lane ${lane.id}: sidecars need pluginRoutes read-write, the only level atomic-server accepts them at`,
+        );
+      if (config.roleOffsets?.sidecar === undefined)
+        throw new Error(
+          `lane ${lane.id}: sidecars need a sidecar port (roleOffsets.sidecar)`,
+        );
+    }
+
     if (lane.paths !== undefined) {
       if (!Array.isArray(lane.paths))
         throw new Error(`lane ${lane.id}: paths must be an array`);
