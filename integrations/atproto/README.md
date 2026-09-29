@@ -118,9 +118,11 @@ looked the drive up by and never from `Forwarded`/`X-Forwarded-Host`. It
 reports this as `hostFeatures.pluginRoutes.requestHost: true` in
 `/plugin-catalog`. On such a host only `config.handle` answers; every other
 hostname bound to the same drive gets `404`, whatever forwarding headers a
-client adds.
+client adds. Pin candidate16 (`38306758`, the `.atomic-server-ref` this
+plugin landed with) includes that branch; the e2e passed there on
+2026-09-29.
 
-**Older hosts** (the current pin, `2567fc30b`, and candidate14 itself) pass
+**Older hosts** (pins before candidate16, candidate14 itself included) pass
 path/wellKnown/method and a `url`/`base` whose authority Actix takes from
 forwarding headers, but no trusted host name. There the plugin cannot tell
 hostnames apart: every approved hostname of the drive answers with the same
