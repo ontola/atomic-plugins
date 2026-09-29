@@ -129,6 +129,10 @@ export function describe(state: ViewState): string {
         parts.push(
           `${plural(s.localOnly, 'row')} made here won’t be sent: creating events isn’t supported.`,
         );
+      if (s.unmapped.length)
+        parts.push(
+          `${plural(s.unmapped.length, 'column')} the app doesn’t send (${s.unmapped.map(u => u.column).join(', ')}) ${s.unmapped.length === 1 ? 'is' : 'are'} kept here only.`,
+        );
 
       return parts.join(' ');
     }

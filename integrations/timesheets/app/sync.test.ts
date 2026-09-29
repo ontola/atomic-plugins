@@ -1,6 +1,11 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
-import { PROJECT, USER, WORKSPACE } from '../fixtures/clockify/scenario.mjs';
+import {
+  PROJECT,
+  PROJECTS,
+  USER,
+  WORKSPACE,
+} from '../fixtures/clockify/scenario.mjs';
 import type { Settings } from './config.js';
 import { fixtureProxy } from './fixtureProxy.js';
 import {
@@ -62,11 +67,15 @@ describe('ensureSchema', () => {
       'https://atomicdata.dev/datatypes/integer',
     );
     expect(property(schema.row.start)[PARENT]).toBe(ONTOLOGY);
-    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(15);
+    // 8 row fields, 3 settings, 4 log fields, 3 sync extras (#123 M3).
+    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(18);
     const recommends = store.resources.get(ROW_CLASS)![
       atomic.recommends
     ] as string[];
     expect(recommends).toEqual([NAME, ...Object.values(schema.row)]);
+    // Sync bookkeeping stays on the row, but not as a column (#123 M3).
+    for (const extra of Object.values(schema.sync))
+      expect(recommends).not.toContain(extra);
     // Settings are stored on the App, not shown as table columns.
     expect(recommends).not.toContain(schema.settings.workspaceId);
     expect(await findSchema(store)).toEqual(schema);
@@ -123,7 +132,7 @@ describe('syncClockify against the shared Clockify mock', () => {
     // What the timesheet views read (#89): the mirror and the names.
     // 7-day window: entry-3 (20 days ago) is not read.
     expect(Object.keys(result.mirror.records)).toHaveLength(4);
-    expect(result.projects.map(p => p.id)).toEqual([PROJECT.id]);
+    expect(result.projects.map(p => p.id)).toEqual(PROJECTS.map(p => p.id));
     expect(result.members.map(m => m.id)).toEqual([USER.id]);
     // Rows are projected from the mirror in start order.
     expect(rows().map(([, r]) => r[schema.row.entryId])).toEqual([

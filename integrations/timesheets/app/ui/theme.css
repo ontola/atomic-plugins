@@ -1045,6 +1045,82 @@ select.sel {
   padding-left: 18px;
 }
 
+/* #123 M3: "Changes to send", the "Not sent" tag and the edit form (edit.ts). */
+.changes {
+  display: grid;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--pl-radius);
+  border: 1px solid color-mix(in srgb, var(--pl-accent) 45%, var(--pl-surface));
+  background: var(--pl-accent-soft);
+  font-size: 13.5px;
+}
+.changes p {
+  margin: 0;
+}
+.changes ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.changes ul.chg {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.chg > li {
+  background: var(--pl-surface);
+  border: 1px solid var(--pl-hair);
+  border-radius: calc(var(--pl-radius) - 2px);
+  padding: 8px 10px;
+}
+.chg-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.chg-blocked {
+  color: color-mix(in srgb, var(--pl-neg) 75%, var(--pl-text));
+  font-size: 12.5px;
+}
+.chg-notes {
+  font-size: 12.5px;
+}
+.tag-pending {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px dashed var(--pl-accent);
+  color: var(--pl-text);
+  white-space: nowrap;
+}
+.entry.del .desc {
+  text-decoration: line-through;
+}
+form.edit {
+  display: grid;
+  gap: 14px;
+}
+input.inp {
+  font: inherit;
+  font-size: 13.5px;
+  padding: 7px 10px;
+  border: 1px solid var(--pl-border);
+  border-radius: calc(var(--pl-radius) - 2px);
+  background: var(--pl-surface);
+  color: var(--pl-text);
+  min-width: 0;
+}
+label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* The host's colour scheme (store.getTheme / onThemeChange), as data-scheme.
    The colours still come from the host's --t-* values; this sets native
    controls to dark, and puts dark text on the accent, which the host

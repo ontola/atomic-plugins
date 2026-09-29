@@ -453,6 +453,42 @@ describe('Calendar views: host operations of pin 007869464', () => {
     expect(opened).toEqual(['did:ad:row']);
   });
 
+  it('#192: opening the app again lists an End day edited in the host, and a column it doesn’t send', async () => {
+    const { store } = await chosen(1120);
+    const SHORTNAME = 'https://atomicdata.dev/properties/shortname';
+    const RECOMMENDS = 'https://atomicdata.dev/properties/recommends';
+    const endDay = [...store.resources.entries()].find(
+      ([, p]) => p[SHORTNAME] === 'atomic-calendar-end-day',
+    )![0];
+    const [trip, props] = rowWith(store, 'Calendar three-day fixture');
+    const attendees = 'did:ad:prop-attendees';
+    store.resources.set(attendees, {
+      [SHORTNAME]: 'attendees',
+      [NAME]: 'Attendees',
+    });
+    const klass = store.resources.get('did:ad:class-item')!;
+    store.resources.set('did:ad:class-item', {
+      ...klass,
+      [RECOMMENDS]: [...(klass[RECOMMENDS] as string[]), attendees],
+    });
+    store.resources.set(trip, {
+      ...props,
+      [endDay]: '2026-09-15',
+      [attendees]: 'A. Example',
+    });
+
+    const root = await mount(store, 1120);
+    await settle(10);
+    await click(one(root, 'button', 'Review 1 change'), 10);
+    const sheet = one(root, 'dialog');
+    // Shown as the last day, not the exclusive end: 12th → 14th.
+    expect(sheet.textContent).toContain('EndSat 12 Sep→ becomes Mon 14 Sep');
+    expect(sheet.textContent).toContain(
+      'Kept here only, never sent to Google: Attendees (1 event).',
+    );
+    expect(store.google.writes).toEqual([]);
+  });
+
   it('an older host shows none of these controls', async () => {
     const { root } = await chosen(1120, fakeStore({ hostOps: false }));
     expect(byRole(root, 'button', 'Month ↗')).toEqual([]);

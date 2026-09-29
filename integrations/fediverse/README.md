@@ -133,7 +133,8 @@ Exact, and all enforced by the plugin unless marked host:
 Public surfaces need the `plugin-routes` Cargo feature, `--plugin-routes
 read-write`, and the installer's approval. Beyond what
 `claude/atomic-plugins-pin-candidate14` has, this plugin needs atomic-server
-branch `claude/plugin-fediverse-host`:
+branch `claude/plugin-fediverse-host`, which pin candidate16 (`38306758`,
+the `.atomic-server-ref` this plugin landed with) includes:
 
 - `auth: atomic` on routes (the publish route): a version 2 request
   signature over method, URL and body, each proof once; `request.caller =
@@ -155,8 +156,7 @@ branch `claude/plugin-fediverse-host`:
 ```sh
 node integrations/fediverse/build.mjs
 node integrations/tooling/run-lane.mjs fediverse --tier node
-ATOMIC_SERVER_ROUTES_BINARY=<a claude/plugin-fediverse-host build> \
-  node integrations/tooling/run-lane.mjs fediverse --tier e2e
+node integrations/tooling/run-lane.mjs fediverse --tier e2e
 ```
 
 The node tier checks the handler's decisions against an in-memory host. The

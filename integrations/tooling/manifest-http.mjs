@@ -187,7 +187,7 @@ const withReason = item => {
 /**
  * Validates an `http` block and returns its canonical form: defaults left
  * out, and `undefined` when it holds nothing. `context` is
- * `{ serverExtension, operations: [{ id, effect, url }] }`.
+ * `{ serverExtension, operations: [{ id, effect, url, method }] }`.
  */
 export function validateHttp(raw, context) {
   const entry = object(raw, 'http');
@@ -216,12 +216,14 @@ export function validateHttp(raw, context) {
       'methods',
       'principal',
       'auth',
+      'authOptional',
       'accept',
       'cors',
       'maxBodyBytes',
       'body',
       'writes',
       'enqueues',
+      'fetches',
       'timeoutMs',
     ]);
 
@@ -248,6 +250,14 @@ export function validateHttp(raw, context) {
         ['none', 'atomic', 'http-signature', 'bearer', 'dpop'],
         'none',
       ),
+      authOptional: (() => {
+        const v = route.authOptional;
+        if (v === undefined) return false;
+        if (typeof v !== 'boolean')
+          throw new Error('authOptional: invalid type, expected a boolean');
+
+        return v;
+      })(),
       accept: texts(route.accept, 'route accept'),
       cors: variant(route.cors, ['none', 'any-origin-no-credentials'], 'none'),
       maxBodyBytes: number('maxBodyBytes'),
@@ -257,6 +267,7 @@ export function validateHttp(raw, context) {
           : variant(route.body, ['json', 'text', 'blob']),
       writes: texts(route.writes, 'route writes'),
       enqueues: texts(route.enqueues, 'route enqueues'),
+      fetches: texts(route.fetches, 'route fetches'),
       timeoutMs: number('timeoutMs'),
     };
   });
@@ -381,6 +392,11 @@ export function validateHttp(raw, context) {
       );
     if (route.auth === 'bearer' && tokens.length === 0)
       throw new Error('auth bearer requires http.tokens');
+    if (
+      route.authOptional &&
+      !['bearer', 'dpop', 'atomic'].includes(route.auth)
+    )
+      throw new Error('authOptional requires auth bearer, dpop or atomic');
     if (route.accept.some(a => !a.includes('/')))
       throw new Error('route accept entries must be media types');
 
@@ -406,6 +422,22 @@ export function validateHttp(raw, context) {
       )
     )
       throw new Error('enqueues must name declared write operations');
+    // `ctx.blobs.fetch` (atomic-server candidate16): declared GET read
+    // operations whose answer the host downloads into the blob store.
+    if (
+      route.fetches.some(
+        id =>
+          !context.operations.some(
+            o =>
+              o.id === id &&
+              String(o.method).toUpperCase() === 'GET' &&
+              o.effect === 'read',
+          ),
+      )
+    )
+      throw new Error(
+        'fetches must name declared GET operations with effect read',
+      );
 
     for (const other of patterns) {
       const shared = route.methods.some(m => other.methods.includes(m));
@@ -471,10 +503,13 @@ export function validateHttp(raw, context) {
   for (const operation of context.operations) {
     if (
       isWildcardHost(operation.url) &&
-      !routes.some(r => r.enqueues.includes(operation.id))
+      !routes.some(
+        r =>
+          r.enqueues.includes(operation.id) || r.fetches.includes(operation.id),
+      )
     )
       throw new Error(
-        "wildcard-host operations must be listed in a route's enqueues",
+        "wildcard-host operations must be listed in a route's enqueues or fetches",
       );
   }
 
@@ -488,6 +523,7 @@ export function validateHttp(raw, context) {
             methods: r.methods,
             ...(r.principal !== 'anonymous' ? { principal: r.principal } : {}),
             ...(r.auth !== 'none' ? { auth: r.auth } : {}),
+            ...(r.authOptional ? { authOptional: true } : {}),
             ...(r.accept.length ? { accept: r.accept } : {}),
             ...(r.cors !== 'none' ? { cors: r.cors } : {}),
             ...(r.maxBodyBytes !== undefined
@@ -496,6 +532,7 @@ export function validateHttp(raw, context) {
             ...(r.body !== undefined ? { body: r.body } : {}),
             ...(r.writes.length ? { writes: r.writes } : {}),
             ...(r.enqueues.length ? { enqueues: r.enqueues } : {}),
+            ...(r.fetches.length ? { fetches: r.fetches } : {}),
             ...(r.timeoutMs !== undefined ? { timeoutMs: r.timeoutMs } : {}),
           })),
         }
@@ -524,6 +561,7 @@ const isReadOnlyRoute = route =>
   (route.auth ?? 'none') === 'none' &&
   !route.writes?.length &&
   !route.enqueues?.length &&
+  !route.fetches?.length &&
   route.body === undefined;
 
 /**
@@ -551,6 +589,10 @@ export function httpGate(http) {
     ...new Set((http?.routes ?? []).flatMap(r => r.enqueues ?? [])),
   ];
   for (const id of deliveries) add(`delivery \`${id}\``, 'read-write');
+  const fetches = [
+    ...new Set((http?.routes ?? []).flatMap(r => r.fetches ?? [])),
+  ];
+  for (const id of fetches) add(`fetch \`${id}\``, 'read-write');
   for (const listener of http?.listeners ?? [])
     add(`listener \`${listener.name}\``, 'read-write');
   for (const sidecar of http?.sidecars ?? [])
@@ -621,6 +663,7 @@ export function checkManifest(raw) {
       id: o?.id,
       effect: o?.effect,
       url: o?.url,
+      method: o?.method,
     })),
   });
 

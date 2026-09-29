@@ -216,6 +216,97 @@
     ]
   },
   {
+    "name": "v3 optional bearer",
+    "file": "v3-optional-bearer.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [],
+      "http": {
+        "routes": [
+          {
+            "id": "read",
+            "path": "/storage/{*rest}",
+            "methods": [
+              "GET",
+              "HEAD"
+            ],
+            "principal": "installation",
+            "auth": "bearer",
+            "authOptional": true,
+            "cors": "any-origin-no-credentials"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "storage"
+          }
+        ]
+      }
+    },
+    "gate": {
+      "needed": "read-write",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `GET,HEAD /storage/{*rest}`",
+          "needs": "read-write"
+        },
+        {
+          "surface": "token store `storage`",
+          "needs": "read-write"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
+      "wasm-sandbox"
+    ]
+  },
+  {
+    "name": "v3 optional dpop",
+    "file": "v3-optional-dpop.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [],
+      "http": {
+        "routes": [
+          {
+            "id": "pod",
+            "path": "/pod/{*rest}",
+            "methods": [
+              "GET",
+              "HEAD"
+            ],
+            "auth": "dpop",
+            "authOptional": true
+          }
+        ]
+      }
+    },
+    "gate": {
+      "needed": "read-write",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `GET,HEAD /pod/{*rest}`",
+          "needs": "read-write"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
+      "wasm-sandbox"
+    ]
+  },
+  {
     "name": "v3 listener",
     "file": "v3-listener.json",
     "gate": {
@@ -284,6 +375,73 @@
       "surfaces": []
     },
     "requires": [
+      "wasm-sandbox"
+    ]
+  },
+  {
+    "name": "v3 fetches",
+    "file": "v3-fetches.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [
+        {
+          "id": "fetch-file",
+          "method": "GET",
+          "url": "https://*/{*rest}",
+          "effect": "read"
+        },
+        {
+          "id": "notify",
+          "method": "POST",
+          "url": "https://*/ocm/notifications",
+          "effect": "write"
+        }
+      ],
+      "http": {
+        "mount": "drive-prefix",
+        "routes": [
+          {
+            "id": "shares",
+            "path": "/ocm/shares",
+            "methods": [
+              "POST"
+            ],
+            "auth": "http-signature",
+            "body": "json",
+            "enqueues": [
+              "notify"
+            ],
+            "fetches": [
+              "fetch-file"
+            ]
+          }
+        ]
+      }
+    },
+    "gate": {
+      "needed": "read-write",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `POST /ocm/shares`",
+          "needs": "read-write"
+        },
+        {
+          "surface": "delivery `notify`",
+          "needs": "read-write"
+        },
+        {
+          "surface": "fetch `fetch-file`",
+          "needs": "read-write"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
       "wasm-sandbox"
     ]
   },
@@ -378,6 +536,16 @@
     "error": "auth bearer requires http.tokens"
   },
   {
+    "name": "authOptional without auth bearer",
+    "file": "v3-auth-optional-without-bearer.json",
+    "error": "authOptional requires auth bearer, dpop or atomic"
+  },
+  {
+    "name": "authOptional on http-signature",
+    "file": "v3-auth-optional-http-signature.json",
+    "error": "authOptional requires auth bearer, dpop or atomic"
+  },
+  {
     "name": "body too large",
     "file": "v3-body-too-large.json",
     "error": "maxBodyBytes"
@@ -405,7 +573,7 @@
   {
     "name": "wildcard operation that no route enqueues",
     "file": "v3-wildcard-not-enqueued.json",
-    "error": "wildcard-host operations must be listed in a route's enqueues"
+    "error": "wildcard-host operations must be listed in a route's enqueues or fetches"
   },
   {
     "name": "well-known name off the allowlist",
@@ -456,5 +624,15 @@
     "name": "rels on an exclusive claim",
     "file": "v3-rels-not-webfinger.json",
     "error": "match.rels"
+  },
+  {
+    "name": "fetches naming a write operation",
+    "file": "v3-fetches-write-operation.json",
+    "error": "fetches must name declared GET operations with effect read"
+  },
+  {
+    "name": "fetches naming a POST operation",
+    "file": "v3-fetches-post.json",
+    "error": "fetches must name declared GET operations with effect read"
   }
 ]

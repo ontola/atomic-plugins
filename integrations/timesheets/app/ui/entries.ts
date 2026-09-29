@@ -22,6 +22,7 @@ import {
   type GridDay,
 } from '../model/views.js';
 import type { H } from './dom.js';
+import { pendingTag } from './edit.js';
 import { dot, duration } from './week.js';
 
 export interface Highlight {
@@ -57,13 +58,16 @@ export function entryRow(h: H, entry: TimeEntry, p: DayCardProps) {
     'button',
     {
       type: 'button',
-      class: `entry${lit ? ' hl' : ''}`,
+      class: `entry${lit ? ' hl' : ''}${entry.pending === 'delete' ? ' del' : ''}`,
       'data-k': `entry:${entry.id}`,
       'data-entry': entry.id,
     },
-    entry.description
-      ? h('span', { class: 'desc' }, entry.description)
-      : h('span', { class: 'desc muted' }, '(no description)'),
+    h(
+      'span',
+      { class: `desc${entry.description ? '' : ' muted'}` },
+      entry.description || '(no description)',
+      entry.pending ? [' ', pendingTag(h, entry.pending)] : null,
+    ),
     h(
       'span',
       { class: 'pj' },
