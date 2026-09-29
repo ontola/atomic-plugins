@@ -173,8 +173,9 @@ and checks two refusals. The peer is written from the specification, not
 from atomic-server's code, but it is still ours: it is not interoperability
 evidence with any deployed OCM server.
 
-**The e2e is pending on candidate16.** It passed against
-`claude/plugin-ocm-host` d18d2f6a2 with the earlier `enqueues` manifest;
-with `fetches` it needs a host that has the field (candidate16), and it has
-not been rerun since. On the current pin the signed share is refused (no
-OCM key discovery) and the e2e fails.
+**Verified on candidate16** (2026-09-29): with the `fetches` manifest, the
+e2e passed against pin candidate16 (`38306758`) built with the
+`plugin-routes` feature, including the install review's "May download files
+from any server into your drive". It had earlier passed against
+`claude/plugin-ocm-host` d18d2f6a2 with the `enqueues` manifest. At a pin
+without OCM key discovery the signed share is refused and the e2e fails.
