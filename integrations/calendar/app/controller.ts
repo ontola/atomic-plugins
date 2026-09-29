@@ -34,6 +34,7 @@ import {
   type Outcome,
   type PendingEdit,
 } from './sync.js';
+import { errorStack, report } from './report.js';
 
 /** What went wrong, in the terms the banners use (DESIGN.md §5.12). */
 export interface Problem {
@@ -114,7 +115,7 @@ export function describe(state: ViewState): string {
       const s = state.summary;
       const parts = [
         `Last refreshed ${state.at.toLocaleTimeString()}: ${plural(s.total, 'event')} (${s.added} added, ${s.updated} updated, ${s.unchanged} unchanged).`,
-        `Not imported: ${s.skipped.recurring} recurring, ${s.skipped.cancelled} cancelled.`,
+        `Not imported: ${s.skipped.recurring} recurring, ${s.skipped.cancelled} cancelled${s.skipped.unreadable ? `, ${s.skipped.unreadable} unreadable` : ''}.`,
       ];
       if (s.conflicts.length)
         parts.push(`${plural(s.conflicts.length, 'conflict')} left as is.`);
@@ -412,7 +413,13 @@ export function createController(
     }
   }
 
-  const fail = (error: unknown, outcomes?: Outcome[]) =>
+  const fail = (error: unknown, outcomes?: Outcome[]) => {
+    const problem = classify(error);
+    report('error', message(error), {
+      problem: problem.kind,
+      ...(problem.status ? { status: problem.status } : {}),
+      stack: errorStack(error),
+    });
     set({
       kind: 'error',
       message: message(error),
@@ -420,10 +427,11 @@ export function createController(
         connections.length === 0 ||
         (error as { reconnect?: boolean }).reconnect === true ||
         spent(error),
-      problem: classify(error),
+      problem,
       ...(outcomes ? { outcomes } : {}),
       ...(last ? { summary: last.summary, at: last.at } : {}),
     });
+  };
 
   const reload = async () => {
     if (!meta) return;
@@ -590,6 +598,19 @@ export function createController(
         );
         stale = false;
         last = { summary, at: new Date() };
+        report(summary.unreadable.length ? 'warn' : 'info', 'Sync finished', {
+          total: summary.total,
+          added: summary.added,
+          updated: summary.updated,
+          unchanged: summary.unchanged,
+          skipped: summary.skipped,
+          conflicts: summary.conflicts.length,
+          review: summary.review.length,
+          unreadable: summary.unreadable.map(({ id, reason }) => ({
+            id,
+            reason,
+          })),
+        });
         await reload();
         set({ kind: 'ready', at: last.at, summary, outcomes: [] });
       } catch (error) {
