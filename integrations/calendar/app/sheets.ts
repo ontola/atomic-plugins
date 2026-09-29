@@ -123,6 +123,15 @@ export function review(
         `${plural(summary.localOnly, 'row')} made in this table won’t be sent: creating events isn’t supported.`,
       ),
     );
+  if (summary.unmapped.length)
+    notes.push(
+      h(
+        doc,
+        'p',
+        { class: 'fine' },
+        `Kept here only, never sent to Google: ${summary.unmapped.map(u => `${u.column} (${plural(u.rows, 'event')})`).join(', ')}. Only Title, Notes, Location, Start, End, All day, Day and End day are sent.`,
+      ),
+    );
 
   // After a send: one row per outcome.
   if (!items.length && outcomes.length) {

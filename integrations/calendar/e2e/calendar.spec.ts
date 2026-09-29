@@ -32,7 +32,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -206,6 +206,43 @@ test.describe('calendar drive app', () => {
       0,
     );
     expect((await driver('state', [])).writes).toHaveLength(2);
+
+    // Compare on open (#192): an edit made in the host's table, in the
+    // host's format (End day, exclusive), found when the app opens again and
+    // sent, after review, as Google's end date.
+    const oneDay = (await rowsOf(page)).find(
+      r => r.name === 'Calendar all-day fixture',
+    )!;
+    const later = new Date(Date.parse(`${oneDay[END_DAY]}T00:00:00Z`) + 864e5)
+      .toISOString()
+      .slice(0, 10);
+    await setRowField(page, 'Calendar all-day fixture', END_DAY, later);
+    await page.reload();
+    // No Sync now: opening the app compares the rows with their baselines.
+    const review = app.getByRole('button', { name: 'Review 1 change' });
+    await expect(review).toBeVisible({ timeout: 30_000 });
+    await review.click();
+    // The sheet shows the last day (End day minus one), not the raw date.
+    await expect(sheet).toContainText('Calendar all-day fixture');
+    await expect(sheet).toContainText(/End[^→]*→\s*becomes/);
+    expect((await driver('state', [])).writes).toHaveLength(2);
+    await sendOne.click();
+    await expect(sheet).toContainText('1 of 1 change sent');
+    expect((await driver('state', [])).writes.at(-1)).toEqual(
+      expect.objectContaining({
+        id: 'all-day',
+        patch: { end: { date: later } },
+        ifMatch: expect.stringMatching(/^"v\d+"$/),
+      }),
+    );
+    await sheet.getByRole('button', { name: 'Done' }).click();
+    await expect
+      .poll(
+        async () =>
+          (await rowsOf(page)).find(r => r.name === 'Calendar all-day fixture')
+            ?.end,
+      )
+      .toBe(later);
 
     // The connection lives at the proxy, owned by the signed-in user and
     // delegated to this app; the page keeps nothing credential-like.
@@ -411,7 +448,8 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     // Exclusive end: not on the 13th, and not the day before.
     await expect(chip(`${month}13`, trip.name)).toHaveCount(0);
     await expect(chip(`${month}09`, trip.name)).toHaveCount(0);
-    // A one-day all-day event covers its day only.
+    // The other all-day event is not drawn on its End day. (The fixture is
+    // shared: after the first test's End day edit it is two days long.)
     await expect(chip(allDay[DAY], allDay.name)).toBeVisible();
     await expect(chip(allDay[END_DAY], allDay.name)).toHaveCount(0);
     // A timed event shows on its day.
@@ -531,6 +569,45 @@ async function setRowTitle(page: Page, from: string, to: string) {
       throw new Error(`no row named ${oldTitle}`);
     },
     [table, from, to, NAME] as const,
+  );
+}
+
+/** Sets one column (by shortname) of the row named `title`: a user's commit, as a table edit is. */
+async function setRowField(
+  page: Page,
+  title: string,
+  shortname: string,
+  value: string,
+) {
+  const table = await tableOf(page);
+  await page.evaluate(
+    async ([subject, rowTitle, short, newValue, name]) => {
+      const store = window.store!;
+      const collection = await (
+        await store.getResource(subject)
+      ).getChildrenCollection(500);
+
+      for (const member of await collection.getAllMembers()) {
+        const row = await store.getResource(member);
+        if (row.get(name) !== rowTitle) continue;
+
+        for (const property of Object.keys(row.getPropVals())) {
+          const found = (await store.getResource(property)).get(
+            'https://atomicdata.dev/properties/shortname',
+          );
+          if (found !== short) continue;
+          await row.set(property, newValue);
+          await row.save();
+
+          return;
+        }
+
+        throw new Error(`row ${rowTitle} has no ${short}`);
+      }
+
+      throw new Error(`no row named ${rowTitle}`);
+    },
+    [table, title, shortname, value, NAME] as const,
   );
 }
 

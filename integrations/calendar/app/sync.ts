@@ -20,8 +20,10 @@
  *   for an all-day event it is Google's exclusive end date, the day after the
  *   last day; for a timed event that ends on a later date it is that date,
  *   and a timed event within one day has none. Day and End day are derived
- *   on import and on local edits, and never sent to Google. The app's own
- *   views place rows by them, as the host view does (`events.ts`).
+ *   on import and on local edits. Edited in the host (its table or its
+ *   Calendar view), they are translated back into Start and End for review
+ *   (`hostValue`); they are never sent as such. The app's own views place
+ *   rows by them, as the host view does (`events.ts`).
  * - The binding lives on the row, not in a separate store: the Google event
  *   id, the ETag last read, and the baseline — the projection both sides
  *   last agreed on, as JSON text. The baseline is what lets a refresh tell a
@@ -44,7 +46,12 @@ import {
   type Preview,
   type Projection,
 } from '../adapter.js';
+import {
+  isCalendarDate,
+  nextCalendarDate,
+} from '../../../browser/lib/src/calendar-date.js';
 import type { CalEvent } from './events.js';
+import { addDays, daysBetween } from './time.js';
 import { relay, UncertainWriteError, type Relayed } from './relay.js';
 import type {
   HostProxy,
@@ -62,6 +69,7 @@ export const SHORTNAME = `${A}/properties/shortname`;
 export const DESCRIPTION = `${A}/properties/description`;
 export const DATATYPE = `${A}/properties/datatype`;
 export const RECOMMENDS = `${A}/properties/recommends`;
+export const REQUIRES = `${A}/properties/requires`;
 export const PROPERTIES = `${A}/properties/properties`;
 export const PROPERTY_CLASS = `${A}/classes/Property`;
 const DT = `${A}/datatypes`;
@@ -116,14 +124,14 @@ export const SPECS: Record<string, Spec> = {
     name: 'Day',
     datatype: `${DT}/date`,
     description:
-      'The date of Start, for calendar views. Derived on import; edit Start to move the event.',
+      'The date of Start, for calendar views. Derived from Start; editing it moves the event, and the Calendar app offers that move to Google for review.',
     column: true,
   },
   [END_DAY]: {
     name: 'End day',
     datatype: `${DT}/date`,
     description:
-      'For calendar views: the day after the last day of an all-day event (exclusive, as Google has it), or the end date of a timed event that ends on a later day. Derived on import; edit End to change it.',
+      'For calendar views: the day after the last day of an all-day event (exclusive, as Google has it), or the end date of a timed event that ends on a later day. Derived from End; editing it changes the end, and the Calendar app offers that to Google for review.',
     column: true,
   },
   [NOTES]: {
@@ -362,20 +370,124 @@ export async function chooseCalendar(
 const text = (value: JSONValue): string =>
   typeof value === 'string' ? value : '';
 
-function cardOf(row: PluginResource, props: Props): Card {
+/**
+ * The row as the adapter's projection. For a synced row, Start, End and All
+ * day come through `hostValue`, so an edit to Day or End day made in the
+ * host is read, not overwritten. `reason` says why the row's columns can't
+ * be turned into something Google can take; the value is then the row's own
+ * Start and End.
+ */
+function cardOf(row: PluginResource, props: Props): Card & { reason?: string } {
   const id = row.get(props['google-event-id']);
+  const bound = typeof id === 'string' && !!id;
+  const own = {
+    start: text(row.get(props.start)),
+    end: text(row.get(props.end)),
+    allDay: row.get(props[ALL_DAY]) === true,
+  };
+  const when = bound
+    ? hostValue(
+        { ...own, day: row.get(props[DAY]), endDay: row.get(props[END_DAY]) },
+        baselineOf(row, props),
+      )
+    : own;
 
   return {
     subject: row.subject,
-    ...(typeof id === 'string' && id ? { id } : {}),
+    ...(bound ? { id } : {}),
     value: {
       title: text(row.get(NAME)),
       description: text(row.get(props[NOTES])),
       location: text(row.get(props.location)),
-      start: text(row.get(props.start)),
-      end: text(row.get(props.end)),
-      allDay: row.get(props[ALL_DAY]) === true,
+      ...('reason' in when ? own : when),
     },
+    ...('reason' in when ? { reason: when.reason } : {}),
+  };
+}
+
+type When = Pick<Projection, 'start' | 'end' | 'allDay'>;
+
+/**
+ * The lens read backwards: what a synced row's Start, End, All day, Day and
+ * End day columns ask Google for. The rows keep the host's format (Day, and
+ * an exclusive End day for all-day events; `endDayOf`), and the host table
+ * and its built-in Calendar view edit Day, End day and All day without
+ * touching Start and End.
+ *
+ * - Day and End day agree with Start and End (as the app writes them): Start
+ *   and End.
+ * - Only Day, End day or All day differ from the baseline: Start and End
+ *   are made from them, so Google shows the days the host view shows. All
+ *   day: Day to End day (exclusive), or Day alone when End day is unset.
+ *   Timed: Day with Start's clock time and offset; End moves by the same
+ *   number of days, or to End day (Day when cleared) if End day was edited.
+ * - Only Start or End differ from the baseline (Day and End day are then
+ *   stale): Start and End, and the next write re-derives Day and End day.
+ * - Both differ and disagree, or the host format has no Google equivalent
+ *   (End day not after Day on an all-day row, All day turned off with no
+ *   times to send): a reason, and the row is held back, not rewritten.
+ *
+ * Without a baseline, Start and End.
+ */
+export function hostValue(
+  row: When & { day: JSONValue; endDay: JSONValue },
+  baseline: Projection | null,
+): When | { reason: string } {
+  const own: When = { start: row.start, end: row.end, allDay: row.allDay };
+  if (!baseline) return own;
+  const day = typeof row.day === 'string' ? row.day : undefined;
+  const endDay = typeof row.endDay === 'string' ? row.endDay : undefined;
+  const startEdited = row.start !== baseline.start || row.end !== baseline.end;
+  const allDayEdited = row.allDay !== baseline.allDay;
+  const agrees = day === row.start.slice(0, 10) && endDay === endDayOf(own);
+  if (agrees && (startEdited || !allDayEdited)) return own;
+  // No Day (cleared, or a row an older version wrote without one): nothing
+  // for Google in it; the next write of the row derives it again.
+  if (day === undefined && !allDayEdited) return own;
+  const baseEndDay = endDayOf(baseline);
+  const dayEdited =
+    day !== baseline.start.slice(0, 10) || endDay !== baseEndDay;
+
+  if (startEdited)
+    return dayEdited
+      ? {
+          reason:
+            'Start or End and Day or End day were edited in the table and disagree; change the event with Edit in the app',
+        }
+      : own;
+
+  if (!isCalendarDate(day))
+    return { reason: 'Day must be a date (YYYY-MM-DD)' };
+  if (endDay !== undefined && !isCalendarDate(endDay))
+    return { reason: 'End day must be a date (YYYY-MM-DD)' };
+
+  if (row.allDay) {
+    if (endDay === undefined)
+      return { start: day, end: nextCalendarDate(day), allDay: true };
+    if (endDay <= day)
+      return {
+        reason:
+          'End day must be after Day: for an all-day event it is the day after the last day',
+      };
+
+    return { start: day, end: endDay, allDay: true };
+  }
+
+  if (baseline.allDay)
+    return {
+      reason:
+        'All day was turned off in the table, with no times to send; set the times with Edit in the app',
+    };
+  const startDate = row.start.slice(0, 10);
+  const endDate =
+    endDay !== baseEndDay
+      ? (endDay ?? day)
+      : addDays(row.end.slice(0, 10), daysBetween(startDate, day));
+
+  return {
+    start: `${day}${row.start.slice(10)}`,
+    end: `${endDate}${row.end.slice(10)}`,
+    allDay: false,
   };
 }
 
@@ -417,6 +529,52 @@ export interface Rows {
   localOnly: number;
   /** Bound rows whose local value can't be sent, with the reason. */
   invalid: Map<string, { title: string; reason: string }>;
+  /** Columns the app doesn't map, with how many bound rows fill them. */
+  unmapped: Array<{ column: string; rows: number }>;
+}
+
+/**
+ * Version 0.1.0's Day and All day, derived from Start: not columns a person
+ * fills. (Its other old column, the core Description, is listed: a value
+ * there is not sent; Notes is.)
+ */
+const LEGACY = new Set(['day', 'all-day']);
+
+const filled = (value: JSONValue) =>
+  value !== undefined &&
+  value !== null &&
+  value !== '' &&
+  !(Array.isArray(value) && !value.length);
+
+/**
+ * The table's columns (the row class's `requires` and `recommends`) that
+ * the app neither writes nor sends: ones a person added in the host. Their
+ * values stay on the rows; this only finds them, so the app can say they
+ * aren't sent.
+ */
+async function otherColumns(
+  store: PluginStore,
+  where: Layout,
+  props: Props,
+): Promise<string[]> {
+  const klass = await store.getResource(where.rowClass);
+  const own = new Set<string>([
+    NAME,
+    ...Object.values(props as Record<string, string>),
+  ]);
+  const out: string[] = [];
+
+  for (const subject of new Set([
+    ...asList(klass.get(REQUIRES)),
+    ...asList(klass.get(RECOMMENDS)),
+  ])) {
+    if (own.has(subject)) continue;
+    const shortname = (await store.getResource(subject)).get(SHORTNAME);
+    if (typeof shortname === 'string' && LEGACY.has(shortname)) continue;
+    out.push(subject);
+  }
+
+  return out;
 }
 
 async function readRows(
@@ -429,7 +587,10 @@ async function readRows(
     bound: new Map(),
     localOnly: 0,
     invalid: new Map(),
+    unmapped: [],
   };
+  const others = await otherColumns(store, where, props);
+  const counts = new Map(others.map(p => [p, 0]));
 
   for (const subject of await store.query({
     property: PARENT,
@@ -437,8 +598,25 @@ async function readRows(
   })) {
     const row = await store.getResource(subject);
     const card = cardOf(row, props);
-    if (!card.id) out.localOnly++;
-    else out.bound.set(subject, row);
+
+    if (!card.id) {
+      out.localOnly++;
+      continue;
+    }
+
+    out.bound.set(subject, row);
+    for (const p of others)
+      if (filled(row.get(p))) counts.set(p, counts.get(p)! + 1);
+  }
+
+  for (const [subject, rows] of counts) {
+    if (!rows) continue;
+    const column = await store.getResource(subject);
+    const name = column.get(NAME) ?? column.get(SHORTNAME);
+    out.unmapped.push({
+      column: typeof name === 'string' && name ? name : subject,
+      rows,
+    });
   }
 
   return out;
@@ -461,8 +639,8 @@ function host(
       const cards: Card[] = [];
 
       for (const row of rows.bound.values()) {
-        const card = cardOf(row, props);
-        const reason = invalid(card.value);
+        const { reason: hostReason, ...card } = cardOf(row, props);
+        const reason = hostReason ?? invalid(card.value);
 
         if (reason) {
           // Held back, not dropped: the baseline stands in for it, so the
@@ -541,6 +719,8 @@ export interface ImportSummary {
   conflicts: Conflict[];
   localOnly: number;
   invalid: Array<{ title: string; reason: string }>;
+  /** Columns a person added that the app doesn't send, with how many synced rows fill them. */
+  unmapped: Array<{ column: string; rows: number }>;
   review: PendingEdit[];
 }
 
@@ -568,7 +748,7 @@ function fieldsOf(before: Projection, after: Projection) {
  * undefined when it has none. Exact strings: the date part of what Google
  * sent, never re-derived through a `Date`.
  */
-export function endDayOf(value: Projection): string | undefined {
+export function endDayOf(value: When): string | undefined {
   const day = value.start.slice(0, 10);
   const end = value.end.slice(0, 10);
   if (value.allDay) return end;
@@ -688,6 +868,7 @@ export async function refresh(
     }),
     localOnly: rows.localOnly,
     invalid: [...rows.invalid.values()],
+    unmapped: rows.unmapped,
     review: [],
   };
 
@@ -802,6 +983,18 @@ export async function send(
 
       if (pending.edit.subject && projection) {
         const row = await store.getResource(pending.edit.subject);
+        // An edit made in the host's format (Day, End day, All day) was
+        // sent as Start and End: write those back, so the row agrees with
+        // its new baseline. Unless the row changed again since the review;
+        // then the next preview lists that change.
+        const now = cardOf(row, props);
+        if (
+          !now.reason &&
+          (Object.keys(LABELS) as Array<keyof Projection>).every(
+            k => now.value[k] === pending.desired[k],
+          )
+        )
+          writeRow(row, props, projection);
         await row
           .set(props['google-etag'], event.etag)
           .set(props['sync-baseline'], JSON.stringify(projection))
@@ -896,9 +1089,10 @@ export async function readEvents(
       pending:
         !!card.id &&
         !!baseline &&
-        (Object.keys(LABELS) as Array<keyof Projection>).some(
-          k => baseline[k] !== card.value[k],
-        ),
+        (!!card.reason ||
+          (Object.keys(LABELS) as Array<keyof Projection>).some(
+            k => baseline[k] !== card.value[k],
+          )),
       conflict: inConflict.has(subject),
       readOnly: readOnly || !card.id,
       calendar: { name: meta.summary, color: meta.color },
