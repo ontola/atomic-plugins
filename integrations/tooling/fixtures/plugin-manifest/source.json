@@ -13,6 +13,11 @@
     "unchanged by #1732, copied from the pin 11264e83e18ca59e0e0bd696eef6c8ac7ced5f68": [
       "v2-js-extension.json",
       "v2-wasm-server-extension.json"
+    ],
+    "added or changed by ontola/atomic-server branch claude/plugin-remotestorage-host (b701b9852, authOptional)": [
+      "http-index.json",
+      "v3-optional-bearer.json",
+      "v3-auth-optional-without-bearer.json"
     ]
   }
 }
