@@ -393,8 +393,8 @@
     "https://atomicdata.dev/integrations/properties/experimental": true,
     "https://atomicdata.dev/integrations/properties/enabled": false,
     "https://atomicdata.dev/properties/name": "Open Cloud Mesh",
-    "https://atomicdata.dev/properties/description": "Reviewed OCM share metadata and lifecycle receipts linked to existing Atomic documents.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Experimental reviewed jobs only. HTTP receiving, file exchange, peer authentication and access revocation are not implemented.",
+    "https://atomicdata.dev/properties/description": "Receive files shared over Open Cloud Mesh 1.5 by servers you allow: signed shares are fetched into a folder you pick, and acknowledged.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Experimental. Receiving only, with legacy shared-secret access to absolute WebDAV URIs; no sending, WebDAV serving, token exchange or invites. The received file is a copy taken when the share arrives. Needs a host with plugin routes at read-write; not tested against a real Nextcloud or ownCloud server.",
     "https://atomicdata.dev/integrations/properties/requires": [
       "persistent-host",
       "plugin-routes:read-write",
