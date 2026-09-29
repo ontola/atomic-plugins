@@ -1,3 +1,9 @@
+import {
+  USER_TESTING_NO_ISSUES_REPOSITORY,
+  USER_TESTING_REPOSITORIES,
+  seedUserTesting,
+} from './user-testing.mjs';
+
 /**
  * A repository that exists with issues from the start, because the mock
  * proxy runs in its own process and a host e2e cannot reach the in-process
@@ -6,10 +12,17 @@
  */
 export const SEEDED_REPOSITORY = 'atomic-fixture/tracker';
 
-/** Stateful provider fixture, shared by the HTTP proxy and its test-side driver. */
-export function githubTracker() {
+/**
+ * Stateful provider fixture, shared by the HTTP proxy and its test-side driver.
+ * `scenario: 'user-testing'` swaps the seeded repositories for the synthetic
+ * ones in `user-testing.mjs`; anything else is the default scenario.
+ */
+export function githubTracker({ scenario } = {}) {
+  const userTesting = scenario === 'user-testing';
   const repositories = new Map();
   let seeding = false;
+  // Answers for the next proxied requests, set by the `failNext` driver.
+  const failures = [];
 
   const repo = name => {
     if (!repositories.has(name)) {
@@ -30,6 +43,12 @@ export function githubTracker() {
         repositories
           .get(name)
           .comments.find(c => c.id === comment.id).user.login = 'alice';
+        seeding = false;
+      }
+
+      if (userTesting && Object.hasOwn(USER_TESTING_REPOSITORIES, name)) {
+        seeding = true;
+        seedUserTesting(name, api, repositories.get(name));
         seeding = false;
       }
     }
@@ -129,17 +148,25 @@ export function githubTracker() {
           // label the issue does not carry is a 404.
           const labelName =
             label === undefined ? undefined : decodeURIComponent(label);
+          // A stored label is a name, or GitHub's `{ name, color }` object
+          // in the user-testing scenario.
+          const names = () => issue.labels.map(l => l?.name ?? l);
 
           if (method === 'POST' && labelName === undefined) {
             if (!Array.isArray(input.labels) || !input.labels.length)
               return { status: 422, body: { message: 'Validation Failed' } };
-            issue.labels = [...new Set([...issue.labels, ...input.labels])];
+            issue.labels = [
+              ...issue.labels,
+              ...new Set(input.labels.filter(l => !names().includes(l))),
+            ];
 
             return { status: 200, body: structuredClone(issue.labels) };
           }
 
-          if (method === 'DELETE' && issue.labels.includes(labelName)) {
-            issue.labels = issue.labels.filter(l => l !== labelName);
+          if (method === 'DELETE' && names().includes(labelName)) {
+            issue.labels = issue.labels.filter(
+              l => (l?.name ?? l) !== labelName,
+            );
 
             return { status: 200, body: structuredClone(issue.labels) };
           }
@@ -172,10 +199,43 @@ export function githubTracker() {
   // repositories-read-overlay.yaml). Kept outside `request` above so it stays
   // a separate hunk from the issue routes.
   const issueRequest = api.request;
-  api.request = (method, url, input) =>
-    url.pathname === `${PROXY}/user/repos`
+
+  api.request = (method, url, input) => {
+    const failure = failures.shift();
+
+    if (failure) return failure;
+
+    return url.pathname === `${PROXY}/user/repos`
       ? listRepositories(method, url)
       : issueRequest(method, url, input);
+  };
+
+  /** A comment by someone else on GitHub (drivers only; the API sets no author). */
+  api.commentAs = (name, number, login, body) => {
+    const comment = api.createComment(name, number, { body });
+    if (!comment) return;
+    repo(name).comments.find(c => c.id === comment.id).user.login = login;
+
+    return { ...comment, user: { login } };
+  };
+
+  /**
+   * The next `count` proxied GitHub requests answer `status` instead: 503 for
+   * an outage, 429 or 403 for a rate limit (with GitHub's message), 401 for
+   * revoked access.
+   */
+  api.failNext = (status, count = 1) => {
+    const message =
+      status === 401
+        ? 'Bad credentials'
+        : status === 403 || status === 429
+          ? 'API rate limit exceeded'
+          : 'Service unavailable';
+    for (let i = 0; i < count; i++)
+      failures.push({ status, body: { message } });
+
+    return { pending: failures.length };
+  };
 
   /**
    * Every repository this fixture has seen (the seeded one first), plus one
@@ -187,7 +247,12 @@ export function githubTracker() {
    */
   function listRepositories(method, url) {
     if (method !== 'GET') return { status: 404, body: {} };
-    repo(SEEDED_REPOSITORY);
+    if (userTesting)
+      for (const name of Object.keys(USER_TESTING_REPOSITORIES)) repo(name);
+    else repo(SEEDED_REPOSITORY);
+    const noIssues = userTesting
+      ? USER_TESTING_NO_ISSUES_REPOSITORY
+      : NO_ISSUES_REPOSITORY;
     const all = [
       ...[...repositories.entries()].map(([fullName, state], index) =>
         repository(index + 1, fullName, {
@@ -196,7 +261,7 @@ export function githubTracker() {
             .length,
         }),
       ),
-      repository(repositories.size + 1, NO_ISSUES_REPOSITORY, {
+      repository(repositories.size + 1, noIssues, {
         has_issues: false,
         open_issues_count: 0,
       }),
@@ -262,7 +327,16 @@ function repository(id, fullName, fields) {
 export default {
   title: 'GitHub Issues',
   jsonBody: true,
-  create: githubTracker,
-  // For the drive app's e2e: someone reading and editing on GitHub itself.
-  drivers: ['snapshot', 'updateIssue'],
+  // MOCK_SCENARIO=user-testing: the synthetic repositories in user-testing.mjs.
+  create: () => githubTracker({ scenario: process.env.MOCK_SCENARIO }),
+  // For the drive app's e2e and live user testing: someone reading and
+  // editing on GitHub itself, and GitHub failing.
+  drivers: [
+    'snapshot',
+    'updateIssue',
+    'createIssue',
+    'createComment',
+    'commentAs',
+    'failNext',
+  ],
 };
