@@ -29,9 +29,10 @@
  *
  * Needs an atomic-server with auth: atomic on routes, the verified actor's
  * inbox in `request.caller.actor`, shared WebFinger claims by rel, and the
- * debug-build loopback seam (atomic-server branch
+ * debug-build peer seams (atomic-server branch
  * claude/plugin-fediverse-host). The lane starts the server with
- * ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS=true (lanes.json `serverEnv`).
+ * ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS=true and ATOMIC_PLUGIN_E2E_PEER_CA
+ * pointing at the peer's test CA (lanes.json `serverEnv`).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -79,7 +80,7 @@ test.describe('fediverse', () => {
 
   let peer: Peer;
   test.beforeAll(async () => {
-    peer = await startPeer();
+    peer = await startPeer(resolve(__dirname, '../../..'));
   });
   test.afterAll(async () => {
     await peer?.close();

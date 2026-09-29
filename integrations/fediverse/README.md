@@ -144,9 +144,11 @@ branch `claude/plugin-fediverse-host`:
 - `match.rels` on shared WebFinger claims, so this plugin (`self`) and the
   remoteStorage plugin can answer for the same `acct:` on one host; the host
   merges their answers.
-- For the e2e only: `ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS` in debug builds, which
-  lets deliveries and key fetches reach a peer on loopback with a
-  self-signed certificate.
+- For the e2e only, in debug builds (release builds ignore them):
+  `ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS=true` lets deliveries and key fetches
+  reach a peer on loopback, and `ATOMIC_PLUGIN_E2E_PEER_CA` names a CA
+  certificate that is then the only trusted root for loopback peers. The
+  peer's certificate is still verified, hostname included.
 
 ## Tests
 

@@ -14,10 +14,11 @@
  *   key the Atomic actor document publishes under the signature's `keyId`
  *   (fetched from the Atomic server, not taken from the request).
  *
- * The certificate is self-signed, made with `openssl` at start: the host
- * only reaches it through atomic-server's debug-build e2e seam
- * (ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS), which lets deliveries and key fetches
- * reach loopback and accept an unverifiable certificate there.
+ * Its certificate is issued by a throwaway test CA, made with `openssl` at
+ * start. The host reaches it only through atomic-server's debug-build e2e
+ * seams: ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS lets deliveries and key fetches
+ * reach loopback, and ATOMIC_PLUGIN_E2E_PEER_CA makes that CA the only
+ * trusted root there. Certificates are still verified, hostname included.
  */
 import { execFileSync } from 'node:child_process';
 import {
@@ -26,11 +27,17 @@ import {
   createVerify,
   generateKeyPairSync,
 } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export interface Delivery {
   path: string;
@@ -94,33 +101,45 @@ export function atomicRequest(
   });
 }
 
-function selfSignedCertificate() {
+/**
+ * Where the peer's test CA certificate is written, relative to the
+ * repository root: the lane starts atomic-server there with
+ * ATOMIC_PLUGIN_E2E_PEER_CA pointing at this path (lanes.json `serverEnv`),
+ * and the server reads it at each connection to a loopback peer, trusting
+ * it as the only root. Its key never leaves the temporary directory.
+ */
+export const PEER_CA_PATH = 'integrations/fediverse/e2e/.peer/ca.pem';
+
+/**
+ * A throwaway CA and a `localhost` certificate it issued, made with
+ * `openssl`. The CA's certificate is written to {@link PEER_CA_PATH}.
+ */
+function issuedCertificate(repoRoot: string) {
   const dir = mkdtempSync(join(tmpdir(), 'fediverse-peer-'));
+  const at = (name: string) => join(dir, name);
+  const run = (args: string[]) =>
+    execFileSync('openssl', args, { stdio: 'ignore' });
 
   try {
-    execFileSync(
-      'openssl',
-      [
-        'req',
-        '-x509',
-        '-newkey',
-        'rsa:2048',
-        '-nodes',
-        '-keyout',
-        join(dir, 'key.pem'),
-        '-out',
-        join(dir, 'cert.pem'),
-        '-days',
-        '1',
-        '-subj',
-        '/CN=localhost',
-      ],
-      { stdio: 'ignore' },
+    writeFileSync(
+      at('ca.cnf'),
+      'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n',
     );
+    writeFileSync(
+      at('leaf.cnf'),
+      'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1\n',
+    );
+    run(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', at('ca.key'), '-out', at('ca.csr'), '-subj', '/CN=fediverse e2e test CA']);
+    run(['x509', '-req', '-in', at('ca.csr'), '-signkey', at('ca.key'), '-out', at('ca.pem'), '-days', '1', '-extfile', at('ca.cnf')]);
+    run(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', at('key.pem'), '-out', at('leaf.csr'), '-subj', '/CN=localhost']);
+    run(['x509', '-req', '-in', at('leaf.csr'), '-CA', at('ca.pem'), '-CAkey', at('ca.key'), '-CAcreateserial', '-out', at('cert.pem'), '-days', '1', '-extfile', at('leaf.cnf')]);
+    const ca = join(repoRoot, PEER_CA_PATH);
+    mkdirSync(dirname(ca), { recursive: true });
+    writeFileSync(ca, readFileSync(at('ca.pem')));
 
     return {
-      key: readFileSync(join(dir, 'key.pem')),
-      cert: readFileSync(join(dir, 'cert.pem')),
+      key: readFileSync(at('key.pem')),
+      cert: readFileSync(at('cert.pem')),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -173,7 +192,7 @@ async function verifyDelivery(
   return ok ? { keyId, verified: true } : fail('bad signature');
 }
 
-export async function startPeer(): Promise<Peer> {
+export async function startPeer(repoRoot: string): Promise<Peer> {
   const { publicKey, privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
   });
@@ -182,7 +201,7 @@ export async function startPeer(): Promise<Peer> {
   let origin = '';
   const actorPath = '/users/bob';
 
-  const server = https.createServer(selfSignedCertificate(), (req, res) => {
+  const server = https.createServer(issuedCertificate(repoRoot), (req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', c => chunks.push(c));
     req.on('end', async () => {
@@ -302,10 +321,3 @@ export async function waitFor<T>(
     await new Promise(done => setTimeout(done, 250));
   }
 }
-
-export const writeTemp = (name: string, text: string) => {
-  const path = join(tmpdir(), name);
-  writeFileSync(path, text);
-
-  return path;
-};
