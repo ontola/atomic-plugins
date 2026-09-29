@@ -21,15 +21,16 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SESSIONS_DIR = process.env.SESSIONS_DIR ?? '/sessions';
+const here = dirname(fileURLToPath(import.meta.url));
 const MODEL = process.env.ANALYSIS_MODEL ?? 'claude-opus-5';
 const REPO = process.env.GITHUB_FINDINGS_REPO ?? 'ontola/usertest-findings';
 const MAX_SHOTS = 12;
 
-const INSTRUCTIONS = `You analyze one remote usability test of Atomic (a personal data app) and its drive apps, plugins that import data from services like Google Calendar, GitHub, Notion and Clockify. A voice moderator (also Claude) ran the session; you get its transcript (speech-to-text, so expect recognition errors), the app's log lines each turn saw, and some screenshots of the tester's screen.
+const INSTRUCTIONS = `You analyze one remote usability test of Atomic (a personal data app) and its drive apps, plugins that import data from services like Google Calendar, GitHub, Notion and Clockify. A voice moderator (also Claude) ran the session; you get its transcript (speech-to-text, so expect recognition errors; turns marked TESTER (typed) were typed by the tester instead), the app's log lines each turn saw, and some screenshots of the tester's screen. The session may be in another language than English, or switch language midway (marked "(lang ...)"); write the findings in English anyway, translating the few words you quote.
 
 Find what should change. Two kinds:
 - "app": a problem in Atomic or a drive app: confusion, a dead end, a wrong expectation, an error, missing feedback. Give "repo": "atomic-plugins" for a drive app (integrations/<plugin>/, the catalog) and "atomic-server" for the host (drive, navigation, Integrations page, settings, tables).
@@ -58,10 +59,13 @@ function transcriptText(entries) {
     const time = e.t.slice(11, 19);
     if (e.role === 'tester') {
       if (e.log?.length) lines.push(`${time} [log] ${e.log.join(' | ')}`);
-      lines.push(`${time} TESTER: ${e.said}`);
+      lines.push(
+        `${time} TESTER${e.input === 'typed' ? ' (typed)' : ''}: ${e.said}`,
+      );
     } else if (e.role === 'moderator')
       lines.push(`${time} MODERATOR: ${e.say || '(stayed silent)'}`);
-    else if (e.event) lines.push(`${time} (${e.event})`);
+    else if (e.event)
+      lines.push(`${time} (${e.event}${e.lang ? ` ${e.lang}` : ''})`);
   }
 
   return lines.join('\n');
@@ -147,9 +151,17 @@ export async function analyze(id, { client = new Anthropic() } = {}) {
         },
       },
     );
+  // The plan the moderator followed: its tasks, what success looks like and
+  // the limits already known. Sessions from before plans existed have none.
+  const planFile = join(here, 'sessions', `${meta.plan ?? 'calendar'}.md`);
+  if (existsSync(planFile))
+    content.push({
+      type: 'text',
+      text: `The session plan the moderator followed. A limit it lists as known is only a finding if the session adds something new about it (how it confused the tester, a workaround they tried):\n\n${readFileSync(planFile, 'utf8')}`,
+    });
   content.push({
     type: 'text',
-    text: `Session ${id}, started ${meta.started}. Transcript:\n\n${transcriptText(entries)}`,
+    text: `Session ${id} (plan: ${meta.plan ?? 'calendar'}), started ${meta.started}. Transcript:\n\n${transcriptText(entries)}`,
   });
 
   const response = await client.beta.messages.create({

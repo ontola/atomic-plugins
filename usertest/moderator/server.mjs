@@ -3,12 +3,25 @@
  * The voice moderator of a user-testing session (../page/ is its front end).
  * Each turn gets what the tester said (speech-to-text in their browser) plus
  * the collector's log lines since the previous turn, asks Claude for the next
- * thing to say (script.md is the interview script), and returns it for the
- * browser to speak.
+ * thing to say, and returns it for the browser to speak. The system prompt is
+ * script.md (how to moderate) followed by one session plan from sessions/
+ * (which tasks), picked by the invite link's `session` parameter.
  *
  * Per session it keeps, under SESSIONS_DIR/<id>/: meta.json, transcript.jsonl
  * (both sides, with the log lines each turn saw) and recording.webm (screen
  * and microphone, uploaded by the page in chunks).
+ *
+ * A tester who can't talk types instead: such a turn arrives with
+ * `input: 'typed'`, reaches Claude marked "[Tester, typed]", is recorded with
+ * `input: 'typed'` in transcript.jsonl and counted in meta.json's
+ * `typedTurns`. meta.json's `input` says how the session started: `voice`,
+ * or `typed` when the page had no microphone or speech recognition.
+ *
+ * The tester picks the language on the page (English by default, see
+ * LANGUAGES) and can switch mid-session (`POST /sessions/<id>/lang`). Every
+ * turn tells Claude the language to speak in a `[Language]` line, so the
+ * system prompt (script and plan, in English) stays the same and cached.
+ * meta.json keeps the current `lang` and every switch in `langChanges`.
  *
  * The endpoints spend API money and are public, so every request needs the
  * invite code (USERTEST_CODE, sent as `x-usertest-code`), a session takes at
@@ -47,6 +60,18 @@ const MAX_TURNS = 120;
 const MAX_SESSIONS_PER_DAY = 20;
 const MAX_CHUNK = 32 * 1024 * 1024;
 const MAX_LOG_LINES = 15;
+/** The page's languages (../page/i18n.js), by the BCP 47 tag it sends. */
+const LANGUAGES = {
+  'en-US': {
+    name: 'English',
+    lost: 'Sorry, I lost my train of thought. Could you tell me what you are doing now?',
+  },
+  'nl-NL': {
+    name: 'Dutch (Nederlands)',
+    lost: 'Sorry, ik ben de draad even kwijt. Kun je vertellen wat je nu aan het doen bent?',
+  },
+};
+const DEFAULT_LANG = 'en-US';
 
 if (!CODE || CODE.length < 12)
   throw new Error('USERTEST_CODE must be set (at least 12 characters)');
@@ -68,8 +93,21 @@ const clientOf = req =>
     .slice(0, 16);
 
 const SCRIPT = readFileSync(join(here, 'script.md'), 'utf8');
+/** Session plans by name: sessions/<name>.md (README.md is not a plan). */
+const PLANS = Object.fromEntries(
+  readdirSync(join(here, 'sessions'))
+    .filter(file => file.endsWith('.md') && file !== 'README.md')
+    .map(file => [
+      file.slice(0, -3),
+      readFileSync(join(here, 'sessions', file), 'utf8'),
+    ]),
+);
+/** The plan an invite link without `session` gets: the first one we ran. */
+const DEFAULT_PLAN = 'calendar';
+if (!PLANS[DEFAULT_PLAN])
+  throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
 const client = new Anthropic();
-/** id -> { dir, started, cursor, clients, messages, turns, done, analyzed } */
+/** id -> { dir, meta, lang, langChanged, started, plan, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
 
 mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -129,6 +167,13 @@ function logSince(cursor, clients) {
   return lines.slice(-MAX_LOG_LINES);
 }
 
+function writeMeta(session) {
+  writeFileSync(
+    join(session.dir, 'meta.json'),
+    JSON.stringify(session.meta, null, 2),
+  );
+}
+
 function record(session, entry) {
   appendFileSync(
     join(session.dir, 'transcript.jsonl'),
@@ -137,7 +182,7 @@ function record(session, entry) {
 }
 
 /** Asks Claude for the next thing to say. */
-async function nextLine(session, said, screenshot) {
+async function nextLine(session, said, screenshot, typed) {
   const now = new Date().toISOString();
   const log = logSince(session.cursor, session.clients);
   session.cursor = now;
@@ -146,10 +191,20 @@ async function nextLine(session, said, screenshot) {
     typeof screenshot === 'string' && /^[A-Za-z0-9+/=]+$/.test(screenshot)
       ? screenshot
       : undefined;
+  const language = LANGUAGES[session.lang];
+  const opening =
+    session.meta.input === 'typed'
+      ? '(the session starts now; the tester has no working microphone or speech recognition and types their answers)'
+      : '(the session starts now)';
   const content = [
+    `[Language] ${language.name}${session.langChanged ? '. The tester just switched to it: speak it from now on.' : ''}`,
     log.length ? `[Log]\n${log.join('\n')}` : '[Log]\n(nothing new)',
-    `[Tester]\n${session.turns === 0 ? '(the session starts now)' : heard}`,
+    `[Tester${typed ? ', typed' : ''}]\n${session.turns === 0 ? opening : heard}`,
   ].join('\n\n');
+  if (typed) {
+    session.meta.typedTurns++;
+    writeMeta(session);
+  }
 
   // History keeps the text only; the screenshot goes with this turn alone,
   // so the conversation does not grow by an image per turn.
@@ -164,7 +219,15 @@ async function nextLine(session, said, screenshot) {
       join(session.dir, `screen-${String(session.turns).padStart(3, '0')}.jpg`),
       Buffer.from(shot, 'base64'),
     );
-  record(session, { role: 'tester', said: heard, log, screenshot: !!shot });
+  session.langChanged = false;
+  record(session, {
+    role: 'tester',
+    said: heard,
+    input: typed ? 'typed' : 'voice',
+    lang: session.lang,
+    log,
+    screenshot: !!shot,
+  });
 
   const messages = shot
     ? [
@@ -191,7 +254,7 @@ async function nextLine(session, said, screenshot) {
     // short too.
     output_config: { effort: 'low' },
     cache_control: { type: 'ephemeral' },
-    system: SCRIPT,
+    system: `${SCRIPT}\n\n${PLANS[session.plan]}`,
     messages,
   });
 
@@ -207,8 +270,7 @@ async function nextLine(session, said, screenshot) {
   const wait = !done && /^\[WAIT\]$/.test(text);
   const say = wait
     ? ''
-    : text.replace('[END]', '').replace('[WAIT]', '').trim() ||
-      'Sorry, I lost my train of thought. Could you tell me what you are doing now?';
+    : text.replace('[END]', '').replace('[WAIT]', '').trim() || language.lost;
 
   session.messages.push({ role: 'assistant', content: wait ? '[WAIT]' : say });
   session.turns++;
@@ -282,41 +344,55 @@ createServer(async (req, res) => {
       if (sessionsToday() >= MAX_SESSIONS_PER_DAY)
         return reply(429, { error: 'No more sessions today' });
       const body = JSON.parse((await readBody(req, 64 * 1024)).toString());
+      const plan = body.session ?? DEFAULT_PLAN;
+      // A mistyped link fails here, not by silently running another plan.
+      if (typeof plan !== 'string' || !Object.hasOwn(PLANS, plan))
+        return reply(400, {
+          error: `Unknown session plan; known: ${Object.keys(PLANS).join(', ')}`,
+        });
       const id = `${today()}-${randomBytes(4).toString('hex')}`;
       const dir = join(SESSIONS_DIR, id);
       mkdirSync(dir);
       const started = new Date().toISOString();
-      writeFileSync(
-        join(dir, 'meta.json'),
-        JSON.stringify(
-          {
-            id,
-            started,
-            name: String(body.name ?? '').slice(0, 80),
-            lang: String(body.lang ?? '').slice(0, 20),
-            userAgent: req.headers['user-agent'],
-            model: MODEL,
-          },
-          null,
-          2,
-        ),
-      );
-      sessions.set(id, {
+      const lang = Object.hasOwn(LANGUAGES, body.lang)
+        ? body.lang
+        : DEFAULT_LANG;
+      const session = {
         dir,
+        meta: {
+          id,
+          started,
+          name: String(body.name ?? '').slice(0, 80),
+          lang,
+          // Every switch after the start: [{ t, lang }].
+          langChanges: [],
+          plan,
+          // How the page started: `typed` without a microphone or speech
+          // recognition. Typed turns are counted either way.
+          input: body.input === 'typed' ? 'typed' : 'voice',
+          typedTurns: 0,
+          userAgent: req.headers['user-agent'],
+          model: MODEL,
+        },
+        lang,
+        langChanged: false,
         started,
+        plan,
         cursor: started,
         clients: new Set([clientOf(req)]),
         messages: [],
         turns: 0,
         done: false,
         analyzed: false,
-      });
+      };
+      writeMeta(session);
+      sessions.set(id, session);
 
       return reply(200, { id });
     }
 
     const match = url.pathname.match(
-      /^\/sessions\/([\w-]+)\/(turn|recording|end|news)$/,
+      /^\/sessions\/([\w-]+)\/(turn|recording|end|news|lang)$/,
     );
     const session = match && sessions.get(match[1]);
     if (!session) return reply(404, { error: 'Unknown session' });
@@ -344,6 +420,7 @@ createServer(async (req, res) => {
         session,
         String(body.said ?? ''),
         body.screenshot,
+        body.input === 'typed',
       );
       if (next.done) finishLater(match[1], session);
 
@@ -357,6 +434,25 @@ createServer(async (req, res) => {
       );
 
       return reply(204);
+    }
+
+    if (req.method === 'POST' && match[2] === 'lang') {
+      const { lang } = JSON.parse((await readBody(req, 1024)).toString());
+      if (!Object.hasOwn(LANGUAGES, lang))
+        return reply(400, {
+          error: `Unknown language; known: ${Object.keys(LANGUAGES).join(', ')}`,
+        });
+
+      if (lang !== session.lang) {
+        session.lang = lang;
+        session.langChanged = true;
+        session.meta.lang = lang;
+        session.meta.langChanges.push({ t: new Date().toISOString(), lang });
+        writeMeta(session);
+        record(session, { role: 'page', event: 'lang', lang });
+      }
+
+      return reply(200, { lang });
     }
 
     if (req.method === 'POST' && match[2] === 'end') {

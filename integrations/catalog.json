@@ -397,5 +397,22 @@
       "public-origin",
       "wasm-sandbox"
     ]
+  },
+  {
+    "@id": "https://atomicdata.dev/integrations/catalog/willow-drop",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "willow-drop",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Willow drop",
+    "https://atomicdata.dev/properties/emoji": "🌳",
+    "https://atomicdata.dev/properties/description": "Import the entries of a Willow'25 drop file into a Willow entries table, after checking each entry's Meadowcap authorisation and, where the drop carries it, its payload.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Preview namespace, subspace, path, timestamp, payload digest and payload length as exact strings; payloads up to 65,536 bytes are stored as UTF-8 text or base64. An entry is left out when a newer entry in the same drop has its path or a prefix of it, or when the table already holds a newer entry at the same path.",
+    "https://atomicdata.dev/integrations/properties/events": "Upload a drop file, raw or base64-encoded, when you need it. No network access, no secrets and no live Willow sync.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified: up to 1,000 entries and 5,000,000 bytes (5 MB) per drop; sandbox fuel use per entry has not been measured. Only drops written by willow25 0.7.9 have been tested. Capabilities with delegations and partial payloads are refused, and an imported entry does not remove existing rows whose path it prunes. Timestamps are read as the Willow data model recommends (TAI microseconds since J2000); willow25 0.7.9, via hifitime, reads the same value 86,432.184 s later, which is being reported upstream. The raw timestamp is kept alongside.",
+    "https://atomicdata.dev/integrations/properties/keywords": "willow willow25 meadowcap drop sideload earthstar p2p local-first import",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0"
   }
 ]
