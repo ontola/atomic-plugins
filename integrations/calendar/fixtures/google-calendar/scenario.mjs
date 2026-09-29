@@ -109,7 +109,9 @@ const patchable = ['summary', 'description', 'location', 'start', 'end'];
  * `primary` is an alias for {@link PRIMARY}, as it is at Google.
  *
  * Primary holds one all-day event, one timed event, a weekly series (its
- * master and one instance) and one cancelled event. Only the first two are
+ * master and one instance), one cancelled event, and a three-day all-day
+ * event on the 10th to 12th of `day`'s month, so that a month grid of `day`
+ * always shows all three days. The two all-day events and the timed one are
  * importable in the adapter's scope; the others exercise its skip rules.
  *
  * Writes: `PATCH .../events/{eventId}` only, and only with an `If-Match`
@@ -189,6 +191,15 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
       ],
     },
     { id: 'gone', status: 'cancelled' },
+    {
+      id: 'trip',
+      summary: 'Calendar three-day fixture',
+      status: 'confirmed',
+      htmlLink: 'https://www.google.com/calendar/event?eid=dHJpcCBzeW50aGV0aWM',
+      // Google's all-day end is exclusive: the 13th, for the 10th to 12th.
+      start: { date: `${day.slice(0, 7)}-10` },
+      end: { date: `${day.slice(0, 7)}-13` },
+    },
   ];
   const team = [
     {
