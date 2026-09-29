@@ -3,8 +3,11 @@
 //! Atomic Server reaches this service only through declared
 //! `atomic-sidecar:/nextgraph/...` operations (atomic-server branch
 //! `claude/plugin-nextgraph-host`). The host strips any `x-atomic-*` header a
-//! plugin sets and adds `x-atomic-installation` and `x-atomic-drive` itself.
-//! Every operation is then checked here against the operator's scope file:
+//! plugin sets, adds `x-atomic-installation` and `x-atomic-drive` itself, and
+//! signs the request as that installation's app agent. Every operation except
+//! `/v1/health` is first verified by [crate::auth] (signature, freshness,
+//! replay, and that the signer is the installation's registered app agent),
+//! then checked here against the operator's scope file:
 //! which installation may read, or read and write, which NextGraph document.
 //! Nothing is granted by default, and the file is re-read on every request so
 //! a revocation takes effect on the next call.
@@ -15,6 +18,7 @@
 //! the stored acknowledgement instead of writing again, and a key whose write
 //! began but whose acknowledgement was never stored is reported as uncertain
 //! rather than repeated.
+use crate::auth::{self, Registry, ReplayCache, Signed};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -90,8 +94,12 @@ struct Entry {
 
 pub struct Request {
     pub method: String,
+    /// Path without the query, for routing.
     pub path: String,
-    pub installation: Option<String>,
+    /// The full URL the host signed: the sidecar's public URL, then the
+    /// request's path and query exactly as received.
+    pub url: String,
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
@@ -125,6 +133,12 @@ pub struct Service<E> {
     pub scopes: PathBuf,
     pub acks: PathBuf,
     pub now: fn() -> u64,
+    /// Which app agent may speak for an installation (the host's lookup).
+    pub registry: Box<dyn Registry>,
+    /// Proofs already used, in memory: a restart forgets them, and a proof
+    /// captured before a restart could be replayed once within its five
+    /// minute window.
+    pub replay: ReplayCache,
 }
 
 #[derive(Deserialize)]
@@ -155,10 +169,7 @@ fn digest(parts: &[&str]) -> String {
         hash.update((part.len() as u64).to_be_bytes());
         hash.update(part.as_bytes());
     }
-    hash.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl<E: Engine> Service<E> {
@@ -171,8 +182,27 @@ impl<E: Engine> Service<E> {
                 200,
                 json!({"ok": true, "engine": "nextgraph", "broker": self.engine.broker_status()}),
             ),
-            ("POST", "/v1/query") => self.query(&request),
-            ("POST", "/v1/update") => self.update(&request),
+            ("POST", "/v1/query" | "/v1/update") => {
+                let caller = match auth::verify(
+                    &Signed {
+                        method: &request.method,
+                        url: &request.url,
+                        headers: &request.headers,
+                        body: &request.body,
+                    },
+                    (self.now)() as i64,
+                    &mut self.replay,
+                    self.registry.as_ref(),
+                ) {
+                    Ok(c) => c,
+                    Err(r) => return Response::problem(r.status, r.kind, r.detail),
+                };
+                if request.path == "/v1/query" {
+                    self.query(&request, &caller.installation)
+                } else {
+                    self.update(&request, &caller.installation)
+                }
+            }
             (_, "/v1/health" | "/v1/query" | "/v1/update") => {
                 Response::problem(405, "method-not-allowed", "method not allowed")
             }
@@ -183,17 +213,10 @@ impl<E: Engine> Service<E> {
     /// The operator's grant for this installation and document, re-read now.
     fn authorize(
         &self,
-        installation: Option<&str>,
+        installation: &str,
         document: &str,
         needed: Access,
     ) -> Result<(), Response> {
-        let installation = installation.ok_or_else(|| {
-            Response::problem(
-                401,
-                "no-installation",
-                "the host did not name an installation (x-atomic-installation)",
-            )
-        })?;
         let scopes = read_scopes(&self.scopes)
             .map_err(|e| Response::problem(500, "scopes-unreadable", e))?;
         let grant = scopes
@@ -215,7 +238,7 @@ impl<E: Engine> Service<E> {
         }
     }
 
-    fn query(&mut self, request: &Request) -> Response {
+    fn query(&mut self, request: &Request, installation: &str) -> Response {
         let body: QueryBody = match serde_json::from_slice(&request.body) {
             Ok(b) => b,
             Err(e) => return Response::problem(400, "bad-request", e.to_string()),
@@ -223,11 +246,7 @@ impl<E: Engine> Service<E> {
         if let Err(e) = self.engine.check_document(&body.document) {
             return Response::problem(400, "bad-document", e);
         }
-        if let Err(r) = self.authorize(
-            request.installation.as_deref(),
-            &body.document,
-            Access::Read,
-        ) {
+        if let Err(r) = self.authorize(installation, &body.document, Access::Read) {
             return r;
         }
         match self.engine.query(&body.document) {
@@ -240,7 +259,7 @@ impl<E: Engine> Service<E> {
         }
     }
 
-    fn update(&mut self, request: &Request) -> Response {
+    fn update(&mut self, request: &Request, installation: &str) -> Response {
         let body: UpdateBody = match serde_json::from_slice(&request.body) {
             Ok(b) => b,
             Err(e) => return Response::problem(400, "bad-request", e.to_string()),
@@ -261,11 +280,10 @@ impl<E: Engine> Service<E> {
         if let Err(e) = self.engine.check_insert_only(&body.update) {
             return Response::problem(400, "not-insert-data", e);
         }
-        let installation = request.installation.as_deref();
         if let Err(r) = self.authorize(installation, &body.document, Access::ReadWrite) {
             return r;
         }
-        let slot = digest(&[installation.unwrap_or_default(), &body.key]);
+        let slot = digest(&[installation, &body.key]);
         let fingerprint = digest(&[&body.document, &body.update]);
         let mut acks = match read_acks(&self.acks) {
             Ok(a) => a,
@@ -367,12 +385,16 @@ pub fn write_durably(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn write_acks(path: &Path, acks: &BTreeMap<String, Entry>) -> Result<(), String> {
-    write_durably(path, &serde_json::to_vec_pretty(acks).map_err(|e| e.to_string())?)
+    write_durably(
+        path,
+        &serde_json::to_vec_pretty(acks).map_err(|e| e.to_string())?,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::tests::{keypair, sign, Stub, NOW};
 
     const DOC: &str = "did:ng:o:doc";
     const OTHER: &str = "did:ng:o:other";
@@ -419,22 +441,57 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("scopes.json"), json!({"grants": grants}).to_string()).unwrap();
+        fs::write(
+            dir.join("scopes.json"),
+            json!({"grants": grants}).to_string(),
+        )
+        .unwrap();
         Service {
             engine: Fake::default(),
             scopes: dir.join("scopes.json"),
             acks: dir.join("acks.json"),
-            now: || 1_700_000_000_000,
+            now: || NOW as u64,
+            registry: registry(),
+            replay: ReplayCache::default(),
         }
     }
 
+    /// The host's lookup: both test installations have their own app agent.
+    fn registry() -> Box<dyn Registry> {
+        let mut stub = Stub::one(INSTALLATION, &keypair(1));
+        stub.0
+            .extend(Stub::one("http://localhost:9883/other", &keypair(3)).0);
+        Box::new(stub)
+    }
+
+    /// A request as the host sends it: signed by the installation's agent.
+    /// `None` is an unsigned request from some other local process.
     fn post(path: &str, installation: Option<&str>, body: Value) -> Request {
+        let url = format!("http://127.0.0.1:14480{path}");
+        let body = body.to_string().into_bytes();
+        let headers = match installation {
+            Some(i) => {
+                let seed = if i == INSTALLATION { 1 } else { 3 };
+                let ts = NOW - rand_offset();
+                sign(&keypair(seed), "POST", &url, &body, i, ts)
+            }
+            None => vec![],
+        };
         Request {
             method: "POST".into(),
             path: path.into(),
-            installation: installation.map(str::to_string),
-            body: body.to_string().into_bytes(),
+            url,
+            headers,
+            body,
         }
+    }
+
+    /// Distinct timestamps, so repeated identical requests carry distinct
+    /// proofs, as a host signing each request afresh would.
+    fn rand_offset() -> i64 {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        static N: AtomicI64 = AtomicI64::new(0);
+        N.fetch_add(1, Ordering::Relaxed)
     }
 
     fn update(key: &str, text: &str) -> Request {
@@ -448,7 +505,11 @@ mod tests {
     #[test]
     fn nothing_is_granted_by_default() {
         let mut s = service("default", json!([]));
-        let r = s.handle(post("/v1/query", Some(INSTALLATION), json!({"document": DOC})));
+        let r = s.handle(post(
+            "/v1/query",
+            Some(INSTALLATION),
+            json!({"document": DOC}),
+        ));
         assert_eq!(r.status, 403, "{}", r.body);
         let r = s.handle(post("/v1/query", None, json!({"document": DOC})));
         assert_eq!(r.status, 401, "{}", r.body);
@@ -460,10 +521,18 @@ mod tests {
             "read",
             json!([{"installation": INSTALLATION, "document": DOC, "access": "read"}]),
         );
-        let r = s.handle(post("/v1/query", Some(INSTALLATION), json!({"document": DOC})));
+        let r = s.handle(post(
+            "/v1/query",
+            Some(INSTALLATION),
+            json!({"document": DOC}),
+        ));
         assert_eq!(r.status, 200, "{}", r.body);
         assert_eq!(r.content_type, "application/sparql-results+json");
-        let r = s.handle(post("/v1/query", Some(INSTALLATION), json!({"document": OTHER})));
+        let r = s.handle(post(
+            "/v1/query",
+            Some(INSTALLATION),
+            json!({"document": OTHER}),
+        ));
         assert_eq!(r.status, 403);
         let r = s.handle(post(
             "/v1/query",
@@ -525,7 +594,9 @@ mod tests {
             engine: Fake::default(),
             scopes: s.scopes.clone(),
             acks: s.acks.clone(),
-            now: || 0,
+            now: || NOW as u64,
+            registry: registry(),
+            replay: ReplayCache::default(),
         };
         let r = restarted.handle(update("k", text));
         assert_eq!(r.status, 200);
@@ -596,7 +667,8 @@ mod tests {
             s.handle(Request {
                 method: "GET".into(),
                 path: "/v1/update".into(),
-                installation: None,
+                url: "http://127.0.0.1:14480/v1/update".into(),
+                headers: vec![],
                 body: vec![],
             })
             .status,

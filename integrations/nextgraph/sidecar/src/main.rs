@@ -2,13 +2,21 @@
 //! Server `nextgraph` plugin. See ../README.md, "Live sidecar".
 //!
 //!   ng-atomic-sidecar init  --base DIR [--documents N] [--seed FILE] [--broker-peer PEER_ID]
-//!   ng-atomic-sidecar serve --base DIR --listen 127.0.0.1:PORT [--connect]
+//!   ng-atomic-sidecar serve --base DIR --listen 127.0.0.1:PORT
+//!                           --atomic-server http://HOST:PORT [--public-url URL] [--connect]
 //!
 //! `init` creates a NextGraph wallet saved under DIR and N Graph documents
 //! (default 1), applies the SPARQL update in FILE to the first, and prints
 //! `{"documents": [NURI, ...]}`. `serve` opens that wallet and answers the
 //! scoped operations in service.rs. Scopes are read from DIR/scopes.json on
 //! every request; acknowledgements are kept in DIR/acks.json.
+//!
+//! Every operation but `/v1/health` must be signed by the host as the
+//! installation's app agent (auth.rs). `--atomic-server` is where the sidecar
+//! asks which agent that is. `--public-url` is the URL the host was told the
+//! sidecar is at (its `--plugin-sidecars` entry), which the signature covers;
+//! without it the request's Host header is used.
+mod auth;
 mod engine;
 mod service;
 
@@ -78,12 +86,23 @@ fn serve(args: &[String]) -> Result<(), String> {
     let base = base(args)?;
     let listen = arg(args, "--listen").unwrap_or_else(|| "127.0.0.1:14480".into());
     let connect = args.iter().any(|a| a == "--connect");
+    let atomic_server = arg(args, "--atomic-server").ok_or(
+        "--atomic-server http://HOST:PORT is required: it names each installation's app agent",
+    )?;
+    if !atomic_server.starts_with("http://") {
+        return Err("--atomic-server must be an http:// URL".into());
+    }
+    let public_url = arg(args, "--public-url").map(|u| u.trim_end_matches('/').to_string());
     let engine = async_std::task::block_on(engine::NextGraph::open(&base, connect))?;
     let mut service = Service {
         engine,
         scopes: base.join("scopes.json"),
         acks: base.join("acks.json"),
         now: now_ms,
+        registry: Box::new(auth::HttpRegistry {
+            base: atomic_server.trim_end_matches('/').to_string(),
+        }),
+        replay: auth::ReplayCache::default(),
     };
     let server = tiny_http::Server::http(&listen).map_err(|e| e.to_string())?;
     eprintln!("ng-atomic-sidecar: listening on {listen}");
@@ -91,11 +110,25 @@ fn serve(args: &[String]) -> Result<(), String> {
     // both single-writer, and this is a loopback control plane, not a
     // throughput path.
     for mut incoming in server.incoming_requests() {
-        let installation = incoming
+        let headers: Vec<(String, String)> = incoming
             .headers()
             .iter()
-            .find(|h| h.field.equiv("x-atomic-installation"))
-            .map(|h| h.value.as_str().to_string());
+            .map(|h| {
+                (
+                    h.field.as_str().as_str().to_string(),
+                    h.value.as_str().to_string(),
+                )
+            })
+            .collect();
+        let base = public_url.clone().unwrap_or_else(|| {
+            let host = headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("host"))
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("");
+            format!("http://{host}")
+        });
+        let url = format!("{base}{}", incoming.url());
         let mut body = Vec::new();
         let read = incoming
             .as_reader()
@@ -105,7 +138,8 @@ fn serve(args: &[String]) -> Result<(), String> {
             Ok(_) => service.handle(Request {
                 method: incoming.method().as_str().to_ascii_uppercase(),
                 path: incoming.url().split('?').next().unwrap_or("").to_string(),
-                installation,
+                url,
+                headers,
                 body,
             }),
             Err(e) => service::Response {

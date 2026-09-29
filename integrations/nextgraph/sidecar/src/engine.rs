@@ -21,9 +21,7 @@ use nextgraph::net::app_protocol::{
 use nextgraph::net::types::BootstrapContentV0;
 use nextgraph::repo::types::PubKey;
 use nextgraph::wallet::types::CreateWalletV0;
-use ng_oxigraph::spargebra::{
-    term::GraphName, GraphUpdateOperation, Update,
-};
+use ng_oxigraph::spargebra::{term::GraphName, GraphUpdateOperation, Update};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -160,7 +158,10 @@ impl NextGraph {
     /// to disk. With `connect`, also connects to the wallet's broker.
     pub async fn open(base: &Path, connect: bool) -> Result<Self, String> {
         let raw = std::fs::read(credentials_path(base)).map_err(|e| {
-            format!("{}: {e} (run `init` first)", credentials_path(base).display())
+            format!(
+                "{}: {e} (run `init` first)",
+                credentials_path(base).display()
+            )
         })?;
         let secret: Credentials = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
         start_broker(base).await?;
@@ -231,7 +232,10 @@ impl Engine for NextGraph {
             let request = AppRequest::V0(AppRequestV0 {
                 command: AppRequestCommandV0::new_read_query(),
                 nuri,
-                payload: Some(AppRequestPayload::new_sparql_query(SELECT.into(), Some(base))),
+                payload: Some(AppRequestPayload::new_sparql_query(
+                    SELECT.into(),
+                    Some(base),
+                )),
                 session_id: self.session_id,
             });
             match app_request(request).await.map_err(|e| e.to_string())? {

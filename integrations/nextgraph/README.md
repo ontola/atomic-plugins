@@ -15,7 +15,10 @@ Two ways in:
   `atomic-sidecar:` operations (branch `claude/plugin-nextgraph-host`, not yet
   in the pinned `.atomic-server-ref`), built with `plugin-routes`, started at
   `--plugin-routes read-write` with `--plugin-sidecars nextgraph=http://127.0.0.1:<port>`,
-  and the sidecar in [`sidecar/`](sidecar/) running on that port.
+  and the sidecar in [`sidecar/`](sidecar/) running on that port. The
+  sidecar also needs the host to sign its requests and to name each
+  installation's app agent (atomic-server pin candidate17, **pending**; see
+  [Host-to-sidecar trust](#host-to-sidecar-trust)).
 
 What has been **verified** and what is only **declared** is listed under
 [Evidence](#evidence).
@@ -28,9 +31,12 @@ Atomic drive ── /plugin-run ──► QuickJS: plugin.mjs
                                    │   url:"atomic-sidecar:/nextgraph/v1/query"})
                                    ▼
 atomic-server host ── only declared operations, only the configured loopback URL,
-                      adds x-atomic-installation / x-atomic-drive ──►
+                      adds x-atomic-installation / x-atomic-drive, signs as the
+                      installation's app agent (v2 request signature) ──►
                                    ▼
-ng-atomic-sidecar (operator) ── scopes.json: installation × document × read|read-write
+ng-atomic-sidecar (operator) ── verifies the signature, asks the host which agent
+                                 speaks for the installation, then
+                                 scopes.json: installation × document × read|read-write
                                    │
                       NextGraph wallet + local verifier (nextgraph-rs), saved to disk
 ```
@@ -92,7 +98,9 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/dat
 # lines before it); the wallet mnemonic and PIN go to
 # /srv/ng-sidecar/credentials.json (mode 0600), never to stdout
 docker run -d --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/data \
-  -p 127.0.0.1:14480:14480 ng-atomic-sidecar serve --base /data --listen 0.0.0.0:14480
+  -p 127.0.0.1:14480:14480 --add-host host.docker.internal:host-gateway \
+  ng-atomic-sidecar serve --base /data --listen 0.0.0.0:14480 \
+  --atomic-server http://host.docker.internal:9883 --public-url http://127.0.0.1:14480
 atomic-server --plugin-routes read-write --plugin-sidecars nextgraph=http://127.0.0.1:14480
 ```
 
@@ -125,7 +133,8 @@ commits, appliedAt}, replayed}`; needs `read-write`. Only `INSERT DATA` into
   is a 409 `outcome-uncertain`, never a second write.
 
 Nothing is granted by default. The installation comes only from the
-`x-atomic-installation` header, which the host sets and a plugin cannot.
+`x-atomic-installation` header, which the host sets and signs and a plugin
+cannot set. `GET /v1/health` is the only unsigned operation.
 
 ### Data exposure (E2EE)
 
@@ -140,9 +149,66 @@ wallet is connected to one, still only see encrypted commits. Use a wallet
 created for this purpose, and grant it only documents whose contents may be
 stored in the drive.
 
-Host-to-sidecar trust is loopback only: any local process that can reach the
-sidecar port can claim an installation. There is no shared secret or request
-signature between host and sidecar yet.
+### Host-to-sidecar trust
+
+Loopback is not the boundary: any local process can reach the port and set
+`x-atomic-installation`. So every operation except `/v1/health` must be
+signed by the host, as the installation's app agent on that node (a key the
+plugin never holds), and the sidecar refuses anything else with 401. The
+check (`sidecar/src/auth.rs`), in order:
+
+1. `x-atomic-signature-version: 2`, `x-atomic-agent`, `x-atomic-public-key`,
+   `x-atomic-signature` and `x-atomic-timestamp` are each present once.
+2. The Ed25519 signature verifies (strictly) over atomic_lib's v2 message
+   extended with the host's own headers:
+
+   ```text
+   atomic-request-v2
+   POST
+   http://127.0.0.1:14480/v1/query
+   1700000000000
+   <sha-256 hex of the body>
+   x-atomic-drive:<drive>
+   x-atomic-installation:<installation>
+   ```
+
+   The URL is `--public-url` (the URL in the host's `--plugin-sidecars`)
+   plus the request's path and query; without `--public-url`, the `Host`
+   header is used. The trailing lines are every `x-atomic-*` header except
+   the five proof headers above, with lower-case names, sorted by name; a
+   header sent twice is refused. Changing the method, URL, body,
+   installation or drive, or adding an `x-atomic-*` header, breaks the
+   signature.
+
+3. The timestamp is at most 5 minutes old and at most 10 seconds ahead
+   (atomic_lib's `AUTH_MAX_AGE_MS` and `ACCEPTABLE_TIME_DIFFERENCE`).
+4. The signature has not been seen before within that window. The replay
+   cache is in memory (at most 100,000 live proofs; when it is full, new
+   proofs are refused): a proof captured before a sidecar restart can be
+   replayed once within its 5 minutes. A replayed write still meets the
+   idempotency key.
+5. The host says the signer is that installation's app agent:
+   `GET {--atomic-server}/plugin-runtime?installation=<urlencoded>` answers
+   `{"agent": "...", "publicKey": "..."}` (or 404), and both must match the
+   request's `x-atomic-agent` and `x-atomic-public-key`. It is asked on every
+   request, so revoking an app agent applies to the next call. A host that
+   cannot be reached is a 503, never a pass.
+
+**Pending**: the host side (signing sidecar requests, serving
+`/plugin-runtime?installation=`) is atomic-server pin candidate17, which
+does not exist yet. The exact message format and the lookup's path and
+answer shape are this sidecar's proposal, and must match what the host
+ships. Until then, `serve` against any released host refuses every
+operation, and the e2e test skips itself on the first 401. The sidecar
+checks were exercised with a stub lookup: cargo unit tests, and a manual run
+of the real container against a node script that signs requests and serves
+the lookup (signed: 200; replayed, unsigned, forged installation,
+unregistered installation and expired: 401).
+
+The lookup is plain HTTP/1.0 to `--atomic-server` and is not itself
+authenticated: whoever controls that address decides which agent speaks for
+an installation. Point it at the host on loopback or on a private Docker
+network.
 
 ### Broker
 
@@ -168,13 +234,22 @@ node integrations/tooling/run-lane.mjs nextgraph --tier e2e    # real host + rea
   read versus read-write grants, revocation on the next request, replayed
   acknowledgements, acknowledgements across a restart, uncertain outcomes not
   repeated, malformed requests refused before any write.
+- Sidecar signature tests (`sidecar/src/auth.rs`, stub lookup): a good
+  signature; unsigned; tampered body, method, URL, installation or drive; an
+  added or doubled `x-atomic-*` header; a replayed proof; another agent, an
+  unregistered installation, the right agent subject with another key; an
+  expired or future timestamp; version 1; an unreachable lookup (503); a
+  golden message.
 - Host tests (atomic-server `claude/plugin-nextgraph-host`,
   `plugins::host_core`, shared manifest fixtures in Rust and TypeScript): only
   declared `atomic-sidecar:` operations reach only the configured sidecar,
   with the host's identity headers and none of the plugin's.
 - e2e (`e2e/nextgraph.spec.ts`): see the spec header for exactly what it
   checks. It is skipped, saying why, on a host without `atomic-sidecar:`
-  operations, which includes the current pin.
+  operations (which includes the current pin), or on one that does not sign
+  sidecar requests (everything before candidate17). **Pending**: it has not
+  run against a signing host. The last passing run, before signatures, was
+  on `claude/plugin-nextgraph-host` at a68427c14.
 
 `fixtures/select.json` is hand-authored, not a NextGraph capture. No broker,
 no other NextGraph client and no NextGraph app have been used against these

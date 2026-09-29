@@ -26,8 +26,12 @@
  * so nothing here syncs between NextGraph peers.
  *
  * Needs a host with `atomic-sidecar:` operations (atomic-server branch
- * claude/plugin-nextgraph-host). On a host without them publishing the
- * release is refused on the operation URL, and the test is skipped saying so.
+ * claude/plugin-nextgraph-host) that also signs its requests to sidecars as
+ * the installation's app agent and serves `/plugin-runtime?installation=`
+ * (atomic-server pin candidate17, PENDING: not yet run against it). On a host
+ * without operations publishing the release is refused on the operation URL;
+ * on a host that does not sign, the sidecar refuses the first pull with 401.
+ * Either way the test is skipped saying so.
  * Needs Docker. Run it the way CI would:
  *   node integrations/tooling/run-lane.mjs nextgraph --tier e2e
  */
@@ -113,12 +117,20 @@ function startSidecar(dir: string) {
     `${dir}:/data`,
     '-p',
     `127.0.0.1:${port}:14480`,
+    // The sidecar asks the host which app agent speaks for an installation.
+    '--add-host',
+    'host.docker.internal:host-gateway',
     IMAGE,
     'serve',
     '--base',
     '/data',
     '--listen',
     '0.0.0.0:14480',
+    '--atomic-server',
+    `http://host.docker.internal:${new URL(SERVER_URL).port}`,
+    // What the host signs: the URL it was given in --plugin-sidecars.
+    '--public-url',
+    SIDECAR_URL,
   ]);
 }
 
@@ -229,14 +241,21 @@ test.describe('nextgraph integration', () => {
     startSidecar(dir);
     await waitForSidecar();
 
-    // 1. Pull: the plugin reads the source document through the sidecar.
-    const pulled = await runPlugin(agent, target, {
+    // 1. Pull: the plugin reads the source document through the sidecar,
+    // which accepts only requests the host signed.
+    const first = await runPluginRaw(agent, target, {
       mode: 'pull',
       parent: drive,
       id: `pull-${Date.now()}`,
       name: 'NextGraph source',
       document: source,
     });
+    const firstError = (first.json as { error?: string } | undefined)?.error;
+    test.skip(
+      !!firstError?.includes('(401)') && firstError.includes('unsigned'),
+      'this atomic-server does not sign its requests to sidecars (needs atomic-server pin candidate17)',
+    );
+    const pulled = verdictOf(first);
     const snapshot = pulled.intents[0];
     expect(snapshot.op).toBe('create');
     expect(snapshot.set[P.media]).toBe('application/sparql-results+json');
@@ -304,7 +323,9 @@ test.describe('nextgraph integration', () => {
     expect(await pullRows(agent, target, drive, destination)).toEqual(
       expect.arrayContaining(rows),
     );
-    const replay = await fetch(`${SIDECAR_URL}/v1/update`, {
+    // A local process that is not the host cannot speak for the plugin,
+    // whatever installation it names.
+    const forged = await fetch(`${SIDECAR_URL}/v1/update`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -312,7 +333,15 @@ test.describe('nextgraph integration', () => {
       },
       body: intent.body,
     });
-    const replayed = await replay.json();
+    expect(forged.status).toBe(401);
+    // Approving the same export again under a new run: the host sends the
+    // same key, and the restarted sidecar replays its stored acknowledgement.
+    const replay = await post(agent, '/plugin-external-apply', {
+      ...approval,
+      run: `${exportId}-after-restart`,
+    });
+    expect(replay.status, replay.text).toBe(200);
+    const replayed = JSON.parse((replay.json as { body: string }).body);
     expect(replayed.replayed).toBe(true);
     expect(replayed.ack).toEqual(ack.ack);
 
@@ -372,7 +401,15 @@ async function runPlugin(
   target: { drive: string; plugin: string },
   config: Record<string, string>,
 ): Promise<{ intents: Intent[] }> {
-  const response = await post(agent, '/plugin-run', {
+  return verdictOf(await runPluginRaw(agent, target, config));
+}
+
+function runPluginRaw(
+  agent: Agent,
+  target: { drive: string; plugin: string },
+  config: Record<string, string>,
+) {
+  return post(agent, '/plugin-run', {
     ...target,
     source,
     input: JSON.stringify({
@@ -380,6 +417,11 @@ async function runPlugin(
       config,
     }),
   });
+}
+
+function verdictOf(response: Awaited<ReturnType<typeof post>>): {
+  intents: Intent[];
+} {
   expect(response.status, response.text).toBe(200);
   const { verdict, error } = response.json as {
     verdict?: string;
