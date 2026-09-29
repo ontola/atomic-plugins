@@ -9,7 +9,7 @@
  *    into a folder named in its config.
  * 2. An independent client, remotestorage.js (`remotestoragejs` from npm,
  *    pinned in `package.json` next to this file), runs on another origin
- *    (`http://rs-app.test`, served by Playwright) and connects with the user
+ *    (`http://rs-app.localhost`, served by Playwright) and connects with the user
  *    address `me@<installation slug>.routes.localhost:<port>`: WebFinger, the
  *    OAuth implicit grant through the host's consent page (a person clicks
  *    Allow), and the token back in the redirect fragment.
@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { Agent, signRequest } from '@tomic/lib';
+import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
   createFromCatalog,
@@ -45,7 +45,9 @@ const rsjs = readFileSync(
 );
 const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
 const ROUTES_ORIGIN = process.env.PLUGIN_ROUTES_ORIGIN ?? '';
-const APP = 'http://rs-app.test';
+// On loopback, like the server: Chromium's local network access checks
+// refuse requests from a public origin to localhost.
+const APP = 'http://rs-app.localhost';
 const FILE = 'https://atomicdata.dev/classes/File';
 const P = {
   parent: 'https://atomicdata.dev/properties/parent',
@@ -108,6 +110,12 @@ test.describe('remoteStorage server', () => {
         : route.fulfill({ contentType: 'text/html', body: APP_PAGE });
     });
 
+    page.on('requestfailed', r => console.log('DEBUG failed', r.url(), r.failure()?.errorText));
+    page.on('response', r => { if (r.url().includes('routes.localhost')) console.log('DEBUG response', r.status(), r.url(), JSON.stringify(r.headers())); });
+    {
+      const r = await fetch(`${origin}/.well-known/webfinger?resource=acct:${userAddress}`, { headers: { Origin: APP } });
+      console.log('DEBUG node', r.status, JSON.stringify([...r.headers]), await r.text());
+    }
     // WebFinger, from the app's origin, as a browser client sees it.
     await page.goto(`${APP}/`);
     const jrd = await page.evaluate(
@@ -347,9 +355,14 @@ async function install(page: Page, releaseId: string, folder: string) {
   await page.goto(new URL('/app/integrations', SERVER_URL).href);
   const card = page.locator(`[data-release="${releaseId}"]`);
   await expect(card).toBeVisible({ timeout: 45_000 });
-  await card.getByRole('button', { name: 'Open', exact: true }).click();
   const dialog = page.locator('dialog[open]');
-  await expect(dialog).toBeVisible({ timeout: 30_000 });
+  // The store re-renders its cards while its listing settles.
+  await expect(async () => {
+    await card
+      .getByRole('button', { name: 'Open', exact: true })
+      .click({ timeout: 5_000 });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
   await dialog.getByTestId('route-write-approval').check();
   const editor = dialog.locator('.cm-content');
   await editor.click();
@@ -385,17 +398,20 @@ function routeSlug(subject: string) {
     .slice(0, 32);
 }
 
-/** A POST signed as the test's agent. */
+/**
+ * A POST signed as the test's agent, with a version 2 signature over the
+ * method, URL and body: state-changing endpoints require it (#1700).
+ */
 async function post(agent: Agent, path: string, body: unknown) {
   const url = `${SERVER_URL}${path}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(await signRequest(url, agent, {})),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(
+    url,
+    await signedRequestInit(url, agent, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
   const text = await response.text();
   let json: unknown;
 
