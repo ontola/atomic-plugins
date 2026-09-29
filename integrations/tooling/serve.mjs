@@ -350,9 +350,9 @@ async function waitFor(url, what) {
  * ports. Validated in lanes.mjs: only `ATOMIC_*` names, never the
  * plugin-routes options, whose values come from `pluginRoutes`.
  */
-export const laneServerEnv = (serverEnv, ports) =>
+export const laneServerEnv = (declared, ports) =>
   Object.fromEntries(
-    Object.entries(serverEnv ?? {}).map(([key, value]) => [
+    Object.entries(declared ?? {}).map(([key, value]) => [
       key,
       value.replace(/\{(atomicServer|devServer|mockProxy)\}/g, (_, role) =>
         String(ports[role]),

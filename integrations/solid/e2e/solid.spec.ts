@@ -30,7 +30,14 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect } from '@playwright/test';
-import { Agent, Store, installRelease, signRequest } from '@tomic/lib';
+import {
+  Agent,
+  Store,
+  fetchPluginAgent,
+  installRelease,
+  signRequest,
+  signedRequestInit,
+} from '@tomic/lib';
 import {
   before,
   createFromCatalog,
@@ -72,7 +79,31 @@ test.describe('Solid pod', () => {
     page,
   }) => {
     test.setTimeout(300_000);
-    const { pod, storage } = await installPod(page);
+    const { pod, storage, installation, agent } = await installPod(page);
+
+    // On failure, the host's run log for the pod says why a route failed.
+    try {
+      await usePod(page, pod, storage);
+    } catch (error) {
+      const url = `${SERVER_URL}/plugin-route-status?installation=${encodeURIComponent(installation)}`;
+      const status = await fetch(url, {
+        headers: await signRequest(url, agent, {}),
+      });
+      await test.info().attach('route-status.json', {
+        body: await status.text(),
+        contentType: 'application/json',
+      });
+      throw error;
+    }
+  });
+});
+
+async function usePod(
+  page: import('@playwright/test').Page,
+  pod: string,
+  storage: string,
+) {
+  {
     const alice = issuer.session('alice');
     const bob = issuer.session('bob');
 
@@ -133,7 +164,6 @@ test.describe('Solid pod', () => {
       read: true,
       append: true,
       write: true,
-      control: false,
     });
     const renamed = solid.setStringNoLocale(
       solid.getThing(mine, `${hello}#me`)!,
@@ -252,8 +282,8 @@ _:p a solid:InsertDeletePatch;
       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
     );
     expect(rootTypes).toContain(`${LDP}BasicContainer`);
-  });
-});
+  }
+}
 
 /**
  * Publishes ../plugin.mjs, pins it, and installs it on the test's drive
@@ -301,7 +331,8 @@ async function installPod(page: import('@playwright/test').Page) {
   expect(entry, JSON.stringify(catalog.entries)).toBeTruthy();
   expect(entry.requires).toContain('plugin-routes:read-write');
 
-  const store = new Store({ serverUrl: SERVER_URL, agent, connect: false });
+  // Connected: a Store that is not connected saves offline, never to the server.
+  const store = new Store({ serverUrl: SERVER_URL, agent });
   const folder = await store.newResource({
     isA: 'https://atomicdata.dev/classes/Folder',
     parent: target.drive,
@@ -309,9 +340,6 @@ async function installPod(page: import('@playwright/test').Page) {
       'https://atomicdata.dev/properties/name': 'Solid pod storage',
       'https://atomicdata.dev/properties/displayStyle':
         'https://atomicdata.dev/display-style/list',
-      'https://atomicdata.dev/properties/read': [
-        'https://atomicdata.dev/agents/publicAgent',
-      ],
     },
   });
   await folder.save();
@@ -339,6 +367,22 @@ async function installPod(page: import('@playwright/test').Page) {
       },
     ],
   });
+  // The rights, from the page's own store: the plugin's agent may write in
+  // the folder (what the install review's rights commit does) and the
+  // public may read it. A Node-side Store's later edits did not reach the
+  // server here, so they are made where the data browser makes them.
+  const pluginAgent = await fetchPluginAgent(store, installation);
+  await page.evaluate(
+    async ({ target: subject, writer }) => {
+      const resource = await window.store!.getResource(subject);
+      resource.push('https://atomicdata.dev/properties/write', [writer], true);
+      await resource.set('https://atomicdata.dev/properties/read', [
+        'https://atomicdata.dev/agents/publicAgent',
+      ]);
+      await resource.save();
+    },
+    { target: storage, writer: pluginAgent },
+  );
   const origin = new URL(ROUTES_ORIGIN);
   const pod = `${origin.protocol}//${routeSlug(installation)}.${origin.host}/`;
   issuer.setStorage('alice', pod);
@@ -347,7 +391,7 @@ async function installPod(page: import('@playwright/test').Page) {
     .poll(async () => (await fetch(pod)).status, { timeout: 60_000 })
     .not.toBe(404);
 
-  return { pod, storage, installation };
+  return { pod, storage, installation, agent };
 }
 
 /** atomic-server `route_registry::slug`, as plugin-routes.spec.ts computes it. */
@@ -368,17 +412,21 @@ function routeSlug(subject: string) {
     .slice(0, 32);
 }
 
-/** A POST signed as the test's agent. */
+/**
+ * A POST with a version 2 request signature over the method, the full URL
+ * and the body (atomic-server#1832), as integrations/tooling/e2e/signed-post.ts
+ * does; a plugin folder calls `signedRequestInit` itself.
+ */
 async function post(agent: Agent, path: string, body: unknown) {
   const url = `${SERVER_URL}${path}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(await signRequest(url, agent, {})),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(
+    url,
+    await signedRequestInit(url, agent, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
   const text = await response.text();
   let json: unknown;
 

@@ -387,7 +387,7 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
 });
 
 test('serverEnv takes ATOMIC_* strings and never the gates or the stack settings', () => {
-  const lane = {
+  const demo = {
     id: 'demo',
     index: 90,
     platforms: [],
@@ -395,7 +395,7 @@ test('serverEnv takes ATOMIC_* strings and never the gates or the stack settings
     e2e: ['integrations/demo/e2e/demo.spec.ts'],
   };
   const check = serverEnv =>
-    validateConfig({ ...config, lanes: [{ ...lane, serverEnv }] });
+    validateConfig({ ...config, lanes: [{ ...demo, serverEnv }] });
   assert.doesNotThrow(() =>
     check({ ATOMIC_SOLID_OIDC_ISSUERS: 'http://127.0.0.1:{mockProxy}' }),
   );
@@ -411,7 +411,7 @@ test('serverEnv takes ATOMIC_* strings and never the gates or the stack settings
     () =>
       validateConfig({
         ...config,
-        lanes: [{ ...lane, tiers: [], serverEnv: { ATOMIC_X: 'y' } }],
+        lanes: [{ ...demo, tiers: [], serverEnv: { ATOMIC_X: 'y' } }],
       }),
     /serverEnv only affects/,
   );

@@ -1093,9 +1093,6 @@ function ancestors(path) {
   return out;
 }
 
-const containerOf = path =>
-  path.slice(0, path.slice(0, -1).lastIndexOf('/') + 1);
-
 const list = value =>
   Array.isArray(value) ? value.filter(v => typeof v === 'string') : [];
 
@@ -1449,12 +1446,13 @@ function localId(prefix) {
 }
 
 function createIntent(pod, path, media, body) {
+  // PlainText requires a description: the exact bytes, possibly none.
   const set = {
     [P.name]: path,
     [P.media]: media,
     [P.localId]: `solid:${path}`,
+    [P.description]: body,
   };
-  if (body) set[P.description] = body;
 
   return {
     op: 'create',
