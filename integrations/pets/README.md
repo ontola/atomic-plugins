@@ -58,7 +58,7 @@ stylesheet.
   `Link` header). Its document, `overlays/pets-demo/1.0.0/openapi.json`,
   declares `security: []`, so the proxy's consent page asks for nothing and
   the connection holds no credential. That needs `atomic-integration-proxy`
-  0.2.2 or later; 0.2.1 lists `pets` but refuses to connect it. Pages serves
+  0.2.3 or later; 0.2.2 and earlier list `pets` but refuse to connect it. Pages serves
   the file as `application/octet-stream`; the host and syncables parse the
   body as JSON regardless. `app/openapi.json` is the same document
   (`app/sync.test.ts` checks this).

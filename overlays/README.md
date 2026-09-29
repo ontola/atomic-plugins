@@ -60,8 +60,8 @@ the one operation it declares, `GET /pets`, is the static file
 `pets-demo/1.0.0/api/pets` (five synthetic pets, one page, no `Link`
 header; Pages serves it as `application/octet-stream`). It declares
 top-level `security: []` and no security scheme, which
-`atomic-integration-proxy` 0.2.2 and later connect without a credential;
-0.2.1 lists the platform but refuses to connect it. The Pets drive app
+`atomic-integration-proxy` 0.2.3 and later connect without a credential;
+0.2.2 and earlier list the platform but refuse to connect it. The Pets drive app
 bundles the same document (`integrations/pets/app/openapi.json`). A change
 to either the document or the data is a change to what live users of the
 demo read, so give it a new version folder rather than editing `1.0.0` in

@@ -65,8 +65,8 @@ user's key. A wrong verifier does not burn the handoff; concurrent second
 redemptions fail. Responses are `no-store`.
 
 The consent page's CSP allows form submissions only to the proxy itself (and,
-for an API-key platform, to the return address's origin, where approval
-redirects), and one inline script identified by its SHA-256 hash; nothing
+for an API-key or no-credential platform, to the return address's origin,
+where approval redirects), and one inline script identified by its SHA-256 hash; nothing
 else runs. An OAuth approval answers with a page that continues to the
 provider's authorization URL by `<meta>` refresh and button, sent with
 `Referrer-Policy: no-referrer`, `no-store`, and a CSP with no script and
@@ -82,7 +82,7 @@ For an API-key platform the key is typed into the proxy's own consent page
 and sealed like an OAuth token; it is never returned to the hub.
 
 A platform whose composed document declares top-level `security: []`, no
-security scheme, and no operation that requires one (0.2.2 and later)
+security scheme, and no operation that requires one (0.2.3 and later)
 connects on consent alone: the connection seals only the platform name and
 requests are forwarded with no credential. Everything else is unchanged: the
 redeem and every proxied request are signed (or carry a frame capability),

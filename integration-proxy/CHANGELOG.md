@@ -3,7 +3,7 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## 0.2.2 (unreleased)
+## 0.2.3 (unreleased)
 
 - A catalog platform whose composed OpenAPI document declares top-level
   `security: []`, no security scheme, and no operation that requires one now
@@ -17,7 +17,25 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   answer `401 credential_refresh_failed` (connect again).
   (ontola/atomic-plugins#174)
 - The default catalog (`overlays/catalog.json`) gains `pets`, a static,
-  read-only demo API on GitHub Pages that uses this. 0.2.1 loads that catalog
-  and lists `pets`, but its consent page answers "This platform is not
-  available for connection".
+  read-only demo API on GitHub Pages that uses this. 0.2.2 and earlier load
+  that catalog and list `pets`, but their consent page answers "This platform
+  is not available for connection".
 - `CHANGELOG.md` is packaged with the crate.
+
+## 0.2.2 (2026-09-29, tag `integration-proxy-v0.2.2`)
+
+- For an OAuth platform, `POST /connect/authorize` continues to the provider
+  with a page (a `<meta>` refresh and a button, sent with
+  `Referrer-Policy: no-referrer`), not a `303` redirect. The consent page's
+  CSP `form-action` covers a form submission's whole redirect chain, so a
+  provider whose authorization endpoint redirects to another origin of its
+  own (Notion's API host to its app host) was blocked. The consent page's
+  `form-action` is now `'self'` for OAuth platforms; an API-key approval
+  still redirects to `redirect_uri` and keeps that origin.
+  (ontola/atomic-plugins#207)
+- Approving a consent page a second time (back button, double click) answers
+  "You already approved this connection …" instead of "expired".
+- The consent page's one inline script, allowed by its SHA-256 hash in the
+  CSP, disables the approve button on submit.
+- An unusable API key is refused before the consent is spent, so correcting
+  it and approving again works.
