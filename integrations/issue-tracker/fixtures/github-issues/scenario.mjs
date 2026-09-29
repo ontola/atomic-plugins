@@ -180,6 +180,20 @@ export function githubTracker({ scenario } = {}) {
     },
   };
 
+  /**
+   * A pull request: GitHub's `/issues` endpoints list it among the issues,
+   * with a `pull_request` field, and number it in the same sequence.
+   */
+  api.createPullRequest = (name, input) => {
+    const { number } = api.createIssue(name, input);
+    const stored = repo(name).issues.find(i => i.number === number);
+    stored.pull_request = {
+      url: `https://api.github.com/repos/${name}/pulls/${number}`,
+    };
+
+    return structuredClone(stored);
+  };
+
   // GitHub's GET /user/repos, the issue-tracker drive app's repository
   // picker (overlays/github.com/github-issues/1.1.4/
   // repositories-read-overlay.yaml). Kept outside `request` above so it stays

@@ -10,8 +10,10 @@ const copy = value => structuredClone(value);
 
 /** Single-writer, checkpointed reconciliation. Ports own transport and durable writes. */
 export class Bridge {
-  constructor({ devonian, local, remote, base, snapshot, save }) {
+  constructor({ devonian, local, remote, base, snapshot, save, imported }) {
     this.api = devonian;
+    /** Called after each record imported from GitHub into the table; see `syncEntity`. */
+    this.imported = imported;
     this.local = local;
     this.remote = remote;
     this.save = save;
@@ -368,6 +370,41 @@ export class Bridge {
         ...decision.remote,
       };
       const metadata = rows.remote?.metadata;
+
+      // Import: on GitHub, never synced, not in the table. The list row is
+      // the observation, so nothing is read back from GitHub, and no pending
+      // operation is checkpointed first: an Atomic create is idempotent
+      // (`AtomicPort.create` finds its own earlier create by localId), and
+      // a row that exists but was never checkpointed binds back by its
+      // issue number or comment id on the next pass. Nothing goes to GitHub.
+      if (
+        rows.remote &&
+        !rows.local &&
+        record.baseline === undefined &&
+        !relink
+      ) {
+        this.store.patch(subject, { set: this.properties(desired) });
+        const id = await this.lens(
+          'local',
+          entity,
+          crypto.randomUUID(),
+          metadata,
+        ).publish(subject);
+        record.baseline = copy(desired);
+        await this.checkpoint();
+        await this.imported?.({
+          entity,
+          subject,
+          row: {
+            id,
+            ...(entity === 'issue' ? { remoteId: rows.remote.id } : {}),
+            value: copy(desired),
+            ...(metadata ? { metadata: copy(metadata) } : {}),
+          },
+          context: this.context('local', entity),
+        });
+        continue;
+      }
 
       if (
         rows.local &&

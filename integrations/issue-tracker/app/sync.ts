@@ -217,7 +217,26 @@ export interface PassOptions {
   overlay?: Overlay;
   /** Tests inject the relay directly. */
   dispatch?: Dispatch;
+  /**
+   * Called as the pass imports GitHub issues and comments into the table,
+   * so the view can show them before the pass ends.
+   */
+  onImported?: (imported: Imported) => void;
 }
+
+/** One record a pass imported from GitHub, as the board shows it. */
+export type Imported =
+  | { entity: 'issue'; row: IssueRow }
+  | { entity: 'comment'; issue: string; comment: CommentRow };
+
+/**
+ * During an import the sync state is written every this many imported
+ * records, or after this long, whichever comes first, instead of before
+ * every record: the state holds every imported issue's text, so writing it
+ * per record made the import quadratic (#206).
+ */
+export const IMPORT_FLUSH_EVERY = 25;
+export const IMPORT_FLUSH_MS = 10_000;
 
 function bridgeFor(options: PassOptions) {
   const { store, repository, tracker, state } = options;
@@ -248,7 +267,40 @@ function bridgeFor(options: PassOptions) {
   });
   const remote = new GitHubPort(undefined, { repository }, transport);
   const sent = { value: 0 };
+  let sinceFlush = 0;
+  let flushedAt = Date.now();
+
+  const imported = async ({
+    entity,
+    row,
+    context,
+  }: {
+    entity: string;
+    row: ImportedRow;
+    context: { issueId?: string };
+  }) => {
+    if (
+      ++sinceFlush >= IMPORT_FLUSH_EVERY ||
+      Date.now() - flushedAt >= IMPORT_FLUSH_MS
+    ) {
+      sinceFlush = 0;
+      flushedAt = Date.now();
+      await state.flush();
+    }
+
+    const notify = options.onImported;
+    if (!notify) return;
+    if (entity === 'issue') notify({ entity, row: issueRow(row, []) });
+    else if (context.issueId)
+      notify({
+        entity: 'comment',
+        issue: context.issueId,
+        comment: commentRow(row.id, row.value.body, row.metadata ?? {}),
+      });
+  };
+
   const bridge = new Bridge({
+    imported,
     devonian,
     local,
     remote: reviewGate(counted(remote, sent), options.approved ?? new Set()),
@@ -305,14 +357,9 @@ async function tableRows(
 ): Promise<IssueRow[]> {
   const comments = await commentsByIssue(atomicStore, options);
 
-  return (
-    (await local.list('issue')) as {
-      id: string;
-      remoteId?: number;
-      value: { title: string; body: string; status: Status };
-      metadata?: Record<string, unknown>;
-    }[]
-  ).map(row => issueRow(row, comments.get(row.id) ?? []));
+  return ((await local.list('issue')) as ImportedRow[]).map(row =>
+    issueRow(row, comments.get(row.id) ?? []),
+  );
 }
 
 /**
@@ -397,15 +444,28 @@ export async function resolveConflict(
 const text = (value: unknown) =>
   typeof value === 'string' ? value : undefined;
 
-function issueRow(
-  row: {
-    id: string;
-    remoteId?: number;
-    value: { title: string; body: string; status: Status };
-    metadata?: Record<string, unknown>;
-  },
-  comments: CommentRow[],
-): IssueRow {
+interface ImportedRow {
+  id: string;
+  remoteId?: number;
+  value: { title: string; body: string; status: Status };
+  metadata?: Record<string, unknown>;
+}
+
+function commentRow(
+  subject: string,
+  body: string | undefined,
+  source: Record<string, unknown>,
+): CommentRow {
+  return {
+    subject,
+    body: body ?? '',
+    ...(text(source.author) ? { author: text(source.author) } : {}),
+    ...(text(source.createdAt) ? { createdAt: text(source.createdAt) } : {}),
+    ...(text(source.url) ? { url: text(source.url) } : {}),
+  };
+}
+
+function issueRow(row: ImportedRow, comments: CommentRow[]): IssueRow {
   const m = row.metadata ?? {};
   const labels = Array.isArray(m.labels)
     ? (m.labels as Label[]).filter(l => typeof l?.name === 'string')
@@ -464,13 +524,7 @@ async function commentsByIssue(
       // Unreadable provenance: shown without an author.
     }
 
-    const comment: CommentRow = {
-      subject,
-      body: text(r.get(DESCRIPTION)) ?? '',
-      ...(text(source.author) ? { author: text(source.author) } : {}),
-      ...(text(source.createdAt) ? { createdAt: text(source.createdAt) } : {}),
-      ...(text(source.url) ? { url: text(source.url) } : {}),
-    };
+    const comment = commentRow(subject, text(r.get(DESCRIPTION)), source);
     const list = out.get(about) ?? [];
     list.push(comment);
     out.set(about, list);

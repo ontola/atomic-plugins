@@ -43,15 +43,15 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 
 /** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
 const VERSIONS = {
-  calendar: 'usertest-5',
-  'issue-tracker': 'usertest',
+  calendar: 'usertest-6',
+  'issue-tracker': 'usertest-2',
   money: 'usertest',
-  notion: 'usertest',
-  timesheets: 'usertest',
+  notion: 'usertest-2',
+  timesheets: 'usertest-2',
 };
 const APPS = {
   calendar: {
-    base: 'devonian-google-calendar',
+    base: 'calendar',
     name: 'Google Calendar',
     emoji: '📅',
     row: ['Event', 'Events'],
@@ -59,7 +59,7 @@ const APPS = {
     report: true,
   },
   'issue-tracker': {
-    base: 'devonian-todoist',
+    base: 'issue-tracker',
     name: 'GitHub issues',
     emoji: '🐙',
     description: 'Import the issues of a GitHub repository into a table.',

@@ -8,6 +8,9 @@ export const PLATFORM = 'clockify';
  * only ever sees this interface, so it cannot hold, rotate or persist a
  * credential; whoever implements it owns authority.
  *
+ * Writes (#123 M3) pass `init`; the frame client allows `PUT` and `DELETE`
+ * since #54 phase 2 (`PROXY_METHODS` in view-client.js at the pin).
+ *
  * The one implementation is `relayTransport`, over the host's
  * `store.proxy.request`: since ontola/atomic-plugins#54 phase 2 the host's
  * frame client calls the proxy itself, with a capability the page signed and
@@ -18,12 +21,19 @@ export interface ProxyTransport {
   request(
     path: string,
     query?: Record<string, string>,
+    /** A write: the method and its JSON text body. Absent: a `GET`. */
+    init?: WriteInit,
   ): Promise<{
     status: number;
     body: unknown;
     /** Lower-cased; the relay passes `retry-after` among a few others. */
     headers?: Record<string, string>;
   }>;
+}
+
+export interface WriteInit {
+  method: 'POST' | 'PUT' | 'DELETE';
+  body?: string;
 }
 
 export class ProxyError extends Error {
@@ -99,11 +109,26 @@ export function proxyRefusal(response: {
     return undefined;
   const detail = typeof body?.message === 'string' ? `: ${body.message}` : '';
 
-  return new Error(
+  return new ProxyRefusal(
     RECONNECT_CODES.includes(code)
       ? `The integration proxy refused this connection (${code}${detail}). Connect again.`
       : `The integration proxy refused the request (${code}${detail}).`,
+    code,
   );
+}
+
+/**
+ * The proxy answered for itself, before Clockify was called: nothing
+ * reached Clockify, so a write that ends in one is certainly not applied.
+ */
+export class ProxyRefusal extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = 'ProxyRefusal';
+  }
 }
 
 /**
@@ -116,13 +141,14 @@ export function relayTransport(
   connection: ConnectionReference,
 ): ProxyTransport {
   return {
-    async request(path, query) {
+    async request(path, query, init) {
       const response = await proxy.request({
         platform: connection.platform,
         connectionId: connection.connectionId,
         path,
-        method: 'GET',
+        method: init?.method ?? 'GET',
         ...(query ? { query } : {}),
+        ...(init?.body !== undefined ? { body: init.body } : {}),
       });
       const refused = proxyRefusal(response);
       if (refused) throw refused;
