@@ -272,7 +272,8 @@ async function install(
           [`${p}release`]: release,
           [`${p}releaseId`]: releaseId,
           [`${p}installationStatus`]: 'active',
-          [`${p}grants`]: [],
+          // Every declared capability must be granted.
+          [`${p}grants`]: ['storage'],
           [`${p}config`]: config as never,
         },
         propDatatypes: {
