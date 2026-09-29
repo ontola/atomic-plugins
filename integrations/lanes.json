@@ -34,6 +34,19 @@
       "e2e": ["integrations/calendar/e2e/calendar.spec.ts"]
     },
     {
+      "id": "remotestorage",
+      "index": 10,
+      "platforms": [],
+      "tiers": ["node", "e2e"],
+      "pluginRoutes": "read-write",
+      "nodeTests": ["integrations/remotestorage/plugin.test.mjs"],
+      "e2e": [
+        "integrations/remotestorage/e2e/server.spec.ts",
+        "integrations/remotestorage/e2e/import.spec.ts"
+      ],
+      "note": "A remoteStorage server (draft-dejong-remotestorage-22) on the installation-origin mount. The e2e runs atomic-server built with the plugin-routes feature at --plugin-routes read-write: server.spec.ts installs the unchanged bundle through the store's review dialog and drives remotestorage.js (npm remotestoragejs, pinned in e2e/package.json) through WebFinger, the host consent page and the storage API; import.spec.ts runs the reviewed text importer through /plugin-run. Needs a host with authOptional bearer routes, trailing-slash {*rest} matches redirects to a consented client and handler CORS expose headers (atomic-server branch claude/plugin-remotestorage-host, on candidate14); the node tier needs no server."
+    },
+    {
       "id": "issue-tracker",
       "index": 1,
       "platforms": ["github-issues", "todoist"],
@@ -78,6 +91,20 @@
       "tiers": ["e2e"],
       "note": "e2e drives the Bank statements importer through the host's generic file entry point (atomic-server#1653: manifest accepts/destination, PluginPage Import tab): publish, discover, set up, MT940 and camt.053 import, reload, reimport, local edit, conflict and refused files. A second test installs the Money drive app (integrations/money/app/) test-side as an app rendering the Bank transaction class, adds it through the table's Add view as a read-only view, imports an MT940 from inside the app through the host's review (store.importer.run, atomic-server#1774), and saves a category after the host's Allow editing (atomic-server#1788). The pin includes that change (atomic-server#1691); against an older host, publishing the bundle fails on the unknown manifest field. Host bug atomic-server#1846, fixed at pin 1432e244a (atomic-server#1847, atomic-plugins #179): at pin 2567fc30b Add view read the drive's apps once on mount, so when the app's save synced in after navigating, 'New app' never appeared and the second test failed. No typecheck/unit tier: money has an atomicCertification block, so the unsharded certification step in shared-checks already runs exactly its typecheck (tsconfig.json) and unit (vitest.config.ts) on every integrations/** change, plus bundle reproducibility. moneybird is listed for a future Moneybird fixture in integrations/money/fixtures/moneybird/ (plugin-specific files stay in the plugin folder); integrations/money/ has no Moneybird runtime code.",
       "e2e": ["integrations/money/e2e/money.spec.ts"]
+    },
+    {
+      "id": "fediverse",
+      "index": 13,
+      "platforms": [],
+      "tiers": ["node", "e2e"],
+      "nodeTests": ["integrations/fediverse/plugin.test.mjs"],
+      "pluginRoutes": "read-write",
+      "serverEnv": {
+        "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
+        "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/fediverse/e2e/.peer/ca.pem"
+      },
+      "e2e": ["integrations/fediverse/e2e/fediverse.spec.ts"],
+      "note": "node: the handler's decisions against an in-memory host (projection, WebFinger, NodeInfo, publish, Follow/Accept, Undo, replies, Delete) and bundle reproducibility. e2e: the bundle on atomic-server built with plugin-routes at read-write, federating with the ActivityPub peer fixture in integrations/fediverse/e2e/peer.ts (HTTPS on loopback, self-signed): WebFinger and NodeInfo through /.well-known/, a host-verified signed Follow answered by a signed Accept from the host delivery queue, a publish over auth: atomic delivered as a signed Create, a reply stored as an Atomic Message, and Undo. The e2e needs atomic-server branch claude/plugin-fediverse-host (auth: atomic, request.caller.actor, WebFinger rels, and the debug-build ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS and ATOMIC_PLUGIN_E2E_PEER_CA seams that serverEnv turns on: loopback peers, with the peer's throwaway test CA as the only trusted root there); at a pin without it, the e2e tier fails."
     },
     {
       "id": "notion",

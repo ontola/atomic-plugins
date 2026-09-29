@@ -22,6 +22,30 @@ export const TIERS = ['contract', 'node', 'typecheck', 'unit', 'live', 'e2e'];
 export const PLUGIN_ROUTES_LEVELS = ['off', 'read-only', 'read-write'];
 
 /**
+ * What a lane's `serverEnv` (lanes.json) may not set on its atomic-server:
+ * the plugin-routes gates, which come from `pluginRoutes` only, and what
+ * serve.mjs derives from the lane's ports and store (serve.mjs `serverEnv`).
+ * Anything else named `ATOMIC_*` is allowed: the debug-build test seams
+ * (`ATOMIC_PLUGIN_E2E_*`, which atomic-server ignores in release builds)
+ * and host settings a lane's e2e needs, such as `ATOMIC_SOLID_OIDC_ISSUERS`.
+ * serve.test.mjs checks this list covers both.
+ */
+export const SERVER_ENV_RESERVED = [
+  'ATOMIC_PLUGIN_ROUTES',
+  'ATOMIC_ROUTES_ORIGIN',
+  'ATOMIC_PLUGIN_LISTENERS',
+  'ATOMIC_PLUGIN_SIDECARS',
+  'ATOMIC_DATA_DIR',
+  'ATOMIC_CONFIG_DIR',
+  'ATOMIC_CACHE_DIR',
+  'ATOMIC_PORT',
+  'ATOMIC_DOMAIN',
+  'ATOMIC_REPOPULATE_DEFAULTS',
+  'ATOMIC_INTEGRATION_PROXY_URL',
+  'ATOMIC_INTEGRATION_FRONTEND_ORIGIN',
+];
+
+/**
  * A tooling lane tests shared tooling rather than one plugin, so it owns a
  * directory here (this one, or one under it) instead of integrations/<id>/
  * (`dir` in lanes.json).
@@ -37,13 +61,6 @@ export const laneDir = lane => lane.dir ?? `integrations/${lane.id}`;
  * `plugin-routes` tooling lane: `off` and `read-only`) runs each such tier
  * once per level, on a fresh server.
  */
-/**
- * What a lane's `serverEnv` may set on its atomic-server: only switches a
- * debug build reads for tests (atomic-server ignores them in release
- * builds), never the gates or the store.
- */
-export const SERVER_ENV_PREFIXES = ['ATOMIC_PLUGIN_E2E_'];
-
 export const pluginRoutesLevels = lane =>
   lane.pluginRoutes === undefined ? [] : [lane.pluginRoutes].flat();
 
@@ -123,19 +140,22 @@ export function validateConfig(config) {
 
     if (lane.serverEnv !== undefined) {
       const entries =
-        lane.serverEnv && typeof lane.serverEnv === 'object'
+        lane.serverEnv &&
+        typeof lane.serverEnv === 'object' &&
+        !Array.isArray(lane.serverEnv)
           ? Object.entries(lane.serverEnv)
           : [];
       if (
         !entries.length ||
         entries.some(
           ([key, value]) =>
-            !SERVER_ENV_PREFIXES.some(prefix => key.startsWith(prefix)) ||
+            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
+            SERVER_ENV_RESERVED.includes(key) ||
             typeof value !== 'string',
         )
       )
         throw new Error(
-          `lane ${lane.id}: serverEnv names test seams only (${SERVER_ENV_PREFIXES.join(', ')}*), with string values`,
+          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
         );
       if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
         throw new Error(

@@ -217,12 +217,7 @@ test.describe('money integration', () => {
     await expect(dialog.getByText('"Café lunch"').first()).toBeVisible();
   });
 
-  // Temporarily skipped: at pin candidate14 (1432e244a) the host's "+ Add view"
-  // menu often never lists "New app" in CI (ontola/atomic-server#1846; #1847
-  // fixed it only partly). It failed on #180, #197, #201 and #209 and passed on
-  // #171 and #176. Remove this `fixme` once the pin includes the atomic-server
-  // follow-up that re-reads the drive's apps when the menu opens.
-  test.fixme('Money app: a view of the Bank transactions table: import, statements, row editing, in-app check', async ({
+  test('Money app: a view of the Bank transactions table: import, statements, row editing, in-app check', async ({
     page,
   }) => {
     test.setTimeout(300_000);

@@ -103,9 +103,11 @@ with the route field `fetches` below. No pin contains them yet:
 - **`ctx.blobs.fetch`** (new): a `GET` whose answer goes straight into the
   blob store, through the egress guard, for an operation listed in the
   route's own `fetches` field (a declared `GET` read operation; wildcard
-  host and trailing `{*rest}` path allowed). It needs `read-write`, and the
-  install review says the plugin may download files into the drive. The
-  plugin only gets `{ status, blob }`.
+  host and trailing `{*rest}` path allowed). It needs `read-write` (gate
+  surface ``fetch `<id>` ``), and the install review says "May download
+  files from <hosts> into your drive": for this plugin's wildcard host,
+  "May download files from any server into your drive". The plugin only
+  gets `{ status, blob }`.
 - The Fediverse worker's debug-build test seams
   (`ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS`, `ATOMIC_PLUGIN_E2E_PEER_CA`): key and
   discovery fetches, deliveries and (here) `blobs.fetch` may reach loopback,
@@ -120,8 +122,8 @@ in the shares route's `fetches`) and `notify` (`POST https://*/{*rest}`,
 `effect: write`, in its `enqueues`). The first version borrowed an
 `enqueues` write operation for the download; candidate16's host has the
 dedicated `fetches` field instead, and `integrations/tooling/manifest-http.mjs`
-mirrors it provisionally (surface ``fetch `<id>` ``, read-write) until the
-host's shared manifest fixtures for it are copied in.
+mirrors it, checked against the host's shared manifest fixtures copied from
+candidate16 (`integrations/tooling/fixtures/plugin-manifest/v3-fetches*.json`).
 
 ## Not implemented
 

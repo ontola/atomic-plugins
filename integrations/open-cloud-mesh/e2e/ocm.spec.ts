@@ -86,6 +86,11 @@ test.describe('Open Cloud Mesh receiver', () => {
       expect(pinned.status, pinned.text).toBe(200);
 
       const dialog = await openReview(page, releaseId);
+      // The route's `fetches` (wildcard host) in the review, as candidate16
+      // words it.
+      await expect(
+        dialog.getByText('May download files from any server into your drive'),
+      ).toBeVisible();
       await dialog.getByLabel('Config').fill(
         JSON.stringify({
           sharesFolder: folder,
