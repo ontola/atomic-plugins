@@ -58,11 +58,11 @@ export function send(
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string },
 ): Promise<Response>;
-export function fetchJson(url: string): Promise<any>;
+export function fetchJson(url: string): Promise<Record<string, unknown>>;
 export function discover(
   domain: string,
-  fetch?: (url: string) => Promise<any>,
-): Promise<any>;
+  fetch?: (url: string) => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>>;
 export function startPeer(options?: {
   port?: number;
   files?: Record<string, PeerFile>;
