@@ -5,7 +5,15 @@
   "capabilities": [
     {
       "name": "storage",
-      "reason": "Reads only operator-selected, anonymously readable Atomic profile and object resources."
+      "reason": "Reads the public profile and posts it publishes, and keeps followers and replies as resources under the folders you choose."
+    }
+  ],
+  "operations": [
+    {
+      "id": "deliver",
+      "method": "POST",
+      "url": "https://*/inbox",
+      "effect": "write"
     }
   ],
   "config": {
@@ -13,22 +21,42 @@
     "properties": {
       "origin": {
         "type": "string",
-        "description": "HTTPS Atomic drive-host origin; stable protocol identities and /resource?subject= links for canonical local resources."
+        "description": "The drive host this actor lives on, e.g. https://alice.example. Every protocol id is under it."
       },
       "username": {
         "type": "string",
-        "description": "Single lowercase actor account name."
+        "description": "The account name: @<username>@<host>. Lowercase letters, digits, - and _."
       },
       "profile": {
         "type": "string",
-        "description": "Public HTTPS or canonical atomic: profile subject; only name and description are projected."
+        "description": "A publicly readable resource; its name and description become the actor's name and summary."
       },
-      "publication": {
-        "type": "object",
-        "description": "Either objects: up to50 {id,subject,published} bindings; or collection:{parent,idProperty,publishedProperty} for scoped Atomic query. ISO UTC timestamps with .000Z."
+      "posts": {
+        "type": "string",
+        "description": "Folder of posts. Must be readable by the public agent. Posts published here are stored in it."
+      },
+      "followers": {
+        "type": "string",
+        "description": "Folder where followers are kept (one Bookmark per follower). Keep it private."
+      },
+      "replies": {
+        "type": "string",
+        "description": "Folder where replies to your posts are stored as Messages."
+      },
+      "publishers": {
+        "type": "array",
+        "description": "Agents allowed to post through /ap/outbox."
       }
     },
-    "required": ["origin", "username", "profile", "publication"]
+    "required": [
+      "origin",
+      "username",
+      "profile",
+      "posts",
+      "followers",
+      "replies",
+      "publishers"
+    ]
   },
   "http": {
     "mount": "drive-host",
@@ -62,29 +90,33 @@
         "auth": "none"
       },
       {
-        "id": "outbox-unavailable",
+        "id": "publish",
         "path": "/ap/outbox",
         "methods": ["POST"],
-        "principal": "anonymous",
-        "auth": "none",
+        "principal": "installation",
+        "auth": "atomic",
         "body": "json",
-        "maxBodyBytes": 16384
+        "maxBodyBytes": 16384,
+        "writes": ["posts"],
+        "enqueues": ["deliver"]
       },
       {
-        "id": "inbox-read-unavailable",
-        "path": "/ap/inbox",
+        "id": "followers",
+        "path": "/ap/followers",
         "methods": ["GET", "HEAD"],
-        "principal": "anonymous",
+        "principal": "installation",
         "auth": "none"
       },
       {
-        "id": "inbox-unavailable",
+        "id": "inbox",
         "path": "/ap/inbox",
         "methods": ["POST"],
-        "principal": "anonymous",
-        "auth": "none",
+        "principal": "installation",
+        "auth": "http-signature",
         "body": "json",
-        "maxBodyBytes": 16384
+        "maxBodyBytes": 262144,
+        "writes": ["followers", "replies"],
+        "enqueues": ["deliver"]
       },
       {
         "id": "webfinger",
@@ -114,7 +146,8 @@
         "name": "webfinger",
         "kind": "shared",
         "match": {
-          "resourcePrefix": "acct:"
+          "resourcePrefix": "acct:",
+          "rels": ["self"]
         },
         "route": "webfinger"
       },
@@ -124,6 +157,30 @@
         "route": "nodeinfo-links"
       }
     ],
-    "reason": "Public single-actor ActivityStreams projection and discovery; inbox and client writes return unavailable until host authentication and durable delivery exist. No route writes."
+    "writeTargets": [
+      {
+        "id": "posts",
+        "parent": "config:posts",
+        "classes": ["https://atomicdata.dev/classes/Message"]
+      },
+      {
+        "id": "followers",
+        "parent": "config:followers",
+        "classes": ["https://atomicdata.dev/class/Bookmark"]
+      },
+      {
+        "id": "replies",
+        "parent": "config:replies",
+        "classes": ["https://atomicdata.dev/classes/Message"]
+      }
+    ],
+    "keys": [
+      {
+        "name": "actor-key",
+        "alg": "rsa-sha256",
+        "reason": "The actor's key: published in its actor document, and signs every delivery to other fediverse servers."
+      }
+    ],
+    "reason": "One ActivityPub actor for this drive: other fediverse servers can find it (WebFinger), follow it, receive its public posts and send replies. Anyone on the internet can call these endpoints; this plugin decides what they may see and store."
   }
 }

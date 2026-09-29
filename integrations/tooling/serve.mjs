@@ -349,6 +349,7 @@ export async function bringUp({
   platforms,
   label = 'shared',
   pluginRoutes,
+  extraServerEnv = {},
 }) {
   const config = loadLanes();
   let image = serverImage();
@@ -413,7 +414,7 @@ export async function bringUp({
         name: container,
         ports,
         label,
-        env: serverEnv(ports, IMAGE_STORE),
+        env: { ...serverEnv(ports, IMAGE_STORE), ...extraServerEnv },
         command: pluginRoutesArgs(pluginRoutes, ports),
       }),
     );
@@ -422,7 +423,10 @@ export async function bringUp({
       'atomic-server',
       binary,
       pluginRoutesArgs(pluginRoutes, ports),
-      serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      {
+        ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+        ...extraServerEnv,
+      },
     );
   }
 
@@ -512,6 +516,7 @@ if (
     platforms: lane?.platforms,
     label: lane?.id ?? 'shared',
     pluginRoutes,
+    extraServerEnv: lane?.serverEnv,
   });
   console.log(`serving ${JSON.stringify(ports)} — ctrl-c to stop`);
   for (const signal of ['SIGINT', 'SIGTERM'])

@@ -37,6 +37,13 @@ export const laneDir = lane => lane.dir ?? `integrations/${lane.id}`;
  * `plugin-routes` tooling lane: `off` and `read-only`) runs each such tier
  * once per level, on a fresh server.
  */
+/**
+ * What a lane's `serverEnv` may set on its atomic-server: only switches a
+ * debug build reads for tests (atomic-server ignores them in release
+ * builds), never the gates or the store.
+ */
+export const SERVER_ENV_PREFIXES = ['ATOMIC_PLUGIN_E2E_'];
+
 export const pluginRoutesLevels = lane =>
   lane.pluginRoutes === undefined ? [] : [lane.pluginRoutes].flat();
 
@@ -111,6 +118,28 @@ export function validateConfig(config) {
       )
         throw new Error(
           `lane ${lane.id}: dir must be ${TOOLING_LANE_ROOT} or a directory under it; a plugin lane owns integrations/${lane.id}/`,
+        );
+    }
+
+    if (lane.serverEnv !== undefined) {
+      const entries =
+        lane.serverEnv && typeof lane.serverEnv === 'object'
+          ? Object.entries(lane.serverEnv)
+          : [];
+      if (
+        !entries.length ||
+        entries.some(
+          ([key, value]) =>
+            !SERVER_ENV_PREFIXES.some(prefix => key.startsWith(prefix)) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv names test seams only (${SERVER_ENV_PREFIXES.join(', ')}*), with string values`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
         );
     }
 

@@ -71,6 +71,17 @@
       "e2e": ["integrations/money/e2e/money.spec.ts"]
     },
     {
+      "id": "fediverse",
+      "index": 13,
+      "platforms": [],
+      "tiers": ["node", "e2e"],
+      "nodeTests": ["integrations/fediverse/plugin.test.mjs"],
+      "pluginRoutes": "read-write",
+      "serverEnv": { "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true" },
+      "e2e": ["integrations/fediverse/e2e/fediverse.spec.ts"],
+      "note": "node: the handler's decisions against an in-memory host (projection, WebFinger, NodeInfo, publish, Follow/Accept, Undo, replies, Delete) and bundle reproducibility. e2e: the bundle on atomic-server built with plugin-routes at read-write, federating with the ActivityPub peer fixture in integrations/fediverse/e2e/peer.ts (HTTPS on loopback, self-signed): WebFinger and NodeInfo through /.well-known/, a host-verified signed Follow answered by a signed Accept from the host delivery queue, a publish over auth: atomic delivered as a signed Create, a reply stored as an Atomic Message, and Undo. The e2e needs atomic-server branch claude/plugin-fediverse-host (auth: atomic, request.caller.actor, WebFinger rels, and the debug-build ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS seam that serverEnv turns on); at a pin without it, the e2e tier fails."
+    },
+    {
       "id": "notion",
       "index": 4,
       "platforms": ["notion"],

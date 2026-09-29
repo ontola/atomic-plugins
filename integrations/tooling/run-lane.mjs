@@ -229,6 +229,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        extraServerEnv: lane.serverEnv,
       });
       status = run(
         requireTool(`${bin}/vitest`, 'run pnpm install in browser/'),
@@ -255,6 +256,7 @@ for (const tier of order.filter(t => tiers.includes(t))) {
         platforms: lane.platforms,
         label: lane.id,
         pluginRoutes: level,
+        extraServerEnv: lane.serverEnv,
       });
       status = runE2e(level);
       await stopStack();
