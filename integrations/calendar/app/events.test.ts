@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agendaDays,
   busyDays,
+  latestEvent,
   nextEvent,
   packWeek,
   type CalEvent,
@@ -282,6 +283,30 @@ describe('nextEvent and busyDays', () => {
       date: '2026-10-13',
     });
     expect(nextEvent([early], '2026-10-05', AMS)).toBeUndefined();
+  });
+
+  it('finds the last event before a date, for a calendar of past events', () => {
+    const april = ev({
+      title: 'testing',
+      allDay: true,
+      start: '2026-04-02',
+      end: '2026-04-03',
+    });
+    const may = ev({
+      title: 'May',
+      start: '2026-05-12T10:00:00+02:00',
+      end: '2026-05-12T11:00:00+02:00',
+    });
+    const next = ev({
+      title: 'Next',
+      start: '2026-10-13T10:00:00+02:00',
+      end: '2026-10-13T11:00:00+02:00',
+    });
+    expect(latestEvent([april, next, may], '2026-09-28', AMS)).toMatchObject({
+      event: may,
+      date: '2026-05-12',
+    });
+    expect(latestEvent([next], '2026-09-28', AMS)).toBeUndefined();
   });
 
   it('marks the days with events', () => {

@@ -56,7 +56,11 @@ describe('Google Calendar package', () => {
       'primary',
     );
     expect(result.changes).toHaveLength(249);
-    expect(result.skipped).toEqual({ recurring: 1, cancelled: 1 });
+    expect(result.skipped).toEqual({
+      recurring: 1,
+      cancelled: 1,
+      unreadable: 0,
+    });
     // The ETag each later edit is conditioned on comes from this same read.
     expect(result.changes[0]).toMatchObject({ id: 'e1', etag: '"e1"' });
   });
@@ -121,17 +125,88 @@ describe('Google Calendar package', () => {
       end: '2026-09-23',
       allDay: true,
     });
-    expect(() =>
+    // end == start, as Google Calendar shows it: one day, exclusive end.
+    expect(
       project(
         timed('e3', {
+          start: { date: '2026-12-31' },
+          end: { date: '2026-12-31' },
+        }),
+      ),
+    ).toMatchObject({ start: '2026-12-31', end: '2027-01-01', allDay: true });
+    expect(() =>
+      project(
+        timed('e3b', {
           start: { date: '2026-09-22' },
-          end: { date: '2026-09-22' },
+          end: { date: '2026-09-21' },
         }),
       ),
     ).toThrow('invalid all-day interval');
     expect(() =>
       project(timed('e4', { end: { dateTime: '2026-09-22T09:00:00+02:00' } })),
     ).toThrow('invalid timed interval');
+  });
+
+  it('skips and lists an unreadable event instead of failing the whole scan', async () => {
+    // In user testing (2026-09-28) one odd all-day event failed every sync.
+    const bad = timed('bad', {
+      summary: 'testing',
+      start: { date: '2026-04-02' },
+      end: { date: '2026-04-01' },
+    });
+    const result = await preview(
+      {
+        read: async () => ({
+          status: 200,
+          body: JSON.stringify({ items: [timed('e1'), bad] }),
+        }),
+        cards: async () => [
+          {
+            subject: 'row-bad',
+            id: 'bad',
+            value: {
+              title: 'testing',
+              description: '',
+              location: '',
+              start: '2026-04-02',
+              end: '2026-04-03',
+              allDay: true,
+            },
+          },
+        ],
+        state: async () => ({
+          revision: 1,
+          records: { bad: { local: 'row-bad', baseline: {} } },
+          cursor: null,
+        }),
+      },
+      'primary',
+    );
+
+    expect(result.changes.map(c => c.id)).toEqual(['e1']);
+    expect(result.skipped).toEqual({
+      recurring: 0,
+      cancelled: 0,
+      unreadable: 1,
+    });
+    expect(result.unreadable).toEqual([
+      {
+        id: 'bad',
+        title: 'testing',
+        reason:
+          'Calendar event bad has an invalid all-day interval (start "2026-04-02", end "2026-04-01")',
+      },
+    ]);
+    // Its existing row is kept: a conflict, never an inferred deletion.
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        subject: 'row-bad',
+        id: 'bad',
+        fields: [
+          'Event cancelled, recurring or inaccessible; no deletion inferred',
+        ],
+      }),
+    ]);
   });
 
   it('skips recurring instances and cancelled events without throwing', () => {

@@ -1,0 +1,12 @@
+{
+  "name": "usertest-moderator",
+  "private": true,
+  "type": "module",
+  "description": "The voice moderator of user-testing sessions; see ../README.md",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.128.0"
+  }
+}

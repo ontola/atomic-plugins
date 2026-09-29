@@ -1,0 +1,44 @@
+# Caddy config for the user-testing droplet. Installed as
+# /etc/caddy/Caddyfile by deploy.sh; Caddy fetches the Let's Encrypt
+# certificates itself. BASE_DOMAIN and ACME_EMAIL come from
+# /etc/caddy/usertest.env, which the systemd drop-in caddy-usertest.conf
+# loads (see README.md).
+{
+	email {$ACME_EMAIL}
+}
+
+# atomic-server (server.sh), plain HTTP on loopback. It builds its links from
+# ATOMIC_DOMAIN and reads the scheme from X-Forwarded-Proto, which Caddy sets.
+# /usertest/ is the moderated-session page (page/) and /usertest/api/ its
+# moderator (moderator/). They share the data-browser's origin so the page can
+# set the test catalog in the browser's storage.
+plugins.{$BASE_DOMAIN} {
+	redir /usertest /usertest/?{query} 308
+	handle_path /usertest/api/* {
+		reverse_proxy 127.0.0.1:8082
+	}
+	handle_path /usertest/* {
+		root * /opt/usertest/page
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+# The test catalog and the drive app modules it points at (catalog.mjs).
+# The data-browser fetches the catalog cross-origin; app modules are
+# downloaded by the host and checked against their SRI hash.
+catalog.{$BASE_DOMAIN} {
+	root * /srv/catalog
+	header Access-Control-Allow-Origin *
+	header Cache-Control "no-cache"
+	file_server
+}
+
+# The log collector (collector/server.mjs): Sentry envelopes from
+# atomic-server and the data-browser, and /log posts from drive apps.
+logs.{$BASE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8081
+}

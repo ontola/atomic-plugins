@@ -26,10 +26,11 @@ import {
   type ViewState,
 } from './controller.js';
 import { detail, editor } from './drawer.js';
-import { busyDays, nextEvent, type CalEvent } from './events.js';
+import { busyDays, latestEvent, nextEvent, type CalEvent } from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
-import { notShown, sidebar } from './sidebar.js';
+import { reportUncaught } from './report.js';
+import { anySkipped, notShown, sidebar } from './sidebar.js';
 import type { ViewArgs } from './store.js';
 import type { Choice, Conflict, ImportSummary } from './sync.js';
 import {
@@ -87,7 +88,8 @@ const EMPTY_SUMMARY: ImportSummary = {
   added: 0,
   updated: 0,
   unchanged: 0,
-  skipped: { recurring: 0, cancelled: 0 },
+  skipped: { recurring: 0, cancelled: 0, unreadable: 0 },
+  unreadable: [],
   conflicts: [],
   localOnly: 0,
   invalid: [],
@@ -95,6 +97,7 @@ const EMPTY_SUMMARY: ImportSummary = {
 };
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
+  reportUncaught(root.ownerDocument.defaultView ?? window);
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
   installTheme(root, `${PLUGIN_CSS}\n${CALENDAR_CSS}`, store);
@@ -509,20 +512,24 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
     if (empty && snap.summary) {
       const next = nextEvent(events, addDays(rangeFrom, rangeDays), zone);
+      // Nothing later: point at the most recent earlier event instead, so an
+      // import of past events never ends on an empty week with no way on.
+      const latest = next ? undefined : latestEvent(events, rangeFrom, zone);
+      const target = next ?? latest;
       body = emptyState(doc, {
         muted: true,
         title:
           ui.view === 'week' && days < 7
             ? 'No events these days'
             : 'No events this week',
-        ...(next
+        ...(target
           ? {
-              text: `Your next event is ${next.event.title || '(untitled)'} on ${longDay(next.date)}.`,
+              text: `Your ${next ? 'next' : 'latest'} event is ${target.event.title || '(untitled)'} on ${longDay(target.date)}.`,
             }
           : !ui.visible
             ? { text: `${snap.meta?.summary ?? 'The calendar'} is hidden.` }
             : {}),
-        children: next
+        children: target
           ? [
               h(
                 doc,
@@ -530,9 +537,9 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
                 {
                   class: 'btn btn-primary',
                   'data-key': 'jump',
-                  onclick: () => c.goTo(next.date),
+                  onclick: () => c.goTo(target.date),
                 },
-                'Jump to next event',
+                next ? 'Jump to next event' : 'Jump to latest event',
               ),
             ]
           : [],
@@ -544,9 +551,8 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         c,
         events,
         ui.anchor,
-        snap.summary &&
-          (snap.summary.skipped.recurring || snap.summary.skipped.cancelled)
-          ? notShown(snap.summary.skipped)
+        snap.summary && anySkipped(snap.summary.skipped)
+          ? notShown(snap.summary.skipped, snap.summary.unreadable)
           : undefined,
       );
 

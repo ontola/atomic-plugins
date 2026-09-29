@@ -3,10 +3,12 @@
 //! 1. The data browser opens `/connect?platform&redirect_uri&code_challenge&code_challenge_method=S256`.
 //!    There is no proxy login and no `user_id`: this page is a consent
 //!    screen naming the platform and where the browser will return to.
-//! 2. `POST /connect/authorize` sends the browser to the provider's OAuth,
-//!    or, for an API-key platform, seals the key pasted on the consent page,
-//!    or, for a platform whose document requires no security, hands off a
-//!    connection that holds no credential.
+//! 2. `POST /connect/authorize` sends the browser to the provider's OAuth
+//!    (with a page that navigates on, not a redirect: see
+//!    `templates::render_oauth_continue`), or, for an API-key platform,
+//!    seals the key pasted on the consent page, or, for a platform whose
+//!    document requires no security, hands off a connection that holds no
+//!    credential.
 //! 3. The provider callback (`oauth.rs`) sends the browser back to
 //!    `redirect_uri?connection_code=<handoff>`; the handoff is single-use,
 //!    valid five minutes, and bound to the PKCE challenge.
@@ -36,6 +38,10 @@ use url::Url;
 
 const CONSENT_COOKIE: &str = "platform_consent";
 const PROVIDER_COOKIE: &str = "platform_oauth";
+/// Replaces `platform_consent` once it has been approved; holds its CSRF
+/// token, so approving the same consent page again can say so.
+const CONSENT_USED_COOKIE: &str = "platform_consent_used";
+const ALREADY_APPROVED: &str = "You already approved this connection. Continue in the page that opened after approving; if it did not open or you closed it, start again from your hub";
 const HANDOFF_AAD: &[u8] = b"platform-handoff-v2";
 pub(crate) const OAUTH_CONTEXT_AAD: &[u8] = b"platform-oauth-v2";
 
@@ -229,27 +235,28 @@ pub async fn page(
     response
         .headers_mut()
         .insert(header::REFERRER_POLICY, "same-origin".parse().unwrap());
-    // Chrome applies form-action to redirects too, including an
+    // Chrome applies form-action to the whole redirect chain of a form
+    // submission. An OAuth approval answers with a page (see
+    // `templates::render_oauth_continue`) instead of redirecting, so the
+    // provider's origins, however many it redirects through, and an
     // already-authorized provider returning straight through its callback to
-    // the hub. An apiKey or no-credential platform never redirects to a third
-    // party, so only the caller's own redirect_uri needs allowing.
+    // the hub, are all outside that chain: only 'self' is needed. An apiKey
+    // or no-credential approval redirects straight to the caller's
+    // redirect_uri and never to a third party, so that origin is allowed too.
     let base = response.headers()["content-security-policy"]
         .to_str()
         .unwrap()
         .to_owned();
+    let script = templates::consent_script_hash();
     let policy = match &scheme {
-        crate::providers::SecurityScheme::OAuth(provider) => format!(
-            "{base}; form-action 'self' {} {}",
-            Url::parse(&provider.authorization_url)
-                .unwrap()
-                .origin()
-                .ascii_serialization(),
+        crate::providers::SecurityScheme::OAuth(_) => {
+            format!("{base}; script-src {script}; form-action 'self'")
+        }
+        crate::providers::SecurityScheme::ApiKey(_)
+        | crate::providers::SecurityScheme::NoCredential => format!(
+            "{base}; script-src {script}; form-action 'self' {}",
             form_action_source(&target)
         ),
-        crate::providers::SecurityScheme::ApiKey(_)
-        | crate::providers::SecurityScheme::NoCredential => {
-            format!("{base}; form-action 'self' {}", form_action_source(&target))
-        }
     };
     response
         .headers_mut()
@@ -262,6 +269,14 @@ pub struct Approval {
     csrf: String,
     #[serde(default)]
     api_key: Option<String>,
+}
+
+fn valid_api_key(approval: &Approval) -> Option<&str> {
+    approval
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| (4..=512).contains(&key.len()))
 }
 
 /// `POST /connect/authorize`: the consent form's submission.
@@ -279,6 +294,16 @@ pub async fn authorize(
         return error("Invalid connection approval");
     }
     let Some(cookie) = jar.get(CONSENT_COOKIE) else {
+        // The first approval replaced the consent cookie with this marker, so
+        // a second click on the same consent page (the back button, a
+        // navigation that seemed stuck) is told what happened rather than
+        // that the request expired.
+        if jar
+            .get(CONSENT_USED_COOKIE)
+            .is_some_and(|used| used.value() == approval.csrf)
+        {
+            return error(ALREADY_APPROVED);
+        }
         return error("Connection request expired; start again from your hub");
     };
     let Ok(consent) = serde_json::from_str::<Consent>(cookie.value()) else {
@@ -293,26 +318,35 @@ pub async fn authorize(
     let Some(security) = &state.security else {
         return error("Connections are unavailable");
     };
-    if !matches!(
-        security
-            .consume_nonce(&format!("consent:{}", consent.csrf))
-            .await,
-        Ok(true)
-    ) {
-        return error("Connection approval expired or already used");
+    // Refuse an unusable API key before the consent is spent, so correcting
+    // it and approving again works.
+    if matches!(
+        state.catalog.security_scheme(&consent.request.platform),
+        Ok(crate::providers::SecurityScheme::ApiKey(_))
+    ) && valid_api_key(&approval).is_none()
+    {
+        return error("Enter a valid API key");
     }
-    let jar = jar.remove(Cookie::build(CONSENT_COOKIE).path("/").build());
-    // Only an OAuth platform redirects to a third party from here; an apiKey
-    // platform already has everything it needs (the submitted key) and
-    // completes the handoff directly (decision 11).
+    match security
+        .consume_nonce(&format!("consent:{}", consent.csrf))
+        .await
+    {
+        Ok(true) => {}
+        // Spent by an earlier submission that still carried this cookie
+        // (a double click before the first answer arrived).
+        Ok(false) => return error(ALREADY_APPROVED),
+        Err(_) => return error("Connections are unavailable"),
+    }
+    let jar = jar
+        .remove(Cookie::build(CONSENT_COOKIE).path("/").build())
+        .add(private_cookie(CONSENT_USED_COOKIE, consent.csrf.clone()));
+    // Only an OAuth platform goes on to a third party from here; an apiKey
+    // platform already has everything it needs (the submitted key), and a
+    // no-credential platform needs nothing, so both complete the handoff
+    // directly (decision 11).
     match state.catalog.security_scheme(&consent.request.platform) {
         Ok(crate::providers::SecurityScheme::ApiKey(_)) => {
-            let Some(key) = approval
-                .api_key
-                .as_deref()
-                .map(str::trim)
-                .filter(|key| (4..=512).contains(&key.len()))
-            else {
+            let Some(key) = valid_api_key(&approval) else {
                 return error("Enter a valid API key");
             };
             let credential = crate::proxy::StoredCredential::ApiKey {
@@ -350,9 +384,21 @@ pub async fn authorize(
                 Ok(url) => url,
                 Err(()) => return error("Could not start platform authorization"),
             };
+            // The continue page puts this address in a refresh and a link;
+            // only a web address may go there.
+            if !Url::parse(&url).is_ok_and(|url| matches!(url.scheme(), "https" | "http")) {
+                return error("Could not start platform authorization");
+            }
+            // A page, not a redirect: see `templates::render_oauth_continue`.
+            // `protected` sends it with `Referrer-Policy: no-referrer`, so the
+            // provider learns nothing about the proxy page it came from.
             protected((
                 jar.add(private_cookie(PROVIDER_COOKIE, context.binding)),
-                Redirect::to(&url),
+                Html(templates::render_oauth_continue(
+                    &state.operator,
+                    &consent.request.platform,
+                    &url,
+                )),
             ))
         }
         Err(_) => error("This platform is not available for connection"),
@@ -595,6 +641,134 @@ mod tests {
         (status, String::from_utf8(body.to_vec()).unwrap())
     }
 
+    async fn body_text(response: Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// The `name=value` pair of a cookie `response` sets, if any.
+    fn set_cookie(response: &Response, name: &str) -> Option<String> {
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
+            .find(|v| v.starts_with(&format!("{name}=")))
+    }
+
+    /// Where an OAuth approval's continue page sends the browser. It must be
+    /// a `200` page (not a redirect, which the consent page's `form-action`
+    /// would govern), whose refresh and button both lead to the provider,
+    /// and which sends no referrer and runs no script.
+    async fn continue_page(response: Response) -> Url {
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "configure fixture OAUTH_GITHUB_ISSUES_CLIENT_ID and CLIENT_SECRET"
+        );
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(policy.starts_with("default-src 'none';"), "{policy}");
+        assert!(!policy.contains("script-src"), "{policy}");
+        let html = body_text(response).await;
+        assert!(!html.contains("<script"), "{html}");
+        let attribute = |prefix: &str| {
+            html.split(prefix)
+                .nth(1)
+                .unwrap_or_else(|| panic!("no {prefix} in {html}"))
+                .split('"')
+                .next()
+                .unwrap()
+                .replace("&amp;", "&")
+        };
+        let refresh = attribute(r#"<meta http-equiv="refresh" content="0;url="#);
+        let button = attribute(r#"<a class="button" href=""#);
+        assert_eq!(refresh, button);
+        Url::parse(&refresh).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_second_approval_says_it_was_already_approved_not_expired() {
+        let s = state(None);
+        // What the browser holds after a first approval: no consent cookie,
+        // and the marker naming the consent it spent.
+        let jar = PrivateCookieJar::new(s.key.clone())
+            .add(private_cookie(CONSENT_USED_COOKIE, "used".into()));
+        for (jar, csrf, message) in [
+            (jar.clone(), "used", ALREADY_APPROVED),
+            // Another consent page's token is not "already approved".
+            (
+                jar,
+                "other",
+                "Connection request expired; start again from your hub",
+            ),
+            (
+                PrivateCookieJar::new(s.key.clone()),
+                "used",
+                "Connection request expired; start again from your hub",
+            ),
+        ] {
+            let response = authorize(
+                State(s.clone()),
+                jar,
+                HeaderMap::new(),
+                Form(Approval {
+                    csrf: csrf.into(),
+                    api_key: None,
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_text(response).await, message, "{csrf}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_consent_page_allows_only_its_own_script() {
+        let mut s = state(None);
+        s.catalog = api_key_catalog();
+        let (status, html) = get_body(s.clone(), &connect_uri(&api_key_request())).await;
+        assert_eq!(status, StatusCode::OK);
+        let response = crate::router(s)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(connect_uri(&api_key_request()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        // An apiKey approval still redirects straight to the destination.
+        assert!(
+            policy.ends_with(&format!(
+                "; script-src {}; form-action 'self' https://hub.example",
+                templates::consent_script_hash()
+            )),
+            "{policy}"
+        );
+        assert!(
+            !policy.contains("unsafe-inline'; script") && !policy.contains("script-src 'self'")
+        );
+        // The one inline script is exactly the one the hash allows.
+        let scripts: Vec<_> = html.split("<script>").skip(1).collect();
+        assert_eq!(scripts.len(), 1, "{html}");
+        assert_eq!(
+            scripts[0].split("</script>").next().unwrap(),
+            templates::CONSENT_SCRIPT
+        );
+    }
+
     #[tokio::test]
     async fn the_pages_name_the_configured_operator_and_the_proxy_host() {
         let mut s = state(None);
@@ -794,7 +968,8 @@ mod tests {
             CONSENT_COOKIE,
             serde_json::to_string(&consent).unwrap(),
         ));
-        // A blank key is refused (and burns this consent).
+        // A blank key is refused without spending the consent, so the same
+        // page can approve again with a corrected key.
         let blank = authorize(
             State(s.clone()),
             jar.clone(),
@@ -806,15 +981,7 @@ mod tests {
         )
         .await;
         assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
-        let consent = Consent {
-            request: api_key_request(),
-            csrf: random(),
-            expires: crate::now_secs() + 600,
-        };
-        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
-            CONSENT_COOKIE,
-            serde_json::to_string(&consent).unwrap(),
-        ));
+        assert_eq!(body_text(blank).await, "Enter a valid API key");
         let response = authorize(
             State(s.clone()),
             jar.clone(),
@@ -837,7 +1004,8 @@ mod tests {
             .unwrap()
             .1
             .into_owned();
-        // The consent cannot be approved twice.
+        // The consent cannot be approved twice, and a second approval says
+        // why.
         let again = authorize(
             State(s.clone()),
             jar,
@@ -849,6 +1017,7 @@ mod tests {
         )
         .await;
         assert_eq!(again.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_text(again).await, ALREADY_APPROVED);
 
         let owner = Agent::new(21);
         // Wrong verifier: refused, and the handoff survives.
@@ -1113,13 +1282,8 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::SEE_OTHER,
-            "configure fixture OAUTH_GITHUB_ISSUES_CLIENT_ID and CLIENT_SECRET"
-        );
-        let destination =
-            Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let binding_cookie = set_cookie(&response, "platform_oauth").unwrap();
+        let destination = continue_page(response).await;
         assert_eq!(destination.host_str(), Some("auth.example"));
         let provider_state = destination
             .query_pairs()
@@ -1127,13 +1291,6 @@ mod tests {
             .unwrap()
             .1
             .into_owned();
-        let binding_cookie = response
-            .headers()
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
-            .find(|v| v.starts_with("platform_oauth="))
-            .unwrap();
         // Another browser (no binding cookie) cannot complete the callback.
         let foreign = crate::router(s.clone())
             .oneshot(
@@ -1167,21 +1324,14 @@ mod tests {
             }),
         )
         .await;
-        let destination =
-            Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let binding_cookie_2 = set_cookie(&response, "platform_oauth").unwrap();
+        let destination = continue_page(response).await;
         let provider_state = destination
             .query_pairs()
             .find(|(k, _)| k == "state")
             .unwrap()
             .1
             .into_owned();
-        let binding_cookie_2 = response
-            .headers()
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
-            .find(|v| v.starts_with("platform_oauth="))
-            .unwrap();
         assert_ne!(binding_cookie, binding_cookie_2);
         let cancelled = crate::router(s.clone())
             .oneshot(
@@ -1312,8 +1462,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(approval.status(), StatusCode::SEE_OTHER);
-        let provider = Url::parse(approval.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let binding = set_cookie(&approval, "platform_oauth").unwrap();
+        let provider = continue_page(approval).await;
         assert_eq!(provider.host_str(), Some("auth.example"));
         let provider_state = provider
             .query_pairs()
@@ -1321,13 +1471,6 @@ mod tests {
             .unwrap()
             .1
             .into_owned();
-        let binding = approval
-            .headers()
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
-            .find(|v| v.starts_with("platform_oauth="))
-            .unwrap();
 
         // 2. The provider calls back; the browser returns home with a handoff.
         let callback = crate::router(s.clone())
@@ -1398,5 +1541,95 @@ mod tests {
             .unwrap();
         assert_eq!(call.status(), StatusCode::OK);
         server.abort();
+    }
+
+    /// Regression (production, 2026-09-29): a provider whose authorization
+    /// endpoint on its API host redirects to its sign-in UI on another host
+    /// was blocked, because the approval was a `303` and Chrome held the
+    /// whole redirect chain to the consent page's `form-action`, which only
+    /// listed the authorization endpoint's origin. The approval now answers
+    /// with a page, and the consent page allows form submissions to itself
+    /// only, so no provider origin needs listing.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL and fixture OAuth credentials; CI runs it"]
+    async fn postgres_oauth_approval_leaves_the_form_before_the_provider_redirects() {
+        let security = crate::test_support::security().await;
+        let mut s = state(Some(security));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "github-issues",
+            serde_json::json!({
+                "servers": [{"url": "https://api.provider.example/v1"}],
+                "components": {"securitySchemes": {"oauth": {"type": "oauth2", "flows": {
+                    "authorizationCode": {
+                        "authorizationUrl": "https://api.provider.example/v1/oauth/authorize",
+                        "tokenUrl": "https://api.provider.example/v1/oauth/token",
+                        "scopes": {"read": "Read records"}
+                    }
+                }}}},
+                "security": [{"oauth": ["read"]}],
+                "paths": {"/records": {"get": {}}}
+            }),
+            serde_json::json!({}),
+        );
+        let page = crate::router(s.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(connect_uri(&request()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let policy = page.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(policy.ends_with("; form-action 'self'"), "{policy}");
+        assert!(!policy.contains("provider.example"), "{policy}");
+        let consent_cookie = set_cookie(&page, "platform_consent").unwrap();
+        let html = body_text(page).await;
+        let csrf = html
+            .split("name=\"csrf\" value=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_owned();
+        let approve = |cookie: String| {
+            crate::router(s.clone()).oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/connect/authorize")
+                    .header(header::COOKIE, cookie)
+                    .header(header::ORIGIN, crate::test_support::PUBLIC_ORIGIN)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from(format!("csrf={csrf}")))
+                    .unwrap(),
+            )
+        };
+        let approval = approve(consent_cookie.clone()).await.unwrap();
+        let used = set_cookie(&approval, CONSENT_USED_COOKIE).unwrap();
+        // The consent cookie is cleared (an empty value, already expired).
+        assert_eq!(
+            set_cookie(&approval, CONSENT_COOKIE).as_deref(),
+            Some("platform_consent=")
+        );
+        let provider = continue_page(approval).await;
+        assert_eq!(provider.host_str(), Some("api.provider.example"));
+        assert_eq!(provider.path(), "/v1/oauth/authorize");
+        assert!(provider.query_pairs().any(|(k, v)| k == "redirect_uri"
+            && v == "https://proxy.example/oauth/github-issues/callback"));
+
+        // A double click: the second submission still carries the consent
+        // cookie, whose single use the first one spent.
+        let again = approve(consent_cookie).await.unwrap();
+        assert_eq!(again.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_text(again).await, ALREADY_APPROVED);
+        // Approving again later from the same page (e.g. after going back).
+        let later = approve(used).await.unwrap();
+        assert_eq!(later.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_text(later).await, ALREADY_APPROVED);
     }
 }

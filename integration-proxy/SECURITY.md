@@ -64,6 +64,20 @@ becomes the owner, so the page that started the flow must also hold the
 user's key. A wrong verifier does not burn the handoff; concurrent second
 redemptions fail. Responses are `no-store`.
 
+The consent page's CSP allows form submissions only to the proxy itself (and,
+for an API-key platform, to the return address's origin, where approval
+redirects), and one inline script identified by its SHA-256 hash; nothing
+else runs. An OAuth approval answers with a page that continues to the
+provider's authorization URL by `<meta>` refresh and button, sent with
+`Referrer-Policy: no-referrer`, `no-store`, and a CSP with no script and
+`frame-ancestors 'none'`; only an `http(s)` authorization URL is placed
+there. The provider's own redirects after that are outside `form-action`, so
+the proxy does not list, and cannot restrict, the origins a provider's
+authorization passes through; the callback's state, browser binding and PKCE
+checks are what bind the result. A spent consent leaves a
+`platform_consent_used` cookie (encrypted, 10 minutes, holding only the
+spent CSRF token) so that approving again says so; it grants nothing.
+
 For an API-key platform the key is typed into the proxy's own consent page
 and sealed like an OAuth token; it is never returned to the hub.
 
