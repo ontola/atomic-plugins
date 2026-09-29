@@ -104,6 +104,65 @@
     ]
   },
   {
+    "name": "webfinger claim with rels",
+    "file": "v3-webfinger-rels.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [],
+      "http": {
+        "mount": "drive-host",
+        "routes": [
+          {
+            "id": "webfinger",
+            "path": "/webfinger",
+            "methods": [
+              "GET",
+              "HEAD"
+            ],
+            "cors": "any-origin-no-credentials"
+          }
+        ],
+        "wellKnown": [
+          {
+            "name": "webfinger",
+            "kind": "shared",
+            "match": {
+              "resourcePrefix": "acct:",
+              "rels": [
+                "self",
+                "http://webfinger.net/rel/profile-page"
+              ]
+            },
+            "route": "webfinger"
+          }
+        ],
+        "reason": "Answers WebFinger for this drive's actor, next to other claims for the same accounts."
+      }
+    },
+    "gate": {
+      "needed": "read-only",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `GET,HEAD /webfinger`",
+          "needs": "read-only"
+        },
+        {
+          "surface": "well-known `webfinger`",
+          "needs": "read-only"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-only",
+      "public-origin",
+      "wasm-sandbox"
+    ]
+  },
+  {
     "name": "v3 activitypub",
     "file": "v3-activitypub.json",
     "gate": {
@@ -208,6 +267,46 @@
     ]
   },
   {
+    "name": "v3 optional dpop",
+    "file": "v3-optional-dpop.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [],
+      "http": {
+        "routes": [
+          {
+            "id": "pod",
+            "path": "/pod/{*rest}",
+            "methods": [
+              "GET",
+              "HEAD"
+            ],
+            "auth": "dpop",
+            "authOptional": true
+          }
+        ]
+      }
+    },
+    "gate": {
+      "needed": "read-write",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `GET,HEAD /pod/{*rest}`",
+          "needs": "read-write"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
+      "wasm-sandbox"
+    ]
+  },
+  {
     "name": "v3 listener",
     "file": "v3-listener.json",
     "gate": {
@@ -276,6 +375,73 @@
       "surfaces": []
     },
     "requires": [
+      "wasm-sandbox"
+    ]
+  },
+  {
+    "name": "v3 fetches",
+    "file": "v3-fetches.json",
+    "serialized": {
+      "schemaVersion": 3,
+      "secrets": [],
+      "operations": [
+        {
+          "id": "fetch-file",
+          "method": "GET",
+          "url": "https://*/{*rest}",
+          "effect": "read"
+        },
+        {
+          "id": "notify",
+          "method": "POST",
+          "url": "https://*/ocm/notifications",
+          "effect": "write"
+        }
+      ],
+      "http": {
+        "mount": "drive-prefix",
+        "routes": [
+          {
+            "id": "shares",
+            "path": "/ocm/shares",
+            "methods": [
+              "POST"
+            ],
+            "auth": "http-signature",
+            "body": "json",
+            "enqueues": [
+              "notify"
+            ],
+            "fetches": [
+              "fetch-file"
+            ]
+          }
+        ]
+      }
+    },
+    "gate": {
+      "needed": "read-write",
+      "listeners": [],
+      "sidecars": [],
+      "surfaces": [
+        {
+          "surface": "route `POST /ocm/shares`",
+          "needs": "read-write"
+        },
+        {
+          "surface": "delivery `notify`",
+          "needs": "read-write"
+        },
+        {
+          "surface": "fetch `fetch-file`",
+          "needs": "read-write"
+        }
+      ]
+    },
+    "requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
       "wasm-sandbox"
     ]
   },
@@ -372,7 +538,12 @@
   {
     "name": "authOptional without auth bearer",
     "file": "v3-auth-optional-without-bearer.json",
-    "error": "authOptional requires auth bearer"
+    "error": "authOptional requires auth bearer, dpop or atomic"
+  },
+  {
+    "name": "authOptional on http-signature",
+    "file": "v3-auth-optional-http-signature.json",
+    "error": "authOptional requires auth bearer, dpop or atomic"
   },
   {
     "name": "body too large",
@@ -402,7 +573,7 @@
   {
     "name": "wildcard operation that no route enqueues",
     "file": "v3-wildcard-not-enqueued.json",
-    "error": "wildcard-host operations must be listed in a route's enqueues"
+    "error": "wildcard-host operations must be listed in a route's enqueues or fetches"
   },
   {
     "name": "well-known name off the allowlist",
@@ -443,5 +614,25 @@
     "name": "bad sidecar name",
     "file": "v3-sidecar-bad-name.json",
     "error": "sidecar names"
+  },
+  {
+    "name": "duplicate webfinger rel",
+    "file": "v3-webfinger-rels-duplicate.json",
+    "error": "match.rels"
+  },
+  {
+    "name": "rels on an exclusive claim",
+    "file": "v3-rels-not-webfinger.json",
+    "error": "match.rels"
+  },
+  {
+    "name": "fetches naming a write operation",
+    "file": "v3-fetches-write-operation.json",
+    "error": "fetches must name declared GET operations with effect read"
+  },
+  {
+    "name": "fetches naming a POST operation",
+    "file": "v3-fetches-post.json",
+    "error": "fetches must name declared GET operations with effect read"
   }
 ]

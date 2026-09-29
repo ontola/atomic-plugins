@@ -2,22 +2,32 @@
   "//": "Copied byte for byte from ontola/atomic-server's testdata/plugin-manifest/, the shared fixtures its Rust (server/src/plugins/manifest_http.rs) and TypeScript (browser/lib/src/plugin-manifest-http.ts) implementations both run. integrations/tooling/manifest-http.test.mjs runs this repo's port against them. To refresh: copy the files again from the named commit and update `commit`.",
   "repository": "ontola/atomic-server",
   "path": "testdata/plugin-manifest",
-  "pullRequest": 1732,
-  "commit": "bcf8199927fc4b9d6640c228146fbb189609015a",
-  "files": {
-    "added by #1732": [
-      "http-index.json",
-      "http-refusals.json",
-      "v3-*.json"
+  "commit": "38306758f0f5af4eb2624ce18acccceb792b869f",
+  "commitNote": "pin candidate16 (.atomic-server-ref); every file below is byte-identical to that commit",
+  "files": [
+    "http-index.json",
+    "http-refusals.json",
+    "v3-*.json",
+    "v2-js-extension.json",
+    "v2-wasm-server-extension.json"
+  ],
+  "history": {
+    "added by #1732": ["http-index.json", "http-refusals.json", "v3-*.json"],
+    "WebFinger match.rels (atomic-server branch claude/plugin-fediverse-host)": [
+      "v3-webfinger-rels.json",
+      "v3-webfinger-rels-duplicate.json",
+      "v3-rels-not-webfinger.json"
     ],
-    "unchanged by #1732, copied from the pin 11264e83e18ca59e0e0bd696eef6c8ac7ced5f68": [
-      "v2-js-extension.json",
-      "v2-wasm-server-extension.json"
-    ],
-    "added or changed by ontola/atomic-server branch claude/plugin-remotestorage-host (b701b9852, authOptional)": [
-      "http-index.json",
+    "authOptional (claude/plugin-remotestorage-host, then widened to dpop and atomic)": [
       "v3-optional-bearer.json",
-      "v3-auth-optional-without-bearer.json"
+      "v3-auth-optional-without-bearer.json",
+      "v3-auth-optional-http-signature.json",
+      "v3-optional-dpop.json"
+    ],
+    "route field fetches (ctx.blobs.fetch, claude/plugin-ocm-host)": [
+      "v3-fetches.json",
+      "v3-fetches-post.json",
+      "v3-fetches-write-operation.json"
     ]
   }
 }

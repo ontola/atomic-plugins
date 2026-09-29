@@ -25,6 +25,7 @@ export const LEVELS = ['off', 'read-only', 'read-write'];
 export const MAX_ROUTES = 32;
 export const MAX_INLINE_BODY_BYTES = 1_048_576;
 export const MAX_TIMEOUT_MS = 30_000;
+export const MAX_WELL_KNOWN_RELS = 16;
 export const HOST_FEATURE_UNAVAILABLE = 'host-feature-unavailable';
 
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -186,7 +187,7 @@ const withReason = item => {
 /**
  * Validates an `http` block and returns its canonical form: defaults left
  * out, and `undefined` when it holds nothing. `context` is
- * `{ serverExtension, operations: [{ id, effect, url }] }`.
+ * `{ serverExtension, operations: [{ id, effect, url, method }] }`.
  */
 export function validateHttp(raw, context) {
   const entry = object(raw, 'http');
@@ -222,6 +223,7 @@ export function validateHttp(raw, context) {
       'body',
       'writes',
       'enqueues',
+      'fetches',
       'timeoutMs',
     ]);
 
@@ -265,6 +267,7 @@ export function validateHttp(raw, context) {
           : variant(route.body, ['json', 'text', 'blob']),
       writes: texts(route.writes, 'route writes'),
       enqueues: texts(route.enqueues, 'route enqueues'),
+      fetches: texts(route.fetches, 'route fetches'),
       timeoutMs: number('timeoutMs'),
     };
   });
@@ -276,8 +279,12 @@ export function validateHttp(raw, context) {
 
     if (claim.match !== undefined) {
       const m = object(claim.match, 'match');
-      known(m, ['resourcePrefix']);
-      match = { resourcePrefix: text(m.resourcePrefix, 'resourcePrefix') };
+      known(m, ['resourcePrefix', 'rels']);
+      const rels = texts(m.rels, 'match rels');
+      match = {
+        resourcePrefix: text(m.resourcePrefix, 'resourcePrefix'),
+        ...(rels.length > 0 ? { rels } : {}),
+      };
     }
 
     return {
@@ -385,8 +392,11 @@ export function validateHttp(raw, context) {
       );
     if (route.auth === 'bearer' && tokens.length === 0)
       throw new Error('auth bearer requires http.tokens');
-    if (route.authOptional && route.auth !== 'bearer')
-      throw new Error('authOptional requires auth bearer');
+    if (
+      route.authOptional &&
+      !['bearer', 'dpop', 'atomic'].includes(route.auth)
+    )
+      throw new Error('authOptional requires auth bearer, dpop or atomic');
     if (route.accept.some(a => !a.includes('/')))
       throw new Error('route accept entries must be media types');
 
@@ -412,6 +422,22 @@ export function validateHttp(raw, context) {
       )
     )
       throw new Error('enqueues must name declared write operations');
+    // `ctx.blobs.fetch` (atomic-server candidate16): declared GET read
+    // operations whose answer the host downloads into the blob store.
+    if (
+      route.fetches.some(
+        id =>
+          !context.operations.some(
+            o =>
+              o.id === id &&
+              String(o.method).toUpperCase() === 'GET' &&
+              o.effect === 'read',
+          ),
+      )
+    )
+      throw new Error(
+        'fetches must name declared GET operations with effect read',
+      );
 
     for (const other of patterns) {
       const shared = route.methods.some(m => other.methods.includes(m));
@@ -438,6 +464,21 @@ export function validateHttp(raw, context) {
       throw new Error(
         'shared well-known claims need match.resourcePrefix; exclusive ones take none',
       );
+    // `match.rels` (claude/plugin-fediverse-host): the link relations a
+    // webfinger claim answers for, so claims for the same accounts coexist.
+    const rels = claim.match?.rels ?? [];
+    if (
+      rels.length > MAX_WELL_KNOWN_RELS ||
+      new Set(rels).size !== rels.length ||
+      rels.some(
+        rel =>
+          rel.length === 0 || rel.length > 512 || !/^[\x21-\x7e]+$/.test(rel),
+      ) ||
+      (rels.length > 0 && claim.name !== 'webfinger')
+    )
+      throw new Error(
+        `match.rels must be at most ${MAX_WELL_KNOWN_RELS} unique link relations without spaces, on a webfinger claim`,
+      );
     if (!routes.some(r => r.id === claim.route))
       throw new Error('well-known claims must name a declared route');
   }
@@ -462,10 +503,13 @@ export function validateHttp(raw, context) {
   for (const operation of context.operations) {
     if (
       isWildcardHost(operation.url) &&
-      !routes.some(r => r.enqueues.includes(operation.id))
+      !routes.some(
+        r =>
+          r.enqueues.includes(operation.id) || r.fetches.includes(operation.id),
+      )
     )
       throw new Error(
-        "wildcard-host operations must be listed in a route's enqueues",
+        "wildcard-host operations must be listed in a route's enqueues or fetches",
       );
   }
 
@@ -488,6 +532,7 @@ export function validateHttp(raw, context) {
             ...(r.body !== undefined ? { body: r.body } : {}),
             ...(r.writes.length ? { writes: r.writes } : {}),
             ...(r.enqueues.length ? { enqueues: r.enqueues } : {}),
+            ...(r.fetches.length ? { fetches: r.fetches } : {}),
             ...(r.timeoutMs !== undefined ? { timeoutMs: r.timeoutMs } : {}),
           })),
         }
@@ -516,6 +561,7 @@ const isReadOnlyRoute = route =>
   (route.auth ?? 'none') === 'none' &&
   !route.writes?.length &&
   !route.enqueues?.length &&
+  !route.fetches?.length &&
   route.body === undefined;
 
 /**
@@ -543,6 +589,10 @@ export function httpGate(http) {
     ...new Set((http?.routes ?? []).flatMap(r => r.enqueues ?? [])),
   ];
   for (const id of deliveries) add(`delivery \`${id}\``, 'read-write');
+  const fetches = [
+    ...new Set((http?.routes ?? []).flatMap(r => r.fetches ?? [])),
+  ];
+  for (const id of fetches) add(`fetch \`${id}\``, 'read-write');
   for (const listener of http?.listeners ?? [])
     add(`listener \`${listener.name}\``, 'read-write');
   for (const sidecar of http?.sidecars ?? [])
@@ -613,6 +663,7 @@ export function checkManifest(raw) {
       id: o?.id,
       effect: o?.effect,
       url: o?.url,
+      method: o?.method,
     })),
   });
 
