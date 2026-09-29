@@ -83,9 +83,23 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   link (`atomic://…`); it may not carry `connection_code` or `error`
   parameters, credentials or a fragment.
 - `POST /connect/authorize` — the consent form (cookie-bound CSRF token,
-  single use). For an OAuth platform it redirects to the provider; for an
-  API-key platform (`type: apiKey` in the composed document) the consent page
-  asks for the key, and this seals it.
+  single use). For an OAuth platform it answers `200` with a page that
+  continues to the provider (a `<meta>` refresh plus a button, sent with
+  `Referrer-Policy: no-referrer`) rather than redirecting: the consent page's
+  CSP `form-action` governs a form submission's whole redirect chain, and a
+  provider whose authorization endpoint first redirects to another origin of
+  its own (Notion's API host to its app host, for one) would be blocked. The
+  consent page therefore allows form submissions to the proxy only. 0.2.2
+  and later; 0.2.1 redirected (`303`). For an API-key platform (`type:
+  apiKey` in the composed document) the consent page asks for the key, and
+  this seals it and redirects (`303`) to `redirect_uri`. For a platform whose
+  composed document declares top-level `security: []` and no security scheme
+  (0.2.3 and later), the consent page asks for nothing, and this hands off a
+  connection that holds no credential and redirects (`303`) to
+  `redirect_uri`; requests are forwarded with none. Approving the same
+  consent page twice answers `400` "You already approved this connection …"
+  rather than "expired"; the page's one inline script (allowed by its hash)
+  disables the button after the first click.
 - `GET /oauth/{platform}/callback` — the provider's callback. Only the
   browser that approved consent can complete it. It redirects to
   `redirect_uri?connection_code=<handoff>` (or `?error=access_denied`). The
@@ -372,7 +386,7 @@ git tag integration-proxy-v0.1.1 && git push origin integration-proxy-v0.1.1
 ```
 
 Only `src/`, `static/index.html`, `static/logo.png`, `Cargo.toml`,
-`Cargo.lock`, `README.md`, `SECURITY.md` and `LICENSE` are packaged
+`Cargo.lock`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `LICENSE` are packaged
 (`cargo package --list` shows the exact list). `tests/` fixtures are not, so
 `cargo test` only works from a checkout of this repository.
 
@@ -382,34 +396,22 @@ This section is about one deployment, not a requirement: the crate runs on
 any host that provides the environment variables, one HTTP port and
 PostgreSQL ([SELF_HOSTING.md](SELF_HOSTING.md)). localthought.io runs on
 Heroku from the separate repository
-`localthought/integration-proxy`, which today still carries its own full copy
-of this source. The target state is that it contains only the files in
-[`examples/heroku-wrapper/`](examples/heroku-wrapper/) and picks up proxy
-changes by bumping the `atomic-integration-proxy` version in its `Cargo.lock`;
-that directory's README has the switch-over steps.
-
-Until that switch-over, every change merged here must be duplicated there by
-hand, or production will not get it. Copy the whole tree rather than
-cherry-picking patches — this package's `src/main.rs` became `src/lib.rs`
-plus a thin `src/main.rs`, so patches against one layout do not apply to the
-other:
+`localthought/integration-proxy`, which since its PRs #77 (wrapper) and #78
+(0.2.1 from crates.io) holds only the [`examples/heroku-wrapper/`](examples/heroku-wrapper/) files
+and depends on `atomic-integration-proxy` from crates.io. A change merged here
+reaches production only after it is published (see "Publishing the crate")
+and that repository's `Cargo.lock` is bumped:
 
 ```sh
-# from the root of an ontola/atomic-plugins checkout on the merged main,
-# with localthought/integration-proxy checked out at ../localthought-integration-proxy
-rsync -a --delete \
-  --exclude .git --exclude .github --exclude target --exclude .env \
-  --exclude examples \
-  integration-proxy/ ../localthought-integration-proxy/
-cd ../localthought-integration-proxy
-cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test
-git add -A && git commit -m "Sync from ontola/atomic-plugins@<sha>"
+# in a localthought/integration-proxy checkout, once <version> is on crates.io
+# (raise the requirement in Cargo.toml too when the deployment needs it)
+cargo update -p atomic-integration-proxy
+cargo build --release --locked
+git commit -am "Deploy atomic-integration-proxy <version> from crates.io"
 ```
 
-The synced `Procfile` runs `target/release/integration-proxy` (the binary was
-`auth-proxy` before this package became a crate), and log lines are tagged
-`atomic_integration_proxy` instead of `auth_proxy`, which matters only if
-`RUST_LOG` names the old target.
+Merging that to its `main` deploys. Do not copy this source tree there: the
+wrapper is the whole repository now.
 
 From 0.2.1 the landing and consent pages no longer say "LocalThought"
 unless told to: set `OPERATOR_NAME=LocalThought` and
