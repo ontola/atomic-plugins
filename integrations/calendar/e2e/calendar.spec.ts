@@ -4,7 +4,10 @@
  * frame on the pinned atomic-server: connect Google Calendar through the
  * host's consent bar and the mock integration proxy, choose one calendar,
  * import it, refresh after a Google-side edit, then preview and send a local
- * edit — including an ETag conflict and a write whose response is lost.
+ * edit — including an ETag conflict and a write whose response is lost. The
+ * Month hand-off opens the app's table in the host, whose own Calendar view
+ * reads the rows by the host's calendar field names (`calendarFields` in
+ * atomic-server `browser/lib/src/calendar-date.ts`).
  *
  * The frame calls the proxy itself (#54 phase 2): a capability from the page,
  * each request signed with the frame's own key, `If-Match` passed through.
@@ -29,8 +32,13 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const NAME = 'https://atomicdata.dev/properties/name';
+/** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
+const DAY = 'atomic-calendar-day';
+const ALL_DAY = 'atomic-calendar-all-day';
+const END_DAY = 'atomic-calendar-end-day';
+const NOTES = 'atomic-calendar-notes';
 
 test.describe('calendar drive app', () => {
   test.beforeEach(before);
@@ -74,8 +82,9 @@ test.describe('calendar drive app', () => {
     ).toBeVisible();
     await choose.getByRole('button', { name: 'Import this calendar' }).click();
 
-    // Bounded, paged import: the all-day and the timed event; the weekly
-    // series (master and instance) and the cancelled event are not imported.
+    // Bounded, paged import: the two all-day events and the timed one; the
+    // weekly series (master and instance) and the cancelled event are not
+    // imported.
     await expect(pill).toContainText('Synced', { timeout: 30_000 });
     await app.getByRole('button', { name: 'Agenda', exact: true }).click();
     await expect(app.locator('.agenda')).toContainText(
@@ -89,21 +98,34 @@ test.describe('calendar drive app', () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: 'Calendar all-day fixture',
-          'all-day': true,
+          [ALL_DAY]: true,
         }),
         expect.objectContaining({
           name: 'Calendar timed fixture',
           location: 'Room 4',
-          'all-day': false,
+          [NOTES]: 'Synthetic agenda',
+          [ALL_DAY]: false,
+        }),
+        expect.objectContaining({
+          name: 'Calendar three-day fixture',
+          [ALL_DAY]: true,
         }),
       ]),
     );
-    expect(imported).toHaveLength(2);
+    expect(imported).toHaveLength(3);
     const timed = imported.find(r => r.name === 'Calendar timed fixture')!;
     expect(timed.start).toMatch(/^\d{4}-\d{2}-\d{2}T09:30:00\+02:00$/);
+    expect(timed[DAY]).toBe((timed.start as string).slice(0, 10));
+    // Within one day: no End day.
+    expect(timed).not.toHaveProperty(END_DAY);
     const allDay = imported.find(r => r.name === 'Calendar all-day fixture')!;
     expect(allDay.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(allDay.day).toBe(allDay.start);
+    expect(allDay[DAY]).toBe(allDay.start);
+    // The host reads End day as exclusive, as Google's all-day end is.
+    expect(allDay[END_DAY]).toBe(allDay.end);
+    const trip = imported.find(r => r.name === 'Calendar three-day fixture')!;
+    expect(trip[DAY]).toMatch(/^\d{4}-\d{2}-10$/);
+    expect(trip[END_DAY]).toMatch(/^\d{4}-\d{2}-13$/);
 
     // Sync after an edit made in Google.
     await driver('editRemote', ['timed', { location: 'Room 2' }]);
@@ -115,7 +137,7 @@ test.describe('calendar drive app', () => {
     // commit comes back, so poll.
     await expect
       .poll(async () => (await rowsOf(page)).map(r => r.location).sort())
-      .toEqual(['', 'Room 2']);
+      .toEqual(['', '', 'Room 2']);
 
     // A local edit is previewed, not sent, until approved.
     await setRowTitle(page, 'Calendar timed fixture', 'Renamed here');
@@ -329,10 +351,10 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
           .map(c => c.delegations.length),
       )
       .toEqual([0]);
-    expect(await rowsOf(page)).toHaveLength(2);
+    expect(await rowsOf(page)).toHaveLength(3);
   });
 
-  test('Month opens the app’s table in the host (pin 007869464)', async ({
+  test('Month opens the app’s table in the host, whose Calendar view spans all-day ranges (#172)', async ({
     page,
   }) => {
     test.skip(
@@ -352,8 +374,48 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       timeout: 30_000,
     });
     const table = await tableOf(page);
+    // The mock's fixture is shared by the lane's tests, so the timed event
+    // may carry an earlier test's title; it is the one with a room.
+    const rows = await rowsOf(page);
+    const timed = rows.find(r => /^Room \d+$/.test(String(r.location)))!;
+    const trip = rows.find(r => r.name === 'Calendar three-day fixture')!;
+    const allDay = rows.find(r => r.name === 'Calendar all-day fixture')!;
     await app.getByRole('button', { name: 'Month ↗' }).click();
     await expect.poll(() => decodeURIComponent(page.url())).toContain(table);
+
+    // The host table's own Calendar view (atomic-server CalendarView.tsx):
+    // it places rows by the first date column, `atomic-calendar-day`, and
+    // only then spans an all-day row from Day up to End day, exclusive.
+    await page.getByRole('button', { name: 'Add view' }).click();
+    await page.getByTestId('menu-item-calendar').click();
+    await expect(page.getByTestId('calendar-view')).toBeVisible({
+      timeout: 30_000,
+    });
+    const cell = (date: unknown) =>
+      page.locator(`[data-testid="calendar-day"][data-date="${date}"]`);
+    const chip = (date: unknown, name: unknown) =>
+      cell(date)
+        .getByTestId('calendar-event')
+        .filter({ hasText: String(name) });
+    // The fixture puts the three-day event in the fixture day's month, which
+    // is the month the view opens on (both are today, give or take the
+    // browser's zone at midnight).
+    const month = String(trip[DAY]).slice(0, 8);
+    await expect(cell(`${month}10`)).toBeVisible();
+
+    for (const day of ['10', '11', '12'])
+      await expect(
+        chip(`${month}${day}`, trip.name),
+        `three-day event on the ${day}th`,
+      ).toBeVisible({ timeout: 15_000 });
+    // Exclusive end: not on the 13th, and not the day before.
+    await expect(chip(`${month}13`, trip.name)).toHaveCount(0);
+    await expect(chip(`${month}09`, trip.name)).toHaveCount(0);
+    // A one-day all-day event covers its day only.
+    await expect(chip(allDay[DAY], allDay.name)).toBeVisible();
+    await expect(chip(allDay[END_DAY], allDay.name)).toHaveCount(0);
+    // A timed event shows on its day.
+    await expect(chip(timed[DAY], timed.name)).toBeVisible();
   });
 });
 

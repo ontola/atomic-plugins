@@ -250,6 +250,7 @@ suite('controller: views over the rows', () => {
     const { events } = controller.snapshot();
     expect(events.map(e => e.title).sort()).toEqual([
       'Calendar all-day fixture',
+      'Calendar three-day fixture',
       'Calendar timed fixture',
     ]);
     expect(events.every(e => !e.pending && !e.conflict && !e.readOnly)).toBe(
@@ -398,7 +399,7 @@ suite('controller: views over the rows', () => {
     const rowsBefore = [...store.resources.values()].filter(
       p => p[PARENT] === TABLE,
     ).length;
-    expect(rowsBefore).toBe(2);
+    expect(rowsBefore).toBe(3);
 
     const timed = conflicts.find(c => c.id === 'timed')!;
     await controller.keepAsLocal(timed);
@@ -407,7 +408,7 @@ suite('controller: views over the rows', () => {
     await controller.removeLocal(conflicts.find(c => c.id === 'all-day')!);
     expect(
       [...store.resources.values()].filter(p => p[PARENT] === TABLE),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
 
     await controller.refresh();
     const state = controller.state();
@@ -425,8 +426,8 @@ suite('controller: errors keep what is on screen', () => {
     const state = controller.state();
     if (state.kind !== 'error') throw new Error(state.kind);
     expect(state.problem).toMatchObject({ kind: 'reauth', status: 401 });
-    expect(state.summary?.total).toBe(2);
-    expect(controller.snapshot().events).toHaveLength(2);
+    expect(state.summary?.total).toBe(3);
+    expect(controller.snapshot().events).toHaveLength(3);
     expect(pill(controller.snapshot()).text).toBe('Reconnect needed');
   });
 
@@ -509,13 +510,13 @@ suite('controller: host operations of pin 007869464', () => {
     const { controller, store } = await imported();
     const rows = () =>
       [...store.resources.values()].filter(p => p[PARENT] === TABLE).length;
-    expect(rows()).toBe(2);
+    expect(rows()).toBe(3);
     await controller.disconnect();
     expect(controller.state().kind).toBe('disconnected');
     expect(
       await store.proxy!.connections({ platform: 'google-calendar' }),
     ).toEqual([]);
-    expect(rows()).toBe(2);
+    expect(rows()).toBe(3);
   });
 
   it('on an older host, says the operations are missing and does nothing', async () => {

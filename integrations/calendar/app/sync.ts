@@ -7,13 +7,20 @@
  * reconciliation, minimal ETag-conditioned patches). This file only maps its
  * `Card`/`ConnectionState` onto rows:
  *
- * - The five mapped fields are ordinary columns: Name (title), Description,
- *   Location, Start, End, All day. Start and End are the exact strings
- *   Google sent (`YYYY-MM-DD`, or a date-time with its UTC offset), never
- *   parsed into numbers or `Date`s for storage.
- * - Day (a `date` column) is the civil date of Start, so the host table's
- *   own Calendar view can place the row. It is derived on import and never
- *   read back: move an event by editing Start and End.
+ * - The six mapped fields are ordinary columns: Name (title), Location,
+ *   Start, End, All day and Notes (Google's description). Start and End are
+ *   the exact strings Google sent (`YYYY-MM-DD`, or a date-time with its UTC
+ *   offset), never parsed into numbers or `Date`s for storage.
+ * - All day, Day, End day and Notes use the host's shared calendar field
+ *   names (`calendarFields` in atomic-server `browser/lib/src/calendar-date.ts`:
+ *   `atomic-calendar-all-day`, `-day`, `-end-day`, `-notes`), so the host
+ *   table's own Calendar view (the app's Month) places the row, and spans
+ *   an all-day range over its days. Day is the civil date of Start. End day
+ *   follows the host's reading of it (`isAllDayOnDate`: start <= day < end):
+ *   for an all-day event it is Google's exclusive end date, the day after the
+ *   last day; for a timed event that ends on a later date it is that date,
+ *   and a timed event within one day has none. Day and End day are derived
+ *   on import and never read back: move an event by editing Start and End.
  * - The binding lives on the row, not in a separate store: the Google event
  *   id, the ETag last read, and the baseline — the projection both sides
  *   last agreed on, as JSON text. The baseline is what lets a refresh tell a
@@ -66,6 +73,16 @@ interface Spec {
   column: boolean;
 }
 
+/**
+ * The host's shared calendar field names (`@tomic/lib` `calendarFields`).
+ * Its Calendar view matches them by shortname, so only these names get
+ * all-day and multi-day handling there.
+ */
+export const DAY = 'atomic-calendar-day';
+export const ALL_DAY = 'atomic-calendar-all-day';
+export const END_DAY = 'atomic-calendar-end-day';
+export const NOTES = 'atomic-calendar-notes';
+
 /** Shortname -> Property. Created under the app's ontology on first import. */
 export const SPECS: Record<string, Spec> = {
   location: {
@@ -88,17 +105,30 @@ export const SPECS: Record<string, Spec> = {
       'Exclusive: the day after the last day for an all-day event, otherwise a date-time with its UTC offset.',
     column: true,
   },
-  'all-day': {
+  [ALL_DAY]: {
     name: 'All day',
     datatype: `${DT}/boolean`,
     description: 'Whether Start and End are dates rather than date-times.',
     column: true,
   },
-  day: {
+  [DAY]: {
     name: 'Day',
     datatype: `${DT}/date`,
     description:
       'The date of Start, for calendar views. Derived on import; edit Start to move the event.',
+    column: true,
+  },
+  [END_DAY]: {
+    name: 'End day',
+    datatype: `${DT}/date`,
+    description:
+      'For calendar views: the day after the last day of an all-day event (exclusive, as Google has it), or the end date of a timed event that ends on a later day. Derived on import; edit End to change it.',
+    column: true,
+  },
+  [NOTES]: {
+    name: 'Notes',
+    datatype: `${DT}/string`,
+    description: 'The event’s description, as Google Calendar has it.',
     column: true,
   },
   'google-event-id': {
@@ -228,7 +258,6 @@ export async function properties(
   const recommends = asList(klass.get(RECOMMENDS));
   const wanted = [
     NAME,
-    DESCRIPTION,
     ...Object.keys(SPECS)
       .filter(s => SPECS[s].column)
       .map(s => props[s]),
@@ -340,11 +369,11 @@ function cardOf(row: PluginResource, props: Props): Card {
     ...(typeof id === 'string' && id ? { id } : {}),
     value: {
       title: text(row.get(NAME)),
-      description: text(row.get(DESCRIPTION)),
+      description: text(row.get(props[NOTES])),
       location: text(row.get(props.location)),
       start: text(row.get(props.start)),
       end: text(row.get(props.end)),
-      allDay: row.get(props['all-day']) === true,
+      allDay: row.get(props[ALL_DAY]) === true,
     },
   };
 }
@@ -533,16 +562,38 @@ function fieldsOf(before: Projection, after: Projection) {
     }));
 }
 
+/**
+ * The host Calendar view's End day for `value` (see the file comment), or
+ * undefined when it has none. Exact strings: the date part of what Google
+ * sent, never re-derived through a `Date`.
+ */
+export function endDayOf(value: Projection): string | undefined {
+  const day = value.start.slice(0, 10);
+  const end = value.end.slice(0, 10);
+  if (value.allDay) return end;
+
+  return end > day ? end : undefined;
+}
+
+/** Row values for `value`; `undefined` means the property is removed. */
 function valuesOf(props: Props, value: Projection): Record<string, JSONValue> {
   return {
     [NAME]: value.title,
-    [DESCRIPTION]: value.description,
+    [props[NOTES]]: value.description,
     [props.location]: value.location,
     [props.start]: value.start,
     [props.end]: value.end,
-    [props['all-day']]: value.allDay,
-    [props.day]: value.start.slice(0, 10),
+    [props[ALL_DAY]]: value.allDay,
+    [props[DAY]]: value.start.slice(0, 10),
+    [props[END_DAY]]: endDayOf(value),
   };
+}
+
+/** `valuesOf` without the removed properties, for a new row. */
+function defined(values: Record<string, JSONValue>): Record<string, JSONValue> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, v]) => v !== undefined),
+  );
 }
 
 function writeRow(
@@ -554,7 +605,8 @@ function writeRow(
 
   for (const [property, v] of Object.entries(valuesOf(props, value)))
     if (row.get(property) !== v) {
-      row.set(property, v);
+      if (v === undefined) row.remove(property);
+      else row.set(property, v);
       changed = true;
     }
 
@@ -648,7 +700,7 @@ export async function refresh(
         parent: where.table,
         isA: [where.rowClass],
         propVals: {
-          ...valuesOf(props!, change.desired),
+          ...defined(valuesOf(props!, change.desired)),
           [props!['google-event-id']]: change.id,
           [props!['google-etag']]: change.etag ?? '',
           [props!['sync-baseline']]: baseline,
@@ -870,7 +922,8 @@ export async function saveMeta(
 }
 
 /**
- * A local edit from the event drawer: the five mapped fields (and Day),
+ * A local edit from the event drawer: the six mapped fields (and Day and
+ * End day),
  * stored as exact strings. Nothing is sent; the next preview lists it for
  * review because the row now differs from its baseline.
  */
