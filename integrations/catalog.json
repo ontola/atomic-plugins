@@ -458,5 +458,28 @@
       "public-origin",
       "wasm-sandbox"
     ]
+  },
+  {
+    "@id": "https://atomicdata.dev/integrations/catalog/willow",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "willow",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Willow export",
+    "https://atomicdata.dev/properties/emoji": "🌳",
+    "https://atomicdata.dev/properties/description": "Serve selected public resources as a Willow'25 drop whose entries the server signs with this installation's own subspace key, in a communal namespace you choose.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "One public URL answers the drop: each selected resource's chosen properties as a JSON-AD payload at path prefix plus subject, timestamped by its last commit (microseconds of TAI since J2000), with a communal Meadowcap capability and the server's Ed25519 signature. Unchanged resources give the same bytes.",
+    "https://atomicdata.dev/integrations/properties/events": "Anyone who fetches the URL gets the drop as it is then. No live Willow sync (WGPS), no network access and no secrets.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified: up to 32 resources and 32 properties, 65,536-byte payloads. Needs a server built with plugin routes at read-write, and host support that is not in a released server yet. Only public resources and communal namespaces; no owned namespaces, delegations or live sync.",
+    "https://atomicdata.dev/integrations/properties/keywords": "willow willow25 meadowcap drop sideload export p2p local-first",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
+    "https://atomicdata.dev/integrations/properties/requires": [
+      "persistent-host",
+      "plugin-routes:read-write",
+      "public-origin",
+      "wasm-sandbox"
+    ]
   }
 ]
