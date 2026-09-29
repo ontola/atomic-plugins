@@ -2,14 +2,14 @@
   "schemaVersion": 3,
   "name": "remotestorage",
   "namespace": "atomic-plugins",
-  "version": "0.2.0",
-  "description": "Import remoteStorage text exports as Atomic documents and serve explicitly public categories.",
+  "version": "0.3.0",
+  "description": "A remoteStorage server for this drive: apps connect with a user address, you approve per category, and documents are stored as Atomic Files.",
   "operations": [],
   "secrets": [],
   "capabilities": [
     {
       "name": "storage",
-      "reason": "Read scoped Atomic resources; propose reviewed document import intents."
+      "reason": "Read and write this plugin’s own Files under the configured folder; propose reviewed document import intents."
     }
   ],
   "config": {
@@ -17,11 +17,11 @@
     "properties": {
       "table": {
         "type": "string",
-        "description": "Parent resource for reviewed text imports"
+        "description": "Folder resource the documents are stored in (as Files) and imports go to"
       },
-      "publicCategories": {
-        "type": "object",
-        "description": "Explicit public category to parent resource mapping; private parents are refused by host read permissions"
+      "user": {
+        "type": "string",
+        "description": "The user name in the remoteStorage address (name@host); any name when unset"
       }
     },
     "required": ["table"]
@@ -35,16 +35,73 @@
     }
   ],
   "http": {
-    "mount": "drive-prefix",
-    "reason": "Read explicitly exported public text documents. No public write route or private-data authority.",
+    "mount": "installation-origin",
+    "reason": "A remoteStorage server: apps you approve per category read and write documents in the configured folder, and anyone may read documents under /public/.",
     "routes": [
       {
-        "id": "public-storage",
-        "path": "/storage/public/{*rest}",
+        "id": "webfinger",
+        "path": "/webfinger",
         "methods": ["GET", "HEAD"],
         "principal": "anonymous",
         "auth": "none",
         "cors": "any-origin-no-credentials"
+      },
+      {
+        "id": "oauth",
+        "path": "/oauth",
+        "methods": ["GET"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "oauth-callback",
+        "path": "/oauth/callback",
+        "methods": ["GET"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "storage-read",
+        "path": "/storage/{*rest}",
+        "methods": ["GET", "HEAD"],
+        "principal": "installation",
+        "auth": "bearer",
+        "authOptional": true,
+        "cors": "any-origin-no-credentials"
+      },
+      {
+        "id": "storage-write",
+        "path": "/storage/{*rest}",
+        "methods": ["PUT", "DELETE"],
+        "principal": "installation",
+        "auth": "bearer",
+        "cors": "any-origin-no-credentials",
+        "body": "blob",
+        "maxBodyBytes": 16777216,
+        "writes": ["documents"]
+      }
+    ],
+    "wellKnown": [
+      {
+        "name": "webfinger",
+        "kind": "shared",
+        "match": {
+          "resourcePrefix": "acct:"
+        },
+        "route": "webfinger"
+      }
+    ],
+    "writeTargets": [
+      {
+        "id": "documents",
+        "parent": "config:table",
+        "classes": ["https://atomicdata.dev/classes/File"]
+      }
+    ],
+    "tokens": [
+      {
+        "name": "storage",
+        "reason": "Bearer tokens this plugin hands to remoteStorage apps, each for the categories (read, or read and write) you approved."
       }
     ]
   }

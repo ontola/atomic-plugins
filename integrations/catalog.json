@@ -394,12 +394,16 @@
     "https://atomicdata.dev/properties/name": "remoteStorage",
     "https://atomicdata.dev/integrations/properties/experimental": true,
     "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/description": "Use this drive as a remoteStorage server: apps you approve per category (read, or read and write) store their documents as Atomic Files in a folder you choose, and anyone can read what they put under /public/.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "WebFinger discovery for name@<installation host>, the OAuth implicit grant through AtomicServer's consent page with per-category r/rw scopes, GET/HEAD/PUT/DELETE with ETags, If-Match and If-None-Match, JSON-LD folder listings, public documents without a token, CORS for browser apps. Also imports JSON text exports as reviewed text documents.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified in production: up to 1,000 documents per storage (every listing and write reads them all), 16 MiB per document; no byte ranges, no token in query parameters, no PKCE code flow. An app is not told when you deny access. A preconditioned write is checked just before it is applied, not inside the commit. Needs a server built with the plugin-routes feature at --plugin-routes read-write with a routes origin, and an AtomicServer that includes the claude/plugin-remotestorage-host changes.",
+    "https://atomicdata.dev/integrations/properties/keywords": "remotestorage unhosted webfinger oauth storage sync",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
     "https://atomicdata.dev/integrations/properties/requires": [
       "persistent-host",
-      "plugin-routes:read-only",
+      "plugin-routes:read-write",
       "public-origin",
       "wasm-sandbox"
-    ],
-    "https://atomicdata.dev/integrations/properties/limitation": "Experimental reviewed text imports and public reads only; bearer authentication, HTTP writes and blob storage are not implemented."
+    ]
   }
 ]

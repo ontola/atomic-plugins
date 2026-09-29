@@ -1,168 +1,172 @@
 # remoteStorage
 
-Status: **experimental partial implementation**, targeting QuickJS JavaScript.
-This package now contains executable source, a generated standalone `plugin.js`,
-a runtime `plugin.json`, an Atomic resource adapter and a Node CI lane. It does
-not implement a complete remoteStorage server. No independent client, actual
-QuickJS invocation or real host persistence round trip has been verified.
+Status: **experimental**, catalog entry `enabled: false`. A remoteStorage
+server ([draft-dejong-remotestorage-22](https://datatracker.ietf.org/doc/draft-dejong-remotestorage/))
+that runs as a QuickJS plugin route on AtomicServer and keeps documents as
+Atomic Files. Its bundle also keeps the earlier reviewed importer for JSON
+text exports.
 
-## Implemented
+What it needs from the host, and at which atomic-server commit each part
+exists, is in [Host requirements](#host-requirements). In short: it installs
+only on a server built with the `plugin-routes` feature, started with
+`--plugin-routes read-write` and a `--routes-origin`, and at a commit that
+includes the `claude/plugin-remotestorage-host` changes (not yet in any
+pinned candidate).
 
-- `run(ctx)` imports a JSON text export through the host's existing
-  `ctx.upload.text` contract. It returns ordinary `create`/`set` intents for the
-  host to validate, preview, approve and commit to its actual atom store. Returning
-  an intent is not a durable HTTP write acknowledgment.
-- Each text document is an Atomic resource under `config.table`, with `name`,
-  `description`, `localId` and `importBaseline` atoms. The baseline supplies
-  the host-required `values` and `previous` snapshots for signed commit conflict
-  checks, covering both the title and text. It also retains the
-  exact source text, path and media type, including CRLF and Unicode. These are
-  ordinary resources, **not DocumentV2 rich-text documents**: the current editor
-  reads a Loro `doc` map which sandbox intents cannot construct. No Tiptap JSON
-  is written into `documentContent`.
-- Repeat imports resolve persisted identities through `ctx.query(parent, table)`
-  and `ctx.read(subject)`. Unchanged documents produce no intents, source changes
-  propose updates, and local description edits block replacement. A rejected
-  batch produces no partial intents. Existing path/file collisions are refused.
-- `handle(ctx, request)` serves explicitly exported **public** categories through
-  the actual scoped `ctx.query` and `ctx.read` APIs. The anonymous route principal
-  means host permissions must permit both anonymous and installation reads.
-  Configuring a private parent does not grant it public access.
-- Public `GET`/`HEAD`, text media types, SHA-256 ETags, `If-Match`,
-  `If-None-Match`, and recursive JSON-LD folder listings are implemented.
-  Folder entries use the same version as fetching that subfolder, and nested
-  changes invalidate ancestors. Missing folders return empty listings.
-- The manifest declares host-owned wildcard CORS without credentials; responses
-  expose ETag and list conditional headers. **Preflight OPTIONS dispatch still
-  needs host work**: the pinned manifest only accepts six methods, excluding
-  OPTIONS. Browser interoperability is therefore not claimed.
+## What it does
 
-The source uses no Node/browser runtime APIs, Rust crates or remote network
-libraries. Its synchronous host calls match
-`plugin-runtime/src/lib.rs` and `server/src/plugins/js_runtime.rs` at pinned
-atomic-server `35504494261f59e922e79d536fd437954451e6a3`.
+- **Discovery.** A shared `webfinger` claim (`acct:` resources) on the
+  installation's own origin, `https://<slug>.<routes origin host>`. The user
+  address is `name@<slug>.<routes origin host>`; `config.user` restricts the
+  name, otherwise any name answers. The JRD links the storage root
+  (`<origin>/storage`) and the OAuth endpoint (`<origin>/oauth`), and says
+  that byte ranges, tokens in query parameters and web authoring are not
+  supported.
+- **Authorization.** `GET /oauth` takes the implicit grant
+  (`response_type=token`, the only one supported) with `redirect_uri`,
+  `scope` (`notes:rw contacts:r`, or `*:r` / `*:rw`) and `state`. It asks the
+  host for consent (`ctx.tokens.requestConsent`) and redirects to the host's
+  consent page on the API origin, where someone who manages the Installation
+  sees the app's origin and the exact scopes and clicks Allow or Deny. The
+  host sends the answer to `GET /oauth/callback`, which redeems the one-time
+  code (`ctx.tokens.issue({ code })`) for a bearer token with exactly the
+  approved scopes and redirects to `redirect_uri#access_token=…`. The app's
+  origin is the token's `client`; a callback whose redirect names another
+  origin revokes the token instead. Tokens do not expire; they are listed and
+  revoked on the Installation page (host `/plugin-route-tokens`).
+- **Storage.** `GET`/`HEAD` and `PUT`/`DELETE` on `/storage/{*rest}`:
+  - A token's scopes decide access per category, `r` or `rw`; `*` covers
+    every category and is needed for `/` and `/public/`. Documents under
+    `/public/<category>/` are readable without a token; public folder
+    listings are not. No token is `401`, a token outside its scope `403`.
+  - A document is a File directly under the folder named in `config.table`,
+    with the bytes in the host's blob store (`body: blob`): `name` and
+    `filename` (the last path segment), `localId` (`remotestorage:` + SHA-256
+    of the path, the identity the host keeps unique), `blob`, `filesize`,
+    `mimetype` (the `Content-Type` of the PUT, served back unchanged) and
+    `downloadURL` (the document's URL, which also records its path). Folders
+    are not resources: they are the documents' path prefixes.
+  - A document's ETag is its BLAKE3 blob hash, set by the host. `If-Match` and
+    `If-None-Match` on GET, HEAD, PUT and DELETE are answered by the host
+    against the blob the handler reports (`response.current`); a failed
+    precondition is `412` (`304` for GET/HEAD) and nothing is stored.
+  - Folder listings are `application/ld+json` folder descriptions with each
+    item's ETag, `Content-Type` and `Content-Length`; a folder's ETag is the
+    SHA-256 of its listing, so it changes with any document below it. An
+    empty or missing folder is an empty listing.
+  - A document and a folder cannot share a path (`409`). A PUT or DELETE on a
+    folder path is `400`.
+  - Every storage response allows any origin without credentials and exposes
+    `ETag`, `Content-Type`, `Content-Length` and `WWW-Authenticate`.
+- **Imports.** `run(ctx)` imports a JSON export of text documents (at most
+  128 per upload, 256 KiB each) as reviewed `create`/`set` intents: ordinary
+  resources with the text in `description` and an `importBaseline`. The
+  storage serves these read-only (ETag: SHA-256 of the source), lists them,
+  and answers `409` to a PUT or DELETE on one; an import never replaces a
+  document an app stored. An imported document edited in Atomic since is a
+  `503` and is left out of listings until it is imported again.
 
-## Import and public export
+The source uses no Node or browser APIs; everything it calls is in the host's
+QuickJS prelude (`ctx.query`, `ctx.read`, `ctx.tokens`).
 
-Install the generated sandbox bundle using the host's plugin install/import
-flow, then configure a parent resource to which the installing actor and
-installation both have write access. For example:
+## Install
 
-```json
-{
-  "table": "https://atomic.example/remote-documents",
-  "publicCategories": {
-    "notes": "https://atomic.example/remote-documents"
-  }
-}
-```
+On a server with the host requirements below:
 
-Upload a JSON file through the host's importer:
+1. Create a folder for the documents.
+2. Publish the bundle (`plugin.js`) to the node's store and open it in the
+   store. The review lists the public endpoints and the `documents` write
+   target. Check **Incoming items**, and set the config:
 
-```json
-{
-  "documents": [
-    {
-      "path": "/public/notes/hello.txt",
-      "contentType": "text/plain; charset=utf-8",
-      "text": "Hello from remoteStorage.\n"
-    },
-    {
-      "path": "/notes/private.json",
-      "contentType": "application/json",
-      "text": "{\"draft\":true}"
-    }
-  ]
-}
-```
+   ```json
+   { "table": "<the folder's subject>", "user": "me" }
+   ```
 
-Review/apply the returned changes. The first resource is eligible for export at
-`/_routes/<installation-slug>/storage/public/notes/hello.txt` only when host
-permissions also allow anonymous reads. The second is never exported by these
-routes. `publicCategories` is an explicit mapping, not a token scope or a request
-supplied parent. A source category need not be public to import its text.
+3. Connect an app with `me@<slug>.<routes origin host>`. The slug is the
+   first 32 hex characters of the BLAKE3 hash of the Installation's subject
+   (see `routeSlug` in `e2e/server.spec.ts`).
 
-The host needs all three endpoint gates: the `plugin-routes` build feature,
-`--plugin-routes read-only` (or a higher operator level), and per-installation
-endpoint consent. This plugin does not alter those gates. atomic.place does not
-provide the build feature.
+## Limits
 
-Limits are 256 KiB per JSON upload/text document, 128 resources per queried
-parent, and 32 path segments. HTML, binary files, traversal, encoded separators,
-ambiguous paths, duplicate identities and incomplete/denied host queries fail
-closed. There is no pagination. A category read consists of separately scoped
-resource reads; it is not an atomic multi-resource snapshot. Edited description
-atoms cause a visible import conflict and public reads return 503 rather than
-silently exporting an obsolete source baseline; reconciliation is manual.
+Declared, not measured in production:
 
-## Required host work for writable remoteStorage
+- 1,000 resources in the folder: every listing and every write reads them
+  all (one `ctx.read` each) within the route's 3,000 ms deadline.
+- 16 MiB per document (`maxBodyBytes`, the host's default blob limit), and
+  the host's route quotas (creates per caller per hour, bytes per day).
+- `redirect_uri` at most 400 characters, and `redirect_uri` plus `state` at
+  most 512 characters of JSON (the host's limit on consent `state`).
+- Paths: at most 32 segments and 2,048 characters; no `.`/`..`, empty
+  segments, encoded `/`, backslash, `%`, `?`, `#` or control characters in a
+  decoded segment.
 
-No bearer token is accepted by this plugin and **no PUT or DELETE route is
-registered**. The current host drops authorization headers, sets `caller: null`,
-and returns `route-auth-unavailable` for bearer/caller routes
-(`server/src/plugins/route_exec.rs`). It also rejects `body: blob`; the QuickJS
-prelude has no durable write, blob read/write or transaction API. A plugin-local
-map or a successful preview cannot substitute for those facilities.
+## Not supported, or not atomic
 
-The next host adapter needs these semantics; these are requirements, not
-invented callable `ctx` methods:
+- **A denied request is not reported to the app.** The host only lets a route
+  redirect to a client a person approved in that same request, so after
+  Deny the callback answers `403` on the routes origin instead of sending
+  `#error=access_denied` back.
+- **Preconditions are checked just before the write, not inside the commit**
+  (#167, section 1). Two writers racing on one path can both pass `If-Match`.
+  Two concurrent creates of one path cannot both succeed: the host refuses
+  the second create's duplicate `localId` (a `500 route-write-failed`, not a
+  `412`).
+- **Stored bytes are not garbage-collected**: the host keeps a blob after a
+  refused write or a DELETE (#167, section 2).
+- The OAuth code flow with PKCE, tokens in query parameters (RFC 6750 2.3),
+  byte ranges (RFC 7233), `Last-Modified` in listings, and web authoring.
+- Preflight `OPTIONS` requests are answered by the server's global CORS layer
+  (any origin, any method and header), not per declared route (#167,
+  section 4). That is what lets browser apps PUT today.
+- Documents are Files with blobs, not DocumentV2 rich text; imported text
+  stays plain text (#167, section 6).
 
-1. A host-verified principal bound to installation, user, category and `r`/`rw`,
-   with expiry and revocation enforced at effect time. OAuth consent, WebFinger
-   and token issuance must stay host-owned (AS-08/AS-06).
-2. An installation-scoped request-body blob handle, length and media type,
-   plus scoped reads/response handles backed by the real Atomic blob store.
-   Binary content must not be stuffed into description atoms (AS-10).
-3. A durable transaction keyed by installation/user/path that checks the
-   current version and scope, promotes the blob reference, creates/updates or
-   removes the real Atomic resource, and updates every ancestor version
-   together. Stale `If-Match`/`If-None-Match` must leave all state unchanged.
-   A durable commit receipt must precede any successful PUT/DELETE response;
-   crash recovery must reclaim staged orphan blobs and retries must be safe
-   (AS-07). Reviewed importer intents are not this transaction mechanism.
-4. OPTIONS preflight routing, bounded complete folder snapshots, quotas and
-   live interoperability tests with an independent remoteStorage client.
+## Host requirements
 
-Full implementation remains tracked in
-[#136](https://github.com/ontola/atomic-plugins/issues/136). The protocol sources
-are the [remoteStorage specification](https://github.com/remotestorage/spec)
-and [protocol overview](https://remotestorage.io/protocol).
+| Needed | pin `2567fc30b` (`.atomic-server-ref`) | candidate14 `1432e244a` | `claude/plugin-remotestorage-host` |
+| --- | --- | --- | --- |
+| `plugin-routes` feature, `read-write`, routes origin, install review with route-write grant | yes | yes | yes |
+| `installation-origin` mount, `webfinger` claim, `request.base` | yes | yes | yes |
+| `body: blob`, `response.blob`, `response.current` preconditions | yes | yes | yes |
+| `ctx.tokens.requestConsent` / `issue({ code })`, consent page, `auth: bearer` | yes | yes (consent answers need v2 signatures) | yes |
+| `authOptional`: public reads and bearer reads on one route | no | no | **yes** |
+| `{*rest}` matching a trailing slash (folders, `/storage/`) | no | no | **yes** |
+| `Location` to the approved client after `issue({ code })` | no | no | **yes** |
+
+Without the last three rows the manifest does not validate (`authOptional`
+is an unknown field), and even without it folders could not be listed and
+the token could not be handed back to the app.
 
 ## Validation
 
 ```sh
-node integrations/remotestorage/build.mjs
+node integrations/remotestorage/build.mjs --check
 node integrations/tooling/run-lane.mjs remotestorage --tier node
-node integrations/tooling/run-lane.mjs remotestorage --tier e2e
-node --experimental-strip-types integrations/remotestorage/verify-host.mjs /path/to/pinned/atomic-server
+ATOMIC_SERVER_CHECKOUT=/path/to/atomic-server-at-plugin-remotestorage-host \
+ATOMIC_SERVER_ROUTES_BINARY=/path/to/that/target/e2e/atomic-server \
+  node integrations/tooling/run-lane.mjs remotestorage --tier e2e
 ```
 
-The node lane executes 14 tests covering import identity/update conflicts,
-Unicode byte counts and hashing, folder versions, read preconditions, category
-and parent confinement, host denials, malformed paths, unavailable writes and
-bundle reproducibility. Its fixture applies intent-shaped objects in memory to
-exercise the adapter; this is **unit evidence only**, not real host persistence.
+- **node** (`plugin.test.mjs`): the manifest against this repo's port of the
+  host's manifest rules; WebFinger; the OAuth request, callback and refusals;
+  scopes; PUT/DELETE intents and `current`; listings and ETags; imports and
+  their interplay with stored documents; path validation; and that the
+  committed `plugin.js` is the reproducible bundle and runs without Node
+  APIs. An in-memory `ctx`: unit evidence, not host persistence.
+- **e2e** (`e2e/server.spec.ts`), on atomic-server built with the feature at
+  `--plugin-routes read-write`: installs the unchanged bundle through the
+  store's review dialog, then drives **remotestorage.js 2.0.0-beta.10**
+  (npm `remotestoragejs`, pinned in `e2e/package.json`) from another origin
+  through discovery, the host's consent page (Allow), and its own
+  `storeFile`/`getFile`/`getListing`/`remove`, a binary document included.
+  Then plain `fetch` checks public and private reads, scope refusals, `304`
+  and `412`s, and that the documents are Files with blobs and route
+  provenance under the configured folder. `e2e/import.spec.ts` runs the text
+  importer through `/plugin-run` with real approval and persistence.
 
-`verify-host.mjs` separately invokes the pinned host's real `validateManifest`
-and `parseVerdict` source functions on this implementation's manifest and import
-output. It passed at the pin above. This verifies source contracts, not a
-QuickJS run, host transaction or browser client exchange. `build.mjs --check`
-checks both generated artifacts without rewriting them.
+`verify-host.mjs` runs a checkout's own `validateManifest` and `parseVerdict`
+on this manifest and an import verdict:
 
-The E2E tier uses the normal host file-import UI and the unchanged production
-bundle. It publishes a release, configures its original source draft, uploads text,
-captures the actual `/plugin-run` response, confirms preview alone writes
-nothing, approves the change and reloads the resulting atom values. It then
-checks duplicate import, source update and preservation of a real local edit.
-There is no mock host or simulated persistence in this test. A passing run
-would verify the importer path; it would not establish remoteStorage bearer
-HTTP interoperability, blob support or independent client compatibility.
-
-Test discovery, lint and lane configuration checks pass. Runtime execution is
-being verified separately; a locally built binary of unknown commit provenance
-is only a development probe, not certification against `.atomic-server-ref`.
-
-The standard E2E server lacks the optional `plugin-routes` feature, so the
-production HTTP release is correctly hidden from installable catalog cards.
-The importer test runs its unchanged source draft through `/plugin-run`; it
-does not certify route installation or bypass the catalog feature gate.
+```sh
+node --experimental-strip-types integrations/remotestorage/verify-host.mjs /path/to/atomic-server
+```
