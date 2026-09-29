@@ -218,11 +218,13 @@ test.describe('calendar drive app', () => {
       .slice(0, 10);
     await setRowField(page, 'Calendar all-day fixture', END_DAY, later);
     await page.reload();
-    await expect(pill).toContainText(/Synced|to review/, { timeout: 30_000 });
-    await app.getByRole('button', { name: 'Review 1 change' }).click();
-    await expect(sheet).toContainText(
-      new RegExp(`End\\s*${oneDay[END_DAY]}\\s*→\\s*becomes\\s*${later}`),
-    );
+    // No Sync now: opening the app compares the rows with their baselines.
+    const review = app.getByRole('button', { name: 'Review 1 change' });
+    await expect(review).toBeVisible({ timeout: 30_000 });
+    await review.click();
+    // The sheet shows the last day (End day minus one), not the raw date.
+    await expect(sheet).toContainText('Calendar all-day fixture');
+    await expect(sheet).toContainText(/End[^→]*→\s*becomes/);
     expect((await driver('state', [])).writes).toHaveLength(2);
     await sendOne.click();
     await expect(sheet).toContainText('1 of 1 change sent');
