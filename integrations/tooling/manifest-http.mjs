@@ -320,11 +320,22 @@ export function validateHttp(raw, context) {
 
   const keys = list(entry.keys, 'http.keys').map(value => {
     const key = object(value, 'key');
-    known(key, ['name', 'alg', 'reason']);
+    known(key, ['name', 'alg', 'willow', 'reason']);
+    let willow;
+
+    if (key.willow !== undefined) {
+      const binding = object(key.willow, 'key willow');
+      known(binding, ['namespace', 'pathPrefix']);
+      willow = {
+        namespace: text(binding.namespace, 'willow namespace'),
+        pathPrefix: text(binding.pathPrefix, 'willow pathPrefix'),
+      };
+    }
 
     return {
       name: text(key.name, 'key name'),
       alg: variant(key.alg, ['rsa-sha256', 'ed25519']),
+      ...(willow ? { willow } : {}),
       reason: optionalText(key.reason, 'key reason'),
     };
   });
@@ -354,6 +365,32 @@ export function validateHttp(raw, context) {
     keys.map(k => k.name),
     'key names',
   );
+
+  // A Willow subspace key (candidate17): Ed25519, bound to a namespace and a
+  // path prefix, each `config:<key>` or a literal.
+  for (const key of keys) {
+    if (!key.willow) continue;
+    if (key.alg !== 'ed25519')
+      throw new Error(
+        `key \`${key.name}\`: a Willow subspace key must be ed25519`,
+      );
+    const configKey = v =>
+      v.startsWith('config:') &&
+      /^[A-Za-z0-9_.-]{1,128}$/.test(v.slice('config:'.length));
+    const hexBytes = v => /^(?:[0-9a-fA-F]{2})*$/.test(v);
+    const namespaceOk =
+      configKey(key.willow.namespace) ||
+      (key.willow.namespace.length === 64 && hexBytes(key.willow.namespace));
+    const prefix = key.willow.pathPrefix;
+    const prefixOk =
+      configKey(prefix) || prefix === '' || prefix.split('/').every(hexBytes);
+
+    if (!namespaceOk || !prefixOk)
+      throw new Error(
+        `key \`${key.name}\`: willow.namespace must be \`config:<key>\` or 64 hex characters, and willow.pathPrefix \`config:<key>\` or hex components joined by \`/\``,
+      );
+  }
+
   uniqueNames(
     tokens.map(t => t.name),
     'token names',
@@ -582,7 +619,11 @@ export function httpGate(http) {
     add(`well-known \`${claim.name}\``, 'read-only');
   for (const target of http?.writeTargets ?? [])
     add(`write target \`${target.id}\``, 'read-write');
-  for (const key of http?.keys ?? []) add(`key \`${key.name}\``, 'read-write');
+  for (const key of http?.keys ?? [])
+    add(
+      key.willow ? `Willow signing key \`${key.name}\`` : `key \`${key.name}\``,
+      'read-write',
+    );
   for (const token of http?.tokens ?? [])
     add(`token store \`${token.name}\``, 'read-write');
   const deliveries = [
@@ -644,6 +685,74 @@ export function derivedRequires(manifest) {
   return [...requires].sort();
 }
 
+const SIDECAR_URL_RULE =
+  'atomic-sidecar: URLs are `atomic-sidecar:/<name>/<path>`, with no dot segments, backslashes, fragment or (in an operation) query';
+const SIDECAR_NAME = /^[a-z0-9-]{1,64}$/;
+
+/**
+ * Splits an `atomic-sidecar:/<name>/<path>?<query>` operation URL the way the
+ * host does (`parseSidecarRelative` in `browser/lib/src/plugin-manifest.ts`,
+ * `SidecarRelative::parse` in Rust): the path rules of `atomic-proxy:` and a
+ * name as `http.sidecars` names one. `undefined` for any other URL; throws
+ * for a malformed one.
+ */
+export function parseSidecarRelative(raw) {
+  if (typeof raw !== 'string' || !raw.startsWith('atomic-sidecar:'))
+    return undefined;
+  const rest = raw.slice('atomic-sidecar:'.length);
+  if (rest.includes('#') || rest.includes('\\'))
+    throw new Error(SIDECAR_URL_RULE);
+  const q = rest.indexOf('?');
+  const pathPart = q === -1 ? rest : rest.slice(0, q);
+  const query = q === -1 ? undefined : rest.slice(q + 1);
+  if (!pathPart.startsWith('/')) throw new Error(SIDECAR_URL_RULE);
+  const slash = pathPart.indexOf('/', 1);
+  if (slash === -1) throw new Error(SIDECAR_URL_RULE);
+  const name = pathPart.slice(1, slash);
+  const path = pathPart.slice(slash + 1);
+  if (!SIDECAR_NAME.test(name) || !path) throw new Error(SIDECAR_URL_RULE);
+
+  const dot = segment => {
+    const decoded = segment.toLowerCase().replaceAll('%2e', '.');
+
+    return decoded === '.' || decoded === '..';
+  };
+
+  if (path.split('/').some(dot) || path.toLowerCase().includes('%2f'))
+    throw new Error(SIDECAR_URL_RULE);
+
+  return {
+    name,
+    path: `/${path}`,
+    ...(query !== undefined ? { query } : {}),
+  };
+}
+
+/**
+ * The one operation rule this port checks outside the `http` block: an
+ * `atomic-sidecar:` operation has no query and names a sidecar declared in
+ * `http.sidecars` (the host checks the rest of `operations` at publish).
+ */
+function checkSidecarOperations(manifest) {
+  const rawSidecars = manifest.http?.sidecars;
+  const declared = Array.isArray(rawSidecars)
+    ? rawSidecars.map(s => s?.name)
+    : [];
+  const operations = Array.isArray(manifest.operations)
+    ? manifest.operations
+    : [];
+
+  for (const operation of operations) {
+    const sidecar = parseSidecarRelative(operation?.url);
+    if (!sidecar) continue;
+    if (sidecar.query !== undefined) throw new Error(SIDECAR_URL_RULE);
+    if (!declared.includes(sidecar.name))
+      throw new Error(
+        `operation ${operation.id} does not declare sidecar '${sidecar.name}' in \`http.sidecars\``,
+      );
+  }
+}
+
 /**
  * Checks the parts of a manifest this module owns and returns the manifest
  * with its `http` block canonical (dropped when empty). Throws with the
@@ -654,6 +763,7 @@ export function checkManifest(raw) {
   const version = manifest.schemaVersion;
   if (version !== 1 && version !== 2 && version !== 3)
     throw new Error('unsupported manifest schemaVersion');
+  checkSidecarOperations(manifest);
   const { http: rawHttp, ...rest } = manifest;
   if (rawHttp === undefined) return rest;
   if (version !== 3) throw new Error('the http block needs schemaVersion 3');

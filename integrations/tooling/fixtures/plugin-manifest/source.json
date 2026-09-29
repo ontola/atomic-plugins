@@ -2,8 +2,8 @@
   "//": "Copied byte for byte from ontola/atomic-server's testdata/plugin-manifest/, the shared fixtures its Rust (server/src/plugins/manifest_http.rs) and TypeScript (browser/lib/src/plugin-manifest-http.ts) implementations both run. integrations/tooling/manifest-http.test.mjs runs this repo's port against them. To refresh: copy the files again from the named commit and update `commit`.",
   "repository": "ontola/atomic-server",
   "path": "testdata/plugin-manifest",
-  "commit": "38306758f0f5af4eb2624ce18acccceb792b869f",
-  "commitNote": "pin candidate16 (.atomic-server-ref); every file below is byte-identical to that commit",
+  "commit": "7dbd054a62a9678961c9cde112b6315cba851be8",
+  "commitNote": "pin candidate17 (.atomic-server-ref); every file below is byte-identical to that commit",
   "files": [
     "http-index.json",
     "http-refusals.json",
@@ -12,7 +12,11 @@
     "v2-wasm-server-extension.json"
   ],
   "history": {
-    "added by #1732": ["http-index.json", "http-refusals.json", "v3-*.json"],
+    "added by #1732": [
+      "http-index.json",
+      "http-refusals.json",
+      "v3-*.json"
+    ],
     "WebFinger match.rels (atomic-server branch claude/plugin-fediverse-host)": [
       "v3-webfinger-rels.json",
       "v3-webfinger-rels-duplicate.json",
@@ -28,6 +32,17 @@
       "v3-fetches.json",
       "v3-fetches-post.json",
       "v3-fetches-write-operation.json"
+    ],
+    "Willow key binding http.keys[].willow (claude/plugin-willow-host, folded into candidate17)": [
+      "v3-willow-key.json",
+      "v3-willow-key-rsa.json",
+      "v3-willow-key-bad-namespace.json"
+    ],
+    "atomic-sidecar: operations for http.sidecars (claude/plugin-nextgraph-host, folded into candidate17)": [
+      "v3-sidecar-operation.json",
+      "v3-sidecar-operation-undeclared.json",
+      "v3-sidecar-operation-query.json",
+      "v3-sidecar-operation-bad-name.json"
     ]
   }
 }
