@@ -23,7 +23,7 @@
         "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/open-cloud-mesh/e2e/.peer/ca.pem"
       },
       "e2e": ["integrations/open-cloud-mesh/e2e/ocm.spec.ts"],
-      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams, and the route field `fetches` of pin candidate16); the e2e is pending on candidate16 and fails at a pin without these. No interoperability claim with a real Nextcloud/ownCloud peer."
+      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams, and the route field `fetches` of pin candidate16); pin candidate16 (38306758) has all of them, and the e2e passed there on 2026-09-29; it fails at a pin without them. No interoperability claim with a real Nextcloud/ownCloud peer."
     },
     {
       "id": "calendar",
