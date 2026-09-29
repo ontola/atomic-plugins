@@ -39,6 +39,9 @@ let busy = false;
 let heard = [];
 let lastSpeech = Date.now();
 let lastTurn = Date.now();
+/** 'voice' by default; 'typed' when the microphone or the speech recognizer
+ * is not available, so the session runs on the typed-answer box alone. */
+let inputMode = 'voice';
 let uploads = Promise.resolve();
 /** Plays the shared screen off-screen, so a turn can grab a frame of it. */
 let screenVideo;
@@ -53,10 +56,11 @@ async function api(path, init = {}) {
   return response.status === 204 ? {} : response.json();
 }
 
-function show(who, text) {
+function show(who, text, typed = false) {
   const p = document.createElement('p');
   if (who === 'me') p.className = 'me';
-  p.textContent = who === 'me' ? `You: ${text}` : text;
+  p.textContent =
+    who === 'me' ? `${typed ? 'You (typed)' : 'You'}: ${text}` : text;
   $('log').prepend(p);
 }
 
@@ -135,19 +139,25 @@ function screenshot() {
   return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
 }
 
-async function turn(said) {
+/** `typed`: the turn (or part of it) came from the typed-answer box. */
+async function turn(said, typed = false) {
   if (busy || ended) return;
   busy = true;
+  $('send').disabled = true;
   heard = [];
   $('heard').textContent = '';
   lastTurn = Date.now();
-  if (said) show('me', said);
+  if (said) show('me', said, typed);
   status('Thinking…');
 
   try {
     const { say, done } = await api(`/sessions/${session}/turn`, {
       method: 'POST',
-      body: JSON.stringify({ said, screenshot: screenshot() }),
+      body: JSON.stringify({
+        said,
+        input: typed ? 'typed' : 'voice',
+        screenshot: screenshot(),
+      }),
     });
 
     if (say) {
@@ -157,13 +167,24 @@ async function turn(said) {
     }
 
     if (done) return finish();
-    status('Listening…');
+    status(inputMode === 'typed' ? 'Your turn: type below.' : 'Listening…');
   } catch (error) {
     status('The moderator is not answering. Keep going; it will try again.');
     console.error(error);
   } finally {
     busy = false;
+    $('send').disabled = ended;
   }
+}
+
+/** Sends the typed-answer box as a turn, with anything heard but not yet
+ * sent in front of it. */
+async function sendTyped() {
+  const typed = $('typed').value.trim();
+  if (!typed || busy || speaking || ended) return;
+  const said = [...heard, typed].join(' ').trim();
+  $('typed').value = '';
+  await turn(said, true);
 }
 
 function listen() {
@@ -199,11 +220,26 @@ function setupRecognition() {
   recognition.onend = () => listen();
 
   recognition.onerror = event => {
-    if (event.error === 'not-allowed')
-      status('Microphone access is blocked for this page.');
+    if (
+      ['not-allowed', 'audio-capture', 'service-not-allowed'].includes(
+        event.error,
+      )
+    ) {
+      status('The microphone is not working here. Type your answers below.');
+      useTyping();
+    }
   };
 
   listen();
+}
+
+/** Switches the session to typed answers: the recognizer stops trying. */
+function useTyping() {
+  inputMode = 'typed';
+  recognition?.abort();
+  recognition = undefined;
+  $('ask-row').hidden = true;
+  $('typed').focus();
 }
 
 /** Decides when to hand the conversation to the moderator. */
@@ -231,19 +267,35 @@ async function checkNews() {
   }
 }
 
-async function startRecording() {
+/** Asks for the screen and the microphone. Without a microphone (none,
+ * broken or refused) the session goes on with typed answers and a
+ * screen-only recording. */
+async function getMedia() {
   const screen = await navigator.mediaDevices.getDisplayMedia({
     video: { frameRate: 5 },
     audio: false,
   });
-  const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const mic = await navigator.mediaDevices
+    .getUserMedia({ audio: true })
+    .catch(error => {
+      console.error(error);
+      return undefined;
+    });
+  if (!mic) inputMode = 'typed';
+
+  return { screen, mic };
+}
+
+/** Records the media from getMedia() into the session. */
+async function startRecording({ screen, mic }) {
   const stream = new MediaStream([
     ...screen.getVideoTracks(),
-    ...mic.getAudioTracks(),
+    ...(mic?.getAudioTracks() ?? []),
   ]);
-  const type = ['video/webm;codecs=vp9,opus', 'video/webm'].find(t =>
-    MediaRecorder.isTypeSupported(t),
-  );
+  const type = [
+    mic ? 'video/webm;codecs=vp9,opus' : 'video/webm;codecs=vp9',
+    'video/webm',
+  ].find(t => MediaRecorder.isTypeSupported(t));
   recorder = new MediaRecorder(stream, type ? { mimeType: type } : {});
 
   recorder.ondataavailable = event => {
@@ -282,6 +334,7 @@ async function finish() {
   $('rec').textContent = '';
   status('Thank you! The session has ended; you can close both windows.');
   $('end').hidden = true;
+  $('typed-form').hidden = true;
 }
 
 async function start() {
@@ -296,22 +349,30 @@ async function start() {
     `popup,width=${width},height=${screen.availHeight},left=${screen.availWidth - width},top=0`,
   );
 
+  if (!Recognition) inputMode = 'typed';
+  let media;
+
   try {
+    media = await getMedia();
     ({ id: session } = await api('/sessions', {
       method: 'POST',
       body: JSON.stringify({
         name: $('name').value,
         lang: LANG,
+        // How the session starts; the tester can type at any time anyway.
+        input: inputMode,
         // Which session plan (moderator/sessions/<name>.md); none = calendar.
         session: params.get('session') ?? undefined,
       }),
     }));
-    await startRecording();
+    await startRecording(media);
   } catch (error) {
     app?.close();
+    media?.screen.getTracks().forEach(track => track.stop());
+    media?.mic?.getTracks().forEach(track => track.stop());
     $('error').textContent =
       error.name === 'NotAllowedError'
-        ? 'The session needs screen sharing and the microphone. Please allow both and try again.'
+        ? 'The session needs screen sharing. Please allow it and try again.'
         : `Could not start the session (${error.message}). Is the invite link complete?`;
     $('error').hidden = false;
     $('start').disabled = false;
@@ -322,7 +383,8 @@ async function start() {
   $('intro').hidden = true;
   $('consent').hidden = true;
   $('session').hidden = false;
-  setupRecognition();
+  if (inputMode === 'voice') setupRecognition();
+  else useTyping();
   setInterval(tick, 1000);
   setInterval(checkNews, 5000);
   turn('');
@@ -336,11 +398,25 @@ if (!code) {
 }
 
 $('agree').addEventListener('change', () => {
-  $('start').disabled = !$('agree').checked || !Recognition || !code;
+  $('start').disabled = !$('agree').checked || !code;
 });
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
 // Hands over at once, with whatever was heard so far.
 $('ask').addEventListener('click', () => {
   if (!speaking) turn(heard.join(' ').trim());
+});
+$('typed-form').addEventListener('submit', event => {
+  event.preventDefault();
+  sendTyped();
+});
+$('typed').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendTyped();
+  }
+});
+// Typing counts as talking: no "what are you doing?" while a tester types.
+$('typed').addEventListener('input', () => {
+  lastSpeech = Date.now();
 });
