@@ -29,7 +29,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { Agent, signRequest } from '@tomic/lib';
+import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
   createFromCatalog,
@@ -86,12 +86,15 @@ test.describe('Open Cloud Mesh receiver', () => {
       expect(pinned.status, pinned.text).toBe(200);
 
       const dialog = await openReview(page, releaseId);
-      await dialog.getByTestId('route-write-approval').click();
-      await setConfig(page, dialog, {
-        sharesFolder: folder,
-        allowedPeers: { [peer.domain]: true },
-        recipients: { bob: 'Bob Invented' },
-      });
+      await dialog.getByLabel('Config').fill(
+        JSON.stringify({
+          sharesFolder: folder,
+          allowedPeers: { [peer.domain]: true },
+          recipients: { bob: 'Bob Invented' },
+        }),
+      );
+      await dialog.getByTestId('route-write-approval').check();
+      await expect(dialog.getByTestId('route-write-unresolved')).toHaveCount(0);
       const reviewUrl = page.url();
       await dialog
         .getByRole('button', { name: 'Install', exact: true })
@@ -102,7 +105,20 @@ test.describe('Open Cloud Mesh receiver', () => {
       const base = `http://${host}`;
 
       // -- 2. discovery ----------------------------------------------------
-      const discovery = await peerModule.fetchJson(`${base}/.well-known/ocm`);
+      // The route registry picks the installation up after the commit.
+      let discovery: Record<string, unknown> | undefined;
+      await expect
+        .poll(
+          async () => {
+            discovery = await peerModule
+              .fetchJson(`${base}/.well-known/ocm`)
+              .catch(() => undefined);
+
+            return discovery?.enabled;
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
       expect(discovery).toMatchObject({
         enabled: true,
         apiVersion: '1.5.0',
@@ -271,20 +287,6 @@ async function createPluginAndFolder(page: Page) {
   );
 }
 
-/** Replaces the review dialog's config JSON. */
-async function setConfig(
-  page: Page,
-  dialog: ReturnType<Page['locator']>,
-  config: object,
-) {
-  const editor = dialog.locator('.cm-content').first();
-  await editor.click();
-  await page.keyboard.press('ControlOrMeta+A');
-  await page.keyboard.press('Delete');
-  await page.keyboard.insertText(JSON.stringify(config));
-  await expect(dialog.getByTestId('route-write-unresolved')).toHaveCount(0);
-}
-
 async function openReview(page: Page, releaseId: string) {
   await page.goto(new URL('/app/integrations', SERVER_URL).href);
   const card = page.locator(`[data-release="${releaseId}"]`);
@@ -331,16 +333,20 @@ function routeSlug(subject: string) {
     .slice(0, 32);
 }
 
+/**
+ * A POST that needs a version 2 request signature (`/plugin-release`,
+ * `/plugin-release-pin`), signed anew over method, URL and body.
+ */
 async function post(agent: Agent, path: string, body: unknown) {
   const url = `${SERVER_URL}${path}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(await signRequest(url, agent, {})),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(
+    url,
+    await signedRequestInit(url, agent, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
   const text = await response.text();
   let json: unknown;
 

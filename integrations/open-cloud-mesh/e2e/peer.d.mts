@@ -28,7 +28,10 @@ export interface Peer {
   domain: string;
   received: Received[];
   keyId(): string;
-  sendShare(url: string, share: unknown): Promise<{ status: number; body: string }>;
+  sendShare(
+    url: string,
+    share: unknown,
+  ): Promise<{ status: number; body: string }>;
   sendNotification(
     url: string,
     notification: unknown,
