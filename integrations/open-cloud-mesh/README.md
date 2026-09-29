@@ -1,185 +1,165 @@
 # Open Cloud Mesh
 
-Status: **experimental implementation slice**, not a working federated receiver.
-This package now contains executable QuickJS JavaScript, a v3 host manifest,
-a reproducible bundle, and protocol/Atomic mapping tests. `manifest.json` and
-`plugin.js` are the host release inputs.
+Status: **experimental receiver**. Declared, not verified against a real
+Nextcloud, ownCloud or OCIS server. `manifest.json` and `plugin.js` are the
+host release inputs; edit `plugin.mjs` and run `build.mjs`.
 
-## Implemented behavior
+An Open Cloud Mesh (OCM) server can share a file with a person on this
+drive: the plugin answers OCM discovery, accepts RFC 9421 signed Share
+Creation Notifications from servers the installer allows, has the host
+fetch the shared file into the blob store, stores it as a File in a folder
+the installer picks, and sends `SHARE_ACCEPTED` back. The received copy
+opens in the data browser like any uploaded File (including its "convert to
+document" action).
 
-`handle(ctx, request)` serves disabled OCM 1.3 discovery at `/ocm-provider`
-with `enabled: false` and no resource types. `HEAD` has no body. The
-`drive-host` manifest targets the drive's configured hostname. POST
-`/ocm/shares` returns 501 and never emits intents, even when a caller or share
-body claims to be authorized. This release does not claim a well-known path.
+Reference: [OCM 1.5.0](https://github.com/cs3org/OCM-API/tree/v1.5.0)
+(`IETF-OCM.md`, `spec.yaml`), the latest release on 2026-09-29.
 
-`parseShare` validates a bounded subset of the official OCM 1.3 `NewShare`
-contract: user/file shares with WebDAV metadata (`multi` or legacy `webdav`),
-required identity fields, permission names and safe-integer expiration. Input
-is limited to 16,384 JavaScript characters. Unsupported requirements, folders,
-groups and protocols are refused. Relative WebDAV references are accepted;
-absolute references must use HTTPS without embedded credentials. WebDAV
-locations and shared secrets are excluded from its returned metadata.
+## What it implements
 
-`run(ctx)` implements an **operator-reviewed metadata import** using actual
-host `ctx.read`, `ctx.query` and create intents. It validates an allowed peer,
-recipient and existing accessible Atomic `Document` or `DocumentV2`, then
-proposes a `Message` beneath that document with `about` pointing to the
-same document. This is a native comment visible in the data browser's comments
-panel, with a readable escaped Markdown receipt. It does not change the
-original document content, permissions or Loro/Yjs state. The ordinary host
-job planning/review/apply path authorizes storage writes.
+| OCM 1.5 part                                     | Here                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Discovery                                        | `GET /.well-known/ocm` (exclusive claim) and the removed-in-1.4 `/ocm-provider`, both on the installation's origin: `apiVersion` `1.5.0`, `endPoint` `<base>/ocm`, `resourceTypes: [{ name: "file", shareTypes: ["user"], protocols: { "webdav-receive": { uri: "absolute" } } }]`, `capabilities: ["http-sig", "notifications"]`, `criteria: ["must-use-http-sig", "allowlist"]`, `jwksUri` `<base>/ocm/jwks`. `enabled` is `false` until `sharesFolder` is configured. |
+| HTTP Message Signatures                          | Inbound: verified by the host before this code runs (see "Host contracts"). Outbound: the host's delivery queue signs with the installation's Ed25519 key `ocm-key`, `tag="ocm"`, covering `@method`, `@target-uri`, `content-digest` and `content-length`; the key is published as `<host>#ocm-key` at `/ocm/jwks`.                                                                                                                                                     |
+| Share Creation Notification (`POST /ocm/shares`) | `shareType: user`, `resourceType: file`, WebDAV (`multi` or legacy `webdav`) with an **absolute** `uri` and a `sharedSecret`. `201 { recipientDisplayName }` on success.                                                                                                                                                                                                                                                                                                 |
+| Resource access                                  | Legacy shared-secret access only: `GET <uri>` with `Authorization: Bearer <sharedSecret>`, done by the host (`ctx.blobs.fetch`). No `PROPFIND`, no token exchange.                                                                                                                                                                                                                                                                                                       |
+| Notifications (`POST /ocm/notifications`)        | Receives `SHARE_UNSHARED` and `SHARE_CHANGE_PERMISSION` (provider ID from `notification.file.providerId`, or the deprecated top-level `providerId`). Sends `SHARE_ACCEPTED` once per share.                                                                                                                                                                                                                                                                              |
 
-The mapping was checked against pinned Atomic Server `35504494261f59e922e79d536fd437954451e6a3`:
-`lib/defaults/chatroom.json` defines Message's required description/parent and
-`about` as an Atomic resource reference; `CommentsPanelContainer.tsx` queries
-that property. `browser/lib/src/ontologies/dataBrowser.ts` defines the two
-supported document classes. `server/src/plugins/plan.rs` parses these create
-intents. No new host methods or arbitrary document-content encodings are used.
+Refused, with the status OCM names: unsigned or non-`tag="ocm"` requests
+(`401`, from the host or the plugin); a signing server that is not in
+`allowedPeers`, or a `sender`/`owner` that is not an account of the signing
+server (`403`); an unknown recipient, an expired share, an `http:` WebDAV URI
+that is not on the verified sender's own origin, a file the sender refuses
+to serve (`400`); groups, folders, encryption, relative WebDAV URIs,
+`webapp`/`ssh`, and any `requirements` such as `must-exchange-token` or
+`must-use-mfa` (`501`). Nothing is stored and nothing is sent for a refused
+share.
 
-An identity tuple of peer origin, provider share ID and recipient is persisted
-using Atomic's `localId` property. A subsequent fresh job finds an identical
-receipt and emits no changes. Multiple matching receipts, a different document,
-changed metadata or inaccessible resources fail closed. This is replay handling
-for sequential reviewed jobs, **not an atomic uniqueness guarantee** for
-concurrent imports. The host must serialize/review such imports.
+### What is stored
 
-## Manual import configuration
+Each accepted share is one `File` under `sharesFolder`, created by the
+installation's agent through the host's route-write grant: name, `blob`
+(the fetched bytes, `atomic:blob:<blake3>`), size, media type,
+`downloadURL` `/download/files/<blake3>`, and a Markdown description
+listing the state, sender, owner, sending server, provider ID, recipient,
+permissions and expiration. `localId` holds the identity
+`["ocm-share-v2", <sending server>, <providerId>]`; a repeated notification
+with the same identity answers `201` and changes nothing.
 
-Provide installation-owned configuration, then execute the normal reviewed job
-path with the release's `run` entrypoint. The operator must inspect the source
-and remove credentials before putting share JSON into configuration:
+**The shared secret is never stored**: not in the File, the answer, a
+delivery or a log line of this plugin. It is used once, for the fetch. So
+the copy is a snapshot taken when the share arrived: later changes at the
+sender are not fetched, and `SHARE_UNSHARED` marks the copy `unshared`
+without deleting it (OCM lets a receiver clean up; this one leaves that to
+the person).
+
+Limits: request bodies up to 65,536 bytes; the fetched file up to the
+operator's `--plugin-route-max-blob-bytes` (16 MiB by default), counted
+toward the installation's bytes-per-day quota; the whole request within the
+host's route deadline (3 s without the `extended-fuel` grant, which the
+fetch must fit in).
+
+## Configuration
+
+Set in the install review, next to approving the route writes:
 
 ```json
 {
-  "publicOrigin": "https://atomic.example",
-  "mode": "import-reviewed-share",
-  "peerOrigin": "https://cloud.example",
-  "allowedPeers": { "https://cloud.example": true },
-  "recipient": "bob@atomic.example",
-  "document": "https://atomic.example/documents/project",
-  "shareJson": "{\"name\":\"Design.md\",\"providerId\":\"share-123\",\"owner\":\"alice@cloud.example\",\"sender\":\"alice@cloud.example\",\"shareWith\":\"bob@atomic.example\",\"shareType\":\"user\",\"resourceType\":\"file\",\"protocol\":{\"name\":\"multi\",\"webdav\":{\"uri\":\"share-123\",\"permissions\":[\"read\"]}}}"
+  "sharesFolder": "<subject of a Folder on this drive>",
+  "allowedPeers": { "cloud.example.org": true },
+  "recipients": { "bob": "Bob" },
+  "providerName": "Atomic Server"
 }
 ```
 
-Peer origin is an operator assertion for this manual workflow, not proof of a
-network identity. Never connect untrusted incoming HTTP JSON to this job.
-No access token, shared secret or remote content URI enters the receipt intents.
-The resulting Message explicitly says content has not been imported.
+`allowedPeers` keys are server domains as OCM addresses spell them
+(`host` or `host:port`, lowercased). `recipients` keys are the user part of
+the OCM addresses on this installation's host: with the above, the address
+is `bob@<installation host>`. Everything else answers `403` or `400`.
 
-## Host requirements and remaining receiver work
+The installation needs `--plugin-routes read-write`, a routes origin
+(`--routes-origin`; the manifest uses the `installation-origin` mount,
+since `drive-prefix` routes cannot use the `installation` principal), and
+the install review's route-write approval for `sharesFolder`.
 
-The pinned host now implements route dispatch, the build/runtime/install gates,
-QuickJS `handle`, and well-known routing. But `route_exec.rs` still rejects
-non-anonymous authentication before running a plugin, and rejects all route
-intents/enqueues even at `read-write`. Host route writes (#1717), signatures and
-tokens (#1718), and durable deliveries (#1719) are required before accepting
-network shares or issuing accept/reject notifications. There is no supported
-QuickJS API for importing remote blob bytes or editing a document's Loro state.
+## Host contracts it depends on
 
-Every public route requires Cargo feature `plugin-routes`, operator switch
-`--plugin-routes read-write` (required by the host for the POST route, even though it returns an error without writing), and
-Installation consent. atomic.place builds omit the feature. No unauthenticated
-write fallback exists. The manifest's anonymous POST route only explains the
-unavailable service; installing it does not enable OCM receiving.
+All from atomic-server's plugin-routes work (ontola/atomic-plugins#167),
+plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
+(on top of `claude/atomic-plugins-pin-candidate14`), which no pin contains
+yet:
 
-Still required for [receiver issue #138](https://github.com/ontola/atomic-plugins/issues/138):
-authenticated peer binding, network acceptance and durable share state, expiry
-and revocation enforcement for remote access, notifications/retries, content
-fetch/import, and an independent OCM peer interoperability run. No peer or
-QuickJS/live host execution has been verified by these Node tests. Sending
-shares and WebDAV content serving remain subsequent work.
+- **OCM key discovery for `auth: http-signature`** (new). A request whose
+  RFC 9421 signature carries `tag="ocm"` is verified the OCM way: exactly
+  one such signature, covering `@method`, `@target-uri` and, with a body,
+  `content-digest` and `content-length`; the signer's domain is the JSON
+  body's `senderDomain` or the domain of its `sender`; the key is the JWK
+  with that `kid` at the `jwksUri` of `https://<domain>/.well-known/ocm`,
+  and its `alg` decides the algorithm (Ed25519, RS256 or PS512).
+  `request.caller` is `{ keyId, owner, domain, scheme, alg, tag, endPoint }`.
+- **Tagged outbound signatures** (new): `sign.tag` on deliveries and
+  `ctx.keys.sign`, and `ctx.keys.publicKey(...).jwk`.
+- **`ctx.blobs.fetch`** (new): a `GET` whose answer goes straight into the
+  blob store, through the egress guard, for an operation listed in the
+  route's `enqueues` (wildcard host and trailing `{*rest}` path allowed).
+  The plugin only gets `{ status, blob }`.
+- **`--plugin-egress-loopback`** (new, development and tests only): exact
+  loopback origins that key/discovery fetches, `blobs.fetch` and deliveries
+  may reach, with `http` URLs on them matched as `https` against declared
+  operations. Only the e2e lane uses it.
+- Existing: route writes into `writeTargets` under the route grant, the
+  durable delivery queue, host-held installation keys, the `ocm`
+  well-known claim.
 
-## Build and CI
+The operations `fetch-file` (`GET https://*/{*rest}`) and `notify`
+(`POST https://*/{*rest}`) are declared `effect: write` because the host
+only lets data-derived (wildcard-host) destinations be used by operations
+a route `enqueues`; `fetch-file` is a read in HTTP terms.
+
+## Not implemented
+
+- Sending shares, and serving shared resources over WebDAV (`PROPFIND`,
+  ranges): needs host method and response-header support (#167 section 4).
+- The code flow (`exchange-token`, `tokenEndPoint`), `must-use-mfa`,
+  invites (`/invite-accepted`, WAYF), `REQUEST_SHARE`, `REQUEST_RESHARE`,
+  groups, folders, encryption, the `webapp` and `ssh` protocols.
+- Relative WebDAV URIs (would need an inline read of the sender's
+  discovery, which the host only allows for fixed endpoints), and a
+  `PROPFIND` before the `GET`.
+- Draft-cavage signatures and the pre-1.4 `publicKey` discovery field that
+  older Nextcloud releases use. The host still verifies cavage signatures
+  against a fetched `keyId` document, but this plugin only accepts
+  `tag="ocm"` callers.
+- Replay protection beyond the ±300 s `created` window, and atomic
+  uniqueness for concurrent identical shares (two concurrent deliveries of
+  the same share could both create a File; the host has no in-commit
+  uniqueness check yet, #167 section 1).
+- Re-fetching after the sender changes the file, and revocation of the local
+  copy on `SHARE_UNSHARED`.
+
+## Build and tests
 
 ```sh
 node integrations/open-cloud-mesh/build.mjs
 node integrations/tooling/run-lane.mjs open-cloud-mesh --tier node
+node integrations/tooling/run-lane.mjs open-cloud-mesh --tier e2e
 ```
 
-The executable Node lane tests discovery and unavailable receiving, protocol
-validation/limits, actual intent shape, document binding, replay/conflicts,
-permission/read failures, credential exclusion and deterministic bundling.
-It needs no browser dependencies. `plugin.js` is generated; edit `plugin.mjs`.
+The node tier runs `plugin.test.mjs` (every route with a fake host:
+discovery, JWK Set, accepted/refused/repeated shares, notifications,
+secret handling, the bundle) and `peer.test.mjs` (the e2e peer's own RFC
+9421 code).
 
-## Specification and OpenGeoMesh reference
+The e2e tier runs `e2e/ocm.spec.ts` on atomic-server built with the
+`plugin-routes` feature at `--plugin-routes read-write`, with the invented
+OCM peer in `e2e/peer.mjs` on the lane's `protocolPeer` port, allowed with
+`--plugin-egress-loopback`. It installs the plugin through the store's
+review dialog, checks discovery, sends a signed share, sees the File (and
+its text preview) in the drive, has the peer verify the `SHARE_ACCEPTED`
+notification against the installation's JWK Set, sends `SHARE_UNSHARED`,
+and checks two refusals. The peer is written from the specification, not
+from atomic-server's code, but it is still ours: it is not interoperability
+evidence with any deployed OCM server.
 
-Wire fields were checked against the official
-[OCM 1.3.0 specification](https://github.com/cs3org/OCM-API/blob/v1.3.0/spec.yaml),
-including `Discovery` and `NewShare`. Fixtures are synthetic and there is no
-claim of full 1.3 conformance or compatibility with newer versions.
-
-[OpenGeoMesh's opencloudmesh crate](https://docs.rs/opencloudmesh/latest/opencloudmesh/)
-provides a useful protocol reference, but cannot be linked into QuickJS. This
-implementation uses JavaScript and the OCM specification directly; no Rust
-source or dependency is bundled. The [accepted route design](../../docs/design/server-plugin-routes.md)
-provides the intended C receiver/B delivery placement.
-
-## Reviewed notification lifecycle
-
-The OCM 1.3 `NewNotification` schema requires `notificationType`, `resourceType`
-and `providerId`; it permits an optional protocol-specific `notification`
-object. This implementation supports the named file notifications
-`SHARE_ACCEPTED`, `SHARE_DECLINED` and `SHARE_UNSHARED`. Other notification types
-and resource types are refused. Optional notification parameters are validated
-as an object but never persisted: the specification explicitly permits a
-`sharedSecret` there. This is a metadata workflow, not token processing.
-
-For a previously imported receipt, run the normal reviewed job with the same
-peer policy, recipient and document configuration, changing these fields:
-
-```json
-{
-  "mode": "apply-reviewed-notification",
-  "expectedState": "recorded",
-  "notificationJson": "{\"notificationType\":\"SHARE_ACCEPTED\",\"resourceType\":\"file\",\"providerId\":\"share-123\"}"
-}
-```
-
-The notification does not carry a recipient in this spec. The operator must
-identify and review both its peer provenance and recipient; neither is inferred
-or authenticated from the notification JSON. The job looks up the exact persisted
-peer/provider-ID/recipient tuple, requires one matching Message, checks its
-parent and `about` link against the configured existing document, and checks
-that the receipt text has not been locally edited.
-
-New receipts persist lifecycle metadata in the host's existing JSON
-`importBaseline` property. Its `values` map records the source description;
-`previous` carries the preceding source values for the native commit validator.
-This lets the host reject a stale transition or a concurrent local text edit.
-States are `recorded`, `accepted`, `declined` and
-`unshared`. The local policy permits recorded → accepted/declined/unshared and
-accepted → unshared. Declined/unshared are terminal; this conservative policy
-is ours, not a state machine defined by OCM. A repeat of the recorded last
-notification is a no-op; conflicting or stale transitions fail without intents.
-A later share reimport preserves the existing lifecycle instead of resetting it.
-Exact pre-lifecycle receipts can gain their baseline through another reviewed
-share import; edited or ambiguously bound legacy receipts cannot.
-
-A transition proposes only two property changes on the existing receipt:
-`importBaseline` and its readable description. It does not change the
-underlying document, permissions, content, credentials or remote share. In
-particular an `unshared` receipt is **not enforcement of remote or Atomic access
-revocation**. No notification is sent or acknowledged over the network. POST
-`/ocm/notifications` is explicitly 501 behind the same host gates as shares.
-
-`expectedState` is checked while planning. The native import baseline validator
-also checks preceding source values and local text edits at commit. These
-checks do not provide a transaction/snapshot guarantee across resources. OCM1.3 has no notification event ID
-in this schema, so idempotency here recognizes repeated resulting decisions,
-not an authenticated durable inbox log. Live host and peer interoperability
-remain unverified.
-
-Peer origins are canonicalized before policy checks and identity lookup: HTTPS
-scheme/DNS case are normalized, port 443 is omitted, and other numeric ports
-must be 1–65535. Policy keys undergo the same normalization; contradictory
-allow/deny aliases fail closed. Malformed DNS labels, IP spellings, trailing
-dots, credentials, paths and query strings are not accepted by this deliberately
-restricted parser. An old receipt keyed with explicit `:443` is refused for
-manual reconciliation rather than silently migrated or duplicated; these
-unpublished changes provide no deployed-data migration guarantee.
-
-Document references support canonical `atomic:<genesis>` resource subjects,
-legacy `did:ad:` subjects and HTTP(S) resource URLs. The configured subject is
-passed unchanged to actual host reads and remains subject to resource type and
-permission checks; recognizing its scheme grants no access.
+Needs an `.atomic-server-ref` that contains `claude/plugin-ocm-host`; on the
+current pin the server refuses to start with `--plugin-egress-loopback`.

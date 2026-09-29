@@ -130,6 +130,17 @@ export function validateConfig(config) {
         );
     }
 
+    // A protocol peer on loopback needs `--plugin-egress-loopback`, which
+    // only a read-write node accepts.
+    if (lane.protocolPeer !== undefined) {
+      if (lane.protocolPeer !== true)
+        throw new Error(`lane ${lane.id}: protocolPeer must be true or absent`);
+      if (!pluginRoutesLevels(lane).includes('read-write'))
+        throw new Error(
+          `lane ${lane.id}: protocolPeer needs pluginRoutes read-write`,
+        );
+    }
+
     if (lane.paths !== undefined) {
       if (!Array.isArray(lane.paths))
         throw new Error(`lane ${lane.id}: paths must be an array`);
@@ -161,7 +172,11 @@ export function loadLanes(base = root) {
   );
 }
 
-/** Every lane's three listeners, derived so CI logs and local runs agree. */
+/**
+ * Every lane's listeners (one per `roleOffsets` role: atomic-server, the
+ * dev-server, the mock proxy, and a protocol peer a lane's e2e may start),
+ * derived so CI logs and local runs agree.
+ */
 export function lanePorts(lane, config) {
   const base = config.portBase + lane.index * 10;
 

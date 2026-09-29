@@ -95,11 +95,32 @@ export function serverEnv(ports, store) {
 export const routesOrigin = ports =>
   `http://routes.localhost:${ports.atomicServer}`;
 
-/** atomic-server's arguments for a lane at one `--plugin-routes` level. */
-export const pluginRoutesArgs = (level, ports) =>
+/**
+ * Where a lane's protocol peer listens (lanes.json `protocolPeer`): an OCM
+ * server, a fediverse instance, ... that the lane's e2e starts itself, on
+ * the lane's own `protocolPeer` port.
+ */
+export const protocolPeerOrigin = ports =>
+  `http://127.0.0.1:${ports.protocolPeer}`;
+
+/**
+ * atomic-server's arguments for a lane at one `--plugin-routes` level.
+ * `egressLoopback`: loopback origins plugin egress may reach
+ * (`--plugin-egress-loopback`, read-write only), for a protocol peer on this
+ * machine.
+ */
+export const pluginRoutesArgs = (level, ports, egressLoopback = []) =>
   level === undefined
     ? []
-    : ['--plugin-routes', level, '--routes-origin', routesOrigin(ports)];
+    : [
+        '--plugin-routes',
+        level,
+        '--routes-origin',
+        routesOrigin(ports),
+        ...(level === 'read-write' && egressLoopback.length
+          ? ['--plugin-egress-loopback', egressLoopback.join(',')]
+          : []),
+      ];
 
 /**
  * The plugin-routes options atomic-server reads from its environment. A build
@@ -112,6 +133,7 @@ export const PLUGIN_ROUTES_ENV = [
   'ATOMIC_ROUTES_ORIGIN',
   'ATOMIC_PLUGIN_LISTENERS',
   'ATOMIC_PLUGIN_SIDECARS',
+  'ATOMIC_PLUGIN_EGRESS_LOOPBACK',
 ];
 
 const withoutPluginRoutesEnv = env =>
@@ -349,6 +371,7 @@ export async function bringUp({
   platforms,
   label = 'shared',
   pluginRoutes,
+  egressLoopback = [],
 }) {
   const config = loadLanes();
   let image = serverImage();
@@ -414,14 +437,14 @@ export async function bringUp({
         ports,
         label,
         env: serverEnv(ports, IMAGE_STORE),
-        command: pluginRoutesArgs(pluginRoutes, ports),
+        command: pluginRoutesArgs(pluginRoutes, ports, egressLoopback),
       }),
     );
   } else {
     start(
       'atomic-server',
       binary,
-      pluginRoutesArgs(pluginRoutes, ports),
+      pluginRoutesArgs(pluginRoutes, ports, egressLoopback),
       serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
     );
   }

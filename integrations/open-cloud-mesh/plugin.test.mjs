@@ -6,193 +6,574 @@ import {
   handle,
   parseShare,
   parseNotification,
+  domain,
+  describe,
   run,
   P,
-  origin,
+  FILE,
+  KEY,
 } from './plugin.mjs';
-const doc = 'https://atomic.example/docs/project';
-const peer = 'https://cloud.example';
-const share = {
-  name: 'Design.md',
+
+// Invented test data only.
+const FOLDER = 'atomic:folder-received-shares';
+const BASE = 'https://ocm-inst.routes.atomic.example';
+const HOST = 'ocm-inst.routes.atomic.example';
+const PEER = 'cloud.example.org';
+const SECRET = 'invented-shared-secret-DO-NOT-PERSIST';
+const HASH = 'a'.repeat(64);
+
+const share = (overrides = {}) => ({
+  shareWith: `bob@${HOST}`,
+  name: 'spec.txt',
   providerId: 'share-123',
-  owner: 'alice@cloud.example',
-  sender: 'alice@cloud.example',
-  shareWith: 'bob@atomic.example',
+  owner: `alice@${PEER}`,
+  sender: `alice@${PEER}`,
+  senderDisplayName: 'Alice',
   shareType: 'user',
   resourceType: 'file',
   protocol: {
     name: 'multi',
     webdav: {
-      uri: 'remote.php/dav/share-123',
+      uri: `https://${PEER}/remote.php/dav/ocm/share-123`,
+      sharedSecret: SECRET,
       permissions: ['read'],
-      sharedSecret: 'DO-NOT-PERSIST',
     },
   },
-};
+  ...overrides,
+});
 
-function host(config = {}, rows = {}) {
+const caller = (overrides = {}) => ({
+  keyId: `${PEER}#key1`,
+  owner: `https://${PEER}`,
+  domain: PEER,
+  scheme: 'rfc9421',
+  alg: 'ed25519',
+  tag: 'ocm',
+  endPoint: `https://${PEER}/ocm`,
+  ...overrides,
+});
+
+/** A route context like the host's: config, reads, queries, host calls. */
+function ctx({ route, config = {}, rows = {}, fetch } = {}) {
+  const calls = { fetch: [] };
+
   return {
+    calls,
+    trigger: { kind: 'http', route },
     config: {
-      publicOrigin: 'https://atomic.example',
-      mode: 'import-reviewed-share',
-      peerOrigin: peer,
-      allowedPeers: { [peer]: true },
-      recipient: share.shareWith,
-      document: doc,
-      shareJson: JSON.stringify(share),
+      sharesFolder: FOLDER,
+      allowedPeers: { [PEER]: true },
+      recipients: { bob: 'Bob' },
       ...config,
     },
-    read(s) {
-      return (
-        rows[s] ??
-        (s === doc
-          ? { [P.isA]: ['https://atomicdata.dev/classes/DocumentV2'] }
-          : undefined)
-      );
+    read: s => rows[s],
+    query: (p, v) => Object.keys(rows).filter(s => rows[s][p] === v),
+    keys: {
+      publicKey: name => {
+        assert.equal(name, KEY);
+
+        return {
+          name,
+          alg: 'ed25519',
+          publicKeyPem:
+            '-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n',
+          jwk: {
+            kty: 'OKP',
+            crv: 'Ed25519',
+            alg: 'Ed25519',
+            use: 'sig',
+            x: 'invented-x',
+          },
+        };
+      },
     },
-    query(p, value) {
-      return Object.keys(rows).filter(s => rows[s][p] === value);
+    blobs: {
+      fetch: request => {
+        calls.fetch.push(request);
+        if (fetch) return fetch(request);
+
+        return {
+          status: 200,
+          blob: {
+            hash: HASH,
+            size: 33,
+            type: 'text/plain',
+            subject: `atomic:blob:${HASH}`,
+          },
+        };
+      },
     },
   };
 }
 
-function fail(c, re, rows) {
-  const result = run(host(c, rows));
-  assert.deepEqual(result.intents, []);
-  assert.equal(result.problems[0].severity, 'error');
-  assert.match(result.problems[0].message, re);
-}
+const request = (method, body, extra = {}) => ({
+  method,
+  path: '/',
+  url: `${BASE}/`,
+  base: BASE,
+  params: {},
+  query: {},
+  headers: {},
+  body:
+    body === undefined
+      ? null
+      : typeof body === 'string'
+        ? body
+        : JSON.stringify(body),
+  caller: null,
+  receivedAt: 0,
+  ...extra,
+});
 
-test('disabled discovery is explicit and never advertises unsupported file exchange', () => {
-  const result = handle(host(), { method: 'GET', path: '/ocm-provider' });
-  assert.equal(result.status, 200);
-  assert.deepEqual(JSON.parse(result.body), {
-    enabled: false,
-    apiVersion: '1.3.0',
-    endPoint: 'https://atomic.example/ocm',
-    resourceTypes: [],
-  });
-  assert.equal(
-    handle(host(), { method: 'HEAD', path: '/ocm-provider' }).body,
-    '',
+const post = (route, body, callerOverrides, context = {}) => {
+  const c = ctx({ route, ...context });
+  const verdict = handle(
+    c,
+    request('POST', body, {
+      caller: callerOverrides === null ? null : caller(callerOverrides),
+    }),
   );
+  const status = verdict.response ? verdict.response.status : verdict.status;
+  const answer = verdict.response ? verdict.response.body : verdict.body;
+
+  return {
+    verdict,
+    status,
+    answer: JSON.parse(answer || 'null'),
+    calls: c.calls,
+  };
+};
+
+test('discovery advertises an enabled OCM 1.5 receiver with its JWK Set', () => {
+  const c = ctx({ route: 'discovery' });
+  const r = handle(c, request('GET', undefined, { wellKnown: 'ocm' }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(r.body), {
+    enabled: true,
+    apiVersion: '1.5.0',
+    endPoint: `${BASE}/ocm`,
+    provider: 'Atomic Server',
+    resourceTypes: [
+      {
+        name: 'file',
+        shareTypes: ['user'],
+        protocols: { 'webdav-receive': { uri: 'absolute' } },
+      },
+    ],
+    capabilities: ['http-sig', 'notifications'],
+    criteria: ['must-use-http-sig', 'allowlist'],
+    jwksUri: `${BASE}/ocm/jwks`,
+  });
+  assert.equal(handle(c, request('HEAD')).body, '');
+  assert.equal(handle(c, request('POST', {})).status, 405);
+  const off = handle(
+    ctx({ route: 'discovery', config: { sharesFolder: undefined } }),
+    request('GET'),
+  );
+  assert.equal(JSON.parse(off.body).enabled, false);
+});
+
+test('the JWK Set publishes the installation key under <host>#ocm-key', () => {
+  const r = handle(ctx({ route: 'jwks' }), request('GET'));
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(r.body), {
+    keys: [
+      {
+        kty: 'OKP',
+        crv: 'Ed25519',
+        alg: 'Ed25519',
+        use: 'sig',
+        x: 'invented-x',
+        kid: `${HOST}#ocm-key`,
+      },
+    ],
+  });
+});
+
+test('a signed share from an allowed peer is fetched, stored and acknowledged', () => {
+  const { verdict, status, answer, calls } = post('shares', share(), {});
+  assert.equal(status, 201);
+  assert.deepEqual(answer, { recipientDisplayName: 'Bob' });
+  // The host fetches the file with the share's secret, never the plugin.
+  assert.deepEqual(calls.fetch, [
+    {
+      operation: 'fetch-file',
+      url: `https://${PEER}/remote.php/dav/ocm/share-123`,
+      headers: { authorization: `Bearer ${SECRET}` },
+    },
+  ]);
+  assert.equal(verdict.intents.length, 1);
+  const [create] = verdict.intents;
+  assert.equal(create.op, 'create');
+  assert.equal(create.parent, FOLDER);
+  assert.deepEqual(create.isA, [FILE]);
+  assert.equal(create.set[P.name], 'spec.txt');
+  assert.equal(create.set[P.blob], `atomic:blob:${HASH}`);
+  assert.equal(create.set[P.filesize], 33);
+  assert.equal(create.set[P.mimetype], 'text/plain');
+  assert.equal(create.set[P.downloadURL], `/download/files/${HASH}`);
   assert.equal(
-    handle(host({ publicOrigin: '' }), { method: 'GET', path: '/ocm-provider' })
-      .status,
+    create.set[P.localId],
+    JSON.stringify(['ocm-share-v2', PEER, 'share-123']),
+  );
+  assert.match(create.set[P.description], /^- State: accepted$/m);
+  // The secret is in the fetch request only: not in intents, deliveries
+  // or the answer.
+  const { response, ...effects } = verdict;
+  assert.ok(!JSON.stringify(effects).includes(SECRET));
+  assert.ok(!JSON.stringify(response).includes(SECRET));
+
+  assert.deepEqual(verdict.enqueue, [
+    {
+      operation: 'notify',
+      url: `https://${PEER}/ocm/notifications`,
+      headers: { 'content-type': 'application/json' },
+      body: {
+        notificationType: 'SHARE_ACCEPTED',
+        senderDomain: HOST,
+        resourceType: 'file',
+        shareType: 'user',
+        notification: {
+          message: 'The share was accepted.',
+          file: { providerId: 'share-123' },
+        },
+      },
+      sign: {
+        key: KEY,
+        keyId: `${HOST}#ocm-key`,
+        format: 'rfc9421',
+        tag: 'ocm',
+      },
+      idempotencyKey: `accepted:${PEER}:share-123`,
+    },
+  ]);
+});
+
+test('a repeated share answers 201 without fetching or writing again', () => {
+  const rows = {
+    'atomic:existing': {
+      [P.localId]: JSON.stringify(['ocm-share-v2', PEER, 'share-123']),
+    },
+  };
+  const { verdict, status, calls } = post('shares', share(), {}, { rows });
+  assert.equal(status, 201);
+  assert.equal(calls.fetch.length, 0);
+  assert.equal(verdict.intents, undefined);
+  assert.equal(verdict.enqueue, undefined);
+});
+
+test('shares are refused unless signed by an allowed peer for its own accounts', () => {
+  const cases = [
+    [null, share(), 401],
+    [{ tag: undefined }, share(), 401],
+    [{ domain: 'other.example' }, share(), 403],
+    [{}, share({ sender: 'mallory@other.example' }), 403],
+    [{}, share({ owner: 'mallory@other.example' }), 403],
+    [{}, share({ shareWith: 'carol@' + HOST }), 400],
+    [{}, share({ shareWith: 'bob@elsewhere.example' }), 400],
+    [{}, share({ expiration: 1 }), 400],
+  ];
+
+  for (const [who, body, expected] of cases) {
+    const { verdict, status, calls } = post('shares', body, who);
+    assert.equal(status, expected, JSON.stringify([who, body.shareWith]));
+    assert.equal(verdict.intents, undefined);
+    assert.equal(calls.fetch.length, 0);
+  }
+
+  // Allowed peers are an explicit allowlist.
+  for (const allowedPeers of [
+    undefined,
+    {},
+    { [PEER]: false },
+    { 'CLOUD.example.org': 'yes' },
+  ])
+    assert.equal(
+      post('shares', share(), {}, { config: { allowedPeers } }).status,
+      403,
+    );
+  assert.equal(
+    post(
+      'shares',
+      share(),
+      {},
+      { config: { allowedPeers: { 'Cloud.Example.Org': true } } },
+    ).status,
+    201,
+  );
+  // Not configured yet.
+  assert.equal(
+    post('shares', share(), {}, { config: { sharesFolder: '' } }).status,
     503,
   );
 });
-test('receive fails closed even with invented caller and malicious payload', () => {
-  const result = handle(host(), {
-    method: 'POST',
-    path: '/ocm/shares',
-    caller: 'admin',
-    body: JSON.stringify(share),
-  });
-  assert.equal(result.status, 501);
-  assert.equal(result.intents, undefined);
-  assert.equal(
-    handle(host(), { method: 'GET', path: '/ocm/shares' }).status,
-    405,
-  );
-  assert.equal(handle(host(), { method: 'GET', path: '/other' }).status, 404);
-});
-test('protocol parser drops WebDAV credentials and locations, preserves exact expiration', () => {
-  const parsed = parseShare(
-    JSON.stringify({ ...share, expiration: 1800000000 }),
-  );
-  assert.equal(parsed.expiration, '1800000000');
-  assert.deepEqual(parsed.permissions, ['read']);
-  assert.ok(!JSON.stringify(parsed).includes('DO-NOT-PERSIST'));
-  assert.ok(!JSON.stringify(parsed).includes('remote.php'));
-});
-test('reviewed import produces native Message about the existing document', () => {
-  const result = run(host());
-  assert.deepEqual(result.problems, []);
-  const intent = result.intents[0];
-  assert.equal(intent.op, 'create');
-  assert.equal(intent.parent, doc);
-  assert.equal(intent.set[P.about], doc);
-  assert.deepEqual(intent.isA, ['https://atomicdata.dev/classes/Message']);
-  assert.equal(intent.set[P.name], 'OCM share: Design.md');
-  assert.ok(!JSON.stringify(result).includes('DO-NOT-PERSIST'));
-  assert.ok(!JSON.stringify(result).includes('documentContent'));
-});
-test('durable duplicate is a no-op across fresh runs; modifications conflict', () => {
-  const intent = run(host()).intents[0];
-  const row = { ...intent.set, [P.parent]: intent.parent, [P.isA]: intent.isA };
-  assert.deepEqual(run(host({}, { receipt: row })), {
-    intents: [],
-    problems: [],
-  });
-  fail(
-    { shareJson: JSON.stringify({ ...share, name: 'Changed' }) },
-    /conflicts/,
-    { receipt: row },
-  );
-  fail({}, /conflicts/, {
-    receipt: { ...row, [P.about]: 'https://atomic.example/other' },
-  });
-  fail({}, /Ambiguous/, { a: row, b: row });
-});
-test('operator policy, scope and document type are required before any intent', () => {
-  fail({ mode: 'network' }, /operator-reviewed/);
-  fail({ allowedPeers: [] }, /not allowed/);
-  fail({ recipient: 'other' }, /recipient/);
-  fail({ document: 'https://atomic.example/missing' }, /accessible Atomic/);
-  fail({}, /accessible Atomic/, {
-    [doc]: { [P.isA]: ['https://atomicdata.dev/classes/File'] },
-  });
-  const c = host();
 
-  c.read = () => {
-    throw new Error('host denied read');
+test('unsupported share shapes answer 501 and fetch nothing', () => {
+  const dav = share().protocol.webdav;
+
+  for (const body of [
+    share({ shareType: 'group' }),
+    share({ resourceType: 'folder' }),
+    share({ encryption: { resourceId: 'x', scheme: 'ocm-gpg' } }),
+    share({ protocol: { name: 'multi', webapp: { uri: 'https://x/' } } }),
+    share({
+      protocol: { name: 'multi', webdav: { ...dav, uri: 'share-123' } },
+    }),
+    share({
+      protocol: {
+        name: 'multi',
+        webdav: { ...dav, requirements: ['must-exchange-token'] },
+      },
+    }),
+  ]) {
+    const { status, calls } = post('shares', body, {});
+    assert.equal(status, 501, JSON.stringify(body.protocol));
+    assert.equal(calls.fetch.length, 0);
+  }
+});
+
+test('plain-http WebDAV URIs are only accepted on the verified sender origin', () => {
+  const dav = share().protocol.webdav;
+  const http = uri =>
+    share({ protocol: { name: 'multi', webdav: { ...dav, uri } } });
+  assert.equal(post('shares', http(`http://${PEER}/dav/x`), {}).status, 400);
+  // A peer the operator allowed on loopback: the host reports its
+  // discovery origin as `owner`.
+  const local = { domain: '127.0.0.1:19143', owner: 'http://127.0.0.1:19143' };
+  const body = share({
+    sender: 'alice@127.0.0.1:19143',
+    owner: 'alice@127.0.0.1:19143',
+    protocol: {
+      name: 'multi',
+      webdav: { ...dav, uri: 'http://127.0.0.1:19143/dav/x' },
+    },
+  });
+  assert.equal(
+    post('shares', body, local, {
+      config: { allowedPeers: { '127.0.0.1:19143': true } },
+    }).status,
+    201,
+  );
+});
+
+test('a failed fetch stores and sends nothing', () => {
+  const refused = post(
+    'shares',
+    share(),
+    {},
+    { fetch: () => ({ status: 401 }) },
+  );
+  assert.equal(refused.status, 400);
+  assert.match(refused.answer.message, /answered 401/);
+  assert.equal(refused.verdict.intents, undefined);
+  const thrown = post(
+    'shares',
+    share(),
+    {},
+    {
+      fetch: () => {
+        throw new Error('bytes-per-day quota');
+      },
+    },
+  );
+  assert.equal(thrown.status, 503);
+  assert.ok(!JSON.stringify(thrown.answer).includes(SECRET));
+  assert.equal(thrown.verdict.intents, undefined);
+});
+
+test('no endPoint in the sender discovery: stored, with a warning instead of a notification', () => {
+  const { verdict, status } = post('shares', share(), { endPoint: null });
+  assert.equal(status, 201);
+  assert.equal(verdict.intents.length, 1);
+  assert.deepEqual(verdict.enqueue, []);
+  assert.match(verdict.problems[0].message, /no endPoint/);
+});
+
+const identity = JSON.stringify(['ocm-share-v2', PEER, 'share-123']);
+
+function received(state = 'accepted') {
+  return {
+    'atomic:received': {
+      [P.parent]: FOLDER,
+      [P.isA]: [FILE],
+      [P.localId]: identity,
+      [P.description]: describe({
+        ...parseShare(JSON.stringify(share())).share,
+        peer: PEER,
+        state,
+      }),
+    },
+  };
+}
+
+const notification = (type = 'SHARE_UNSHARED', extra = {}) => ({
+  notificationType: type,
+  senderDomain: PEER,
+  resourceType: 'file',
+  shareType: 'user',
+  notification: {
+    message: 'invented',
+    sharedSecret: SECRET,
+    file: { providerId: 'share-123', ...extra },
+  },
+});
+
+test('SHARE_UNSHARED marks the received copy unshared, once', () => {
+  const { verdict, status } = post(
+    'notifications',
+    notification(),
+    {},
+    { rows: received() },
+  );
+  assert.equal(status, 201);
+  assert.equal(verdict.intents.length, 1);
+  assert.equal(verdict.intents[0].op, 'set');
+  assert.equal(verdict.intents[0].subject, 'atomic:received');
+  assert.match(verdict.intents[0].set[P.description], /^- State: unshared$/m);
+  assert.ok(!JSON.stringify(verdict).includes(SECRET));
+  const again = post(
+    'notifications',
+    notification(),
+    {},
+    { rows: received('unshared') },
+  );
+  assert.equal(again.status, 201);
+  assert.equal(again.verdict.intents, undefined);
+});
+
+test('SHARE_CHANGE_PERMISSION updates the permissions line', () => {
+  const { verdict } = post(
+    'notifications',
+    notification('SHARE_CHANGE_PERMISSION', { permissions: ['write', 'read'] }),
+    {},
+    { rows: received() },
+  );
+  assert.match(
+    verdict.intents[0].set[P.description],
+    /^- Permissions: read, write$/m,
+  );
+  assert.equal(
+    post(
+      'notifications',
+      notification('SHARE_CHANGE_PERMISSION'),
+      {},
+      { rows: received() },
+    ).status,
+    400,
+  );
+});
+
+test('notifications are refused for other senders, unknown shares and unsupported types', () => {
+  assert.equal(
+    post('notifications', notification(), null, { rows: received() }).status,
+    401,
+  );
+  assert.equal(
+    post(
+      'notifications',
+      { ...notification(), senderDomain: 'other.example' },
+      {},
+      { rows: received() },
+    ).status,
+    403,
+  );
+  assert.equal(
+    post('notifications', notification(), {}, { rows: {} }).status,
+    404,
+  );
+  assert.equal(
+    post(
+      'notifications',
+      notification('SHARE_ACCEPTED'),
+      {},
+      { rows: received() },
+    ).status,
+    501,
+  );
+  assert.equal(
+    post(
+      'notifications',
+      notification('REQUEST_RESHARE'),
+      {},
+      { rows: received() },
+    ).status,
+    501,
+  );
+  const moved = received();
+  moved['atomic:received'][P.parent] = 'atomic:elsewhere';
+  assert.equal(
+    post('notifications', notification(), {}, { rows: moved }).status,
+    409,
+  );
+  const edited = received();
+  edited['atomic:received'][P.description] = 'edited by hand';
+  assert.equal(
+    post('notifications', notification(), {}, { rows: edited }).status,
+    409,
+  );
+  // The deprecated top-level providerId still works.
+  const legacy = { ...notification(), providerId: 'share-123' };
+  delete legacy.notification;
+  assert.equal(
+    post('notifications', legacy, {}, { rows: received() }).status,
+    201,
+  );
+});
+
+test('parsers bound their input and keep secrets out of metadata', () => {
+  const { share: meta, access } = parseShare(JSON.stringify(share()));
+  assert.equal(access.secret, SECRET);
+  assert.ok(!JSON.stringify(meta).includes(SECRET));
+  assert.deepEqual(meta.permissions, ['read']);
+  assert.throws(() => parseShare('x'.repeat(70000)), /at most/);
+  assert.throws(() => parseShare('[]'), /Invalid share/);
+  assert.throws(
+    () => parseShare(JSON.stringify(share({ name: '../x' }))),
+    /Invalid name/,
+  );
+  assert.throws(
+    () => parseShare(JSON.stringify(share({ name: 'a\nb' }))),
+    /Invalid name/,
+  );
+  const n = parseNotification(JSON.stringify(notification()));
+  assert.deepEqual(n, {
+    notificationType: 'SHARE_UNSHARED',
+    senderDomain: PEER,
+    providerId: 'share-123',
+  });
+});
+
+test('domains are canonical host[:port] only', () => {
+  assert.equal(domain('Cloud.Example.Org'), 'cloud.example.org');
+  assert.equal(domain('127.0.0.1:19143'), '127.0.0.1:19143');
+  for (const bad of [
+    'https://cloud.example.org',
+    'cloud.example.org/path',
+    'user@cloud.example.org',
+    'cloud.example.org:0',
+    'cloud.example.org:65536',
+    '-bad.example',
+    '[::1]:80',
+    'cloud.example.org\n',
+  ])
+    assert.throws(() => domain(bad), undefined, bad);
+});
+
+test('unknown routes and failures never echo request data', () => {
+  assert.equal(handle(ctx({ route: 'nope' }), request('GET')).status, 404);
+  const c = ctx({ route: 'shares' });
+
+  c.query = () => {
+    throw new Error(SECRET);
   };
 
-  assert.deepEqual(run(c).intents, []);
+  const r = handle(c, request('POST', share(), { caller: caller() }));
+  assert.equal(r.status, 500);
+  assert.ok(!r.body.includes(SECRET));
+  assert.equal(run().intents.length, 0);
 });
-test('bounded parsing refuses malformed, oversized, unsupported and ambiguous wire data', () => {
-  for (const body of ['{', 'null', '[]', ' '.repeat(16385)])
-    assert.throws(() => parseShare(body));
-  for (const patch of [
-    { name: '\n' },
-    { shareType: 'group' },
-    { resourceType: 'folder' },
-    { expiration: 1.2 },
-    { protocol: null },
-    { providerId: 7 },
-  ])
-    assert.throws(() => parseShare(JSON.stringify({ ...share, ...patch })));
-  assert.throws(
-    () =>
-      parseShare(
-        JSON.stringify({
-          ...share,
-          protocol: {
-            name: 'multi',
-            webdav: {
-              uri: 'x',
-              permissions: ['read'],
-              requirements: ['must-use-mfa'],
-            },
-          },
-        }),
-      ),
-    /requirements/,
-  );
-});
-test('origin parsing works without URL and refuses credentials, query and path', () => {
-  assert.equal(origin(peer), peer);
-  for (const bad of [
-    'http://cloud.example',
-    'https://user:pw@cloud.example',
-    peer + '/path',
-    peer + '?token=secret',
-    'https://cloud.example\n',
-  ])
-    assert.throws(() => origin(bad));
-});
-test('self-contained release rebuilds reproducibly with executable manifest routes', async () => {
+
+test('the bundle rebuilds reproducibly and matches the manifest', async () => {
   const before = await readFile(
     new URL('./plugin.js', import.meta.url),
     'utf8',
@@ -207,344 +588,28 @@ test('self-contained release rebuilds reproducibly with executable manifest rout
   const built = await import(
     'data:text/javascript;base64,' + Buffer.from(before).toString('base64')
   );
-  assert.deepEqual(built.run(host()), run(host()));
   const manifest = JSON.parse(
     await readFile(new URL('./manifest.json', import.meta.url)),
   );
   assert.deepEqual(built.manifest, manifest);
   assert.equal(manifest.schemaVersion, 3);
-  assert.equal(manifest.http.mount, 'drive-host');
+  assert.equal(manifest.http.mount, 'installation-origin');
+  const routes = Object.fromEntries(manifest.http.routes.map(r => [r.id, r]));
 
-  for (const route of manifest.http.routes) {
-    assert.equal(route.auth, 'none');
-    assert.equal(route.writes, undefined);
-    assert.equal(route.enqueues, undefined);
-    assert.notEqual(
-      handle(host(), { path: route.path, method: route.methods[0] }).status,
-      404,
-    );
-  }
-});
+  // Writes and deliveries only on signature-verified routes.
+  for (const route of Object.values(routes))
+    if (route.writes || route.enqueues) {
+      assert.equal(route.auth, 'http-signature', route.id);
+      assert.equal(route.principal, 'installation', route.id);
+    }
 
-function savedReceipt() {
-  const intent = run(host()).intents[0];
-
-  return { ...intent.set, [P.parent]: intent.parent, [P.isA]: intent.isA };
-}
-
-function notify(row, type = 'SHARE_ACCEPTED', overrides = {}) {
-  return run(
-    host(
-      {
-        mode: 'apply-reviewed-notification',
-        expectedState: 'recorded',
-        notificationJson: JSON.stringify({
-          notificationType: type,
-          resourceType: 'file',
-          providerId: 'share-123',
-          notification: {
-            message: 'Reviewed by operator',
-            sharedSecret: 'NEVER-PUBLISH',
-          },
-        }),
-        ...overrides,
-      },
-      { receipt: row },
-    ),
-  );
-}
-
-test('OCM1.3 notification fixture projects only the required public identity', () => {
-  assert.deepEqual(
-    parseNotification(
-      '{"notificationType":"SHARE_ACCEPTED","resourceType":"file","providerId":"share-123","notification":{"sharedSecret":"secret"}}',
-    ),
-    {
-      notificationType: 'SHARE_ACCEPTED',
-      resourceType: 'file',
-      providerId: 'share-123',
-    },
-  );
-  for (const value of [
-    JSON.stringify({
-      notificationType: ['SHARE_ACCEPTED'],
-      resourceType: 'file',
-      providerId: 'x',
-    }),
-    'null',
-    '[]',
-    '{',
-    JSON.stringify({
-      notificationType: 'USER_REMOVED',
-      resourceType: 'user',
-      providerId: 'x',
-    }),
-    JSON.stringify({
-      notificationType: 'REQUEST_RESHARE',
-      resourceType: 'file',
-      providerId: 'x',
-    }),
-    JSON.stringify({
-      notificationType: 'SHARE_DECLINED',
-      resourceType: 'file',
-      providerId: 'x',
-      notification: [],
-    }),
-    ' '.repeat(16385),
-  ])
-    assert.throws(() => parseNotification(value));
-});
-test('reviewed acceptance updates only persisted receipt metadata, then deduplicates', () => {
-  const row = savedReceipt();
-  const result = notify(row);
-  assert.deepEqual(result.problems, []);
-  assert.equal(result.intents.length, 1);
-  const change = result.intents[0];
-  assert.equal(change.op, 'set');
-  assert.equal(change.subject, 'receipt');
-  assert.deepEqual(
-    Object.keys(change.set).sort(),
-    [P.baseline, P.description].sort(),
-  );
-  assert.equal(change.set[P.baseline].state, 'accepted');
-  assert.equal(change.set[P.baseline].lastNotification, 'SHARE_ACCEPTED');
-  assert.equal(change.set[P.baseline].document, doc);
-  assert.ok(!JSON.stringify(result).includes('NEVER-PUBLISH'));
-  const persisted = { ...row, ...change.set };
-  assert.deepEqual(notify(persisted), { intents: [], problems: [] });
-  assert.deepEqual(run(host({}, { receipt: persisted })), {
-    intents: [],
-    problems: [],
-  });
-});
-test('decline and unshare are conservative terminal receipt states', () => {
-  const initial = savedReceipt();
-  const declined = {
-    ...initial,
-    ...notify(initial, 'SHARE_DECLINED').intents[0].set,
-  };
-  assert.equal(declined[P.baseline].state, 'declined');
-  const reopen = notify(declined, 'SHARE_ACCEPTED', {
-    expectedState: 'declined',
-  });
-  assert.deepEqual(reopen.intents, []);
-  assert.match(reopen.problems[0].message, /terminal/);
-  const accepted = { ...initial, ...notify(initial).intents[0].set };
-  const revoke = notify(accepted, 'SHARE_UNSHARED', {
-    expectedState: 'accepted',
-  });
-  assert.equal(revoke.intents[0].set[P.baseline].state, 'unshared');
-  const revoked = { ...accepted, ...revoke.intents[0].set };
-  assert.deepEqual(
-    notify(revoked, 'SHARE_UNSHARED', { expectedState: 'accepted' }),
-    { intents: [], problems: [] },
-  );
-  assert.deepEqual(
-    notify(revoked, 'SHARE_ACCEPTED', { expectedState: 'unshared' }).intents,
-    [],
-  );
-  assert.equal(
-    notify(initial, 'SHARE_UNSHARED').intents[0].set[P.baseline].state,
-    'unshared',
-  );
-});
-test('notification binding, expected-state and local-edit conflicts cannot mutate receipts', () => {
-  const row = savedReceipt();
-  for (const overrides of [
-    { recipient: 'somebody-else' },
-    {
-      peerOrigin: 'https://other.example',
-      allowedPeers: { 'https://other.example': true },
-    },
-    { expectedState: 'accepted' },
-    {
-      notificationJson:
-        '{"notificationType":"SHARE_ACCEPTED","resourceType":"file","providerId":"another-share"}',
-    },
-  ])
-    assert.deepEqual(notify(row, 'SHARE_ACCEPTED', overrides).intents, []);
-  assert.deepEqual(
-    notify({ ...row, [P.description]: 'Locally edited' }).intents,
-    [],
-  );
-  assert.deepEqual(
-    notify({ ...row, [P.about]: 'https://atomic.example/other' }).intents,
-    [],
-  );
-  const duplicateHost = host(
-    {
-      mode: 'apply-reviewed-notification',
-      expectedState: 'recorded',
-      notificationJson:
-        '{"notificationType":"SHARE_ACCEPTED","resourceType":"file","providerId":"share-123"}',
-    },
-    { a: row, b: row },
-  );
-  assert.deepEqual(run(duplicateHost).intents, []);
-});
-test('legacy receipts migrate only by exact reviewed reimport, and HTTP remains unavailable', () => {
-  const row = savedReceipt();
-  delete row[P.baseline];
-  assert.deepEqual(notify(row).intents, []);
-  const migration = run(host({}, { receipt: row }));
-  assert.deepEqual(migration.problems, []);
-  assert.deepEqual(Object.keys(migration.intents[0].set), [P.baseline]);
-  assert.equal(migration.intents[0].set[P.baseline].state, 'recorded');
-  assert.equal(
-    handle(host(), {
-      method: 'POST',
-      path: '/ocm/notifications',
-      body: '{"notificationType":"SHARE_UNSHARED"}',
-      caller: 'pretend-peer',
-    }).status,
-    501,
-  );
-});
-
-test('origin aliases share canonical identity and policy decisions', () => {
-  for (const alias of [
-    'https://CLOUD.Example',
-    'HTTPS://cloud.example:443',
-    'https://cloud.example:00443',
-  ])
-    assert.equal(origin(alias), peer);
-  assert.equal(
-    origin('https://CLOUD.example:08443'),
-    'https://cloud.example:8443',
-  );
-  for (const invalid of [
-    'https://cloud..example',
-    'https://-cloud.example',
-    'https://cloud-.example',
-    'https://cloud.example.',
-    'https://cloud.example:65536',
-    'https://cloud.example:0',
-    'https://127.0.0.1',
-    'https://' + 'x'.repeat(64) + '.example',
-  ])
-    assert.throws(() => origin(invalid));
-  const original = savedReceipt();
-  const aliases = {
-    peerOrigin: 'https://CLOUD.example:443',
-    allowedPeers: { 'HTTPS://Cloud.Example:443': true },
-  };
-  assert.deepEqual(run(host(aliases, { receipt: original })), {
-    intents: [],
-    problems: [],
-  });
-  assert.equal(
-    notify(original, 'SHARE_ACCEPTED', aliases).intents[0].set[P.baseline].peer,
-    peer,
-  );
-  assert.deepEqual(
-    run(host({ allowedPeers: { [peer]: true, [peer + ':443']: false } }))
-      .intents,
-    [],
-  );
-  assert.equal(
-    run(host({ allowedPeers: { [peer]: true, [peer + ':443']: true } })).intents
-      .length,
-    1,
-  );
-});
-test('precanonical default-port receipts fail closed rather than duplicate', () => {
-  const legacy = savedReceipt();
-  legacy[P.localId] = JSON.stringify([
-    'ocm-receipt-v1',
-    peer + ':443',
-    share.providerId,
-    share.shareWith,
+  assert.deepEqual(manifest.http.wellKnown, [
+    { name: 'ocm', kind: 'exclusive', route: 'discovery' },
   ]);
-  const result = run(host({}, { legacy }));
-  assert.deepEqual(result.intents, []);
-  assert.match(result.problems[0].message, /Legacy origin alias/);
-  assert.deepEqual(notify(legacy).intents, []);
-});
 
-test('canonical Atomic document subjects work for import and lifecycle', () => {
-  const atomicDocument = 'atomic:7c084226d9a111e6bf26cec0c932ce01';
-  const c = host(
-    { document: atomicDocument },
-    {
-      [atomicDocument]: {
-        [P.isA]: ['https://atomicdata.dev/classes/DocumentV2'],
-      },
-    },
-  );
-  const created = run(c);
-  assert.deepEqual(created.problems, []);
-  const intent = created.intents[0];
-  assert.equal(intent.parent, atomicDocument);
-  assert.equal(intent.set[P.about], atomicDocument);
-  const row = {
-    ...intent.set,
-    [P.parent]: atomicDocument,
-    [P.isA]: intent.isA,
-  };
-  const n = host(
-    {
-      document: atomicDocument,
-      mode: 'apply-reviewed-notification',
-      expectedState: 'recorded',
-      notificationJson:
-        '{"notificationType":"SHARE_ACCEPTED","resourceType":"file","providerId":"share-123"}',
-    },
-    {
-      receipt: row,
-      [atomicDocument]: {
-        [P.isA]: ['https://atomicdata.dev/classes/DocumentV2'],
-      },
-    },
-  );
-  assert.equal(run(n).intents[0].set[P.baseline].document, atomicDocument);
-
-  n.read = () => {
-    throw Error('Denied by host');
-  };
-
-  assert.deepEqual(run(n).intents, []);
-  for (const document of [
-    'atomic:',
-    'atomic://legacy',
-    'atomic:bad name',
-    'atomic:x?query',
-  ])
-    assert.deepEqual(run(host({ document })).intents, []);
-});
-
-test('native import baselines carry exact source values and previous values across lifecycle', () => {
-  // Contract: atomic-server/lib/src/import_identity.rs validate_baseline.
-  // Metadata can accompany the maps, but cannot replace these required fields.
-  const initial = savedReceipt();
-  assert.deepEqual(initial[P.baseline].previous, {});
-  assert.deepEqual(initial[P.baseline].values, {
-    [P.description]: initial[P.description],
-  });
-  const accept = notify(initial).intents[0].set;
-  assert.deepEqual(accept[P.baseline].previous, initial[P.baseline].values);
-  assert.deepEqual(accept[P.baseline].values, {
-    [P.description]: accept[P.description],
-  });
-  const accepted = { ...initial, ...accept };
-  const revoke = notify(accepted, 'SHARE_UNSHARED', {
-    expectedState: 'accepted',
-  }).intents[0].set;
-  assert.deepEqual(revoke[P.baseline].previous, accept[P.baseline].values);
-  assert.deepEqual(revoke[P.baseline].values, {
-    [P.description]: revoke[P.description],
-  });
-  const legacy = { ...initial };
-  delete legacy[P.baseline];
-  const adopted = run(host({}, { receipt: legacy })).intents[0].set;
-  assert.deepEqual(adopted[P.baseline].previous, {});
-  assert.deepEqual(adopted[P.baseline].values, {
-    [P.description]: legacy[P.description],
-  });
-});
-
-test('inconsistent source baseline is refused before receipt state can change', () => {
-  const row = savedReceipt();
-  row[P.baseline].values[P.description] = 'different source text';
-  assert.deepEqual(notify(row).intents, []);
-  assert.deepEqual(run(host({}, { receipt: row })).intents, []);
+  // Every route a manifest declares has a handler here.
+  for (const id of Object.keys(routes)) {
+    const r = built.handle(ctx({ route: id }), request('GET'));
+    assert.notEqual(r.status ?? r.response?.status, 404, id);
+  }
 });

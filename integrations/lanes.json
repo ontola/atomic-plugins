@@ -2,7 +2,12 @@
   "//": "One source of truth for the per-plugin CI lanes. Read by integrations/tooling/lanes.mjs, which .github/workflows/ci.yml and integrations/tooling/run-lane.mjs both go through. See integrations/PARALLEL_LANES.md.",
 
   "portBase": 19100,
-  "roleOffsets": { "atomicServer": 0, "devServer": 1, "mockProxy": 2 },
+  "roleOffsets": {
+    "atomicServer": 0,
+    "devServer": 1,
+    "mockProxy": 2,
+    "protocolPeer": 3
+  },
 
   "sharedIndexNote": "Port block for the CI jobs that are not a plugin lane — the hosting-surface check and the generic plugin-system e2e suite. A reserved index rather than a separate fixed block, so there is one port formula and lanes.test.mjs can prove it collides with nothing. No lane may take index 9.",
   "sharedIndex": 9,
@@ -12,9 +17,15 @@
       "id": "open-cloud-mesh",
       "index": 16,
       "platforms": [],
-      "tiers": ["node"],
-      "nodeTests": ["integrations/open-cloud-mesh/plugin.test.mjs"],
-      "note": "Executable OCM discovery, bounded metadata parser and reviewed Atomic document receipt importer. Network receipt remains unavailable pending host authorization and writes; no live interoperability claim."
+      "tiers": ["node", "e2e"],
+      "nodeTests": [
+        "integrations/open-cloud-mesh/plugin.test.mjs",
+        "integrations/open-cloud-mesh/peer.test.mjs"
+      ],
+      "pluginRoutes": "read-write",
+      "protocolPeer": true,
+      "e2e": ["integrations/open-cloud-mesh/e2e/ocm.spec.ts"],
+      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs) on the lane's protocolPeer port, allowed with --plugin-egress-loopback. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, blobs.fetch, the loopback option); no interoperability claim with a real Nextcloud/ownCloud peer."
     },
     {
       "id": "calendar",
