@@ -123,7 +123,12 @@ test.describe('atproto', () => {
     const installation = await install(page, target.drive, {
       release,
       releaseId,
-      config: { handle: HANDLE, did: WEB_DID, pds: PDS, signingKey: SIGNING_KEY },
+      config: {
+        handle: HANDLE,
+        did: WEB_DID,
+        pds: PDS,
+        signingKey: SIGNING_KEY,
+      },
     });
 
     // Handle -> DID: the HTTPS resolution method's well-known file.
@@ -132,7 +137,12 @@ test.describe('atproto', () => {
     expect(did.headers['content-type']).toBe('text/plain');
     expect(did.headers['cache-control']).toBe('no-store');
     expect(did.body).toBe(WEB_DID);
-    const head = await send('HEAD', '/.well-known/atproto-did', `${HANDLE}:${PORT}`, {});
+    const head = await send(
+      'HEAD',
+      '/.well-known/atproto-did',
+      `${HANDLE}:${PORT}`,
+      {},
+    );
     expect(head.status).toBe(200);
     expect(head.body).toBe('');
 
@@ -312,10 +322,15 @@ async function signedPost(
   body: unknown,
 ) {
   const text = JSON.stringify(body);
-  const headers = await signRequest(`${origin}${path}`, agent, {}, {
-    method: 'POST',
-    body: text,
-  });
+  const headers = await signRequest(
+    `${origin}${path}`,
+    agent,
+    {},
+    {
+      method: 'POST',
+      body: text,
+    },
+  );
 
   return send(
     'POST',

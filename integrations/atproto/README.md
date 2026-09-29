@@ -12,10 +12,10 @@ account, its repository and its signing key stay on an existing PDS.
 The manifest uses `drive-host` and declares two anonymous GET/HEAD routes,
 each with an exclusive well-known claim the host dispatches to it:
 
-| Claim | Route | Answers |
-| --- | --- | --- |
-| `/.well-known/atproto-did` | `/atproto-did` | `200`, `text/plain`, the DID bytes only |
-| `/.well-known/did.json` | `/did.json` | `200`, `application/json`, the DID document, only for `did:web:<handle>`; `404` otherwise |
+| Claim                      | Route          | Answers                                                                                   |
+| -------------------------- | -------------- | ----------------------------------------------------------------------------------------- |
+| `/.well-known/atproto-did` | `/atproto-did` | `200`, `text/plain`, the DID bytes only                                                   |
+| `/.well-known/did.json`    | `/did.json`    | `200`, `application/json`, the DID document, only for `did:web:<handle>`; `404` otherwise |
 
 HEAD has identical metadata and an empty body. All responses are `no-store`
 and `Access-Control-Allow-Origin: *` without credentials. Requests perform no
@@ -79,7 +79,7 @@ prefix and publishes the bare Multikey). The document the plugin serves is:
 }
 ```
 
-A `did:web` on a *different* host (`did:web:id.example.org` with handle
+A `did:web` on a _different_ host (`did:web:id.example.org` with handle
 `user.example.com`) is accepted: this drive then answers the handle only,
 and `did.json` is `404`, because that DID's document belongs to its own host.
 `pds` and `signingKey` are ignored except for `did:web:<handle>`.

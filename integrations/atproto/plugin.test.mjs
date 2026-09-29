@@ -359,18 +359,24 @@ test('did:web configuration needs the handle host, a PDS and a key', () => {
     assert.throws(() => configuration({ ...webConfig, ...patch }));
   // A did:web on another host: this host answers the handle only; the
   // document is that host's to publish.
-  const elsewhere = { handle: 'user.example.com', did: 'did:web:id.example.org' };
+  const elsewhere = {
+    handle: 'user.example.com',
+    did: 'did:web:id.example.org',
+  };
   assert.deepEqual(configuration(elsewhere), elsewhere);
   assert.equal(
     handle(webContext('atproto-did', elsewhere), request()).body,
     'did:web:id.example.org',
   );
-  assert.equal(handle(webContext('did-json', elsewhere), didJson()).status, 404);
-  // did:plc ignores the did:web-only fields.
-  assert.deepEqual(
-    configuration({ handle: 'user.example.com', did, pds: 1 }),
-    { handle: 'user.example.com', did },
+  assert.equal(
+    handle(webContext('did-json', elsewhere), didJson()).status,
+    404,
   );
+  // did:plc ignores the did:web-only fields.
+  assert.deepEqual(configuration({ handle: 'user.example.com', did, pds: 1 }), {
+    handle: 'user.example.com',
+    did,
+  });
 });
 test('did.json serves the AT Protocol DID document for did:web', () => {
   const result = handle(webContext(), didJson());
