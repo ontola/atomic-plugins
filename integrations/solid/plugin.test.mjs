@@ -129,6 +129,8 @@ test('manifest: an installation-origin pod whose routes need DPoP and write only
     assert.equal(route.principal, 'installation');
     assert.deepEqual(route.writes, ['storage']);
     assert.equal(route.cors, 'any-origin-no-credentials');
+    // Public reads and the pod's own 401 need token-less requests.
+    assert.equal(route.authOptional, true);
   }
 
   assert.deepEqual(manifest.http.routes[0].methods, ['GET', 'HEAD', 'POST']);

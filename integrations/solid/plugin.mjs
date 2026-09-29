@@ -42,6 +42,11 @@ const route = (id, path, methods) => ({
   methods,
   principal: 'installation',
   auth: 'dpop',
+  // Token-less requests reach the handler as the public principal (reads
+  // only; the host refuses their writes), so the pod serves public data and
+  // answers its own 401 with a DPoP challenge. Without it the host answers
+  // 401 to every request that carries no token.
+  authOptional: true,
   body: 'text',
   maxBodyBytes: 65536,
   cors: 'any-origin-no-credentials',

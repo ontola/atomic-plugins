@@ -41,9 +41,12 @@ first 128 bits of SHA-256 over the media type and the exact representation.
 
 The host verifies `Authorization: DPoP <access token>` plus the `DPoP` proof
 before this code runs (atomic-server `auth: dpop`; see "Host requirements")
-and hands over `request.caller.webid`. A request without a token runs as the
-host's **public** principal with `caller: null`, and the host refuses any
-write it proposes. The pod's `access` config then decides, pod-wide:
+and hands over `request.caller.webid`. Both routes declare
+`"authOptional": true`, so a request without a token runs as the host's
+**public** principal with `caller: null`, and the host refuses any write it
+proposes; without the flag the host would answer `401` itself, and the pod
+could serve no public reads. The pod's `access` config then decides,
+pod-wide:
 
 ```json
 {
@@ -105,7 +108,10 @@ The resource server needs, from atomic-server:
 - `plugin-routes` built in, `--plugin-routes read-write`, a `--routes-origin`
   (the installation origin), and the install review's route-write grant for
   the `storage` target.
-- **`auth: dpop`**, `--solid-oidc-issuers`, the Solid response headers
+- **`auth: dpop` with `authOptional`** (token-less requests as the public
+  principal only when a route declares it; the atomic-server worker adds the
+  flag for dpop routes when folding this branch into candidate16, as
+  candidate15 has it for `auth: bearer`), `--solid-oidc-issuers`, the Solid response headers
   (`allow`, `accept-*`, `wac-allow`), `link`/`slug` request headers and
   multi-valued `Link`. These are on atomic-server branch
   `claude/plugin-solid-host` (on `claude/atomic-plugins-pin-candidate14`),
@@ -160,6 +166,12 @@ the pod with [@inrupt/solid-client](https://www.npmjs.com/package/@inrupt/solid-
 serves issuer metadata, JWKS and WebID profiles and mints tokens in process;
 it is not an identity provider. The lane passes the issuer to the server
 through `serverEnv` in `integrations/lanes.json`.
+
+**Pending candidate16**: the e2e below ran against the branch alone, where a
+token-less dpop request was public implicitly; with candidate16 that needs
+`authOptional`, which the manifest now declares. The spec itself is
+unchanged (its anonymous reads and 401 checks rely on exactly that); it has
+not been rerun against candidate16, which does not exist yet.
 
 **Verified** (2026-09-29, `node integrations/tooling/run-lane.mjs solid`,
 node and e2e tiers passing) against atomic-server `claude/plugin-solid-host`
