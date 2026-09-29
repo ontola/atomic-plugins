@@ -13,6 +13,7 @@ import {
   runPass,
   type ConflictField,
   type Held,
+  type Imported,
   type IssueRow,
   type PassError,
   type PassResult,
@@ -106,6 +107,11 @@ export type ViewState =
        * mark them "Waiting to send" before the pass that holds them returns.
        */
       touched?: string[];
+      /**
+       * While a pass imports from GitHub: how many issues and comments it
+       * has added to the table so far. Their rows are already in `last`.
+       */
+      importing?: { issues: number; comments: number };
     };
 
 export type Ready = Extract<ViewState, { kind: 'ready' }>;
@@ -218,6 +224,9 @@ interface Session {
   overlay: Overlay;
 }
 
+/** At most one redraw per this long while a pass imports rows. */
+const PROGRESS_MS = 250;
+
 const statusOf = (value: unknown): Status | undefined =>
   value === 'Todo' || value === 'Doing' || value === 'Done' ? value : undefined;
 
@@ -287,7 +296,55 @@ export function createController(
     tracker: s.tracker,
     state: s.state,
     overlay: s.overlay,
+    onImported: showImported,
   });
+
+  /** When the view last showed imported rows; see `showImported`. */
+  let shownAt = 0;
+
+  /**
+   * Adds a row or comment a running pass imported to what the view shows,
+   * re-rendering at most every `PROGRESS_MS` (the view redraws in full).
+   * The pass's own result replaces all of it when it ends.
+   */
+  function showImported(imported: Imported) {
+    if (current.kind !== 'ready' || !current.busy) return;
+    const ready = current;
+    const result = ready.last?.result ?? emptyResult();
+    const counts = { ...(ready.importing ?? { issues: 0, comments: 0 }) };
+    let rows: IssueRow[];
+
+    if (imported.entity === 'issue') {
+      rows = [
+        ...result.rows.filter(r => r.subject !== imported.row.subject),
+        imported.row,
+      ];
+      counts.issues++;
+    } else {
+      rows = result.rows.map(r =>
+        r.subject === imported.issue
+          ? { ...r, comments: [...r.comments, imported.comment] }
+          : r,
+      );
+      counts.comments++;
+    }
+
+    const next: Ready = {
+      ...ready,
+      last: { at: ready.last?.at ?? 0, result: { ...result, rows } },
+      importing: counts,
+    };
+    const at = now();
+
+    if (at - shownAt < PROGRESS_MS) {
+      current = next;
+
+      return;
+    }
+
+    shownAt = at;
+    set(next);
+  }
 
   /** The frame store the Bridge uses, so the app's own edits read back. */
   const tableStore = (s: Session) =>
@@ -312,6 +369,20 @@ export function createController(
 
       try {
         const s = await open(ready.repository);
+
+        // First pass in this view: show what the table already has (an
+        // import a reload interrupted) while the pass runs.
+        if (!ready.last && busy === 'syncing') {
+          const rows = await readRows(
+            passOptions(s, ready.connectionId, ready.repository),
+          ).catch(() => []);
+          if (rows.length && current.kind === 'ready' && !current.last)
+            set({
+              ...current,
+              last: { at: 0, result: { ...emptyResult(), rows } },
+            });
+        }
+
         const result = await work(s, ready);
         conflict = undefined;
         const after = latest(ready);

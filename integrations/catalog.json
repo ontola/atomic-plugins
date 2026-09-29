@@ -374,11 +374,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect GitHub through the host's consent bar and choose a repository. It syncs when opened, on Sync now and after each edit made in the app; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One repository per app. Labels and assignees are shown read-only; milestones and pull requests are not synced, and deletions are never sent to GitHub. One syncing view per app is assumed: two tabs or devices are not guarded. A new issue whose send got no answer pauses sync, with no in-app way out yet (#156). Mock-tested only: not yet verified against live GitHub or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "github issues board kanban tracker two-way review drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-QyXVqeSXn59mWrCcsoubVrfKllEI0Y+1QP/B2HxTcyZO5e7mr3UPkllNZ06UTXFB"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.1.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-MqUAGzXa72Dq/mGWTroA+G7zkuTxcP8lW5nmBXFLF5Q0fV0YEz7CkwxaNRXot4ZO"
   },
   {
     "https://atomicdata.dev/properties/localId": "open-cloud-mesh",
