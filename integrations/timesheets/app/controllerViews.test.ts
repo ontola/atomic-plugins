@@ -249,3 +249,74 @@ describe('controller for the timesheet views', () => {
     expect(forgotten).toEqual(['clockify']);
   });
 });
+
+describe('editing and sending (#123 M3)', () => {
+  it('lists an edit, shows it as not sent, and sends it', async () => {
+    const { proxy, store } = await configured(7);
+    const controller = await ready(store);
+
+    expect(controller.editBlockers('entry-2')).toEqual([]);
+    expect(controller.projectChoices().projects.map(p => p.name)).toEqual([
+      'Atomic plugins',
+      'Research',
+    ]);
+    await controller.editEntry('entry-2', {
+      name: 'Weekly sync (notes)',
+      projectId: 'eeeeeeeeeeeeeeeeeeeeeeee',
+    });
+
+    const [change] = controller.changes().review;
+    expect(change).toMatchObject({
+      entryId: 'entry-2',
+      fields: ['name', 'projectId'],
+      blockers: [],
+    });
+    const shown = controller.sheet()!.entries.find(e => e.id === 'entry-2')!;
+    expect(shown).toMatchObject({
+      description: 'Weekly sync (notes)',
+      pending: 'update',
+      project: { id: 'eeeeeeeeeeeeeeeeeeeeeeee', name: 'Research' },
+    });
+    expect(proxy.fixture.state.writes).toEqual([]);
+
+    await controller.send();
+
+    expect(controller.changes().outcomes?.results).toMatchObject([
+      { entryId: 'entry-2', status: 'sent' },
+    ]);
+    expect(controller.changes().review).toEqual([]);
+    const after = controller.sheet()!.entries.find(e => e.id === 'entry-2')!;
+    expect(after.pending).toBeUndefined();
+    expect(after.description).toBe('Weekly sync (notes)');
+  });
+
+  it('asks to delete, and Discard drops the request', async () => {
+    const { store } = await configured(7);
+    const controller = await ready(store);
+
+    await controller.deleteEntry('entry-1');
+    expect(controller.changes().review).toMatchObject([
+      { kind: 'delete', entryId: 'entry-1' },
+    ]);
+    expect(
+      controller.sheet()!.entries.find(e => e.id === 'entry-1')!.pending,
+    ).toBe('delete');
+
+    await controller.discard('entry-1');
+    expect(controller.changes().review).toEqual([]);
+  });
+
+  it('says why an entry cannot be edited', async () => {
+    const { proxy, store } = await configured(7);
+    proxy.fixture.control({
+      action: 'update',
+      id: 'entry-2',
+      patch: { isLocked: true },
+    });
+    const controller = await ready(store);
+
+    expect(controller.editBlockers('entry-2')).toEqual([
+      'It is locked in Clockify.',
+    ]);
+  });
+});

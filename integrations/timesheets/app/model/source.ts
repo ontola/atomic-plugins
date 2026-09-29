@@ -1,8 +1,9 @@
 // @wc-ignore-file
 /**
  * Builds the views' `Timesheet` from the M1 observation log's mirror (#123):
- * the entries as Clockify last showed them, never the table's rows (those
- * are a read-only projection that a sync overwrites).
+ * the entries as Clockify last showed them, never the table's rows (rows
+ * edited in the drive are shown with their change by the controller,
+ * `withPending`, until it is sent).
  *
  * Which entries count follows the one Clockify lens (`../project.ts`, via
  * `../../localthought.ts`): completed `REGULAR` entries. Running timers and

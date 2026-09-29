@@ -155,6 +155,33 @@ export const LOG_FIELDS = {
   ),
 } as const;
 
+/**
+ * Sync bookkeeping on each row (#177 Q4: "bookkeeping lives on the row"),
+ * as provider extras: not in the row class's `recommends`, so the table
+ * does not show them as columns. JSON text in string properties.
+ */
+export const SYNC_FIELDS = {
+  baseline: field(
+    'clockify-sync-baseline',
+    'Clockify sync baseline',
+    datatypes.string,
+    'JSON text: the values this row and Clockify last agreed on. A row that differs from it has changes to send. Written by the timesheets app; do not edit.',
+  ),
+  outbox: field(
+    'clockify-outbox',
+    'Clockify outbox',
+    datatypes.string,
+    'JSON text: a write to Clockify that was started and not yet confirmed; empty when none. Written by the timesheets app; do not edit.',
+  ),
+  deleteRequested: field(
+    'clockify-delete',
+    'Delete in Clockify',
+    datatypes.boolean,
+    'True when someone asked to delete this entry in Clockify and it has not been sent yet.',
+  ),
+} as const;
+
 export type RowKey = keyof typeof ROW_FIELDS;
+export type SyncKey = keyof typeof SYNC_FIELDS;
 export type SettingKey = keyof typeof SETTING_FIELDS;
 export type LogKey = keyof typeof LOG_FIELDS;

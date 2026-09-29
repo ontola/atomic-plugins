@@ -13,6 +13,7 @@ import type { LookbackDays } from '../../localthought.js';
 import {
   describe,
   type Controller,
+  type EntryEdit,
   type SyncOutcome,
   type ViewState,
 } from '../controller.js';
@@ -32,6 +33,7 @@ import { dayList, projectSummary, weekGrid } from '../model/views.js';
 import { button, header, pill, type PillState } from './components.js';
 import { renderConflicts, renderUnknown, unknownIn } from './coverage.js';
 import { entryDetail, type Overlay } from './detail.js';
+import { renderChanges } from './edit.js';
 import { builder, type Child } from './dom.js';
 import { dayCard, dayCards, weekStrip, type Highlight } from './entries.js';
 import { projectsView } from './projects.js';
@@ -71,6 +73,8 @@ interface Ui {
   /** The narrow strip's selected day. */
   day?: DayKey;
   entryId?: string;
+  /** The open drawer is editing, or asking to confirm a delete. */
+  editing?: 'edit' | 'confirm-delete';
   /** `data-k` of the row that opened the drawer, to return focus to. */
   opener?: string;
   /** Settings was asked for over the data (sheet), not first-run setup. */
@@ -504,6 +508,24 @@ export function mountShell(
     const failed = failure(state);
     const last = state.kind === 'ready' ? state.last : undefined;
 
+    content.push(
+      renderChanges(
+        h,
+        controller.changes(),
+        sheet,
+        {
+          onSend: () => void controller.send(),
+          onDiscard: id => void controller.discard(id),
+          onOpen: id => {
+            ui.entryId = id;
+            ui.editing = undefined;
+            ui.opener = `send-changes`;
+            render();
+          },
+        },
+        state.kind !== 'ready' || !!controller.changes().sending,
+      ),
+    );
     content.push(renderConflicts(h, sheet));
     if (state.kind === 'no-proxy') content.push(noRelay(h));
 
@@ -682,14 +704,53 @@ export function mountShell(
               lastChecked: sheet.lastChecked,
               onClose: update(() => {
                 ui.entryId = undefined;
+                ui.editing = undefined;
               }),
               openExternal: opener(),
               openRow: controller.canOpen().resource
                 ? () => void controller.openRow(entry.id)
                 : undefined,
+              edit: editProps(entry.id, sheet.timeZone),
             }),
           }
         : {}),
+    };
+  }
+
+  /** Edit and Delete in the drawer (#123 M3); absent without a sync. */
+  function editProps(entryId: string, timeZone: string) {
+    const state = controller.state();
+    if (state.kind !== 'ready' && state.kind !== 'syncing') return undefined;
+    const { projects, required } = controller.projectChoices();
+    const back = update(() => {
+      ui.editing = undefined;
+    });
+
+    return {
+      blockers: controller.editBlockers(entryId),
+      mode: ui.editing ?? ('view' as const),
+      editor: {
+        timeZone,
+        projects,
+        projectRequired: required,
+        onSave: (edit: EntryEdit) => {
+          ui.editing = undefined;
+          void controller.editEntry(entryId, edit);
+        },
+        onCancel: back,
+      },
+      onEdit: update(() => {
+        ui.editing = 'edit';
+      }),
+      onDelete: update(() => {
+        ui.editing = 'confirm-delete';
+      }),
+      onConfirmDelete: () => {
+        ui.editing = undefined;
+        void controller.deleteEntry(entryId);
+      },
+      onCancelDelete: back,
+      onDiscard: () => void controller.discard(entryId),
     };
   }
 
