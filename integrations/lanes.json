@@ -58,9 +58,11 @@
       "id": "atproto",
       "index": 12,
       "platforms": [],
-      "tiers": ["node"],
+      "tiers": ["node", "e2e"],
       "nodeTests": ["integrations/atproto/plugin.test.mjs"],
-      "note": "Executable QuickJS handle-to-DID route checks and reproducible bundle; no live resolver verification."
+      "pluginRoutes": "read-only",
+      "note": "Node: QuickJS handle-to-DID and did:web document route checks and a reproducible bundle. e2e: publishes plugin.mjs to atomic-server built with the plugin-routes feature at --plugin-routes read-only, binds two invented host names to the test drive, installs with a did:web identity and resolves /.well-known/atproto-did and /.well-known/did.json on the handle host over HTTP with a Host header (no TLS, DNS or network). Where the host reports hostFeatures.pluginRoutes.requestHost (atomic-server claude/plugin-atproto-host), the other host name must answer 404; otherwise the spec records that every host name of the drive answers. No independent resolver library or live Bluesky verification.",
+      "e2e": ["integrations/atproto/e2e/atproto.spec.ts"]
     },
     {
       "id": "money",

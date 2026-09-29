@@ -377,6 +377,15 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  assert.equal(needsPluginRoutesBuild(config, ['shared']), false);
+  // A shared change selects every plugin lane, and the atproto plugin lane
+  // declares pluginRoutes too, so it needs the build as well.
+  assert.equal(needsPluginRoutesBuild(config, ['shared']), true);
+  assert.equal(
+    needsPluginRoutesBuild(
+      { ...config, lanes: config.lanes.filter(l => l.id !== 'atproto') },
+      ['shared'],
+    ),
+    false,
+  );
   assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
 });
