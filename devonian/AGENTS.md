@@ -12,4 +12,5 @@ Devonian is a TypeScript library for bidirectional data portability. Its native 
 - Do not claim distributed convergence, Atomic Server transport, or signed Commit support without implementing and testing those protocols.
 - Keep network access out of unit tests; use deterministic connector fakes.
 - Avoid editing generated HTML docs directly. Regenerate them with TypeDoc when changing that documentation surface.
+- `src/reconcileRecord.ts` is a verbatim copy of atomic-server's `browser/lib/src/plugin-reconcile.ts`, because no published `@tomic/lib` exports it yet. Change it there first, then copy it over; `integrations/tooling/host-copies.test.mjs` fails when the two differ at `.atomic-server-ref`.
 - Keep every `exports` entry point browser-safe: no Node built-ins or Node globals outside `src/reflect/file.ts` (excluded by the `browser` condition). `__tests__/browser/bundle.test.ts` enforces this; add a driver there for any new subpath.

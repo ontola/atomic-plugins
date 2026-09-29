@@ -595,6 +595,7 @@ jobs:
             integrations/tooling/certify.test.mjs \
             integrations/tooling/deps.test.mjs \
             integrations/tooling/dev-server.test.mjs \
+            integrations/tooling/host-copies.test.mjs \
             integrations/tooling/lanes.test.mjs \
             integrations/tooling/link-atomic-server.test.mjs \
             integrations/tooling/manifest-http.test.mjs \
