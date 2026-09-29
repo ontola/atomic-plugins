@@ -1,126 +1,175 @@
-# NextGraph RDF snapshot adapter
+# NextGraph RDF interchange
 
-Status: **implemented bounded interchange adapter; no live broker verification**.
-This is a QuickJS sandbox job using actual Atomic read/query APIs and reviewed
-create intents. It is not an `ngd` broker, WebSocket client, CRDT synchronizer,
-or encrypted-session implementation.
+Status: **RDF snapshot exchange between Atomic resources and NextGraph
+documents, through an operator-run NextGraph sidecar**. The plugin is a
+QuickJS sandbox job. It never holds a NextGraph key and never opens a broker
+connection itself. It is not a CRDT synchronizer: it moves bounded snapshots
+of triples, in both directions, with a person approving every write into
+NextGraph.
 
-## Verified interchange boundary
+Two ways in:
 
-The official [NextGraph App Protocol](https://docs.nextgraph.org/en/specs/protocol-app/)
-specifies SPARQL Results JSON for ReadQuery SELECT responses and SPARQL Update
-for WriteQuery. Its [framework examples](https://docs.nextgraph.org/en/framework/getting-started/)
-show `ng.sparql_query` returning `results.bindings`. This adapter consumes that
-standard decoded JSON, not the encrypted broker wire envelope. It emits an
-ordinary SPARQL INSERT DATA statement for a separately authorized client to run.
-Neither exchange performs broker I/O from QuickJS.
+- **Pasted** (`mode: "import"`): works on any host. A person pastes a SPARQL
+  Results JSON answer from their own NextGraph client.
+- **Live** (`mode: "pull"`, plus a pushed export): needs atomic-server with
+  `atomic-sidecar:` operations (branch `claude/plugin-nextgraph-host`, not yet
+  in the pinned `.atomic-server-ref`), built with `plugin-routes`, started at
+  `--plugin-routes read-write` with `--plugin-sidecars nextgraph=http://127.0.0.1:<port>`,
+  and the sidecar in [`sidecar/`](sidecar/) running on that port.
 
-The parser follows [SPARQL 1.1 Results JSON](https://www.w3.org/TR/sparql11-results-json/)
-for a deliberately bounded triple projection. It accepts URI, blank-node and
-literal terms, preserving exact literal strings, datatype IRIs and language
-labels. Subjects cannot be literals, predicates must be IRIs, and every row must
-bind exactly `s`, `p`, `o`. Blank-node labels are scoped to one snapshot and
-remapped to safe output labels. Numeric lexical values are never converted to
-JavaScript numbers. ASK, RDF-star and arbitrary variable projections are rejected.
+What has been **verified** and what is only **declared** is listed under
+[Evidence](#evidence).
 
-## Actual Atomic storage
+## How the pieces fit
 
-Import mode validates the result and proposes an existing host `create` intent
-for a native `https://atomicdata.dev/classes/PlainText` resource. The original
-SPARQL JSON bytes are retained in the real `description` property, alongside
-name, mimetype and localId. These are actual atoms in Atomic's store **after the
-host reviews and applies the intent**. They are not an in-memory plugin store.
-The native class requires name and description, as verified in pinned host
-`lib/defaults/default_store.json` (PlainText) and browser ontology definitions.
-The snapshot uses those ordinary resource fields, not DocumentV2/Loro content.
-
-Export mode reads that actual stored resource using `ctx.read`, preserving host
-access checks, revalidates it, and proposes another PlainText resource containing
-SPARQL INSERT DATA with MIME type `application/sparql-update`. Permission errors
-propagate before any export intent is produced. This provides a reviewable atom
-storage round-trip; it does not map RDF predicates to new Atomic ontologies or
-mutate the original external subjects.
-
-## Operator workflow
-
-1. In an authorized NextGraph client, select the intended graph/document and run:
-
-   ```sparql
-   SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 257
-   ```
-
-   Transfer the decoded JSON response. The adapter accepts at most 256 rows;
-   the extra row is a sentinel that rejects oversized results instead of silently
-   taking a partial snapshot. Input cannot prove which query generated it: do
-   not provide results truncated by a smaller limit or an intermediate client.
-
-2. Configure and run the sandbox job with an actual writable Atomic parent:
-
-   ```json
-   {
-     "mode": "import",
-     "parent": "https://your-atomic-server.example/folder",
-     "id": "snapshot-1",
-     "name": "NextGraph RDF snapshot",
-     "result": "<UTF-8 SPARQL Results JSON string>"
-   }
-   ```
-
-   Review/apply the proposed create intent and retain its assigned Atomic subject.
-
-3. For export, use the following config and review/apply the resulting resource:
-
-   ```json
-   {
-     "mode": "export",
-     "parent": "https://your-atomic-server.example/folder",
-     "id": "export-1",
-     "name": "NextGraph SPARQL import",
-     "sourceSubject": "<actual Atomic snapshot subject>"
-   }
-   ```
-
-   Use the exported resource's description as the authorized NextGraph client's
-   update text against the intended destination graph. It adds triples to that
-   client's default graph; it does not erase, synchronize or select another graph.
-   Repeated application with blank nodes creates new blank nodes, so this is an
-   explicit snapshot transfer, not a retry-safe replication engine.
-
-## Bounds and safety
-
-Input is capped at 65,536 UTF-8 bytes and 256 triples; generated N-Triples/update
-text at 131,072 bytes; IDs at 64 ASCII letters/digits/underscore/hyphen; names
-at 256 characters. IRIs and language tags are validated before interpolation;
-literals are escaped, and raw blank labels never enter generated SPARQL. All
-validation completes before a verdict is returned. Repeating an identical stored
-snapshot produces no changes after a scoped read verifies its parent, class,
-identity, name, media type and exact body. Changed or ambiguous identities are
-refused to protect local edits and avoid accidental overwrites. This query preflight is not an
-atomic uniqueness transaction: concurrent reviewed jobs still need host review.
-
-No keys, credentials, binary blobs, broker sessions or peer requests are accepted.
-There is no public HTTP route and no authentication shortcut. Automatic transfer
-would require host/sidecar scoped operations with broker authorization and durable
-acknowledgements, unavailable in the inspected host
-`35504494261f59e922e79d536fd437954451e6a3`. The broker remains a native sidecar as
-specified by the accepted server plugin design.
-
-## Build and verification
-
-```sh
-node integrations/nextgraph/build.mjs
-node integrations/tooling/run-lane.mjs nextgraph --tier node
+```
+Atomic drive ── /plugin-run ──► QuickJS: plugin.mjs
+                                   │ ctx.http({operation:"query",
+                                   │   url:"atomic-sidecar:/nextgraph/v1/query"})
+                                   ▼
+atomic-server host ── only declared operations, only the configured loopback URL,
+                      adds x-atomic-installation / x-atomic-drive ──►
+                                   ▼
+ng-atomic-sidecar (operator) ── scopes.json: installation × document × read|read-write
+                                   │
+                      NextGraph wallet + local verifier (nextgraph-rs), saved to disk
 ```
 
-The build writes `integrations/nextgraph/dist/plugin.js` and `manifest.json`.
-Fourteen Node tests cover standard result parsing, exact RDF term serialization,
-reviewed atom import/export, denied reads, malformed/injected input, blank nodes,
-UTF-8/row bounds, duplicate snapshots and reproducible executable bundles.
-`fixtures/select.json` is a hand-authored standards fixture, not a broker capture.
-No live QuickJS execution, actual Atomic commit, independent SPARQL engine or
-NextGraph broker transfer has been verified; green CI does not establish those.
+Writes never happen from inside a run. `export` produces the INSERT DATA text
+as an Atomic resource; `pushIntent()` turns it into the declared `update`
+operation, which a person approves through atomic-server's
+`/plugin-external-apply`. The host journals that request and the sidecar's
+answer; a retried approval returns the journaled receipt instead of writing
+again.
 
-The manifest declares every consumed installation configuration field using the
-host-supported string/object schema. Conditional fields are checked by the entry
-point: result for import, sourceSubject for export; mode/parent/id/name are
-always required.
+## Modes
+
+| `mode` | Reads | Proposes |
+| --- | --- | --- |
+| `import` | `result`: pasted SPARQL Results JSON | a PlainText resource holding it |
+| `pull` | the `document` NURI, through the sidecar's `query` operation | a PlainText resource holding the answer |
+| `export` | `sourceSubject`: a stored snapshot, with `ctx.read` | a PlainText resource holding `INSERT DATA { … }` |
+
+Config (declared in the manifest): `mode`, `parent`, `id`, `name` are always
+required; `result` for import, `document` for pull, `sourceSubject` for
+export. `pushIntent({ document, id, update })` (exported by `plugin.mjs`)
+builds the external intent `{ id: "push-<id>", operation: "update", method:
+"POST", url: "atomic-sidecar:/nextgraph/v1/update", body }`, whose sidecar
+idempotency key is `atomic-export-<id>`.
+
+## Snapshot format
+
+The parser follows [SPARQL 1.1 Results JSON](https://www.w3.org/TR/sparql11-results-json/),
+which the [NextGraph App Protocol](https://docs.nextgraph.org/en/specs/protocol-app/)
+uses for ReadQuery SELECT answers, for a deliberately bounded triple
+projection: every row binds exactly `s`, `p`, `o`; subjects are IRIs or blank
+nodes, predicates IRIs; literals keep their exact lexical form, datatype IRI
+and language tag. Numeric values are never converted to JavaScript numbers.
+ASK, RDF-star and other projections are refused. The sidecar runs exactly
+`SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 257`; 257 rows (the sentinel)
+refuse the snapshot instead of truncating it.
+
+Snapshots are stored as native `https://atomicdata.dev/classes/PlainText`
+resources: the exact JSON bytes in `description`, plus `name`, `mimetype`
+and `localId` (`nextgraph:<parent>:<id>`). RDF predicates are **not** mapped
+onto Atomic properties, and the original subjects are not turned into Atomic
+resources. Rerunning with the same id and identical content proposes nothing;
+different content under the same id is refused.
+
+## Live sidecar
+
+[`sidecar/`](sidecar/) is `ng-atomic-sidecar`, a Rust binary linking the
+NextGraph Rust SDK at nextgraph-rs commit
+`d507afa3e97197b7ded5a5e241c10dd0f12dd6d4`. Build it with Docker (the bundled
+RocksDB does not build with a local cargo on macOS; see the Dockerfile):
+
+```sh
+docker build -t ng-atomic-sidecar integrations/nextgraph/sidecar
+mkdir -p /srv/ng-sidecar
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/data \
+  ng-atomic-sidecar init --base /data --documents 1
+# prints {"documents":["did:ng:o:…"]}; the wallet mnemonic and PIN go to
+# /srv/ng-sidecar/credentials.json (mode 0600), never to stdout
+docker run -d --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/data \
+  -p 127.0.0.1:14480:14480 ng-atomic-sidecar serve --base /data --listen 0.0.0.0:14480
+atomic-server --plugin-routes read-write --plugin-sidecars nextgraph=http://127.0.0.1:14480
+```
+
+Grants live in `/srv/ng-sidecar/scopes.json`, written by the operator and
+re-read on every request (a revocation applies to the next call):
+
+```json
+{ "grants": [
+  { "installation": "<Atomic installation or plugin subject>",
+    "document": "did:ng:o:…", "access": "read" }
+] }
+```
+
+Operations (loopback HTTP; the host is the only intended client):
+
+- `GET /v1/health`
+- `POST /v1/query` `{document}` → SPARQL Results JSON; needs `read`.
+- `POST /v1/update` `{document, key, update}` → `{ack: {key, document,
+  commits, appliedAt}, replayed}`; needs `read-write`. Only `INSERT DATA` into
+  the document's default graph (parsed with NextGraph's own SPARQL parser),
+  at most 131,072 bytes. The key is reserved on disk (fsync, rename) before
+  the NextGraph write and the acknowledgement stored before it is returned.
+  The same key and body replay the stored acknowledgement; the same key with
+  another body is a 409; a key whose write started but was never acknowledged
+  is a 409 `outcome-uncertain`, never a second write.
+
+Nothing is granted by default. The installation comes only from the
+`x-atomic-installation` header, which the host sets and a plugin cannot.
+
+### Data exposure (E2EE)
+
+The sidecar holds the operator's NextGraph wallet and runs the verifier on
+the operator's machine. **For the documents that wallet can open, the
+operator's host is an endpoint of NextGraph's end-to-end encryption**, as in
+NextGraph's own headless mode: decrypted triples exist in the sidecar
+process, in its on-disk verifier store under `--base`, in Atomic Server (the
+snapshot resources, readable by whoever may read their parent), and in the
+host's external-operation journal (the pushed update text). Brokers, if the
+wallet is connected to one, still only see encrypted commits. Use a wallet
+created for this purpose, and grant it only documents whose contents may be
+stored in the drive.
+
+Host-to-sidecar trust is loopback only: any local process that can reach the
+sidecar port can claim an installation. There is no shared secret or request
+signature between host and sidecar yet.
+
+### Broker
+
+`init --broker-peer <PEER_ID>` points the wallet at a local `ngd`, and
+`serve --connect` connects to it. **Not verified**: no test runs `ngd`, so
+sync between NextGraph peers, and registration of the wallet with a broker,
+are declared only. Without a broker the documents are real NextGraph
+repositories, but live in this wallet's local store alone.
+
+## Evidence
+
+```sh
+node integrations/tooling/run-lane.mjs nextgraph --tier node   # plugin module
+docker build integrations/nextgraph/sidecar                    # also runs the sidecar's cargo tests
+node integrations/tooling/run-lane.mjs nextgraph --tier e2e    # real host + real sidecar
+```
+
+- Node tests (`plugin.test.mjs`): parsing, exact term serialization, reviewed
+  import/pull/export, the declared operations `pull` and `pushIntent` use,
+  refused and oversized sidecar answers, bounds, duplicates, a reproducible
+  bundle.
+- Sidecar unit tests (`sidecar/src/service.rs`, fake engine): default deny,
+  read versus read-write grants, revocation on the next request, replayed
+  acknowledgements, acknowledgements across a restart, uncertain outcomes not
+  repeated, malformed requests refused before any write.
+- Host tests (atomic-server `claude/plugin-nextgraph-host`,
+  `plugins::host_core`, shared manifest fixtures in Rust and TypeScript): only
+  declared `atomic-sidecar:` operations reach only the configured sidecar,
+  with the host's identity headers and none of the plugin's.
+- e2e (`e2e/nextgraph.spec.ts`): see the spec header for exactly what it
+  checks. It is skipped, saying why, on a host without `atomic-sidecar:`
+  operations, which includes the current pin.
+
+`fixtures/select.json` is hand-authored, not a NextGraph capture. No broker,
+no other NextGraph client and no NextGraph app have been used against these
+documents.

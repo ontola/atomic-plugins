@@ -37,7 +37,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { test, expect, type Page } from '@playwright/test';
-import { Agent, signRequest } from '@tomic/lib';
+import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
   createFromCatalog,
@@ -435,15 +435,14 @@ async function createPlugin(page: Page) {
 /** A POST signed (v2, over method and body) as the test's agent. */
 async function post(agent: Agent, path: string, body: unknown) {
   const url = `${SERVER_URL}${path}`;
-  const text = JSON.stringify(body);
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(await signRequest(url, agent, {}, { method: 'POST', body: text })),
-      'Content-Type': 'application/json',
-    },
-    body: text,
-  });
+  const response = await fetch(
+    url,
+    await signedRequestInit(url, agent, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
   const answer = await response.text();
   let json: unknown;
 
