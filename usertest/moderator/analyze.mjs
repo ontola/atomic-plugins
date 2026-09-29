@@ -30,7 +30,7 @@ const MODEL = process.env.ANALYSIS_MODEL ?? 'claude-opus-5';
 const REPO = process.env.GITHUB_FINDINGS_REPO ?? 'ontola/usertest-findings';
 const MAX_SHOTS = 12;
 
-const INSTRUCTIONS = `You analyze one remote usability test of Atomic (a personal data app) and its drive apps, plugins that import data from services like Google Calendar, GitHub, Notion and Clockify. A voice moderator (also Claude) ran the session; you get its transcript (speech-to-text, so expect recognition errors; turns marked TESTER (typed) were typed by the tester instead), the app's log lines each turn saw, and some screenshots of the tester's screen.
+const INSTRUCTIONS = `You analyze one remote usability test of Atomic (a personal data app) and its drive apps, plugins that import data from services like Google Calendar, GitHub, Notion and Clockify. A voice moderator (also Claude) ran the session; you get its transcript (speech-to-text, so expect recognition errors; turns marked TESTER (typed) were typed by the tester instead), the app's log lines each turn saw, and some screenshots of the tester's screen. The session may be in another language than English, or switch language midway (marked "(lang ...)"); write the findings in English anyway, translating the few words you quote.
 
 Find what should change. Two kinds:
 - "app": a problem in Atomic or a drive app: confusion, a dead end, a wrong expectation, an error, missing feedback. Give "repo": "atomic-plugins" for a drive app (integrations/<plugin>/, the catalog) and "atomic-server" for the host (drive, navigation, Integrations page, settings, tables).
@@ -64,7 +64,8 @@ function transcriptText(entries) {
       );
     } else if (e.role === 'moderator')
       lines.push(`${time} MODERATOR: ${e.say || '(stayed silent)'}`);
-    else if (e.event) lines.push(`${time} (${e.event})`);
+    else if (e.event)
+      lines.push(`${time} (${e.event}${e.lang ? ` ${e.lang}` : ''})`);
   }
 
   return lines.join('\n');
