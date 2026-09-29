@@ -379,7 +379,9 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     assert.ok(laneFilter(routes).includes(path), path);
   // A shared change runs every plugin lane (remotestorage needs the build
   // too), but not this tooling lane.
-  assert.ok(!matrixFor(config, ['shared']).some(l => l.lane === 'plugin-routes'));
+  assert.ok(
+    !matrixFor(config, ['shared']).some(l => l.lane === 'plugin-routes'),
+  );
   assert.equal(
     needsPluginRoutesBuild(config, ['shared']),
     config.lanes.some(l => !l.dir && pluginRoutesLevels(l).length > 0),

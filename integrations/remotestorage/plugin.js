@@ -23,6 +23,7 @@ export const FILE = 'https://atomicdata.dev/classes/File';
 export const SPEC_VERSION = 'draft-dejong-remotestorage-22';
 const MAX_BYTES = 262144;
 const MAX_RECORDS = 128;
+
 /** Documents one storage may hold: every listing and every write reads them all. */
 export const MAX_DOCUMENTS = 1000;
 /** Bytes per PUT body, the host's default blob route limit (16 MiB). */
@@ -369,7 +370,9 @@ export function run(ctx) {
       .filter(record => record?.kind === 'blob');
     for (const doc of documents)
       if (stored.some(record => record.path === doc.path))
-        fail(doc.path + ' was stored by a remoteStorage app; it is not imported');
+        fail(
+          doc.path + ' was stored by a remoteStorage app; it is not imported',
+        );
     const paths = [
       ...new Set([
         ...existingDocs.map(item => item.doc.path),
@@ -430,7 +433,6 @@ export function run(ctx) {
   }
 }
 
-
 // -- the storage: Files under `config.table` ---------------------------------
 
 /** The identity of the document at `path`, shared by imports and PUTs. */
@@ -482,6 +484,7 @@ function pathOfURL(url) {
     url,
   );
   if (!match) return null;
+
   try {
     const path = match[1]
       .split('/')
@@ -508,10 +511,11 @@ function blobHash(value) {
  * edited in Atomic since (`'stale'`, served as 503). Anything else under
  * the folder is not a remoteStorage document: null.
  */
-export function recordOf(subject, resource, table) {
-  if (!resource || resource[P.parent] !== table) return null;
+export function recordOf(subject, resource, folder) {
+  if (!resource || resource[P.parent] !== folder) return null;
   const hash = blobHash(resource[P.blob]);
   const key = resource[P.localId];
+
   if (hash) {
     const path = pathOfURL(resource[P.downloadURL]);
     if (!path || path.endsWith('/') || key !== documentKey(path)) return null;
@@ -527,19 +531,23 @@ export function recordOf(subject, resource, table) {
       size: typeof size === 'number' ? size : Number(size) || 0,
     };
   }
+
   const data = resource[P.baseline];
   if (!data || data.protocol !== 'remoteStorage-text-v1') return null;
   let doc;
+
   try {
     doc = baseline(resource);
   } catch {
     doc = null;
   }
+
   if (!doc) {
     const path = typeof data.path === 'string' ? data.path : null;
 
     return path ? { kind: 'stale', subject, path } : null;
   }
+
   if (!sameDisplay(resource, doc) || key !== documentKey(doc.path))
     return { kind: 'stale', subject, path: doc.path };
 
@@ -605,14 +613,14 @@ export function categoryOf(pieces) {
   return pieces[0] ?? null;
 }
 
-export function mayAccess(scopes, category, write) {
+export function mayAccess(scopes, category, writing) {
   return (scopes || []).some(scope => {
     const parsed = parseScope(scope);
 
     return (
       parsed &&
       (parsed.category === '*' || parsed.category === category) &&
-      (!write || parsed.write)
+      (!writing || parsed.write)
     );
   });
 }
@@ -661,7 +669,8 @@ function unauthorized() {
 
 function forbidden() {
   return response(403, 'The token does not cover this category', {
-    'www-authenticate': 'Bearer realm="remoteStorage", error="insufficient_scope"',
+    'www-authenticate':
+      'Bearer realm="remoteStorage", error="insufficient_scope"',
   });
 }
 
@@ -710,7 +719,10 @@ function read(ctx, request, target, scopes) {
   if (!scopes) {
     // Without a token: public documents only, never a listing.
     if (!isPublic || target.folder) return unauthorized();
-  } else if (!(isPublic && !target.folder) && !mayAccess(scopes, category, false))
+  } else if (
+    !(isPublic && !target.folder) &&
+    !mayAccess(scopes, category, false)
+  )
     return forbidden();
 
   if (target.folder) {
@@ -874,7 +886,14 @@ export function originOf(url) {
 }
 
 function oauthError(status, text) {
-  return { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }, body: text };
+  return {
+    status,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+    body: text,
+  };
 }
 
 /** Parses the remoteStorage `scope` parameter: `notes:rw contacts:r`. */
@@ -892,12 +911,21 @@ function authorize(ctx, request) {
   const redirect = typeof q.redirect_uri === 'string' ? q.redirect_uri : '';
   const client = originOf(redirect);
   if (!client || redirect.length > 400)
-    return oauthError(400, 'redirect_uri must be an http(s) URL of at most 400 characters');
+    return oauthError(
+      400,
+      'redirect_uri must be an http(s) URL of at most 400 characters',
+    );
   if ((q.response_type ?? 'token') !== 'token')
-    return oauthError(400, 'Only the implicit grant (response_type=token) is supported');
+    return oauthError(
+      400,
+      'Only the implicit grant (response_type=token) is supported',
+    );
   const scopes = parseScopes(q.scope);
   if (!scopes)
-    return oauthError(400, 'scope must be categories with :r or :rw, such as notes:rw');
+    return oauthError(
+      400,
+      'scope must be categories with :r or :rw, such as notes:rw',
+    );
   const state = JSON.stringify({
     r: redirect.replace(/#.*$/, ''),
     s: typeof q.state === 'string' ? q.state : '',
@@ -929,18 +957,23 @@ function callback(ctx, request) {
   }
 
   if (!state || typeof state.r !== 'string' || !originOf(state.r))
-    return oauthError(400, 'This answer does not belong to a request from this server');
+    return oauthError(
+      400,
+      'This answer does not belong to a request from this server',
+    );
   if (q.error)
     // The host only lets a route redirect to a client someone approved, so
     // a denial cannot be handed back to the app.
     return oauthError(403, 'Access was denied. You can close this page.');
   if (typeof q.code !== 'string') return oauthError(400, 'No code');
   const issued = ctx.tokens.issue({ code: q.code });
+
   if (issued.client !== originOf(state.r)) {
     ctx.tokens.revoke(issued.id);
 
     return oauthError(400, 'The redirect does not match the approved app');
   }
+
   const fragment =
     'access_token=' +
     encodeURIComponent(issued.token) +
@@ -949,7 +982,10 @@ function callback(ctx, request) {
 
   return {
     status: 302,
-    headers: { location: state.r + '#' + fragment, 'cache-control': 'no-store' },
+    headers: {
+      location: state.r + '#' + fragment,
+      'cache-control': 'no-store',
+    },
   };
 }
 
@@ -965,7 +1001,9 @@ function authorityOf(url) {
 export function webfinger(ctx, request) {
   const resource = request.query?.resource;
   const match =
-    typeof resource === 'string' ? /^acct:([^@\s]+)@([^@\s]+)$/i.exec(resource) : null;
+    typeof resource === 'string'
+      ? /^acct:([^@\s]+)@([^@\s]+)$/i.exec(resource)
+      : null;
   const host = authorityOf(request.url);
   const user = ctx.config?.user;
   if (
@@ -1012,18 +1050,24 @@ export function handle(ctx, request) {
   switch (ctx.trigger?.route) {
     case 'webfinger':
       return webfinger(ctx, request);
+
     case 'oauth':
       try {
         return authorize(ctx, request);
       } catch {
         return oauthError(503, 'The consent page cannot be reached right now');
       }
+
     case 'oauth-callback':
       try {
         return callback(ctx, request);
       } catch {
-        return oauthError(400, 'This answer is unknown, used or expired; start again from the app');
+        return oauthError(
+          400,
+          'This answer is unknown, used or expired; start again from the app',
+        );
       }
+
     case 'storage-read':
     case 'storage-write':
       return storage(ctx, request);

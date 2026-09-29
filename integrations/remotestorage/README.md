@@ -123,15 +123,15 @@ Declared, not measured in production:
 
 ## Host requirements
 
-| Needed | pin `2567fc30b` (`.atomic-server-ref`) | candidate14 `1432e244a` | `claude/plugin-remotestorage-host` |
-| --- | --- | --- | --- |
-| `plugin-routes` feature, `read-write`, routes origin, install review with route-write grant | yes | yes | yes |
-| `installation-origin` mount, `webfinger` claim, `request.base` | yes | yes | yes |
-| `body: blob`, `response.blob`, `response.current` preconditions | yes | yes | yes |
-| `ctx.tokens.requestConsent` / `issue({ code })`, consent page, `auth: bearer` | yes | yes (consent answers need v2 signatures) | yes |
-| `authOptional`: public reads and bearer reads on one route | no | no | **yes** |
-| `{*rest}` matching a trailing slash (folders, `/storage/`) | no | no | **yes** |
-| `Location` to the approved client after `issue({ code })` | no | no | **yes** |
+| Needed                                                                                      | pin `2567fc30b` (`.atomic-server-ref`) | candidate14 `1432e244a`                  | `claude/plugin-remotestorage-host` |
+| ------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------- | ---------------------------------- |
+| `plugin-routes` feature, `read-write`, routes origin, install review with route-write grant | yes                                    | yes                                      | yes                                |
+| `installation-origin` mount, `webfinger` claim, `request.base`                              | yes                                    | yes                                      | yes                                |
+| `body: blob`, `response.blob`, `response.current` preconditions                             | yes                                    | yes                                      | yes                                |
+| `ctx.tokens.requestConsent` / `issue({ code })`, consent page, `auth: bearer`               | yes                                    | yes (consent answers need v2 signatures) | yes                                |
+| `authOptional`: public reads and bearer reads on one route                                  | no                                     | no                                       | **yes**                            |
+| `{*rest}` matching a trailing slash (folders, `/storage/`)                                  | no                                     | no                                       | **yes**                            |
+| `Location` to the approved client after `issue({ code })`                                   | no                                     | no                                       | **yes**                            |
 
 Without the last three rows the manifest does not validate (`authOptional`
 is an unknown field), and even without it folders could not be listed and

@@ -91,7 +91,10 @@ function fixture(documents = []) {
   apply(proposal(documents));
 
   const call = (route, request) =>
-    handle({ ...ctx, trigger: { route } }, { base: BASE, headers: {}, ...request });
+    handle(
+      { ...ctx, trigger: { route } },
+      { base: BASE, headers: {}, ...request },
+    );
   const scopes = s => ({ token: { id: 'tok_x', scopes: s } });
   /** A request to the storage, as the host hands it to the handler. */
   const storage = (method, path, { caller = null, headers = {}, blob } = {}) =>
@@ -102,6 +105,7 @@ function fixture(documents = []) {
       headers,
       blob,
     });
+
   /** PUT, then apply its intents like the host would after the precondition check. */
   const put = (path, text, type = 'text/plain', caller = scopes(['*:rw'])) => {
     const hash = hashOf(text);
@@ -119,14 +123,32 @@ function fixture(documents = []) {
     return { verdict, hash };
   };
 
-  return { ctx, resources, proposal, apply, call, storage, put, scopes, consents, issued, revoked };
+  return {
+    ctx,
+    resources,
+    proposal,
+    apply,
+    call,
+    storage,
+    put,
+    scopes,
+    consents,
+    issued,
+    revoked,
+  };
 }
 
 const status = verdict => verdict.response?.status ?? verdict.status;
-const body = verdict => (verdict.response ?? verdict).body;
 
 test('SHA-256 matches independent standard implementation for Unicode and multiple blocks', () => {
-  for (const text of ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'x'.repeat(1000), 'é 🌍\r\n'])
+  for (const text of [
+    '',
+    'abc',
+    'a'.repeat(55),
+    'a'.repeat(56),
+    'x'.repeat(1000),
+    'é 🌍\r\n',
+  ])
     assert.equal(sha256(text), hashOf(text));
 });
 
@@ -147,14 +169,17 @@ test('the manifest is a valid v3 http block that needs read-write, on its own or
   assert.deepEqual(manifest.http.writeTargets, [
     { id: 'documents', parent: 'config:table', classes: [FILE] },
   ]);
-  assert.deepEqual(manifest.http.wellKnown[0].match, { resourcePrefix: 'acct:' });
+  assert.deepEqual(manifest.http.wellKnown[0].match, {
+    resourcePrefix: 'acct:',
+  });
 });
 
 // -- WebFinger ------------------------------------------------------------------
 
 test('WebFinger answers the storage root and the OAuth endpoint for this host', () => {
   const f = fixture();
-  const url = BASE + '/.well-known/webfinger?resource=acct:me@abc.routes.example.test';
+  const url =
+    BASE + '/.well-known/webfinger?resource=acct:me@abc.routes.example.test';
   const answer = f.call('webfinger', {
     method: 'GET',
     url,
@@ -167,11 +192,21 @@ test('WebFinger answers the storage root and the OAuth endpoint for this host', 
   const [link] = jrd.links;
   assert.equal(link.rel, 'http://tools.ietf.org/id/draft-dejong-remotestorage');
   assert.equal(link.href, BASE + '/storage');
-  assert.equal(link.properties['http://remotestorage.io/spec/version'], SPEC_VERSION);
-  assert.equal(link.properties['http://tools.ietf.org/html/rfc6749#section-4.2'], BASE + '/oauth');
+  assert.equal(
+    link.properties['http://remotestorage.io/spec/version'],
+    SPEC_VERSION,
+  );
+  assert.equal(
+    link.properties['http://tools.ietf.org/html/rfc6749#section-4.2'],
+    BASE + '/oauth',
+  );
   assert.equal(link.properties['http://tools.ietf.org/html/rfc7233'], null);
 
-  for (const resource of ['acct:me@other.example.test', 'mailto:me@abc.routes.example.test', undefined])
+  for (const resource of [
+    'acct:me@other.example.test',
+    'mailto:me@abc.routes.example.test',
+    undefined,
+  ])
     assert.equal(
       f.call('webfinger', { method: 'GET', url, query: { resource } }).status,
       404,
@@ -180,11 +215,19 @@ test('WebFinger answers the storage root and the OAuth endpoint for this host', 
   // A configured user name is the only one answered.
   f.ctx.config.user = 'alice';
   assert.equal(
-    f.call('webfinger', { method: 'GET', url, query: { resource: 'acct:me@abc.routes.example.test' } }).status,
+    f.call('webfinger', {
+      method: 'GET',
+      url,
+      query: { resource: 'acct:me@abc.routes.example.test' },
+    }).status,
     404,
   );
   assert.equal(
-    f.call('webfinger', { method: 'GET', url, query: { resource: 'acct:alice@abc.routes.example.test' } }).status,
+    f.call('webfinger', {
+      method: 'GET',
+      url,
+      query: { resource: 'acct:alice@abc.routes.example.test' },
+    }).status,
     200,
   );
 });
@@ -204,14 +247,20 @@ test('the OAuth endpoint asks the host for consent with the app origin and exact
     },
   });
   assert.equal(answer.status, 302);
-  assert.equal(answer.headers.location, 'http://api.example.test/app/route-consent?request=r1');
+  assert.equal(
+    answer.headers.location,
+    'http://api.example.test/app/route-consent?request=r1',
+  );
   assert.deepEqual(f.consents, [
     {
       name: 'storage',
       scopes: ['notes:rw', 'contacts:r'],
       client: 'https://app.example.test',
       redirect: '/oauth/callback',
-      state: JSON.stringify({ r: 'https://App.Example.test:443/cb?x=1', s: 'abc' }),
+      state: JSON.stringify({
+        r: 'https://App.Example.test:443/cb?x=1',
+        s: 'abc',
+      }),
     },
   ]);
 });
@@ -229,7 +278,11 @@ test('bad OAuth requests are refused before any consent is asked', () => {
     { ...good, scope: '../x:rw' },
     { ...good, response_type: 'code' },
   ])
-    assert.equal(f.call('oauth', { method: 'GET', query }).status, 400, JSON.stringify(query));
+    assert.equal(
+      f.call('oauth', { method: 'GET', query }).status,
+      400,
+      JSON.stringify(query),
+    );
   assert.deepEqual(f.consents, []);
   assert.deepEqual(parseScopes('*:rw'), ['*:rw']);
   assert.deepEqual(parseScopes('a:r,a:r b:rw'), ['a:r', 'b:rw']);
@@ -241,7 +294,10 @@ test('bad OAuth requests are refused before any consent is asked', () => {
 test('the callback hands the token back to the approved app in the fragment', () => {
   const f = fixture();
   const state = JSON.stringify({ r: 'https://app.example.test/cb', s: 'a b' });
-  const answer = f.call('oauth-callback', { method: 'GET', query: { code: 'good-code', state } });
+  const answer = f.call('oauth-callback', {
+    method: 'GET',
+    query: { code: 'good-code', state },
+  });
   assert.equal(answer.status, 302);
   assert.equal(
     answer.headers.location,
@@ -251,18 +307,34 @@ test('the callback hands the token back to the approved app in the fragment', ()
 
   // A state that names another app: the token is revoked, not handed over.
   const other = JSON.stringify({ r: 'https://evil.example.test/cb', s: '' });
-  const refused = f.call('oauth-callback', { method: 'GET', query: { code: 'good-code', state: other } });
+  const refused = f.call('oauth-callback', {
+    method: 'GET',
+    query: { code: 'good-code', state: other },
+  });
   assert.equal(refused.status, 400);
   assert.deepEqual(f.revoked, ['tok_1']);
   assert.equal(refused.headers.location, undefined);
 
   // Denied, unknown codes and forged states.
   assert.equal(
-    f.call('oauth-callback', { method: 'GET', query: { error: 'access_denied', state } }).status,
+    f.call('oauth-callback', {
+      method: 'GET',
+      query: { error: 'access_denied', state },
+    }).status,
     403,
   );
-  assert.equal(f.call('oauth-callback', { method: 'GET', query: { code: 'bad', state } }).status, 400);
-  assert.equal(f.call('oauth-callback', { method: 'GET', query: { code: 'good-code', state: '{' } }).status, 400);
+  assert.equal(
+    f.call('oauth-callback', { method: 'GET', query: { code: 'bad', state } })
+      .status,
+    400,
+  );
+  assert.equal(
+    f.call('oauth-callback', {
+      method: 'GET',
+      query: { code: 'good-code', state: '{' },
+    }).status,
+    400,
+  );
 });
 
 // -- storage: access -------------------------------------------------------------
@@ -274,11 +346,19 @@ test('without a token only public documents are readable, never a listing', () =
   const anon = f.storage('GET', '/storage/public/notes/a.txt');
   assert.equal(anon.response.blob, hashOf('public'));
   assert.equal(anon.response.headers['content-type'], 'text/plain');
-  for (const path of ['/storage/notes/private.txt', '/storage/public/notes/', '/storage/notes/', '/storage/'])
+  for (const path of [
+    '/storage/notes/private.txt',
+    '/storage/public/notes/',
+    '/storage/notes/',
+    '/storage/',
+  ])
     assert.equal(status(f.storage('GET', path)), 401, path);
   assert.equal(status(f.storage('PUT', '/storage/public/notes/b.txt')), 401);
   assert.equal(status(f.storage('DELETE', '/storage/public/notes/a.txt')), 401);
-  assert.match(f.storage('GET', '/storage/notes/').headers['www-authenticate'], /^Bearer/);
+  assert.match(
+    f.storage('GET', '/storage/notes/').headers['www-authenticate'],
+    /^Bearer/,
+  );
 });
 
 test('scopes are per category, r or rw, and * covers the root', () => {
@@ -286,18 +366,47 @@ test('scopes are per category, r or rw, and * covers the root', () => {
   f.put('/notes/a.txt', 'a');
   f.put('/contacts/b.txt', 'b');
   const notesR = f.scopes(['notes:r']);
-  assert.equal(f.storage('GET', '/storage/notes/a.txt', { caller: notesR }).response.blob, hashOf('a'));
-  assert.equal(status(f.storage('GET', '/storage/notes/', { caller: notesR })), 200);
-  assert.equal(status(f.storage('GET', '/storage/contacts/b.txt', { caller: notesR })), 403);
+  assert.equal(
+    f.storage('GET', '/storage/notes/a.txt', { caller: notesR }).response.blob,
+    hashOf('a'),
+  );
+  assert.equal(
+    status(f.storage('GET', '/storage/notes/', { caller: notesR })),
+    200,
+  );
+  assert.equal(
+    status(f.storage('GET', '/storage/contacts/b.txt', { caller: notesR })),
+    403,
+  );
   assert.equal(status(f.storage('GET', '/storage/', { caller: notesR })), 403);
-  assert.equal(status(f.storage('GET', '/storage/public/notes/', { caller: notesR })), 200);
-  assert.equal(status(f.storage('GET', '/storage/public/', { caller: notesR })), 403);
-  assert.equal(status(f.put('/notes/c.txt', 'c', 'text/plain', notesR).verdict), 403);
-  assert.equal(status(f.put('/public/notes/c.txt', 'c', 'text/plain', f.scopes(['notes:rw'])).verdict), 201);
-  assert.equal(status(f.storage('GET', '/storage/', { caller: f.scopes(['*:r']) })), 200);
+  assert.equal(
+    status(f.storage('GET', '/storage/public/notes/', { caller: notesR })),
+    200,
+  );
+  assert.equal(
+    status(f.storage('GET', '/storage/public/', { caller: notesR })),
+    403,
+  );
+  assert.equal(
+    status(f.put('/notes/c.txt', 'c', 'text/plain', notesR).verdict),
+    403,
+  );
+  assert.equal(
+    status(
+      f.put('/public/notes/c.txt', 'c', 'text/plain', f.scopes(['notes:rw']))
+        .verdict,
+    ),
+    201,
+  );
+  assert.equal(
+    status(f.storage('GET', '/storage/', { caller: f.scopes(['*:r']) })),
+    200,
+  );
   // Public documents are readable with any token, or none.
   assert.equal(
-    f.storage('GET', '/storage/public/notes/c.txt', { caller: f.scopes(['contacts:r']) }).response.blob,
+    f.storage('GET', '/storage/public/notes/c.txt', {
+      caller: f.scopes(['contacts:r']),
+    }).response.blob,
     hashOf('c'),
   );
 });
@@ -328,7 +437,9 @@ test('PUT creates a File with the blob, then updates it; the host gets the prior
   assert.equal(second.verdict.response.current, hashOf('one'));
   assert.equal(second.verdict.intents[0].op, 'set');
   assert.equal(f.resources.size, 1);
-  const read = f.storage('GET', '/storage/notes/a%20b.txt', { caller: f.scopes(['notes:r']) });
+  const read = f.storage('GET', '/storage/notes/a%20b.txt', {
+    caller: f.scopes(['notes:r']),
+  });
   assert.equal(read.response.blob, hashOf('two'));
   assert.equal(read.response.headers['cache-control'], 'no-cache');
   assert.match(read.response.headers['access-control-expose-headers'], /ETag/);
@@ -338,16 +449,31 @@ test('DELETE destroys the File and tells the host which blob it held', () => {
   const f = fixture();
   f.put('/notes/a.txt', 'a');
   const rw = f.scopes(['notes:rw']);
-  const missing = f.storage('DELETE', '/storage/notes/nope.txt', { caller: rw });
+  const missing = f.storage('DELETE', '/storage/notes/nope.txt', {
+    caller: rw,
+  });
   assert.equal(missing.response.status, 404);
   assert.equal(missing.response.current, null);
   const gone = f.storage('DELETE', '/storage/notes/a.txt', { caller: rw });
   assert.equal(gone.response.status, 200);
   assert.equal(gone.response.current, hashOf('a'));
-  assert.deepEqual(gone.intents, [{ op: 'destroy', subject: [...f.resources.keys()][0] }]);
+  assert.deepEqual(gone.intents, [
+    { op: 'destroy', subject: [...f.resources.keys()][0] },
+  ]);
   f.apply(gone);
-  assert.equal(status(f.storage('GET', '/storage/notes/a.txt', { caller: rw })), 404);
-  assert.equal(status(f.storage('GET', '/storage/notes/a.txt', { caller: rw, headers: { 'if-match': '"x"' } })), 412);
+  assert.equal(
+    status(f.storage('GET', '/storage/notes/a.txt', { caller: rw })),
+    404,
+  );
+  assert.equal(
+    status(
+      f.storage('GET', '/storage/notes/a.txt', {
+        caller: rw,
+        headers: { 'if-match': '"x"' },
+      }),
+    ),
+    412,
+  );
 });
 
 test('a document and a folder cannot share a path, and folders are not written', () => {
@@ -356,8 +482,16 @@ test('a document and a folder cannot share a path, and folders are not written',
   assert.equal(status(f.put('/notes/a/b', 'b').verdict), 409);
   f.put('/notes/c/d', 'd');
   assert.equal(status(f.put('/notes/c', 'c').verdict), 409);
-  assert.equal(status(f.storage('PUT', '/storage/notes/', { caller: f.scopes(['*:rw']) })), 400);
-  assert.equal(status(f.storage('DELETE', '/storage/notes/', { caller: f.scopes(['*:rw']) })), 400);
+  assert.equal(
+    status(f.storage('PUT', '/storage/notes/', { caller: f.scopes(['*:rw']) })),
+    400,
+  );
+  assert.equal(
+    status(
+      f.storage('DELETE', '/storage/notes/', { caller: f.scopes(['*:rw']) }),
+    ),
+    400,
+  );
 });
 
 test('folder listings show immediate children with ETags that change with any descendant', () => {
@@ -368,7 +502,10 @@ test('folder listings show immediate children with ETags that change with any de
   const listing = f.storage('GET', '/storage/notes/', { caller });
   assert.equal(listing.headers['content-type'], 'application/ld+json');
   const json = JSON.parse(listing.body);
-  assert.equal(json['@context'], 'http://remotestorage.io/spec/folder-description');
+  assert.equal(
+    json['@context'],
+    'http://remotestorage.io/spec/folder-description',
+  );
   assert.deepEqual(Object.keys(json.items), ['a.txt', 'sub/']);
   assert.deepEqual(json.items['a.txt'], {
     ETag: hashOf('é'),
@@ -382,13 +519,36 @@ test('folder listings show immediate children with ETags that change with any de
   const changed = f.storage('GET', '/storage/notes/', { caller });
   assert.notEqual(changed.headers.etag, listing.headers.etag);
   // Conditional folder reads, and an empty folder.
-  assert.equal(status(f.storage('GET', '/storage/notes/', { caller, headers: { 'if-none-match': changed.headers.etag } })), 304);
-  assert.equal(status(f.storage('GET', '/storage/notes/', { caller, headers: { 'if-match': '"old"' } })), 412);
-  assert.deepEqual(JSON.parse(f.storage('GET', '/storage/notes/none/', { caller }).body).items, {});
+  assert.equal(
+    status(
+      f.storage('GET', '/storage/notes/', {
+        caller,
+        headers: { 'if-none-match': changed.headers.etag },
+      }),
+    ),
+    304,
+  );
+  assert.equal(
+    status(
+      f.storage('GET', '/storage/notes/', {
+        caller,
+        headers: { 'if-match': '"old"' },
+      }),
+    ),
+    412,
+  );
+  assert.deepEqual(
+    JSON.parse(f.storage('GET', '/storage/notes/none/', { caller }).body).items,
+    {},
+  );
   assert.equal(f.storage('HEAD', '/storage/notes/', { caller }).body, '');
   // The root listing shows categories as folders.
   assert.deepEqual(
-    Object.keys(JSON.parse(f.storage('GET', '/storage/', { caller: f.scopes(['*:r']) }).body).items),
+    Object.keys(
+      JSON.parse(
+        f.storage('GET', '/storage/', { caller: f.scopes(['*:r']) }).body,
+      ).items,
+    ),
     ['notes/'],
   );
 });
@@ -400,17 +560,39 @@ test('imported text documents are served and listed, but not overwritten over re
   assert.equal(read.status, 200);
   assert.equal(read.body, 'é\r\n🌍');
   assert.match(read.headers.etag, /^"[a-f0-9]{64}"$/);
-  assert.equal(status(f.storage('GET', '/storage/notes/imported.txt', { caller, headers: { 'If-None-Match': read.headers.etag } })), 304);
   assert.equal(
-    JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items['imported.txt'].ETag,
+    status(
+      f.storage('GET', '/storage/notes/imported.txt', {
+        caller,
+        headers: { 'If-None-Match': read.headers.etag },
+      }),
+    ),
+    304,
+  );
+  assert.equal(
+    JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items[
+      'imported.txt'
+    ].ETag,
     read.headers.etag.slice(1, -1),
   );
-  assert.equal(status(f.put('/notes/imported.txt', 'x', 'text/plain', caller).verdict), 409);
-  assert.equal(status(f.storage('DELETE', '/storage/notes/imported.txt', { caller })), 409);
+  assert.equal(
+    status(f.put('/notes/imported.txt', 'x', 'text/plain', caller).verdict),
+    409,
+  );
+  assert.equal(
+    status(f.storage('DELETE', '/storage/notes/imported.txt', { caller })),
+    409,
+  );
   // A local edit in Atomic: 503 rather than an outdated text, and left out of listings.
   [...f.resources.values()][0][P.content] = 'local edit';
-  assert.equal(status(f.storage('GET', '/storage/notes/imported.txt', { caller })), 503);
-  assert.deepEqual(JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items, {});
+  assert.equal(
+    status(f.storage('GET', '/storage/notes/imported.txt', { caller })),
+    503,
+  );
+  assert.deepEqual(
+    JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items,
+    {},
+  );
 });
 
 test('imports never replace a document an app stored', () => {
@@ -424,8 +606,20 @@ test('imports never replace a document an app stored', () => {
 test('host failures are a 503 that says nothing about the data', () => {
   const f = fixture();
   f.put('/notes/a.txt', 'a');
-  const failing = { ...f.ctx, trigger: { route: 'storage-read' }, read: () => { throw Error('private key in error'); } };
-  const answer = handle(failing, { method: 'GET', path: '/storage/notes/', caller: f.scopes(['notes:r']), headers: {}, base: BASE });
+  const failing = {
+    ...f.ctx,
+    trigger: { route: 'storage-read' },
+    read: () => {
+      throw Error('private key in error');
+    },
+  };
+  const answer = handle(failing, {
+    method: 'GET',
+    path: '/storage/notes/',
+    caller: f.scopes(['notes:r']),
+    headers: {},
+    base: BASE,
+  });
   assert.equal(answer.status, 503);
   assert.doesNotMatch(answer.body, /private key/);
 });
@@ -434,15 +628,30 @@ test('records outside the folder, or whose URL and identity disagree, are not do
   const f = fixture();
   f.put('/notes/a.txt', 'a');
   const [subject, resource] = [...f.resources][0];
-  f.resources.set(subject, { ...resource, [P.parent]: 'https://elsewhere.example.test/x' });
+  f.resources.set(subject, {
+    ...resource,
+    [P.parent]: 'https://elsewhere.example.test/x',
+  });
   const caller = f.scopes(['notes:r']);
-  assert.equal(status(f.storage('GET', '/storage/notes/a.txt', { caller })), 404);
-  f.resources.set(subject, { ...resource, [P.downloadURL]: BASE + '/storage/notes/b.txt' });
-  assert.deepEqual(JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items, {});
+  assert.equal(
+    status(f.storage('GET', '/storage/notes/a.txt', { caller })),
+    404,
+  );
+  f.resources.set(subject, {
+    ...resource,
+    [P.downloadURL]: BASE + '/storage/notes/b.txt',
+  });
+  assert.deepEqual(
+    JSON.parse(f.storage('GET', '/storage/notes/', { caller }).body).items,
+    {},
+  );
   // A document whose own path has a `storage` segment.
   f.put('/notes/storage/c.txt', 'c');
   assert.deepEqual(
-    Object.keys(JSON.parse(f.storage('GET', '/storage/notes/storage/', { caller }).body).items),
+    Object.keys(
+      JSON.parse(f.storage('GET', '/storage/notes/storage/', { caller }).body)
+        .items,
+    ),
     ['c.txt'],
   );
 });
@@ -450,17 +659,38 @@ test('records outside the folder, or whose URL and identity disagree, are not do
 test('path validation refuses traversal and encoded separators but supports Unicode URL encoding', () => {
   const f = fixture();
   f.put('/public/notes/é.txt', 'x');
-  assert.equal(f.storage('GET', '/storage/public/notes/%C3%A9.txt').response.blob, hashOf('x'));
-  for (const suffix of ['../secret', '%2e%2e/secret', 'a%2Fb', 'a%5Cb', '%252e%252e/secret', 'a//b', 'bad%GG'])
-    assert.equal(status(f.storage('GET', '/storage/public/notes/' + suffix)), 400, suffix);
-  assert.deepEqual(storagePath('/storage/'), { path: '/', pieces: [], folder: true });
+  assert.equal(
+    f.storage('GET', '/storage/public/notes/%C3%A9.txt').response.blob,
+    hashOf('x'),
+  );
+  for (const suffix of [
+    '../secret',
+    '%2e%2e/secret',
+    'a%2Fb',
+    'a%5Cb',
+    '%252e%252e/secret',
+    'a//b',
+    'bad%GG',
+  ])
+    assert.equal(
+      status(f.storage('GET', '/storage/public/notes/' + suffix)),
+      400,
+      suffix,
+    );
+  assert.deepEqual(storagePath('/storage/'), {
+    path: '/',
+    pieces: [],
+    folder: true,
+  });
   assert.equal(storagePath('/storage/a/b/').path, '/a/b/');
 });
 
 test('unsafe JSON object member names survive folder serialization as ordinary keys', () => {
   const f = fixture();
   f.put('/notes/__proto__', 'x');
-  const items = JSON.parse(f.storage('GET', '/storage/notes/', { caller: f.scopes(['notes:r']) }).body).items;
+  const items = JSON.parse(
+    f.storage('GET', '/storage/notes/', { caller: f.scopes(['notes:r']) }).body,
+  ).items;
   assert.equal(Object.hasOwn(items, '__proto__'), true);
 });
 
@@ -468,7 +698,12 @@ test('malformed conditions are a 400', () => {
   const f = fixture();
   f.put('/notes/a.txt', 'a');
   assert.equal(
-    status(f.storage('GET', '/storage/notes/', { caller: f.scopes(['notes:r']), headers: { 'if-none-match': 'garbage' } })),
+    status(
+      f.storage('GET', '/storage/notes/', {
+        caller: f.scopes(['notes:r']),
+        headers: { 'if-none-match': 'garbage' },
+      }),
+    ),
     400,
   );
 });
@@ -543,14 +778,27 @@ test('canonical Atomic parents and resource IDs support imports, updates and rea
   f.resources.set(subject, { [P.parent]: parent, ...created.intents[0].set });
   assert.equal(f.storage('GET', '/storage/public/notes/a.txt').body, 'hello');
   assert.deepEqual(f.proposal([document()]).intents, []);
-  assert.equal(f.proposal([document(undefined, 'changed')]).intents[0].subject, subject);
+  assert.equal(
+    f.proposal([document(undefined, 'changed')]).intents[0].subject,
+    subject,
+  );
 });
 
 test('empty, legacy-link and control-containing parent subjects are refused', () => {
-  for (const parent of ['atomic:', 'atomic:?drive=x', 'atomic://host/path', 'atomic:bad\nvalue', 'did:ad:', 'https://']) {
+  for (const parent of [
+    'atomic:',
+    'atomic:?drive=x',
+    'atomic://host/path',
+    'atomic:bad\nvalue',
+    'did:ad:',
+    'https://',
+  ]) {
     const f = fixture();
     f.ctx.config = { table: parent };
-    assert.match(f.proposal([document()]).problems[0].message, /parent subject/);
+    assert.match(
+      f.proposal([document()]).problems[0].message,
+      /parent subject/,
+    );
     assert.equal(status(f.storage('GET', '/storage/public/notes/a.txt')), 503);
   }
 });
@@ -564,11 +812,17 @@ test('import baselines carry source values and the observed previous values for 
   f.apply(first);
   const update = f.proposal([document(undefined, 'second')]);
   assert.deepEqual(update.intents[0].set[P.baseline].previous, source);
-  assert.deepEqual(update.intents[0].set[P.baseline].values, { ...source, [P.content]: 'second' });
+  assert.deepEqual(update.intents[0].set[P.baseline].values, {
+    ...source,
+    [P.content]: 'second',
+  });
   f.apply(update);
   assert.deepEqual(f.proposal([document(undefined, 'second')]).intents, []);
   const third = f.proposal([document(undefined, 'third')]);
-  assert.deepEqual(third.intents[0].set[P.baseline].previous, update.intents[0].set[P.baseline].values);
+  assert.deepEqual(
+    third.intents[0].set[P.baseline].previous,
+    update.intents[0].set[P.baseline].values,
+  );
   // A held preview keeps the original source snapshot so the host can reject
   // it if another import updates the baseline before Apply.
   assert.deepEqual(update.intents[0].set[P.baseline].previous, source);
@@ -595,16 +849,32 @@ test('local name edits and malformed legacy source baselines require review', ()
 });
 
 test('bundle is deterministic, self-contained and executable without Node host APIs', async () => {
-  execFileSync(process.execPath, [new URL('./build.mjs', import.meta.url).pathname, '--check']);
+  execFileSync(process.execPath, [
+    new URL('./build.mjs', import.meta.url).pathname,
+    '--check',
+  ]);
   const source = readFileSync(new URL('./plugin.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /^\s*import\s/m);
-  assert.doesNotMatch(source, /\b(?:require\(|Buffer\.|fetch\(|process\.|crypto\.|new URL\()/);
-  const bundle = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+  assert.doesNotMatch(
+    source,
+    /\b(?:require\(|Buffer\.|fetch\(|process\.|crypto\.|new URL\()/,
+  );
+  const bundle = await import(
+    'data:text/javascript;base64,' + Buffer.from(source).toString('base64')
+  );
   assert.equal(bundle.sha256('abc'), sha256('abc'));
   const f = fixture();
   f.put('/public/notes/a.txt', 'a');
   assert.equal(
-    bundle.handle({ ...f.ctx, trigger: { route: 'storage-read' } }, { method: 'GET', path: '/storage/public/notes/a.txt', headers: {}, caller: null }).response.blob,
+    bundle.handle(
+      { ...f.ctx, trigger: { route: 'storage-read' } },
+      {
+        method: 'GET',
+        path: '/storage/public/notes/a.txt',
+        headers: {},
+        caller: null,
+      },
+    ).response.blob,
     hashOf('a'),
   );
 });
