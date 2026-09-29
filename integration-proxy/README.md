@@ -83,9 +83,19 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   link (`atomic://…`); it may not carry `connection_code` or `error`
   parameters, credentials or a fragment.
 - `POST /connect/authorize` — the consent form (cookie-bound CSRF token,
-  single use). For an OAuth platform it redirects to the provider; for an
-  API-key platform (`type: apiKey` in the composed document) the consent page
-  asks for the key, and this seals it.
+  single use). For an OAuth platform it answers `200` with a page that
+  continues to the provider (a `<meta>` refresh plus a button, sent with
+  `Referrer-Policy: no-referrer`) rather than redirecting: the consent page's
+  CSP `form-action` governs a form submission's whole redirect chain, and a
+  provider whose authorization endpoint first redirects to another origin of
+  its own (Notion's API host to its app host, for one) would be blocked. The
+  consent page therefore allows form submissions to the proxy only. 0.2.2
+  and later; 0.2.1 redirected (`303`). For an API-key platform (`type:
+  apiKey` in the composed document) the consent page asks for the key, and
+  this seals it and redirects (`303`) to `redirect_uri`. Approving the same
+  consent page twice answers `400` "You already approved this connection …"
+  rather than "expired"; the page's one inline script (allowed by its hash)
+  disables the button after the first click.
 - `GET /oauth/{platform}/callback` — the provider's callback. Only the
   browser that approved consent can complete it. It redirects to
   `redirect_uri?connection_code=<handoff>` (or `?error=access_denied`). The
