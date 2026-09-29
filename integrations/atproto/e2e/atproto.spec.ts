@@ -311,7 +311,8 @@ async function reconfigure(page: Page, installation: string, config: unknown) {
 
 /**
  * A POST to atomic-server with a version 2 request signature over the
- * method, `origin` + `path` and the body. `origin` may be a host bound to a
+ * method, `origin` + `path` and the body (version 1 where the endpoint
+ * refuses version 2). `origin` may be a host bound to a
  * drive: the request still goes to the server's port, with that host in the
  * `Host` header, and the server checks the signature against the URL on that
  * host. `/bind-drive` binds that URL's host name without the port.
@@ -323,23 +324,32 @@ async function signedPost(
   body: unknown,
 ) {
   const text = JSON.stringify(body);
-  const headers = await signRequest(
-    `${origin}${path}`,
-    agent,
-    {},
-    {
-      method: 'POST',
-      body: text,
-    },
+  const url = `${origin}${path}`;
+  const post = (headers: Record<string, string>) =>
+    send(
+      'POST',
+      path,
+      new URL(origin).host,
+      { ...headers, 'content-type': 'application/json' },
+      text,
+    );
+  const v2 = await post(
+    await signRequest(url, agent, {}, { method: 'POST', body: text }),
   );
 
-  return send(
-    'POST',
-    path,
-    new URL(origin).host,
-    { ...headers, 'content-type': 'application/json' },
-    text,
-  );
+  // Endpoints that don't check version 2 yet (`/plugin-release` at the pin)
+  // say so; sign those with version 1. Built by hand rather than with
+  // `signRequest`, which sends no headers when an agent on `localhost` signs
+  // a URL on another host.
+  if (v2.status !== 401 || !v2.body.includes('version 2')) return v2;
+  const timestamp = Date.now();
+
+  return post({
+    'x-atomic-public-key': await agent.getPublicKey(),
+    'x-atomic-signature': await agent.createSignature(url, timestamp),
+    'x-atomic-timestamp': String(timestamp),
+    'x-atomic-agent': agent.subject!,
+  });
 }
 
 /** A GET on `host` (a name without port) at the server's port. */
