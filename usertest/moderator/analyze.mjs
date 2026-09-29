@@ -21,10 +21,11 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SESSIONS_DIR = process.env.SESSIONS_DIR ?? '/sessions';
+const here = dirname(fileURLToPath(import.meta.url));
 const MODEL = process.env.ANALYSIS_MODEL ?? 'claude-opus-5';
 const REPO = process.env.GITHUB_FINDINGS_REPO ?? 'ontola/usertest-findings';
 const MAX_SHOTS = 12;
@@ -147,9 +148,17 @@ export async function analyze(id, { client = new Anthropic() } = {}) {
         },
       },
     );
+  // The plan the moderator followed: its tasks, what success looks like and
+  // the limits already known. Sessions from before plans existed have none.
+  const planFile = join(here, 'sessions', `${meta.plan ?? 'calendar'}.md`);
+  if (existsSync(planFile))
+    content.push({
+      type: 'text',
+      text: `The session plan the moderator followed. A limit it lists as known is only a finding if the session adds something new about it (how it confused the tester, a workaround they tried):\n\n${readFileSync(planFile, 'utf8')}`,
+    });
   content.push({
     type: 'text',
-    text: `Session ${id}, started ${meta.started}. Transcript:\n\n${transcriptText(entries)}`,
+    text: `Session ${id} (plan: ${meta.plan ?? 'calendar'}), started ${meta.started}. Transcript:\n\n${transcriptText(entries)}`,
   });
 
   const response = await client.beta.messages.create({
