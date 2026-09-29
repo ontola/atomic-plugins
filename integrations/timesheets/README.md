@@ -5,8 +5,9 @@ The supported path is the **drive app** in `app/` (below): catalog entry
 (experimental plugins shown), which downloads
 `apps/timesheets/<version>/ui.js` from GitHub Pages and checks it against the
 catalog's integrity hash (see
-[Publishing a drive app](../README.md#publishing-a-drive-app)). It is
-read-only, and mock-tested only. The first sections describe the Clockify
+[Publishing a drive app](../README.md#publishing-a-drive-app)). Since 0.2.0
+it writes reviewed edits back to Clockify (#123 M3, below); it is
+mock-tested only, so that capability is declared, not verified. The first sections describe the Clockify
 lens and the LocalThought extension flow it was written for; the pinned host
 no longer has that flow.
 
@@ -56,7 +57,7 @@ Live account data must never be checked into fixtures.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 89 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 118 KB, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -136,20 +137,75 @@ into the view root.
     the longest entry seen (at least 24 h), so an entry longer than the
     margin leaves the window's first part unknown until an older range is
     read.
-  - **Rows.** The table's rows are a read-only projection of the mirror
-    (#97 answer 2): completed `REGULAR` entries through the one Clockify
-    lens (`devonian/clockify/`; running timers and breaks skipped), by
-    `clockify-entry-id` among the table's children, with project and user
-    names. A row whose entry Clockify confirmed deleted is removed. Edits
-    made in the table are overwritten on the next pass; the table's
-    description (if it has none) says so.
+  - **Rows.** The table's rows follow the mirror: completed `REGULAR`
+    entries through the one Clockify lens (`devonian/clockify/`; running
+    timers and breaks skipped), by `clockify-entry-id` among the table's
+    children, with project and user names. A row whose entry Clockify
+    confirmed deleted is removed. Since 0.2.0 an edit made in the table is
+    kept and listed to send (write-back, below), no longer overwritten
+    (#177 Q5 reverses #97 answer 2); the table's description says so.
   - **Status line.** Created/updated/unchanged as before, plus rows
     removed, entries waiting for a re-check, how much of the window is not
     loaded, and whether the workspace requires a project on every entry
     (`forceProjects`: "worked, no project" cannot be written back there),
     each only when it applies.
-    Nothing is written to Clockify. Requests are sequential; each is one
-    relay round trip.
+    A sync writes nothing to Clockify. Requests are sequential; each is
+    one relay round trip.
+- **Write-back** (#123 M3, following #177 §4; 0.2.0). Mock-tested only:
+  - _What can change:_ an entry's Name (its description), project,
+    billable flag, start and end, in the entry drawer (Edit) or anywhere
+    else the row can be edited (the table, another view, another device);
+    and Delete entry ("did not work" for all of it). Changed start and end
+    snap down to whole minutes (#97 answer 7). Not yet: splitting,
+    trimming or filling a range, creating entries, resolving overlap
+    conflicts (M4); tags, tasks, custom fields.
+  - _Not editable_ (`blockers` in the lens, checked when listing and again
+    on the fresh read): running timers, breaks and other non-`REGULAR`
+    entries, locked entries, entries with custom field values (the request
+    shape is unverified), an end in the future, a start not before the end,
+    no project under `forceProjects`, and an unknown or archived project.
+  - _Bookkeeping on the row_ (#177 Q4), as provider extras that are not
+    table columns: `clockify-sync-baseline` (JSON: the values the row and
+    Clockify last agreed on), `clockify-outbox` (a marker written before a
+    write and cleared once a read settled it) and `clockify-delete`.
+  - _Finding changes_ is comparing each row with its baseline, on open and
+    on every sync (the host has no change feed yet, #177 H6). A three-way
+    `reconcileRecord` (the host's `plugin-reconcile.ts`, the calendar's
+    engine) over baseline, row and Clockify takes a Clockify-only change
+    into the row, keeps a row-only change and lists it, and for a field
+    changed on both sides **keeps Clockify's value** (#177 §4.4), naming
+    the dropped value under "Changes to send".
+  - _Sending_, only from "Changes to send" (every send is reviewed while
+    testing, #177 §4.3), per entry and one request at a time: the row is
+    re-read (changed since the list: not sent); a fresh `GET` by id, the
+    only concurrency check Clockify allows (no ETag or If-Match); the
+    three-way check against it (a conflict sends nothing); the outbox
+    marker; one full-replacement `PUT` that the lens
+    (`devonian/clockify/lens/writeBack.ts` `putBody`) builds from the fresh
+    full record, replacing only changed fields and always sending `start`,
+    `end`, `billable`, `description`, `tagIds` and `type` (a project change
+    drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and
+    row advance only after that read, to what Clockify then holds
+    ("adjusted" if it differs from what was sent). Every read and write
+    response goes into the observation log.
+  - _Failures:_ a thrown call or a 5xx is uncertain (it may have been
+    applied): the batch stops, the marker stays, and the next sync reads
+    the entry back and settles it either way. A 4xx is shown and not
+    retried. A 429 waits for `retry-after` (at most 60 s) once. A proxy
+    refusal, or the proxy's 404 for a catalog without the write overlay,
+    stops the batch with that reason.
+  - _Known limits:_ a change made in Clockify between the fresh read and
+    the write is overwritten (the verification read shows the result); a
+    row deleted in the table is not noticed (needs the host's change list
+    with tombstones, #177 H6b); two devices sending at once are not
+    coordinated (the lease is M5); changes are found only while the app
+    is open.
+  - _Prerequisites, checked at the pin:_ the host's frame client allows
+    `PUT` and `DELETE` to the proxy (`PROXY_METHODS` in
+    `server/src/plugins/assets/view-client.js`, also at candidate14
+    `1432e244a`), and the proxy catalog's Clockify entry lists the
+    time-entry write overlay
+    (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`).
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):
@@ -221,6 +277,15 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   Europe/Amsterdam, the rendering hooks, and the merge property over 40
   seeded observation sets (any fold order and record order gives equal
   segments and conflicts) are in `app/timeline/timeline.test.ts`.
+  Write-back (#123 M3): the lens's get/put, blockers and a PutGet property
+  over 40 seeded edits against the mock's `PUT`
+  (`devonian/clockify/lens/writeBack.test.ts`); bookkeeping on the row,
+  compare on open, Clockify winning a both-sides change, and #123's S9
+  (as a field edit), S13, S14, S16–S18, S20, S23–S26, deletes, project
+  names typed into the table and `forceProjects`
+  (`app/writeBack.test.ts`); the controller's edit/delete/discard/send
+  (`app/controllerViews.test.ts`); and the drawer's edit form through to
+  a send in the DOM (`app/ui/ui.test.ts`, frames N1 and N2).
 - **Host e2e** (`e2e/clockify.spec.ts`, the `timesheets` lane's `e2e` tier)
   against the pinned atomic-server (`.atomic-server-ref`, which includes
   frame capabilities from atomic-server#1697) and the local mock proxy,
@@ -234,6 +299,12 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   7 → 30 days adding exactly the older entry, and a 503 that leaves the
   three rows readable in the table and recovers on reopen; then an M2
   "unclear which project" conflict and not-loaded time in the #89 views.
+  A second test (#123 M3) edits an entry's description and project in
+  the drawer, checks nothing is written before Send and that the edit
+  survives a reload, sends it as one `PUT` through the host's frame
+  client and the mock proxy's catalog check, reopens with the row in
+  agreement, and sees the refusal of a proxy whose catalog lacks the
+  write overlay.
   Provider changes
   and failures are driven through the mock proxy's local-only
   `POST /__fixture/clockify`.
@@ -260,7 +331,8 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   `forceProjects`), `forbid` (403 without applying), `catalog`
   (`readOnly`: the catalog before the write overlay), `applyThenDrop`,
   `failBefore`, `onNextRequest`, `deleteDuringPaging`, `add`, `delete`.
-  The app does not write to Clockify.
+  The project list has a second active project and an archived one, so a
+  project change and its refusal are testable.
 
 - **Not verified:** a real integration proxy or a real Clockify account.
   The `/api/v1/...` paths match the mock fixture, not a recorded live
@@ -297,10 +369,15 @@ pin), Disconnect (`store.proxy.disconnect`), "Open Clockify" through
 each feature-detected. The data-browser's LocalThought-extension path was
 removed upstream (`c707ca4ed`).
 
-1. **Writes to Clockify** (#123 M3, then M4): intents and an outbox, then
-   resolving conflicts from the app. Until then conflicts are read-only and
-   table edits are overwritten.
+1. **Range edits and conflict resolution** (#123 M4): "worked on P" and
+   "did not work" over a range (trims, splits, creates), and resolving
+   overlap conflicts from the app. M3's field edits and deletes are done
+   (0.2.0), mock-tested only.
 2. **Live evidence**: a run of the app against a live account through the
-   real integration proxy. Until then the card's capabilities are declared,
-   not verified.
+   real integration proxy, in a dedicated test workspace. For write-back
+   that includes #123 §5.4's checks: full-replacement `PUT` (a field left
+   out is cleared, `end` omitted makes a running timer), the status for
+   writing a locked entry, the custom-field request shape, and the
+   `start`/`end` list semantics once more. Until then the card's
+   capabilities are declared, not verified.
 3. **Pruning** `localthought.ts` to what `app/` imports.

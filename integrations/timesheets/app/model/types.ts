@@ -29,6 +29,9 @@ export interface TimeEntry {
   billable: boolean;
   project?: Project;
   member?: string;
+  /** A change made in the drive and not yet sent to Clockify (#123 M3):
+   * the entry shows the values that would be sent. */
+  pending?: 'update' | 'delete';
 }
 
 /** `[from, to)` in epoch ms. */
