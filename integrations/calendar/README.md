@@ -15,7 +15,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   104,561 bytes for 0.1.1) from GitHub Pages and refuses it unless it
+   107,798 bytes for 0.1.2) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -104,14 +104,58 @@ day is exclusive, like Google's all-day end:
 - timed event within one day: no End day (the property is removed if an
   edit makes an overnight event fit in one day).
 
-Day and End day are derived on import and on every local edit, and never
-read back, so move an event by editing Start and End. Version 0.1.0 wrote
+Day and End day are derived on import and on every local edit, and are not
+re-derived when Start or End is edited in the host table, so move an event
+with the app's Edit (or edit Day and End day too). Version 0.1.0 wrote
 the shortnames `day` and `all-day`, no End day, and Google's description to
 the core Description; the host view drew its all-day and multi-day events
 on their first day only. A table first imported by 0.1.0 keeps those old
 Properties (0.1.1 no longer writes them) and gets the new ones on its next
 sync; installs of 0.1.0 were experimental, so nothing migrates the old
 values beyond that re-import.
+
+### Which days the Agenda and Week draw an event on
+
+From 0.1.2 the app's own views draw every row on exactly the days the host
+table's Calendar view draws it (Michiel's decision on
+atomic-server#1803: the data keeps the host's format, and the app's views
+follow the host, not Google's UI). `app/events.ts` imports the host's
+`isAllDayOnDate` from `browser/lib/src/calendar-date.ts` and applies
+`CalendarView.tsx`'s bucketing to the same columns, at the pin:
+
+| Row                                                        | Host view and app views                   |
+| ---------------------------------------------------------- | ----------------------------------------- |
+| All day, End day after Day                                 | Day up to, not including, End day         |
+| All day, End day equal to or before Day, or no date        | nowhere                                   |
+| All day, no End day                                        | Day only                                  |
+| Not all day (timed), any End day                           | Day only, End day ignored                 |
+| No Day (or one that doesn't start with `YYYY-MM-DD`)       | nowhere                                   |
+| Made with the host view's `+` (Day, End day, no Start/End) | Day (the app draws it untimed, read-only) |
+
+Consequences, which differ from 0.1.1 and from Google's own UI:
+
+- A timed event that runs past midnight, or over several days, is drawn on
+  its Day only: the Week's block stops at 24:00, and its label and
+  accessible name give the real end ("22:00 to 01:30 on Friday 25
+  September").
+- The day and the clock times of a timed event are the ones in its stored
+  offset (the date Day holds), not in the viewer's zone. For a viewer whose
+  zone has the same offset as the event nothing changes. Otherwise, an event
+  stored as `23:30-04:00` shows at 23:30 on its own date, as the host does,
+  while the drawer still gives the time in the viewer's zone and, on a
+  second line, in the event's own offset.
+- Day and End day decide, not Start and End: a row whose Day or End day was
+  edited in the host table moves in the app too.
+
+Declared by unit tests (`app/events.test.ts`, one case per row of the table,
+each checked against the host's `isAllDayOnDate`); the e2e checks the host
+view's days for the fixture, not the app's views in another zone.
+
+The Google side stays as Google has it: an all-day event whose `end.date`
+equals its `start.date` (Google's UI shows one day) is read as that one
+day, with End day the day after (#184), both by `project()` and by the
+LocalThought lens in `devonian/google-calendar/lens/projection.ts`; a
+write-back sends Google the exclusive end.
 
 Each row also carries its binding, outside the table's columns: the Google
 event id, the ETag last read, and the sync baseline. The baseline is JSON of
@@ -231,8 +275,10 @@ node --test integrations/localthought/mock-proxy.test.mjs
 - **Unit, views** (`app/view.test.ts`, jsdom; `app/controller.test.ts`,
   `app/events.test.ts`, `app/contrast.test.ts`): every screen of the design
   against the fake store, the banner copy for each provider status, agenda
-  grouping and week packing (exclusive all-day ends, midnight crossings,
-  viewer zone), local edits stored as offset-qualified strings, and the
+  grouping and week packing on the host Calendar view's days (exclusive
+  End day, End day == Day, missing Day or End day, midnight crossings,
+  events stored in another offset), local edits stored as offset-qualified
+  strings, and the
   event tints' contrast for Google's 24 classic calendar colours.
 - **Unit** (`app/sync.test.ts`, `adapter.test.ts`): the whole drive-app path
   against the stateful fixture in

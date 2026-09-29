@@ -20,7 +20,8 @@
  *   for an all-day event it is Google's exclusive end date, the day after the
  *   last day; for a timed event that ends on a later date it is that date,
  *   and a timed event within one day has none. Day and End day are derived
- *   on import and never read back: move an event by editing Start and End.
+ *   on import and on local edits, and never sent to Google. The app's own
+ *   views place rows by them, as the host view does (`events.ts`).
  * - The binding lives on the row, not in a separate store: the Google event
  *   id, the ETag last read, and the baseline — the projection both sides
  *   last agreed on, as JSON text. The baseline is what lets a refresh tell a
@@ -901,6 +902,9 @@ export async function readEvents(
       conflict: inConflict.has(subject),
       readOnly: readOnly || !card.id,
       calendar: { name: meta.summary, color: meta.color },
+      // What the host's Calendar view places the row by; the views do too.
+      day: row.get(props[DAY]),
+      endDay: row.get(props[END_DAY]),
     });
   }
 

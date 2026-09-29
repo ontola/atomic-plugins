@@ -29,7 +29,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 /** The fixture's workspace (`../fixtures/clockify/scenario.mjs`). */
 const WORKSPACE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -323,6 +323,116 @@ test.describe('timesheets drive app', () => {
     await expect(status).toContainText('Not connected', { timeout: 30_000 });
     expect((await proxyConnections('clockify'))[0].delegations).toHaveLength(0);
     await expectRows(page, table);
+  });
+
+  test('#123 M3: an edit in the app reaches Clockify only after review, through the proxy', async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(240_000);
+    await fixture({ action: 'reset' });
+    await installFromCatalog(page);
+    const appUrl = page.url();
+    const app = page.frameLocator(APP_FRAME);
+    const status = app.getByRole('status');
+    await expect(status).toContainText('Not connected');
+    await app.getByRole('button', { name: 'Connect Clockify' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page.getByLabel('API key').fill('synthetic-clockify-key');
+    await page
+      .getByRole('button', { name: 'Connect Clockify', exact: true })
+      .click();
+    await expect(status).toContainText('Choose the workspace', {
+      timeout: 30_000,
+    });
+    await app.getByRole('radio', { name: 'Test workspace' }).check();
+    await app.getByRole('button', { name: 'Last 7 days' }).click();
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '2 created,',
+      { timeout: 60_000 },
+    );
+
+    // Edit in the drawer: saved to the row, listed, nothing sent.
+    await app.getByRole('tab', { name: 'Entries' }).click();
+    const weekly = app.getByRole('button', { name: /Weekly sync/ });
+    if (!(await weekly.count()))
+      await app.getByRole('button', { name: 'Previous week' }).click();
+    await weekly.click();
+    const detail = app.getByRole('dialog', { name: 'Weekly sync' });
+    await detail.getByRole('button', { name: 'Edit', exact: true }).click();
+    const form = app.getByRole('form', { name: 'Edit entry' });
+    await form.getByLabel('Description').fill('Weekly sync (notes)');
+    await form.getByLabel('Project').selectOption({ label: 'Research' });
+    await app.getByRole('button', { name: 'Save', exact: true }).click();
+    const changes = app.getByRole('region', { name: 'Changes to send' });
+    await expect(changes).toContainText('1 change to send', {
+      timeout: 30_000,
+    });
+    await expect(changes).toContainText('Project: Atomic plugins → Research');
+    let log = (await fixture({ action: 'requests' })) as {
+      writes: unknown[];
+    };
+    expect(log.writes).toEqual([]);
+
+    // Compare on open: the edit survives a reload and a sync.
+    await page.goto(appUrl);
+    await expect(status.filter({ hasText: 'Last synced' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(changes).toContainText(
+      'Description: Weekly sync → Weekly sync (notes)',
+    );
+
+    // Send: one full-replacement PUT through the host's frame client and
+    // the proxy's catalog (write overlay), then the row agrees with Clockify.
+    await changes.getByRole('button', { name: 'Send 1 to Clockify' }).click();
+    await expect(changes).toContainText('“Weekly sync”: Sent', {
+      timeout: 60_000,
+    });
+    log = (await fixture({ action: 'requests' })) as { writes: unknown[] };
+    expect(log.writes).toEqual([
+      expect.objectContaining({
+        method: 'PUT',
+        path: expect.stringContaining(
+          `/workspaces/${WORKSPACE_ID}/time-entries/entry-2`,
+        ),
+        body: expect.objectContaining({
+          description: 'Weekly sync (notes)',
+          projectId: 'eeeeeeeeeeeeeeeeeeeeeeee',
+          billable: false,
+          tagIds: [],
+        }),
+      }),
+    ]);
+    await page.goto(appUrl);
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '0 created, 0 updated, 2 unchanged',
+      { timeout: 60_000 },
+    );
+    await expect(changes).toHaveCount(0);
+
+    // A proxy without the write overlay refuses the write; the app says so.
+    await fixture({ action: 'catalog', readOnly: true });
+    await app.getByRole('tab', { name: 'Entries' }).click();
+    if (!(await weekly.count()))
+      await app.getByRole('button', { name: 'Previous week' }).click();
+    await app.getByRole('button', { name: /Weekly sync \(notes\)/ }).click();
+    await app.getByRole('button', { name: 'Edit', exact: true }).click();
+    await app
+      .getByRole('form', { name: 'Edit entry' })
+      .getByLabel('Billable')
+      .check();
+    await app.getByRole('button', { name: 'Save', exact: true }).click();
+    await changes.getByRole('button', { name: 'Send 1 to Clockify' }).click();
+    await expect(changes).toContainText('does not allow writing to Clockify', {
+      timeout: 60_000,
+    });
+    await fixture({ action: 'catalog', readOnly: false });
   });
 });
 

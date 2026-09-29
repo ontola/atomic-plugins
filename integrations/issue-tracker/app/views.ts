@@ -853,7 +853,9 @@ function skeletonCard(): HTMLElement {
 
 function board(state: Ready, ui: Ui, actions: Actions): HTMLElement {
   const rows = state.last?.result.rows ?? [];
-  const importing = state.busy === 'syncing' && !state.last;
+  // Skeleton cards while there is nothing yet, or more is on its way.
+  const importing =
+    state.busy === 'syncing' && (!state.last || !!state.importing);
   const filter: Filter = { search: ui.search, label: ui.label };
   const cols = columns(rows, filter, ui.allDone);
   const marks = markers(state);
@@ -889,7 +891,11 @@ function board(state: Ready, ui: Ui, actions: Actions): HTMLElement {
           { class: 'col-head' },
           statusGlyph(GLYPH[col.status]),
           h('h2', { id: `col-${col.status}` }, col.status),
-          h('span', { class: 'count' }, importing ? '…' : String(col.total)),
+          h(
+            'span',
+            { class: 'count' },
+            importing && !rows.length ? '…' : String(col.total),
+          ),
           iconButton(
             'plus',
             `New issue in ${col.status}`,
@@ -1155,9 +1161,24 @@ function toolbar(
           { class: 'tb-count' },
           state.busy === 'syncing' && !state.last
             ? 'Importing…'
-            : countText(rows, { search: ui.search, label: ui.label }),
+            : state.busy && state.importing
+              ? importingText(state.importing)
+              : countText(rows, { search: ui.search, label: ui.label }),
         ),
   );
+}
+
+/** The toolbar count while a pass imports: rows appear as they land. */
+export function importingText(importing: {
+  issues: number;
+  comments: number;
+}): string {
+  const n = (count: number, one: string) =>
+    `${count} ${one}${count === 1 ? '' : 's'}`;
+
+  return `Importing… ${n(importing.issues, 'issue')}${
+    importing.comments ? `, ${n(importing.comments, 'comment')}` : ''
+  } so far`;
 }
 
 function emptyContent(

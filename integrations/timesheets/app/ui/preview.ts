@@ -6,11 +6,17 @@
  * imported by `main.ts`, so not bundled.
  */
 import type { SetupOptions } from '../clockifyApi.js';
-import type { Controller, SyncOutcome, ViewState } from '../controller.js';
+import type {
+  ChangesState,
+  Controller,
+  SyncOutcome,
+  ViewState,
+} from '../controller.js';
 import { SAMPLE_NOW, sampleTimesheet } from '../model/sample.js';
 import type { Timesheet } from '../model/types.js';
 import type { Problem } from '../problem.js';
 import type { SyncResult } from '../sync.js';
+import type { EntryValues, PendingChange } from '../writeBack.js';
 import { mountShell, type Shell } from './shell.js';
 import { installStyles } from './theme.js';
 
@@ -86,6 +92,8 @@ export const FRAMES = {
   l: { width: 560, title: 'L Week outside the window' },
   m: { width: 560, title: 'M Settings' },
   o: { width: 1080, title: 'O Dark' },
+  n1: { width: 760, title: 'N1 Changes to send' },
+  n2: { width: 1080, title: 'N2 Edit an entry' },
 } as const;
 
 export type FrameId = keyof typeof FRAMES;
@@ -107,10 +115,79 @@ interface Stub {
   set(state: ViewState): void;
 }
 
+const NO_CHANGES: ChangesState = { review: [], providerWon: [], recovered: [] };
+
+/** Frame N1: two changes (one blocked), a kept Clockify value, a send. */
+function sampleChanges(sheet: Timesheet): ChangesState {
+  const [first, second] = sheet.entries;
+  const values = (e: Timesheet['entries'][number]): EntryValues => ({
+    name: e.description || 'Time entry',
+    start: e.start,
+    end: e.end,
+    billable: e.billable,
+    projectId: e.project?.id ?? null,
+    project: e.project?.name ?? null,
+  });
+  const change = (
+    e: Timesheet['entries'][number],
+    desired: Partial<EntryValues>,
+    fields: PendingChange['fields'],
+    blockers: string[] = [],
+  ): PendingChange => ({
+    kind: 'update',
+    entryId: e.id,
+    subject: `row:${e.id}`,
+    title: e.description,
+    base: values(e),
+    local: { ...values(e), ...desired } as EntryValues,
+    desired: { ...values(e), ...desired } as EntryValues,
+    fields,
+    blockers,
+  });
+
+  return {
+    review: [
+      change(first, { start: first.start - 15 * 60_000 }, ['start']),
+      change(
+        second,
+        { name: `${second.description} (review)`, billable: !second.billable },
+        ['name', 'billable'],
+        ['It is locked in Clockify.'],
+      ),
+    ],
+    providerWon: [
+      {
+        entryId: 'e-kept',
+        title: 'Client call',
+        fields: [
+          {
+            field: 'name',
+            yours: 'Client call (notes)',
+            clockify: 'Client call',
+          },
+        ],
+      },
+    ],
+    recovered: [],
+    outcomes: {
+      at: SAMPLE_NOW - 60_000,
+      results: [
+        {
+          entryId: 'e-sent',
+          title: 'Wireframes',
+          kind: 'update',
+          status: 'sent',
+        },
+      ],
+    },
+  };
+}
+
 function stub(
   initial: ViewState,
   sheet: Timesheet | undefined,
   render: () => void,
+  changes: ChangesState = NO_CHANGES,
 ): Stub {
   let state = initial;
 
@@ -150,7 +227,33 @@ function stub(
       workspaceName: 'Studio Veldkamp',
       timeZone: 'Europe/Amsterdam',
     }),
-    sheet: () => sheet,
+    sheet: () =>
+      sheet && changes.review.length
+        ? {
+            ...sheet,
+            entries: sheet.entries.map(e =>
+              changes.review.some(c => c.entryId === e.id)
+                ? { ...e, pending: 'update' as const }
+                : e,
+            ),
+          }
+        : sheet,
+    changes: () => changes,
+    editBlockers: () => [],
+    projectChoices: () => ({
+      projects: (sheet?.entries ?? [])
+        .map(e => e.project)
+        .filter(
+          (p, i, all): p is NonNullable<typeof p> =>
+            !!p?.name && all.findIndex(q => q?.id === p.id) === i,
+        )
+        .map(p => ({ id: p.id, name: p.name! })),
+      required: false,
+    }),
+    editEntry: async () => {},
+    deleteEntry: async () => {},
+    discard: async () => {},
+    send: async () => state,
   };
 
   return { controller, set: next => void set(next) };
@@ -250,11 +353,18 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
     l: [ready(ok(4)), sheet],
     m: [ready(ok(4)), sheet],
     o: [ready(ok(4)), sheet],
+    n1: [ready(ok(4)), sheet],
+    n2: [ready(ok(4)), sheet],
   };
 
   let shell: Shell | undefined;
   const [state, data] = table[id];
-  const { controller } = stub(state, data, () => shell?.render());
+  const { controller } = stub(
+    state,
+    data,
+    () => shell?.render(),
+    id === 'n1' && data ? sampleChanges(data) : NO_CHANGES,
+  );
   shell = mountShell(root, controller, {
     now: () => SAMPLE_NOW,
     width: FRAMES[id].width,
@@ -284,6 +394,14 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
       break;
     case 'm':
       click(root, '[data-k="settings"]');
+      break;
+    case 'n1':
+      click(root, '[data-k="view:entries"]');
+      break;
+    case 'n2':
+      click(root, '[data-k="view:entries"]');
+      click(root, '.entry', 'Homepage hero, responsive pass');
+      click(root, '[data-k="edit"]');
       break;
   }
 

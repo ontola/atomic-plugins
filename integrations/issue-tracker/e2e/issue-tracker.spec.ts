@@ -33,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const REPOSITORY = 'atomic-fixture/tracker';
 const NAME = 'https://atomicdata.dev/properties/name';
 
@@ -48,6 +48,7 @@ test.describe('GitHub issues drive app', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    const writes = appWrites(page);
     await installFromCatalog(page);
 
     const app = page.frameLocator(APP_FRAME);
@@ -105,6 +106,10 @@ test.describe('GitHub issues drive app', () => {
       { timeout: 60_000 },
     );
     await expect(bar).toHaveAttribute('title', /2 issues and 1 comment/);
+    // How long the host takes per app write (#206); for the report only.
+    console.info(
+      `/app-write through the import and reload: ${writes.summary()}`,
+    );
 
     // 3. A reviewed update: close #1 from the table, outside the app.
     const first = await subjectOf(app, '#1');
@@ -351,6 +356,34 @@ async function signedInAgent(page: Page): Promise<string> {
  * unless its bytes match `app-module-integrity`, then opens the new app.
  * Returns the card, for its "Installed <version>" line.
  */
+/**
+ * The page's `/app-write` POSTs (every write the app makes), with their
+ * request size and time to a response, as Playwright reports them.
+ */
+function appWrites(page: Page) {
+  const seen: { bytes: number; ms: number }[] = [];
+
+  page.on('requestfinished', request => {
+    if (request.method() !== 'POST' || !request.url().endsWith('/app-write'))
+      return;
+    const timing = request.timing();
+    seen.push({
+      bytes: request.postDataBuffer()?.length ?? 0,
+      ms: Math.round(timing.responseEnd - timing.requestStart),
+    });
+  });
+
+  return {
+    summary() {
+      const ms = seen.map(w => w.ms).sort((a, b) => a - b);
+      const at = (q: number) =>
+        ms[Math.min(ms.length - 1, Math.floor(q * ms.length))];
+
+      return `${seen.length} writes, ${seen.reduce((n, w) => n + w.bytes, 0)} bytes, largest ${Math.max(0, ...seen.map(w => w.bytes))} bytes; median ${at(0.5)} ms, p90 ${at(0.9)} ms, max ${ms.at(-1)} ms; ${JSON.stringify(seen)}`;
+    },
+  };
+}
+
 async function installFromCatalog(page: Page) {
   await page.goto(new URL('/app/integrations', page.url()).href);
   const experimental = page.getByRole('checkbox', {

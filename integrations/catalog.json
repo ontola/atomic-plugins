@@ -167,11 +167,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Calendar through the host's consent bar and choose a calendar. It syncs when opened and on Sync now; Send sends the reviewed edits. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One calendar per app, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. Mock-tested only: not yet verified against a live Google account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google calendar events agenda week month schedule drive app two-way review",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.2",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.1.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-TWIhxFCrYOCtmlHL+faWPcQSbKndLcY1gGtSxMJ3yEhN1B3tUBQp6lHi9w84lZ9i"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.1.2/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-vNveURZFLgD4O9jmppoh9EwESAONdgkbw4QWyYKqNTNi0tTn0dtDWg10hUoloQt2"
   },
   {
     "https://atomicdata.dev/properties/localId": "devonian-todoist",
@@ -240,16 +240,16 @@
     "https://atomicdata.dev/integrations/properties/enabled": false,
     "https://atomicdata.dev/properties/name": "Clockify",
     "https://atomicdata.dev/properties/emoji": "⏱️",
-    "https://atomicdata.dev/properties/description": "A read-only drive app that brings your Clockify time entries into a week view and a table of its own.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Reads your own time entries in one workspace over a rolling 7- or 30-day look-back, keeps what each read saw in an observation log in the drive, and shows a week grid, the entries by day and hours per project. Completed entries become rows in the app's table (start, end, project, billable). A timeline shows overlapping entries and work over a break as conflicts, read-only, and time no read has covered as not loaded, never as not worked.",
+    "https://atomicdata.dev/properties/description": "A drive app that brings your Clockify time entries into a week view and a table of its own, and sends edits you review back to Clockify.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Reads your own time entries in one workspace over a rolling 7- or 30-day look-back, keeps what each read saw in an observation log in the drive, and shows a week grid, the entries by day and hours per project. Completed entries become rows in the app's table (start, end, project, billable). A timeline shows overlapping entries and work over a break as conflicts, read-only, and time no read has covered as not loaded, never as not worked. An entry's description, project, billable flag, start and end can be edited in the app or in the table, or the entry deleted; each change is listed under Changes to send and written to Clockify only when sent, after a fresh read, and confirmed by a read afterwards. If Clockify changed the same field, Clockify's value is kept.",
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written to Clockify, and conflicts cannot be resolved from the app yet. Edits made in the table are overwritten by the next sync. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited, time ranges cannot be split or filled yet, and overlap conflicts cannot be resolved from the app. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-EqMsXgbu57BU1Y0u0KaUoq/5DtTJ4Vuto7uPk/lEvf9RwvCOmFbA570TqTVzwjEw"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-1XsOtRqJgx5PCSfxiBf5pxbRaYaUNAQ6ldysjk8idX83P4SUTM++RTLEm/3cRZWC"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",
@@ -378,11 +378,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect GitHub through the host's consent bar and choose a repository. It syncs when opened, on Sync now and after each edit made in the app; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One repository per app. Labels and assignees are shown read-only; milestones and pull requests are not synced, and deletions are never sent to GitHub. One syncing view per app is assumed: two tabs or devices are not guarded. A new issue whose send got no answer pauses sync, with no in-app way out yet (#156). Mock-tested only: not yet verified against live GitHub or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "github issues board kanban tracker two-way review drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-QyXVqeSXn59mWrCcsoubVrfKllEI0Y+1QP/B2HxTcyZO5e7mr3UPkllNZ06UTXFB"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.1.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-MqUAGzXa72Dq/mGWTroA+G7zkuTxcP8lW5nmBXFLF5Q0fV0YEz7CkwxaNRXot4ZO"
   },
   {
     "https://atomicdata.dev/properties/localId": "open-cloud-mesh",

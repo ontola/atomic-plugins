@@ -6,17 +6,45 @@ import {
   type SetupOptions,
 } from './clockifyApi.js';
 import { readSettings, type Settings } from './config.js';
-import { timesheetFromMirror } from './model/source.js';
+import { projectOf, timesheetFromMirror } from './model/source.js';
 import { browserTimeZone } from './model/time.js';
 import type { Timesheet } from './model/types.js';
 import { emptyMirror, type Mirror } from './observations.js';
 import { classify, type Problem } from './problem.js';
 import { atomic } from './ontology.js';
-import { ensureSchema, findSchema } from './schema.js';
+import { ensureSchema, findSchema, type CompleteSchema } from './schema.js';
 import type { ConnectionReference, PluginStore } from './store.js';
-import { syncClockify, type SyncResult } from './sync.js';
+import {
+  newObservationId,
+  syncClockify,
+  type Recovered,
+  type SyncResult,
+} from './sync.js';
 import { PLATFORM, relayTransport, type ProxyTransport } from './transport.js';
 import { readMirror } from './viewData.js';
+import { ObservationLog } from './observationLog.js';
+import {
+  blockers,
+  descriptionOf,
+  type ClockifyProject,
+  type WriteContext,
+} from '../devonian/clockify/lens/index.js';
+import {
+  discardChange,
+  localValues,
+  mirrorEntry,
+  planAll,
+  planChange,
+  readRowState,
+  requestDelete,
+  sendChanges,
+  setRowValues,
+  sortChanges,
+  type EntryValues,
+  type PendingChange,
+  type ProviderWon,
+  type SendOutcome,
+} from './writeBack.js';
 
 /**
  * Everything the view shows, as data, so it is testable without a DOM. The
@@ -76,6 +104,27 @@ interface SheetInput {
   forceProjects?: boolean;
 }
 
+/**
+ * The "Changes to send" list (#123 M3, #177 §4.3): what the rows changed,
+ * what a sync had to settle for Clockify, and how the last send went.
+ */
+export interface ChangesState {
+  review: PendingChange[];
+  /** Changed here and in Clockify: Clockify's value was kept. */
+  providerWon: ProviderWon[];
+  /** Sends a closed frame left unconfirmed, settled by the last sync. */
+  recovered: Recovered[];
+  outcomes?: { at: number; results: SendOutcome[] };
+  sending?: { done: number; total: number };
+  /** The last edit or send could not be saved or started. */
+  error?: string;
+}
+
+/** What an edit in the drawer may set. */
+export type EntryEdit = Partial<
+  Pick<EntryValues, 'name' | 'start' | 'end' | 'billable' | 'projectId'>
+>;
+
 export interface SettingsChoice {
   workspaceId: string;
   lookbackDays: LookbackDays;
@@ -110,6 +159,20 @@ export interface Controller {
   names(): { userName?: string; workspaceName?: string; timeZone?: string };
   /** The timesheet the views show, or undefined before anything was read. */
   sheet(now?: number): Timesheet | undefined;
+  /** The "Changes to send" list and the last send's outcome. */
+  changes(): ChangesState;
+  /** Why the entry cannot be edited here; empty: it can. */
+  editBlockers(entryId: string): string[];
+  /** Active projects to choose from, and whether one is required. */
+  projectChoices(): { projects: ClockifyProject[]; required: boolean };
+  /** Saves the edit to the entry's row; it is then listed to send. */
+  editEntry(entryId: string, edit: EntryEdit): Promise<void>;
+  /** Asks to delete the entry in Clockify (listed to send). */
+  deleteEntry(entryId: string): Promise<void>;
+  /** Puts the row back as Clockify has it and drops the change. */
+  discard(entryId: string): Promise<void>;
+  /** Sends the listed changes that can be sent, one at a time. */
+  send(): Promise<ViewState>;
 }
 
 const message = (error: unknown) =>
@@ -123,6 +186,7 @@ export function createController(
   let current: ViewState = { kind: 'loading' };
   let running = false;
   let input: SheetInput | undefined;
+  let changes: ChangesState = { review: [], providerWon: [], recovered: [] };
   const timeZone = browserTimeZone();
 
   const settingsOf = (state: ViewState): Settings | undefined =>
@@ -303,11 +367,11 @@ export function createController(
       // Counts list pages as the sync reads them, for the progress line.
       const relay = relayTransport(store.proxy, connection);
       const transport: ProxyTransport = {
-        request(path, query) {
+        request(path, query, init) {
           if (path.endsWith('/time-entries') && query?.page)
             progress({ phase: 'fetch', page: Number(query.page) });
 
-          return relay.request(path, query);
+          return relay.request(path, query, init);
         },
       };
 
@@ -325,6 +389,12 @@ export function createController(
               progress({ phase: 'save', done, total }),
           },
         );
+        changes = {
+          review: result.review,
+          providerWon: result.providerWon,
+          recovered: result.recovered,
+          ...(changes.outcomes ? { outcomes: changes.outcomes } : {}),
+        };
         input = {
           mirror: result.mirror,
           projects: result.projects,
@@ -449,16 +519,9 @@ export function createController(
       if (typeof store.openResource !== 'function') return false;
 
       try {
-        // The row is the table child carrying this entry id (the table is
-        // a projection of the mirror, written by the sync).
         const schema = await findSchema(store);
         if (!schema.row.entryId) return false;
-        const own = new Set(
-          await store.query({ property: atomic.parent, value: schema.table }),
-        );
-        const subject = (
-          await store.query({ property: schema.row.entryId, value: entryId })
-        ).find(s => own.has(s));
+        const subject = await rowSubject(schema as CompleteSchema, entryId);
         if (!subject) return false;
         await store.openResource(subject);
 
@@ -493,22 +556,241 @@ export function createController(
       if (!input) return undefined;
       const settings = settingsOf(current);
 
-      return timesheetFromMirror({
-        mirror: input.mirror,
-        ...(input.projects ? { projects: input.projects } : {}),
-        ...(input.members ? { members: input.members } : {}),
-        ...(settings ? { settings } : {}),
-        now: at,
-        // Clockify's profile zone once a sync has read it; the browser's
-        // until then (and without a relay).
-        timeZone: input.timeZone ?? timeZone,
-        ...(input.weekStart ? { weekStart: input.weekStart } : {}),
-        ...(input.forceProjects !== undefined
-          ? { forceProjects: input.forceProjects }
-          : {}),
+      return withPending(
+        timesheetFromMirror({
+          mirror: input.mirror,
+          ...(input.projects ? { projects: input.projects } : {}),
+          ...(input.members ? { members: input.members } : {}),
+          ...(settings ? { settings } : {}),
+          now: at,
+          // Clockify's profile zone once a sync has read it; the browser's
+          // until then (and without a relay).
+          timeZone: input.timeZone ?? timeZone,
+          ...(input.weekStart ? { weekStart: input.weekStart } : {}),
+          ...(input.forceProjects !== undefined
+            ? { forceProjects: input.forceProjects }
+            : {}),
+        }),
+      );
+    },
+
+    changes: () => changes,
+
+    editBlockers(entryId) {
+      if (!input) return ['Nothing has been read from Clockify yet.'];
+      const entry = mirrorEntry(input.mirror, entryId);
+      if (!entry) return ['This entry is not in what was last read.'];
+
+      return [
+        ...(current.kind === 'ready' && store.proxy
+          ? []
+          : ['Connect and sync first.']),
+        ...blockers(entry, writeContext()),
+      ];
+    },
+
+    projectChoices: () => ({
+      projects: activeProjects(),
+      required: input?.forceProjects === true,
+    }),
+
+    async editEntry(entryId, edit) {
+      await changeRow(entryId, async (row, schema) => {
+        const local = localValues(row, schema);
+        if (!local) throw new Error('The row has no start or end.');
+        const projectId =
+          edit.projectId === undefined ? local.projectId : edit.projectId;
+        const next: EntryValues = {
+          ...local,
+          ...edit,
+          projectId,
+          project:
+            projectId === local.projectId
+              ? local.project
+              : (projectId &&
+                  (input?.projects ?? []).find(p => p.id === projectId)
+                    ?.name) ||
+                null,
+        };
+        if (setRowValues(row, schema, next)) await row.save();
       });
     },
+
+    async deleteEntry(entryId) {
+      await changeRow(entryId, (row, schema) =>
+        requestDelete(row, schema, true),
+      );
+    },
+
+    async discard(entryId) {
+      await changeRow(entryId, (row, schema) => discardChange(row, schema));
+    },
+
+    async send() {
+      if (current.kind !== 'ready' || !store.proxy || running) return current;
+      const sendable = changes.review.filter(c => !c.blockers.length);
+      if (!sendable.length) return current;
+      running = true;
+      const { connection, settings } = current;
+      changes = {
+        ...changes,
+        sending: { done: 0, total: sendable.length },
+      };
+      delete changes.outcomes;
+      delete changes.error;
+      onChange(current);
+
+      try {
+        const schema = await ensureSchema(store);
+        const log = await ObservationLog.open(store, schema, { clock: now });
+        const results = await sendChanges(
+          {
+            store,
+            schema,
+            log,
+            read: {
+              transport: relayTransport(store.proxy, connection),
+              workspaceId: settings.workspaceId,
+              userId: settings.userId,
+              ...(input?.timeZone ? { timeZone: input.timeZone } : {}),
+              clock: now,
+              newId: () => newObservationId(now),
+              device: 'frame-send',
+            },
+            write: writeContext(),
+            onProgress: (done, total) => {
+              changes = { ...changes, sending: { done, total } };
+              onChange(current);
+            },
+          },
+          sendable,
+        );
+        input = { ...(input ?? {}), mirror: log.mirror };
+        const review = await planAll(store, schema, log.mirror, writeContext());
+        changes = {
+          review,
+          providerWon: changes.providerWon,
+          recovered: [],
+          outcomes: { at: now(), results },
+        };
+      } catch (error) {
+        changes = { ...changes, error: message(error) };
+        delete changes.sending;
+      } finally {
+        running = false;
+      }
+
+      return set(current);
+    },
   };
+
+  /** The active projects, by name, from the last sync. */
+  function activeProjects(): ClockifyProject[] {
+    return ((input?.projects ?? []) as ClockifyProject[])
+      .filter(
+        p =>
+          typeof p.id === 'string' &&
+          typeof p.name === 'string' &&
+          p.archived !== true,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function writeContext(): WriteContext {
+    return {
+      now: now(),
+      ...(input?.forceProjects !== undefined
+        ? { forceProjects: input.forceProjects }
+        : {}),
+      projects: (input?.projects ?? []) as ClockifyProject[],
+    };
+  }
+
+  /** The table row carrying this entry id (a child of the app's table). */
+  async function rowSubject(schema: CompleteSchema, entryId: string) {
+    const own = new Set(
+      await store.query({ property: atomic.parent, value: schema.table }),
+    );
+
+    return (
+      await store.query({ property: schema.row.entryId, value: entryId })
+    ).find(s => own.has(s));
+  }
+
+  /**
+   * Changes one entry's row, then lists what it now holds to send. Edits
+   * need a synced row (it has a baseline) and a quiet moment (no sync or
+   * send running).
+   */
+  async function changeRow(
+    entryId: string,
+    change: (
+      row: Awaited<ReturnType<PluginStore['getResource']>>,
+      schema: CompleteSchema,
+    ) => Promise<void>,
+  ) {
+    try {
+      if (running) throw new Error('Wait for the sync or send to finish.');
+      const schema = await ensureSchema(store);
+      const subject = await rowSubject(schema, entryId);
+      if (!subject) throw new Error('This entry has no row in the table.');
+      const row = await store.getResource(subject);
+      if (!readRowState(row, schema)?.baseline)
+        throw new Error('Sync first: this row has not been compared yet.');
+      await change(row, schema);
+      const state = readRowState(await store.getResource(subject), schema);
+      const planned =
+        state &&
+        planChange(
+          state,
+          input ? mirrorEntry(input.mirror, entryId) : undefined,
+          writeContext(),
+        );
+      changes = {
+        ...changes,
+        review: sortChanges([
+          ...changes.review.filter(c => c.entryId !== entryId),
+          ...(planned ? [planned] : []),
+        ]),
+      };
+      delete changes.error;
+    } catch (error) {
+      changes = { ...changes, error: message(error) };
+    }
+
+    onChange(current);
+  }
+
+  /** The views show a listed change as it would be, marked not sent. */
+  function withPending(sheet: Timesheet): Timesheet {
+    if (!changes.review.length) return sheet;
+    const byId = new Map(changes.review.map(c => [c.entryId, c]));
+
+    return {
+      ...sheet,
+      entries: sheet.entries.map(entry => {
+        const change = byId.get(entry.id);
+        if (!change) return entry;
+        if (change.kind === 'delete') return { ...entry, pending: 'delete' };
+        const { desired } = change;
+        const project = projectOf(
+          desired.projectId ?? undefined,
+          input?.projects ?? [],
+        );
+        const { project: _, ...rest } = entry;
+
+        return {
+          ...rest,
+          description: descriptionOf(desired.name),
+          start: desired.start,
+          end: desired.end,
+          billable: desired.billable,
+          ...(project ? { project } : {}),
+          pending: 'update',
+        };
+      }),
+    };
+  }
 
   return controller;
 }
@@ -536,7 +818,7 @@ export function describe(state: ViewState): string {
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot import. Nothing was fetched.';
     case 'not-connected':
-      return 'Not connected. Connect a Clockify account to import your completed time entries. Nothing is written to Clockify.';
+      return 'Not connected. Connect a Clockify account to import your completed time entries. Nothing is written to Clockify until you send a change.';
     case 'connecting':
       return 'Waiting for you to confirm the connection…';
     case 'failed':
