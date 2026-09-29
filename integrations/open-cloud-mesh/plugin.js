@@ -397,8 +397,13 @@ function signer(request) {
   return domain(caller.domain, 'signing server');
 }
 
-function identity(peer, providerId) {
-  return JSON.stringify([IDENTITY, peer, providerId]);
+/**
+ * The `localId` of a received share. Plain text, not JSON: the host's intent
+ * planner reads a JSON-looking string value as a JSON value (and resolves
+ * the strings in an array as subjects), so a JSON array would not survive.
+ */
+export function identity(peer, providerId) {
+  return [IDENTITY, peer, providerId].map(encodeURIComponent).join(' ');
 }
 
 function receiveShare(ctx, request) {

@@ -8,6 +8,7 @@ import {
   parseNotification,
   domain,
   describe,
+  identity,
   run,
   P,
   FILE,
@@ -212,10 +213,7 @@ test('a signed share from an allowed peer is fetched, stored and acknowledged', 
   assert.equal(create.set[P.filesize], 33);
   assert.equal(create.set[P.mimetype], 'text/plain');
   assert.equal(create.set[P.downloadURL], `/download/files/${HASH}`);
-  assert.equal(
-    create.set[P.localId],
-    JSON.stringify(['ocm-share-v2', PEER, 'share-123']),
-  );
+  assert.equal(create.set[P.localId], `ocm-share-v2 ${PEER} share-123`);
   assert.match(create.set[P.description], /^- State: accepted$/m);
   // The secret is in the fetch request only: not in intents, deliveries
   // or the answer.
@@ -252,7 +250,7 @@ test('a signed share from an allowed peer is fetched, stored and acknowledged', 
 test('a repeated share answers 201 without fetching or writing again', () => {
   const rows = {
     'atomic:existing': {
-      [P.localId]: JSON.stringify(['ocm-share-v2', PEER, 'share-123']),
+      [P.localId]: `ocm-share-v2 ${PEER} share-123`,
     },
   };
   const { verdict, status, calls } = post('shares', share(), {}, { rows });
@@ -378,14 +376,14 @@ test('no endPoint in the sender discovery: stored, with a warning instead of a n
   assert.match(verdict.problems[0].message, /no endPoint/);
 });
 
-const identity = JSON.stringify(['ocm-share-v2', PEER, 'share-123']);
+const shareId = `ocm-share-v2 ${PEER} share-123`;
 
 function received(state = 'accepted') {
   return {
     'atomic:received': {
       [P.parent]: FOLDER,
       [P.isA]: [FILE],
-      [P.localId]: identity,
+      [P.localId]: shareId,
       [P.description]: describe({
         ...parseShare(JSON.stringify(share())).share,
         peer: PEER,
@@ -601,4 +599,10 @@ test('the bundle rebuilds reproducibly and matches the manifest', async () => {
     const r = built.handle(ctx({ route: id }), request('GET'));
     assert.notEqual(r.status ?? r.response?.status, 404, id);
   }
+});
+
+test('share identities are plain text the host planner keeps as is', () => {
+  const id = identity('localhost:8443', 'share 1/[x]');
+  assert.equal(id, 'ocm-share-v2 localhost%3A8443 share%201%2F%5Bx%5D');
+  assert.throws(() => JSON.parse(id));
 });

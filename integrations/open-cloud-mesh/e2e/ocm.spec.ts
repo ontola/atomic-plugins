@@ -166,8 +166,14 @@ test.describe('Open Cloud Mesh receiver', () => {
       await page.goto(
         `${SERVER_URL}/app/show?subject=${encodeURIComponent(folder)}`,
       );
-      const entry = page.getByText('spec.txt').first();
-      await expect(entry).toBeVisible({ timeout: 30_000 });
+      // The folder's listing follows the sync; reload until it has the File.
+      const entry = page
+        .getByRole('main')
+        .getByRole('link', { name: 'spec.txt' });
+      await expect(async () => {
+        await page.reload();
+        await expect(entry).toBeVisible({ timeout: 10_000 });
+      }).toPass({ timeout: 90_000 });
       await entry.click();
       await expect(page.getByText('State: accepted')).toBeVisible({
         timeout: 30_000,

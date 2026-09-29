@@ -43,7 +43,8 @@ installation's agent through the host's route-write grant: name, `blob`
 `downloadURL` `/download/files/<blake3>`, and a Markdown description
 listing the state, sender, owner, sending server, provider ID, recipient,
 permissions and expiration. `localId` holds the identity
-`["ocm-share-v2", <sending server>, <providerId>]`; a repeated notification
+`ocm-share-v2 <sending server> <providerId>` (each part URI-encoded; plain
+text, because the host's planner reads JSON-looking strings as JSON); a repeated notification
 with the same identity answers `201` and changes nothing.
 
 **The shared secret is never stored**: not in the File, the answer, a
