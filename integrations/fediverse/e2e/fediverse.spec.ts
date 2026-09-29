@@ -464,11 +464,11 @@ async function childNamed(page: Page, parent: string, text: string) {
 
       for (const hit of await store.search(text, { parents: parent })) {
         const row = await store.fetchResourceFromServer(hit);
-        const values = row.getPropVals();
-        if (String(values.get('https://atomicdata.dev/properties/description') ?? '').includes(text))
-          return Object.fromEntries(
-            [...values.entries()].map(([k, v]) => [k, v as unknown]),
-          );
+        const values = row.getPropVals() as Record<string, unknown>;
+        const description =
+          values['https://atomicdata.dev/properties/description'];
+        if (String(description ?? '').includes(text))
+          return JSON.parse(JSON.stringify(values)) as Record<string, unknown>;
       }
 
       return undefined;
