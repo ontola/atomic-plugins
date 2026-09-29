@@ -63,12 +63,17 @@
       "id": "solid",
       "index": 11,
       "platforms": [],
-      "tiers": ["node"],
+      "tiers": ["node", "e2e"],
       "nodeTests": [
         "integrations/solid/plugin.test.mjs",
         "integrations/solid/turtle.test.mjs"
       ],
-      "note": "QuickJS partial Solid resource bridge: reviewed Atomic document import, public reads, RDF validation and fail-closed host gaps."
+      "pluginRoutes": "read-write",
+      "serverEnv": {
+        "ATOMIC_SOLID_OIDC_ISSUERS": "http://127.0.0.1:{mockProxy}"
+      },
+      "e2e": ["integrations/solid/e2e/solid.spec.ts"],
+      "note": "Solid pod on an installation origin: LDP resources and containers as PlainText atoms, Turtle/JSON-LD, N3 Patch and SPARQL Update data, strong ETags, WAC-Allow, Solid-OIDC DPoP verified by the host (`auth: dpop`, atomic-server claude/plugin-solid-host). The e2e starts a test Solid-OIDC issuer on the lane's otherwise unused mock-proxy port (platforms is empty) and drives the pod with @inrupt/solid-client; against a host without `auth: dpop` it skips with that reason."
     },
     {
       "id": "localthought",
