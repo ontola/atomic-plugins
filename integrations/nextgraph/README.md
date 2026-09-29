@@ -88,7 +88,8 @@ docker build -t ng-atomic-sidecar integrations/nextgraph/sidecar
 mkdir -p /srv/ng-sidecar
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/data \
   ng-atomic-sidecar init --base /data --documents 1
-# prints {"documents":["did:ng:o:…"]}; the wallet mnemonic and PIN go to
+# its last stdout line is {"documents":["did:ng:o:…"]} (NextGraph logs INFO
+# lines before it); the wallet mnemonic and PIN go to
 # /srv/ng-sidecar/credentials.json (mode 0600), never to stdout
 docker run -d --user "$(id -u):$(id -g)" -e HOME=/data -v /srv/ng-sidecar:/data \
   -p 127.0.0.1:14480:14480 ng-atomic-sidecar serve --base /data --listen 0.0.0.0:14480
