@@ -23,7 +23,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
   ssh "$@" "$TARGET" 'set -e
     test -f /etc/caddy/usertest.env ||
       { echo "create /etc/caddy/usertest.env first (README.md)" >&2; exit 1; }
-    mkdir -p /opt/usertest /etc/systemd/system/caddy.service.d
+    mkdir -p /opt/usertest /etc/systemd/system/caddy.service.d /etc/caddy/routes-allowed
     tar xzf - -C /opt/usertest
     cp /opt/usertest/caddy-usertest.conf /etc/systemd/system/caddy.service.d/usertest.conf
     cp /opt/usertest/Caddyfile /etc/caddy/Caddyfile
