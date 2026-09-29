@@ -154,6 +154,7 @@ suite('pill', () => {
     conflicts: [],
     localOnly: 0,
     invalid: [],
+    unmapped: [],
     review: [],
   };
 

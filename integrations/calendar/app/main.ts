@@ -93,6 +93,7 @@ const EMPTY_SUMMARY: ImportSummary = {
   conflicts: [],
   localOnly: 0,
   invalid: [],
+  unmapped: [],
   review: [],
 };
 
