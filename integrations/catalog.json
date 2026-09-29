@@ -171,7 +171,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-uwmajpxh9zYj+YfenZC6Bmv2Xk7X6Q0qyF0SkRB2dVzTtBBm9qy8w8hT+ffuC/AU"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-jiAZHNuKQYliNx/DGUHWN0JaIN+cCl03UWrBAk0xmiY+tb7Hq6XwFJlfVo/P4vGr"
   },
   {
     "https://atomicdata.dev/properties/localId": "devonian-todoist",
