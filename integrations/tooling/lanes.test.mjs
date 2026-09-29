@@ -339,6 +339,41 @@ test('pluginRoutes takes one level or a list of distinct levels, for live or e2e
   );
 });
 
+test('serverEnv maps ATOMIC_* names to strings, never the reserved ones, for live or e2e tiers', () => {
+  const e2e = { tiers: ['e2e'], e2e: ['x.spec.ts'] };
+  for (const serverEnv of [
+    { ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS: 'true' },
+    { ATOMIC_SOLID_OIDC_ISSUERS: 'http://127.0.0.1:{mockProxy}' },
+  ])
+    assert.doesNotThrow(
+      () => validateConfig(cfg(lane({ ...e2e, serverEnv }))),
+      JSON.stringify(serverEnv),
+    );
+  for (const serverEnv of [
+    {},
+    [],
+    'ATOMIC_PLUGIN_E2E_X',
+    { SOLID_ISSUER: 'x' },
+    { atomic_x: 'y' },
+    { ATOMIC_PLUGIN_ROUTES: 'read-write' },
+    { ATOMIC_DATA_DIR: '/tmp' },
+    { ATOMIC_PORT: '1' },
+    { ATOMIC_PLUGIN_E2E_X: true },
+  ])
+    assert.throws(
+      () => validateConfig(cfg(lane({ ...e2e, serverEnv }))),
+      /serverEnv maps ATOMIC_\* names to strings/,
+      JSON.stringify(serverEnv),
+    );
+  assert.throws(
+    () =>
+      validateConfig(
+        cfg(lane({ tiers: ['unit'], serverEnv: { ATOMIC_PLUGIN_E2E_X: '1' } })),
+      ),
+    /serverEnv only affects the live and e2e tiers/,
+  );
+});
+
 test('only a run with a pluginRoutes lane asks for the plugin-routes build', () => {
   const routes = lane({
     id: 'routes',
@@ -377,15 +412,14 @@ test('the plugin-routes lane runs its e2e at read-only, then off', () => {
     '.atomic-server-ref',
   ])
     assert.ok(laneFilter(routes).includes(path), path);
-  // A shared change selects every plugin lane, and the atproto plugin lane
-  // declares pluginRoutes too, so it needs the build as well.
-  assert.equal(needsPluginRoutesBuild(config, ['shared']), true);
+  // A shared change runs every plugin lane (remotestorage needs the build
+  // too), but not this tooling lane.
+  assert.ok(
+    !matrixFor(config, ['shared']).some(l => l.lane === 'plugin-routes'),
+  );
   assert.equal(
-    needsPluginRoutesBuild(
-      { ...config, lanes: config.lanes.filter(l => l.id !== 'atproto') },
-      ['shared'],
-    ),
-    false,
+    needsPluginRoutesBuild(config, ['shared']),
+    config.lanes.some(l => !l.dir && pluginRoutesLevels(l).length > 0),
   );
   assert.equal(needsPluginRoutesBuild(config, ['shared', 'all']), true);
 });

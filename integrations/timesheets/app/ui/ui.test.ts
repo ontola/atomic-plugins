@@ -143,14 +143,19 @@ describe('frames', () => {
     expect(doc.activeElement?.id).toBe('sheet-h');
     expect(text(doc.activeElement)).toBe('Homepage hero, responsive pass');
     expect(text(dialog.querySelector('.prov'))).toContain(
-      'Changes made in Clockify replace this copy on the next sync.',
+      'Edits are saved in this drive and reach Clockify only when you send them.',
     );
 
     const footer = [...dialog.querySelectorAll('footer button')].map(b =>
       text(b),
     );
-    // The host can open both (frame D's two actions).
-    expect(footer).toEqual(['Open row in Atomic', 'Open Clockify']);
+    // #123 M3's Edit and Delete, then the host's two (frame D's actions).
+    expect(footer).toEqual([
+      'Edit',
+      'Delete entry…',
+      'Open row in Atomic',
+      'Open Clockify',
+    ]);
     const link = dialog.querySelector('footer button:last-child')!;
     (link as HTMLElement).focus();
     dialog.dispatchEvent(
@@ -398,7 +403,7 @@ describe('view() against the fake store and the Clockify mock', () => {
     const root = dom.window.document.getElementById('root')!;
     await view({ root, store });
 
-    return { root, store };
+    return { root, store, proxy };
   }
 
   it('asks for a workspace first, then imports and shows the entries', async () => {
@@ -489,6 +494,75 @@ describe('view() against the fake store and the Clockify mock', () => {
     expect(buttons(root, 'Open row in Atomic')).toHaveLength(0);
     expect(root.querySelector('footer a')!.getAttribute('href')).toBe(
       'https://app.clockify.me/tracker',
+    );
+  });
+
+  it('#123 M3: edits an entry in the drawer, lists it, and sends it to Clockify after review', async () => {
+    const { root, proxy } = await mount(true);
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Last synced');
+    buttons(root, 'Entries')[0].click();
+    if (!root.querySelector('.entry'))
+      buttons(root, 'Previous week')[0].click();
+    const weekly = [...root.querySelectorAll<HTMLElement>('.entry')].find(e =>
+      text(e).includes('Weekly sync'),
+    )!;
+    weekly.click();
+    buttons(root, 'Edit')[0].click();
+    const form = root.querySelector('form.edit')!;
+    (form.querySelector('#ed-desc') as HTMLInputElement).value =
+      'Weekly sync (notes)';
+    (form.querySelector('#ed-bill') as HTMLInputElement).checked = true;
+    buttons(root, 'Save')[0].click();
+
+    const changes = () =>
+      root.querySelector('section[aria-label="Changes to send"]');
+    await expect.poll(() => text(changes())).toContain('1 change to send');
+    expect(text(changes())).toContain(
+      'Description: Weekly sync → Weekly sync (notes)',
+    );
+    expect(text(changes())).toContain('Billable: No → Yes');
+    // Nothing was sent yet; the entry shows the change, marked.
+    expect(proxy.fixture.state.writes).toEqual([]);
+    expect(text(root.querySelector('.entry .tag-pending'))).toBe('Not sent');
+
+    buttons(root, 'Send 1 to Clockify')[0].click();
+    await expect.poll(() => text(changes())).toContain('“Weekly sync”: Sent');
+    expect(proxy.fixture.state.writes).toHaveLength(1);
+    expect(
+      proxy.fixture.state.entries.find(
+        (e: { id: string }) => e.id === 'entry-2',
+      ),
+    ).toMatchObject({ description: 'Weekly sync (notes)', billable: true });
+    expect(root.querySelector('.entry .tag-pending')).toBeNull();
+  }, 60_000);
+});
+
+describe('#123 M3 frames', () => {
+  it('N1: lists changes field by field, with blockers, kept values and the last send', () => {
+    const { root } = frame('n1');
+    const region = root.querySelector('section[aria-label="Changes to send"]')!;
+    expect(text(region)).toContain('2 changes to send to Clockify');
+    expect(text(region)).toContain('Cannot be sent: It is locked in Clockify.');
+    expect(text(region)).toContain(
+      'Changed here and in Clockify: Clockify’s values were kept.',
+    );
+    expect(text(region)).toContain('“Wireframes”: Sent');
+    // One blocked: only one can be sent.
+    expect(buttons(root, 'Send 1 to Clockify')).toHaveLength(1);
+  });
+
+  it('N2: the edit form has labelled fields in the profile zone', () => {
+    const { root } = frame('n2');
+    const form = root.querySelector('form.edit')!;
+    for (const id of ['ed-desc', 'ed-proj', 'ed-bill', 'ed-start', 'ed-end'])
+      expect(form.querySelector(`label[for="${id}"]`)).not.toBeNull();
+    expect(text(form.querySelector('label[for="ed-start"]'))).toContain(
+      'Europe/Amsterdam',
+    );
+    expect((form.querySelector('#ed-desc') as HTMLInputElement).value).toBe(
+      'Homepage hero, responsive pass',
     );
   });
 });

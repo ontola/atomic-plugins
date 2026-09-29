@@ -6,8 +6,15 @@ import {
   latestEvent,
   nextEvent,
   packWeek,
+  occupies,
   type CalEvent,
 } from './events.js';
+import { endDayOf } from './sync.js';
+import { endClock, spoken, when } from './context.js';
+import {
+  isAllDayOnDate,
+  nextCalendarDate,
+} from '../../../browser/lib/src/calendar-date.js';
 import {
   addDays,
   hhmm,
@@ -28,8 +35,13 @@ const NY = 'America/New_York';
 
 let n = 0;
 
+/**
+ * A row as `readEvents` reads it. Day and End day default to what the app
+ * writes for Start and End (`sync.ts` `valuesOf`); a test that passes them
+ * explicitly models a row whose Day or End day were set some other way.
+ */
 function ev(fields: Partial<CalEvent>): CalEvent {
-  return {
+  const base = {
     subject: `did:ad:row-${++n}`,
     id: `e${n}`,
     title: `Event ${n}`,
@@ -43,6 +55,12 @@ function ev(fields: Partial<CalEvent>): CalEvent {
     readOnly: false,
     calendar: { name: 'Work', color: '#039be5' },
     ...fields,
+  };
+
+  return {
+    day: base.start.slice(0, 10),
+    endDay: endDayOf(base),
+    ...base,
   };
 }
 
@@ -103,7 +121,7 @@ describe('agendaDays', () => {
       start: '2026-09-23',
       end: '2026-09-26',
     });
-    const days = agendaDays([offsite], '2026-09-22', 6, AMS);
+    const days = agendaDays([offsite], '2026-09-22', 6);
     expect(days.map(d => d.items.length)).toEqual([0, 1, 1, 1, 0, 0]);
     expect(days[2].items[0]).toMatchObject({
       allDay: true,
@@ -113,27 +131,27 @@ describe('agendaDays', () => {
 
   it('a one-day all-day event has no "Day n of m"', () => {
     const one = ev({ allDay: true, start: '2026-09-24', end: '2026-09-25' });
-    const [day] = agendaDays([one], '2026-09-24', 1, AMS);
+    const [day] = agendaDays([one], '2026-09-24', 1);
     expect(day.items[0].dayOf).toBeUndefined();
   });
 
-  it('splits a timed event that crosses midnight into one piece per day', () => {
+  it('shows a timed event that crosses midnight on its Day only, as the host does', () => {
     const late = ev({
       start: '2026-09-24T22:00:00+02:00',
       end: '2026-09-25T01:30:00+02:00',
     });
-    const days = agendaDays([late], '2026-09-24', 2, AMS);
+    // The app writes End day for it; the host view ignores End day unless
+    // All day is true, and so do the views.
+    expect(late.endDay).toBe('2026-09-25');
+    const days = agendaDays([late], '2026-09-24', 2);
+    expect(days.map(d => d.items.length)).toEqual([1, 0]);
     expect(days[0].items[0]).toMatchObject({
       startMin: 1320,
       endMin: 1440,
       allDay: false,
-      dayOf: { n: 1, total: 2 },
+      until: { date: '2026-09-25', minutes: 90 },
     });
-    expect(days[1].items[0]).toMatchObject({
-      startMin: 0,
-      endMin: 90,
-      dayOf: { n: 2, total: 2 },
-    });
+    expect(days[0].items[0].dayOf).toBeUndefined();
   });
 
   it('an event ending exactly at midnight stays on its own day', () => {
@@ -141,20 +159,36 @@ describe('agendaDays', () => {
       start: '2026-09-24T20:00:00+02:00',
       end: '2026-09-25T00:00:00+02:00',
     });
-    const days = agendaDays([evening], '2026-09-24', 2, AMS);
+    const days = agendaDays([evening], '2026-09-24', 2);
     expect(days.map(d => d.items.length)).toEqual([1, 0]);
-    expect(days[0].items[0].dayOf).toBeUndefined();
+    expect(days[0].items[0]).toMatchObject({ startMin: 1200, endMin: 1440 });
+    expect(days[0].items[0].until).toBeUndefined();
   });
 
-  it('places timed events in the viewer zone, not the event zone', () => {
-    // 23:30 in New York is 05:30 the next day in Amsterdam.
+  it('places a timed event on its Day, in its own offset, whatever the viewer zone', () => {
+    // 23:30 in New York is 05:30 the next day in Amsterdam. The host view
+    // reads Day, the date in the stored offset, and so does the app.
     const call = ev({
       start: '2026-09-24T23:30:00-04:00',
       end: '2026-09-25T00:30:00-04:00',
     });
-    const days = agendaDays([call], '2026-09-24', 2, AMS);
-    expect(days[0].items).toEqual([]);
-    expect(days[1].items[0]).toMatchObject({ startMin: 330, endMin: 390 });
+    const days = agendaDays([call], '2026-09-24', 2);
+    expect(days[1].items).toEqual([]);
+    expect(days[0].items[0]).toMatchObject({
+      startMin: 1410,
+      endMin: 1440,
+      until: { date: '2026-09-25', minutes: 30 },
+    });
+  });
+
+  it('draws a timed event spanning several days on its Day only', () => {
+    const conference = ev({
+      start: '2026-09-22T09:00:00+02:00',
+      end: '2026-09-24T17:00:00+02:00',
+    });
+    const days = agendaDays([conference], '2026-09-21', 5);
+    expect(days.map(d => d.items.length)).toEqual([0, 1, 0, 0, 0]);
+    expect(days[1].items[0]).toMatchObject({ allDay: false, startMin: 540 });
   });
 
   it('orders all-day first, then by start time', () => {
@@ -174,13 +208,13 @@ describe('agendaDays', () => {
       start: '2026-09-24',
       end: '2026-09-25',
     });
-    const [day] = agendaDays([a, b, c], '2026-09-24', 1, AMS);
+    const [day] = agendaDays([a, b, c], '2026-09-24', 1);
     expect(day.items.map(i => i.event.title)).toEqual(['Z', 'A', 'B']);
   });
 
   it('skips events with an interval it cannot place', () => {
     const bad = ev({ start: 'garbage', end: 'garbage' });
-    expect(agendaDays([bad], '2026-09-24', 1, AMS)[0].items).toEqual([]);
+    expect(agendaDays([bad], '2026-09-24', 1)[0].items).toEqual([]);
   });
 });
 
@@ -201,7 +235,7 @@ describe('packWeek', () => {
       start: '2026-09-24',
       end: '2026-09-25',
     });
-    const week = packWeek([offsite, deadline, holiday], '2026-09-21', 7, AMS);
+    const week = packWeek([offsite, deadline, holiday], '2026-09-21', 7);
     const bar = (e: CalEvent) => week.bars.find(b => b.event === e)!;
     expect(bar(offsite)).toMatchObject({ col: 2, span: 3, row: 0 });
     expect(bar(deadline)).toMatchObject({ col: 0, span: 1, row: 0 });
@@ -211,7 +245,7 @@ describe('packWeek', () => {
 
   it('clips bars to the visible days', () => {
     const long = ev({ allDay: true, start: '2026-09-19', end: '2026-09-23' });
-    const week = packWeek([long], '2026-09-21', 3, AMS);
+    const week = packWeek([long], '2026-09-21', 3);
     expect(week.bars[0]).toMatchObject({ col: 0, span: 2 });
   });
 
@@ -226,12 +260,7 @@ describe('packWeek', () => {
     const dentist = t('11:30', '12:30', 'Dentist');
     const later = t('12:15', '13:00', 'Later');
     const alone = t('16:00', '17:00', 'Sync');
-    const week = packWeek(
-      [alone, later, dentist, oneOnOne],
-      '2026-09-21',
-      7,
-      AMS,
-    );
+    const week = packWeek([alone, later, dentist, oneOnOne], '2026-09-21', 7);
     const col = week.columns[1];
     const of = (e: CalEvent) => col.find(b => b.segment.event === e)!;
     expect(of(oneOnOne)).toMatchObject({ lane: 0, lanes: 2 });
@@ -242,21 +271,198 @@ describe('packWeek', () => {
     expect(week.columns[0]).toEqual([]);
   });
 
-  it('draws a timed event covering whole days in the all-day row', () => {
+  it('draws a timed event covering whole days in its Day column only', () => {
     const trip = ev({
       start: '2026-09-21T18:00:00+02:00',
       end: '2026-09-23T09:00:00+02:00',
     });
-    const week = packWeek([trip], '2026-09-21', 7, AMS);
-    expect(week.bars).toEqual([expect.objectContaining({ col: 1, span: 1 })]);
+    const week = packWeek([trip], '2026-09-21', 7);
+    expect(week.bars).toEqual([]);
     expect(week.columns[0][0].segment).toMatchObject({
       startMin: 1080,
       endMin: 1440,
+      until: { date: '2026-09-23', minutes: 540 },
     });
-    expect(week.columns[2][0].segment).toMatchObject({
-      startMin: 0,
-      endMin: 540,
+    expect(week.columns.slice(1).flat()).toEqual([]);
+  });
+});
+
+/**
+ * The host table's Calendar view, case by case (atomic-server
+ * CalendarView.tsx at the pin): the app's views must draw exactly the days
+ * it draws. `host()` restates the host's bucketing of one row, with the
+ * host's own `isAllDayOnDate`, so each case is checked against it as well
+ * as against the expected days.
+ */
+describe('the host Calendar view’s days', () => {
+  const WEEK = '2026-09-21';
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(WEEK, i));
+  const host = (e: CalEvent) =>
+    dates.filter(d =>
+      e.allDay && e.endDay !== undefined
+        ? isAllDayOnDate(
+            typeof e.day === 'string' ? e.day.slice(0, 10) : undefined,
+            e.endDay,
+            d,
+          )
+        : typeof e.day === 'string' && e.day.slice(0, 10) === d,
+    );
+
+  const drawn = (e: CalEvent) => {
+    const week = packWeek([e], WEEK, 7);
+
+    return {
+      agenda: agendaDays([e], WEEK, 7)
+        .filter(d => d.items.length)
+        .map(d => d.date),
+      week: week.days.filter(
+        (_, i) =>
+          week.columns[i].length ||
+          week.bars.some(b => i >= b.col && i < b.col + b.span),
+      ),
+      busy: [...busyDays([e], WEEK, 7)],
+    };
+  };
+
+  const cases: Array<[string, Partial<CalEvent>, string[]]> = [
+    [
+      'all-day, one day',
+      { allDay: true, start: '2026-09-22', end: '2026-09-23' },
+      ['2026-09-22'],
+    ],
+    [
+      'all-day, three days, End day exclusive',
+      { allDay: true, start: '2026-09-22', end: '2026-09-25' },
+      ['2026-09-22', '2026-09-23', '2026-09-24'],
+    ],
+    [
+      'all-day, End day == Day (#184 shape, as stored): nowhere',
+      {
+        allDay: true,
+        start: '2026-09-22',
+        end: '2026-09-23',
+        endDay: '2026-09-22',
+      },
+      [],
+    ],
+    [
+      'all-day, End day before Day: nowhere',
+      {
+        allDay: true,
+        start: '2026-09-22',
+        end: '2026-09-23',
+        endDay: '2026-09-20',
+      },
+      [],
+    ],
+    [
+      'all-day, End day not a date: nowhere',
+      { allDay: true, start: '2026-09-22', end: '2026-09-23', endDay: 'soon' },
+      [],
+    ],
+    [
+      'all-day, no End day: its Day only',
+      {
+        allDay: true,
+        start: '2026-09-22',
+        end: '2026-09-25',
+        endDay: undefined,
+      },
+      ['2026-09-22'],
+    ],
+    [
+      'row added in the host view: Day and End day, no Start or End',
+      {
+        allDay: true,
+        start: '',
+        end: '',
+        id: undefined,
+        day: '2026-09-23',
+        endDay: nextCalendarDate('2026-09-23'),
+      },
+      ['2026-09-23'],
+    ],
+    [
+      'Day and End day edited in the host table: they win over Start and End',
+      {
+        allDay: true,
+        start: '2026-09-22',
+        end: '2026-09-23',
+        day: '2026-09-25',
+        endDay: '2026-09-27',
+      },
+      ['2026-09-25', '2026-09-26'],
+    ],
+    [
+      'no Day: nowhere',
+      { allDay: true, start: '2026-09-22', end: '2026-09-23', day: undefined },
+      [],
+    ],
+    [
+      'Day with a time part: its first ten characters',
+      { day: '2026-09-24T10:00:00+02:00' },
+      ['2026-09-24'],
+    ],
+    ['timed, within one day', {}, ['2026-09-24']],
+    [
+      'timed, crossing midnight: Day only',
+      { start: '2026-09-24T22:00:00+02:00', end: '2026-09-25T01:30:00+02:00' },
+      ['2026-09-24'],
+    ],
+    [
+      'timed, three days: Day only, End day ignored',
+      { start: '2026-09-22T09:00:00+02:00', end: '2026-09-24T17:00:00+02:00' },
+      ['2026-09-22'],
+    ],
+    [
+      'timed, stored in another offset: the stored date',
+      { start: '2026-09-24T23:30:00-04:00', end: '2026-09-25T00:30:00-04:00' },
+      ['2026-09-24'],
+    ],
+    [
+      'timed, Start and End unusable, Day set: its Day, untimed',
+      { start: '', end: '', day: '2026-09-23' },
+      ['2026-09-23'],
+    ],
+  ];
+
+  for (const [name, fields, expected] of cases)
+    it(name, () => {
+      const e = ev(fields);
+      expect(host(e)).toEqual(expected);
+      expect(dates.filter(d => occupies(e, d))).toEqual(expected);
+      expect(drawn(e)).toEqual({
+        agenda: expected,
+        week: expected,
+        busy: expected,
+      });
     });
+
+  it('draws a row without clock times in the all-day area, saying so', () => {
+    const e = ev({ start: '', end: '', day: '2026-09-23' });
+    const [segment] = agendaDays([e], '2026-09-23', 1)[0].items;
+    expect(segment).toMatchObject({ allDay: true, untimed: true });
+    expect(packWeek([e], WEEK, 7).bars).toEqual([
+      expect.objectContaining({ col: 2, span: 1 }),
+    ]);
+  });
+
+  it('numbers the days of a multi-day all-day event from Day to End day', () => {
+    const e = ev({
+      allDay: true,
+      start: '2026-09-22',
+      end: '2026-09-23',
+      day: '2026-09-22',
+      endDay: '2026-09-24',
+    });
+    expect(
+      agendaDays([e], WEEK, 7)
+        .flatMap(d => d.items)
+        .map(s => s.dayOf),
+    ).toEqual([
+      { n: 1, total: 2 },
+      { n: 2, total: 2 },
+    ]);
   });
 });
 
@@ -278,11 +484,11 @@ describe('nextEvent and busyDays', () => {
       start: '2026-10-20',
       end: '2026-10-21',
     });
-    expect(nextEvent([later, early, next], '2026-10-05', AMS)).toMatchObject({
+    expect(nextEvent([later, early, next], '2026-10-05')).toMatchObject({
       event: next,
       date: '2026-10-13',
     });
-    expect(nextEvent([early], '2026-10-05', AMS)).toBeUndefined();
+    expect(nextEvent([early], '2026-10-05')).toBeUndefined();
   });
 
   it('finds the last event before a date, for a calendar of past events', () => {
@@ -302,18 +508,47 @@ describe('nextEvent and busyDays', () => {
       start: '2026-10-13T10:00:00+02:00',
       end: '2026-10-13T11:00:00+02:00',
     });
-    expect(latestEvent([april, next, may], '2026-09-28', AMS)).toMatchObject({
+    expect(latestEvent([april, next, may], '2026-09-28')).toMatchObject({
       event: may,
       date: '2026-05-12',
     });
-    expect(latestEvent([next], '2026-09-28', AMS)).toBeUndefined();
+    expect(latestEvent([next], '2026-09-28')).toBeUndefined();
   });
 
   it('marks the days with events', () => {
     const e = ev({ allDay: true, start: '2026-09-23', end: '2026-09-25' });
-    expect([...busyDays([e], '2026-09-21', 7, AMS)]).toEqual([
+    expect([...busyDays([e], '2026-09-21', 7)]).toEqual([
       '2026-09-23',
       '2026-09-24',
     ]);
+  });
+});
+
+describe('labels for host-placed segments', () => {
+  it('names the real end of an event that runs past midnight', () => {
+    const late = ev({
+      title: 'Night shift',
+      start: '2026-09-24T22:00:00+02:00',
+      end: '2026-09-25T01:30:00+02:00',
+    });
+    const [segment] = agendaDays([late], '2026-09-24', 1)[0].items;
+    expect(spoken(segment)).toBe('22:00 to 01:30 on Friday 25 September');
+    expect(endClock(segment, true)).toBe('01:30 Fri 25 Sep');
+  });
+
+  it('describes a row with a Day but no Start or End without throwing', () => {
+    expect(
+      when(ev({ allDay: true, start: '', end: '', day: '2026-09-23' }), AMS),
+    ).toEqual({ day: 'Wednesday 23 September', time: 'All day' });
+    expect(when(ev({ start: '', end: '', day: '2026-09-23' }), AMS)).toEqual({
+      day: 'Wednesday 23 September',
+      time: 'No time set',
+    });
+    const [segment] = agendaDays(
+      [ev({ start: '', end: '', day: '2026-09-23' })],
+      '2026-09-23',
+      1,
+    )[0].items;
+    expect(spoken(segment)).toBe('No time set');
   });
 });

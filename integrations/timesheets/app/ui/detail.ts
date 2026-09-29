@@ -1,6 +1,8 @@
 // @wc-ignore-file
 /**
- * Entry detail (#89 frame D): read-only. A drawer from the right at ≥ 720px,
+ * Entry detail (#89 frame D), with Edit and Delete entry (#123 M3) when the
+ * entry can be written back: an edit is saved to the row and listed under
+ * "Changes to send". A drawer from the right at ≥ 720px,
  * a full-height sheet below. Focus goes to the heading, stays inside while
  * open, and Esc or Close hand it back to the row that opened it (the caller
  * restores focus by the row's `data-k`).
@@ -18,9 +20,24 @@ import type { TimeEntry } from '../model/types.js';
 import { projectLabel } from '../model/views.js';
 import { button, extLink } from './components.js';
 import type { H } from './dom.js';
+import { entryEditor, pendingTag, type EditorProps } from './edit.js';
 import { dot } from './week.js';
 
 export const CLOCKIFY_TRACKER = 'https://app.clockify.me/tracker';
+
+/** What the drawer offers for writing back; absent: read-only. */
+export interface DetailEdit {
+  /** Why it cannot be edited; empty: Edit and Delete are offered. */
+  blockers: string[];
+  mode: 'view' | 'edit' | 'confirm-delete';
+  editor: EditorProps;
+  onEdit: () => void;
+  onDelete: () => void;
+  onConfirmDelete: () => void;
+  onCancelDelete: () => void;
+  /** Offered while the entry has a change not sent yet. */
+  onDiscard: () => void;
+}
 
 export interface Overlay {
   node: HTMLElement;
@@ -105,8 +122,24 @@ export function entryDetail(
     openExternal?: ((url: string) => void) | undefined;
     /** Shows the entry's table row in the host, when it can. */
     openRow?: (() => void) | undefined;
+    edit?: DetailEdit | undefined;
   },
 ): Overlay {
+  const edit = p.edit;
+  const title = entry.description || '(no description)';
+
+  if (edit?.mode === 'edit') {
+    const form = entryEditor(h, entry, edit.editor);
+
+    return sheet(h, {
+      title: `Edit: ${title}`,
+      full: p.full,
+      onClose: edit.editor.onCancel,
+      body: [form.body],
+      footer: form.footer,
+    });
+  }
+
   const day = dayKey(entry.start, p.timeZone);
   const ms = entry.end - entry.start;
   const at = (t: number) =>
@@ -117,11 +150,58 @@ export function entryDetail(
     h('dd', null, value),
   ];
 
+  const writable = !!edit && !edit.blockers.length;
+  const confirming = edit?.mode === 'confirm-delete';
+  const writeNote: HTMLElement | null = !edit
+    ? null
+    : edit.blockers.length
+      ? h(
+          'p',
+          { class: 'muted', style: 'font-size: 12.5px; margin: 0' },
+          `Not editable here: ${edit.blockers.join(' ')}`,
+        )
+      : null;
+
   return sheet(h, {
-    title: entry.description || '(no description)',
+    title,
     full: p.full,
     onClose: p.onClose,
     body: [
+      entry.pending
+        ? h(
+            'p',
+            { style: 'margin: 0' },
+            pendingTag(h, entry.pending),
+            entry.pending === 'delete'
+              ? ' Deleting it in Clockify is listed under “Changes to send”.'
+              : ' Shown with your change, which is listed under “Changes to send”.',
+          )
+        : null,
+      confirming && edit
+        ? h(
+            'div',
+            { class: 'confirm', role: 'group', 'aria-label': 'Delete entry' },
+            h(
+              'p',
+              null,
+              'Delete this entry in Clockify? It is listed under “Changes to send” first, and deleted only when you send it.',
+            ),
+            h(
+              'div',
+              { class: 'row' },
+              button(h, 'Delete in Clockify', {
+                variant: 'danger',
+                key: 'confirm-delete',
+                onClick: edit.onConfirmDelete,
+              }),
+              button(h, 'Keep', {
+                variant: 'ghost',
+                key: 'cancel-delete',
+                onClick: edit.onCancelDelete,
+              }),
+            ),
+          )
+        : null,
       h(
         'div',
         null,
@@ -162,10 +242,32 @@ export function entryDetail(
           Number.isFinite(checked)
             ? `, last checked ${formatDay(dayKey(checked, p.timeZone))} ${formatTime(checked, p.timeZone)}`
             : ''
-        }. Changes made in Clockify replace this copy on the next sync.`,
+        }. ${
+          edit
+            ? 'Edits are saved in this drive and reach Clockify only when you send them. If Clockify changes the same field, Clockify’s value is kept.'
+            : 'Changes made in Clockify replace this copy on the next sync.'
+        }`,
       ),
+      writeNote,
     ],
     footer: [
+      writable && edit && !confirming && entry.pending !== 'delete'
+        ? button(h, 'Edit', { key: 'edit', onClick: edit.onEdit })
+        : null,
+      writable && edit && !confirming && entry.pending !== 'delete'
+        ? button(h, 'Delete entry…', {
+            variant: 'danger',
+            key: 'delete',
+            onClick: edit.onDelete,
+          })
+        : null,
+      edit && entry.pending
+        ? button(h, 'Discard change', {
+            variant: 'sec',
+            key: 'discard',
+            onClick: edit.onDiscard,
+          })
+        : null,
       p.openRow
         ? button(h, 'Open row in Atomic', {
             variant: 'sec',

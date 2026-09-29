@@ -335,6 +335,25 @@ async function waitFor(url, what) {
 }
 
 /**
+ * A lane's own atomic-server environment (lanes.json `serverEnv`), with
+ * `{atomicServer}`, `{devServer}` and `{mockProxy}` replaced by that lane's
+ * ports. Validated in lanes.mjs: only `ATOMIC_*` names, never
+ * SERVER_ENV_RESERVED (the plugin-routes options, whose values come from
+ * `pluginRoutes`, and what {@link serverEnv} derives). A relative path in a
+ * value resolves against this repository's root, the local binary's working
+ * directory; the image does not mount the repository.
+ */
+export const laneServerEnv = (declared, ports) =>
+  Object.fromEntries(
+    Object.entries(declared ?? {}).map(([key, value]) => [
+      key,
+      value.replace(/\{(atomicServer|devServer|mockProxy)\}/g, (_, role) =>
+        String(ports[role]),
+      ),
+    ]),
+  );
+
+/**
  * Start the stack on `ports`. Returns a `stop()` that kills all of it and
  * resolves once every process has exited.
  * `platforms` is the mock proxy's fixture set, passed as
@@ -343,12 +362,15 @@ async function waitFor(url, what) {
  * non-lane stack) serves every fixture; an empty list — a lane whose tests
  * never touch the shared mock — does not start the mock at all. See §4 of
  * integrations/PARALLEL_LANES.md.
+ * `serverEnv` is the lane's own lanes.json `serverEnv`, applied through
+ * {@link laneServerEnv}.
  */
 export async function bringUp({
   ports,
   platforms,
   label = 'shared',
   pluginRoutes,
+  serverEnv: laneEnv,
 }) {
   const config = loadLanes();
   let image = serverImage();
@@ -413,17 +435,18 @@ export async function bringUp({
         name: container,
         ports,
         label,
-        env: serverEnv(ports, IMAGE_STORE),
+        env: {
+          ...serverEnv(ports, IMAGE_STORE),
+          ...laneServerEnv(laneEnv, ports),
+        },
         command: pluginRoutesArgs(pluginRoutes, ports),
       }),
     );
   } else {
-    start(
-      'atomic-server',
-      binary,
-      pluginRoutesArgs(pluginRoutes, ports),
-      serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
-    );
+    start('atomic-server', binary, pluginRoutesArgs(pluginRoutes, ports), {
+      ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      ...laneServerEnv(laneEnv, ports),
+    });
   }
 
   // MOCK_FRONTEND_ORIGIN must match wherever the browser actually loads the
@@ -450,6 +473,10 @@ export async function bringUp({
     ['integrations/tooling/dev-server.mjs'],
     {
       DEV_SERVER_PORT: String(ports.devServer),
+      // Serve every drive app entry enabled, so an e2e can install an app
+      // the published catalog still keeps disabled until its launch
+      // (dev-server.mjs enableAppEntries).
+      DEV_SERVER_ENABLE_APPS: process.env.DEV_SERVER_ENABLE_APPS ?? 'all',
     },
   );
 
@@ -512,6 +539,7 @@ if (
     platforms: lane?.platforms,
     label: lane?.id ?? 'shared',
     pluginRoutes,
+    serverEnv: lane?.serverEnv,
   });
   console.log(`serving ${JSON.stringify(ports)} — ctrl-c to stop`);
   for (const signal of ['SIGINT', 'SIGTERM'])

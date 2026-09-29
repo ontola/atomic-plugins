@@ -14,7 +14,7 @@ instead of open questions.
 Sections 1–3 are based on atomic-server at `bae5cdbe3` (2026-09-23).
 Section 0 was checked against `2f403624e`, the commit pinned in
 `.atomic-server-ref` when the gating was added (2026-09-24). Limits marked
-*proposed* are starting numbers for review, not measurements. No protocol in
+_proposed_ are starting numbers for review, not measurements. No protocol in
 section 3 has been prototyped against this design, so its feasibility column
 is an assessment on paper.
 
@@ -81,7 +81,7 @@ This design builds on the following facts, all true at the pinned atomic-server 
 ## 0. Gating: build flag, runtime switch, install consent
 
 A plugin that opens a public endpoint on the server changes what the server
-*is*: it answers strangers, stores what they send, and can make the server
+_is_: it answers strangers, stores what they send, and can make the server
 talk to other servers on their behalf. So none of that is reachable through
 installing a plugin alone. Each such surface needs **all three** of:
 
@@ -103,16 +103,16 @@ for it.
 These are the "similarly powerful" features. All of them share the same two
 gates. The table gives the minimum runtime level each needs.
 
-| Surface | Where designed | Minimum `--plugin-routes` level | Extra operator config |
-| --- | --- | --- | --- |
-| Sandbox routes (`http.routes`), `GET`/`HEAD`, `principal: anonymous`, `auth: none` | 2.2, 2.3 | `read-only` | none (`ATOMIC_ROUTES_ORIGIN` for the `installation-origin` mount) |
-| Well-known claims, shared and exclusive (`http.wellKnown`) | 2.4 | `read-only` | exclusive names on the API origin: operator config, as in 2.4 |
-| Routes with any other method, principal or auth; inbound writes (`writeTargets`); blob request bodies | 2.5, 2.6 | `read-write` | none |
-| Host-held keys and tokens (`http.keys`, `http.tokens`) | 2.2, AS-08 | `read-write` | none |
-| Route-enqueued deliveries and wildcard-host operations (`enqueues`, `https://*`) | 2.6, D5 | `read-write` | none |
-| Host-mediated WebSockets (phase 3) | AS-12 | `read-write` | none |
-| Listeners and raw ports (`http.listeners`, `world: server-extension` only) | 2.2, phase 4 | `read-write` | the operator binds each one: `ATOMIC_PLUGIN_LISTENERS=willow-wgps:4455` |
-| Sidecar access: declared operations to a loopback daemon, which the egress guard otherwise refuses | 1 (placement E), phase 4 | `read-write` | the operator names each one: `ATOMIC_PLUGIN_SIDECARS=pds=http://127.0.0.1:2583` |
+| Surface                                                                                               | Where designed           | Minimum `--plugin-routes` level | Extra operator config                                                           |
+| ----------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------- | ------------------------------------------------------------------------------- |
+| Sandbox routes (`http.routes`), `GET`/`HEAD`, `principal: anonymous`, `auth: none`                    | 2.2, 2.3                 | `read-only`                     | none (`ATOMIC_ROUTES_ORIGIN` for the `installation-origin` mount)               |
+| Well-known claims, shared and exclusive (`http.wellKnown`)                                            | 2.4                      | `read-only`                     | exclusive names on the API origin: operator config, as in 2.4                   |
+| Routes with any other method, principal or auth; inbound writes (`writeTargets`); blob request bodies | 2.5, 2.6                 | `read-write`                    | none                                                                            |
+| Host-held keys and tokens (`http.keys`, `http.tokens`)                                                | 2.2, AS-08               | `read-write`                    | none                                                                            |
+| Route-enqueued deliveries and wildcard-host operations (`enqueues`, `https://*`)                      | 2.6, D5                  | `read-write`                    | none                                                                            |
+| Host-mediated WebSockets (phase 3)                                                                    | AS-12                    | `read-write`                    | none                                                                            |
+| Listeners and raw ports (`http.listeners`, `world: server-extension` only)                            | 2.2, phase 4             | `read-write`                    | the operator binds each one: `ATOMIC_PLUGIN_LISTENERS=willow-wgps:4455`         |
+| Sidecar access: declared operations to a loopback daemon, which the egress guard otherwise refuses    | 1 (placement E), phase 4 | `read-write`                    | the operator names each one: `ATOMIC_PLUGIN_SIDECARS=pds=http://127.0.0.1:2583` |
 
 Nothing else is gated by this design. Views (A), jobs (B), class extenders
 (D hooks), secrets and outbound operations to fixed hosts work exactly as
@@ -212,8 +212,8 @@ four points:
    listener and sidecar names it asks for. If the node falls short, the
    install is refused with a typed problem, `host-feature-unavailable`,
    carrying `{ feature: "plugin-routes", needed, compiled, level,
-   surfaces }`, where `surfaces` lists what asked for it ("route `POST
-   /users/{name}/inbox`", "well-known `nodeinfo`"). The message is one of:
+surfaces }`, where `surfaces` lists what asked for it ("route `POST
+/users/{name}/inbox`", "well-known `nodeinfo`"). The message is one of:
    - not compiled: "This plugin opens public endpoints on the server
      (…surfaces…). This AtomicServer was built without plugin routes, so the
      plugin can't be installed here."
@@ -226,6 +226,7 @@ four points:
 
    An upgrade that raises the needed level is refused the same way, and the
    old release keeps running.
+
 2. **Consent.** With the gates open, the install review lists every public
    endpoint (2.9). An Installation with a gated surface is never created
    without that review: bundled templates, auto-install and drive imports do
@@ -279,13 +280,13 @@ so a client can filter without parsing manifests. Then:
 today, one is what this document proposes, and two are escape hatches for
 operators.
 
-| # | Placement | Runs where | Triggered by | Exists? |
-| --- | --- | --- | --- | --- |
-| A | **Iframe view** | User's browser, null-origin iframe | A person opening the view | Yes |
-| B | **Sandbox job** | AtomicServer, QuickJS in wasmtime (or a `wasip2` component, once components can export `run`) | manual, cron, query trigger | Yes |
-| C | **Sandbox route** | Same sandbox as B | An inbound HTTP request from anyone | **Proposed here** |
-| D | **Server extension** | AtomicServer, installed by the operator, `world: server-extension` | Reads/commits (class extenders); proposed: raw listeners | Hooks yes, listeners no |
-| E | **Sidecar** | A separate daemon the operator runs next to AtomicServer, often behind the same reverse proxy | Its own protocol | Outside AtomicServer; only documented here |
+| #   | Placement            | Runs where                                                                                    | Triggered by                                             | Exists?                                    |
+| --- | -------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| A   | **Iframe view**      | User's browser, null-origin iframe                                                            | A person opening the view                                | Yes                                        |
+| B   | **Sandbox job**      | AtomicServer, QuickJS in wasmtime (or a `wasip2` component, once components can export `run`) | manual, cron, query trigger                              | Yes                                        |
+| C   | **Sandbox route**    | Same sandbox as B                                                                             | An inbound HTTP request from anyone                      | **Proposed here**                          |
+| D   | **Server extension** | AtomicServer, installed by the operator, `world: server-extension`                            | Reads/commits (class extenders); proposed: raw listeners | Hooks yes, listeners no                    |
+| E   | **Sidecar**          | A separate daemon the operator runs next to AtomicServer, often behind the same reverse proxy | Its own protocol                                         | Outside AtomicServer; only documented here |
 
 ### Decision rules
 
@@ -320,20 +321,20 @@ part is decided separately.
 
 ### Examples
 
-| Package / feature | Placement | Why |
-| --- | --- | --- |
-| Pets drive app (`integrations/pets/app/`) | A | Reads through the proxy relay; no unattended work |
-| Notion one-way import, on demand | A | User present; the top page holds the LocalThought connection |
-| Notion scheduled sync | B | Rule 2; needs host-held credentials (rule 3) |
-| Bank statement upload (`integrations/money/`) | B | Parsing in the sandbox; the product is proposal and review |
-| GitHub two-way (`issue-tracker/devonian/`) | A | Local-first, with the journal in the browser; needs no server |
-| WebFinger responder for `acct:alice@drive-host` | C | Rule 1; tiny, read-only |
-| ActivityPub inbox and outbox for one actor | C + B | The inbox is rule 1; delivery retries are rule 2 |
-| remoteStorage server for a drive | C | Rule 1; remote apps call it while the user is away |
-| atproto PDS with `subscribeRepos` firehose | E (or D) | Rule 4: WebSocket firehose, MST repo state, relay crawling |
-| Willow live sync (WGPS over QUIC/TCP) | D or E | Rule 4: non-HTTP, long-lived transport |
-| Willow sideloading "drop" file import | B | A file importer, like `money`; no port at all |
-| Folder validation hook | D | Rule 5 |
+| Package / feature                               | Placement | Why                                                           |
+| ----------------------------------------------- | --------- | ------------------------------------------------------------- |
+| Pets drive app (`integrations/pets/app/`)       | A         | Reads through the proxy relay; no unattended work             |
+| Notion one-way import, on demand                | A         | User present; the top page holds the LocalThought connection  |
+| Notion scheduled sync                           | B         | Rule 2; needs host-held credentials (rule 3)                  |
+| Bank statement upload (`integrations/money/`)   | B         | Parsing in the sandbox; the product is proposal and review    |
+| GitHub two-way (`issue-tracker/devonian/`)      | A         | Local-first, with the journal in the browser; needs no server |
+| WebFinger responder for `acct:alice@drive-host` | C         | Rule 1; tiny, read-only                                       |
+| ActivityPub inbox and outbox for one actor      | C + B     | The inbox is rule 1; delivery retries are rule 2              |
+| remoteStorage server for a drive                | C         | Rule 1; remote apps call it while the user is away            |
+| atproto PDS with `subscribeRepos` firehose      | E (or D)  | Rule 4: WebSocket firehose, MST repo state, relay crawling    |
+| Willow live sync (WGPS over QUIC/TCP)           | D or E    | Rule 4: non-HTTP, long-lived transport                        |
+| Willow sideloading "drop" file import           | B         | A file importer, like `money`; no port at all                 |
+| Folder validation hook                          | D         | Rule 5                                                        |
 
 ### How this answers #1535
 
@@ -341,15 +342,15 @@ part is decided separately.
 the host **derives** that list from the placement declarations rather than
 the author writing it by hand, so the two can never disagree:
 
-| Declared in manifest | Implies `requires` |
-| --- | --- |
-| `entrypoints.run` + a cron/query trigger | `persistent-host` |
-| `secrets` non-empty | `host-credentials` |
-| `runtime: wasip2/1` or any B/C code | `wasm-sandbox` |
+| Declared in manifest                                                               | Implies `requires`                                                                                |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `entrypoints.run` + a cron/query trigger                                           | `persistent-host`                                                                                 |
+| `secrets` non-empty                                                                | `host-credentials`                                                                                |
+| `runtime: wasip2/1` or any B/C code                                                | `wasm-sandbox`                                                                                    |
 | `http.routes` or `http.wellKnown` non-empty, read-only surfaces only (section 0.1) | `persistent-host`, `wasm-sandbox`, **`public-origin`** (new), **`plugin-routes:read-only`** (new) |
-| any `read-write` surface in section 0.1 | the above, with **`plugin-routes:read-write`** instead |
-| `http.listeners` (section 2.2, D only) | `plugin-routes:read-write`, `operator-listener:<name>` (new) |
-| sidecar operations (phase 4) | `plugin-routes:read-write`, `operator-sidecar:<name>` (new) |
+| any `read-write` surface in section 0.1                                            | the above, with **`plugin-routes:read-write`** instead                                            |
+| `http.listeners` (section 2.2, D only)                                             | `plugin-routes:read-write`, `operator-listener:<name>` (new)                                      |
+| sidecar operations (phase 4)                                                       | `plugin-routes:read-write`, `operator-sidecar:<name>` (new)                                       |
 
 `public-origin` is a new requirement. A node can have the sandbox and still
 be unreachable from the internet: a desktop node behind NAT, an Android node,
@@ -413,16 +414,16 @@ everywhere v3 is understood.
   "entrypoints": { "run": true, "view": "ui.js" },
   "http": {
     // Where the routes live. See 2.3.
-    "mount": "installation-origin",          // | "drive-host" | "drive-prefix"
+    "mount": "installation-origin", // | "drive-host" | "drive-prefix"
     "routes": [
       {
         "id": "actor",
-        "path": "/users/{name}",             // literal segments, {param}, trailing {*rest}; no regex
+        "path": "/users/{name}", // literal segments, {param}, trailing {*rest}; no regex
         "methods": ["GET", "HEAD"],
-        "principal": "anonymous",            // | "installation" | "caller"
-        "auth": "none",                      // | "atomic" | "http-signature" | "bearer" | "dpop"
+        "principal": "anonymous", // | "installation" | "caller"
+        "auth": "none", // | "atomic" | "http-signature" | "bearer" | "dpop"
         "accept": ["application/activity+json", "application/ld+json"],
-        "cors": "none"                       // | "any-origin-no-credentials"
+        "cors": "none", // | "any-origin-no-credentials"
       },
       {
         "id": "inbox",
@@ -430,31 +431,52 @@ everywhere v3 is understood.
         "methods": ["POST"],
         "principal": "installation",
         "auth": "http-signature",
-        "maxBodyBytes": 262144,              // proposed default 256 KiB, host max 1 MiB
-        "body": "json",                      // | "text" | "blob" (host stores it; handler gets a hash)
-        "writes": ["inbox-items"],           // ids from http.writeTargets; see 2.6
-        "enqueues": ["deliver"],             // declared operations it may schedule; see 2.6
-        "timeoutMs": 3000
-      }
+        "maxBodyBytes": 262144, // proposed default 256 KiB, host max 1 MiB
+        "body": "json", // | "text" | "blob" (host stores it; handler gets a hash)
+        "writes": ["inbox-items"], // ids from http.writeTargets; see 2.6
+        "enqueues": ["deliver"], // declared operations it may schedule; see 2.6
+        "timeoutMs": 3000,
+      },
     ],
     "wellKnown": [
-      { "name": "webfinger", "kind": "shared", "match": { "resourcePrefix": "acct:" }, "route": "webfinger" },
-      { "name": "nodeinfo",  "kind": "exclusive", "route": "nodeinfo-links" }
+      {
+        "name": "webfinger",
+        "kind": "shared",
+        "match": { "resourcePrefix": "acct:" },
+        "route": "webfinger",
+      },
+      { "name": "nodeinfo", "kind": "exclusive", "route": "nodeinfo-links" },
     ],
     "writeTargets": [
-      { "id": "inbox-items", "parent": "config:inboxTable", "classes": ["https://…/classes/Activity"] }
+      {
+        "id": "inbox-items",
+        "parent": "config:inboxTable",
+        "classes": ["https://…/classes/Activity"],
+      },
     ],
     "keys": [
-      { "name": "actor-key", "alg": "rsa-sha256", "reason": "Signs deliveries to other fediverse servers" }
+      {
+        "name": "actor-key",
+        "alg": "rsa-sha256",
+        "reason": "Signs deliveries to other fediverse servers",
+      },
     ],
     "tokens": [
-      { "name": "storage", "reason": "Bearer tokens this plugin issues to remoteStorage apps" }
+      {
+        "name": "storage",
+        "reason": "Bearer tokens this plugin issues to remoteStorage apps",
+      },
     ],
-    "reason": "Lets other fediverse servers follow and message this drive's actor."
+    "reason": "Lets other fediverse servers follow and message this drive's actor.",
   },
   "operations": [
-    { "id": "deliver", "method": "POST", "url": "https://*/inbox", "effect": "write" }
-  ]
+    {
+      "id": "deliver",
+      "method": "POST",
+      "url": "https://*/inbox",
+      "effect": "write",
+    },
+  ],
 }
 ```
 
@@ -465,7 +487,7 @@ What each part does:
   work with.
 - **`path`** patterns are matched by the host router, not by plugin code.
   Patterns cannot use regex or overlap within one installation. An
-  installation can declare at most 32 routes (*proposed*).
+  installation can declare at most 32 routes (_proposed_).
 - **`principal`** and **`auth`**: see 2.5.
 - **`wellKnown`** claims: see 2.4.
 - **`writeTargets`** and **`enqueues`** are the only writes a route can
@@ -496,11 +518,11 @@ What each part does:
 Atomic uses its path space for resource subjects, and the API origin carries
 session cookies. So plugin routes do not go on the API origin by default.
 
-| Mount | URL shape | Who configures | Good for | Cost |
-| --- | --- | --- | --- | --- |
-| `installation-origin` (**default**) | `https://<installation-slug>.<ATOMIC_ROUTES_ORIGIN>/…` | The operator sets `ATOMIC_ROUTES_ORIGIN`, wildcard DNS and TLS, exactly as for `ATOMIC_WEBSITE_ORIGIN` | Anything; the full path space and its own `/.well-known/` | Needs a wildcard cert; identity URLs contain an installation slug |
-| `drive-host` | `https://<drive vanity host>/…` via `Tree::DriveMapping` | The drive owner, on a host mapped to their drive | Handles like `@alice@alice.example` | Shares the host with the drive's own resources, so only non-colliding paths (below) |
-| `drive-prefix` | `https://<api origin>/_routes/<installation-slug>/…` | Nobody; always available | Development, and protocols that accept any base URL (remoteStorage storage root, Solid storage, OCM endpoint URL) | Same origin as the API, so the **host strips cookies and Atomic auth headers** and refuses `text/html` responses and `Set-Cookie` |
+| Mount                               | URL shape                                                | Who configures                                                                                         | Good for                                                                                                          | Cost                                                                                                                              |
+| ----------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `installation-origin` (**default**) | `https://<installation-slug>.<ATOMIC_ROUTES_ORIGIN>/…`   | The operator sets `ATOMIC_ROUTES_ORIGIN`, wildcard DNS and TLS, exactly as for `ATOMIC_WEBSITE_ORIGIN` | Anything; the full path space and its own `/.well-known/`                                                         | Needs a wildcard cert; identity URLs contain an installation slug                                                                 |
+| `drive-host`                        | `https://<drive vanity host>/…` via `Tree::DriveMapping` | The drive owner, on a host mapped to their drive                                                       | Handles like `@alice@alice.example`                                                                               | Shares the host with the drive's own resources, so only non-colliding paths (below)                                               |
+| `drive-prefix`                      | `https://<api origin>/_routes/<installation-slug>/…`     | Nobody; always available                                                                               | Development, and protocols that accept any base URL (remoteStorage storage root, Solid storage, OCM endpoint URL) | Same origin as the API, so the **host strips cookies and Atomic auth headers** and refuses `text/html` responses and `Set-Cookie` |
 
 Rules:
 
@@ -516,6 +538,7 @@ Rules:
   Subject creation must also reserve `_routes/`, so that no resource can be
   created under it (issue draft AS-04; the reservation itself is compiled into every build,
   section 0.2).
+
 - **Collisions are refused at activation**, not resolved at request time.
   The registry is keyed on `(host, method, normalized pattern)`. Overlapping
   patterns from different installations on the same host (`/users/{a}` vs
@@ -560,16 +583,30 @@ route's `principal`.
 
 Authentication (`auth`) is verified in Rust before the sandbox starts:
 
-| `auth` | Host verifies | Handler receives |
-| --- | --- | --- |
-| `none` | nothing | `request.caller = null` |
-| `atomic` | Atomic signed headers (`x-atomic-*`), never cookies | `caller = { agent }` |
+| `auth`           | Host verifies                                                                                                                                                 | Handler receives                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `none`           | nothing                                                                                                                                                       | `request.caller = null`                                                       |
+| `atomic`         | Atomic signed headers (`x-atomic-*`), never cookies                                                                                                           | `caller = { agent }`                                                          |
 | `http-signature` | draft-cavage-12 **and** RFC 9421 signatures. Fetches the `keyId` document through the egress guard (5 s timeout, 64 KiB cap) and caches keys per installation | `caller = { keyId, owner }`; the plugin decides what that remote actor may do |
-| `bearer` | a token issued through this installation's `tokens` store, with its scopes | `caller = { token: { id, scopes } }` |
-| `dpop` | DPoP proof + access token (Solid-OIDC, atproto OAuth). Fetches the issuer's JWKS through the egress guard | `caller = { webid or did, clientId }` |
+| `bearer`         | a token issued through this installation's `tokens` store, with its scopes                                                                                    | `caller = { token: { id, scopes } }`                                          |
+| `dpop`           | DPoP proof + access token (Solid-OIDC, atproto OAuth). Fetches the issuer's JWKS through the egress guard                                                     | `caller = { webid or did, clientId }`                                         |
 
 A request that fails verification gets a 401 from the host. The sandbox never
 runs, so floods of failed-auth requests cost no fuel.
+
+_Implemented for Solid-OIDC on atomic-server `claude/plugin-solid-host` (not
+yet in a pin; atomic-plugins#167 section 3):_ issuers come from the
+operator's `--solid-oidc-issuers` list only; the proof's `htu` is compared
+with the URL built from the node's configured origins, not from `Host` or
+`Forwarded`; `jti` is single-use in memory; the WebID's Turtle profile must
+list the issuer. A `dpop` route that declares `"authOptional": true` (as
+`bearer` routes can since candidate15) also answers a request with **no**
+token: it runs as the public principal with `caller: null`, and the host
+refuses any write or enqueue it proposes, so a resource server can serve
+public reads and answer `401` itself. Without the flag the host answers
+`401` to a token-less request.
+`caller = { scheme: "dpop", webid, issuer, clientId, jkt }`. atproto OAuth
+is not covered.
 
 The principal (`principal`) decides who `ctx.read`, `ctx.query` and intents
 act as:
@@ -641,7 +678,7 @@ approve each one. The compromise follows the existing rule in
 - An upgrade that widens `writeTargets` needs a new review. The old release
   keeps serving until that review is done.
 - Quotas: at most N resources created per remote caller per hour, and M per
-  installation per day (*proposed*: 100 and 10,000). Past that, the host
+  installation per day (_proposed_: 100 and 10,000). Past that, the host
   returns 429. This contains spam but does not moderate it; moderation stays
   in plugin logic.
 
@@ -653,36 +690,36 @@ write operations. The scheduler runs them through the existing
 external-intent journal (`approveExternalIntent`, receipts, an "uncertain"
 state for lost responses) with exponential backoff. ActivityPub delivery and
 OCM notifications both fit this model. A route can call `ctx.http` inline
-only for declared **read** operations, at most 2 per request (*proposed*),
+only for declared **read** operations, at most 2 per request (_proposed_),
 and within the route's deadline.
 
 ### 2.7 Security model
 
-| Threat | Mitigation |
-| --- | --- |
-| Theft of sessions or credentials through content a plugin serves | The default mount is a separate origin. On `drive-prefix`, the host strips cookies and Atomic auth headers before the sandbox runs, refuses `text/html` and `Set-Cookie`, and forces `nosniff`. Routes that serve HTML (OAuth consent screens) are only allowed on `installation-origin`. |
-| SSRF via attacker-supplied URLs (`keyId`, actor, inbox, OIDC issuer) | Every fetch goes through `egress.rs`, including the host's own key and JWKS fetches: public addresses only, pinned resolution, no redirects, size caps. Key and JWKS fetches are cached per installation, with a short negative cache. |
-| Amplification | Inline egress is limited to declared reads, at most 2 per request. Deliveries only go through the durable queue, with a concurrency limit per destination. |
-| Route collisions and hijacking | A static registry that refuses collisions at activation; reserved host paths; slugs never reused; exclusive well-known names need approval from the drive owner or operator. |
-| DoS / fuel exhaustion | Routes get their own worker pool, separate from jobs, so inbound floods cannot starve schedules. Per-installation limits on concurrency and queue depth, per-remote rate limits, and early refusal of oversized bodies. Failed auth costs no sandbox time. A saturated installation returns 503 + `Retry-After`. |
-| Data exposure | `anonymous` routes only see public resources. `installation` routes see what the installation's grants allow, and the install review lists what each route "exposes to the public internet". |
-| Response smuggling | The host builds the HTTP response from a validated structure. Headers are allowlisted: `Content-Type`, `Cache-Control`, `ETag`, `Last-Modified`, `Link`, `Location` (same host only), `WWW-Authenticate`, `Retry-After`, `Vary`, plus declared CORS headers. No hop-by-hop headers. |
-| Replay | `http-signature` requires a `Date`/`created` within ±5 minutes (*proposed*) and a digest over the body. `dpop` requires a unique `jti`, checked against a cache the host keeps. |
-| Key misuse | Private keys never enter the sandbox. `ctx.keys.sign` only signs with declared key names, and every signature is logged with its operation id. |
-| Duplicate identity across replicas | Routes are only registered on the execution owner (2.3). |
+| Threat                                                               | Mitigation                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Theft of sessions or credentials through content a plugin serves     | The default mount is a separate origin. On `drive-prefix`, the host strips cookies and Atomic auth headers before the sandbox runs, refuses `text/html` and `Set-Cookie`, and forces `nosniff`. Routes that serve HTML (OAuth consent screens) are only allowed on `installation-origin`.                        |
+| SSRF via attacker-supplied URLs (`keyId`, actor, inbox, OIDC issuer) | Every fetch goes through `egress.rs`, including the host's own key and JWKS fetches: public addresses only, pinned resolution, no redirects, size caps. Key and JWKS fetches are cached per installation, with a short negative cache.                                                                           |
+| Amplification                                                        | Inline egress is limited to declared reads, at most 2 per request. Deliveries only go through the durable queue, with a concurrency limit per destination.                                                                                                                                                       |
+| Route collisions and hijacking                                       | A static registry that refuses collisions at activation; reserved host paths; slugs never reused; exclusive well-known names need approval from the drive owner or operator.                                                                                                                                     |
+| DoS / fuel exhaustion                                                | Routes get their own worker pool, separate from jobs, so inbound floods cannot starve schedules. Per-installation limits on concurrency and queue depth, per-remote rate limits, and early refusal of oversized bodies. Failed auth costs no sandbox time. A saturated installation returns 503 + `Retry-After`. |
+| Data exposure                                                        | `anonymous` routes only see public resources. `installation` routes see what the installation's grants allow, and the install review lists what each route "exposes to the public internet".                                                                                                                     |
+| Response smuggling                                                   | The host builds the HTTP response from a validated structure. Headers are allowlisted: `Content-Type`, `Cache-Control`, `ETag`, `Last-Modified`, `Link`, `Location` (same host only), `WWW-Authenticate`, `Retry-After`, `Vary`, plus declared CORS headers. No hop-by-hop headers.                              |
+| Replay                                                               | `http-signature` requires a `Date`/`created` within ±5 minutes (_proposed_) and a digest over the body. `dpop` requires a unique `jti`, checked against a cache the host keeps.                                                                                                                                  |
+| Key misuse                                                           | Private keys never enter the sandbox. `ctx.keys.sign` only signs with declared key names, and every signature is logged with its operation id.                                                                                                                                                                   |
+| Duplicate identity across replicas                                   | Routes are only registered on the execution owner (2.3).                                                                                                                                                                                                                                                         |
 
-### 2.8 Resource limits (all *proposed*)
+### 2.8 Resource limits (all _proposed_)
 
-| Limit | Route default | Route max (with `extended-*` grant) | Job today |
-| --- | --- | --- | --- |
-| Fuel | 1G | 10G | 20G / 200G |
-| Memory | 64 MiB | 256 MiB | 256 MiB / 2000 MiB |
-| Wall-clock deadline | 3 s | 30 s | none per run (fetch 30 s) |
-| Request body inline | 256 KiB | 1 MiB | n/a |
-| Request body as blob | 16 MiB | operator-configured | n/a |
-| Response body inline | 1 MiB | 8 MiB | n/a |
-| Inline reads (`ctx.http`) | 2 | 4 | unlimited |
-| Concurrent requests per installation | 8 | 32 | 1 run per job |
+| Limit                                | Route default | Route max (with `extended-*` grant) | Job today                 |
+| ------------------------------------ | ------------- | ----------------------------------- | ------------------------- |
+| Fuel                                 | 1G            | 10G                                 | 20G / 200G                |
+| Memory                               | 64 MiB        | 256 MiB                             | 256 MiB / 2000 MiB        |
+| Wall-clock deadline                  | 3 s           | 30 s                                | none per run (fetch 30 s) |
+| Request body inline                  | 256 KiB       | 1 MiB                               | n/a                       |
+| Request body as blob                 | 16 MiB        | operator-configured                 | n/a                       |
+| Response body inline                 | 1 MiB         | 8 MiB                               | n/a                       |
+| Inline reads (`ctx.http`)            | 2             | 4                                   | unlimited                 |
+| Concurrent requests per installation | 8             | 32                                  | 1 run per job             |
 
 The cost of creating a new component instance per request has **not been
 measured**. If it dominates small `GET`s, the first optimization should be a
@@ -692,14 +729,14 @@ they would break principle 2.
 
 ### 2.9 Lifecycle
 
-| Event | Routes | Keys and tokens | Data |
-| --- | --- | --- | --- |
-| Install (review) | The review lists each route's path, methods, principal, auth, write targets and claims. Nothing is registered until the installation is active | Keys generated on activation | Write-target tables created as in any install |
-| Activate | Registered atomically; any collision refuses the whole activation | — | — |
-| Upgrade | The upgrade review includes the diff of routes, claims, writeTargets and keys. The old release keeps serving until approval. Removed routes answer `410 Gone` | Carried over (they belong to the Installation) | Unchanged |
-| Pause | `503` + `Retry-After: 3600`, so peers retry instead of forgetting the actor | Kept | Kept |
-| Revoke / uninstall | `410 Gone` for 30 days (*proposed*), then 404; slug retired | Private keys erased with the existing revocation tombstone; issued tokens stop working | Kept, like every uninstall today |
-| Execution owner moves (#1535) | Unregistered on the old node, registered on the new one. The URL only survives if the host name moves too | Keys are per node today. Moving them would be a new, explicit handoff (D3: not in phases 1–2) | Synced as usual |
+| Event                         | Routes                                                                                                                                                        | Keys and tokens                                                                               | Data                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Install (review)              | The review lists each route's path, methods, principal, auth, write targets and claims. Nothing is registered until the installation is active                | Keys generated on activation                                                                  | Write-target tables created as in any install |
+| Activate                      | Registered atomically; any collision refuses the whole activation                                                                                             | —                                                                                             | —                                             |
+| Upgrade                       | The upgrade review includes the diff of routes, claims, writeTargets and keys. The old release keeps serving until approval. Removed routes answer `410 Gone` | Carried over (they belong to the Installation)                                                | Unchanged                                     |
+| Pause                         | `503` + `Retry-After: 3600`, so peers retry instead of forgetting the actor                                                                                   | Kept                                                                                          | Kept                                          |
+| Revoke / uninstall            | `410 Gone` for 30 days (_proposed_), then 404; slug retired                                                                                                   | Private keys erased with the existing revocation tombstone; issued tokens stop working        | Kept, like every uninstall today              |
+| Execution owner moves (#1535) | Unregistered on the old node, registered on the new one. The URL only survives if the host name moves too                                                     | Keys are per node today. Moving them would be a new, explicit handoff (D3: not in phases 1–2) | Synced as usual                               |
 
 Federated identities are URLs. Changing the routes origin, the drive's vanity
 host or the slug breaks every follower and every share. The install review
@@ -751,22 +788,22 @@ Legend: **C** sandbox route (this proposal), **B** sandbox job, **A** iframe,
 **D** server extension, **E** sidecar. "Phase" refers to section 4. These are
 assessments on paper; none has been prototyped.
 
-| Protocol | Inbound surface | Well-known | Auth | Long-lived / background | Non-HTTP | Placement | Phase |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| **WebFinger** (building block) | `GET /.well-known/webfinger?resource=` | `webfinger` (shared) | none | none | no | C | 1 |
-| **Open Cloud Mesh** (receive shares) | `POST /shares`, `/notifications`, `/invite-accepted`; `POST /token` (code exchange, OCM 1.2) | `ocm` (+ legacy `/ocm-provider`) exclusive | HTTP signatures (draft-cavage in deployed Nextcloud-family servers, RFC 9421 in the newer spec); bearer via `token` | outbound notifications (B queue) | no | C + B | 2 |
-| **Open Cloud Mesh** (send shares) | Serving the shared resource over WebDAV (`PROPFIND`, `GET`, maybe `PUT`) | same | shared secret / exchanged bearer token | — | no | C with non-standard methods and blob bodies | 3 |
-| **remoteStorage** | Storage root: `GET`/`HEAD`/`PUT`/`DELETE`/`OPTIONS` with `ETag`, `If-Match`, `If-None-Match`, folder listings; CORS for any origin | `webfinger` link to storage root and auth URL | OAuth 2 implicit-grant dialog (an HTML consent page, needs the user's Atomic login) + bearer tokens scoped `category:r`/`rw` | none | no | C (`installation-origin` for the dialog; storage on any mount); documents as blobs, folders as resources | 2 |
-| **Solid** (resource server) | LDP `GET`/`HEAD`/`PUT`/`POST`/`PATCH` (N3 Patch)/`DELETE`/`OPTIONS`; content negotiation Turtle/JSON-LD; `Link` headers (`type`, `acl`, `describedby`); WAC or ACP | `solid` storage description | Solid-OIDC: DPoP-bound tokens from any issuer; WebID profile document | Notifications (WebSocketChannel2023, webhooks) | no | C for resources and WebID; RDF parsing better as `wasip2` Rust than in QuickJS; notifications phase 3 | 2–3 |
-| **Solid** (identity provider) | OIDC `authorize` (interactive), `token`, `jwks`, dynamic `registration` | `openid-configuration` | OIDC + DPoP | sessions | no | E (use an existing IdP) or D; not in the sandbox | 4 |
-| **atproto** (handle only) | `GET /.well-known/atproto-did` returning a DID | `atproto-did` exclusive | none | none | no | C | 1 |
-| **atproto** (PDS) | XRPC `/xrpc/<nsid>` (`com.atproto.server.*`, `repo.*`, `sync.*`); blobs; `com.atproto.sync.subscribeRepos` WebSocket firehose; `did.json` for `did:web` | `atproto-did`, `oauth-authorization-server`, `oauth-protected-resource` | atproto OAuth (PAR + DPoP), service JWTs | signed Merkle Search Tree repo, CAR export, relay `requestCrawl`, `did:plc` operations | WebSocket | E (run the reference PDS), with the plugin bridging data as a client (B/A); a PDS in the sandbox is not realistic | 4 |
-| **atproto** (read / AppView-like) | none | none | none | polling | no | A or B, outbound only | 0 |
-| **ActivityPub / fediverse** | actor (content-negotiated `GET`), `POST` inbox (+ shared inbox), outbox, followers/following collections, objects | `webfinger` (shared), `nodeinfo` exclusive, `host-meta` (generated) | HTTP signatures on inbound POST; signed GETs for "authorized fetch" servers; outbound signing with the actor key | delivery fan-out with retries over hours to days (B queue) | no | C + B | 2 |
-| **Willow** (sideloading drops) | none | none | Meadowcap capabilities inside the drop | none | no (files) | B as a file importer | 0 |
-| **Willow** (live sync, WGPS) | none standardized over HTTP; WGPS needs a reliable bidirectional stream (TCP, QUIC, or WebSocket) | none | Meadowcap | long-lived sessions with resource control | yes, or WebSocket | D or E. A host-mediated WebSocket (phase 3) could work only if an implementation tolerates one invocation per message, which is unverified | 4 |
-| **NextGraph** (client interop) | none | none | NextGraph wallet/keys | broker connection | WebSocket to a broker (outbound) | A: the browser store backend in atomic-server `planning/nextgraph-interop.md` | separate plan |
-| **NextGraph** (broker / server-to-server) | broker protocol over WebSocket (`ngd`) | none | E2EE, NextGraph keys | long-lived | WebSocket / own port | E (run `ngd`) | 4 |
+| Protocol                                  | Inbound surface                                                                                                                                                    | Well-known                                                              | Auth                                                                                                                         | Long-lived / background                                                                | Non-HTTP                         | Placement                                                                                                                                  | Phase         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| **WebFinger** (building block)            | `GET /.well-known/webfinger?resource=`                                                                                                                             | `webfinger` (shared)                                                    | none                                                                                                                         | none                                                                                   | no                               | C                                                                                                                                          | 1             |
+| **Open Cloud Mesh** (receive shares)      | `POST /shares`, `/notifications`, `/invite-accepted`; `POST /token` (code exchange, OCM 1.2)                                                                       | `ocm` (+ legacy `/ocm-provider`) exclusive                              | HTTP signatures (draft-cavage in deployed Nextcloud-family servers, RFC 9421 in the newer spec); bearer via `token`          | outbound notifications (B queue)                                                       | no                               | C + B                                                                                                                                      | 2             |
+| **Open Cloud Mesh** (send shares)         | Serving the shared resource over WebDAV (`PROPFIND`, `GET`, maybe `PUT`)                                                                                           | same                                                                    | shared secret / exchanged bearer token                                                                                       | —                                                                                      | no                               | C with non-standard methods and blob bodies                                                                                                | 3             |
+| **remoteStorage**                         | Storage root: `GET`/`HEAD`/`PUT`/`DELETE`/`OPTIONS` with `ETag`, `If-Match`, `If-None-Match`, folder listings; CORS for any origin                                 | `webfinger` link to storage root and auth URL                           | OAuth 2 implicit-grant dialog (an HTML consent page, needs the user's Atomic login) + bearer tokens scoped `category:r`/`rw` | none                                                                                   | no                               | C (`installation-origin` for the dialog; storage on any mount); documents as blobs, folders as resources                                   | 2             |
+| **Solid** (resource server)               | LDP `GET`/`HEAD`/`PUT`/`POST`/`PATCH` (N3 Patch)/`DELETE`/`OPTIONS`; content negotiation Turtle/JSON-LD; `Link` headers (`type`, `acl`, `describedby`); WAC or ACP | `solid` storage description                                             | Solid-OIDC: DPoP-bound tokens from any issuer; WebID profile document                                                        | Notifications (WebSocketChannel2023, webhooks)                                         | no                               | C for resources and WebID; RDF parsing better as `wasip2` Rust than in QuickJS; notifications phase 3                                      | 2–3           |
+| **Solid** (identity provider)             | OIDC `authorize` (interactive), `token`, `jwks`, dynamic `registration`                                                                                            | `openid-configuration`                                                  | OIDC + DPoP                                                                                                                  | sessions                                                                               | no                               | E (use an existing IdP) or D; not in the sandbox                                                                                           | 4             |
+| **atproto** (handle only)                 | `GET /.well-known/atproto-did` returning a DID                                                                                                                     | `atproto-did` exclusive                                                 | none                                                                                                                         | none                                                                                   | no                               | C                                                                                                                                          | 1             |
+| **atproto** (PDS)                         | XRPC `/xrpc/<nsid>` (`com.atproto.server.*`, `repo.*`, `sync.*`); blobs; `com.atproto.sync.subscribeRepos` WebSocket firehose; `did.json` for `did:web`            | `atproto-did`, `oauth-authorization-server`, `oauth-protected-resource` | atproto OAuth (PAR + DPoP), service JWTs                                                                                     | signed Merkle Search Tree repo, CAR export, relay `requestCrawl`, `did:plc` operations | WebSocket                        | E (run the reference PDS), with the plugin bridging data as a client (B/A); a PDS in the sandbox is not realistic                          | 4             |
+| **atproto** (read / AppView-like)         | none                                                                                                                                                               | none                                                                    | none                                                                                                                         | polling                                                                                | no                               | A or B, outbound only                                                                                                                      | 0             |
+| **ActivityPub / fediverse**               | actor (content-negotiated `GET`), `POST` inbox (+ shared inbox), outbox, followers/following collections, objects                                                  | `webfinger` (shared), `nodeinfo` exclusive, `host-meta` (generated)     | HTTP signatures on inbound POST; signed GETs for "authorized fetch" servers; outbound signing with the actor key             | delivery fan-out with retries over hours to days (B queue)                             | no                               | C + B                                                                                                                                      | 2             |
+| **Willow** (sideloading drops)            | none                                                                                                                                                               | none                                                                    | Meadowcap capabilities inside the drop                                                                                       | none                                                                                   | no (files)                       | B as a file importer                                                                                                                       | 0             |
+| **Willow** (live sync, WGPS)              | none standardized over HTTP; WGPS needs a reliable bidirectional stream (TCP, QUIC, or WebSocket)                                                                  | none                                                                    | Meadowcap                                                                                                                    | long-lived sessions with resource control                                              | yes, or WebSocket                | D or E. A host-mediated WebSocket (phase 3) could work only if an implementation tolerates one invocation per message, which is unverified | 4             |
+| **NextGraph** (client interop)            | none                                                                                                                                                               | none                                                                    | NextGraph wallet/keys                                                                                                        | broker connection                                                                      | WebSocket to a broker (outbound) | A: the browser store backend in atomic-server `planning/nextgraph-interop.md`                                                              | separate plan |
+| **NextGraph** (broker / server-to-server) | broker protocol over WebSocket (`ngd`)                                                                                                                             | none                                                                    | E2EE, NextGraph keys                                                                                                         | long-lived                                                                             | WebSocket / own port             | E (run `ngd`)                                                                                                                              | 4             |
 
 What the table shows:
 
@@ -875,8 +912,8 @@ revisit if needed**.
   recommendation, expressed as the runtime level.
 - **D3. Identity portability.** Federated identities stay bound to their
   host name, and keys stay per node in phases 1–2. Handing keys over is not
-  part of the #1535 execution-owner handoff for now. *Decided by default;
-  revisit if needed*, at the latest when that handoff is implemented.
+  part of the #1535 execution-owner handoff for now. _Decided by default;
+  revisit if needed_, at the latest when that handoff is implemented.
 - **D4. Route writes without review.** The route grant and quotas of 2.6, as
   proposed. There is no "pending" state for inbound writes, so a 2xx means
   the write was stored.
@@ -893,8 +930,8 @@ revisit if needed**.
 - **D7. Reachability.** The host runs a reachability self-check (fetching
   its own routes origin) at startup and at activation. The result is shown
   in `hostFeatures` and on the Installation page, but does not block
-  installs. Tunnels for desktop and Android nodes are out of scope. *Decided
-  by default; revisit if needed.*
+  installs. Tunnels for desktop and Android nodes are out of scope. _Decided
+  by default; revisit if needed._
 - **D8. Crypto in host vs JS.** Verifying and creating HTTP signatures and
   DPoP/JWS are Rust host calls. JS libraries are allowed in the sandbox but
   get no key material.
@@ -902,7 +939,7 @@ revisit if needed**.
   Hosts that understand v3 accept v3 manifests without an `http` block.
 - **D10. Relation to Atomic `Endpoint`.** Registered plugin routes stay
   internal to the host. The install review and `readRouteStatus` are how
-  people find them. *Decided by default; revisit if needed*, for example if
+  people find them. _Decided by default; revisit if needed_, for example if
   a client needs to discover routes.
 - **D11. First protocol.** remoteStorage first, then ActivityPub, then OCM.
 - **D12. Gating.** Three layers, all required: the `plugin-routes` Cargo

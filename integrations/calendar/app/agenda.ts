@@ -24,7 +24,7 @@ export function dayStrip(
 ): HTMLElement {
   const { doc } = ctx;
   const monday = mondayOf(selected);
-  const busy = busyDays(events, monday, 7, ctx.zone);
+  const busy = busyDays(events, monday, 7);
 
   return h(
     doc,
@@ -55,10 +55,10 @@ function row(ctx: Ctx, segment: Segment): HTMLElement {
   const { doc } = ctx;
   const e = segment.event;
   const time = segment.allDay
-    ? [h(doc, 'span', {}, 'All day')]
+    ? [h(doc, 'span', {}, segment.untimed ? 'No time' : 'All day')]
     : [
         h(doc, 'span', {}, hhmm(segment.startMin)),
-        h(doc, 'small', {}, hhmm(segment.endMin)),
+        h(doc, 'small', {}, hhmm(segment.until?.minutes ?? segment.endMin)),
       ];
   const second = segment.dayOf
     ? `Day ${segment.dayOf.n} of ${segment.dayOf.total}`
@@ -109,7 +109,6 @@ export function agenda(
     events,
     from,
     Math.max(1, daysBetween(from, addDays(mondayOf(from), 7))),
-    ctx.zone,
   );
 
   return h(

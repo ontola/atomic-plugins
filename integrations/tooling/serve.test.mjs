@@ -26,6 +26,7 @@ import {
   dockerRunArgs,
   IMAGE_STORE,
   imagePinProblem,
+  laneServerEnv,
   pluginRoutesArgs,
   PLUGIN_ROUTES_ENV,
   routesImageFor,
@@ -33,7 +34,7 @@ import {
   serverEnv,
   storeVolume,
 } from './serve.mjs';
-import { root } from './lanes.mjs';
+import { root, SERVER_ENV_RESERVED } from './lanes.mjs';
 
 const ports = { atomicServer: 41001, mockProxy: 41002, devServer: 41003 };
 const pin = 'a'.repeat(40);
@@ -77,6 +78,31 @@ test('serverEnv is the same for the binary and the image, apart from the store',
   for (const key of Object.keys(binary))
     if (!/_DIR$/.test(key)) assert.equal(binary[key], image[key], key);
   assert.equal(binary.ATOMIC_CACHE_DIR, '/checkout/.lane-store/pets/cache');
+});
+
+test("a lane's serverEnv can set nothing serve.mjs or pluginRoutes owns", () => {
+  for (const key of [
+    ...Object.keys(serverEnv(ports, IMAGE_STORE)),
+    ...PLUGIN_ROUTES_ENV,
+  ])
+    assert.ok(SERVER_ENV_RESERVED.includes(key), key);
+});
+
+test('laneServerEnv fills in the lane ports', () => {
+  assert.deepEqual(
+    laneServerEnv(
+      {
+        ATOMIC_A: 'http://127.0.0.1:{mockProxy}/{atomicServer}/{devServer}',
+        ATOMIC_B: 'integrations/x/ca.pem',
+      },
+      ports,
+    ),
+    {
+      ATOMIC_A: 'http://127.0.0.1:41002/41001/41003',
+      ATOMIC_B: 'integrations/x/ca.pem',
+    },
+  );
+  assert.deepEqual(laneServerEnv(undefined, ports), {});
 });
 
 test('each label gets its own store volume', () => {
