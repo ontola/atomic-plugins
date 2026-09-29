@@ -304,11 +304,22 @@ export function validateHttp(raw, context) {
 
   const keys = list(entry.keys, 'http.keys').map(value => {
     const key = object(value, 'key');
-    known(key, ['name', 'alg', 'reason']);
+    known(key, ['name', 'alg', 'willow', 'reason']);
+    let willow;
+
+    if (key.willow !== undefined) {
+      const binding = object(key.willow, 'key willow');
+      known(binding, ['namespace', 'pathPrefix']);
+      willow = {
+        namespace: text(binding.namespace, 'willow namespace'),
+        pathPrefix: text(binding.pathPrefix, 'willow pathPrefix'),
+      };
+    }
 
     return {
       name: text(key.name, 'key name'),
       alg: variant(key.alg, ['rsa-sha256', 'ed25519']),
+      ...(willow ? { willow } : {}),
       reason: optionalText(key.reason, 'key reason'),
     };
   });
@@ -338,6 +349,30 @@ export function validateHttp(raw, context) {
     keys.map(k => k.name),
     'key names',
   );
+
+  // A Willow subspace key (atomic-server claude/plugin-willow-host).
+  for (const key of keys) {
+    if (!key.willow) continue;
+    if (key.alg !== 'ed25519')
+      throw new Error(
+        `key \`${key.name}\`: a Willow subspace key must be ed25519`,
+      );
+    const configKey = v =>
+      v.startsWith('config:') &&
+      /^[A-Za-z0-9_.-]{1,128}$/.test(v.slice('config:'.length));
+    const hexBytes = v => /^(?:[0-9a-fA-F]{2})*$/.test(v);
+    const namespaceOk =
+      configKey(key.willow.namespace) ||
+      (key.willow.namespace.length === 64 && hexBytes(key.willow.namespace));
+    const prefix = key.willow.pathPrefix;
+    const prefixOk =
+      configKey(prefix) || prefix === '' || prefix.split('/').every(hexBytes);
+
+    if (!namespaceOk || !prefixOk)
+      throw new Error(
+        `key \`${key.name}\`: willow.namespace must be \`config:<key>\` or 64 hex characters, and willow.pathPrefix \`config:<key>\` or hex components joined by \`/\``,
+      );
+  }
   uniqueNames(
     tokens.map(t => t.name),
     'token names',
@@ -524,7 +559,11 @@ export function httpGate(http) {
     add(`well-known \`${claim.name}\``, 'read-only');
   for (const target of http?.writeTargets ?? [])
     add(`write target \`${target.id}\``, 'read-write');
-  for (const key of http?.keys ?? []) add(`key \`${key.name}\``, 'read-write');
+  for (const key of http?.keys ?? [])
+    add(
+      key.willow ? `Willow signing key \`${key.name}\`` : `key \`${key.name}\``,
+      'read-write',
+    );
   for (const token of http?.tokens ?? [])
     add(`token store \`${token.name}\``, 'read-write');
   const deliveries = [
