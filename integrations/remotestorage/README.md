@@ -132,10 +132,14 @@ Declared, not measured in production:
 | `authOptional`: public reads and bearer reads on one route                                  | no                                     | no                                       | **yes**                            |
 | `{*rest}` matching a trailing slash (folders, `/storage/`)                                  | no                                     | no                                       | **yes**                            |
 | `Location` to the approved client after `issue({ code })`                                   | no                                     | no                                       | **yes**                            |
+| a handler's `access-control-expose-headers` reaching the browser (apps read `ETag`)         | no                                     | no                                       | **yes**                            |
 
-Without the last three rows the manifest does not validate (`authOptional`
-is an unknown field), and even without it folders could not be listed and
-the token could not be handed back to the app.
+Without the last four rows the manifest does not validate (`authOptional`
+is an unknown field); folders could not be listed, the token could not be
+handed back to the app, and a browser app could not read revisions.
+Verified end to end at `claude/plugin-remotestorage-host` `ed1f03d76`
+(candidate14 plus four commits); the other columns are from reading the
+source at those commits, not from running this plugin there.
 
 ## Validation
 
@@ -158,15 +162,10 @@ ATOMIC_SERVER_ROUTES_BINARY=/path/to/that/target/e2e/atomic-server \
   store's review dialog, then drives **remotestorage.js 2.0.0-beta.10**
   (npm `remotestoragejs`, pinned in `e2e/package.json`) from another origin
   through discovery, the host's consent page (Allow), and its own
-  `storeFile`/`getFile`/`getListing`/`remove`, a binary document included.
-  Then plain `fetch` checks public and private reads, scope refusals, `304`
+  `storeFile`/`getFile`/`getListing`/`remove`, a binary document included
+  (remotestorage.js 2.0.0-beta.10 hands a binary document back as a decoded
+  string, because its binary-or-text check tests an `ArrayBuffer` as a
+  string; the spec checks the exact bytes with `fetch`). Then plain `fetch` checks public and private reads, scope refusals, `304`
   and `412`s, and that the documents are Files with blobs and route
   provenance under the configured folder. `e2e/import.spec.ts` runs the text
   importer through `/plugin-run` with real approval and persistence.
-
-`verify-host.mjs` runs a checkout's own `validateManifest` and `parseVerdict`
-on this manifest and an import verdict:
-
-```sh
-node --experimental-strip-types integrations/remotestorage/verify-host.mjs /path/to/atomic-server
-```

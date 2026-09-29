@@ -35,7 +35,7 @@
         "integrations/remotestorage/e2e/server.spec.ts",
         "integrations/remotestorage/e2e/import.spec.ts"
       ],
-      "note": "A remoteStorage server (draft-dejong-remotestorage-22) on the installation-origin mount. The e2e runs atomic-server built with the plugin-routes feature at --plugin-routes read-write: server.spec.ts installs the unchanged bundle through the store's review dialog and drives remotestorage.js (npm remotestoragejs, pinned in e2e/package.json) through WebFinger, the host consent page and the storage API; import.spec.ts runs the reviewed text importer through /plugin-run. Needs a host with authOptional bearer routes, trailing-slash {*rest} matches and redirects to a consented client (atomic-server branch claude/plugin-remotestorage-host, on candidate14); the node tier needs no server."
+      "note": "A remoteStorage server (draft-dejong-remotestorage-22) on the installation-origin mount. The e2e runs atomic-server built with the plugin-routes feature at --plugin-routes read-write: server.spec.ts installs the unchanged bundle through the store's review dialog and drives remotestorage.js (npm remotestoragejs, pinned in e2e/package.json) through WebFinger, the host consent page and the storage API; import.spec.ts runs the reviewed text importer through /plugin-run. Needs a host with authOptional bearer routes, trailing-slash {*rest} matches redirects to a consented client and handler CORS expose headers (atomic-server branch claude/plugin-remotestorage-host, on candidate14); the node tier needs no server."
     },
     {
       "id": "issue-tracker",
