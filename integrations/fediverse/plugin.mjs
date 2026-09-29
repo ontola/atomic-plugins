@@ -49,6 +49,7 @@ const MIME = 'application/activity+json';
 const LD = `application/ld+json; profile="${AS}"`;
 const JRD = 'application/jrd+json';
 const SCHEMA = 'http://nodeinfo.diaspora.software/ns/schema/2.1';
+
 export const VERSION = '0.2.0';
 
 /** Limits, all exact. */
@@ -142,8 +143,8 @@ function resourceUrl(c, subject) {
     : subject;
 }
 
-export function html(text) {
-  return text
+export function html(value) {
+  return value
     .replace(
       /[&<>"']/g,
       ch =>
@@ -170,8 +171,7 @@ export function text(markup) {
     .replace(/<[^>]*>/g, '')
     .replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos|#39);/gi, (_, e) => {
       const lower = e.toLowerCase();
-      if (lower.startsWith('#x'))
-        return safeChar(parseInt(lower.slice(2), 16));
+      if (lower.startsWith('#x')) return safeChar(parseInt(lower.slice(2), 16));
       if (lower.startsWith('#')) return safeChar(parseInt(lower.slice(1), 10));
 
       return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[lower];
@@ -211,6 +211,7 @@ export function config(ctx) {
     parents[key] = localSubject(c[key]);
     if (!parents[key]) throw new Error(`Invalid ${key} configuration`);
   }
+
   if (!origin || !slug(c.username))
     throw new Error('Invalid actor configuration');
   const publishers = c.publishers ?? [];
@@ -268,7 +269,9 @@ function classes(row) {
 export function postIdentity(subject, row) {
   const localId = row[P.localId];
   const stamped =
-    typeof localId === 'string' ? /^([0-9]{13})-[a-z0-9]{1,24}$/.exec(localId) : null;
+    typeof localId === 'string'
+      ? /^([0-9]{13})-[a-z0-9]{1,24}$/.exec(localId)
+      : null;
   const created = row[P.createdAt];
   const ms = stamped
     ? Number(stamped[1])
@@ -453,7 +456,9 @@ function actorDocument(ctx, c, source) {
     type: 'Service',
     preferredUsername: c.username,
     name: source[P.name],
-    summary: validText(source[P.description]) ? html(source[P.description]) : '',
+    summary: validText(source[P.description])
+      ? html(source[P.description])
+      : '',
     url: resourceUrl(c, c.profile),
     inbox: `${c.origin}/ap/inbox`,
     outbox: `${c.origin}/ap/outbox`,
@@ -651,6 +656,7 @@ function outboxPost(ctx, c, request) {
   } catch {
     return problem(400, 'The body is not JSON');
   }
+
   const object = body?.type === 'Create' ? body.object : body;
   if (
     !object ||
@@ -861,7 +867,7 @@ function remove(ctx, c, activity) {
   };
 }
 
-function inbox(ctx, c, request) {
+function receive(ctx, c, request) {
   let activity;
 
   try {
@@ -869,6 +875,7 @@ function inbox(ctx, c, request) {
   } catch {
     return problem(400, 'The body is not JSON');
   }
+
   if (
     !activity ||
     typeof activity !== 'object' ||
@@ -884,6 +891,7 @@ function inbox(ctx, c, request) {
   switch (activity.type) {
     case 'Follow':
       return follow(ctx, c, request, activity);
+
     case 'Undo': {
       const undone = activity.object;
       if (
@@ -897,6 +905,7 @@ function inbox(ctx, c, request) {
 
       return accepted('only an Undo of a Follow is handled');
     }
+
     case 'Create':
       return create(ctx, c, activity);
     case 'Delete':
@@ -924,9 +933,7 @@ function matchesTag(value, tag, weak) {
 /** Conditional GET/HEAD: a strong SHA-256 ETag over type and body. */
 function conditional(request, response) {
   const tag =
-    '"' +
-    sha256(response.headers['content-type'] + '\n' + response.body) +
-    '"';
+    '"' + sha256(response.headers['content-type'] + '\n' + response.body) + '"';
   response.headers.etag = tag;
 
   try {
@@ -955,7 +962,7 @@ export function handle(ctx, request) {
 
   try {
     if (method === 'POST' && request.path === '/ap/inbox')
-      return inbox(ctx, c, request);
+      return receive(ctx, c, request);
     if (method === 'POST' && request.path === '/ap/outbox')
       return outboxPost(ctx, c, request);
     if (method !== 'GET' && method !== 'HEAD')

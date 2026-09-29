@@ -113,19 +113,19 @@ function json(result, status = 200) {
   return JSON.parse(response.body);
 }
 
-const followerRow = (inbox = bobInbox, name = bob) => ({
+const followerRow = (inboxUrl = bobInbox, name = bob) => ({
   [P.isA]: [C.bookmark],
   [P.parent]: followersFolder,
   [P.name]: name,
-  [P.url]: inbox,
+  [P.url]: inboxUrl,
 });
 
-const signedBy = (owner, inbox = bobInbox) => ({
+const signedBy = (owner, sharedInbox = bobInbox) => ({
   keyId: `${owner}#main-key`,
   owner,
   scheme: 'draft-cavage-12',
   alg: 'rsa-v1_5-sha256',
-  actor: { id: owner, inbox: `${owner}/inbox`, sharedInbox: inbox },
+  actor: { id: owner, inbox: `${owner}/inbox`, sharedInbox },
 });
 
 function inbox(ctx, activity, caller = signedBy(activity.actor)) {
@@ -201,17 +201,14 @@ test('posts project only selected fields, escaped, newest first', () => {
     handle(ctx, request('GET', '/ap/activities/1789000000000-abc')),
   );
   assert.equal(activity.object.id, object.id);
-  assert.equal(
-    handle(ctx, request('GET', '/ap/objects/missing')).status,
-    404,
-  );
+  assert.equal(handle(ctx, request('GET', '/ap/objects/missing')).status, 404);
 });
 
 test('post identity: stamped ids carry their time exactly; others need createdAt', () => {
-  assert.deepEqual(
-    postIdentity('x', { [P.localId]: '1790000000123-k9' }),
-    { id: '1790000000123-k9', published: '2026-09-21T14:13:20.123Z' },
-  );
+  assert.deepEqual(postIdentity('x', { [P.localId]: '1790000000123-k9' }), {
+    id: '1790000000123-k9',
+    published: '2026-09-21T14:13:20.123Z',
+  });
   assert.equal(postIdentity('x', { [P.localId]: 'slug' }), undefined);
   assert.equal(
     postIdentity('x', { [P.localId]: 'slug', [P.createdAt]: 1 }).id,
@@ -243,7 +240,10 @@ test('WebFinger answers only for this account, with rel filtering', () => {
     aliases: [actor],
     links: [{ rel: 'self', type: 'application/activity+json', href: actor }],
   });
-  assert.equal(json(q({ resource: actor })).subject, 'acct:alice@alice.example');
+  assert.equal(
+    json(q({ resource: actor })).subject,
+    'acct:alice@alice.example',
+  );
   assert.deepEqual(
     json(q({ resource: 'acct:alice@alice.example', rel: 'other' })).links,
     [],
@@ -255,7 +255,10 @@ test('WebFinger answers only for this account, with rel filtering', () => {
 test('NodeInfo says activitypub and counts public posts', () => {
   const { ctx } = host();
   const links = json(
-    handle(ctx, request('GET', '/.well-known/nodeinfo', { wellKnown: 'nodeinfo' })),
+    handle(
+      ctx,
+      request('GET', '/.well-known/nodeinfo', { wellKnown: 'nodeinfo' }),
+    ),
   );
   assert.equal(links.links[0].href, `${origin}/nodeinfo/2.1`);
   const info = json(handle(ctx, request('GET', '/nodeinfo/2.1')));
@@ -266,13 +269,18 @@ test('NodeInfo says activitypub and counts public posts', () => {
 
 test('content negotiation, HEAD and conditional requests', () => {
   const { ctx } = host();
-  assert.equal(negotiate('application/activity+json'), 'application/activity+json');
+  assert.equal(
+    negotiate('application/activity+json'),
+    'application/activity+json',
+  );
   assert.match(negotiate('application/ld+json; profile="x"'), /ld\+json/);
   assert.equal(negotiate('text/html'), undefined);
   assert.equal(negotiate('*/*;q=0'), undefined);
   assert.equal(
-    handle(ctx, request('GET', '/ap/actor', { headers: { accept: 'text/html' } }))
-      .status,
+    handle(
+      ctx,
+      request('GET', '/ap/actor', { headers: { accept: 'text/html' } }),
+    ).status,
     406,
   );
   const got = handle(ctx, request('GET', '/ap/actor'));
@@ -281,22 +289,36 @@ test('content negotiation, HEAD and conditional requests', () => {
   assert.equal(head.body, '');
   assert.equal(head.headers.etag, got.headers.etag);
   assert.equal(
-    handle(ctx, request('GET', '/ap/actor', { headers: { 'if-none-match': got.headers.etag } })).status,
+    handle(
+      ctx,
+      request('GET', '/ap/actor', {
+        headers: { 'if-none-match': got.headers.etag },
+      }),
+    ).status,
     304,
   );
   assert.equal(
-    handle(ctx, request('GET', '/ap/actor', { headers: { 'if-match': '"nope"' } })).status,
+    handle(
+      ctx,
+      request('GET', '/ap/actor', { headers: { 'if-match': '"nope"' } }),
+    ).status,
     412,
   );
 });
 
 test('misconfiguration and an unreadable profile fail closed', () => {
   assert.equal(
-    handle(host({}, { origin: 'http://alice.example' }).ctx, request('GET', '/ap/actor')).status,
+    handle(
+      host({}, { origin: 'http://alice.example' }).ctx,
+      request('GET', '/ap/actor'),
+    ).status,
     503,
   );
   assert.equal(
-    handle(host({}, { posts: 'not a subject' }).ctx, request('GET', '/ap/actor')).status,
+    handle(
+      host({}, { posts: 'not a subject' }).ctx,
+      request('GET', '/ap/actor'),
+    ).status,
     503,
   );
   const { ctx, data } = host();
@@ -304,7 +326,10 @@ test('misconfiguration and an unreadable profile fail closed', () => {
   assert.equal(handle(ctx, request('GET', '/ap/actor')).status, 404);
   // Development origins on localhost may be HTTP.
   assert.equal(
-    handle(host({}, { origin: 'http://fedi.localhost:19113' }).ctx, request('GET', '/ap/actor')).status,
+    handle(
+      host({}, { origin: 'http://fedi.localhost:19113' }).ctx,
+      request('GET', '/ap/actor'),
+    ).status,
     200,
   );
 });
@@ -315,10 +340,19 @@ test('a publisher posts a Note: stored under posts, Create queued per shared inb
   const { ctx } = host({
     'https://alice.example/f1': followerRow(),
     // Two followers on one server share its inbox: one delivery.
-    'https://alice.example/f2': followerRow(bobInbox, 'https://remote.example/users/carol'),
-    'https://alice.example/f3': followerRow('https://other.example/inbox', 'https://other.example/u/dan'),
+    'https://alice.example/f2': followerRow(
+      bobInbox,
+      'https://remote.example/users/carol',
+    ),
+    'https://alice.example/f3': followerRow(
+      'https://other.example/inbox',
+      'https://other.example/u/dan',
+    ),
     // Not deliverable by the manifest's operation: skipped.
-    'https://alice.example/f4': followerRow('https://gts.example/users/eve/inbox', 'https://gts.example/users/eve'),
+    'https://alice.example/f4': followerRow(
+      'https://gts.example/users/eve/inbox',
+      'https://gts.example/users/eve',
+    ),
   });
   const verdict = handle(
     ctx,
@@ -359,18 +393,28 @@ test('a publisher posts a Note: stored under posts, Create queued per shared inb
 
 test('only publishers post, only Notes, and only into a public folder', () => {
   const post = (ctx, body, caller = { agent: publisher }) =>
-    handle(ctx, request('POST', '/ap/outbox', { caller, body: JSON.stringify(body) }));
+    handle(
+      ctx,
+      request('POST', '/ap/outbox', { caller, body: JSON.stringify(body) }),
+    );
   const note = { type: 'Note', content: 'x' };
-  assert.equal(post(host().ctx, note, { agent: 'atomic:agent:Someone' }).status, 403);
+  assert.equal(
+    post(host().ctx, note, { agent: 'atomic:agent:Someone' }).status,
+    403,
+  );
   assert.equal(post(host().ctx, note, null).status, 403);
   // did:ad: spellings of a publisher are the same agent.
   assert.equal(
-    post(host().ctx, note, { agent: 'did:ad:agent:AAAAPublisherKeyForTests' }).response.status,
+    post(host().ctx, note, { agent: 'did:ad:agent:AAAAPublisherKeyForTests' })
+      .response.status,
     201,
   );
   assert.equal(post(host().ctx, { type: 'Article', content: 'x' }).status, 400);
   assert.equal(post(host().ctx, { type: 'Note', content: '  ' }).status, 400);
-  assert.equal(post(host().ctx, { type: 'Note', content: 'x'.repeat(8193) }).status, 400);
+  assert.equal(
+    post(host().ctx, { type: 'Note', content: 'x'.repeat(8193) }).status,
+    400,
+  );
   const { ctx, data } = host();
   data[posts] = {};
   assert.equal(post(ctx, note).status, 409);
@@ -415,28 +459,54 @@ test('Follow is accepted automatically: follower stored, signed Accept queued', 
 
 test('a repeated Follow is accepted again without a second follower', () => {
   const { ctx } = host({ 'https://alice.example/f1': followerRow() });
-  const verdict = inbox(ctx, { ...follow, id: 'https://remote.example/follows/2' });
+  const verdict = inbox(ctx, {
+    ...follow,
+    id: 'https://remote.example/follows/2',
+  });
   assert.deepEqual(verdict.intents, []);
-  assert.equal(verdict.enqueue[0].idempotencyKey, 'accept:https://remote.example/follows/2');
+  assert.equal(
+    verdict.enqueue[0].idempotencyKey,
+    'accept:https://remote.example/follows/2',
+  );
 });
 
 test('the activity must be from the signer, and its inbox must be deliverable', () => {
   const { ctx } = host();
-  assert.equal(inbox(ctx, follow, signedBy('https://evil.example/users/mallory')).status, 401);
+  assert.equal(
+    inbox(ctx, follow, signedBy('https://evil.example/users/mallory')).status,
+    401,
+  );
   assert.equal(inbox(ctx, follow, null).status, 401);
   // No verified actor document: no inbox to answer.
-  assert.equal(inbox(ctx, follow, { ...signedBy(bob), actor: undefined }).status, 422);
+  assert.equal(
+    inbox(ctx, follow, { ...signedBy(bob), actor: undefined }).status,
+    422,
+  );
   // The host verified another actor's document than the sender's.
   assert.equal(
-    inbox(ctx, follow, { ...signedBy(bob), actor: { id: 'https://x.example/a', inbox: bobInbox } }).status,
+    inbox(ctx, follow, {
+      ...signedBy(bob),
+      actor: { id: 'https://x.example/a', inbox: bobInbox },
+    }).status,
     422,
   );
   assert.equal(
-    inbox(ctx, follow, signedBy(bob, 'https://remote.example/users/bob/inbox')).status,
+    inbox(ctx, follow, signedBy(bob, 'https://remote.example/users/bob/inbox'))
+      .status,
     422,
   );
-  assert.equal(inbox(ctx, { ...follow, object: 'https://else.example/actor' }).response?.status ?? 202, 202);
-  assert.equal(handle(ctx, request('POST', '/ap/inbox', { body: '{', caller: signedBy(bob) })).status, 400);
+  assert.equal(
+    inbox(ctx, { ...follow, object: 'https://else.example/actor' }).response
+      ?.status ?? 202,
+    202,
+  );
+  assert.equal(
+    handle(
+      ctx,
+      request('POST', '/ap/inbox', { body: '{', caller: signedBy(bob) }),
+    ).status,
+    400,
+  );
   assert.equal(inbox(ctx, { type: 'Follow', actor: bob }).status, 400);
 });
 
@@ -448,14 +518,18 @@ test('Undo(Follow) and Delete of the actor remove the follower', () => {
     actor: bob,
     object: follow,
   });
-  assert.deepEqual(undo.intents, [{ op: 'destroy', subject: 'https://alice.example/f1' }]);
+  assert.deepEqual(undo.intents, [
+    { op: 'destroy', subject: 'https://alice.example/f1' },
+  ]);
   const gone = inbox(host(rows).ctx, {
     id: 'https://remote.example/delete/1',
     type: 'Delete',
     actor: bob,
     object: bob,
   });
-  assert.deepEqual(gone.intents, [{ op: 'destroy', subject: 'https://alice.example/f1' }]);
+  assert.deepEqual(gone.intents, [
+    { op: 'destroy', subject: 'https://alice.example/f1' },
+  ]);
   // Another actor cannot undo bob's follow: their Undo removes nothing of bob's.
   const carol = 'https://remote.example/users/carol';
   const other = inbox(host(rows).ctx, {
@@ -511,18 +585,35 @@ test('replies: unrelated, duplicate, forged and deleted', () => {
       [P.url]: 'https://remote.example/notes/9',
     },
   };
-  assert.equal(inbox(host().ctx, replyTo('https://elsewhere.example/n/1')).intents, undefined);
-  assert.equal(inbox(host().ctx, replyTo(`${origin}/ap/objects/unknown`)).intents, undefined);
   assert.equal(
-    inbox(host(stored).ctx, replyTo(`${origin}/ap/objects/1789000000000-abc`)).intents,
+    inbox(host().ctx, replyTo('https://elsewhere.example/n/1')).intents,
     undefined,
   );
   assert.equal(
-    inbox(host().ctx, replyTo(`${origin}/ap/objects/1789000000000-abc`, { attributedTo: 'https://remote.example/users/eve' })).status,
+    inbox(host().ctx, replyTo(`${origin}/ap/objects/unknown`)).intents,
+    undefined,
+  );
+  assert.equal(
+    inbox(host(stored).ctx, replyTo(`${origin}/ap/objects/1789000000000-abc`))
+      .intents,
+    undefined,
+  );
+  assert.equal(
+    inbox(
+      host().ctx,
+      replyTo(`${origin}/ap/objects/1789000000000-abc`, {
+        attributedTo: 'https://remote.example/users/eve',
+      }),
+    ).status,
     400,
   );
   assert.equal(
-    inbox(host().ctx, replyTo(`${origin}/ap/objects/1789000000000-abc`, { id: 'https://elsewhere.example/n/9' })).status,
+    inbox(
+      host().ctx,
+      replyTo(`${origin}/ap/objects/1789000000000-abc`, {
+        id: 'https://elsewhere.example/n/9',
+      }),
+    ).status,
     400,
   );
   const deleted = inbox(host(stored).ctx, {
@@ -531,18 +622,29 @@ test('replies: unrelated, duplicate, forged and deleted', () => {
     actor: bob,
     object: { id: 'https://remote.example/notes/9', type: 'Tombstone' },
   });
-  assert.deepEqual(deleted.intents, [{ op: 'destroy', subject: 'https://alice.example/r1' }]);
-  const notTheirs = inbox(host(stored).ctx, {
-    id: 'https://remote.example/delete/10',
-    type: 'Delete',
-    actor: 'https://remote.example/users/eve',
-    object: 'https://remote.example/notes/9',
-  }, signedBy('https://remote.example/users/eve'));
+  assert.deepEqual(deleted.intents, [
+    { op: 'destroy', subject: 'https://alice.example/r1' },
+  ]);
+  const notTheirs = inbox(
+    host(stored).ctx,
+    {
+      id: 'https://remote.example/delete/10',
+      type: 'Delete',
+      actor: 'https://remote.example/users/eve',
+      object: 'https://remote.example/notes/9',
+    },
+    signedBy('https://remote.example/users/eve'),
+  );
   assert.deepEqual(notTheirs.intents, []);
 });
 
 test('other activity types are accepted and ignored', () => {
-  const r = inbox(host().ctx, { id: 'https://remote.example/l/1', type: 'Like', actor: bob, object: actor });
+  const r = inbox(host().ctx, {
+    id: 'https://remote.example/l/1',
+    type: 'Like',
+    actor: bob,
+    object: actor,
+  });
   assert.equal(r.status, 202);
   assert.equal(r.intents, undefined);
 });
@@ -550,7 +652,10 @@ test('other activity types are accepted and ignored', () => {
 // -- helpers ------------------------------------------------------------------------------------
 
 test('HTML to text drops markup and decodes entities', () => {
-  assert.equal(text('<p>a<br/>b</p><p>&lt;c&gt; &#65;&#x42; &#0;</p>'), 'a\nb\n<c> AB ');
+  assert.equal(
+    text('<p>a<br/>b</p><p>&lt;c&gt; &#65;&#x42; &#0;</p>'),
+    'a\nb\n<c> AB ',
+  );
 });
 
 test('deliverable inboxes: HTTPS /inbox only', () => {
@@ -570,21 +675,36 @@ test('non-route triggers do nothing', () => {
 // -- bundle ------------------------------------------------------------------------------------------
 
 test('plugin.js is the reproducible build of plugin.mjs and manifest.json', async () => {
-  const before = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-  execFileSync(process.execPath, [new URL('./build.mjs', import.meta.url).pathname]);
+  const before = await readFile(
+    new URL('./plugin.js', import.meta.url),
+    'utf8',
+  );
+  execFileSync(process.execPath, [
+    new URL('./build.mjs', import.meta.url).pathname,
+  ]);
   const after = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-  assert.equal(after, before, 'run node integrations/fediverse/build.mjs and commit plugin.js');
+  assert.equal(
+    after,
+    before,
+    'run node integrations/fediverse/build.mjs and commit plugin.js',
+  );
   const manifest = JSON.parse(
     await readFile(new URL('./manifest.json', import.meta.url), 'utf8'),
   );
   const routes = Object.fromEntries(manifest.http.routes.map(r => [r.id, r]));
   // Everything that writes or queues is authenticated by the host.
   for (const route of Object.values(routes))
-    if (route.writes || route.enqueues) assert.notEqual(route.auth, 'none', route.id);
+    if (route.writes || route.enqueues)
+      assert.notEqual(route.auth, 'none', route.id);
   assert.equal(routes.inbox.auth, 'http-signature');
   assert.equal(routes.publish.auth, 'atomic');
-  assert.deepEqual(manifest.operations.map(o => o.url), ['https://*/inbox']);
-  const mod = await import(new URL('./plugin.js', import.meta.url).href + '?bundle');
+  assert.deepEqual(
+    manifest.operations.map(o => o.url),
+    ['https://*/inbox'],
+  );
+  const mod = await import(
+    new URL('./plugin.js', import.meta.url).href + '?bundle'
+  );
   assert.deepEqual(mod.manifest, manifest);
   assert.equal(typeof mod.handle, 'function');
 });

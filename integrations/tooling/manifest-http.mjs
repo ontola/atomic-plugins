@@ -25,6 +25,7 @@ export const LEVELS = ['off', 'read-only', 'read-write'];
 export const MAX_ROUTES = 32;
 export const MAX_INLINE_BODY_BYTES = 1_048_576;
 export const MAX_TIMEOUT_MS = 30_000;
+export const MAX_WELL_KNOWN_RELS = 16;
 export const HOST_FEATURE_UNAVAILABLE = 'host-feature-unavailable';
 
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -267,8 +268,12 @@ export function validateHttp(raw, context) {
 
     if (claim.match !== undefined) {
       const m = object(claim.match, 'match');
-      known(m, ['resourcePrefix']);
-      match = { resourcePrefix: text(m.resourcePrefix, 'resourcePrefix') };
+      known(m, ['resourcePrefix', 'rels']);
+      const rels = texts(m.rels, 'match rels');
+      match = {
+        resourcePrefix: text(m.resourcePrefix, 'resourcePrefix'),
+        ...(rels.length > 0 ? { rels } : {}),
+      };
     }
 
     return {
@@ -426,6 +431,21 @@ export function validateHttp(raw, context) {
     if (hasMatch !== (claim.kind === 'shared'))
       throw new Error(
         'shared well-known claims need match.resourcePrefix; exclusive ones take none',
+      );
+    // `match.rels` (claude/plugin-fediverse-host): the link relations a
+    // webfinger claim answers for, so claims for the same accounts coexist.
+    const rels = claim.match?.rels ?? [];
+    if (
+      rels.length > MAX_WELL_KNOWN_RELS ||
+      new Set(rels).size !== rels.length ||
+      rels.some(
+        rel =>
+          rel.length === 0 || rel.length > 512 || !/^[\x21-\x7e]+$/.test(rel),
+      ) ||
+      (rels.length > 0 && claim.name !== 'webfinger')
+    )
+      throw new Error(
+        `match.rels must be at most ${MAX_WELL_KNOWN_RELS} unique link relations without spaces, on a webfinger claim`,
       );
     if (!routes.some(r => r.id === claim.route))
       throw new Error('well-known claims must name a declared route');

@@ -419,15 +419,10 @@ export async function bringUp({
       }),
     );
   } else {
-    start(
-      'atomic-server',
-      binary,
-      pluginRoutesArgs(pluginRoutes, ports),
-      {
-        ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
-        ...extraServerEnv,
-      },
-    );
+    start('atomic-server', binary, pluginRoutesArgs(pluginRoutes, ports), {
+      ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
+      ...extraServerEnv,
+    });
   }
 
   // MOCK_FRONTEND_ORIGIN must match wherever the browser actually loads the

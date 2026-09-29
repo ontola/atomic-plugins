@@ -10,6 +10,12 @@
       "http-refusals.json",
       "v3-*.json"
     ],
+    "http-index.json entries and files added by atomic-server branch claude/plugin-fediverse-host (WebFinger match.rels), not yet in a pin": [
+      "http-index.json",
+      "v3-webfinger-rels.json",
+      "v3-webfinger-rels-duplicate.json",
+      "v3-rels-not-webfinger.json"
+    ],
     "unchanged by #1732, copied from the pin 11264e83e18ca59e0e0bd696eef6c8ac7ced5f68": [
       "v2-js-extension.json",
       "v2-wasm-server-extension.json"

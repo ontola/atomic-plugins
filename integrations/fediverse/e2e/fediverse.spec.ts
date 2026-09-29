@@ -11,7 +11,8 @@
  *
  * 1. The plugin (../plugin.js) is published, pinned and installed through the
  *    store's review dialog with its config and route-write approval, on the
- *    `drive-host` mount of `fedi.localhost`, bound to the test's drive.
+ *    `drive-host` mount of a `fedi-<run>.localhost` host bound to the test's
+ *    drive.
  * 2. Discovery: WebFinger and NodeInfo through `/.well-known/`, and the
  *    actor document with the host-held public key.
  * 3. The peer follows: a draft-cavage signed Follow is verified by the host
@@ -51,7 +52,9 @@ import { atomicRequest, startPeer, waitFor, type Peer } from './peer';
 const source = readFileSync(resolve(__dirname, '../plugin.js'), 'utf8');
 const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
 const PORT = new URL(SERVER_URL).port;
-const HOST = `fedi.localhost:${PORT}`;
+// A host of its own per run: a host stays bound to the drive of the run that
+// bound it, and a local rerun reuses the lane's store (CI's is always fresh).
+const HOST = `fedi-${Date.now().toString(36)}.localhost:${PORT}`;
 const ORIGIN = `http://${HOST}`;
 const ACTOR = `${ORIGIN}/ap/actor`;
 const ACCOUNT = `acct:news@${HOST}`;
@@ -282,9 +285,9 @@ test.describe('fediverse', () => {
           })
         ).body,
       );
-      expect(page1.orderedItems.map((a: { object: { id: string } }) => a.object.id)).toEqual([
-        objectId,
-      ]);
+      expect(
+        page1.orderedItems.map((a: { object: { id: string } }) => a.object.id),
+      ).toEqual([objectId]);
     });
 
     await test.step('the peer replies; the reply is stored in the drive', async () => {
@@ -349,10 +352,11 @@ test.describe('fediverse', () => {
 /** The profile and the three folders, under the test's drive. */
 async function createFolders(page: Page) {
   return page.evaluate(
-    async ({ P, FOLDER, PLAIN_TEXT, PUBLIC_AGENT }) => {
+    async ({ p, folderClass, plainTextClass, publicAgent }) => {
       const store = window.store!;
       const drive = store.getDrive();
       if (!drive) throw new Error('no drive');
+
       const make = async (
         isA: string,
         propVals: Record<string, unknown>,
@@ -369,24 +373,29 @@ async function createFolders(page: Page) {
 
       return {
         drive,
-        profile: await make(PLAIN_TEXT, {
-          [P.name]: 'Atomic news',
-          [P.description]: 'Posts from an Atomic drive',
-          [P.read]: [PUBLIC_AGENT],
+        profile: await make(plainTextClass, {
+          [p.name]: 'Atomic news',
+          [p.description]: 'Posts from an Atomic drive',
+          [p.read]: [publicAgent],
         }),
-        posts: await make(FOLDER, {
-          [P.name]: 'Fediverse posts',
-          [P.read]: [PUBLIC_AGENT],
+        posts: await make(folderClass, {
+          [p.name]: 'Fediverse posts',
+          [p.read]: [publicAgent],
         }),
-        followers: await make(FOLDER, { [P.name]: 'Fediverse followers' }),
-        replies: await make(FOLDER, { [P.name]: 'Fediverse replies' }),
+        followers: await make(folderClass, { [p.name]: 'Fediverse followers' }),
+        replies: await make(folderClass, { [p.name]: 'Fediverse replies' }),
       };
     },
-    { P, FOLDER, PLAIN_TEXT, PUBLIC_AGENT },
+    {
+      p: P,
+      folderClass: FOLDER,
+      plainTextClass: PLAIN_TEXT,
+      publicAgent: PUBLIC_AGENT,
+    },
   );
 }
 
-/** Maps `fedi.localhost` to the drive (`/bind-drive`), as its owner. */
+/** Maps the run's host to the drive (`/bind-drive`), as its owner. */
 async function bindHost(agent: Agent, drive: string) {
   const bound = await signedPost(agent, `${ORIGIN}/bind-drive`, {
     'https://atomicdata.dev/properties/initialDrive': drive,
@@ -446,11 +455,17 @@ async function openReview(page: Page, releaseId: string) {
  * the full URL and the body; unsigned without an agent. Drive-host URLs go
  * through {@link atomicRequest}.
  */
-async function signedPost(agent: Agent | undefined, url: string, value: unknown) {
+async function signedPost(
+  agent: Agent | undefined,
+  url: string,
+  value: unknown,
+) {
   const body = JSON.stringify(value);
   const headers = {
     'content-type': 'application/json',
-    ...(agent ? await signRequest(url, agent, {}, { method: 'POST', body }) : {}),
+    ...(agent
+      ? await signRequest(url, agent, {}, { method: 'POST', body })
+      : {}),
   } as Record<string, string>;
 
   return atomicRequest(url, { method: 'POST', headers, body });
@@ -459,21 +474,21 @@ async function signedPost(agent: Agent | undefined, url: string, value: unknown)
 /** A child of `parent` whose description contains `text`, as its propvals. */
 async function childNamed(page: Page, parent: string, text: string) {
   const found = await page.evaluate(
-    async ({ parent, text }) => {
+    async ({ under, needle }) => {
       const store = window.store!;
 
-      for (const hit of await store.search(text, { parents: parent })) {
+      for (const hit of await store.search(needle, { parents: under })) {
         const row = await store.fetchResourceFromServer(hit);
         const values = row.getPropVals() as Record<string, unknown>;
         const description =
           values['https://atomicdata.dev/properties/description'];
-        if (String(description ?? '').includes(text))
+        if (String(description ?? '').includes(needle))
           return JSON.parse(JSON.stringify(values)) as Record<string, unknown>;
       }
 
       return undefined;
     },
-    { parent, text },
+    { under: parent, needle: text },
   );
 
   return (found ?? undefined) as Record<string, unknown> | undefined;

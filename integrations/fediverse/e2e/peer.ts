@@ -70,8 +70,16 @@ export interface Peer {
  */
 export function atomicRequest(
   url: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
-): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  init: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  } = {},
+): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}> {
   const target = new URL(url);
 
   return new Promise((resolve, reject) => {
@@ -129,10 +137,63 @@ function issuedCertificate(repoRoot: string) {
       at('leaf.cnf'),
       'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1\n',
     );
-    run(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', at('ca.key'), '-out', at('ca.csr'), '-subj', '/CN=fediverse e2e test CA']);
-    run(['x509', '-req', '-in', at('ca.csr'), '-signkey', at('ca.key'), '-out', at('ca.pem'), '-days', '1', '-extfile', at('ca.cnf')]);
-    run(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', at('key.pem'), '-out', at('leaf.csr'), '-subj', '/CN=localhost']);
-    run(['x509', '-req', '-in', at('leaf.csr'), '-CA', at('ca.pem'), '-CAkey', at('ca.key'), '-CAcreateserial', '-out', at('cert.pem'), '-days', '1', '-extfile', at('leaf.cnf')]);
+    run([
+      'req',
+      '-new',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      at('ca.key'),
+      '-out',
+      at('ca.csr'),
+      '-subj',
+      '/CN=fediverse e2e test CA',
+    ]);
+    run([
+      'x509',
+      '-req',
+      '-in',
+      at('ca.csr'),
+      '-signkey',
+      at('ca.key'),
+      '-out',
+      at('ca.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      at('ca.cnf'),
+    ]);
+    run([
+      'req',
+      '-new',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      at('key.pem'),
+      '-out',
+      at('leaf.csr'),
+      '-subj',
+      '/CN=localhost',
+    ]);
+    run([
+      'x509',
+      '-req',
+      '-in',
+      at('leaf.csr'),
+      '-CA',
+      at('ca.pem'),
+      '-CAkey',
+      at('ca.key'),
+      '-CAcreateserial',
+      '-out',
+      at('cert.pem'),
+      '-days',
+      '1',
+      '-extfile',
+      at('leaf.cnf'),
+    ]);
     const ca = join(repoRoot, PEER_CA_PATH);
     mkdirSync(dirname(ca), { recursive: true });
     writeFileSync(ca, readFileSync(at('ca.pem')));
@@ -206,6 +267,7 @@ export async function startPeer(repoRoot: string): Promise<Peer> {
     req.on('data', c => chunks.push(c));
     req.on('end', async () => {
       const body = Buffer.concat(chunks).toString('utf8');
+
       const send = (status: number, value?: unknown) => {
         res.writeHead(status, { 'content-type': 'application/activity+json' });
         res.end(value === undefined ? '' : JSON.stringify(value));
@@ -242,6 +304,7 @@ export async function startPeer(repoRoot: string): Promise<Peer> {
         } catch {
           return send(400);
         }
+
         const check = await verifyDelivery(req, body).catch(e => ({
           keyId: '',
           verified: false,
@@ -277,7 +340,13 @@ export async function startPeer(repoRoot: string): Promise<Peer> {
         digest: digestOf(body),
         'content-type': 'application/activity+json',
       };
-      const covered = ['(request-target)', 'host', 'date', 'digest', 'content-type'];
+      const covered = [
+        '(request-target)',
+        'host',
+        'date',
+        'digest',
+        'content-type',
+      ];
       const signed = covered
         .map(name =>
           name === '(request-target)'

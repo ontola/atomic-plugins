@@ -19,15 +19,15 @@ is a job in the host's durable delivery queue, signed by the host.
 
 ## What it does
 
-| Route (drive-host mount) | Auth | What |
-| --- | --- | --- |
-| `GET /.well-known/webfinger` | none | `acct:<username>@<host>` (or the actor URL) → the actor; `rel` filters links. Shared claim for `acct:` with `rels: ["self"]`. |
-| `GET /.well-known/nodeinfo`, `/nodeinfo/2.1` | none | NodeInfo 2.1, `protocols: ["activitypub"]`, the number of public posts. |
-| `GET /ap/actor` | none | A `Service` actor: name and summary from the profile resource, `inbox`, `outbox`, `followers`, and `publicKey` from the host-held `actor-key` (RSA-2048). |
-| `GET /ap/outbox`, `/ap/objects/{id}`, `/ap/activities/{id}` | none | Public posts under `config.posts`, as `Create` activities, 10 per page, newest first. |
-| `GET /ap/followers` | none (reads as the Installation) | An `OrderedCollection` with `totalItems` only: who follows is not published. |
-| `POST /ap/outbox` | `atomic` (a version 2 Atomic request signature) | A configured publisher posts a Note: stored as a `Message` under `config.posts`, and a `Create` queued for each follower's inbox. |
-| `POST /ap/inbox` | `http-signature`, verified by the host | Follow, Undo(Follow), Create(Note) replies, Delete. |
+| Route (drive-host mount)                                    | Auth                                            | What                                                                                                                                                      |
+| ----------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/webfinger`                                | none                                            | `acct:<username>@<host>` (or the actor URL) → the actor; `rel` filters links. Shared claim for `acct:` with `rels: ["self"]`.                             |
+| `GET /.well-known/nodeinfo`, `/nodeinfo/2.1`                | none                                            | NodeInfo 2.1, `protocols: ["activitypub"]`, the number of public posts.                                                                                   |
+| `GET /ap/actor`                                             | none                                            | A `Service` actor: name and summary from the profile resource, `inbox`, `outbox`, `followers`, and `publicKey` from the host-held `actor-key` (RSA-2048). |
+| `GET /ap/outbox`, `/ap/objects/{id}`, `/ap/activities/{id}` | none                                            | Public posts under `config.posts`, as `Create` activities, 10 per page, newest first.                                                                     |
+| `GET /ap/followers`                                         | none (reads as the Installation)                | An `OrderedCollection` with `totalItems` only: who follows is not published.                                                                              |
+| `POST /ap/outbox`                                           | `atomic` (a version 2 Atomic request signature) | A configured publisher posts a Note: stored as a `Message` under `config.posts`, and a `Create` queued for each follower's inbox.                         |
+| `POST /ap/inbox`                                            | `http-signature`, verified by the host          | Follow, Undo(Follow), Create(Note) replies, Delete.                                                                                                       |
 
 ### Inbox
 
@@ -137,7 +137,7 @@ branch `claude/plugin-fediverse-host`:
 
 - `auth: atomic` on routes (the publish route): a version 2 request
   signature over method, URL and body, each proof once; `request.caller =
-  { agent }`.
+{ agent }`.
 - `request.caller.actor` on `http-signature` routes: the signer's actor
   `id`, `inbox` and `endpoints.sharedInbox` from the document the host
   fetched to verify the key (same origin as the key only).
