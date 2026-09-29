@@ -2,7 +2,10 @@
 // turns speech into text with the browser's recognizer, sends turns to the
 // moderator (../moderator/server.mjs) and speaks its answers. Served at
 // /usertest/ on the test instance, so it shares the data-browser's origin
-// and can set the test catalog before opening the app.
+// and can set the test catalog before opening the app. The tester picks the
+// language at the top (i18n.js); switching changes this page, the speech
+// recognizer, the voice and the moderator's language, also mid-session.
+import { DEFAULT_LANG, LANGS, QUESTION, TEXT } from './i18n.js';
 
 const API = '/usertest/api';
 const CATALOG_URL = `https://catalog.${location.hostname.replace(/^plugins\./, '')}/catalog.json`;
@@ -11,8 +14,6 @@ const CATALOG_URL = `https://catalog.${location.hostname.replace(/^plugins\./, '
  * their words; the moderator answers [WAIT] when nothing needs saying. */
 const PAUSE_AFTER_QUESTION = 2000;
 const PAUSE_AFTER_SPEECH = 5000;
-const QUESTION =
-  /\b(how|what|where|why|which|who|when|can you|could you|should i|do i|is it|is there|are there)\b/i;
 /** Screenshots sent with a turn: at most this wide, as JPEG. */
 const SHOT_WIDTH = 1280;
 /** Ask what's happening after this much silence. */
@@ -30,7 +31,34 @@ function inviteCode() {
 }
 
 const code = inviteCode();
+
+/** Remembered per browser; `?lang=nl` (or nl-NL) in the link picks one. */
+function initialLang() {
+  const wanted = params.get('lang') ?? stored('usertest-lang');
+  const match = LANGS.find(l => wanted && [l.code, l.short].includes(wanted));
+
+  return match?.code ?? DEFAULT_LANG;
+}
+
+function stored(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage blocked: the choice is not remembered.
+  }
+
+  return undefined;
+}
+
+let lang = initialLang();
+const t = () => TEXT[lang];
+/** What the status line and the error line show, as keys into TEXT, so a
+ * language switch can redraw them. */
+let statusKey = 'starting';
+let errorText;
 let session;
+let recordingOn = false;
 let recognition;
 let recorder;
 let speaking = false;
@@ -60,42 +88,108 @@ function show(who, text, typed = false) {
   const p = document.createElement('p');
   if (who === 'me') p.className = 'me';
   p.textContent =
-    who === 'me' ? `${typed ? 'You (typed)' : 'You'}: ${text}` : text;
+    who === 'me' ? `${typed ? t().youTyped : t().you}: ${text}` : text;
   $('log').prepend(p);
 }
 
-function status(text) {
-  $('status').textContent = text;
+function status(key) {
+  statusKey = key;
+  $('status').textContent = t().status[key];
 }
 
-/** English only for now: in a Dutch trial (2026-09-28) the moderator switched
- * language on its own while the voice stayed on the one picked at the start. */
-const LANG = 'en-US';
-
-/** One voice for the whole session. Chrome fills getVoices() only after
- * `voiceschanged`, so without waiting the first line got the default voice
- * and later lines another one. */
-let voice;
-
-function pickVoice() {
-  const english = speechSynthesis
-    .getVoices()
-    .filter(v => v.lang.replace('_', '-') === LANG);
-
-  return (
-    english.find(v => /google/i.test(v.name)) ??
-    english.find(v => v.localService) ??
-    english[0]
-  );
+function showError(text) {
+  errorText = text;
+  $('error').textContent = text?.() ?? '';
+  $('error').hidden = !text;
 }
 
-function voiceReady() {
-  voice ??= pickVoice();
-  if (voice) return Promise.resolve();
+/** Puts every text on the page in the current language. */
+function applyTexts() {
+  const texts = t();
+  const { short } = LANGS.find(l => l.code === lang);
+  document.documentElement.lang = short;
+  document.title = texts.title;
+  for (const el of document.querySelectorAll('[data-text]'))
+    el.textContent = texts[el.dataset.text];
+  // Constants from i18n.js only.
+  for (const el of document.querySelectorAll('[data-placeholder]'))
+    el.placeholder = texts[el.dataset.placeholder];
+  for (const el of document.querySelectorAll('[data-html]'))
+    el.innerHTML = texts[el.dataset.html];
+  $('langs').setAttribute('aria-label', texts.languageLabel);
+  for (const button of $('langs').children)
+    button.setAttribute('aria-pressed', String(button.value === lang));
+  $('status').textContent = texts.status[statusKey];
+  $('rec').textContent = recordingOn ? texts.recording : '';
+  showError(errorText);
+}
+
+/** Switches everything to `code`: the page at once, the recognizer after a
+ * restart, the voice from the next line on (a line being spoken finishes in
+ * the old voice), and the moderator from its next turn. */
+function setLang(code) {
+  if (code === lang) return;
+  lang = code;
+  stored('usertest-lang', code);
+  applyTexts();
+
+  if (recognition) {
+    recognition.lang = lang;
+    // onend restarts it, now in the new language; words already recognized
+    // stay in `heard`.
+    recognition.abort();
+  }
+
+  if (session) {
+    checkVoice();
+    api(`/sessions/${session}/lang`, {
+      method: 'POST',
+      body: JSON.stringify({ lang }),
+    }).catch(error => console.error(error));
+  }
+}
+
+function renderLangs() {
+  for (const { code: value, name, flag } of LANGS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.value = value;
+    button.textContent = `${flag} ${name}`;
+    button.addEventListener('click', () => setLang(value));
+    $('langs').append(button);
+  }
+}
+
+/** One voice per language for the whole session. Chrome fills getVoices()
+ * only after `voiceschanged`, so without waiting the first line got the
+ * default voice and later lines another one. */
+const voices = new Map();
+
+function pickVoice(code) {
+  const all = speechSynthesis.getVoices();
+  const norm = v => v.lang.replace('_', '-');
+  const exact = all.filter(v => norm(v) === code);
+  // nl-BE rather than an English voice reading Dutch.
+  const near = all.filter(v => norm(v).split('-')[0] === code.split('-')[0]);
+
+  for (const list of [exact, near]) {
+    const found =
+      list.find(v => /google/i.test(v.name)) ??
+      list.find(v => v.localService) ??
+      list[0];
+    if (found) return found;
+  }
+
+  return undefined;
+}
+
+function voiceReady(code) {
+  if (!voices.get(code)) voices.set(code, pickVoice(code));
+  if (voices.get(code)) return Promise.resolve();
 
   return new Promise(resolve => {
     const done = () => {
-      voice ??= pickVoice();
+      if (!voices.get(code)) voices.set(code, pickVoice(code));
       resolve();
     };
 
@@ -105,12 +199,21 @@ function voiceReady() {
   });
 }
 
+/** Says on the page when the browser has no voice for the language. */
+async function checkVoice() {
+  const code = lang;
+  await voiceReady(code);
+  if (code === lang) $('voice-note').hidden = !!voices.get(code);
+}
+
 async function speak(text) {
-  await voiceReady();
+  const code = lang;
+  await voiceReady(code);
 
   return new Promise(resolve => {
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = LANG;
+    utterance.lang = code;
+    const voice = voices.get(code);
     if (voice) utterance.voice = voice;
     speaking = true;
     // The recognizer would otherwise hear the moderator (without headphones).
@@ -148,7 +251,7 @@ async function turn(said, typed = false) {
   $('heard').textContent = '';
   lastTurn = Date.now();
   if (said) show('me', said, typed);
-  status('Thinking…');
+  status('thinking');
 
   try {
     const { say, done } = await api(`/sessions/${session}/turn`, {
@@ -162,14 +265,14 @@ async function turn(said, typed = false) {
 
     if (say) {
       show('moderator', say);
-      status('Speaking…');
+      status('speaking');
       await speak(say);
     }
 
     if (done) return finish();
-    status(inputMode === 'typed' ? 'Your turn: type below.' : 'Listening…');
+    status(inputMode === 'typed' ? 'yourTurn' : 'listening');
   } catch (error) {
-    status('The moderator is not answering. Keep going; it will try again.');
+    status('noAnswer');
     console.error(error);
   } finally {
     busy = false;
@@ -199,7 +302,7 @@ function listen() {
 
 function setupRecognition() {
   recognition = new Recognition();
-  recognition.lang = LANG;
+  recognition.lang = lang;
   recognition.continuous = true;
   recognition.interimResults = true;
 
@@ -225,7 +328,7 @@ function setupRecognition() {
         event.error,
       )
     ) {
-      status('The microphone is not working here. Type your answers below.');
+      status('micTyping');
       useTyping();
     }
   };
@@ -249,7 +352,7 @@ function tick() {
   const text = heard.join(' ').trim();
 
   if (text) {
-    const wait = QUESTION.test(heard.at(-1) ?? '')
+    const wait = QUESTION[lang].test(heard.at(-1) ?? '')
       ? PAUSE_AFTER_QUESTION
       : PAUSE_AFTER_SPEECH;
     if (now - lastSpeech > wait) turn(text);
@@ -314,7 +417,8 @@ async function startRecording({ screen, mic }) {
   screenVideo.muted = true;
   screenVideo.srcObject = new MediaStream(screen.getVideoTracks());
   await screenVideo.play();
-  $('rec').textContent = '● recording';
+  recordingOn = true;
+  $('rec').textContent = t().recording;
   // Stopping the share from the browser's bar ends the session.
   screen.getVideoTracks()[0].addEventListener('ended', () => finish());
 }
@@ -326,19 +430,20 @@ async function finish() {
   speechSynthesis.cancel();
   if (recorder?.state === 'recording') recorder.stop();
   recorder?.stream.getTracks().forEach(track => track.stop());
-  status('Saving the recording…');
+  status('saving');
   // Let the last chunk arrive before saying goodbye.
   await new Promise(resolve => setTimeout(resolve, 500));
   await uploads;
   await api(`/sessions/${session}/end`, { method: 'POST' }).catch(() => {});
+  recordingOn = false;
   $('rec').textContent = '';
-  status('Thank you! The session has ended; you can close both windows.');
+  status('ended');
   $('end').hidden = true;
   $('typed-form').hidden = true;
 }
 
 async function start() {
-  $('error').hidden = true;
+  showError(undefined);
   $('start').disabled = true;
   // The data-browser reads the catalog URL from this origin's storage.
   localStorage.setItem('plugin-catalog-url', CATALOG_URL);
@@ -358,7 +463,7 @@ async function start() {
       method: 'POST',
       body: JSON.stringify({
         name: $('name').value,
-        lang: LANG,
+        lang,
         // How the session starts; the tester can type at any time anyway.
         input: inputMode,
         // Which session plan (moderator/sessions/<name>.md); none = calendar.
@@ -370,11 +475,11 @@ async function start() {
     app?.close();
     media?.screen.getTracks().forEach(track => track.stop());
     media?.mic?.getTracks().forEach(track => track.stop());
-    $('error').textContent =
+    showError(
       error.name === 'NotAllowedError'
-        ? 'The session needs screen sharing. Please allow it and try again.'
-        : `Could not start the session (${error.message}). Is the invite link complete?`;
-    $('error').hidden = false;
+        ? () => t().errors.notAllowed
+        : () => t().errors.cannotStart(error.message),
+    );
     $('start').disabled = false;
 
     return;
@@ -383,6 +488,7 @@ async function start() {
   $('intro').hidden = true;
   $('consent').hidden = true;
   $('session').hidden = false;
+  checkVoice();
   if (inputMode === 'voice') setupRecognition();
   else useTyping();
   setInterval(tick, 1000);
@@ -390,12 +496,10 @@ async function start() {
   turn('');
 }
 
+renderLangs();
+applyTexts();
 if (!Recognition) $('unsupported').hidden = false;
-
-if (!code) {
-  $('error').textContent = 'This page needs the invite link you received.';
-  $('error').hidden = false;
-}
+if (!code) showError(() => t().errors.noCode);
 
 $('agree').addEventListener('change', () => {
   $('start').disabled = !$('agree').checked || !code;

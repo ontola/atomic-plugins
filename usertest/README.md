@@ -101,6 +101,20 @@ tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest
    without speech recognition (a browser other than Chrome or Edge), the
    session still starts, typed only, and records the screen without sound.
 
+The page is in English or Dutch (Nederlands), picked with the buttons at the
+top, by `&lang=nl` in the invite link, or remembered from a previous visit.
+The choice switches the page's texts, the speech recognizer, the
+moderator's voice (a `nl-NL` voice, else `nl-BE`, else the browser's default)
+and the language the moderator speaks, also mid-session: switching back to
+English restores all of it from the next line on. Session plans stay in
+English; each turn tells Claude the language in a `[Language]` line, so the
+cached system prompt does not change. The Atomic app in the second window
+stays in English: the data-browser has no Dutch translation yet (it has
+English, Spanish, French and German). To add a language, see the top of
+`page/i18n.js`. Checked on 2026-09-29 with a stub in place of the Claude API
+and a macOS Dutch voice; not yet with a Dutch-speaking tester, so the speech
+recognition of Dutch is not verified.
+
 The moderator (`moderator/server.mjs`) asks Claude (`claude-opus-5`, effort
 `low`, server-side refusal fallback on) for the next line, following the
 interview script in `moderator/script.md` and the session's plan: short spoken questions, mostly
@@ -139,9 +153,10 @@ Measured on 2026-09-28 on session 1 (about 11 minutes): 34 s, about 2,000
 input and 2,400 output tokens, 6 findings.
 
 Per session, `/var/lib/usertest-sessions/<id>/` holds `meta.json` (with
-`input`, `voice` or `typed` for how the session started, and `typedTurns`),
+`input`, `voice` or `typed` for how the session started, `typedTurns`,
+`lang`, the current language, and `langChanges`, each switch with its time),
 `transcript.jsonl` (both sides, with the log lines each turn saw, token
-usage, and `input: "typed"` or `"voice"` per tester turn), `screen-NNN.jpg` per turn, `recording.webm`, and after the analysis
+usage, and `input: "typed"` or `"voice"` and `lang` per tester turn), `screen-NNN.jpg` per turn, `recording.webm`, and after the analysis
 `findings.json`, `findings.md` and, when filed, `filed.json`. Limits: the invite code on every request, at
 most 120 turns per session and 20 sessions per UTC day. The moderator keeps
 sessions in memory, so restarting it ends the sessions in progress.
