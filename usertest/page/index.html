@@ -43,7 +43,7 @@
       }
       ul { padding-left: 1.2rem; }
       label { display: block; margin: 0.75rem 0 0.25rem; }
-      input[type='text'], select {
+      input[type='text'], select, textarea {
         width: 100%;
         padding: 0.5rem;
         border: 1px solid var(--line);
@@ -52,6 +52,9 @@
         color: var(--fg);
         font: inherit;
       }
+      textarea { resize: vertical; min-height: 4.5rem; }
+      #typed-form { margin: 1rem 0; }
+      #typed-form p { margin: 0.5rem 0 0; }
       .check { display: flex; gap: 0.5rem; align-items: flex-start; }
       .check input { margin-top: 0.3rem; }
       button {
@@ -98,8 +101,8 @@
           </li>
         </ul>
         <p id="unsupported" class="warn" hidden>
-          This browser can't do speech recognition. Please open this page in
-          Chrome or Edge.
+          This browser can't do speech recognition. You can still type your
+          answers, or open this page in Chrome or Edge to talk.
         </p>
       </section>
 
@@ -115,7 +118,7 @@
             Google's speech service.
           </li>
           <li>
-            That text, a screenshot of your shared screen at each turn, and
+            That text (or what you type instead), a screenshot of your shared screen at each turn, and
             the app's error log are sent to Anthropic's Claude API to decide
             what the moderator says next.
           </li>
@@ -148,10 +151,21 @@
           <span class="muted" id="rec"></span>
         </p>
         <p class="muted" id="heard"></p>
-        <p>
+        <p id="ask-row">
           <button id="ask">Ask the moderator</button>
           <span class="muted">or just pause after a question</span>
         </p>
+        <form id="typed-form">
+          <label for="typed" id="typed-label">
+            Can't talk out loud, or is the microphone not working? Type your
+            answer here instead.
+          </label>
+          <textarea id="typed" rows="3"></textarea>
+          <p>
+            <button id="send" type="submit">Send</button>
+            <span class="muted">Enter sends; Shift+Enter starts a new line.</span>
+          </p>
+        </form>
         <div id="log"></div>
         <button id="end" class="secondary">End the session</button>
       </section>

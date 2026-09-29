@@ -11,6 +11,12 @@
  * (both sides, with the log lines each turn saw) and recording.webm (screen
  * and microphone, uploaded by the page in chunks).
  *
+ * A tester who can't talk types instead: such a turn arrives with
+ * `input: 'typed'`, reaches Claude marked "[Tester, typed]", is recorded with
+ * `input: 'typed'` in transcript.jsonl and counted in meta.json's
+ * `typedTurns`. meta.json's `input` says how the session started: `voice`,
+ * or `typed` when the page had no microphone or speech recognition.
+ *
  * The endpoints spend API money and are public, so every request needs the
  * invite code (USERTEST_CODE, sent as `x-usertest-code`), a session takes at
  * most MAX_TURNS turns, and at most MAX_SESSIONS_PER_DAY sessions start per
@@ -83,7 +89,7 @@ const DEFAULT_PLAN = 'calendar';
 if (!PLANS[DEFAULT_PLAN])
   throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
 const client = new Anthropic();
-/** id -> { dir, started, plan, cursor, clients, messages, turns, done, analyzed } */
+/** id -> { dir, meta, started, plan, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
 
 mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -143,6 +149,13 @@ function logSince(cursor, clients) {
   return lines.slice(-MAX_LOG_LINES);
 }
 
+function writeMeta(session) {
+  writeFileSync(
+    join(session.dir, 'meta.json'),
+    JSON.stringify(session.meta, null, 2),
+  );
+}
+
 function record(session, entry) {
   appendFileSync(
     join(session.dir, 'transcript.jsonl'),
@@ -151,7 +164,7 @@ function record(session, entry) {
 }
 
 /** Asks Claude for the next thing to say. */
-async function nextLine(session, said, screenshot) {
+async function nextLine(session, said, screenshot, typed) {
   const now = new Date().toISOString();
   const log = logSince(session.cursor, session.clients);
   session.cursor = now;
@@ -160,10 +173,18 @@ async function nextLine(session, said, screenshot) {
     typeof screenshot === 'string' && /^[A-Za-z0-9+/=]+$/.test(screenshot)
       ? screenshot
       : undefined;
+  const opening =
+    session.meta.input === 'typed'
+      ? '(the session starts now; the tester has no working microphone or speech recognition and types their answers)'
+      : '(the session starts now)';
   const content = [
     log.length ? `[Log]\n${log.join('\n')}` : '[Log]\n(nothing new)',
-    `[Tester]\n${session.turns === 0 ? '(the session starts now)' : heard}`,
+    `[Tester${typed ? ', typed' : ''}]\n${session.turns === 0 ? opening : heard}`,
   ].join('\n\n');
+  if (typed) {
+    session.meta.typedTurns++;
+    writeMeta(session);
+  }
 
   // History keeps the text only; the screenshot goes with this turn alone,
   // so the conversation does not grow by an image per turn.
@@ -178,7 +199,13 @@ async function nextLine(session, said, screenshot) {
       join(session.dir, `screen-${String(session.turns).padStart(3, '0')}.jpg`),
       Buffer.from(shot, 'base64'),
     );
-  record(session, { role: 'tester', said: heard, log, screenshot: !!shot });
+  record(session, {
+    role: 'tester',
+    said: heard,
+    input: typed ? 'typed' : 'voice',
+    log,
+    screenshot: !!shot,
+  });
 
   const messages = shot
     ? [
@@ -306,24 +333,21 @@ createServer(async (req, res) => {
       const dir = join(SESSIONS_DIR, id);
       mkdirSync(dir);
       const started = new Date().toISOString();
-      writeFileSync(
-        join(dir, 'meta.json'),
-        JSON.stringify(
-          {
-            id,
-            started,
-            name: String(body.name ?? '').slice(0, 80),
-            lang: String(body.lang ?? '').slice(0, 20),
-            plan,
-            userAgent: req.headers['user-agent'],
-            model: MODEL,
-          },
-          null,
-          2,
-        ),
-      );
-      sessions.set(id, {
+      const session = {
         dir,
+        meta: {
+          id,
+          started,
+          name: String(body.name ?? '').slice(0, 80),
+          lang: String(body.lang ?? '').slice(0, 20),
+          plan,
+          // How the page started: `typed` without a microphone or speech
+          // recognition. Typed turns are counted either way.
+          input: body.input === 'typed' ? 'typed' : 'voice',
+          typedTurns: 0,
+          userAgent: req.headers['user-agent'],
+          model: MODEL,
+        },
         started,
         plan,
         cursor: started,
@@ -332,7 +356,9 @@ createServer(async (req, res) => {
         turns: 0,
         done: false,
         analyzed: false,
-      });
+      };
+      writeMeta(session);
+      sessions.set(id, session);
 
       return reply(200, { id });
     }
@@ -366,6 +392,7 @@ createServer(async (req, res) => {
         session,
         String(body.said ?? ''),
         body.screenshot,
+        body.input === 'typed',
       );
       if (next.done) finishLater(match[1], session);
 
