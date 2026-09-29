@@ -35,7 +35,7 @@
       "id": "fetch-file",
       "method": "GET",
       "url": "https://*/{*rest}",
-      "effect": "write"
+      "effect": "read"
     },
     {
       "id": "notify",
@@ -73,7 +73,8 @@
         "accept": ["application/json"],
         "maxBodyBytes": 65536,
         "writes": ["received"],
-        "enqueues": ["fetch-file", "notify"]
+        "enqueues": ["notify"],
+        "fetches": ["fetch-file"]
       },
       {
         "id": "notifications",
@@ -87,7 +88,13 @@
         "writes": ["received"]
       }
     ],
-    "wellKnown": [{ "name": "ocm", "kind": "exclusive", "route": "discovery" }],
+    "wellKnown": [
+      {
+        "name": "ocm",
+        "kind": "exclusive",
+        "route": "discovery"
+      }
+    ],
     "writeTargets": [
       {
         "id": "received",

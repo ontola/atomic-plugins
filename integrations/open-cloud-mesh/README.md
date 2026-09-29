@@ -87,8 +87,8 @@ the install review's route-write approval for `sharesFolder`.
 
 All from atomic-server's plugin-routes work (ontola/atomic-plugins#167),
 plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
-(on top of `claude/plugin-fediverse-host`, itself one commit on
-`claude/atomic-plugins-pin-candidate14`), which no pin contains yet:
+(on top of `claude/plugin-fediverse-host`), as folded into pin candidate16
+with the route field `fetches` below. No pin contains them yet:
 
 - **OCM key discovery for `auth: http-signature`** (new). A request whose
   RFC 9421 signature carries `tag="ocm"` is verified the OCM way: exactly
@@ -102,8 +102,10 @@ plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
   `ctx.keys.sign`, and `ctx.keys.publicKey(...).jwk`.
 - **`ctx.blobs.fetch`** (new): a `GET` whose answer goes straight into the
   blob store, through the egress guard, for an operation listed in the
-  route's `enqueues` (wildcard host and trailing `{*rest}` path allowed).
-  The plugin only gets `{ status, blob }`.
+  route's own `fetches` field (a declared `GET` read operation; wildcard
+  host and trailing `{*rest}` path allowed). It needs `read-write`, and the
+  install review says the plugin may download files into the drive. The
+  plugin only gets `{ status, blob }`.
 - The Fediverse worker's debug-build test seams
   (`ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS`, `ATOMIC_PLUGIN_E2E_PEER_CA`): key and
   discovery fetches, deliveries and (here) `blobs.fetch` may reach loopback,
@@ -113,10 +115,13 @@ plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
   durable delivery queue, host-held installation keys, the `ocm`
   well-known claim.
 
-The operations `fetch-file` (`GET https://*/{*rest}`) and `notify`
-(`POST https://*/{*rest}`) are declared `effect: write` because the host
-only lets data-derived (wildcard-host) destinations be used by operations
-a route `enqueues`; `fetch-file` is a read in HTTP terms.
+The operations are `fetch-file` (`GET https://*/{*rest}`, `effect: read`,
+in the shares route's `fetches`) and `notify` (`POST https://*/{*rest}`,
+`effect: write`, in its `enqueues`). The first version borrowed an
+`enqueues` write operation for the download; candidate16's host has the
+dedicated `fetches` field instead, and `integrations/tooling/manifest-http.mjs`
+mirrors it provisionally (surface ``fetch `<id>` ``, read-write) until the
+host's shared manifest fixtures for it are copied in.
 
 ## Not implemented
 
@@ -166,6 +171,8 @@ and checks two refusals. The peer is written from the specification, not
 from atomic-server's code, but it is still ours: it is not interoperability
 evidence with any deployed OCM server.
 
-Needs an `.atomic-server-ref` that contains `claude/plugin-ocm-host`; on the
-current pin the signed share is refused (no OCM key discovery) and the e2e
-fails.
+**The e2e is pending on candidate16.** It passed against
+`claude/plugin-ocm-host` d18d2f6a2 with the earlier `enqueues` manifest;
+with `fetches` it needs a host that has the field (candidate16), and it has
+not been rerun since. On the current pin the signed share is refused (no
+OCM key discovery) and the e2e fails.

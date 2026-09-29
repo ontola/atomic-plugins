@@ -583,12 +583,31 @@ test('the bundle rebuilds reproducibly and matches the manifest', async () => {
   assert.equal(manifest.http.mount, 'installation-origin');
   const routes = Object.fromEntries(manifest.http.routes.map(r => [r.id, r]));
 
-  // Writes and deliveries only on signature-verified routes.
+  // Writes, deliveries and downloads only on signature-verified routes.
   for (const route of Object.values(routes))
-    if (route.writes || route.enqueues) {
+    if (route.writes || route.enqueues || route.fetches) {
       assert.equal(route.auth, 'http-signature', route.id);
       assert.equal(route.principal, 'installation', route.id);
     }
+
+  // The download is a `fetches` read operation, never borrowed from
+  // `enqueues` (atomic-server candidate16).
+  assert.deepEqual(routes.shares.fetches, ['fetch-file']);
+  assert.deepEqual(routes.shares.enqueues, ['notify']);
+  const operations = Object.fromEntries(
+    manifest.operations.map(o => [o.id, o]),
+  );
+  assert.deepEqual(operations['fetch-file'], {
+    id: 'fetch-file',
+    method: 'GET',
+    url: 'https://*/{*rest}',
+    effect: 'read',
+  });
+  assert.equal(operations.notify.effect, 'write');
+  const blobFetches = [];
+  post('shares', share(), {}).calls.fetch.forEach(c => blobFetches.push(c));
+  for (const c of blobFetches)
+    assert.ok(routes.shares.fetches.includes(c.operation));
 
   assert.deepEqual(manifest.http.wellKnown, [
     { name: 'ocm', kind: 'exclusive', route: 'discovery' },
