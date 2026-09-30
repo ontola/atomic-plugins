@@ -28,7 +28,9 @@
  * The endpoints spend API money and are public, so every request needs the
  * invite code (USERTEST_CODE, sent as `x-usertest-code`), a session takes at
  * most MAX_TURNS turns, and at most MAX_SESSIONS_PER_DAY sessions start per
- * UTC day. ANTHROPIC_API_KEY comes from the environment (/etc/anthropic.env
+ * UTC day. A wrong or missing code gets 403 (and nothing else does), which
+ * the page reports as a code problem; `GET /check` lets it test the code
+ * when it loads. ANTHROPIC_API_KEY comes from the environment (/etc/anthropic.env
  * on the droplet, passed by run.sh) and never leaves this process.
  *
  * A turn only sees its own tester's log lines: the collector tags each line
@@ -350,6 +352,10 @@ createServer(async (req, res) => {
     return reply(200, { ok: true });
   if (req.headers['x-usertest-code'] !== CODE)
     return reply(403, { error: 'Unknown invite code' });
+  // The page checks its invite code when it loads, so a wrong code is
+  // reported before the tester shares a screen or tests a microphone.
+  if (req.method === 'GET' && url.pathname === '/check')
+    return reply(200, { ok: true });
 
   try {
     // The plans the tester can pick from, before a session starts.
