@@ -190,10 +190,23 @@ In the same browser you will use for the app:
 1. Open `https://plugins.178-62-223-35.sslip.io/app/dev-drive` (or your
    existing test drive). Create a folder for the documents and copy its
    subject.
-2. New → Plugin. Edit it, replace the source with the contents of
-   [`integrations/remotestorage/plugin.js`](../integrations/remotestorage/plugin.js),
-   name it `remoteStorage` and save. On its **Code** tab, click
-   **Publish to integration store**.
+2. New → Plugin. Edit it and name it `remoteStorage`. In the source field,
+   **first click the `</>` button (Edit raw markdown)**, then replace the
+   text with the contents of
+   [`integrations/remotestorage/plugin.js`](../integrations/remotestorage/plugin.js)
+   (the raw file) and save without switching back. On its **Code** tab,
+   click **Publish to integration store**.
+
+   The source is a Markdown property, and the Edit form opens it in the
+   rich-text editor. Code pasted there is saved as that editor's Markdown
+   serialization, not as pasted: brackets get backslashes, and fences and
+   blank lines are added. Publishing then fails with a QuickJS syntax
+   error such as `plugin source: expecting ';' at plugin:437:1`, seen on
+   the droplet on 2026-09-30. The file itself parses as a module in QuickJS
+   and quickjs-ng. Re-saving it through the rich-text editor was reproduced
+   in Node with TipTap 3 and candidate15's editor extensions: 1078 lines in,
+   1116 out, and QuickJS rejects the result. If the **Code** tab shows `\[`
+   or ```` ``` ```` in the source, edit it again in raw mode.
 3. On Integrations, open the remoteStorage release. In the review, check
    **Incoming items**, set the config to
    `{ "table": "<the folder's subject>", "user": "me" }` and click
