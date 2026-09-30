@@ -1,6 +1,7 @@
 #!/bin/sh
-# Copies the built catalog (catalog.mjs), the Caddyfile and server.sh to the
-# droplet, then reloads Caddy. Existing app module versions on the droplet are
+# Copies the built catalog (catalog.mjs), the Caddyfile, server.sh and the
+# pinned atomic-server commit (.atomic-server-ref) to the droplet, then
+# reloads Caddy. Existing app module versions on the droplet are
 # kept, so testers who installed an older version can still update from it.
 #
 #   sh usertest/deploy.sh root@<droplet-ip> [ssh options…]
@@ -19,7 +20,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # extended attributes that GNU tar on the droplet warns about.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps) |
   ssh "$@" "$TARGET" 'mkdir -p /srv/catalog && tar xzf - -C /srv/catalog'
-(cd "$HERE" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules -czf - Caddyfile caddy-usertest.conf server.sh collector moderator page) |
+# .atomic-server-ref goes along so that server.sh without a SHA runs the pin.
+(cd "$HERE" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules -czf - Caddyfile caddy-usertest.conf server.sh collector moderator page -C .. .atomic-server-ref) |
   ssh "$@" "$TARGET" 'set -e
     test -f /etc/caddy/usertest.env ||
       { echo "create /etc/caddy/usertest.env first (README.md)" >&2; exit 1; }

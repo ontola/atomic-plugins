@@ -156,11 +156,14 @@ jobs:
         if: inputs.restart-server
         env:
           ROUTES: ${{ inputs.plugin-routes }}
+          # The pin, explicitly; server.sh's own default (the copied
+          # .atomic-server-ref) is the same commit.
+          SHA: ${{ steps.pin.outputs.sha }}
         run: |
           if [ "$ROUTES" = off ]; then
-            ssh "$TARGET" sh /opt/usertest/server.sh "$BASE_DOMAIN"
+            ssh "$TARGET" sh /opt/usertest/server.sh "$BASE_DOMAIN" "$SHA"
           else
-            ssh "$TARGET" USERTEST_PLUGIN_ROUTES="$ROUTES" sh /opt/usertest/server.sh "$BASE_DOMAIN"
+            ssh "$TARGET" USERTEST_PLUGIN_ROUTES="$ROUTES" sh /opt/usertest/server.sh "$BASE_DOMAIN" "$SHA"
           fi
 
       # The page, the catalog and the moderator answer through Caddy. A

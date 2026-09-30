@@ -162,8 +162,15 @@ source, not run.
 - From atomic-server candidate16 on (atomic-server#1903), plugin routes only
   honour `X-Forwarded-Host`/`-Proto` from a trusted proxy. So `server.sh`
   passes `-e ATOMIC_TRUSTED_PROXIES=172.17.0.1` whenever plugin routes are
-  on (Caddy reaches the container from the Docker bridge gateway). The
-  default, candidate15, has no such setting and doesn't read the variable.
+  on (Caddy reaches the container from the Docker bridge gateway).
+  candidate15, which the droplet ran until then, has no such setting and
+  doesn't read the variable.
+- Without a SHA argument, `server.sh` runs the pinned commit: `deploy.sh`
+  copies `.atomic-server-ref` to `/opt/usertest/`, and the deploy workflow
+  also passes that SHA explicitly. Its images are published once the pin is
+  on main (`atomic-server-e2e-image.yml`). A redeploy followed by a server restart
+  therefore moves the droplet to the new pin; pass an older SHA as the
+  second argument to stay on it.
 
 ### Turning it on
 
