@@ -258,6 +258,16 @@ on #177 (question 12).
 Several Claude Code sessions and their subagents work on this repo at the
 same time. These are the working agreements between them.
 
+Since 2026-09-30 most work goes to short-lived sessions, one per feature or
+PR, which coordinate on the board issue
+[#227](https://github.com/ontola/atomic-plugins/issues/227) (its body holds
+the rules; rule 12 lets a session merge its own atomic-plugins PR once the
+`CI` gate is green). The operational know-how those sessions need is in
+[`docs/agents/`](docs/agents/README.md): the working model and worker checks,
+pins and the pin-PR recipe, CI and merging, the catalog and Pages, the
+user-testing droplet, and releasing the integration proxy. Where the roles
+below and #227 disagree, #227 is newer.
+
 ### Roles
 
 - **Repo oversight.** One long-lived session watches all open issues,
