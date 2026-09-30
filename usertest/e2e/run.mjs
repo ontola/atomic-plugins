@@ -162,8 +162,11 @@ const BASE = `http://localhost:${frontPort}/usertest/`;
 // granted is denied with NotAllowedError, as when a tester clicks Block.
 // Screen sharing cannot be denied headlessly (the picker just waits), so
 // that test makes getDisplayMedia reject the way a cancelled picker does.
+// CHROMIUM_PATH: a Chromium other than the one this Playwright downloads.
+const executablePath = process.env.CHROMIUM_PATH || undefined;
 const fakeUi = await chromium.launch({
   channel: 'chromium',
+  executablePath,
   args: [
     '--use-fake-ui-for-media-stream',
     '--use-fake-device-for-media-stream',
@@ -171,6 +174,7 @@ const fakeUi = await chromium.launch({
 });
 const denying = await chromium.launch({
   channel: 'chromium',
+  executablePath,
   args: ['--use-fake-device-for-media-stream', '--deny-permission-prompts'],
 });
 
@@ -191,7 +195,8 @@ async function check(name, fn) {
 
 async function open(browser, query, { permissions = [], init } = {}) {
   const context = await browser.newContext({ permissions });
-  if (init) await context.addInitScript(init);
+  if (Array.isArray(init)) await context.addInitScript(...init);
+  else if (init) await context.addInitScript(init);
   const page = await context.newPage();
   await page.goto(`${BASE}?${query}`);
   return { page, close: () => context.close() };
@@ -440,6 +445,178 @@ await check(
     await screen.close();
   },
 );
+
+// Voices: a stubbed speechSynthesis with the kinds of lists browsers give.
+// Chrome returns [] at first and fills the list on `voiceschanged`, so the
+// stub does the same after 300 ms. Utterances are recorded, not played.
+const VOICES = [
+  { name: 'eSpeak English', lang: 'en-US', localService: true },
+  { name: 'Fred', lang: 'en-US', localService: true },
+  { name: 'Albert', lang: 'en-US', localService: true },
+  { name: 'Samantha', lang: 'en-US', localService: true },
+  { name: 'Google US English', lang: 'en-US', localService: false },
+  {
+    name: 'Microsoft Aria Online (Natural) - English (United States)',
+    lang: 'en-US',
+    localService: false,
+  },
+  { name: 'Daniel', lang: 'en-GB', localService: true },
+  { name: 'eSpeak Dutch', lang: 'nl', localService: true },
+  { name: 'Ellen (Enhanced)', lang: 'nl-BE', localService: true },
+  { name: 'Xander', lang: 'nl_NL', localService: true },
+  { name: 'Google Nederlands', lang: 'nl-NL', localService: false },
+];
+
+function stubVoices(list) {
+  window.__spoken = [];
+  let loaded = [];
+  speechSynthesis.getVoices = () => loaded;
+  speechSynthesis.cancel = () => {};
+  speechSynthesis.speak = utterance => {
+    window.__spoken.push({
+      text: utterance.text,
+      lang: utterance.lang,
+      voice: utterance.voice?.name,
+      rate: utterance.rate,
+      pitch: utterance.pitch,
+    });
+    setTimeout(() => utterance.onend?.(), 10);
+  };
+  // The real one only takes a real SpeechSynthesisVoice.
+  window.SpeechSynthesisUtterance = class {
+    constructor(text) {
+      this.text = text;
+    }
+  };
+  setTimeout(() => {
+    loaded = list;
+    speechSynthesis.dispatchEvent(new Event('voiceschanged'));
+  }, 300);
+}
+
+const { rankVoices, goodEnough } = await import('../page/voices.js');
+const names = list => list.map(v => v.name);
+
+await check(
+  'voice ranking: best first, robotic and other languages never',
+  async () => {
+    const en = names(rankVoices(VOICES, 'en-US'));
+    const wantEn = [
+      'Microsoft Aria Online (Natural) - English (United States)',
+      'Google US English',
+      'Samantha',
+      'Daniel',
+    ];
+    if (JSON.stringify(en) !== JSON.stringify(wantEn))
+      throw new Error(`en-US: ${JSON.stringify(en)}`);
+    const nl = names(rankVoices(VOICES, 'nl-NL'));
+    const wantNl = ['Google Nederlands', 'Xander', 'Ellen (Enhanced)'];
+    if (JSON.stringify(nl) !== JSON.stringify(wantNl))
+      throw new Error(`nl-NL: ${JSON.stringify(nl)}`);
+    // nl-NL beats a better nl-BE voice; nl-BE beats reading Dutch in English.
+    const noGoogle = VOICES.filter(v => v.name !== 'Google Nederlands');
+    if (rankVoices(noGoogle, 'nl-NL')[0].name !== 'Xander')
+      throw new Error('nl-BE picked over nl-NL');
+    const beOnly = VOICES.filter(v => !/Xander|Google Nederlands/.test(v.name));
+    if (rankVoices(beOnly, 'nl-NL')[0].name !== 'Ellen (Enhanced)')
+      throw new Error('no nl-BE fallback');
+    const robotsOnly = VOICES.filter(v => /eSpeak|Fred|Albert/.test(v.name));
+    if (
+      rankVoices(robotsOnly, 'en-US').length ||
+      rankVoices(robotsOnly, 'nl-NL').length
+    )
+      throw new Error('a robotic voice was offered');
+    if (goodEnough(VOICES[3], 'en-US') || !goodEnough(VOICES[4], 'en-US'))
+      throw new Error('goodEnough: plain local voice should wait for more');
+  },
+);
+
+const spoken = page => page.evaluate(() => window.__spoken);
+
+await check(
+  'voices load late: the speaker test waits and uses the best voice; the picker switches it',
+  async () => {
+    const { page, close } = await open(fakeUi, `code=${CODE}`, {
+      init: [stubVoices, VOICES],
+    });
+    // Clicked before the voices arrive: it must wait, not use the default.
+    await page.click('#speaker-test');
+    const best = 'Microsoft Aria Online (Natural) - English (United States)';
+    await expectText(page, '#speaker-status', EN.check.speakerHint(best));
+    let lines = await spoken(page);
+    if (lines.length !== 1 || lines[0].voice !== best)
+      throw new Error(`spoken: ${JSON.stringify(lines)}`);
+    if (
+      lines[0].rate !== 1 ||
+      lines[0].pitch !== 1 ||
+      lines[0].lang !== 'en-US'
+    )
+      throw new Error(`rate/pitch/lang: ${JSON.stringify(lines[0])}`);
+
+    await expectText(page, 'label[for="voice-select"]', EN.check.voiceLabel);
+    const offered = await page.locator('#voice-select option').allInnerTexts();
+    if (
+      offered.some(o => /eSpeak|Fred|Albert|Xander/.test(o)) ||
+      offered.length !== 4
+    )
+      throw new Error(`offered: ${JSON.stringify(offered)}`);
+    if ((await page.locator('#voice-select').inputValue()) !== best)
+      throw new Error('picker does not show the chosen voice');
+
+    await page.selectOption('#voice-select', 'Samantha');
+    await page.click('#voice-try');
+    await expectText(page, '#speaker-status', EN.check.speakerHint('Samantha'));
+    lines = await spoken(page);
+    if (lines.at(-1).voice !== 'Samantha')
+      throw new Error(`after switching: ${JSON.stringify(lines.at(-1))}`);
+
+    // Remembered for the session: a reload keeps it.
+    await page.reload();
+    await page.click('#speaker-test');
+    await expectText(page, '#speaker-status', EN.check.speakerHint('Samantha'));
+    if ((await page.locator('#voice-select').inputValue()) !== 'Samantha')
+      throw new Error('choice not remembered after reload');
+    await close();
+  },
+);
+
+await check('Dutch: an nl-NL voice, never an English one', async () => {
+  const { page, close } = await open(fakeUi, `code=${CODE}&lang=nl`, {
+    init: [stubVoices, VOICES],
+  });
+  await page.click('#speaker-test');
+  await expectText(
+    page,
+    '#speaker-status',
+    NL.check.speakerHint('Google Nederlands'),
+  );
+  const [line] = await spoken(page);
+  if (line.voice !== 'Google Nederlands' || line.lang !== 'nl-NL')
+    throw new Error(`spoken: ${JSON.stringify(line)}`);
+  await expectText(page, '#voice-try', NL.check.voiceTry);
+  // Switching language switches the list and the voice.
+  await page.click('#langs button[value="en-US"]');
+  await page.waitForFunction(() =>
+    document.querySelector('#voice-select').value.startsWith('Microsoft Aria'),
+  );
+  await close();
+});
+
+await check('no voices at all: default voice, picker hidden', async () => {
+  const { page, close } = await open(fakeUi, `code=${CODE}`, {
+    init: [stubVoices, []],
+  });
+  await page.click('#speaker-test');
+  await expectText(
+    page,
+    '#speaker-status',
+    `${EN.check.speakerHint(EN.check.defaultVoice)} ${EN.noVoice}`,
+    8000,
+  );
+  if (!(await page.locator('#voice-row').isHidden()))
+    throw new Error('picker shown without voices');
+  await close();
+});
 
 await fakeUi.close();
 await denying.close();

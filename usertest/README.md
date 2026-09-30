@@ -200,7 +200,9 @@ tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest
    microphone and shows its level, and passes once it hears the tester;
    an optional check shows what the speech recognizer made of a sentence;
    "Test speakers" plays a line in the moderator's voice for the chosen
-   language. Nothing is recorded during the check. Start stays off until the
+   language, names the voice, and offers the other voices for that language
+   with "Try this voice"; a picked voice is kept for the browser session
+   (`sessionStorage`). Nothing is recorded during the check. Start stays off until the
    microphone check passed or the tester chose "Type instead". The
    microphone the check opened is the one recorded; screen sharing is still
    asked for at Start, since sharing starts the recording;
@@ -227,6 +229,19 @@ not supported, screen sharing cancelled, and test server unreachable (no
 answer, or 5xx, with a Try again button). A microphone or screen problem is
 never reported as a code problem.
 
+The voice is picked by `page/voices.js`: the exact language (`en-US`,
+`nl-NL`) before the same base language (`nl-BE`); within that, voices named
+Natural, Neural, Online, Premium, Enhanced or Siri, then Google's own
+("Google Nederlands"), then network voices (`localService: false`, Chrome and
+Edge), then the rest. Robotic and novelty voices (eSpeak, Fred, Albert,
+Zarvox, Bad News, Trinoids and the other old macOS ones) are never picked or
+offered. Chrome and Edge list voices only after `voiceschanged`, so the page
+waits for it, up to 3 s, unless it already has a good exact-language voice,
+and switches to a better voice that arrives later from the next line on
+(unless the tester picked one). Rate and pitch are 1.0. The ranking is
+checked against stubbed voice lists, not yet by ear in each browser: how
+good the best voice sounds depends on the tester's browser and OS.
+
 `e2e/run.mjs` checks the sound check and these messages headlessly: it runs
 the moderator with a dummy code against a stand-in for the Claude API and
 drives Chromium's new headless mode with fake media devices, or with the
@@ -238,12 +253,15 @@ audible are not covered.
 npm ci --prefix usertest/moderator
 npm ci --prefix usertest/e2e && npx --prefix usertest/e2e playwright install chromium
 node usertest/e2e/run.mjs
+# with a Chromium other than Playwright's download:
+CHROMIUM_PATH=/path/to/chromium node usertest/e2e/run.mjs
 ```
 
 The page is in English or Dutch (Nederlands), picked with the buttons at the
 top, by `&lang=nl` in the invite link, or remembered from a previous visit.
 The choice switches the page's texts, the speech recognizer, the
-moderator's voice (a `nl-NL` voice, else `nl-BE`, else the browser's default)
+moderator's voice (a `nl-NL` voice, else `nl-BE`, else the browser's
+default; never an English voice reading Dutch)
 and the language the moderator speaks, also mid-session: switching back to
 English restores all of it from the next line on. Session plans stay in
 English; each turn tells Claude the language in a `[Language]` line, so the
