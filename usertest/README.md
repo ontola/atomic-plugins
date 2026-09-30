@@ -77,6 +77,52 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 
 Never rebuild into an existing version: the host refuses a module whose bytes
 no longer match the hash in the catalog.
+`node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json`,
+run after `catalog.mjs`, fails when an app was rebuilt into a version the
+droplet already serves with other bytes. The deploy workflow below runs it
+before it touches the droplet.
+
+## Deploying from GitHub Actions
+
+[`.github/workflows/usertest-deploy.yml`](../.github/workflows/usertest-deploy.yml)
+runs the same steps from GitHub: it checks out atomic-server at
+`.atomic-server-ref`, builds the catalog with `USERTEST_LOG_URL` set, runs
+`check-live.mjs`, then `deploy.sh`. It runs only by hand (Actions → Deploy
+user-testing instance → Run workflow). Each restart is an option, off by
+default: the moderator (needed for `moderator/` changes; ends sessions in
+progress), the collector, and atomic-server with `server.sh` (ends sessions
+in progress; with a plugin-routes level). Afterwards it checks that the page,
+the moderator's `/health`, the catalog and atomic-server answer.
+
+Setting it up, once, needs a repository admin and root on the droplet:
+
+1. Make a key used for nothing else, and allow it on the droplet:
+
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C usertest-deploy -f usertest-deploy
+   ssh root@178.62.223.35 'cat >> /root/.ssh/authorized_keys' < usertest-deploy.pub
+   ```
+
+2. Get the droplet's host keys, and compare their fingerprints
+   (`ssh-keygen -lf`) with the droplet's own
+   (`ssh root@178.62.223.35 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done'`):
+
+   ```sh
+   ssh-keyscan 178.62.223.35 > usertest-known-hosts
+   ```
+
+3. In the repository's Settings → Environments, create `usertest` (and
+   limit it to the `main` branch, and add required reviewers if you want an
+   approval per deploy). Add the secrets `USERTEST_SSH_KEY` (the contents of
+   `usertest-deploy`) and `USERTEST_SSH_KNOWN_HOSTS` (the contents of
+   `usertest-known-hosts`). The variables `USERTEST_TARGET` and
+   `USERTEST_BASE_DOMAIN` are optional; they default to `root@178.62.223.35`
+   and `178-62-223-35.sslip.io`. Then delete the local `usertest-deploy`.
+
+The key logs in as root, like a deploy from a laptop does. Anyone who can
+push to a branch the `usertest` environment allows can deploy, so keep that
+limited to `main`. Not run yet: the workflow has not deployed to the droplet.
+The build and `check-live.mjs` were checked locally on 2026-09-30.
 
 ## Trying server plugins (remoteStorage)
 
