@@ -37,8 +37,19 @@
  * Either way the test is skipped saying so.
  * Needs Docker. Run it the way CI would:
  *   node integrations/tooling/run-lane.mjs nextgraph --tier e2e
+ *
+ * The sidecar image: with NEXTGRAPH_SIDECAR_IMAGE set, that image, which must
+ * already be present (CI's `build-sidecars` job builds or pulls it and the
+ * lane loads it); otherwise the spec builds ../sidecar/ itself, with its
+ * output shown and at most SIDECAR_BUILD_MINUTES (default 60). A cold build
+ * compiles nextgraph-rs and its bundled RocksDB, which took longer than the
+ * lane's whole 45-minute CI budget; a cached one takes seconds. Under CI the
+ * variable is required, so a missing image fails at once instead of building.
+ *   docker build -t ng-atomic-sidecar:local integrations/nextgraph/sidecar
+ *   NEXTGRAPH_SIDECAR_IMAGE=ng-atomic-sidecar:local \
+ *     node integrations/tooling/run-lane.mjs nextgraph --tier e2e
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -73,7 +84,9 @@ const importNative = new Function('url', 'return import(url)') as (
 
 const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
 const SIDECAR_URL = process.env.PLUGIN_SIDECAR_URL ?? '';
-const IMAGE = process.env.NG_SIDECAR_IMAGE ?? 'ng-atomic-sidecar:e2e';
+const PREBUILT = process.env.NEXTGRAPH_SIDECAR_IMAGE ?? '';
+const IMAGE = PREBUILT || 'ng-atomic-sidecar:e2e';
+const BUILD_MINUTES = Number(process.env.SIDECAR_BUILD_MINUTES ?? 60);
 const CONTAINER = `ng-atomic-sidecar-e2e-${process.pid}`;
 const P = {
   name: 'https://atomicdata.dev/properties/name',
@@ -101,6 +114,71 @@ function docker(args: string[], timeout = 120_000) {
     );
 
   return result.stdout;
+}
+
+/**
+ * The sidecar image, bounded: a prebuilt image must exist (and under CI must
+ * have been given), and a local build streams its output and is killed after
+ * BUILD_MINUTES. Async, so Playwright's own test timeout still applies.
+ */
+async function ensureImage() {
+  const version = spawnSync(
+    'docker',
+    ['version', '--format', '{{.Server.Version}}'],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  );
+  if (version.status !== 0)
+    throw new Error(
+      `the nextgraph e2e needs a running Docker daemon: ${version.error?.message ?? version.stderr}`,
+    );
+
+  if (PREBUILT) {
+    const inspect = spawnSync('docker', ['image', 'inspect', PREBUILT], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    if (inspect.status !== 0)
+      throw new Error(
+        `NEXTGRAPH_SIDECAR_IMAGE=${PREBUILT} is not a local image (in CI, build-sidecars and the lane's "Load the sidecar images" step provide it): ${inspect.stderr}`,
+      );
+
+    return;
+  }
+
+  if (process.env.CI)
+    throw new Error(
+      'NEXTGRAPH_SIDECAR_IMAGE is not set. CI must not build the sidecar inside the spec (a cold build outlasts the lane); ci.yml builds it in build-sidecars and the lane passes it in.',
+    );
+
+  const context = resolve(here, '../sidecar');
+  console.info(
+    `building ${IMAGE} from ${context} (at most ${BUILD_MINUTES} minutes)`,
+  );
+  await new Promise<void>((done, fail) => {
+    const build = spawn('docker', ['build', '-t', IMAGE, context], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    const timer = setTimeout(() => {
+      build.kill('SIGTERM');
+      fail(
+        new Error(
+          `docker build of the sidecar took more than ${BUILD_MINUTES} minutes; build it beforehand (see the header of this spec) and pass NEXTGRAPH_SIDECAR_IMAGE`,
+        ),
+      );
+    }, BUILD_MINUTES * 60_000);
+    build.on('error', error => {
+      clearTimeout(timer);
+      fail(error);
+    });
+    build.on('exit', code => {
+      clearTimeout(timer);
+      if (code === 0) done();
+      else fail(new Error(`docker build of the sidecar failed (${code})`));
+    });
+  });
 }
 
 const user = () =>
@@ -139,7 +217,22 @@ function startSidecar(dir: string) {
 }
 
 async function waitForSidecar() {
+  const logs = () =>
+    spawnSync('docker', ['logs', CONTAINER], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    }).stderr;
+
   for (let i = 0; i < 120; i++) {
+    // A sidecar that exited will never answer: say why now, not in 2 minutes.
+    const state = spawnSync(
+      'docker',
+      ['inspect', '--format', '{{.State.Running}}', CONTAINER],
+      { encoding: 'utf8', timeout: 30_000 },
+    ).stdout.trim();
+    if (state === 'false')
+      throw new Error(`the sidecar container exited: ${logs()}`);
+
     try {
       const health = await fetch(`${SIDECAR_URL}/v1/health`);
       if (health.ok) return health.json();
@@ -151,7 +244,7 @@ async function waitForSidecar() {
   }
 
   throw new Error(
-    `sidecar did not answer at ${SIDECAR_URL}: ${spawnSync('docker', ['logs', CONTAINER], { encoding: 'utf8' }).stderr}`,
+    `sidecar did not answer at ${SIDECAR_URL} within 120 s: ${logs()}`,
   );
 }
 
@@ -191,7 +284,9 @@ test.describe('nextgraph integration', () => {
   test('pull a NextGraph document into Atomic, export it and push it back, durably', async ({
     page,
   }) => {
-    test.setTimeout(3_600_000);
+    // Ten minutes for the test itself (it takes about a minute), plus the
+    // image build when this spec has to build it.
+    test.setTimeout(600_000 + (PREBUILT ? 0 : BUILD_MINUTES * 60_000));
     const draft = await createPlugin(page);
     const { drive } = draft;
     const agent = Agent.fromSecret(await getDevDriveSecret(page), 'js');
@@ -228,8 +323,7 @@ test.describe('nextgraph integration', () => {
 
     // Operator: build the sidecar, create a wallet and two documents, and
     // grant this plugin read on the first and read-write on the second.
-    if (!process.env.NG_SIDECAR_IMAGE)
-      docker(['build', '-t', IMAGE, resolve(here, '../sidecar')], 3_000_000);
+    await ensureImage();
     dir = mkdtempSync(resolve(tmpdir(), 'ng-sidecar-'));
     writeFileSync(resolve(dir, 'seed.sparql'), SEED);
     const init = JSON.parse(

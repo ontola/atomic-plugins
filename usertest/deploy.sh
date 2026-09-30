@@ -23,13 +23,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
   ssh "$@" "$TARGET" 'set -e
     test -f /etc/caddy/usertest.env ||
       { echo "create /etc/caddy/usertest.env first (README.md)" >&2; exit 1; }
-    mkdir -p /opt/usertest /etc/systemd/system/caddy.service.d
+    mkdir -p /opt/usertest /etc/systemd/system/caddy.service.d /etc/caddy/routes-allowed
     tar xzf - -C /opt/usertest
     cp /opt/usertest/caddy-usertest.conf /etc/systemd/system/caddy.service.d/usertest.conf
-    cp /opt/usertest/Caddyfile /etc/caddy/Caddyfile
     set -a; . /etc/caddy/usertest.env; set +a
-    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>/tmp/caddy-validate.log ||
+    caddy validate --config /opt/usertest/Caddyfile --adapter caddyfile >/dev/null 2>/tmp/caddy-validate.log ||
       { cat /tmp/caddy-validate.log >&2; exit 1; }
+    cp /opt/usertest/Caddyfile /etc/caddy/Caddyfile
     systemctl daemon-reload
     systemctl restart caddy'
 echo "deployed to $TARGET"

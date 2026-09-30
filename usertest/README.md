@@ -12,6 +12,7 @@ rebuild it.
 | `https://catalog.<base-domain>/catalog.json` | the test catalog and the app modules it points at (`catalog.mjs`) |
 | `https://logs.<base-domain>` | the log collector (`collector/`) |
 | `https://plugins.<base-domain>/usertest/` | the moderated-session page (`page/`) and its voice moderator (`moderator/`, at `/usertest/api/`) |
+| `https://<slug>.routes.<base-domain>` | a server plugin's installation origin, only with plugin routes on ([Trying server plugins](#trying-server-plugins-remotestorage)) |
 | `https://localthought.io` | the integration proxy, shared with everyone else (not on the droplet) |
 
 The base domain is currently `178-62-223-35.sslip.io`. sslip.io resolves
@@ -76,6 +77,114 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 Never rebuild into an existing version: the host refuses a module whose bytes
 no longer match the hash in the catalog.
 
+## Trying server plugins (remoteStorage)
+
+Server plugins answer HTTP requests themselves (plugin routes). This
+section is for trying [remoteStorage](../integrations/remotestorage/README.md)
+by hand; testers don't need it, and it is off unless `server.sh` is started
+with `USERTEST_PLUGIN_ROUTES`. As of 2026-09-29 none of this has run on the
+droplet yet. Checked locally: the Caddyfile in Docker with Caddy 2.11.4 (a
+certificate for an allowlisted routes host, a refused handshake for any
+other; not with Ubuntu 24.04's packaged Caddy 2.6.2, which `deploy.sh`
+validates against on the droplet), and that the `-plugin-routes` image of
+the previous pin (`2567fc30b`) starts with these settings. That
+candidate15 has what remoteStorage needs from the host was read from its
+source, not run.
+
+### What changes
+
+- `server.sh` runs `ghcr.io/ontola/atomic-server-e2e:<sha>-plugin-routes`
+  (the same commit built with the `plugin-routes` cargo feature, published
+  by `.github/workflows/atomic-server-e2e-image.yml`) with
+  `ATOMIC_PLUGIN_ROUTES=read-write` and
+  `ATOMIC_ROUTES_ORIGIN=https://routes.<base-domain>`. The store volume is
+  the same, so drives stay.
+- Each server-plugin Installation answers on its own origin,
+  `https://<slug>.routes.<base-domain>`, where `<slug>` is 32 hex characters
+  (the start of the BLAKE3 hash of the Installation's subject).
+  atomic-server picks the Installation by the `Host` header. sslip.io
+  resolves these names to the droplet like any other.
+- Caddy (`Caddyfile`, `*.routes.<base-domain>`) proxies those hosts to
+  atomic-server with the `Host` header unchanged. sslip.io has no wildcard
+  certificate, so Caddy gets one certificate per host from Let's Encrypt on
+  the first TLS handshake (on-demand TLS), but only for a host listed in
+  `/etc/caddy/routes-allowed/` (a file named after the host). Without that
+  list, anyone could make Caddy request certificates for made-up slugs and
+  use up the Let's Encrypt rate limits that `plugins.`, `catalog.` and
+  `logs.` renew under.
+- From atomic-server candidate16 on (atomic-server#1903), plugin routes only
+  honour `X-Forwarded-Host`/`-Proto` from a trusted proxy. So `server.sh`
+  passes `-e ATOMIC_TRUSTED_PROXIES=172.17.0.1` whenever plugin routes are
+  on (Caddy reaches the container from the Docker bridge gateway). The
+  default, candidate15, has no such setting and doesn't read the variable.
+
+### Turning it on
+
+From a checkout of this repo (`deploy.sh` needs `usertest/out/`, see
+[Setting it up from scratch](#setting-it-up-from-scratch)); it installs the
+new Caddyfile, creates `/etc/caddy/routes-allowed/` and restarts Caddy:
+
+```sh
+sh usertest/deploy.sh root@178.62.223.35
+ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh 178-62-223-35.sslip.io
+ssh root@178.62.223.35 docker logs atomic-plugins 2>&1 | grep 'Plugin routes are on'
+```
+
+The last line should say `Plugin routes are on (read-write); installation
+origins are subdomains of https://routes.178-62-223-35.sslip.io.`
+Restarting atomic-server interrupts moderated sessions in progress. To turn
+routes off again, run `server.sh` without the variable: Installations of
+server plugins then stay in the drive but answer nothing.
+
+### Installing remoteStorage
+
+In the same browser you will use for the app:
+
+1. Open `https://plugins.178-62-223-35.sslip.io/app/dev-drive` (or your
+   existing test drive). Create a folder for the documents and copy its
+   subject.
+2. New → Plugin. Edit it, replace the source with the contents of
+   [`integrations/remotestorage/plugin.js`](../integrations/remotestorage/plugin.js),
+   name it `remoteStorage` and save. On its **Code** tab, click
+   **Publish to integration store**.
+3. On Integrations, open the remoteStorage release. In the review, check
+   **Incoming items**, set the config to
+   `{ "table": "<the folder's subject>", "user": "me" }` and click
+   **Install**.
+4. On the Installation page, **Endpoints** lists the route URLs, all on
+   `https://<slug>.routes.178-62-223-35.sslip.io`. Allow that host once:
+
+   ```sh
+   ssh root@178.62.223.35 touch /etc/caddy/routes-allowed/<slug>.routes.178-62-223-35.sslip.io
+   curl -s "https://<slug>.routes.178-62-223-35.sslip.io/.well-known/webfinger?resource=acct:me@<slug>.routes.178-62-223-35.sslip.io"
+   ```
+
+   The first request waits a few seconds for the certificate. The answer is
+   a JRD whose `links` name the storage root and the OAuth endpoint on that
+   host. No restart or reload is needed: Caddy asks its own loopback
+   endpoint (`127.0.0.1:8083`) on each new host name.
+
+### Connecting an app
+
+The user address is `me@<slug>.routes.178-62-223-35.sslip.io`. Any
+remoteStorage web app should do, for example
+[Inspektor](https://inspektor.5apps.com/) (browses and edits everything in
+the storage, so it asks for `*:rw`). Paste the address into the app's
+connect widget; it redirects to atomic-server's consent page on
+`plugins.178-62-223-35.sslip.io`, which shows the app's origin and the
+scopes. Click **Allow** (you must be the agent that manages the
+Installation, which is why step 1 used the same browser). The app gets its
+token and can read and write; each document shows up as a File in the
+folder. Tokens are listed and revoked on the Installation page.
+
+Not verified: that apps built on remotestorage.js 1.x (most published apps,
+Inspektor included) work with this server. The lane's e2e ran
+remotestorage.js 2.0.0-beta.10. A denied request is not reported back to the
+app (see the plugin's README, "Not supported, or not atomic").
+
+To connect from a page on your laptop instead, serve any remotestorage.js
+demo on `http://localhost:<port>`; the storage answers CORS for any origin.
+
 ## Moderated sessions
 
 A tester needs only the invite link,
@@ -86,25 +195,73 @@ tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest
 `moderator/run.sh` creates it on first run. The page:
 
 1. explains the session, what is recorded and where it goes, and asks for
-   consent;
-2. stores the test catalog URL in the browser, opens a fresh drive
+   consent; it tests the invite code as soon as it loads (`GET /check`);
+2. runs a sound check before Start: "Test microphone" asks for the
+   microphone and shows its level, and passes once it hears the tester;
+   an optional check shows what the speech recognizer made of a sentence;
+   "Test speakers" plays a line in the moderator's voice for the chosen
+   language, names the voice, and offers the other voices for that language
+   with "Try this voice"; a picked voice is kept for the browser session
+   (`sessionStorage`). Nothing is recorded during the check. Start stays off until the
+   microphone check passed or the tester chose "Type instead". The
+   microphone the check opened is the one recorded; screen sharing is still
+   asked for at Start, since sharing starts the recording;
+3. stores the test catalog URL in the browser, opens a fresh drive
    (`/app/dev-drive`) in a second window, and starts recording the shared
    screen and the microphone;
-3. listens with the browser's speech recognition (Chrome sends the audio to
+4. listens with the browser's speech recognition (Chrome sends the audio to
    Google), sends a turn to the moderator after a pause, a minute of silence
    or a new error in the collector log, and speaks the answer with the
    browser's speech synthesis;
-4. has a box for typed answers under the controls, for testers who can't
+5. has a box for typed answers under the controls, for testers who can't
    talk out loud or whose microphone doesn't work. Voice stays the default.
    A typed answer is sent at once (Enter) and reaches the moderator marked
    `[Tester, typed]`. Without a microphone (none, broken or refused) or
    without speech recognition (a browser other than Chrome or Edge), the
    session still starts, typed only, and records the screen without sound.
 
+Each way the start can fail has its own message, in both languages: invite
+code rejected (only when the moderator answers 403, which it does for a
+wrong or missing code and nothing else), no code in the link, unknown
+session plan (400), no more sessions today (429), microphone blocked (with
+how to allow it again in Chrome or Edge), no microphone, speech recognition
+not supported, screen sharing cancelled, and test server unreachable (no
+answer, or 5xx, with a Try again button). A microphone or screen problem is
+never reported as a code problem.
+
+The voice is picked by `page/voices.js`: the exact language (`en-US`,
+`nl-NL`) before the same base language (`nl-BE`); within that, voices named
+Natural, Neural, Online, Premium, Enhanced or Siri, then Google's own
+("Google Nederlands"), then network voices (`localService: false`, Chrome and
+Edge), then the rest. Robotic and novelty voices (eSpeak, Fred, Albert,
+Zarvox, Bad News, Trinoids and the other old macOS ones) are never picked or
+offered. Chrome and Edge list voices only after `voiceschanged`, so the page
+waits for it, up to 3 s, unless it already has a good exact-language voice,
+and switches to a better voice that arrives later from the next line on
+(unless the tester picked one). Rate and pitch are 1.0. The ranking is
+checked against stubbed voice lists, not yet by ear in each browser: how
+good the best voice sounds depends on the tester's browser and OS.
+
+`e2e/run.mjs` checks the sound check and these messages headlessly: it runs
+the moderator with a dummy code against a stand-in for the Claude API and
+drives Chromium's new headless mode with fake media devices, or with the
+microphone denied. A cancelled screen picker is simulated (headless Chromium
+cannot deny one); real speech recognition and whether the speaker test is
+audible are not covered.
+
+```sh
+npm ci --prefix usertest/moderator
+npm ci --prefix usertest/e2e && npx --prefix usertest/e2e playwright install chromium
+node usertest/e2e/run.mjs
+# with a Chromium other than Playwright's download:
+CHROMIUM_PATH=/path/to/chromium node usertest/e2e/run.mjs
+```
+
 The page is in English or Dutch (Nederlands), picked with the buttons at the
 top, by `&lang=nl` in the invite link, or remembered from a previous visit.
 The choice switches the page's texts, the speech recognizer, the
-moderator's voice (a `nl-NL` voice, else `nl-BE`, else the browser's default)
+moderator's voice (a `nl-NL` voice, else `nl-BE`, else the browser's
+default; never an English voice reading Dutch)
 and the language the moderator speaks, also mid-session: switching back to
 English restores all of it from the next line on. Session plans stay in
 English; each turn tells Claude the language in a `[Language]` line, so the

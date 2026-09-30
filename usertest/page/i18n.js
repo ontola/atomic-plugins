@@ -46,8 +46,6 @@ export const TEXT = {
           window too.
         </li>
       </ul>`,
-    unsupported:
-      "This browser can't do speech recognition. You can still type your answers, or open this page in Chrome or Edge to talk.",
     // HTML
     consent: `<p><strong>What is recorded and where it goes</strong></p>
       <ul>
@@ -104,12 +102,63 @@ export const TEXT = {
       saving: 'Saving the recording…',
       ended: 'Thank you! The session has ended; you can close both windows.',
     },
+    check: {
+      heading: 'Sound check',
+      intro:
+        "Before you start, check that we can hear you and that you can hear the moderator. Nothing is recorded during this check. Can't talk or no microphone? Choose to type instead.",
+      micButton: 'Test microphone',
+      micAsking: 'Your browser asks to use the microphone: choose Allow.',
+      micListening:
+        'The microphone is on. Say something, so we know it hears you.',
+      micOk: '✓ We can hear you.',
+      levelLabel: 'Microphone level',
+      speechButton: 'Check speech recognition (optional)',
+      speechNote:
+        'Say a short sentence. Chrome sends this to Google to turn it into text, as in the session.',
+      speechListening: 'Listening… say a short sentence.',
+      speechHeard: words => `✓ Recognized: “${words}”`,
+      speechNone:
+        'No words were recognized. Try again, a bit louder or closer.',
+      speechFailed: reason =>
+        `Speech recognition did not work (${reason}). You can still talk: the recording has your voice. Or type instead.`,
+      speakerButton: 'Test speakers',
+      speakerLine:
+        'Hello! This is the voice of the moderator. If you can hear me, the sound works.',
+      speakerHint: voice =>
+        `Playing a line in the moderator's voice (${voice}). No sound? Check the volume and your headphones.`,
+      defaultVoice: 'the default voice',
+      voiceLabel: "Moderator's voice (pick another if it sounds robotic)",
+      voiceTry: 'Try this voice',
+      typeInstead: 'Type instead',
+      typedChosen:
+        '✓ You will type your answers. The moderator still speaks, so keep the sound on.',
+      needCheck:
+        'To start, test your microphone above, or choose to type instead.',
+    },
     errors: {
       noCode: 'This page needs the invite link you received.',
-      notAllowed:
-        'The session needs screen sharing. Please allow it and try again.',
-      cannotStart: message =>
-        `Could not start the session (${message}). Is the invite link complete?`,
+      wrongCode:
+        'The invite code in this link was not accepted. Please open the exact link you received, or ask us for a new one.',
+      badLink:
+        'The invite link points to a session that does not exist. Please open the exact link you received.',
+      tooMany:
+        'No more sessions can start today. Please try again tomorrow, or ask us.',
+      network:
+        'Could not reach the test server. Check your internet connection and try again.',
+      retry: 'Try again',
+      micDenied:
+        'The microphone is blocked for this page. To allow it in Chrome or Edge: click the lock or settings icon left of the address bar, choose Site settings, set Microphone to Allow, then reload this page. Or type instead.',
+      noMic:
+        'No microphone was found. Connect one (or a headset) and test again, or type instead.',
+      micOther: reason =>
+        `The microphone could not be opened (${reason}). Close other apps that use it and test again, or type instead.`,
+      speechUnsupported:
+        "This browser can't do speech recognition. Use Chrome or Edge to talk, or type instead.",
+      screenCancelled:
+        'Screen sharing was cancelled or blocked. The session needs it: press Start again and choose your entire screen.',
+      screenFailed: reason =>
+        `Screen sharing did not work (${reason}). Try again, or use Chrome or Edge on a laptop or desktop.`,
+      cannotStart: message => `Could not start the session (${message}).`,
     },
   },
 
@@ -140,8 +189,6 @@ export const TEXT = {
           niet te veranderen.
         </li>
       </ul>`,
-    unsupported:
-      'Deze browser kan geen spraak herkennen. Je kunt je antwoorden wel typen, of deze pagina in Chrome of Edge openen om te praten.',
     // HTML
     consent: `<p><strong>Wat er wordt opgenomen en waar het heen gaat</strong></p>
       <ul>
@@ -198,13 +245,66 @@ export const TEXT = {
       saving: 'De opname wordt opgeslagen…',
       ended: 'Bedankt! De sessie is afgelopen; je kunt beide vensters sluiten.',
     },
+    check: {
+      heading: 'Geluidstest',
+      intro:
+        'Controleer voordat je begint of we je kunnen horen en of jij de gespreksleider kunt horen. Tijdens deze test wordt niets opgenomen. Kun je niet praten of heb je geen microfoon? Kies dan voor typen.',
+      micButton: 'Test de microfoon',
+      micAsking:
+        'Je browser vraagt om de microfoon te gebruiken: kies Toestaan.',
+      micListening:
+        'De microfoon staat aan. Zeg iets, zodat we weten dat hij je hoort.',
+      micOk: '✓ We kunnen je horen.',
+      levelLabel: 'Microfoonniveau',
+      speechButton: 'Test de spraakherkenning (optioneel)',
+      speechNote:
+        'Zeg een korte zin. Chrome stuurt die naar Google om er tekst van te maken, net als in de sessie.',
+      speechListening: 'Luistert… zeg een korte zin.',
+      speechHeard: words => `✓ Herkend: “${words}”`,
+      speechNone:
+        'Er zijn geen woorden herkend. Probeer het opnieuw, wat harder of dichterbij.',
+      speechFailed: reason =>
+        `De spraakherkenning werkte niet (${reason}). Je kunt nog steeds praten: de opname heeft je stem. Of kies voor typen.`,
+      speakerButton: 'Test de luidsprekers',
+      speakerLine:
+        'Hallo! Dit is de stem van de gespreksleider. Als je mij hoort, werkt het geluid.',
+      speakerHint: voice =>
+        `Er klinkt een zin met de stem van de gespreksleider (${voice}). Geen geluid? Controleer het volume en je koptelefoon.`,
+      defaultVoice: 'de standaardstem',
+      voiceLabel:
+        'Stem van de gespreksleider (kies een andere als die robotachtig klinkt)',
+      voiceTry: 'Probeer deze stem',
+      typeInstead: 'Liever typen',
+      typedChosen:
+        '✓ Je typt je antwoorden. De gespreksleider praat wel, dus laat het geluid aan.',
+      needCheck:
+        'Test eerst hierboven je microfoon, of kies voor typen, om te kunnen starten.',
+    },
     errors: {
       noCode:
         'Deze pagina heeft de uitnodigingslink nodig die je hebt gekregen.',
-      notAllowed:
-        'De sessie heeft schermdelen nodig. Sta dat toe en probeer het opnieuw.',
-      cannotStart: message =>
-        `De sessie kon niet starten (${message}). Is de uitnodigingslink compleet?`,
+      wrongCode:
+        'De uitnodigingscode in deze link werd niet geaccepteerd. Open precies de link die je hebt gekregen, of vraag ons om een nieuwe.',
+      badLink:
+        'De uitnodigingslink verwijst naar een sessie die niet bestaat. Open precies de link die je hebt gekregen.',
+      tooMany:
+        'Vandaag kunnen er geen sessies meer starten. Probeer het morgen opnieuw, of vraag het ons.',
+      network:
+        'De testserver is niet bereikbaar. Controleer je internetverbinding en probeer het opnieuw.',
+      retry: 'Opnieuw proberen',
+      micDenied:
+        'De microfoon is geblokkeerd voor deze pagina. Toestaan in Chrome of Edge: klik op het slotje of instellingen-icoon links van de adresbalk, kies Site-instellingen, zet Microfoon op Toestaan en laad deze pagina opnieuw. Of kies voor typen.',
+      noMic:
+        'Er is geen microfoon gevonden. Sluit er een aan (of een headset) en test opnieuw, of kies voor typen.',
+      micOther: reason =>
+        `De microfoon kon niet worden geopend (${reason}). Sluit andere apps die hem gebruiken en test opnieuw, of kies voor typen.`,
+      speechUnsupported:
+        'Deze browser kan geen spraak herkennen. Gebruik Chrome of Edge om te praten, of kies voor typen.',
+      screenCancelled:
+        'Schermdelen is geannuleerd of geblokkeerd. De sessie heeft het nodig: druk opnieuw op Start en kies je hele scherm.',
+      screenFailed: reason =>
+        `Schermdelen werkte niet (${reason}). Probeer het opnieuw, of gebruik Chrome of Edge op een laptop of desktop.`,
+      cannotStart: message => `De sessie kon niet starten (${message}).`,
     },
   },
 };
