@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   loadLanes,
@@ -16,6 +16,9 @@ import {
   matrixFor,
   needsPluginRoutesBuild,
   pluginRoutesLevels,
+  sidecarsFor,
+  sidecarDockerfile,
+  sidecarImageEnv,
   root,
   PLUGIN_BUILD_DEPENDENCIES,
   SHARED_PACKAGES,
@@ -396,6 +399,95 @@ test('only a run with a pluginRoutes lane asks for the plugin-routes build', () 
   assert.equal(needsPluginRoutesBuild(both, ['shared']), true);
   assert.equal(needsPluginRoutesBuild(both, ['all']), true);
   assert.equal(needsPluginRoutesBuild(both, []), false);
+});
+
+test('sidecars need read-write and one name, at the lane sidecar port', () => {
+  const e2e = { tiers: ['e2e'], e2e: ['integrations/p/e2e/p.spec.ts'] };
+  const ported = l => ({
+    ...cfg(l),
+    roleOffsets: { atomicServer: 0, sidecar: 3 },
+  });
+  const ok = lane({
+    ...e2e,
+    pluginRoutes: 'read-write',
+    sidecars: ['nextgraph'],
+  });
+  assert.doesNotThrow(() => validateConfig(ported(ok)));
+  assert.throws(() => validateConfig(cfg(ok)), /roleOffsets.sidecar/);
+  for (const [extra, message] of [
+    [{ pluginRoutes: 'read-only', sidecars: ['nextgraph'] }, /read-write/],
+    [{ sidecars: ['nextgraph'] }, /read-write/],
+    [{ pluginRoutes: 'read-write', sidecars: [] }, /one sidecar name/],
+    [{ pluginRoutes: 'read-write', sidecars: ['Next'] }, /one sidecar name/],
+    [{ pluginRoutes: 'read-write', sidecars: ['a', 'b'] }, /one sidecar name/],
+  ])
+    assert.throws(
+      () => validateConfig(ported(lane({ ...e2e, ...extra }))),
+      message,
+    );
+  const ng = config.lanes.find(l => l.id === 'nextgraph');
+  assert.deepEqual(ng.sidecars, ['nextgraph']);
+  assert.equal(
+    lanePorts(ng, config).sidecar,
+    lanePorts(ng, config).atomicServer + 3,
+  );
+});
+
+// ci.yml's build-sidecars builds each sidecar from this Dockerfile before the
+// lane runs, and the lane hands the image to the spec in this variable. A
+// lane naming a sidecar with no recipe would only fail in CI.
+test('each declared sidecar has an image recipe, and its spec reads the prebuilt image', () => {
+  const declared = [...new Set(config.lanes.flatMap(l => l.sidecars ?? []))];
+  assert.ok(declared.length > 0);
+
+  for (const name of declared) {
+    assert.ok(
+      existsSync(sidecarDockerfile(name)),
+      `no ${sidecarDockerfile(name)}`,
+    );
+    for (const withSidecar of config.lanes.filter(l =>
+      l.sidecars?.includes(name),
+    ))
+      for (const spec of withSidecar.e2e ?? [])
+        assert.match(
+          readFileSync(resolve(root, spec), 'utf8'),
+          new RegExp(`process\\.env\\.${sidecarImageEnv(name)}\\b`),
+          `${spec} does not read ${sidecarImageEnv(name)}`,
+        );
+  }
+
+  assert.equal(sidecarImageEnv('nextgraph'), 'NEXTGRAPH_SIDECAR_IMAGE');
+  assert.equal(sidecarImageEnv('my-store'), 'MY_STORE_SIDECAR_IMAGE');
+});
+
+test('the matrix names each lane sidecar, and the sidecar build list follows it', () => {
+  const e2e = { tiers: ['e2e'], e2e: ['integrations/p/e2e/p.spec.ts'] };
+  const both = {
+    ...cfg(
+      lane({ id: 'plain', ...e2e }),
+      lane({
+        id: 'ng',
+        ...e2e,
+        pluginRoutes: 'read-write',
+        sidecars: ['nextgraph'],
+      }),
+      lane({
+        id: 'ng2',
+        ...e2e,
+        pluginRoutes: 'read-write',
+        sidecars: ['nextgraph'],
+      }),
+    ),
+    roleOffsets: { atomicServer: 0, sidecar: 3 },
+  };
+  assert.deepEqual(
+    matrixFor(both, ['ng']).map(l => l.sidecars),
+    ['nextgraph'],
+  );
+  assert.equal(matrixFor(both, ['plain'])[0].sidecars, undefined);
+  assert.deepEqual(sidecarsFor(both, ['all']), ['nextgraph']);
+  assert.deepEqual(sidecarsFor(both, ['plain']), []);
+  assert.deepEqual(sidecarsFor(config, ['nextgraph']), ['nextgraph']);
 });
 
 test('the plugin-routes lane runs its e2e at read-only, then off', () => {

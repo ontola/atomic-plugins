@@ -32,6 +32,7 @@ import {
   routesImageFor,
   routesOrigin,
   serverEnv,
+  sidecarUrl,
   storeVolume,
 } from './serve.mjs';
 import { root, SERVER_ENV_RESERVED } from './lanes.mjs';
@@ -309,6 +310,27 @@ test('a plugin-routes lane runs the feature binary with its level, never the ima
     process.env = saved;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a lane sidecar is named to the server at read-write only, on the lane sidecar port', () => {
+  const withSidecar = { ...ports, sidecar: 41004 };
+  assert.equal(sidecarUrl(withSidecar), 'http://127.0.0.1:41004');
+  assert.deepEqual(pluginRoutesArgs('read-write', withSidecar, ['nextgraph']), [
+    '--plugin-routes',
+    'read-write',
+    '--routes-origin',
+    'http://routes.localhost:41001',
+    '--plugin-sidecars',
+    'nextgraph=http://127.0.0.1:41004',
+  ]);
+  // atomic-server refuses --plugin-sidecars below read-write.
+  for (const level of ['off', 'read-only'])
+    assert.ok(
+      !pluginRoutesArgs(level, withSidecar, ['nextgraph']).includes(
+        '--plugin-sidecars',
+      ),
+    );
+  assert.deepEqual(pluginRoutesArgs(undefined, withSidecar, ['nextgraph']), []);
 });
 
 test('routesImageFor: an explicit image, else the -plugin-routes variant of ATOMIC_SERVER_IMAGE', () => {

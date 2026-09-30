@@ -2,7 +2,12 @@
   "//": "One source of truth for the per-plugin CI lanes. Read by integrations/tooling/lanes.mjs, which .github/workflows/ci.yml and integrations/tooling/run-lane.mjs both go through. See integrations/PARALLEL_LANES.md.",
 
   "portBase": 19100,
-  "roleOffsets": { "atomicServer": 0, "devServer": 1, "mockProxy": 2 },
+  "roleOffsets": {
+    "atomicServer": 0,
+    "devServer": 1,
+    "mockProxy": 2,
+    "sidecar": 3
+  },
 
   "sharedIndexNote": "Port block for the CI jobs that are not a plugin lane — the hosting-surface check and the generic plugin-system e2e suite. A reserved index rather than a separate fixed block, so there is one port formula and lanes.test.mjs can prove it collides with nothing. No lane may take index 9.",
   "sharedIndex": 9,
@@ -146,9 +151,12 @@
       "id": "nextgraph",
       "index": 15,
       "platforms": [],
-      "tiers": ["node"],
+      "tiers": ["node", "e2e"],
       "nodeTests": ["integrations/nextgraph/plugin.test.mjs"],
-      "note": "Executable RDF interchange and reviewed Atomic snapshot storage; no live NextGraph broker verification."
+      "pluginRoutes": "read-write",
+      "sidecars": ["nextgraph"],
+      "e2e": ["integrations/nextgraph/e2e/nextgraph.spec.ts"],
+      "note": "RDF interchange between Atomic snapshots and NextGraph documents. The node tier tests the plugin module. The e2e tier runs the committed plugin in the server QuickJS sandbox, on atomic-server built with plugin-routes and started at read-write with --plugin-sidecars nextgraph=<the lane sidecar port>, against the operator sidecar in integrations/nextgraph/sidecar/ (a real NextGraph wallet and local verifier, built with docker). It installs the release (only an activated Installation has the app agent the host signs sidecar requests as) and needs a host with atomic-sidecar: operations that signs its sidecar requests: pin candidate17 (7dbd054a), where it passes; on a host without either the spec is skipped with that reason. No NextGraph broker (ngd) is involved: sync between brokers is not verified."
     },
     {
       "id": "timesheets",

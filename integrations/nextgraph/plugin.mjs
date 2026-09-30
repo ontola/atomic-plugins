@@ -1,9 +1,21 @@
-/** NextGraph SELECT-result interchange adapter; QuickJS, no transport or broker. */
+/**
+ * NextGraph RDF interchange for Atomic Server. QuickJS; it never holds a
+ * NextGraph key or opens a broker connection itself. Live reads and writes go
+ * through the operator's `nextgraph` sidecar (./sidecar/), reached only by the
+ * declared `atomic-sidecar:` operations below; see README.md, "Live sidecar".
+ */
+export const SIDECAR_QUERY = 'atomic-sidecar:/nextgraph/v1/query';
+export const SIDECAR_UPDATE = 'atomic-sidecar:/nextgraph/v1/update';
+
 export const manifest = {
   config: {
     key: 'nextgraph',
     properties: {
-      mode: { type: 'string', description: 'Choose import or export.' },
+      mode: {
+        type: 'string',
+        description:
+          'import (pasted result), pull (live, via the sidecar) or export.',
+      },
       parent: {
         type: 'string',
         description: 'Actual Atomic parent for the reviewed output resource.',
@@ -25,10 +37,28 @@ export const manifest = {
         description:
           'Stored Atomic PlainText snapshot subject; required in export mode.',
       },
+      document: {
+        type: 'string',
+        description:
+          'NextGraph document NURI (did:ng:o:...); required in pull mode and for pushing an export.',
+      },
     },
     required: ['mode', 'parent', 'id', 'name'],
   },
   schemaVersion: 3,
+  operations: [
+    { id: 'query', method: 'POST', url: SIDECAR_QUERY, effect: 'read' },
+    { id: 'update', method: 'POST', url: SIDECAR_UPDATE, effect: 'write' },
+  ],
+  http: {
+    sidecars: [
+      {
+        name: 'nextgraph',
+        reason:
+          "Reads and adds RDF in NextGraph documents the operator granted, through the operator's own NextGraph wallet.",
+      },
+    ],
+  },
   name: 'nextgraph',
   namespace: 'atomic-plugins',
   capabilities: [
@@ -226,6 +256,60 @@ function create(ctx, config, body, media) {
   };
 }
 
+/** A NextGraph document NURI as the sidecar accepts one. */
+function nuri(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= 512 &&
+    /^did:ng:o:[A-Za-z0-9_-]+(?::[A-Za-z0-9_:-]+)?$/.test(value)
+  );
+}
+
+/**
+ * Reads the configured document live, through the declared `query`
+ * operation. The sidecar runs exactly SELECT; this checks the result as
+ * strictly as a pasted one.
+ */
+export function pull(ctx, document) {
+  if (!nuri(document)) fail('Configure the NextGraph document NURI');
+  const response = ctx.http({
+    operation: 'query',
+    method: 'POST',
+    url: SIDECAR_QUERY,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ document }),
+  });
+  if (!response || response.status !== 200)
+    fail(
+      `NextGraph sidecar refused the query (${response?.status}): ${String(response?.body ?? '').slice(0, 300)}`,
+    );
+  parseResult(response.body);
+
+  return response.body;
+}
+
+/**
+ * The external write intent that pushes an exported update into a NextGraph
+ * document, for a person to approve (atomic-server `/plugin-external-apply`,
+ * which journals the sidecar's acknowledgement). The sidecar key is derived
+ * from the export id, so a retried approval is acknowledged, not repeated.
+ */
+export function pushIntent({ document, id, update }) {
+  if (!nuri(document)) fail('Configure the NextGraph document NURI');
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id || '')) fail('Configure the export id');
+  bounded(update, MAX_BYTES * 2);
+  if (!update.startsWith('INSERT DATA {\n')) fail('Only INSERT DATA is pushed');
+
+  return {
+    id: `push-${id}`,
+    operation: 'update',
+    method: 'POST',
+    url: SIDECAR_UPDATE,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ document, key: `atomic-export-${id}`, update }),
+  };
+}
+
 export function run(ctx) {
   const config = ctx.config || {};
   if (
@@ -245,6 +329,12 @@ export function run(ctx) {
       config.result,
       'application/sparql-results+json',
     );
+  }
+
+  if (config.mode === 'pull') {
+    const body = pull(ctx, config.document);
+
+    return create(ctx, config, body, 'application/sparql-results+json');
   }
 
   if (config.mode === 'export') {
@@ -268,5 +358,5 @@ export function run(ctx) {
     );
   }
 
-  fail('Mode must be import or export');
+  fail('Mode must be import, pull or export');
 }

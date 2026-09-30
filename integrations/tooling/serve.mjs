@@ -95,11 +95,34 @@ export function serverEnv(ports, store) {
 export const routesOrigin = ports =>
   `http://routes.localhost:${ports.atomicServer}`;
 
-/** atomic-server's arguments for a lane at one `--plugin-routes` level. */
-export const pluginRoutesArgs = (level, ports) =>
+/**
+ * Where a lane's operator sidecar listens (lanes.json `sidecars`): the
+ * lane's `sidecar` port, on loopback, which is the only kind of address
+ * `ATOMIC_PLUGIN_SIDECARS` accepts (atomic-server#1726).
+ */
+export const sidecarUrl = ports => `http://127.0.0.1:${ports.sidecar}`;
+
+/**
+ * atomic-server's arguments for a lane at one `--plugin-routes` level. A
+ * lane's `sidecars` are named to the server only at `read-write`, the one
+ * level at which atomic-server accepts `--plugin-sidecars`; the lane itself
+ * starts the daemon on [sidecarUrl].
+ */
+export const pluginRoutesArgs = (level, ports, sidecars = []) =>
   level === undefined
     ? []
-    : ['--plugin-routes', level, '--routes-origin', routesOrigin(ports)];
+    : [
+        '--plugin-routes',
+        level,
+        '--routes-origin',
+        routesOrigin(ports),
+        ...(level === 'read-write' && sidecars.length
+          ? [
+              '--plugin-sidecars',
+              sidecars.map(name => `${name}=${sidecarUrl(ports)}`).join(','),
+            ]
+          : []),
+      ];
 
 /**
  * The plugin-routes options atomic-server reads from its environment. A build
@@ -336,8 +359,8 @@ async function waitFor(url, what) {
 
 /**
  * A lane's own atomic-server environment (lanes.json `serverEnv`), with
- * `{atomicServer}`, `{devServer}` and `{mockProxy}` replaced by that lane's
- * ports. Validated in lanes.mjs: only `ATOMIC_*` names, never
+ * `{atomicServer}`, `{devServer}`, `{mockProxy}` and `{sidecar}` replaced by
+ * that lane's ports. Validated in lanes.mjs: only `ATOMIC_*` names, never
  * SERVER_ENV_RESERVED (the plugin-routes options, whose values come from
  * `pluginRoutes`, and what {@link serverEnv} derives). A relative path in a
  * value resolves against this repository's root, the local binary's working
@@ -347,8 +370,9 @@ export const laneServerEnv = (declared, ports) =>
   Object.fromEntries(
     Object.entries(declared ?? {}).map(([key, value]) => [
       key,
-      value.replace(/\{(atomicServer|devServer|mockProxy)\}/g, (_, role) =>
-        String(ports[role]),
+      value.replace(
+        /\{(atomicServer|devServer|mockProxy|sidecar)\}/g,
+        (_, role) => String(ports[role]),
       ),
     ]),
   );
@@ -371,10 +395,12 @@ export async function bringUp({
   label = 'shared',
   pluginRoutes,
   serverEnv: laneEnv,
+  sidecars = [],
 }) {
   const config = loadLanes();
   let image = serverImage();
   let binary = resolve(serverCheckout(), 'target/e2e/atomic-server');
+  const routeArgs = pluginRoutesArgs(pluginRoutes, ports, sidecars);
 
   if (pluginRoutes !== undefined) {
     // The default image can't open the gates; its variant can.
@@ -426,6 +452,12 @@ export async function bringUp({
   let container;
 
   if (image) {
+    // Inside the container 127.0.0.1 is the container, not the host where
+    // the lane runs its sidecar.
+    if (routeArgs.includes('--plugin-sidecars'))
+      throw new Error(
+        `${label}: a lane with sidecars needs an atomic-server binary (ATOMIC_SERVER_ROUTES_BINARY or a local build), not the ${image} image`,
+      );
     container = `atomic-plugins-${label}-${ports.atomicServer}-${process.pid}-${Date.now()}`;
     start(
       'atomic-server',
@@ -439,11 +471,11 @@ export async function bringUp({
           ...serverEnv(ports, IMAGE_STORE),
           ...laneServerEnv(laneEnv, ports),
         },
-        command: pluginRoutesArgs(pluginRoutes, ports),
+        command: routeArgs,
       }),
     );
   } else {
-    start('atomic-server', binary, pluginRoutesArgs(pluginRoutes, ports), {
+    start('atomic-server', binary, routeArgs, {
       ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
       ...laneServerEnv(laneEnv, ports),
     });
@@ -540,6 +572,7 @@ if (
     label: lane?.id ?? 'shared',
     pluginRoutes,
     serverEnv: lane?.serverEnv,
+    sidecars: lane?.sidecars,
   });
   console.log(`serving ${JSON.stringify(ports)} — ctrl-c to stop`);
   for (const signal of ['SIGINT', 'SIGTERM'])

@@ -179,6 +179,30 @@ export function validateConfig(config) {
         );
     }
 
+    // Operator sidecars (ATOMIC_PLUGIN_SIDECARS) the lane's server is started
+    // with, all at the lane's one `sidecar` port. atomic-server accepts them
+    // only at `read-write`; the lane's own spec starts the daemon.
+    if (lane.sidecars !== undefined) {
+      if (
+        !Array.isArray(lane.sidecars) ||
+        lane.sidecars.length !== 1 ||
+        !lane.sidecars.every(
+          name => typeof name === 'string' && /^[a-z0-9-]{1,64}$/.test(name),
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: sidecars must list one sidecar name (lowercase letters, digits and -)`,
+        );
+      if (!pluginRoutesLevels(lane).includes('read-write'))
+        throw new Error(
+          `lane ${lane.id}: sidecars need pluginRoutes read-write, the only level atomic-server accepts them at`,
+        );
+      if (config.roleOffsets?.sidecar === undefined)
+        throw new Error(
+          `lane ${lane.id}: sidecars need a sidecar port (roleOffsets.sidecar)`,
+        );
+    }
+
     if (lane.paths !== undefined) {
       if (!Array.isArray(lane.paths))
         throw new Error(`lane ${lane.id}: paths must be an array`);
@@ -357,8 +381,35 @@ export function matrixFor(config, changed) {
     tiers: l.tiers.join(','),
     // ci.yml downloads the plugin-routes build for these jobs only.
     ...(pluginRoutesLevels(l).length ? { 'plugin-routes': 'true' } : {}),
+    // ci.yml loads these sidecars' images (build-sidecars) for these jobs only.
+    ...(l.sidecars?.length ? { sidecars: l.sidecars.join(',') } : {}),
   }));
 }
+
+/**
+ * The operator sidecars the lanes in this run start, each built by ci.yml's
+ * `build-sidecars` from `integrations/<name>/sidecar/Dockerfile`
+ * (`sidecarDockerfile`), sorted and without repeats.
+ */
+export const sidecarsFor = (config, changed) =>
+  [
+    ...new Set(
+      matrixFor(config, changed).flatMap(l =>
+        l.sidecars ? l.sidecars.split(',') : [],
+      ),
+    ),
+  ].sort();
+
+/** Where a sidecar's image recipe lives; its directory is the build context. */
+export const sidecarDockerfile = (name, base = root) =>
+  resolve(base, 'integrations', name, 'sidecar', 'Dockerfile');
+
+/**
+ * The environment variable a lane's spec reads the prebuilt image of sidecar
+ * `name` from: `nextgraph` -> `NEXTGRAPH_SIDECAR_IMAGE`.
+ */
+export const sidecarImageEnv = name =>
+  `${name.toUpperCase().replaceAll('-', '_')}_SIDECAR_IMAGE`;
 
 /**
  * Whether any lane in this run needs atomic-server built with the
@@ -385,6 +436,10 @@ if (
       String(needsPluginRoutesBuild(config, JSON.parse(argument ?? '[]'))) +
         '\n',
     );
+  else if (mode === 'sidecars')
+    process.stdout.write(
+      JSON.stringify(sidecarsFor(config, JSON.parse(argument ?? '[]'))) + '\n',
+    );
   else if (mode === 'ports')
     process.stdout.write(
       JSON.stringify(
@@ -395,7 +450,7 @@ if (
     );
   else {
     console.error(
-      'Usage: lanes.mjs filters | matrix <changed-json> | plugin-routes <changed-json> | ports',
+      'Usage: lanes.mjs filters | matrix <changed-json> | plugin-routes <changed-json> | sidecars <changed-json> | ports',
     );
     process.exit(1);
   }

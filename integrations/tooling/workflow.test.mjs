@@ -329,7 +329,7 @@ test('the plugin-routes build runs only for lanes that need it, and those lanes 
   const lane = jobBlock(workflow, 'lane').join('\n');
   assert.match(
     lane,
-    /needs: \[changes, build-server, build-server-plugin-routes\]/,
+    /needs: \[changes, build-server, build-server-plugin-routes, build-sidecars\]/,
   );
   assert.match(lane, /!cancelled\(\)/);
   assert.match(lane, /needs\.build-server-plugin-routes\.result != 'failure'/);
@@ -338,4 +338,48 @@ test('the plugin-routes build runs only for lanes that need it, and those lanes 
   );
   assert.match(download, /if: matrix\.plugin-routes == 'true'/);
   assert.match(lane, /ATOMIC_SERVER_ROUTES_BINARY: /);
+});
+
+test('sidecar images are built outside the lane, only for lanes that start one, and reach their spec', () => {
+  const changes = jobBlock(workflow, 'changes').join('\n');
+  assert.match(changes, /lanes\.mjs sidecars "\$CHANGED"/);
+  assert.match(
+    changes,
+    /sidecars: \$\{\{ steps\.decide\.outputs\.sidecars \}\}/,
+  );
+
+  const build = jobBlock(workflow, 'build-sidecars').join('\n');
+  assert.match(build, /if: needs\.changes\.outputs\.sidecars != '\[\]'/);
+  assert.match(build, /timeout-minutes: \d+/);
+  // Named by the content of its source, pulled (and label-checked) first.
+  assert.match(build, /git ls-files -s "\$dir" \| sha256sum/);
+  const steps = stepsOf(workflow, 'build-sidecars');
+  const pull = steps.findIndex(s => s.includes('docker pull'));
+  const buildStep = steps.findIndex(s =>
+    s.includes('docker/build-push-action'),
+  );
+  assert.ok(pull !== -1 && buildStep > pull, 'pull before building');
+  assert.match(steps[pull], /dev\.atomicdata\.sidecar\.source/);
+  assert.match(steps[buildStep], /if: steps\.image\.outputs\.hit != 'true'/);
+  assert.match(steps[buildStep], /cache-to: type=gha,.*mode=min/);
+  // Fork PRs never publish.
+  const publish = steps.find(s => s.includes('docker push'));
+  assert.match(
+    publish,
+    /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
+  );
+  assert.match(publish, /continue-on-error: true/);
+  assert.match(build, /name: sidecar-image-\$\{\{ matrix\.sidecar \}\}/);
+
+  // The lane loads them and names each image to its spec.
+  const load = stepsOf(workflow, 'lane').find(s =>
+    s.includes('name: Load the sidecar images'),
+  );
+  assert.match(load, /if: matrix\.sidecars != ''/);
+  assert.match(load, /_SIDECAR_IMAGE/);
+  assert.match(load, /GITHUB_ENV/);
+  const download = stepsOf(workflow, 'lane').find(s =>
+    s.includes('pattern: sidecar-image-*'),
+  );
+  assert.match(download, /if: matrix\.sidecars != ''/);
 });
