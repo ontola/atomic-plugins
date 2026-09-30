@@ -24,7 +24,7 @@ export const QUESTION = {
 
 export const TEXT = {
   'en-US': {
-    title: "Try Atomic's new plugins",
+    title: 'Try something new in Atomic',
     languageLabel: 'Language',
     // HTML
     intro: `<p>
@@ -65,8 +65,8 @@ export const TEXT = {
           the moderator says next.
         </li>
         <li>
-          If you connect your own accounts (for example Google Calendar), the
-          imported data is stored on the test server too. You can disconnect
+          If what you test connects your own accounts (for example Google
+          Calendar), the imported data is stored on the test server too. You can disconnect
           afterwards.
         </li>
         <li>
@@ -74,6 +74,7 @@ export const TEXT = {
           after analysis.
         </li>
       </ul>`,
+    plan: 'What do you want to test?',
     name: 'Your first name (optional)',
     sessionLanguage:
       'The session is in English. You can switch the language at the top of this page at any time.',
@@ -114,7 +115,7 @@ export const TEXT = {
   },
 
   'nl-NL': {
-    title: 'Probeer de nieuwe plugins van Atomic',
+    title: 'Probeer iets nieuws in Atomic',
     languageLabel: 'Taal',
     // HTML
     intro: `<p>
@@ -159,8 +160,9 @@ export const TEXT = {
           Anthropic, om te bepalen wat de gespreksleider daarna zegt.
         </li>
         <li>
-          Als je je eigen accounts koppelt (bijvoorbeeld Google Agenda),
-          worden de geïmporteerde gegevens ook op de testserver bewaard. Je
+          Als wat je test je eigen accounts koppelt (bijvoorbeeld Google
+          Agenda), worden de geïmporteerde gegevens ook op de testserver
+          bewaard. Je
           kunt ze daarna weer ontkoppelen.
         </li>
         <li>
@@ -168,6 +170,7 @@ export const TEXT = {
           analyse verwijderd.
         </li>
       </ul>`,
+    plan: 'Wat wil je testen?',
     name: 'Je voornaam (optioneel)',
     sessionLanguage:
       'De sessie is in het Nederlands. Je kunt de taal bovenaan deze pagina op elk moment wisselen.',

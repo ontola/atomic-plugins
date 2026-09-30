@@ -5,7 +5,9 @@
  * the collector's log lines since the previous turn, asks Claude for the next
  * thing to say, and returns it for the browser to speak. The system prompt is
  * script.md (how to moderate) followed by one session plan from sessions/
- * (which tasks), picked by the invite link's `session` parameter.
+ * (which feature to test, and which tasks). The tester picks the plan on the
+ * page (`GET /plans` lists them); the invite link's `session` parameter
+ * preselects one.
  *
  * Per session it keeps, under SESSIONS_DIR/<id>/: meta.json, transcript.jsonl
  * (both sides, with the log lines each turn saw) and recording.webm (screen
@@ -106,6 +108,16 @@ const PLANS = Object.fromEntries(
 const DEFAULT_PLAN = 'calendar';
 if (!PLANS[DEFAULT_PLAN])
   throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
+/** What the page's "What do you want to test?" menu lists: each plan's
+ * first line, `# Session plan: <title>`, in the order of their titles. */
+const PLAN_LIST = Object.entries(PLANS)
+  .map(([id, text]) => {
+    const title = text.match(/^# (?:Session plan: )?(.+)$/m)?.[1]?.trim();
+    if (!title) throw new Error(`sessions/${id}.md has no # heading`);
+
+    return { id, title };
+  })
+  .sort((a, b) => a.title.localeCompare(b.title));
 const client = new Anthropic();
 /** id -> { dir, meta, lang, langChanged, started, plan, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
@@ -340,6 +352,10 @@ createServer(async (req, res) => {
     return reply(403, { error: 'Unknown invite code' });
 
   try {
+    // The plans the tester can pick from, before a session starts.
+    if (req.method === 'GET' && url.pathname === '/plans')
+      return reply(200, { default: DEFAULT_PLAN, plans: PLAN_LIST });
+
     if (req.method === 'POST' && url.pathname === '/sessions') {
       if (sessionsToday() >= MAX_SESSIONS_PER_DAY)
         return reply(429, { error: 'No more sessions today' });

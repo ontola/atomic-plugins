@@ -1,7 +1,8 @@
 # User-testing instance
 
-An atomic-server test instance, where people try the drive apps on their own
-laptop and with their own provider accounts. It replaces sessions on one
+An atomic-server test instance, where people try new Atomic features (the
+drive apps, and parts of Atomic itself) on their own laptop and with their
+own provider accounts. It replaces sessions on one
 prepared laptop. It runs on one DigitalOcean droplet, set up on 2026-09-28
 (Ubuntu 24.04, 2 vCPU, 4 GB, AMS3). This folder holds everything needed to
 rebuild it.
@@ -187,15 +188,22 @@ demo on `http://localhost:<port>`; the storage answers CORS for any origin.
 
 ## Moderated sessions
 
-A tester needs only the invite link,
-`https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>&session=<plan>`,
+A session tests one feature of Atomic: a drive app, or a part of Atomic
+itself (the calendar view on tables, say). A tester needs only the invite
+link, `https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>&session=<plan>`,
 and Chrome or Edge. `<plan>` names a session plan in
-[`moderator/sessions/`](moderator/sessions/): which app to test and which
-tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest-moderator.env` on the droplet;
+[`moderator/sessions/`](moderator/sessions/): which feature to test and which
+tasks to give. The page lists every plan in a "What do you want to test?"
+menu (`GET /usertest/api/plans`, titled by each plan's first heading), and
+`<plan>` only preselects one, so the tester can switch before starting;
+without it the menu starts on `calendar`. A switch is written back into the
+address bar, so a reload keeps it. A `<plan>` the moderator doesn't know
+stays in the menu, and starting with it fails with the list of known plans.
+The code is in `/etc/usertest-moderator.env` on the droplet;
 `moderator/run.sh` creates it on first run. The page:
 
-1. explains the session, what is recorded and where it goes, and asks for
-   consent;
+1. explains the session, lets the tester pick what to test, says what is
+   recorded and where it goes, and asks for consent;
 2. stores the test catalog URL in the browser, opens a fresh drive
    (`/app/dev-drive`) in a second window, and starts recording the shared
    screen and the microphone;
@@ -270,7 +278,8 @@ usage, and `input: "typed"` or `"voice"` and `lang` per tester turn), `screen-NN
 most 120 turns per session and 20 sessions per UTC day. The moderator keeps
 sessions in memory, so restarting it ends the sessions in progress.
 
-Not verified yet: a full session by a real tester, and Edge. The typed-answer
+Not verified yet: a full session by a real tester, and Edge. The plan menu
+(2026-09-30) was not run in a browser against the droplet's moderator. The typed-answer
 box was checked against the moderator with a stub in place of the Claude API
 (2026-09-29), not yet in a browser session with screen sharing.
 
