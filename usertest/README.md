@@ -113,10 +113,10 @@ source, not run.
   use up the Let's Encrypt rate limits that `plugins.`, `catalog.` and
   `logs.` renew under.
 - From atomic-server candidate16 on (atomic-server#1903), plugin routes only
-  honour `X-Forwarded-Host`/`-Proto` from a trusted proxy. Then `server.sh`
-  also needs `-e ATOMIC_TRUSTED_PROXIES=172.17.0.1` (Caddy reaches the
-  container from the Docker bridge gateway; see the comment in `server.sh`).
-  The default, candidate15, has no such setting.
+  honour `X-Forwarded-Host`/`-Proto` from a trusted proxy. So `server.sh`
+  passes `-e ATOMIC_TRUSTED_PROXIES=172.17.0.1` whenever plugin routes are
+  on (Caddy reaches the container from the Docker bridge gateway). The
+  default, candidate15, has no such setting and doesn't read the variable.
 
 ### Turning it on
 

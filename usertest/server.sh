@@ -42,12 +42,12 @@ case "$ROUTES" in
   read-only | read-write)
     IMAGE=$IMAGE-plugin-routes
     # From candidate16 on (ontola/atomic-server#1903), plugin routes only
-    # honour X-Forwarded-Host/-Proto from a trusted proxy. Caddy reaches the
-    # container from the Docker bridge gateway, so add then:
-    #   -e ATOMIC_TRUSTED_PROXIES=172.17.0.1
-    # candidate15 has no such setting and honours them from anyone.
+    # honour X-Forwarded-Host/-Proto from a trusted proxy: Caddy, which
+    # reaches the container from the Docker bridge gateway. candidate15 has
+    # no such setting (it honours them from anyone) and ignores the variable.
     set -- -e ATOMIC_PLUGIN_ROUTES="$ROUTES" \
-      -e ATOMIC_ROUTES_ORIGIN="https://routes.$BASE_DOMAIN"
+      -e ATOMIC_ROUTES_ORIGIN="https://routes.$BASE_DOMAIN" \
+      -e ATOMIC_TRUSTED_PROXIES=172.17.0.1
     ;;
   *)
     echo "USERTEST_PLUGIN_ROUTES must be off, read-only or read-write, not '$ROUTES'" >&2
