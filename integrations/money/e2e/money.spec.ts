@@ -217,7 +217,12 @@ test.describe('money integration', () => {
     await expect(dialog.getByText('"Café lunch"').first()).toBeVisible();
   });
 
-  test('Money app: a view of the Bank transactions table: import, statements, row editing, in-app check', async ({
+  // Skipped again: at candidate16 (38306758, with #1904) the host's "+ Add view"
+  // menu still sometimes never lists "New app" in CI (passed on #215, failed on
+  // #217, run 36616868387). The atomic-server follow-up (the app stays a loading
+  // placeholder until its snapshot repair, #1905) is in progress; remove this
+  // `fixme` in the pin PR that carries it, as its regression check.
+  test.fixme('Money app: a view of the Bank transactions table: import, statements, row editing, in-app check', async ({
     page,
   }) => {
     test.setTimeout(300_000);
