@@ -4,7 +4,7 @@
 
 `.atomic-server-ref` holds one full atomic-server commit SHA. CI, the lanes,
 `link-atomic-server.mjs` and `usertest-deploy.yml` all check out that
-commit. On 2026-09-30 it is candidate18, `a3d6e1e7d74ee6793068e39ff869b9aa1d107b48`.
+commit. On 2026-09-30 it is candidate19, `a12b74a6783b6158119e26a7d36aecadbedda0bf`.
 
 The pin is always a **candidate**: a commit on an atomic-server branch
 `claude/atomic-plugins-pin-candidateN`, never `develop`. A candidate
