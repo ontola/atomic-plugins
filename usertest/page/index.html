@@ -85,6 +85,23 @@
         background: transparent;
         color: var(--accent);
       }
+      h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      #level {
+        height: 0.75rem;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        overflow: hidden;
+        margin: 0.25rem 0;
+      }
+      #level-bar {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 80ms linear;
+      }
+      #retry { margin-top: 0.5rem; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -96,7 +113,6 @@
 
       <section id="intro" class="card">
         <div data-html="intro"></div>
-        <p id="unsupported" class="warn" data-text="unsupported" hidden></p>
       </section>
 
       <section id="consent" class="card">
@@ -108,8 +124,44 @@
           <input id="agree" type="checkbox" />
           <label for="agree" style="margin: 0" data-text="agree"></label>
         </p>
+      </section>
+
+      <!-- Sound check: nothing here is recorded or sent to the moderator
+           (the optional speech check goes through the browser's
+           recognizer, which in Chrome is Google's speech service). -->
+      <section id="check" class="card">
+        <h2 data-text="check.heading"></h2>
+        <p class="muted" data-text="check.intro"></p>
+        <p class="row">
+          <button id="mic-test" type="button" data-text="check.micButton"></button>
+          <button id="type-instead" type="button" class="secondary" data-text="check.typeInstead"></button>
+        </p>
+        <div id="level-row" hidden>
+          <span class="muted" id="level-label" data-text="check.levelLabel"></span>
+          <div id="level" role="meter" aria-labelledby="level-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="level-bar"></div>
+          </div>
+        </div>
+        <p id="mic-status" aria-live="polite"></p>
+        <p id="mic-error" class="warn" hidden></p>
+        <div id="speech-row" hidden>
+          <p class="row">
+            <button id="speech-test" type="button" class="secondary" data-text="check.speechButton"></button>
+          </p>
+          <p class="muted" data-text="check.speechNote"></p>
+          <p id="speech-status" aria-live="polite"></p>
+        </div>
+        <p class="row">
+          <button id="speaker-test" type="button" class="secondary" data-text="check.speakerButton"></button>
+        </p>
+        <p id="speaker-status" class="muted" aria-live="polite"></p>
+      </section>
+
+      <section id="go" class="card">
+        <p id="need-check" class="muted" data-text="check.needCheck"></p>
         <button id="start" data-text="start" disabled></button>
         <p id="error" class="warn" hidden></p>
+        <button id="retry" type="button" class="secondary" data-text="errors.retry" hidden></button>
       </section>
 
       <section id="session" class="card" hidden>
