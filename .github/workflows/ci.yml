@@ -41,6 +41,7 @@ name: CI
 # ## Job graph
 #
 #   changes -> build-server -> { lane (matrix), hosting-surface, e2e-plugin-system }
+#           -> build-sidecars (only for lanes that declare `sidecars`) -> lane
 #           -> shared-checks
 #           -> publish-image (same-repo PRs that change .atomic-server-ref;
 #                             not required by the `CI` gate)
@@ -100,6 +101,7 @@ jobs:
       matrix: ${{ steps.decide.outputs.matrix }}
       has-lanes: ${{ steps.decide.outputs.has-lanes }}
       plugin-routes: ${{ steps.decide.outputs.plugin-routes }}
+      sidecars: ${{ steps.decide.outputs.sidecars }}
       pin: ${{ steps.pin.outputs.sha }}
       pin-changed: ${{ steps.pin-filter.outputs.pin || 'false' }}
     steps:
@@ -160,6 +162,9 @@ jobs:
           # true when a lane in the matrix declares `pluginRoutes`, which
           # starts build-server-plugin-routes.
           echo "plugin-routes=$(node integrations/tooling/lanes.mjs plugin-routes "$CHANGED")" >> "$GITHUB_OUTPUT"
+          # The operator sidecars those lanes start (lanes.json `sidecars`), a
+          # JSON array that build-sidecars fans out over.
+          echo "sidecars=$(node integrations/tooling/lanes.mjs sidecars "$CHANGED")" >> "$GITHUB_OUTPUT"
           echo "changed: $CHANGED"
           echo "matrix:  $matrix"
 
@@ -514,6 +519,155 @@ jobs:
           path: atomic-server/target/e2e/atomic-server
           retention-days: 1
 
+  # One image per operator sidecar a lane in this run starts (lanes.json
+  # `sidecars`; today only nextgraph), from integrations/<name>/sidecar/.
+  # Why a job of its own and not a `docker build` inside the spec: the
+  # nextgraph sidecar compiles nextgraph-rs and its bundled RocksDB, and cold
+  # that outlasted the lane's whole 45-minute budget (PR #223, run
+  # 36703010952). Here it runs in parallel with build-server, with its own
+  # timeout and its output in the log.
+  #
+  # Where the image comes from, cheapest first:
+  #   1. ghcr.io/ontola/atomic-sidecar-<name>:<source>, where <source> is the
+  #      sha256 of `git ls-files -s integrations/<name>/sidecar` (every
+  #      tracked file's blob hash, so any edit to the recipe or the code is a
+  #      new tag). Label-checked like build-server's image.
+  #   2. Otherwise a buildx build, with the Actions cache (type=gha, mode=min:
+  #      the final image only, about 100 MB) for reruns of the same source,
+  #      e.g. on a fork PR. Then pushed as (1) when this run's token may
+  #      write packages (not fork PRs), never overwriting an existing tag.
+  # The registry is what makes the merge queue fast: a merge_group run
+  # selects every lane, and it cannot read Actions caches written by PR
+  # branches (and main never runs this workflow), so an Actions cache alone
+  # would rebuild the sidecar cold in every queue run.
+  # Either way the job's artifact is the same `docker save` of the image,
+  # tagged atomic-sidecar-<name>:ci, which the lane loads.
+  build-sidecars:
+    name: Build sidecar image (${{ matrix.sidecar }})
+    needs: changes
+    if: needs.changes.outputs.sidecars != '[]' && needs.changes.outputs.sidecars != ''
+    runs-on: ubuntu-latest
+    # A cold nextgraph build is 45+ minutes on a hosted runner; a hit is ~1.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        sidecar: ${{ fromJSON(needs.changes.outputs.sidecars) }}
+    steps:
+      - name: Checkout atomic-plugins
+        uses: actions/checkout@v4
+        with:
+          path: atomic-plugins
+
+      - name: Name the image after its source
+        id: tag
+        working-directory: atomic-plugins
+        env:
+          SIDECAR: ${{ matrix.sidecar }}
+        run: |
+          set -eu
+          dir="integrations/$SIDECAR/sidecar"
+          test -f "$dir/Dockerfile"
+          source=$(git ls-files -s "$dir" | sha256sum | cut -d' ' -f1)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "context=$dir" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/ontola/atomic-sidecar-$SIDECAR:$source" >> "$GITHUB_OUTPUT"
+          echo "local=atomic-sidecar-$SIDECAR:ci" >> "$GITHUB_OUTPUT"
+          echo "$dir -> $source"
+
+      # Never fatal, as in build-server: without a login a private package's
+      # pull fails and the job builds instead.
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use the published image for this source, if there is one
+        id: image
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+          LOCAL: ${{ steps.tag.outputs.local }}
+          SOURCE: ${{ steps.tag.outputs.source }}
+        run: |
+          set -u
+          hit=false
+          if docker pull --platform linux/amd64 "$IMAGE"; then
+            label=$(docker image inspect --format '{{ index .Config.Labels "dev.atomicdata.sidecar.source" }}' "$IMAGE")
+            if [ "$label" = "$SOURCE" ]; then
+              docker tag "$IMAGE" "$LOCAL"
+              hit=true
+            else
+              echo "::warning::$IMAGE is labelled '$label', not $SOURCE; building"
+            fi
+          else
+            echo "No image for this source yet; building"
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        if: steps.image.outputs.hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile's `cargo test` runs here too, so a red sidecar unit
+      # test fails this job.
+      - name: Build the image
+        if: steps.image.outputs.hit != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: atomic-plugins/${{ steps.tag.outputs.context }}
+          platforms: linux/amd64
+          load: true
+          tags: |
+            ${{ steps.tag.outputs.local }}
+            ${{ steps.tag.outputs.image }}
+          labels: dev.atomicdata.sidecar.source=${{ steps.tag.outputs.source }}
+          cache-from: type=gha,scope=sidecar-${{ matrix.sidecar }}
+          cache-to: type=gha,scope=sidecar-${{ matrix.sidecar }},mode=min
+
+      # Fork PRs get a read-only token; everything else (same-repo PRs, the
+      # merge queue, a dispatch) publishes, so the next run pulls. A tag is a
+      # content hash and is never overwritten, so a race only pushes the same
+      # source twice. Not fatal: a failed push costs later runs a build.
+      - name: Publish the image for this source
+        if: >-
+          steps.image.outputs.hit != 'true'
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -eu
+          if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "$IMAGE already exists; not overwriting it"
+          else
+            docker push "$IMAGE"
+          fi
+
+      - name: Save the image
+        env:
+          LOCAL: ${{ steps.tag.outputs.local }}
+          SIDECAR: ${{ matrix.sidecar }}
+        run: |
+          set -eu
+          docker image inspect --format '{{ .Size }} bytes' "$LOCAL"
+          docker save "$LOCAL" | gzip -1 > "sidecar-$SIDECAR.tar.gz"
+          ls -l "sidecar-$SIDECAR.tar.gz"
+
+      - name: Upload the image
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-image-${{ matrix.sidecar }}
+          path: sidecar-${{ matrix.sidecar }}.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
   # Not gated per lane: certify.mjs discovers and reports every certified
   # package in one pass regardless of what changed, and this layer is local
   # typecheck/bundle/fixture work with no server or browser involved — it is
@@ -678,9 +832,12 @@ jobs:
 
   lane:
     name: "Lane: ${{ matrix.lane }} (${{ matrix.tiers }})"
-    needs: [changes, build-server, build-server-plugin-routes]
-    # build-server-plugin-routes is skipped on most runs, and a skipped need
-    # skips this job too unless the condition names a status check itself.
+    needs: [changes, build-server, build-server-plugin-routes, build-sidecars]
+    # build-server-plugin-routes and build-sidecars are skipped on most runs,
+    # and a skipped need skips this job too unless the condition names a
+    # status check itself. A failed sidecar build does not hold back the
+    # other lanes: the lane that needs it fails at its download, and the
+    # gate fails on build-sidecars itself.
     if: >-
       !cancelled()
       && needs.changes.outputs.has-lanes == 'true'
@@ -777,6 +934,31 @@ jobs:
       - name: Make the plugin-routes server binary executable
         if: matrix.plugin-routes == 'true'
         run: chmod +x atomic-server-plugin-routes/atomic-server
+
+      # A lane that declares `sidecars` (matrix.sidecars, from lanes.mjs)
+      # gets the images build-sidecars made, and its spec gets each one's tag
+      # in <NAME>_SIDECAR_IMAGE (lanes.mjs sidecarImageEnv), so it never
+      # builds one itself.
+      - name: Download the sidecar images
+        if: matrix.sidecars != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sidecar-image-*
+          path: sidecar-images
+          merge-multiple: true
+
+      - name: Load the sidecar images
+        if: matrix.sidecars != ''
+        env:
+          SIDECARS: ${{ matrix.sidecars }}
+        run: |
+          set -eu
+          for name in $(printf '%s' "$SIDECARS" | tr ',' ' '); do
+            gunzip -c "sidecar-images/sidecar-$name.tar.gz" | docker load
+            var="$(printf '%s' "$name" | tr 'a-z-' 'A-Z_')_SIDECAR_IMAGE"
+            echo "$var=atomic-sidecar-$name:ci" >> "$GITHUB_ENV"
+            echo "$var=atomic-sidecar-$name:ci"
+          done
 
       # plugins.spec.ts resolves `@tomic/lib` to its built `dist/index.cjs`.
       # In the old single-job workflow that file happened to exist because
@@ -1133,6 +1315,7 @@ jobs:
       - changes
       - build-server
       - build-server-plugin-routes
+      - build-sidecars
       - shared-checks
       - lane
       - hosting-surface
