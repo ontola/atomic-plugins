@@ -99,8 +99,9 @@ on every `.ts`; hedged "declared, not verified" wording in docs; heavy runs
 - **ghcr from the cloud.** On 2026-09-30 the cloud environment's egress policy
   denied `pkg-containers.githubusercontent.com`, ghcr's blob host, so cloud
   sessions could fetch image manifests but not pull layers
-  (`atomic-server-e2e` included). Build from source there, or hand the step
-  to someone with a laptop.
+  (`atomic-server-e2e` included), and the containers have no Docker daemon.
+  Build from source there: the SessionStart hook does that for the pin (see
+  AGENTS.md, "Claude Code cloud sessions").
 - **atomic-server from the cloud.** A cloud session may have no
   ontola/atomic-server access through the GitHub API. atomic-server is
   public, so an anonymous clone through the session's git proxy works:

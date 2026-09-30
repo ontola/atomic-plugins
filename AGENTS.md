@@ -440,3 +440,43 @@ docker build -f integrations/tooling/atomic-server-e2e/Dockerfile \
   --build-arg ATOMIC_SERVER_SHA="$SHA" --build-arg CARGO_BUILD_JOBS=6 \
   -t "ghcr.io/ontola/atomic-server-e2e:$SHA" "$DIR"
 ```
+
+### Claude Code cloud sessions
+
+`.claude/hooks/session-start.sh`, registered in `.claude/settings.json`, sets
+up Claude Code on the web (cloud) sessions. It only runs when
+`CLAUDE_CODE_REMOTE=true`, so local sessions are unaffected. It is
+synchronous, so the session waits for it. The timeout is 5400 s; the cold run
+took 22 min on 2026-09-30. It is idempotent: a warm re-run skips the build
+and takes about 12 s, and it leaves `git status` clean in this repo and in the
+checkout. Every step is best-effort, and it ends by printing a warning count.
+In order, it:
+
+- puts Node 22 first on `PATH` (`/opt/node22`) if `node` is another version;
+- exports `ATOMIC_SERVER_CHECKOUT=$HOME/.cache/atomic-plugins/atomic-server`
+  and, because cloud containers have no IPv6, `ATOMIC_IP=0.0.0.0` through
+  `$CLAUDE_ENV_FILE`. Without that, atomic-server exits with "Cannot bind to
+  endpoint :::<port>: Address family not supported by protocol";
+- runs `link-atomic-server.mjs` (its `pnpm install` included), builds
+  `@tomic/lib`, and installs every plugin lockfile, as CI does;
+- installs Playwright's Chromium for `browser/e2e`. The proxy blocks
+  `cdn.playwright.dev`, so it falls back to the same Chrome for Testing zips
+  on `storage.googleapis.com`;
+- builds the pinned atomic-server from source with ci.yml's `build-server`
+  commands (Rust toolchain and WASM targets, wasm-pack, the browser WASM
+  bundle, `cargo build --profile e2e`). A stamp next to the binary skips this
+  on a warm run. After a pin bump, `link-atomic-server.mjs` moves the checkout
+  in place and the rebuild reuses its `target/`.
+
+What doesn't work in the cloud: the `ATOMIC_SERVER_IMAGE` route. There is no
+Docker daemon, and the proxy denies ghcr's blob host
+(`pkg-containers.githubusercontent.com`). The plugin-routes build
+(`server-build.mjs`) is not warmed. The `plugin-routes` lane would build it
+on first use, from `~/gh/ontola/atomic-server` or `ATOMIC_SERVER_REPO` (not
+verified in the cloud).
+
+Keep the hook up to date. When the environment's requirements change (the
+Node version, ci.yml's build-server commands or plugin-dependency install,
+the Playwright version, a new setup step in `link-atomic-server.mjs`),
+update the hook in the same PR, then test it with
+`CLAUDE_CODE_REMOTE=true .claude/hooks/session-start.sh`.
