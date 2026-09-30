@@ -6,6 +6,7 @@
 // language at the top (i18n.js); switching changes this page, the speech
 // recognizer, the voice and the moderator's language, also mid-session.
 import { DEFAULT_LANG, LANGS, QUESTION, TEXT } from './i18n.js';
+import { goodEnough, rankVoices } from './voices.js';
 
 const API = '/usertest/api';
 const CATALOG_URL = `https://catalog.${location.hostname.replace(/^plugins\./, '')}/catalog.json`;
@@ -214,6 +215,10 @@ function setLang(code) {
     recognition.abort();
   }
 
+  voiceReady(code).then(() => {
+    if (code === lang) renderVoicePicker();
+  });
+
   if (session) {
     checkVoice();
     api(`/sessions/${session}/lang`, {
@@ -234,42 +239,60 @@ function renderLangs() {
   }
 }
 
-/** One voice per language for the whole session. Chrome fills getVoices()
- * only after `voiceschanged`, so without waiting the first line got the
- * default voice and later lines another one. */
+/** One voice per language for the whole session: the best one by
+ * voices.js's ranking, or the one the tester picked in the sound check
+ * (remembered for the browser session). Chrome and Edge fill getVoices()
+ * only after `voiceschanged`, and may add their network voices later still,
+ * so without waiting the first line got the default voice. */
 const voices = new Map();
+/** Waited for at most this long, then the best voice so far (or the
+ * browser's default) is used. */
+const VOICE_WAIT = 3000;
+const VOICE_KEY = code => `usertest-voice-${code}`;
+
+function chosenVoice(code, all) {
+  let name;
+  try {
+    name = sessionStorage.getItem(VOICE_KEY(code));
+  } catch {
+    // Storage blocked: the pick lasts until the page reloads.
+  }
+
+  return name ? all.find(v => v.name === name) : undefined;
+}
 
 function pickVoice(code) {
   const all = speechSynthesis.getVoices();
-  const norm = v => v.lang.replace('_', '-');
-  const exact = all.filter(v => norm(v) === code);
-  // nl-BE rather than an English voice reading Dutch.
-  const near = all.filter(v => norm(v).split('-')[0] === code.split('-')[0]);
 
-  for (const list of [exact, near]) {
-    const found =
-      list.find(v => /google/i.test(v.name)) ??
-      list.find(v => v.localService) ??
-      list[0];
-    if (found) return found;
-  }
-
-  return undefined;
+  return chosenVoice(code, all) ?? rankVoices(all, code)[0];
 }
 
+/** Voices can arrive after the first pick: take a better one for the next
+ * line, unless the tester picked one. */
+speechSynthesis.addEventListener?.('voiceschanged', () => {
+  for (const code of voices.keys()) voices.set(code, pickVoice(code));
+  renderVoicePicker();
+  checkVoice();
+});
+
 function voiceReady(code) {
-  if (!voices.get(code)) voices.set(code, pickVoice(code));
-  if (voices.get(code)) return Promise.resolve();
+  voices.set(code, pickVoice(code));
+  const all = speechSynthesis.getVoices();
+  if (goodEnough(voices.get(code), code) || chosenVoice(code, all))
+    return Promise.resolve();
 
   return new Promise(resolve => {
+    let timer;
     const done = () => {
-      if (!voices.get(code)) voices.set(code, pickVoice(code));
+      clearTimeout(timer);
+      speechSynthesis.removeEventListener('voiceschanged', done);
+      voices.set(code, pickVoice(code));
       resolve();
     };
 
-    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
-    // Some browsers never fire it; go on with the default voice.
-    setTimeout(done, 2000);
+    speechSynthesis.addEventListener('voiceschanged', done);
+    // Some browsers never fire it; go on with the best voice so far.
+    timer = setTimeout(done, VOICE_WAIT);
   });
 }
 
@@ -280,15 +303,25 @@ async function checkVoice() {
   if (code === lang) $('voice-note').hidden = !!voices.get(code);
 }
 
+/** An utterance of `text` in the voice for `code`, at the normal rate and
+ * pitch (some browsers remember a changed one). */
+function utter(text, code) {
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = code;
+  utterance.rate = 1;
+  utterance.pitch = 1;
+  const voice = voices.get(code);
+  if (voice) utterance.voice = voice;
+
+  return utterance;
+}
+
 async function speak(text) {
   const code = lang;
   await voiceReady(code);
 
   return new Promise(resolve => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = code;
-    const voice = voices.get(code);
-    if (voice) utterance.voice = voice;
+    const utterance = utter(text, code);
     speaking = true;
     // The recognizer would otherwise hear the moderator (without headphones).
     recognition?.abort();
@@ -768,6 +801,7 @@ function testSpeech() {
 async function testSpeaker() {
   const code = lang;
   await voiceReady(code);
+  renderVoicePicker();
   const voice = voices.get(code);
   message('speaker-status', () =>
     [
@@ -778,10 +812,37 @@ async function testSpeaker() {
       .trim(),
   );
   speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(TEXT[code].check.speakerLine);
-  utterance.lang = code;
-  if (voice) utterance.voice = voice;
-  speechSynthesis.speak(utterance);
+  speechSynthesis.speak(utter(TEXT[code].check.speakerLine, code));
+}
+
+/** The sound check's voice list for the current language, best first, with
+ * the moderator's voice selected. Hidden while the browser has none. */
+function renderVoicePicker() {
+  const select = $('voice-select');
+  const ranked = rankVoices(speechSynthesis.getVoices(), lang);
+  const current = voices.get(lang) ?? ranked[0];
+  $('voice-row').hidden = ranked.length === 0;
+  select.replaceChildren(
+    ...ranked.map(voice => {
+      const option = document.createElement('option');
+      option.value = voice.name;
+      option.textContent = `${voice.name} (${voice.lang})`;
+      option.selected = voice === current;
+
+      return option;
+    }),
+  );
+}
+
+function chooseVoice() {
+  const name = $('voice-select').value;
+  try {
+    sessionStorage.setItem(VOICE_KEY(lang), name);
+  } catch {
+    // Storage blocked: kept in `voices` until the page reloads.
+  }
+  const voice = speechSynthesis.getVoices().find(v => v.name === name);
+  if (voice) voices.set(lang, voice);
 }
 
 function chooseTyping() {
@@ -800,12 +861,15 @@ if (!Recognition) {
 if (!code) showError(() => t().errors.noCode);
 updateStart();
 checkCode();
+voiceReady(lang).then(renderVoicePicker);
 
 $('agree').addEventListener('change', updateStart);
 $('mic-test').addEventListener('click', testMic);
 $('type-instead').addEventListener('click', chooseTyping);
 $('speech-test').addEventListener('click', testSpeech);
 $('speaker-test').addEventListener('click', testSpeaker);
+$('voice-select').addEventListener('change', chooseVoice);
+$('voice-try').addEventListener('click', testSpeaker);
 $('retry').addEventListener('click', () => retryAction?.());
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());

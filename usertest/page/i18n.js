@@ -127,6 +127,8 @@ export const TEXT = {
       speakerHint: voice =>
         `Playing a line in the moderator's voice (${voice}). No sound? Check the volume and your headphones.`,
       defaultVoice: 'the default voice',
+      voiceLabel: "Moderator's voice (pick another if it sounds robotic)",
+      voiceTry: 'Try this voice',
       typeInstead: 'Type instead',
       typedChosen:
         '✓ You will type your answers. The moderator still speaks, so keep the sound on.',
@@ -269,6 +271,9 @@ export const TEXT = {
       speakerHint: voice =>
         `Er klinkt een zin met de stem van de gespreksleider (${voice}). Geen geluid? Controleer het volume en je koptelefoon.`,
       defaultVoice: 'de standaardstem',
+      voiceLabel:
+        'Stem van de gespreksleider (kies een andere als die robotachtig klinkt)',
+      voiceTry: 'Probeer deze stem',
       typeInstead: 'Liever typen',
       typedChosen:
         '✓ Je typt je antwoorden. De gespreksleider praat wel, dus laat het geluid aan.',
