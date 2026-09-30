@@ -1,0 +1,185 @@
+name: Deploy user-testing instance
+
+# Deploys usertest/ to the user-testing droplet (usertest/README.md): builds
+# the test catalog with usertest/catalog.mjs, copies it and the page,
+# moderator, collector, Caddyfile and server.sh with usertest/deploy.sh (which
+# restarts Caddy), and optionally restarts the containers. The same commands
+# as a deploy from a laptop, so the two cannot drift.
+#
+# Run by hand only (Actions -> Deploy user-testing instance -> Run workflow):
+# restarting the moderator or atomic-server ends sessions in progress, so no
+# push triggers it. Copying files alone takes effect at once for the page and
+# the catalog; server.mjs changes need `restart-moderator`.
+#
+# Setup, once, by a repository admin (see usertest/README.md, "Deploying from
+# GitHub Actions"): a GitHub environment named `usertest` holding
+#   - secret USERTEST_SSH_KEY: a private key whose public half is in the
+#     droplet's /root/.ssh/authorized_keys, used for nothing else;
+#   - secret USERTEST_SSH_KNOWN_HOSTS: the droplet's host key lines
+#     (`ssh-keyscan 178.62.223.35`, checked against the droplet's own
+#     /etc/ssh/ssh_host_*_key.pub), so the job never trusts a key on first
+#     use;
+#   - variables USERTEST_TARGET (root@178.62.223.35) and USERTEST_BASE_DOMAIN
+#     (178-62-223-35.sslip.io); the defaults below are those values.
+
+on:
+  workflow_dispatch:
+    inputs:
+      restart-moderator:
+        description: Restart the moderator (ends sessions in progress)
+        type: boolean
+        default: false
+      restart-collector:
+        description: Restart the log collector
+        type: boolean
+        default: false
+      restart-server:
+        description: Restart atomic-server with server.sh (ends sessions in progress)
+        type: boolean
+        default: false
+      plugin-routes:
+        description: Plugin routes for a restarted atomic-server
+        type: choice
+        options: ['off', read-only, read-write]
+        default: 'off'
+
+concurrency:
+  group: usertest-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.15.1"
+
+jobs:
+  deploy:
+    name: Deploy to the droplet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: usertest
+    env:
+      TARGET: ${{ vars.USERTEST_TARGET || 'root@178.62.223.35' }}
+      BASE_DOMAIN: ${{ vars.USERTEST_BASE_DOMAIN || '178-62-223-35.sslip.io' }}
+    steps:
+      - name: Checkout atomic-plugins
+        uses: actions/checkout@v4
+        with:
+          path: atomic-plugins
+
+      - name: Read pinned atomic-server commit
+        id: pin
+        run: echo "sha=$(cat atomic-plugins/.atomic-server-ref)" >> "$GITHUB_OUTPUT"
+
+      # catalog.mjs builds the drive apps, which import atomic-server's
+      # browser/lib by relative path: the same layout as ci.yml's lanes.
+      - name: Checkout atomic-server at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: ontola/atomic-server
+          ref: ${{ steps.pin.outputs.sha }}
+          path: atomic-server
+
+      - name: Link atomic-server's browser workspace into atomic-plugins
+        env:
+          ATOMIC_SERVER_CHECKOUT: ${{ github.workspace }}/atomic-server
+        run: node atomic-plugins/integrations/tooling/link-atomic-server.mjs --no-fetch --no-install
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ steps.pin.outputs.sha }}-${{ hashFiles('atomic-server/browser/pnpm-lock.yaml') }}
+
+      - name: Install JS dependencies
+        working-directory: atomic-server/browser
+        run: pnpm install --frozen-lockfile
+
+      - name: Install plugin npm dependencies
+        working-directory: atomic-plugins
+        run: |
+          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do
+            [ -e "$lock" ] || continue
+            (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile)
+          done
+
+      - name: Build the test catalog
+        working-directory: atomic-plugins
+        env:
+          USERTEST_LOG_URL: https://logs.${{ env.BASE_DOMAIN }}/log
+        run: node usertest/catalog.mjs
+
+      # Fails when an app changed without a version bump in catalog.mjs,
+      # before anything on the droplet is touched.
+      - name: Check app versions against the live catalog
+        working-directory: atomic-plugins
+        run: node usertest/check-live.mjs "https://catalog.$BASE_DOMAIN/catalog.json"
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.USERTEST_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.USERTEST_SSH_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$SSH_KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::The usertest environment needs the secrets USERTEST_SSH_KEY and USERTEST_SSH_KNOWN_HOSTS (see the top of this workflow)."
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          (umask 077 && printf '%s\n' "$SSH_KEY" > ~/.ssh/usertest)
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host *\n  IdentityFile ~/.ssh/usertest\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  BatchMode yes\n  ConnectTimeout 20\n' > ~/.ssh/config
+
+      - name: Copy files and restart Caddy
+        working-directory: atomic-plugins
+        run: sh usertest/deploy.sh "$TARGET"
+
+      # The collector first: it creates the salt the moderator reads.
+      - name: Restart the collector
+        if: inputs.restart-collector
+        run: ssh "$TARGET" sh /opt/usertest/collector/run.sh
+
+      - name: Restart the moderator
+        if: inputs.restart-moderator
+        run: ssh "$TARGET" sh /opt/usertest/moderator/run.sh
+
+      - name: Restart atomic-server
+        if: inputs.restart-server
+        env:
+          ROUTES: ${{ inputs.plugin-routes }}
+        run: |
+          if [ "$ROUTES" = off ]; then
+            ssh "$TARGET" sh /opt/usertest/server.sh "$BASE_DOMAIN"
+          else
+            ssh "$TARGET" USERTEST_PLUGIN_ROUTES="$ROUTES" sh /opt/usertest/server.sh "$BASE_DOMAIN"
+          fi
+
+      # The page, the catalog and the moderator answer through Caddy. A
+      # container just restarted gets a few seconds.
+      - name: Check the instance answers
+        run: |
+          check() {
+            for i in 1 2 3 4 5 6; do
+              curl -fsS -o /dev/null "$1" && { echo "ok $1"; return 0; }
+              sleep 5
+            done
+            echo "::error::$1 does not answer"
+            return 1
+          }
+          check "https://plugins.$BASE_DOMAIN/usertest/"
+          check "https://plugins.$BASE_DOMAIN/usertest/api/health"
+          check "https://catalog.$BASE_DOMAIN/catalog.json"
+          check "https://plugins.$BASE_DOMAIN/"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f ~/.ssh/usertest

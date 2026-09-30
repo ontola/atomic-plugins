@@ -1,4 +1,4 @@
-# Session plan: the calendar view on tables (atomic-server)
+# Session plan: Calendar view on tables
 
 No account is needed: this tests Atomic's own tables, not a plugin. It repeats the laptop session of 2026-09-25 (findings in ontola/atomic-server#1792–#1808) with testers who have never seen the app.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Headless checks of the session page (../page/): the sound check and the
-// separate start errors, in English and Dutch. Self-contained: it runs
+// Headless checks of the session page (../page/): the sound check, the
+// separate start errors and the plan menu, in English and Dutch. Self-contained: it runs
 // ../moderator/server.mjs with a dummy invite code and key against a local
 // stand-in for the Claude API, serves the page the way Caddy does
 // (/usertest/ and /usertest/api/), and drives headless Chromium with fake
@@ -15,7 +15,7 @@
 // (the optional speech check), whether the speaker test is audible, and the
 // browser's own permission prompts.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -377,6 +377,46 @@ await check(
     await page.click('#type-instead');
     await page.click('#start');
     await expectText(page, '#error', EN.errors.badLink);
+    await close();
+  },
+);
+
+await check(
+  'plan menu: lists the plans, preselects the link, the session runs the pick',
+  async () => {
+    const plan = page => page.locator('#plan').inputValue();
+    const options = page =>
+      page.locator('#plan option').evaluateAll(list => list.map(o => o.value));
+
+    let { page, close } = await open(fakeUi, `code=${CODE}`);
+    await expectText(page, 'label[for=plan]', EN.plan);
+    await page.waitForFunction(() => document.querySelector('#plan option'));
+    if ((await plan(page)) !== 'calendar')
+      throw new Error(`no session: ${await plan(page)}, not calendar`);
+    for (const id of ['calendar', 'calendar-view', 'money', 'notion'])
+      if (!(await options(page)).includes(id))
+        throw new Error(`${id} missing from ${await options(page)}`);
+    await close();
+
+    ({ page, close } = await open(fakeUi, `code=${CODE}&session=notion`, {
+      permissions: ['microphone'],
+    }));
+    await page.waitForFunction(() => document.querySelector('#plan option'));
+    if ((await plan(page)) !== 'notion')
+      throw new Error(`session=notion: ${await plan(page)}`);
+    await page.selectOption('#plan', 'money');
+    if (new URL(page.url()).searchParams.get('session') !== 'money')
+      throw new Error(`address not updated: ${page.url()}`);
+    await page.check('#agree');
+    await page.click('#type-instead');
+    await page.click('#start');
+    await expectText(page, '#log p', STUB_LINE, 10000);
+    const dir = join(dataDir, 'sessions');
+    const plans = readdirSync(dir).map(
+      id => JSON.parse(readFileSync(join(dir, id, 'meta.json'), 'utf8')).plan,
+    );
+    if (!plans.includes('money'))
+      throw new Error(`no session ran the money plan: ${plans}`);
     await close();
   },
 );

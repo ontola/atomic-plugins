@@ -1,7 +1,8 @@
 # User-testing instance
 
-An atomic-server test instance, where people try the drive apps on their own
-laptop and with their own provider accounts. It replaces sessions on one
+An atomic-server test instance, where people try new Atomic features (the
+drive apps, and parts of Atomic itself) on their own laptop and with their
+own provider accounts. It replaces sessions on one
 prepared laptop. It runs on one DigitalOcean droplet, set up on 2026-09-28
 (Ubuntu 24.04, 2 vCPU, 4 GB, AMS3). This folder holds everything needed to
 rebuild it.
@@ -76,6 +77,52 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 
 Never rebuild into an existing version: the host refuses a module whose bytes
 no longer match the hash in the catalog.
+`node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json`,
+run after `catalog.mjs`, fails when an app was rebuilt into a version the
+droplet already serves with other bytes. The deploy workflow below runs it
+before it touches the droplet.
+
+## Deploying from GitHub Actions
+
+[`.github/workflows/usertest-deploy.yml`](../.github/workflows/usertest-deploy.yml)
+runs the same steps from GitHub: it checks out atomic-server at
+`.atomic-server-ref`, builds the catalog with `USERTEST_LOG_URL` set, runs
+`check-live.mjs`, then `deploy.sh`. It runs only by hand (Actions → Deploy
+user-testing instance → Run workflow). Each restart is an option, off by
+default: the moderator (needed for `moderator/` changes; ends sessions in
+progress), the collector, and atomic-server with `server.sh` (ends sessions
+in progress; with a plugin-routes level). Afterwards it checks that the page,
+the moderator's `/health`, the catalog and atomic-server answer.
+
+Setting it up, once, needs a repository admin and root on the droplet:
+
+1. Make a key used for nothing else, and allow it on the droplet:
+
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C usertest-deploy -f usertest-deploy
+   ssh root@178.62.223.35 'cat >> /root/.ssh/authorized_keys' < usertest-deploy.pub
+   ```
+
+2. Get the droplet's host keys, and compare their fingerprints
+   (`ssh-keygen -lf`) with the droplet's own
+   (`ssh root@178.62.223.35 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done'`):
+
+   ```sh
+   ssh-keyscan 178.62.223.35 > usertest-known-hosts
+   ```
+
+3. In the repository's Settings → Environments, create `usertest` (and
+   limit it to the `main` branch, and add required reviewers if you want an
+   approval per deploy). Add the secrets `USERTEST_SSH_KEY` (the contents of
+   `usertest-deploy`) and `USERTEST_SSH_KNOWN_HOSTS` (the contents of
+   `usertest-known-hosts`). The variables `USERTEST_TARGET` and
+   `USERTEST_BASE_DOMAIN` are optional; they default to `root@178.62.223.35`
+   and `178-62-223-35.sslip.io`. Then delete the local `usertest-deploy`.
+
+The key logs in as root, like a deploy from a laptop does. Anyone who can
+push to a branch the `usertest` environment allows can deploy, so keep that
+limited to `main`. Not run yet: the workflow has not deployed to the droplet.
+The build and `check-live.mjs` were checked locally on 2026-09-30.
 
 ## Trying server plugins (remoteStorage)
 
@@ -187,15 +234,22 @@ demo on `http://localhost:<port>`; the storage answers CORS for any origin.
 
 ## Moderated sessions
 
-A tester needs only the invite link,
-`https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>&session=<plan>`,
+A session tests one feature of Atomic: a drive app, or a part of Atomic
+itself (the calendar view on tables, say). A tester needs only the invite
+link, `https://plugins.<base-domain>/usertest/?code=<USERTEST_CODE>&session=<plan>`,
 and Chrome or Edge. `<plan>` names a session plan in
-[`moderator/sessions/`](moderator/sessions/): which app to test and which
-tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest-moderator.env` on the droplet;
+[`moderator/sessions/`](moderator/sessions/): which feature to test and which
+tasks to give. The page lists every plan in a "What do you want to test?"
+menu (`GET /usertest/api/plans`, titled by each plan's first heading), and
+`<plan>` only preselects one, so the tester can switch before starting;
+without it the menu starts on `calendar`. A switch is written back into the
+address bar, so a reload keeps it. A `<plan>` the moderator doesn't know
+stays in the menu, and starting with it fails with the list of known plans.
+The code is in `/etc/usertest-moderator.env` on the droplet;
 `moderator/run.sh` creates it on first run. The page:
 
-1. explains the session, what is recorded and where it goes, and asks for
-   consent; it tests the invite code as soon as it loads (`GET /check`);
+1. explains the session, lets the tester pick what to test, says what is
+   recorded and where it goes, and asks for consent; it tests the invite code as soon as it loads (`GET /check`);
 2. runs a sound check before Start: "Test microphone" asks for the
    microphone and shows its level, and passes once it hears the tester;
    an optional check shows what the speech recognizer made of a sentence;
@@ -318,7 +372,8 @@ usage, and `input: "typed"` or `"voice"` and `lang` per tester turn), `screen-NN
 most 120 turns per session and 20 sessions per UTC day. The moderator keeps
 sessions in memory, so restarting it ends the sessions in progress.
 
-Not verified yet: a full session by a real tester, and Edge. The typed-answer
+Not verified yet: a full session by a real tester, and Edge. The plan menu
+(2026-09-30) was not run in a browser against the droplet's moderator. The typed-answer
 box was checked against the moderator with a stub in place of the Claude API
 (2026-09-29), not yet in a browser session with screen sharing.
 

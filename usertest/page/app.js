@@ -1,4 +1,6 @@
-// The tester's side of a moderated session: records screen and microphone,
+// The tester's side of a moderated session: the tester picks what to test
+// (a session plan, preselected by the link's `session`), then it records
+// screen and microphone,
 // turns speech into text with the browser's recognizer, sends turns to the
 // moderator (../moderator/server.mjs) and speaks its answers. Served at
 // /usertest/ on the test instance, so it shares the data-browser's origin
@@ -608,7 +610,7 @@ async function start() {
         // How the session starts; the tester can type at any time anyway.
         input: inputMode,
         // Which session plan (moderator/sessions/<name>.md); none = calendar.
-        session: params.get('session') ?? undefined,
+        session: $('plan').value || undefined,
       }),
     }));
     await startRecording(media);
@@ -638,6 +640,44 @@ async function start() {
   setInterval(tick, 1000);
   setInterval(checkNews, 5000);
   turn('');
+}
+
+/** Fills the "What do you want to test?" menu from the moderator's plans.
+ * The link's `session` picks the first choice; a name the moderator doesn't
+ * know stays in the menu, so starting says it is unknown instead of quietly
+ * running another plan. */
+async function loadPlans() {
+  const wanted = params.get('session');
+  let list = [];
+  let fallback = wanted;
+
+  try {
+    const { default: preset, plans } = await api('/plans');
+    list = plans;
+    fallback ??= preset;
+  } catch (error) {
+    // No or a wrong invite code: starting fails and says so anyway.
+    console.error(error);
+  }
+
+  if (fallback && !list.some(p => p.id === fallback))
+    list = [{ id: fallback, title: fallback }, ...list];
+
+  for (const { id, title } of list) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = title;
+    $('plan').append(option);
+  }
+
+  $('plan').value = fallback ?? '';
+}
+
+/** Keeps the choice in the address, so a reload keeps it too. */
+function rememberPlan() {
+  const url = new URL(location.href);
+  url.searchParams.set('session', $('plan').value);
+  history.replaceState(null, '', url);
 }
 
 /** Tests the invite code as soon as the page loads, so a wrong one is
@@ -853,6 +893,7 @@ function chooseTyping() {
 
 renderLangs();
 applyTexts();
+if (code) loadPlans();
 if (!Recognition) {
   $('speech-row').hidden = false;
   $('speech-test').hidden = true;
@@ -871,6 +912,7 @@ $('speaker-test').addEventListener('click', testSpeaker);
 $('voice-select').addEventListener('change', chooseVoice);
 $('voice-try').addEventListener('click', testSpeaker);
 $('retry').addEventListener('click', () => retryAction?.());
+$('plan').addEventListener('change', rememberPlan);
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
 // Hands over at once, with whatever was heard so far.
