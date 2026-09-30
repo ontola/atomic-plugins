@@ -195,20 +195,50 @@ tasks to give. Without it, a link gets `calendar`. The code is in `/etc/usertest
 `moderator/run.sh` creates it on first run. The page:
 
 1. explains the session, what is recorded and where it goes, and asks for
-   consent;
-2. stores the test catalog URL in the browser, opens a fresh drive
+   consent; it tests the invite code as soon as it loads (`GET /check`);
+2. runs a sound check before Start: "Test microphone" asks for the
+   microphone and shows its level, and passes once it hears the tester;
+   an optional check shows what the speech recognizer made of a sentence;
+   "Test speakers" plays a line in the moderator's voice for the chosen
+   language. Nothing is recorded during the check. Start stays off until the
+   microphone check passed or the tester chose "Type instead". The
+   microphone the check opened is the one recorded; screen sharing is still
+   asked for at Start, since sharing starts the recording;
+3. stores the test catalog URL in the browser, opens a fresh drive
    (`/app/dev-drive`) in a second window, and starts recording the shared
    screen and the microphone;
-3. listens with the browser's speech recognition (Chrome sends the audio to
+4. listens with the browser's speech recognition (Chrome sends the audio to
    Google), sends a turn to the moderator after a pause, a minute of silence
    or a new error in the collector log, and speaks the answer with the
    browser's speech synthesis;
-4. has a box for typed answers under the controls, for testers who can't
+5. has a box for typed answers under the controls, for testers who can't
    talk out loud or whose microphone doesn't work. Voice stays the default.
    A typed answer is sent at once (Enter) and reaches the moderator marked
    `[Tester, typed]`. Without a microphone (none, broken or refused) or
    without speech recognition (a browser other than Chrome or Edge), the
    session still starts, typed only, and records the screen without sound.
+
+Each way the start can fail has its own message, in both languages: invite
+code rejected (only when the moderator answers 403, which it does for a
+wrong or missing code and nothing else), no code in the link, unknown
+session plan (400), no more sessions today (429), microphone blocked (with
+how to allow it again in Chrome or Edge), no microphone, speech recognition
+not supported, screen sharing cancelled, and test server unreachable (no
+answer, or 5xx, with a Try again button). A microphone or screen problem is
+never reported as a code problem.
+
+`e2e/run.mjs` checks the sound check and these messages headlessly: it runs
+the moderator with a dummy code against a stand-in for the Claude API and
+drives Chromium's new headless mode with fake media devices, or with the
+microphone denied. A cancelled screen picker is simulated (headless Chromium
+cannot deny one); real speech recognition and whether the speaker test is
+audible are not covered.
+
+```sh
+npm ci --prefix usertest/moderator
+npm ci --prefix usertest/e2e && npx --prefix usertest/e2e playwright install chromium
+node usertest/e2e/run.mjs
+```
 
 The page is in English or Dutch (Nederlands), picked with the buttons at the
 top, by `&lang=nl` in the invite link, or remembered from a previous visit.

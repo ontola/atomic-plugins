@@ -756,8 +756,7 @@ function testSpeech() {
   };
 
   recognizer.onend = () => {
-    if (!words && !failed)
-      message('speech-status', () => t().check.speechNone);
+    if (!words && !failed) message('speech-status', () => t().check.speechNone);
     if (checkRecognition === recognizer) checkRecognition = undefined;
     $('speech-test').disabled = false;
   };

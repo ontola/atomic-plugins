@@ -107,9 +107,9 @@ export const TEXT = {
       intro:
         "Before you start, check that we can hear you and that you can hear the moderator. Nothing is recorded during this check. Can't talk or no microphone? Choose to type instead.",
       micButton: 'Test microphone',
-      micAsking:
-        'Your browser asks to use the microphone: choose Allow.',
-      micListening: 'The microphone is on. Say something, so we know it hears you.',
+      micAsking: 'Your browser asks to use the microphone: choose Allow.',
+      micListening:
+        'The microphone is on. Say something, so we know it hears you.',
       micOk: '✓ We can hear you.',
       levelLabel: 'Microphone level',
       speechButton: 'Check speech recognition (optional)',
@@ -117,7 +117,8 @@ export const TEXT = {
         'Say a short sentence. Chrome sends this to Google to turn it into text, as in the session.',
       speechListening: 'Listening… say a short sentence.',
       speechHeard: words => `✓ Recognized: “${words}”`,
-      speechNone: 'No words were recognized. Try again, a bit louder or closer.',
+      speechNone:
+        'No words were recognized. Try again, a bit louder or closer.',
       speechFailed: reason =>
         `Speech recognition did not work (${reason}). You can still talk: the recording has your voice. Or type instead.`,
       speakerButton: 'Test speakers',
@@ -247,7 +248,8 @@ export const TEXT = {
       intro:
         'Controleer voordat je begint of we je kunnen horen en of jij de gespreksleider kunt horen. Tijdens deze test wordt niets opgenomen. Kun je niet praten of heb je geen microfoon? Kies dan voor typen.',
       micButton: 'Test de microfoon',
-      micAsking: 'Je browser vraagt om de microfoon te gebruiken: kies Toestaan.',
+      micAsking:
+        'Je browser vraagt om de microfoon te gebruiken: kies Toestaan.',
       micListening:
         'De microfoon staat aan. Zeg iets, zodat we weten dat hij je hoort.',
       micOk: '✓ We kunnen je horen.',
