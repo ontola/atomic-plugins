@@ -31,8 +31,17 @@
 set -eu
 
 BASE_DOMAIN=${1:?usage: [USERTEST_PLUGIN_ROUTES=read-only|read-write] server.sh <base-domain> [<sha>]}
-# candidate15, main's .atomic-server-ref.
-SHA=${2:-59ddfe788a2e4b1123daa191358662598aa59dc4}
+# Without a SHA: the pinned commit, main's .atomic-server-ref, which deploy.sh
+# copies next to this script.
+PIN_FILE="$(dirname "$0")/.atomic-server-ref"
+if [ -n "${2:-}" ]; then
+  SHA=$2
+elif [ -f "$PIN_FILE" ]; then
+  SHA=$(tr -d '[:space:]' <"$PIN_FILE")
+else
+  echo "no <sha> given and no $PIN_FILE; run deploy.sh first or pass a SHA" >&2
+  exit 1
+fi
 ROUTES=${USERTEST_PLUGIN_ROUTES:-off}
 
 IMAGE=ghcr.io/ontola/atomic-server-e2e:$SHA
