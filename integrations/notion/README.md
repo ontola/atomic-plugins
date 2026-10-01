@@ -3,8 +3,9 @@
 Everything Notion-specific lives in this folder. atomic-server keeps no
 Notion code (branch `claude/remove-notion-code`). There are two paths:
 
-- **Drive plugin on syncables and Devonian** (`app/`, read-only). This
-  is the direction for #8 and #68: an iframe plugin that reads Notion through
+- **Drive plugin on syncables and Devonian** (`app/`, two-way after
+  review since 0.2.0). This is the direction for #8 and #68: an iframe
+  plugin that reads Notion through
   `syncables/browser` over the host's integration-proxy relay, and maps it to
   Atomic rows through a Devonian lens (`devonian/notion/`). It is the one
   with an entry point: the `notion` catalog entry (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it) installs it
@@ -16,13 +17,14 @@ Notion code (branch `claude/remove-notion-code`). There are two paths:
   a release of either bumps both. After a bump, write the module with:
   `node integrations/tooling/apps.mjs write notion`.
 - **Sandbox plugin** (`plugin.ts`, two-way, the pilot). It runs in atomic-server's
-  QuickJS/WASM plugin runtime. It is still the only two-way path, and has no
-  entry point in the data-browser today.
+  QuickJS/WASM plugin runtime. It has no entry point in the data-browser
+  today. Its field and view coverage is wider than the drive app's (page
+  creation, property renames, table/board views), but nothing can run it.
 
 API version `2026-03-11` throughout. Planning notes from the pilot moved
 here from atomic-server and are under [`planning/`](planning/).
 
-## Drive plugin on syncables (read-only, `app/`)
+## Drive plugin on syncables (`app/`)
 
 This plugin works the way `timesheets/app/` (#20) and `pets/app/` (#52) do.
 It is one ES module whose `view({ root, store })` reads through
@@ -60,7 +62,10 @@ proxy. No credential ever reaches the frame.
     into the lens store, the page is `ingest`ed through the data source's
     Devonian `AtomicLens`, and the lens row's values are written back to the
     host row, removals included. New pages become new rows.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), about 116 KB since #89's UI,
+- `app/changes.ts`, `app/send.ts`, `app/view/review.ts`: two-way edits
+  after review (#8, #177 Q4–Q7), described in
+  [Edits and sending them to Notion](#edits-and-sending-them-to-notion).
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 133,028 bytes for 0.2.0,
   including the catalog document, syncables' read path and devonian's Atomic
   Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
@@ -77,18 +82,23 @@ proxy. No credential ever reaches the frame.
 - `catalog/`: the composed catalog document, its provenance and
   `generate.py`. The overlays themselves are in
   `overlays/notion.com/2026-03-11/`; see [`catalog/README.md`](catalog/README.md).
-- `fixtures/notion/`: an authored, read-only mock-proxy fixture serving
+- `fixtures/notion/`: an authored mock-proxy fixture serving
   `catalog/notion.json`. It pages the query two rows at a time, so the last
-  row is only reachable by sending `next_cursor` back in the body.
+  row is only reachable by sending `next_cursor` back in the body, and
+  applies page `PATCH`es as Notion documents them (no other write).
 
 What it does not do, and what is not verified:
 
-- It is read-only: nothing is written to Notion. The lens has a reverse
-  mapping (`write`), but its connector refuses create, update and delete. A
-  page that disappears or is archived is left in place, never deleted.
+- It updates existing pages only. A row added in the table has no Notion
+  page id and is never sent (#177 Q6: hand-added rows stay local; there is
+  no "Publish to Notion"). Nothing is deleted on either side: a page that
+  disappears or is archived in Notion is left in place here, and a row
+  deleted here is imported again on the next sync (the host has no change
+  list with tombstones yet, #177 H6).
 - A value cleared in Notion (empty number, URL, select) is removed from its
-  row on the next import. A value the lens cannot read losslessly (formatted
-  text) leaves the row's value as it was, and is listed in the warnings.
+  row on the next import, unless the row changed that field itself (see
+  below). A value the lens cannot read losslessly (formatted text) leaves the
+  row's value as it was, is listed in the warnings, and is never sent.
 - Select, status and multi-select columns hold Notion option ids, which stay
   stable across renames, rather than option names. The app shows names and
   colours from the sync record's schema, so a rename shows after one sync
@@ -114,6 +124,63 @@ What it does not do, and what is not verified:
 - View choices (database, view, sort) are kept in memory only: the frame is
   null-origin, where `localStorage` throws.
 
+## Edits and sending them to Notion
+
+Since 0.2.0, per #177's decisions (Q4–Q7: edits made anywhere reach the
+provider, bookkeeping on the row, compare on open, review before send). Not
+verified against live Notion or the real integration proxy.
+
+- **Bookkeeping on the row.** Each synced row carries
+  `notion-sync-baseline`: JSON of the data source id and, per editable
+  column, the value Notion and the row last agreed on. Its Property is in
+  the app's ontology but not in the row class's `recommends`, so it is not a
+  column. Keys are the column shortnames, which come from Notion's stable
+  property ids, so renames on either side leave it as it was. A row imported
+  by 0.1.0 has none; its first 0.2.0 sync takes Notion's values (as 0.1.0
+  always did) and writes one.
+- **Compare on open.** Whenever the app reads the rows (on open, after a
+  table change it is subscribed to, after a sync), it compares each row with
+  its baseline (`changes.ts`, no request to Notion). Any difference is an
+  edit, wherever it was made: the app's table, another view, another
+  device. A renamed row counts as a title edit. "N changes in M rows not
+  sent to Notion yet" then shows above the rows.
+- **Sync is three-way per field** (`sync.ts`, `compareOnSync`): a field only
+  Notion changed takes Notion's value; a field only the row changed is kept
+  and stays in the review; a field both changed to the same value is
+  agreed; a field both changed differently is a conflict, and neither side
+  is overwritten. Fixed columns (page id, URL, last edited, data source)
+  always follow Notion.
+- **Review before send.** "Review changes" lists each row's fields as
+  before → after, with option names and colours from the last sync's
+  schema, and Discard per row. A conflict shows Notion's value with "Keep
+  mine" (the baseline moves to Notion's value, so the row's value is sent
+  over it) and "Use Notion's". A value Notion would refuse (an option id the
+  schema does not have, the wrong type) is held back and named. Nothing is
+  sent until "Send N changes".
+- **Sending** (`send.ts`), one row at a time: `GET /v1/pages/{id}`, then
+  `PATCH /v1/pages/{id}` with only the changed properties, keyed by Notion's
+  property id, values from the lens's reverse mapping
+  (`notionPropertyValue`: text in 2000-character parts, options by id).
+  It is not sent, and says why, when the page is gone, archived or in trash
+  (the row is kept); when Notion changed a field to send since the baseline
+  (it becomes a conflict); when Notion holds formatted text in it (never
+  overwritten with plain text); or when Notion refuses it (400). The
+  baseline and the row advance only from the page Notion answers with.
+- **Limits.** Notion has no conditional page updates (no ETag or If-Match),
+  so an edit made in Notion between the GET and the PATCH, one round trip,
+  is overwritten. A PATCH whose answer is lost is reported as "Unknown
+  whether Notion applied it" and the batch stops; the next sync shows what
+  Notion has. A proxy refusal, a 429 or a 5xx also stops the batch. Nothing
+  is sent while the app is closed (no `afterCommit` hook at the pin).
+  Conflicts are kept in memory until the next sync finds them again from
+  the baselines. The Notion integration needs Notion's "Update content"
+  capability; whether a given OAuth connection has it is not verified.
+
+Declared by unit tests (`app/twoway.test.ts`: reconcile cases, compare on
+open, sync merges, send, conflict both ways, archived page, formatted text,
+refused option, lost answer, discard; `app/view.test.ts`'s S15/S16 block)
+and the e2e (below). Not live-verified.
+
 ## E2E
 
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:
@@ -128,9 +195,12 @@ test artefact. It runs against the shared mock proxy's
 `notion` fixture (`fixtures/notion/`), so the lane has
 `platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It needs an
 `.atomic-server-ref` with frame capabilities (ontola/atomic-server#1697; the
-pin `11264e83e` has it). The old
-spec's two-way, PATCH and revoked-access checks have no read-only
-counterpart and were dropped (#68).
+pin `11264e83e` has it). Since 0.2.0 it also edits a row's Points from the
+host page (a user's commit), reloads, finds the edit under "Review changes"
+with no Sync, sends it and checks the fixture's page (`getPage` driver);
+then makes a conflict with the `editPage` driver and resolves it with "Use
+Notion's". The fixture applies `PATCH /v1/pages/{id}` as Notion documents it
+(400 for unknown options, archived pages, wrong type keys).
 
 ## Lens (`devonian/notion/`)
 
@@ -189,11 +259,14 @@ neither the installer (`atomic.ts`) nor a sync (#68). The live tier still
 runs. `host/` (`async-plugin.ts`, `browser-sync.ts`) is its browser host,
 moved here from `localthought/` because Notion was its only user.
 
-Two-way through the drive plugin needs a Devonian bridge that ports
-`model.ts`'s writes (#8 item 2): journalled `PATCH /v1/pages/{id}` through
-the same relay, page-id identity, and a missing page treated as a conflict.
-The lens's `write` is the mapping half of that, and is not wired to a
-connector. Retire `plugin.ts` only once that bridge has live evidence.
+The drive app's two-way edits (0.2.0, above) cover page property updates:
+`PATCH /v1/pages/{id}` through the same relay, page-id identity, and a
+missing page treated as a conflict. They are not journalled: the review is
+the gate, and a lost answer stops the batch rather than being retried. The
+lens's whole-page `write` is still not called; the app maps per field with
+`notionPropertyValue`. What the pilot has and the drive app does not: page
+creation, property and view renames, table/board view sync. Retire
+`plugin.ts` only once the drive app's writes have live evidence.
 
 ### Supported subset
 
