@@ -1,0 +1,32 @@
+name: Authenticated principal proposal
+
+on:
+  pull_request:
+    paths:
+      - spec/authenticated-principal/**
+      - .github/workflows/authenticated-principal.yml
+  push:
+    branches: [main]
+    paths:
+      - spec/authenticated-principal/**
+      - .github/workflows/authenticated-principal.yml
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r spec/authenticated-principal/requirements.txt
+      - run: python spec/authenticated-principal/test_schema.py
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          from openapi_spec_validator import validate
+          root = Path('spec/authenticated-principal/examples')
+          for name in ('generic.yaml', 'google-userinfo.yaml'):
+              validate(yaml.safe_load((root / name).read_text()))
+          PY
