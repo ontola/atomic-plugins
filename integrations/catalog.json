@@ -212,11 +212,14 @@
     "https://atomicdata.dev/properties/emoji": "🐦",
     "https://atomicdata.dev/properties/description": "Import the contacts of one Moneybird administration, read-only.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports the contacts of one administration (archived ones included) into a typed table: name, company, e-mail, city, country, customer ID, archived, version. Invoices, financial mutations, ledger accounts and the other collections are not imported yet.",
-    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, pick an administration, then contacts refresh whenever the app is opened, or on Sync now.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar and choose an administration. Contacts refresh whenever the app is opened and on Sync now. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. Contacts only. One administration per app. Tested against a synthetic fixture, not a real Moneybird account.",
-    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration localthought",
-    "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
-    "https://atomicdata.dev/integrations/properties/platform": "moneybird"
+    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-yc2fJ42WEWVdgEEJuhhnL4Tf3fGLwiPzNq2EluOcSXQVDfu4QyWK5jrAEf+NzKIy"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",
