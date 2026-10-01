@@ -19,7 +19,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -52,7 +51,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -140,17 +138,7 @@
     "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
     "https://atomicdata.dev/properties/shortname": "platform",
     "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The LocalThought platform id this integration's setup dialog connects through, for one that uses the generic LocalThought extension flow instead of its own setup component."
-  },
-  {
-    "@id": "https://atomicdata.dev/integrations/properties/callback-platform",
-    "https://atomicdata.dev/properties/isA": [
-      "https://atomicdata.dev/classes/Property"
-    ],
-    "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
-    "https://atomicdata.dev/properties/shortname": "callback-platform",
-    "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The platform id LocalThought's OAuth callback reports back, for an integration that owns its own setup component instead of using the generic LocalThought flow (so it has no `platform`)."
+    "https://atomicdata.dev/properties/description": "The integration-proxy platform id this integration connects through (for example `todoist`). Nothing reads it at the pin: its reader was the generic LocalThought setup dialog, which atomic-server removed with the LocalThought flow (c707ca4ed). Kept as a record of the provider the entry is for; a drive app names its platform in its own code when it calls `store.proxy.connect`."
   },
   {
     "https://atomicdata.dev/properties/localId": "calendar",
@@ -185,7 +173,7 @@
     "https://atomicdata.dev/properties/emoji": "✅",
     "https://atomicdata.dev/properties/description": "Bring your Todoist projects and tasks into a local issue tracker.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports active tasks and projects. Tasks open in the Issues view with their title, due day and priority. Todoist lists active tasks only, so a task shows as closed only when Todoist itself reports it checked.",
-    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, then Sync now (and every five minutes while the folder is open) to pull the latest tasks.",
+    "https://atomicdata.dev/integrations/properties/events": "Was planned as: connect through the integration proxy, then Sync now (and every five minutes while the folder is open) to pull the latest tasks. The LocalThought connect dialog and sync panel that did this were removed from atomic-server, and no drive app wraps the Todoist lens yet, so nothing runs it at the pin.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist. A task that stops appearing is never assumed completed. The lens can check such a task by id and mark it completed, deleted, unavailable or unconfirmed, with when it was last seen, but no host runs that check yet, and nothing has been verified against a live Todoist account.",
     "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects devonian lens local tracker issues",
     "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
@@ -356,7 +344,7 @@
     "https://atomicdata.dev/integrations/properties/capabilities": "Connects through the integration proxy, with no account or key (the demo provider is a static, read-only API on GitHub Pages), and imports every pet it lists into a Pets table, with typed columns (age, vaccinated, weight, updated at). Re-syncing updates changed pets and writes nothing when nothing changed.",
     "https://atomicdata.dev/integrations/properties/events": "Connect once, then Sync now whenever you want the latest pets. Nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "Demo provider only, not a real account. Import only: nothing is written back. Keep the browser open while syncing.",
-    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points localthought",
+    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
     "https://atomicdata.dev/integrations/properties/version": "0.1.2",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-qTKJ6SFE+FAFKW6rmNhAFV6um9+aHSb+VrAF5B6aRHaBMeT6vH5f5W0T5Q2WTWAt",
