@@ -17,13 +17,16 @@ describe('drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 143,683 bytes minified on 2026-10-01 (JS by esbuild, the
-    // stylesheet ui/theme.css by esbuild's CSS minifier); limit is that plus
-    // ~10%. It was 64 KB before the #89 views, 91 KB before #123 M3's
+    // Measured 160,904 bytes minified on 2026-10-01 (0.5.0; JS by esbuild,
+    // the stylesheet ui/theme.css by esbuild's CSS minifier); limit is that
+    // plus ~10%. It was 64 KB before the #89 views, 91 KB before #123 M3's
     // write-back (edit form, "Changes to send", writeBack.ts), 118 KB
-    // before M4's range edits (planner, new rows, resolve actions) and
-    // 135 KB before M5's lease, range-edit intents and log merging.
-    expect(bytes).toBeLessThan(158_000);
+    // before M4's range edits (planner, new rows, resolve actions), 135 KB
+    // before M5's lease, range-edit intents and log merging, and 144 KB
+    // before #177's shared classes (ontology-kit's terms and resolver
+    // inlined, project and person links, the first-open move and the
+    // read-only view of another table).
+    expect(bytes).toBeLessThan(177_000);
   });
 
   it('carries no credential handling of its own', () => {

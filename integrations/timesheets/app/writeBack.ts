@@ -82,6 +82,13 @@ import {
   type LeaseOptions,
   type LeaseState,
 } from './lease.js';
+import {
+  fields as rowFields,
+  SHARED,
+  sharedValues,
+  TIME_ENTRY as TIME_ENTRY_CLASS,
+} from './fields.js';
+import type { LinkTarget } from './links.js';
 import type { ObservationLog } from './observationLog.js';
 import type { Mirror, MirrorRecord } from './observations.js';
 import { atomic, NAME } from './ontology.js';
@@ -245,32 +252,54 @@ function isValues(value: unknown): value is EntryValues {
   );
 }
 
-/** The row's own values, as the lens compares them. */
-export function localValues(
+const NO_LINK: LinkTarget = { id: null, name: null };
+
+/** What the row's `work-project` link points at. */
+async function projectLink(
   row: PluginResource,
   schema: CompleteSchema,
-): EntryValues | undefined {
-  const start = row.get(schema.row.start);
-  const end = row.get(schema.row.end);
+): Promise<LinkTarget> {
+  const link = sharedValues(row.props)[SHARED.project];
+
+  return typeof link === 'string'
+    ? schema.links.describe('project', link)
+    : NO_LINK;
+}
+
+/**
+ * The row's own values, as the lens compares them, from its shared
+ * `time-entry-v1` fields (read through the resolver, `fields.ts`). The
+ * project is the linked project row's Clockify id and name; a link to a
+ * row without a Clockify id is a project named by that row (resolved when
+ * listed to send, `desiredValues`).
+ */
+export async function localValues(
+  row: PluginResource,
+  schema: CompleteSchema,
+): Promise<EntryValues | undefined> {
+  const shared = sharedValues(row.props);
+  const start = shared[SHARED.start];
+  const end = shared[SHARED.end];
   if (typeof start !== 'number' || typeof end !== 'number') return undefined;
-  const name = row.get(NAME);
+  const name = shared[NAME];
+  const project = await projectLink(row, schema);
 
   return {
     name: typeof name === 'string' ? name : '',
     start,
     end,
-    billable: row.get(schema.row.billable) === true,
-    projectId: text(row.get(schema.row.projectId)),
-    project: text(row.get(schema.row.projectName)),
+    billable: shared[SHARED.billable] === true,
+    projectId: project.id,
+    project: project.name,
   };
 }
 
-export function readRowState(
+export async function readRowState(
   row: PluginResource,
   schema: CompleteSchema,
-): RowState | undefined {
+): Promise<RowState | undefined> {
   const entryId = text(row.get(schema.row.entryId));
-  const local = localValues(row, schema);
+  const local = entryId ? await localValues(row, schema) : undefined;
   if (!entryId || !local) return undefined;
   const baseline = parseJson<EntryValues>(row.get(schema.sync.baseline));
   const outbox = parseJson<OutboxMarker>(row.get(schema.sync.outbox));
@@ -286,50 +315,121 @@ export function readRowState(
 }
 
 /**
- * Sets the row's synced values to `values`, only where they differ. A
- * value that goes away is written as an empty string (the host's `remove`
- * is not needed for that). Returns whether anything was set.
+ * The project row a row with `values` links to: the one standing for its
+ * Clockify project (made when missing), or, with no id but a name, a
+ * project row of that name without an id. `undefined`: no project.
  */
-export function setRowValues(
+async function projectSubject(
+  schema: CompleteSchema,
+  values: Pick<EntryValues, 'projectId' | 'project'>,
+): Promise<string | undefined> {
+  if (values.projectId)
+    return schema.links.ensure('project', values.projectId, values.project);
+  if (values.project) return schema.links.named(values.project);
+
+  return undefined;
+}
+
+/**
+ * Sets the row's synced values to `values`, only where they differ, as
+ * shared `time-entry-v1` fields (the resolver refuses anything else). The
+ * project is a link: kept when it already stands for the same project,
+ * removed for no project. Returns whether anything was set.
+ */
+export async function setRowValues(
   row: PluginResource,
   schema: CompleteSchema,
   values: EntryValues,
-): boolean {
-  const wanted: Record<string, JSONValue> = {
-    [NAME]: values.name,
-    [schema.row.start]: values.start,
-    [schema.row.end]: values.end,
-    [schema.row.billable]: values.billable,
-    [schema.row.projectId]: values.projectId ?? '',
-    [schema.row.projectName]: values.project ?? '',
-  };
+): Promise<boolean> {
+  const wanted = rowFields.write(
+    {
+      [NAME]: values.name,
+      [SHARED.start]: values.start,
+      [SHARED.end]: values.end,
+      [SHARED.billable]: values.billable,
+    },
+    TIME_ENTRY_CLASS,
+  ) as Record<string, JSONValue>;
   let changed = false;
 
   for (const [property, value] of Object.entries(wanted)) {
-    const current = row.get(property);
-    if (current === value || (value === '' && current === undefined)) continue;
+    if (row.get(property) === value) continue;
     row.set(property, value);
+    changed = true;
+  }
+
+  const now = await projectLink(row, schema);
+  const kept = values.projectId
+    ? now.id === values.projectId
+    : now.id === null && now.name === (values.project ?? null);
+
+  if (!kept) {
+    const subject = await projectSubject(schema, values);
+    if (subject) row.set(SHARED.project, subject);
+    else row.remove(SHARED.project);
     changed = true;
   }
 
   return changed;
 }
 
-/** The row values for a new row; no project stays unset. */
-export function newRowValues(
+/** The shared fields of a new row; no project stays unset. */
+export async function rowValues(
   schema: CompleteSchema,
   values: EntryValues,
-): Record<string, JSONValue> {
+): Promise<Record<string, JSONValue>> {
+  const project = await projectSubject(schema, values);
+
+  return rowFields.write(
+    {
+      [NAME]: values.name,
+      [SHARED.start]: values.start,
+      [SHARED.end]: values.end,
+      [SHARED.billable]: values.billable,
+      ...(project ? { [SHARED.project]: project } : {}),
+    },
+    TIME_ENTRY_CLASS,
+  ) as Record<string, JSONValue>;
+}
+
+/** The row values for a new synced row: its fields and its baseline. */
+export async function newRowValues(
+  schema: CompleteSchema,
+  values: EntryValues,
+): Promise<Record<string, JSONValue>> {
   return {
-    [NAME]: values.name,
-    [schema.row.start]: values.start,
-    [schema.row.end]: values.end,
-    [schema.row.billable]: values.billable,
-    ...(values.projectId ? { [schema.row.projectId]: values.projectId } : {}),
-    ...(values.project ? { [schema.row.projectName]: values.project } : {}),
+    ...(await rowValues(schema, values)),
     [schema.sync.baseline]: JSON.stringify(ordered(values)),
   };
 }
+
+/**
+ * Links the row to the person row of Clockify user `id` (made when
+ * missing); who tracked an entry is shown, never written back. Returns
+ * whether it changed the row.
+ */
+export async function setPerson(
+  row: PluginResource,
+  schema: CompleteSchema,
+  id: string | undefined,
+  name: string | null,
+): Promise<boolean> {
+  if (!id) return false;
+  const subject = await schema.links.ensure('person', id, name);
+  if (row.get(SHARED.person) === subject) return false;
+  row.set(SHARED.person, subject);
+
+  return true;
+}
+
+/**
+ * A project's name for `id`: Clockify's, from its project list, or else
+ * the name of the project row this operation read for it.
+ */
+export const namesFor =
+  (schema: CompleteSchema, projects: ClockifyProject[]) =>
+  (id: string): string | undefined =>
+    projectNames(projects)(id) ?? schema.links.nameOf('project', id);
 
 function setBookkeeping(
   row: PluginResource,
@@ -404,20 +504,19 @@ export function desiredValues(
   if (desired.start !== base.start) desired.start = snap(desired.start);
   if (desired.end !== base.end) desired.end = snap(desired.end);
 
-  if (desired.projectId === base.projectId && desired.project !== base.project)
-    if (!desired.project) desired.projectId = null;
-    else {
-      const named = projects.filter(
-        p => p.name === desired.project && p.archived !== true,
+  // A link to a project row without a Clockify id: the project of that name.
+  if (desired.projectId === null && desired.project) {
+    const named = projects.filter(
+      p => p.name === desired.project && p.archived !== true,
+    );
+    if (named.length === 1) desired.projectId = named[0].id;
+    else
+      problems.push(
+        named.length
+          ? `More than one active project is named “${desired.project}”.`
+          : `No active project is named “${desired.project}”.`,
       );
-      if (named.length === 1) desired.projectId = named[0].id;
-      else
-        problems.push(
-          named.length
-            ? `More than one active project is named “${desired.project}”.`
-            : `No active project is named “${desired.project}”.`,
-        );
-    }
+  }
 
   // The name shown is the chosen project's, unless a typed name could not
   // be resolved: then it stays as typed, next to the problem.
@@ -469,11 +568,12 @@ export function planChange(
     boundaries,
   );
   const changed = changedFields(base, desired);
-  // A project name that resolves to no project still changed the row.
+  // A project named by a row without a Clockify id that resolves to no
+  // project still changed the row.
   const fields = ENTRY_FIELDS.filter(
     f =>
       changed.includes(f) ||
-      (f === 'projectId' && desired.project !== base.project),
+      (f === 'projectId' && desired.projectId === null && !!desired.project),
   );
   if (!fields.length) return undefined;
 
@@ -579,7 +679,7 @@ export async function syncRow(
   recovered?: 'applied' | 'not-applied';
   state: RowState;
 }> {
-  const state = readRowState(row, schema);
+  const state = await readRowState(row, schema);
   let extrasChanged = false;
 
   for (const [property, value] of Object.entries(extras))
@@ -589,19 +689,19 @@ export async function syncRow(
     }
 
   if (!state) {
-    const changed = setRowValues(row, schema, remote) || extrasChanged;
+    const changed = (await setRowValues(row, schema, remote)) || extrasChanged;
     setBookkeeping(row, schema, { baseline: remote });
     await row.save();
 
     return {
       valuesChanged: changed,
-      state: readRowState(row, schema)!,
+      state: (await readRowState(row, schema))!,
     };
   }
 
   const result = reconcileRow(state, remote);
   const valuesChanged =
-    setRowValues(row, schema, result.values) || extrasChanged;
+    (await setRowValues(row, schema, result.values)) || extrasChanged;
   const bookkeeping = setBookkeeping(row, schema, {
     baseline: result.baseline,
     ...(state.outbox ? { outbox: null } : {}),
@@ -639,10 +739,10 @@ export async function discardChange(
   row: PluginResource,
   schema: CompleteSchema,
 ): Promise<void> {
-  if (readCreateState(row, schema)) return row.destroy();
-  const state = readRowState(row, schema);
+  if (await readCreateState(row, schema)) return row.destroy();
+  const state = await readRowState(row, schema);
   if (!state?.baseline) return;
-  const changed = setRowValues(row, schema, state.baseline);
+  const changed = await setRowValues(row, schema, state.baseline);
   const flag = setBookkeeping(row, schema, { delete: false });
   if (changed || flag) await row.save();
 }
@@ -650,14 +750,15 @@ export async function discardChange(
 // ---- range edits: new rows (#123 M4) ---------------------------------------
 
 /** A new row's state, if it is one: no entry id, and `clockify-create`. */
-export function readCreateState(
+export async function readCreateState(
   row: PluginResource,
   schema: CompleteSchema,
-): CreateState | undefined {
+): Promise<CreateState | undefined> {
   if (text(row.get(schema.row.entryId))) return undefined;
   const create = parseJson<CreateMarker>(row.get(schema.sync.create));
-  const local = localValues(row, schema);
-  if (!create || typeof create !== 'object' || !local) return undefined;
+  if (!create || typeof create !== 'object') return undefined;
+  const local = await localValues(row, schema);
+  if (!local) return undefined;
   const outbox = parseJson<OutboxMarker>(row.get(schema.sync.outbox));
 
   return {
@@ -792,7 +893,7 @@ export async function stageRangePlan(
   for (const step of steps) {
     if (step.op === 'update') {
       const r = await row(step.entryId);
-      if (setRowValues(r, schema, step.desired)) await r.save();
+      if (await setRowValues(r, schema, step.desired)) await r.save();
     } else if (step.op === 'delete')
       await requestDelete(await row(step.entryId), schema, true);
     else {
@@ -806,21 +907,11 @@ export async function stageRangePlan(
           ? { tagIds: [...source.tagIds] }
           : {}),
       };
-      const values = step.values;
       const created = await store.newResource({
         parent: schema.table,
-        isA: [schema.rowClass],
+        isA: [TIME_ENTRY_CLASS],
         propVals: {
-          [NAME]: values.name,
-          [schema.row.start]: values.start,
-          [schema.row.end]: values.end,
-          [schema.row.billable]: values.billable,
-          ...(values.projectId
-            ? { [schema.row.projectId]: values.projectId }
-            : {}),
-          ...(values.project
-            ? { [schema.row.projectName]: values.project }
-            : {}),
+          ...(await rowValues(schema, step.values)),
           [schema.sync.create]: JSON.stringify(marker),
         },
       });
@@ -867,24 +958,27 @@ const madeBy = (entry: ClockifyTimeEntry, values: EntryValues) => {
   );
 };
 
-/** Who tracked an entry, as the table's Member columns (sync sets the
- * same on imported rows). */
+/** Who tracked an entry, as the row's Person link (sync sets the same on
+ * imported rows). */
 export interface Member {
   id: string;
   name?: unknown;
 }
 
-function setMember(
+async function setMember(
   row: PluginResource,
   schema: CompleteSchema,
   entry: ClockifyTimeEntry,
   members: Member[] = [],
 ) {
   const id = typeof entry.userId === 'string' ? entry.userId : undefined;
-  if (!id) return;
-  row.set(schema.row.memberId, id);
   const name = members.find(m => m.id === id)?.name;
-  if (typeof name === 'string' && name) row.set(schema.row.memberName, name);
+  await setPerson(
+    row,
+    schema,
+    id,
+    typeof name === 'string' && name ? name : null,
+  );
 }
 
 /** Binds a new row to the entry created for it. */
@@ -896,8 +990,8 @@ async function bindRow(
   members?: Member[],
 ) {
   row.set(schema.row.entryId, entry.id);
-  setMember(row, schema, entry, members);
-  setRowValues(row, schema, remote);
+  await setMember(row, schema, entry, members);
+  await setRowValues(row, schema, remote);
   setBookkeeping(row, schema, { baseline: remote, create: null, outbox: null });
   await row.save();
 }
@@ -939,7 +1033,7 @@ export async function settleCreates(
   for (const subject of await tableRows(store, schema)) {
     const row = await store.getResource(subject);
     const id = text(row.get(schema.row.entryId));
-    const state = id ? undefined : readCreateState(row, schema);
+    const state = id ? undefined : await readCreateState(row, schema);
     if (id) bound.add(id);
     if (state) creates.push({ row, state });
   }
@@ -963,7 +1057,7 @@ export async function settleCreates(
     ).find(e => !bound.has(e.id) && madeBy(e, local));
 
     if (match) {
-      const remote = entryValues(match, projectNames(context.projects))!;
+      const remote = entryValues(match, namesFor(schema, context.projects))!;
       await bindRow(row, schema, match, remote, context.members);
       bound.add(match.id);
       settled.push({ subject, title: remote.name, entryId: match.id });
@@ -1134,7 +1228,7 @@ async function sendOne(
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
-  const state = readRowState(row, schema);
+  const state = await readRowState(row, schema);
 
   if (
     !state ||
@@ -1147,7 +1241,7 @@ async function sendOne(
     };
 
   // Fresh read: the only concurrency check Clockify allows (#97 §4.4).
-  const names = projectNames(context.write.projects);
+  const names = namesFor(schema, context.write.projects);
   const fresh = await readEntry(context, change.entryId);
 
   if (!fresh) {
@@ -1172,7 +1266,7 @@ async function sendOne(
 
   if (change.kind === 'delete') {
     if (!same(ordered(remote), ordered(change.base))) {
-      setRowValues(row, schema, remote);
+      await setRowValues(row, schema, remote);
       setBookkeeping(row, schema, { baseline: remote, delete: false });
       await row.save();
 
@@ -1189,7 +1283,7 @@ async function sendOne(
     );
 
     if (decision.agreed) {
-      setRowValues(row, schema, remote);
+      await setRowValues(row, schema, remote);
       setBookkeeping(row, schema, { baseline: remote });
       await row.save();
 
@@ -1206,7 +1300,7 @@ async function sendOne(
         ...decision.conflicts.map(c => c.property),
       ])
         (values as Record<string, unknown>)[key] = remote[key as EntryField];
-      setRowValues(row, schema, values);
+      await setRowValues(row, schema, values);
       setBookkeeping(row, schema, { baseline: remote });
       await row.save();
 
@@ -1320,7 +1414,7 @@ async function sendOne(
     };
   }
 
-  setRowValues(row, schema, after);
+  await setRowValues(row, schema, after);
   setBookkeeping(row, schema, { baseline: after, outbox: null });
   await row.save();
   const differs = changedFields(desired, after);
@@ -1349,7 +1443,7 @@ async function sendCreate(
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
-  const state = readCreateState(row, schema);
+  const state = await readCreateState(row, schema);
 
   if (!state || !same(ordered(state.local), ordered(change.local)))
     return {
@@ -1358,7 +1452,7 @@ async function sendCreate(
     };
 
   const desired = change.desired;
-  const names = projectNames(context.write.projects);
+  const names = namesFor(schema, context.write.projects);
   let read: Awaited<ReturnType<typeof readRange>>;
 
   try {
@@ -1473,7 +1567,7 @@ async function sendCreate(
   // Bound now, so a reload never creates it twice; the marker stays until
   // the verification read below (or the next sync) settles it.
   row.set(schema.row.entryId, made.id);
-  setMember(row, schema, made as ClockifyTimeEntry, context.members);
+  await setMember(row, schema, made as ClockifyTimeEntry, context.members);
   setBookkeeping(row, schema, { create: null, baseline: desired });
   await row.save();
 
@@ -1504,7 +1598,7 @@ async function sendCreate(
     };
   }
 
-  setRowValues(row, schema, after);
+  await setRowValues(row, schema, after);
   setBookkeeping(row, schema, { baseline: after, outbox: null });
   await row.save();
   const differs = changedFields(desired, after);
@@ -1586,14 +1680,14 @@ export async function planAll(
 
   for (const subject of await tableRows(store, schema)) {
     const row = await store.getResource(subject);
-    const created = readCreateState(row, schema);
+    const created = await readCreateState(row, schema);
 
     if (created) {
       changes.push(planCreate(created, context));
       continue;
     }
 
-    const state = readRowState(row, schema);
+    const state = await readRowState(row, schema);
     if (!state) continue;
     const change = planChange(
       state,

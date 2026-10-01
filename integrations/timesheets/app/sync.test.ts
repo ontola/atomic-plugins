@@ -9,6 +9,7 @@ import {
 import type { Settings } from './config.js';
 import { fixtureProxy } from './fixtureProxy.js';
 import {
+  APP,
   fakeStore,
   IS_A,
   ONTOLOGY,
@@ -16,6 +17,7 @@ import {
   ROW_CLASS,
   TABLE,
 } from './fakeStore.js';
+import { SHARED, TIME_ENTRY, WORK_PERSON, WORK_PROJECT } from './fields.js';
 import { atomic, NAME } from './ontology.js';
 import { ensureSchema, findSchema } from './schema.js';
 import { GENERATED_TABLE_NOTE, syncClockify } from './sync.js';
@@ -47,39 +49,48 @@ async function setup(options?: { withNames?: boolean }) {
 }
 
 describe('ensureSchema', () => {
-  it('creates typed Properties under the app ontology once, and lists the row fields as columns', async () => {
+  it('creates typed Properties for its own fields once, and its Projects and People tables', async () => {
     const store = fakeStore();
 
-    expect((await findSchema(store)).row).toEqual({});
+    // The row fields are the shared time-entry-v1 ones (#177).
+    expect((await findSchema(store)).row).toEqual(SHARED);
     const schema = await ensureSchema(store);
     const writes = store.writes.length;
-    expect(await ensureSchema(store)).toEqual(schema);
+    const { links: _, ...rest } = schema;
+    const { links: __, ...again } = await ensureSchema(store);
+    expect(again).toEqual(rest);
     expect(store.writes.length).toBe(writes);
 
     const property = (subject: string) => store.resources.get(subject)!;
-    expect(property(schema.row.start)[atomic.datatype]).toBe(
-      'https://atomicdata.dev/datatypes/timestamp',
+    expect(schema.row.start).toBe(SHARED.start);
+    expect(property(schema.row.entryId)[atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/string',
     );
-    expect(property(schema.row.billable)[atomic.datatype]).toBe(
-      'https://atomicdata.dev/datatypes/boolean',
+    expect(property(schema.link.projectId)[atomic.shortname]).toBe(
+      'clockify-project-id',
     );
     expect(property(schema.settings.lookbackDays)[atomic.datatype]).toBe(
       'https://atomicdata.dev/datatypes/integer',
     );
-    expect(property(schema.row.start)[PARENT]).toBe(ONTOLOGY);
-    // 8 row fields, 3 settings, 7 log fields (lease and range edits: #123
-    // M5), 4 sync extras (#123 M3, M4).
-    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(22);
-    const recommends = store.resources.get(ROW_CLASS)![
-      atomic.recommends
-    ] as string[];
-    expect(recommends).toEqual([NAME, ...Object.values(schema.row)]);
-    // Sync bookkeeping stays on the row, but not as a column (#123 M3).
-    for (const extra of Object.values(schema.sync))
-      expect(recommends).not.toContain(extra);
-    // Settings are stored on the App, not shown as table columns.
-    expect(recommends).not.toContain(schema.settings.workspaceId);
-    expect(await findSchema(store)).toEqual(schema);
+    expect(property(schema.row.entryId)[PARENT]).toBe(ONTOLOGY);
+    // 1 row extra, 2 link extras, 3 settings, 7 log fields (lease and range
+    // edits: #123 M5), 4 sync extras (#123 M3, M4).
+    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(17);
+    // Nothing is added to any class: the columns are the shared class's.
+    expect(store.resources.get(ROW_CLASS)![atomic.recommends]).toEqual([]);
+    // Two tables under the App, of the shared project and person classes.
+    expect(store.resources.get(schema.tables.projects)).toMatchObject({
+      [PARENT]: APP,
+      [NAME]: 'Projects',
+      [atomic.classtype]: WORK_PROJECT,
+    });
+    expect(store.resources.get(schema.tables.people)).toMatchObject({
+      [PARENT]: APP,
+      [NAME]: 'People',
+      [atomic.classtype]: WORK_PERSON,
+    });
+    const { links: ___, ...found } = schema;
+    expect(await findSchema(store)).toEqual(found);
   });
 
   it('refuses a same-named field with another datatype', async () => {
@@ -87,13 +98,13 @@ describe('ensureSchema', () => {
     store.resources.set('did:ad:odd', {
       [PARENT]: ONTOLOGY,
       [IS_A]: [atomic.propertyClass],
-      [atomic.shortname]: 'start',
-      [atomic.datatype]: 'https://atomicdata.dev/datatypes/string',
+      [atomic.shortname]: 'clockify-entry-id',
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/integer',
     });
     store.resources.get(ONTOLOGY)![atomic.properties] = ['did:ad:odd'];
 
     await expect(ensureSchema(store)).rejects.toThrow(
-      /"Start" already exists with another datatype/,
+      /"Clockify entry id" already exists with another datatype/,
     );
   });
 
@@ -148,13 +159,34 @@ describe('syncClockify against the shared Clockify mock', () => {
       ([, r]) => r[schema.row.entryId] === 'entry-1',
     )![1];
     expect(first[NAME]).toBe('Fix plugin source loading');
-    expect(first[IS_A]).toEqual([ROW_CLASS]);
-    expect(first[schema.row.start]).toBe(NOW - 86_400_000 - 4 * 3_600_000);
-    expect(first[schema.row.end]).toBe(NOW - 86_400_000 - 2 * 3_600_000);
-    expect(first[schema.row.projectId]).toBe(PROJECT.id);
-    expect(first[schema.row.projectName]).toBe(PROJECT.name);
-    expect(first[schema.row.memberName]).toBe(USER.name);
-    expect(first[schema.row.billable]).toBe(true);
+    expect(first[IS_A]).toEqual([TIME_ENTRY]);
+    expect(first[SHARED.start]).toBe(NOW - 86_400_000 - 4 * 3_600_000);
+    expect(first[SHARED.end]).toBe(NOW - 86_400_000 - 2 * 3_600_000);
+    expect(first[SHARED.billable]).toBe(true);
+    // Project and person are linked records (#177 Q11).
+    const project = store.resources.get(first[SHARED.project] as string)!;
+    expect(project).toMatchObject({
+      [PARENT]: schema.tables.projects,
+      [IS_A]: [WORK_PROJECT],
+      [NAME]: PROJECT.name,
+      [schema.link.projectId]: PROJECT.id,
+    });
+    const person = store.resources.get(first[SHARED.person] as string)!;
+    expect(person).toMatchObject({
+      [PARENT]: schema.tables.people,
+      [IS_A]: [WORK_PERSON],
+      [NAME]: USER.name,
+      [schema.link.memberId]: USER.id,
+    });
+    // Every active Clockify project gets a row, once.
+    const projectRows = [...store.resources.values()].filter(
+      r => r[PARENT] === schema.tables.projects,
+    );
+    expect(projectRows.map(r => r[schema.link.projectId]).sort()).toEqual(
+      PROJECTS.filter(p => p.archived !== true)
+        .map(p => p.id)
+        .sort(),
+    );
     // Every call carried the reference, and the 7-day window, read from
     // 24 h earlier (the margin, #123 §2.3), as wall-clock time in the
     // user's profile time zone (Amsterdam, UTC+2 in September): Clockify
@@ -173,14 +205,17 @@ describe('syncClockify against the shared Clockify mock', () => {
   });
 
   it('keeps raw ids and warns when project and user names are unavailable', async () => {
-    const { schema, run, rows } = await setup({ withNames: false });
+    const { store, schema, run, rows } = await setup({ withNames: false });
 
     const result = await run();
 
     expect(result.warnings).toHaveLength(2);
     const [, first] = rows()[0];
-    expect(first[schema.row.projectId]).toBe(PROJECT.id);
-    expect(first[schema.row.projectName]).toBeUndefined();
+    const project = store.resources.get(first[SHARED.project] as string)!;
+    expect(project[schema.link.projectId]).toBe(PROJECT.id);
+    expect(project[NAME]).toBe(`Clockify project ${PROJECT.id}`);
+    const person = store.resources.get(first[SHARED.person] as string)!;
+    expect(person[NAME]).toBe(`Clockify user ${USER.id}`);
   });
 
   it('is idempotent: a second run creates nothing and rewrites no row', async () => {

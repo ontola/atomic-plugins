@@ -2,12 +2,14 @@
 /**
  * Every property and class the app reads or writes, in one place.
  *
- * Atomic's own properties are fixed URLs. The app's own fields are not: a
- * host's `/app-write` rejects a property URL that does not resolve to a
- * Property (`value_for` in atomic-server's `store_host.rs`), so the app
- * creates one Property per field under its row class's ontology, inside its
- * own subtree, and finds them again by shortname (`schema.ts`). The same
- * pattern as the Pets and Notion drive apps.
+ * Atomic's own properties are fixed URLs, and so are the shared
+ * `time-entry-v1` fields (`fields.ts`, #177). The app's own fields (Clockify
+ * ids, settings, the observation log, sync bookkeeping) are not: a host's
+ * `/app-write` rejects a property URL that does not resolve to a Property
+ * (`value_for` in atomic-server's `store_host.rs`), so the app creates one
+ * Property per field under its own ontology, inside its own subtree, and
+ * finds them again by shortname (`schema.ts`). The same pattern as the Pets
+ * and Notion drive apps.
  */
 
 const A = 'https://atomicdata.dev';
@@ -21,7 +23,11 @@ export const atomic = {
   isA: `${A}/properties/isA`,
   properties: `${A}/properties/properties`,
   recommends: `${A}/properties/recommends`,
+  classtype: `${A}/properties/classtype`,
   propertyClass: `${A}/classes/Property`,
+  tableClass: `${A}/classes/Table`,
+  /** The App's own ontology, as `createApp` sets it. */
+  defaultOntology: `${A}/ontology/server/property/default-ontology`,
 } as const;
 
 export const NAME = atomic.name;
@@ -47,7 +53,11 @@ const field = (
   description: string,
 ): Field => ({ shortname, name, datatype, description });
 
-/** Columns of an imported time entry, besides Atomic's own `name`. */
+/**
+ * The app's own extra on each row (not a column): the Clockify entry the row
+ * is bound to. The row's values are the shared `time-entry-v1` fields
+ * (`fields.ts`); up to 0.4.0 they were Properties here too.
+ */
 export const ROW_FIELDS = {
   entryId: field(
     'clockify-entry-id',
@@ -55,42 +65,25 @@ export const ROW_FIELDS = {
     datatypes.string,
     'The id of the Clockify time entry this row was imported from.',
   ),
-  start: field(
-    'start',
-    'Start',
-    datatypes.timestamp,
-    'When the time entry started.',
-  ),
-  end: field('end', 'End', datatypes.timestamp, 'When the time entry ended.'),
-  billable: field(
-    'billable',
-    'Billable',
-    datatypes.boolean,
-    'Whether Clockify marks the entry billable.',
-  ),
+} as const;
+
+/**
+ * The app's own extras on the rows of its Projects and People tables
+ * (`work-project-v1`, `work-person-v1`): which Clockify project or user the
+ * row stands for. Up to 0.4.0 they were on each time entry row.
+ */
+export const LINK_FIELDS = {
   projectId: field(
     'clockify-project-id',
     'Clockify project id',
     datatypes.string,
-    'The id of the Clockify project the entry belongs to.',
-  ),
-  projectName: field(
-    'project',
-    'Project',
-    datatypes.string,
-    'The name of the Clockify project the entry belongs to.',
+    'The id of the Clockify project this row stands for.',
   ),
   memberId: field(
     'clockify-user-id',
     'Clockify user id',
     datatypes.string,
-    'The id of the Clockify user who tracked the entry.',
-  ),
-  memberName: field(
-    'member',
-    'Member',
-    datatypes.string,
-    'The name of the Clockify user who tracked the entry.',
+    'The id of the Clockify user this row stands for.',
   ),
 } as const;
 
@@ -206,6 +199,7 @@ export const SYNC_FIELDS = {
 } as const;
 
 export type RowKey = keyof typeof ROW_FIELDS;
+export type LinkKey = keyof typeof LINK_FIELDS;
 export type SyncKey = keyof typeof SYNC_FIELDS;
 export type SettingKey = keyof typeof SETTING_FIELDS;
 export type LogKey = keyof typeof LOG_FIELDS;

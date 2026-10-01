@@ -5,7 +5,9 @@ import {
   type RawNamed,
   type SetupOptions,
 } from './clockifyApi.js';
+import { adopt } from './adopt.js';
 import { readSettings, type Settings } from './config.js';
+import { timesheetFromRows } from './model/rows.js';
 import { projectOf, timesheetFromMirror } from './model/source.js';
 import { browserTimeZone } from './model/time.js';
 import type { Timesheet } from './model/types.js';
@@ -74,6 +76,13 @@ import {
  */
 export type ViewState =
   | { kind: 'loading' }
+  /**
+   * Shown as the view of a table that isn't this app's own (any
+   * `time-entry-v1` table, through the host's "+ Add view"): its rows are
+   * shown, read only, and nothing is synced. "Sync this table" (#177 §6.2
+   * item 14) is not built.
+   */
+  | { kind: 'local'; tableName: string }
   /** The host has no proxy relay (atomic-server#1624 not in this build). */
   | { kind: 'no-proxy' }
   | { kind: 'not-connected' }
@@ -218,6 +227,10 @@ export interface Controller {
   send(): Promise<ViewState>;
 }
 
+/** What the `local` state says, in the banner and to screen readers. */
+export const LOCAL_NOTE =
+  'This table isn’t synced with Clockify: the app syncs only its own table. Its time entries are shown here, read only.';
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -239,6 +252,8 @@ export function createController(
   let current: ViewState = { kind: 'loading' };
   let running = false;
   let input: SheetInput | undefined;
+  /** As the view of another table: what its rows hold (`local`). */
+  let rowsSheet: Timesheet | undefined;
   let changes: ChangesState = { review: [], providerWon: [], recovered: [] };
   /** Range edits (#123 M5), as last read, and the ones written here. */
   let intents: StoredIntent[] = [];
@@ -305,6 +320,28 @@ export function createController(
     state: () => current,
 
     async load() {
+      try {
+        // First open of 0.5.0 moves the app's own table onto time-entry-v1.
+        const adopted = await adopt(store);
+
+        if (!adopted.own) {
+          const data = await store.getData();
+          const table = await store.getResource(data!.table);
+          const name = table.get(atomic.name);
+          rowsSheet = await timesheetFromRows(store, data!.table, timeZone);
+          set({
+            kind: 'local',
+            tableName: typeof name === 'string' && name ? name : 'Time entries',
+          });
+
+          return {};
+        }
+      } catch (error) {
+        set({ kind: 'failed', message: message(error) });
+
+        return {};
+      }
+
       const proxy = store.proxy;
 
       if (!proxy || typeof proxy.connections !== 'function') {
@@ -592,6 +629,13 @@ export function createController(
       if (typeof store.openResource !== 'function') return false;
 
       try {
+        // As the view of another table, an entry's id is its row.
+        if (current.kind === 'local') {
+          await store.openResource(entryId);
+
+          return true;
+        }
+
         const schema = await findSchema(store);
         if (!schema.row.entryId) return false;
         const subject = await rowSubject(schema as CompleteSchema, entryId);
@@ -626,6 +670,7 @@ export function createController(
     }),
 
     sheet(at = now()) {
+      if (current.kind === 'local') return rowsSheet;
       if (!input) return undefined;
       const settings = settingsOf(current);
 
@@ -685,7 +730,7 @@ export function createController(
 
     async editEntry(entryId, edit) {
       await changeRow(entryId, async (row, schema) => {
-        const local = localValues(row, schema);
+        const local = await localValues(row, schema);
         if (!local) throw new Error('The row has no start or end.');
         const projectId =
           edit.projectId === undefined ? local.projectId : edit.projectId;
@@ -701,7 +746,7 @@ export function createController(
                     ?.name) ||
                 null,
         };
-        if (setRowValues(row, schema, next)) await row.save();
+        if (await setRowValues(row, schema, next)) await row.save();
       });
     },
 
@@ -986,10 +1031,13 @@ export function createController(
       const subject = await rowSubject(schema, entryId);
       if (!subject) throw new Error('This entry has no row in the table.');
       const row = await store.getResource(subject);
-      if (!readRowState(row, schema)?.baseline)
+      if (!(await readRowState(row, schema))?.baseline)
         throw new Error('Sync first: this row has not been compared yet.');
       await change(row, schema);
-      const state = readRowState(await store.getResource(subject), schema);
+      const state = await readRowState(
+        await store.getResource(subject),
+        schema,
+      );
       const planned =
         state &&
         planChange(
@@ -1128,6 +1176,8 @@ export function describe(state: ViewState): string {
   switch (state.kind) {
     case 'loading':
       return 'Loading…';
+    case 'local':
+      return LOCAL_NOTE;
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot import. Nothing was fetched.';
     case 'not-connected':
