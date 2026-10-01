@@ -92,7 +92,17 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   consent page therefore allows form submissions to the proxy only. 0.2.2
   and later; 0.2.1 redirected (`303`). For an API-key platform (`type:
   apiKey` in the composed document) the consent page asks for the key, and
-  this seals it and redirects (`303`) to `redirect_uri`. For a platform whose
+  this seals it and redirects (`303`) to `redirect_uri`. When the scheme
+  declares `x-api-key-details`
+  ([`openapi-extensions/spec/api-key-details`](../openapi-extensions/spec/api-key-details/README.md),
+  0.2.3 and later), the page shows the scheme's `description` and links its
+  `helpUrl` (a plain link that opens in a new tab), and this first calls the
+  declared `keyCheck` operation once with the key: a fixed `GET` on the
+  document's own `https` server, no redirects, 10-second timeout. A `401`
+  or `403` answers the consent page again (`200`) saying the key was not
+  accepted, without spending the consent; any other non-2xx, a redirect or
+  no answer is a `400` and nothing is stored. A 2xx may give a label (at most
+  200 characters, sealed with the connection). For a platform whose
   composed document declares top-level `security: []` and no security scheme
   (0.2.3 and later), the consent page asks for nothing, and this hands off a
   connection that holds no credential and redirects (`303`) to
@@ -107,7 +117,8 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   bound to the PKCE challenge.
 - `POST /connect/redeem` — **signed**; body
   `{"code": "<handoff>", "code_verifier": "<PKCE verifier>"}`; answers
-  `{"connection_id", "platform", "owner"}`. The signer becomes the owner.
+  `{"connection_id", "platform", "owner", "label"?}`. The signer becomes the
+  owner. `label` is there when an API-key platform's key check gave one.
   A wrong verifier does not burn the handoff.
 - `ANY /proxy/{connection_id}/{platform}/{path}` — **signed** by the owner, a
   delegated app agent, or a registered runtime of a delegated app; or carrying
@@ -119,7 +130,9 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
   signer's runtimes. Never credentials. Shape:
-  `{"owner", "connections": [{"connection_id", "platform", "owner", "created_at", "last_used_at", "delegations": [...]}], "runtimes": [{"agent", "app", "label", "created_at", "last_used_at"}]}`.
+  `{"owner", "connections": [{"connection_id", "platform", "owner", "label"?, "created_at", "last_used_at", "delegations": [...]}], "runtimes": [{"agent", "app", "label", "created_at", "last_used_at"}]}`.
+  A connection's `label` is the key check's label (see `/connect/authorize`),
+  absent otherwise.
 - `DELETE /connections/{id}` — **signed by the owner**; deletes the connection
   and its delegations. `204`.
 - `POST /connections/{id}/agents` — **signed by the owner**; body

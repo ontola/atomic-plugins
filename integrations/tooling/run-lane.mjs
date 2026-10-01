@@ -302,6 +302,14 @@ function runE2e(level) {
       PLUGIN_CATALOG_URL: `http://localhost:${ports.devServer}/integrations/catalog.json`,
       INTEGRATION_PROXY_URL: mockProxyOrigin(ports),
       ATOMIC_MOCK_INTEGRATION_PROXY: '1',
+      // One Playwright worker unless PLAYWRIGHT_WORKERS says otherwise, as
+      // in CI (browser/e2e's workerBudget gives CI 1). Every test in a lane
+      // shares that lane's one mock proxy, server and store, and specs read
+      // that shared state (a platform's connection list, a provider
+      // fixture's rows), so tests run side by side see each other's writes.
+      // On 2026-10-01 the timesheets lane failed 2 of 4 tests with
+      // PLAYWRIGHT_WORKERS=2 and passed with 1 (integrations/PARALLEL_LANES.md).
+      PLAYWRIGHT_WORKERS: process.env.PLAYWRIGHT_WORKERS ?? '1',
       ...levelEnv(level),
       // What the lane told its server (lanes.json `serverEnv`), so its
       // specs can serve what that names, e.g. the Solid lane's test issuer.
