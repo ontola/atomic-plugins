@@ -18,6 +18,11 @@ deprecated.
   that `integration-proxy/` composes, migrated in from the standalone
   `localthought/overlays` repo with its history intact, and published by
   GitHub Pages at https://ontola.github.io/atomic-plugins/overlays/.
+- `openapi-extensions/` — the OpenAPI extension specs (Pagination Schemes,
+  CRUD Causality, Authenticated Principal and draft proposals) that
+  `overlays/`, `syncables/` and `integration-proxy/` implement, migrated in
+  from the standalone `pondersource/openapi-extensions` repo with its
+  history intact.
 - `integration-proxy/` — the Rust OAuth/API proxy (LocalThought) that drive
   apps reach through atomic-server's `store.proxy`. See its own
   [README](integration-proxy/README.md) and [AGENTS.md](integration-proxy/AGENTS.md).

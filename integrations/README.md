@@ -681,7 +681,7 @@ codes, which #54 retired; they were deleted in #54 phase 2.
 - **Syncables** — the npm `syncables` package, used in the frame as
   `syncables/browser` (`readPlatform`, `describePlatform`, a `Transport`
   over `store.proxy.request`). It reads an OpenAPI document plus its
-  [CRUD Causality Extension](https://github.com/pondersource/openapi-extensions/tree/main/spec/crud-causality)
+  [CRUD Causality Extension](../openapi-extensions/spec/crud-causality/README.md)
   (`components.crudResources`) block, discovers the resource model and
   pages through it, so the app carries no provider-specific paging code.
   Each app bundles the document it reads (`pets/app/openapi.json`,
@@ -756,7 +756,7 @@ The mock proxy accepts runtime-signed requests (`POST /runtimes`, then a
 request signed by the runtime agent), and `serve.mjs` passes the mock's
 origin as `ATOMIC_INTEGRATION_PROXY_URL`, but no lane exercises that path.
 
-### OpenAPI overlays and the pondersource extensions
+### OpenAPI overlays and the openapi-extensions specs
 
 A provider's own OpenAPI document rarely declares the two things syncables
 needs to drive it generically: which operations are CRUD on which resource,
@@ -772,11 +772,11 @@ is a reference implementation of the same deliberately minimal subset —
 `$`, dot-paths (`$.components`), and quoted-bracket segments
 (`$.paths['/pets/{petId}'].get`); no wildcards or array indexing.
 
-Two overlay-carried spec extensions from the
-[`pondersource/openapi-extensions`](https://github.com/pondersource/openapi-extensions)
-project do the actual work:
+Two overlay-carried spec extensions from
+[`openapi-extensions/`](../openapi-extensions/) (migrated in from
+`pondersource/openapi-extensions`, #115) do the actual work:
 
-- **[CRUD Causality Extension](https://github.com/pondersource/openapi-extensions/tree/main/spec/crud-causality)**
+- **[CRUD Causality Extension](../openapi-extensions/spec/crud-causality/README.md)**
   — adds `components.crudResources` (named resources with an `identity`
   URL template + path-variable bindings, and `collections` with their own
   list-query fixed params) and an `x-crud` block on individual operations
@@ -786,7 +786,7 @@ project do the actual work:
   including nested collections; see
   [`syncables/src/resources/discover.ts`](../syncables/src/resources/discover.ts)
   for the reference implementation.
-- **[OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)**
+- **[OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)**
   — adds `components.paginationSchemes`, describing how the API paginates
   (cursor, offset, page, link-header, ...). Providers essentially never
   declare this natively either, so it is applied the same way, via an

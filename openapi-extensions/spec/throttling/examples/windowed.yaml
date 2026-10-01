@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info:
+  title: Illustrative window quotas
+  version: 1.0.0
+x-throttling:
+  limits:
+    ip:
+      requests: 120
+      window: { seconds: 60, kind: fixed, anchor: '2026-01-01T00:00:00Z' }
+      partitionBy: [sourceIp]
+    user:
+      requests: 1000
+      window: { seconds: 3600, kind: sliding }
+      partitionBy: [user]
+    session:
+      window: { seconds: 60, kind: unspecified }
+      partitionBy: [sourceIp, session]
+      description: Per source-IP/session pair; numeric maximum is unpublished.
+  applies: [ip, user]
+paths:
+  /records:
+    get:
+      responses:
+        '200': { description: Records }
+        '429':
+          description: The API throttled the request.
+          headers:
+            Retry-After:
+              description: Delay-seconds or HTTP-date under RFC 9110.
+              schema: { type: string }
+  /session-status:
+    get:
+      x-throttling: [ip, session]
+      responses:
+        '200': { description: Session status }
