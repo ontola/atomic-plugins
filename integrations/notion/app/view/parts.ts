@@ -54,6 +54,8 @@ export interface UiState {
   groupBy?: string;
   /** Asking to confirm "Disconnect Notion". */
   confirmDisconnect?: boolean;
+  /** The "Changes to send" review is open in place of the rows. */
+  review?: boolean;
   /** A link that could not open in a new tab: its row shows it to copy. */
   linkFallback?: { subject: string; href: string };
 }
@@ -669,8 +671,8 @@ export function renderPeek(
       doc,
       'p',
       { class: 'nt-readonly' },
-      icon(doc, 'lock'),
-      'Read-only copy. Edit this page in Notion; the change arrives here on the next sync.',
+      icon(doc, 'info'),
+      'Edit this row in the data table. Your edit waits under “Review changes” until you send it to Notion. Edits made in Notion arrive here on the next sync.',
     ),
   );
 }
@@ -1071,8 +1073,8 @@ export function preConnection(
             text: 'Every property of type text, number, checkbox, select, status, URL, email and phone is copied',
           },
           {
-            icon: 'lock',
-            text: 'Read-only: nothing is ever written back to Notion',
+            icon: 'sync',
+            text: 'Edits to those rows go back to Notion only after you review them and press Send',
           },
           {
             icon: 'db',

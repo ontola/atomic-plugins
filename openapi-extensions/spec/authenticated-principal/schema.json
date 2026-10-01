@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pondersource/openapi-extensions/spec/authenticated-principal/schema.json",
+  "title": "x-authenticated-principal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "namespace", "subject", "identifier"],
+  "properties": {
+    "kind": {
+      "enum": ["user", "organization", "serviceAccount", "bot"]
+    },
+    "namespace": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#@]+(?:/[^?#]*)?$"
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$"
+    },
+    "identifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope"],
+      "properties": {
+        "scope": { "enum": ["provider", "client"] },
+        "stable": { "type": "boolean" },
+        "reassigned": { "type": "boolean" }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$" },
+        "email": { "type": "string", "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$" },
+        "picture": { "type": "string", "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$" },
+        "email_verified": { "type": "string", "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$" }
+      }
+    }
+  }
+}

@@ -107,7 +107,7 @@ const { records, ontology, errors } = await readPlatform(document, {
 ```
 
 - **Collections** come from `components.crudResources` (the
-  [CRUD Causality Extension](https://github.com/pondersource/openapi-extensions/tree/main/spec/crud-causality),
+  [CRUD Causality Extension](https://github.com/ontola/atomic-plugins/tree/main/openapi-extensions/spec/crud-causality),
   usually added by an overlay). A nested collection runs once per parent
   record, with its path variables filled in through `identity.bindings`. On a
   collection, `x-list-query` adds fixed query parameters, `x-list-method: POST`

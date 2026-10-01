@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS agent_connections (
 );
 CREATE INDEX IF NOT EXISTS agent_connections_owner_idx ON agent_connections (owner);
 CREATE INDEX IF NOT EXISTS agent_connections_last_used_at_idx ON agent_connections (last_used_at);
+ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS label_envelope TEXT;
 CREATE TABLE IF NOT EXISTS connection_delegations (
   connection_id TEXT NOT NULL REFERENCES agent_connections (connection_id) ON DELETE CASCADE,
   agent TEXT NOT NULL,
@@ -161,6 +162,10 @@ pub struct ConnectionInfo {
     pub connection_id: String,
     pub platform: String,
     pub owner: String,
+    /// What the provider's key check called the account
+    /// (`x-api-key-details.keyCheck.label`); absent when none was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub created_at: String,
     pub last_used_at: String,
     pub delegations: Vec<DelegationInfo>,
@@ -169,6 +174,10 @@ pub struct ConnectionInfo {
 fn connection_aad(connection_id: &str) -> Vec<u8> {
     // Bound to the row, so one row's envelope cannot be pasted into another.
     format!("agent-connection-v1:{connection_id}").into_bytes()
+}
+
+fn connection_label_aad(connection_id: &str) -> Vec<u8> {
+    format!("agent-connection-label-v1:{connection_id}").into_bytes()
 }
 
 fn timestamp(value: std::time::SystemTime) -> String {
@@ -362,20 +371,37 @@ impl Security {
     /// Creates a connection owned by `owner` (a canonical agent id) holding
     /// `credential` (a serialized `StoredCredential`), and returns its new
     /// random id. The row is the credential's only server-side copy.
+    #[cfg(test)]
     pub async fn create_connection(
         &self,
         platform: &str,
         owner: &str,
         credential: &[u8],
     ) -> Result<String, String> {
+        self.create_labelled_connection(platform, owner, credential, None)
+            .await
+    }
+
+    /// [`Self::create_connection`] with a display label, sealed like the
+    /// credential (it can be personal data, such as an email address).
+    pub async fn create_labelled_connection(
+        &self,
+        platform: &str,
+        owner: &str,
+        credential: &[u8],
+        label: Option<&str>,
+    ) -> Result<String, String> {
         self.sweep_idle_connections().await?;
         let connection_id = crate::connect::random();
         let envelope = self.seal(credential, &connection_aad(&connection_id))?;
+        let label_envelope = label
+            .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
+            .transpose()?;
         self.client()
             .await
             .execute(
-                "INSERT INTO agent_connections (connection_id, platform, owner, envelope) VALUES ($1,$2,$3,$4)",
-                &[&connection_id, &platform, &owner, &envelope],
+                "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
+                &[&connection_id, &platform, &owner, &envelope, &label_envelope],
             )
             .await
             .map_err(db_error)?;
@@ -590,7 +616,7 @@ impl Security {
         let database = self.client().await;
         let rows = database
             .query(
-                "SELECT connection_id, platform, created_at, last_used_at FROM agent_connections WHERE owner = $1 AND last_used_at > NOW() - make_interval(days => $2) ORDER BY created_at",
+                "SELECT connection_id, platform, created_at, last_used_at, label_envelope FROM agent_connections WHERE owner = $1 AND last_used_at > NOW() - make_interval(days => $2) ORDER BY created_at",
                 &[&owner, &CONNECTION_IDLE_DAYS],
             )
             .await
@@ -613,10 +639,15 @@ impl Security {
                     last_used_at: d.get::<_, Option<std::time::SystemTime>>(3).map(timestamp),
                 })
                 .collect();
+            let label = row
+                .get::<_, Option<String>>(4)
+                .and_then(|envelope| self.open(&envelope, &connection_label_aad(&connection_id)))
+                .and_then(|label| String::from_utf8(label).ok());
             connections.push(ConnectionInfo {
                 connection_id,
                 platform: row.get(1),
                 owner: owner.to_owned(),
+                label,
                 created_at: timestamp(row.get(2)),
                 last_used_at: timestamp(row.get(3)),
                 delegations,

@@ -16,7 +16,10 @@ import type { Schema } from './record.js';
 
 export interface Row {
   subject: string;
+  /** The row's name, `Untitled` when it has none. */
   name: string;
+  /** The row's name exactly as stored, if any (a rename is an edit). */
+  hostName?: string;
   pageId?: string;
   /** The database title the sync stored ("Data source" column). */
   dataSource: string;
@@ -78,6 +81,7 @@ export async function loadRows(
       rows.push({
         subject: resource.subject,
         name: typeof name === 'string' && name ? name : 'Untitled',
+        ...(typeof name === 'string' ? { hostName: name } : {}),
         pageId,
         dataSource: text('notion-data-source') ?? '',
         ...(text('notion-url') ? { url: text('notion-url') } : {}),

@@ -201,6 +201,37 @@ runs the whole repository through Jekyll, which skips `_`-prefixed paths,
 renders files with front matter instead of serving them as-is, and fails the
 whole publish if any file in the repository breaks the Jekyll build.
 
+## openapi-extensions/
+
+Unlike `integrations/`, `openapi-extensions/` is not a package: it is a
+folder of OpenAPI extension specifications (`spec/<extension>/README.md`,
+some with a JSON Schema, a small Python validator and example documents),
+migrated in from the standalone `pondersource/openapi-extensions` repo, full
+commit history included via `git subtree` (#115). These are the extensions
+the rest of this repo implements: `overlays/` declares them for real
+providers, `syncables/` reads Pagination Schemes and CRUD Causality, and
+`integration-proxy/` reads `x-oauth-authentication-details` (the OAuth
+Authentication Scheme Details draft) and `x-api-key-details` (API Key
+Details, #121). The Authenticated Principal operations
+in `overlays/` were for the tenant-identity login #54 removed; the proxy no
+longer reads them. A new extension, or a change to
+one, is specified here first, from [`spec/TEMPLATE.md`](openapi-extensions/spec/TEMPLATE.md),
+with a row in [`openapi-extensions/README.md`](openapi-extensions/README.md);
+an overlay or the proxy then implements it, ideally in a later commit of the
+same PR. Spec versions are the `**Spec version:**` line of each README. The
+old repo is not archived from here; that, and pointing it at this folder,
+is Michiel's call. Its CI workflow (Python 3.11, the validators' own tests
+plus the example documents) waits at
+[`openapi-extensions/.github/workflows/openapi-extensions-ci.yml`](openapi-extensions/.github/workflows/openapi-extensions-ci.yml),
+where GitHub doesn't run it: moving it to the root `.github/workflows/`
+needs a push with the token's `workflow` scope, which agent sessions lack
+(`git mv openapi-extensions/.github/workflows/openapi-extensions-ci.yml .github/workflows/`). Like
+the rest of the repository, Pages serves the folder as-is at
+`https://ontola.github.io/atomic-plugins/openapi-extensions/<path>`, but no
+catalog or overlay refers to those URLs; link the specs by repository path.
+`overlays/spec/` still holds an older copy (0.1.0) of Pagination Schemes;
+the current one is `openapi-extensions/spec/pagination-schemes/`.
+
 ## apps/
 
 `apps/<id>/<version>/ui.js` holds the built drive app modules that

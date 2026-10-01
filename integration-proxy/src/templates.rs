@@ -122,13 +122,26 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 
 /// What the consent screen asks for, from the platform's security scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectKind {
+pub enum ConnectKind<'a> {
     /// Continue to the provider's own authorization.
     OAuth,
     /// Paste an API key here.
-    ApiKey,
+    ApiKey(ApiKeyHelp<'a>),
     /// Nothing: the platform's document requires no security.
     NoCredential,
+}
+
+/// What the key field says around itself, from the platform's apiKey scheme
+/// (`description`, `x-api-key-details.helpUrl`) and the last attempt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApiKeyHelp<'a> {
+    /// The scheme's `description`, shown as plain text.
+    pub description: Option<&'a str>,
+    /// An `https` page where the key is made; a link the person may follow,
+    /// never a redirect.
+    pub help_url: Option<&'a str>,
+    /// Why the last key was not accepted, when the page asks again.
+    pub problem: Option<&'a str>,
 }
 
 /// Renders the consent screen for one selected platform. `destination` is
@@ -138,16 +151,15 @@ pub fn render_platform_connect(
     platform: &str,
     destination: &str,
     csrf: &str,
-    kind: ConnectKind,
+    kind: ConnectKind<'_>,
 ) -> String {
     let (api_key_field, button_label) = match kind {
-        ConnectKind::ApiKey => (
-            r#"<p class="secret-help">Find this in your account settings on the platform's own site. It is stored encrypted on this proxy and never sent back to the destination.</p>
-               <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="password" name="api_key" autocomplete="off" placeholder="API key" required />"#,
+        ConnectKind::ApiKey(help) => (
+            api_key_field(platform, help),
             format!("Connect {}", escape(&platform_label(platform))),
         ),
         ConnectKind::OAuth | ConnectKind::NoCredential => (
-            "",
+            String::new(),
             format!(
                 "Use {} to sync {} with this destination",
                 escape(&operator.name),
@@ -193,6 +205,37 @@ pub fn render_platform_connect(
         "",
         &body,
     )
+}
+
+/// The key field and the text around it. The help link opens in a new tab
+/// and is never followed for the person (openapi-extensions/spec/api-key-details).
+fn api_key_field(platform: &str, help: ApiKeyHelp<'_>) -> String {
+    let mut html = String::new();
+    if let Some(problem) = help.problem {
+        html.push_str(&format!(
+            r#"<p class="problem" role="alert">{}</p>"#,
+            escape(problem)
+        ));
+    }
+    html.push_str(&format!(
+        r#"<p class="secret-help">{}</p>"#,
+        escape(
+            help.description
+                .unwrap_or("Find this in your account settings on the platform's own site.")
+        )
+    ));
+    if let Some(url) = help.help_url {
+        html.push_str(&format!(
+            r#"<p class="secret-help"><a href="{}" target="_blank" rel="noopener noreferrer">Where to find your {} API key</a> (opens in a new tab)</p>"#,
+            escape(url),
+            escape(&platform_label(platform))
+        ));
+    }
+    html.push_str(
+        r#"<p class="secret-help">The key is stored encrypted on this proxy and never sent back to the destination.</p>
+               <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="password" name="api_key" autocomplete="off" placeholder="API key" required />"#,
+    );
+    html
 }
 
 /// The consent page's only script: it disables the approve button once the
@@ -260,7 +303,7 @@ pub fn render_oauth_continue(
     )
 }
 
-fn platform_label(platform: &str) -> String {
+pub(crate) fn platform_label(platform: &str) -> String {
     platform
         .split('-')
         .map(|part| {
@@ -312,6 +355,7 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
     }}
     .email {{ color: #666; margin-top: -0.5rem; }}
     .secret-help {{ color: #666; font-size: 0.85rem; }}
+    .problem {{ color: #b3261e; font-weight: 600; }}
     .operator {{ overflow-wrap: anywhere; }}
     .operator a {{ color: inherit; }}
     .button {{
@@ -333,6 +377,7 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
       .card {{ background: #303134; color: #e8eaed; }}
       .email {{ color: #9aa0a6; }}
       .secret-help {{ color: #9aa0a6; }}
+      .problem {{ color: #f2b8b5; }}
     }}
   </style>
 </head>
@@ -467,7 +512,7 @@ mod tests {
             "clockify",
             "https://hub.example",
             "csrf",
-            ConnectKind::ApiKey,
+            ConnectKind::ApiKey(ApiKeyHelp::default()),
         );
         assert!(html.contains(
             "Integration proxy <strong>proxy.example.org</strong>, run by an operator it does not name."
@@ -507,10 +552,39 @@ mod tests {
             "clockify",
             "https://hub.example",
             "csrf",
-            ConnectKind::ApiKey,
+            ConnectKind::ApiKey(ApiKeyHelp::default()),
         );
         assert!(html.contains(r#"name="api_key""#));
         assert!(html.contains("Connect Clockify"));
+        assert!(html.contains("Find this in your account settings"));
+        assert!(!html.contains("<a href=\"https://"));
+        assert!(!html.contains(r#"class="problem""#));
+    }
+
+    #[test]
+    fn api_key_page_shows_the_description_help_link_and_problem_escaped() {
+        let html = render_platform_connect(
+            &unnamed(),
+            "clockify",
+            "https://hub.example",
+            "csrf",
+            ConnectKind::ApiKey(ApiKeyHelp {
+                description: Some("Made under <b>Preferences</b> & Advanced."),
+                help_url: Some(r#"https://help.example/keys?a=1&b="x""#),
+                problem: Some("Clockify did not accept that key <again>."),
+            }),
+        );
+        assert!(html.contains("Made under &lt;b&gt;Preferences&lt;/b&gt; &amp; Advanced."));
+        assert!(!html.contains("Find this in your account settings"));
+        assert!(html.contains(
+            r#"<a href="https://help.example/keys?a=1&amp;b=&quot;x&quot;" target="_blank" rel="noopener noreferrer">Where to find your Clockify API key</a>"#
+        ));
+        assert!(html.contains(
+            r#"<p class="problem" role="alert">Clockify did not accept that key &lt;again&gt;.</p>"#
+        ));
+        // The link is only a link: no refresh, and still the one script.
+        assert!(!html.contains("http-equiv"));
+        assert_eq!(html.matches("<script>").count(), 1);
     }
 
     #[test]
@@ -574,7 +648,7 @@ mod tests {
             "clockify",
             "https://hub.example",
             "csrf",
-            ConnectKind::ApiKey,
+            ConnectKind::ApiKey(ApiKeyHelp::default()),
         );
         assert!(html.contains(&format!("<script>{CONSENT_SCRIPT}</script>")));
     }

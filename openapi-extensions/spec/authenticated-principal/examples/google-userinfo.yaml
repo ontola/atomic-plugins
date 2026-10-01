@@ -1,0 +1,44 @@
+openapi: 3.1.1
+info:
+  title: Google OpenID Connect UserInfo
+  version: 1.0.0
+servers:
+  - url: https://openidconnect.googleapis.com
+paths:
+  /v1/userinfo:
+    get:
+      operationId: googleUserInfo
+      security:
+        - googleOpenId: [openid]
+      x-authenticated-principal:
+        kind: user
+        namespace: https://accounts.google.com
+        subject: $response.body#/sub
+        identifier:
+          scope: provider
+          stable: true
+          reassigned: false
+        claims:
+          name: $response.body#/name
+          email: $response.body#/email
+          picture: $response.body#/picture
+          email_verified: $response.body#/email_verified
+      responses:
+        '200':
+          description: Profile for the authenticated user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sub]
+                properties:
+                  sub: {type: string}
+                  name: {type: string}
+                  email: {type: string}
+                  picture: {type: string, format: uri}
+                  email_verified: {type: boolean}
+components:
+  securitySchemes:
+    googleOpenId:
+      type: openIdConnect
+      openIdConnectUrl: https://accounts.google.com/.well-known/openid-configuration

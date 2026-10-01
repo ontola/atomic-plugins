@@ -77,7 +77,7 @@ Data flows through four stages, each its own directory under `src/`:
    The current model only really supports resources at a fixed,
    parameter-free collection path.
 
-   A sibling spec, the [OpenAPI CRUD Causality Extension](https://github.com/pondersource/openapi-extensions/tree/main/spec/crud-causality)
+   A sibling spec, the [OpenAPI CRUD Causality Extension](../openapi-extensions/spec/crud-causality/README.md)
    (`components.crudResources`, `x-crud`), formalizes a superset of this —
    multiple collections per resource, server-added fields, and (via
    `identity.bindings`) exactly the collection-path-parameter carryover

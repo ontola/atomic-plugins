@@ -3,7 +3,8 @@
  * Notion-specific styles (`nt-*`): toolbar, table, option pills in Notion's
  * ten colours, first-import progress, side peek, board, list and sync
  * details. From mockups.html's "PLUGIN CSS" block (#89); the "later"
- * two-way rules (S15, S16) are left out until that work starts.
+ * two-way rules (S15, S16) are left out until that work starts. The
+ * "Changes to send" strip and review (`review.ts`, #8) are at the end.
  */
 export const NT_CSS = `
 .nt-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:10px 16px}
@@ -146,5 +147,27 @@ export const NT_CSS = `
 .nt-li[aria-current='true']{background:var(--pl-accent-soft)}
 .nt-card[aria-current='true']{border-color:var(--pl-accent)}
 @container pl-app (max-width:639.98px){.nt-toolbar{padding:10px 12px}.nt-search{flex-basis:100%;max-width:none;order:3}.nt-tablewrap{margin:0 12px 12px}.nt-board{padding:0 12px 12px}.nt-sortlabel{display:none}.nt-seg button{height:36px}.nt-li{min-height:44px}}
+.nt-changes{display:flex;align-items:center;gap:10px;margin:0 16px 8px;padding:8px 12px;border:1px solid var(--pl-hair);border-radius:var(--pl-radius);background:var(--pl-accent-soft);font-size:13px}
+.nt-changes p{margin:0;flex:1}
+.nt-review{flex:1;min-height:0;overflow:auto;margin:0 16px 16px;padding:12px 16px;border:1px solid var(--pl-hair);border-radius:var(--pl-radius);background:var(--pl-surface);font-size:13px}
+.nt-r-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.nt-r-top h2{margin:0;font:700 16px/1.3 var(--t-font-family-header,system-ui)}
+.nt-review>p{margin:6px 0 12px}
+.nt-r-list{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:10px}
+.nt-r-list>li{padding:10px 12px;border:1px solid var(--pl-hair);border-radius:8px}
+.nt-r-head{display:flex;align-items:center;gap:10px}
+.nt-r-head .pl-btn{margin-left:auto}
+.nt-r-fields{display:grid;grid-template-columns:minmax(80px,max-content) 1fr;gap:6px 12px;margin:8px 0 0}
+.nt-r-fields dt{color:var(--pl-muted)}
+.nt-r-fields dd{margin:0;display:grid;gap:6px;min-width:0;overflow-wrap:anywhere}
+.nt-r-change{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px}
+.nt-r-before{color:var(--pl-muted);text-decoration:line-through}
+.nt-r-after{font-weight:600}
+.nt-r-conflict{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.nt-r-conflict p{margin:0;flex-basis:100%}
+.nt-r-outcome{display:flex;gap:6px;align-items:flex-start;margin:8px 0 0;color:var(--pl-muted)}
+.nt-r-outcome.is-sent{color:var(--pl-pos)}
+.nt-r-outcome.is-unknown,.nt-r-outcome.is-failed{color:var(--pl-neg)}
+.nt-r-foot{display:flex;align-items:center;gap:12px;position:sticky;bottom:-12px;padding:10px 0 2px;background:var(--pl-surface)}
 @media (prefers-reduced-motion:reduce){.nt-flash td{background:inherit;transition:none}.nt-bar.is-indeterminate span{animation:none;width:100%;opacity:0.4}}
 `;
