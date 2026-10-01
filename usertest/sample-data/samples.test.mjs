@@ -232,6 +232,25 @@ test('notion: reads both databases, keeps no write log', async () => {
   assert.deepEqual(JSON.parse(saved[DESCRIPTION]).writes, []);
 });
 
+test('notion: a page PATCH is kept across a remount', async () => {
+  const store = hostStore();
+  const { proxy, connectionId } = await connected(store, notion);
+  const ask = (p, req) =>
+    p.request({ platform: 'notion', connectionId, ...req });
+  const path = '/v1/pages/1a2b3c4d-0000-4000-8000-000000000001';
+  const patched = await ask(proxy, {
+    method: 'PATCH',
+    path,
+    body: json({ properties: { 'n%3D1': { number: 8 } } }),
+  });
+  assert.equal(patched.status, 200);
+
+  const again = remount(store, notion);
+  const page = await ask(again, { path });
+  assert.equal(page.body.properties.Points.number, 8);
+  assert.equal(page.body.last_edited_time, patched.body.last_edited_time);
+});
+
 test('the state lives in one resource under the app; a wrong connection gets nothing', async () => {
   const store = hostStore();
   const { proxy } = await connected(store, calendar);

@@ -1,0 +1,44 @@
+openapi: 3.1.1
+info:
+  title: Example API
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /me:
+    get:
+      operationId: currentUser
+      security:
+        - bearerAuth: []
+      x-authenticated-principal:
+        kind: user
+        namespace: https://identity.example.com
+        subject: $response.body#/id
+        identifier:
+          scope: provider
+          stable: true
+          reassigned: false
+        claims:
+          name: $response.body#/displayName
+          email: $response.body#/email
+          picture: $response.body#/avatarUrl
+          email_verified: $response.body#/emailVerified
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: {type: string}
+                  displayName: {type: string}
+                  email: {type: string, format: email}
+                  avatarUrl: {type: string, format: uri}
+                  emailVerified: {type: boolean}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
