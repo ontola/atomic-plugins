@@ -1,0 +1,8 @@
+{
+  "name": "@atomic-integrations/remotestorage-e2e",
+  "private": true,
+  "description": "The independent remoteStorage client the remotestorage lane's e2e drives against the plugin. Test-only: nothing here is bundled into plugin.js.",
+  "devDependencies": {
+    "remotestoragejs": "2.0.0-beta.10"
+  }
+}

@@ -29,6 +29,7 @@ export async function build({ outfile } = {}) {
     platform: 'browser',
     target: 'es2022',
     splitting: false,
+    minify: true,
     legalComments: 'none',
     write: false,
     outfile: outfile ?? path('ui.js'),

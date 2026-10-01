@@ -370,8 +370,7 @@ impl Catalog {
     }
     /// Resolves whichever kind of security scheme (OAuth or static apiKey)
     /// the platform's composed document declares, generically. Callers that
-    /// only work with one kind (e.g. tenant identity, which is OAuth-only)
-    /// keep using `oauth_provider` directly.
+    /// only work with one kind keep using `oauth_provider` directly.
     pub fn security_scheme(
         &self,
         platform: &str,
@@ -389,122 +388,6 @@ impl Catalog {
         let oauth_scheme = read_selected("oauthSecurityScheme")?;
         let api_key_scheme = read_selected("apiKeySecurityScheme")?;
         crate::providers::SecurityScheme::from_document(&document, oauth_scheme, api_key_scheme)
-    }
-    /// Returns an explicitly catalog-trusted identity operation. The OpenAPI
-    /// extension alone is descriptive and is never sufficient for tenancy.
-    pub fn tenant_identity(
-        &self,
-        platform: &str,
-    ) -> Result<crate::identity::IdentityOperation, String> {
-        let source = self.get(platform).ok_or("unknown catalog platform")?;
-        let document: Value =
-            serde_yaml::from_str(source).map_err(|_| "invalid catalog document")?;
-        let selection = self
-            .selections
-            .get(platform)
-            .ok_or("tenantIdentity selection is required")?;
-        let scheme = selection
-            .get("oauthSecurityScheme")
-            .and_then(Value::as_str)
-            .ok_or("tenant identity requires oauthSecurityScheme selection")?;
-        let operation = crate::identity::parse(&document, selection)?;
-        // A credential for another OAuth scheme must never be sent to the
-        // identity endpoint. Require the selected scheme in the operation's
-        // effective security requirement (or an unambiguous global one).
-        let required = document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| {
-                paths.values().find_map(|item| {
-                    item.get("get").filter(|op| {
-                        op.get("operationId").and_then(Value::as_str)
-                            == selection
-                                .pointer("/tenantIdentity/operationId")
-                                .and_then(Value::as_str)
-                    })
-                })
-            })
-            .and_then(|op| op.get("security"))
-            .or_else(|| document.get("security"));
-        let allowed = required
-            .and_then(Value::as_array)
-            .is_some_and(|alternatives| {
-                !alternatives.is_empty()
-                    && alternatives.iter().all(|alternative| {
-                        alternative
-                            .as_object()
-                            .is_some_and(|requirement| !requirement.is_empty())
-                    })
-                    && alternatives.iter().any(|alternative| {
-                        alternative.as_object().is_some_and(|requirement| {
-                            requirement.len() == 1 && requirement.contains_key(scheme)
-                        })
-                    })
-            });
-        if !allowed {
-            return Err(
-                "tenant identity operation must require the selected OAuth security scheme".into(),
-            );
-        }
-        Ok(operation)
-    }
-    /// OAuth client configuration narrowed to the scope alternative selected
-    /// by the trusted identity operation, used for login-only authorization.
-    pub fn identity_oauth_provider(
-        &self,
-        platform: &str,
-    ) -> Result<crate::providers::Provider, String> {
-        let source = self.get(platform).ok_or("unknown catalog platform")?;
-        let document: Value =
-            serde_yaml::from_str(source).map_err(|_| "invalid catalog document")?;
-        let selection = self
-            .selections
-            .get(platform)
-            .ok_or("tenantIdentity selection is required")?;
-        let scheme = selection
-            .get("oauthSecurityScheme")
-            .and_then(Value::as_str)
-            .ok_or("tenant identity requires oauthSecurityScheme selection")?;
-        let operation_id = selection
-            .pointer("/tenantIdentity/operationId")
-            .and_then(Value::as_str)
-            .ok_or("tenantIdentity.operationId must be a string")?;
-        self.tenant_identity(platform)?;
-        let operation = document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| {
-                paths.values().find_map(|item| {
-                    item.get("get").filter(|operation| {
-                        operation.get("operationId").and_then(Value::as_str) == Some(operation_id)
-                    })
-                })
-            })
-            .ok_or("tenantIdentity.operationId does not resolve")?;
-        let alternatives = operation
-            .get("security")
-            .or_else(|| document.get("security"))
-            .and_then(Value::as_array)
-            .ok_or("tenant identity operation requires security")?;
-        let scopes = alternatives
-            .iter()
-            .find_map(|alternative| {
-                alternative
-                    .as_object()
-                    .filter(|requirement| requirement.len() == 1)
-                    .and_then(|requirement| requirement.get(scheme))
-                    .and_then(Value::as_array)
-            })
-            .ok_or("tenant identity operation must require the selected OAuth security scheme")?
-            .iter()
-            .map(|scope| {
-                scope
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or("identity scope must be a string")
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(self.oauth_provider(platform)?.with_scopes(scopes))
     }
     fn get(&self, platform: &str) -> Option<&str> {
         self.documents.get(platform).map(String::as_str)
@@ -737,7 +620,7 @@ mod tests {
                 assert_eq!(scheme.name, "X-Api-Key");
                 assert_eq!(scheme.location, crate::providers::ApiKeyLocation::Header);
             }
-            crate::providers::SecurityScheme::OAuth(_) => panic!("expected an apiKey scheme"),
+            _ => panic!("expected an apiKey scheme"),
         }
         assert!(catalog
             .allows(
@@ -873,6 +756,14 @@ mod tests {
         )
         .unwrap();
         for platform in config.platforms {
+            // An OAD may be published from overlays/ too (the pets demo's is).
+            if let Some(relative) = platform.openapi.strip_prefix(OVERLAYS_PAGES_BASE) {
+                assert!(
+                    overlays.join(relative).is_file(),
+                    "{}: missing overlays/{relative}",
+                    platform.name
+                );
+            }
             for url in platform.overlays {
                 let relative = url.strip_prefix(OVERLAYS_PAGES_BASE).unwrap_or_else(|| {
                     panic!("{}: {url} is not published from overlays/", platform.name)
@@ -884,6 +775,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The `pets` platform is published entirely from `overlays/` (its OAD
+    /// and the static API it describes), so it composes from this checkout
+    /// with no download: a credential-free, read-only platform whose only
+    /// allowed request is `GET` of the pets collection under the API base.
+    #[tokio::test]
+    async fn default_catalog_pets_is_a_credential_free_read_of_one_collection() {
+        let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
+        let catalog: Value =
+            serde_json::from_str(&fs::read_to_string(overlays.join("catalog.json")).unwrap())
+                .unwrap();
+        let pets = catalog["platforms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|platform| platform["name"] == "pets")
+            .expect("overlays/catalog.json lists pets")
+            .clone();
+        let only_pets = tempfile_path("pets-catalog.json");
+        fs::write(
+            &only_pets,
+            serde_json::json!({"platforms": [pets]}).to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load_with_mirror(
+            &only_pets.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&overlays),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            catalog.security_scheme("pets"),
+            Ok(crate::providers::SecurityScheme::NoCredential)
+        );
+        let base = "/atomic-plugins/overlays/pets-demo/1.0.0/api";
+        let upstream = catalog
+            .allows("pets", "GET", &format!("{base}/pets"))
+            .unwrap();
+        assert_eq!(
+            upstream.as_str(),
+            "https://ontola.github.io/atomic-plugins/overlays/pets-demo/1.0.0/api"
+        );
+        // The file that URL serves is the one committed next to the OAD.
+        let served: Value = serde_json::from_str(
+            &fs::read_to_string(overlays.join("pets-demo/1.0.0/api/pets")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(served.as_array().unwrap().len(), 5);
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert!(catalog
+                .allows("pets", method, &format!("{base}/pets"))
+                .is_none());
+        }
+        for path in [
+            "/pets".to_owned(),
+            format!("{base}/pets/1"),
+            format!("{base}/owners"),
+            "/atomic-plugins/overlays/catalog.json".to_owned(),
+            "/atomic-plugins/apps/pets/0.1.2/ui.js".to_owned(),
+        ] {
+            assert!(catalog.allows("pets", "GET", &path).is_none(), "{path}");
+        }
+        assert!(catalog
+            .validate_request("pets", "GET", &format!("{base}/pets"), None, None, false)
+            .is_ok());
+    }
+
+    fn tempfile_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "integration-proxy-test-{}-{}",
+            std::process::id(),
+            crate::connect::random()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
     }
 
     /// Exercises the catalog the application loads by default
@@ -919,9 +887,111 @@ mod tests {
             .contains(&("access_type".into(), "offline".into())));
         let spotify = catalog.oauth_provider("spotify").unwrap();
         assert!(spotify.use_pkce);
+        // atomic-plugins#174: the Pets demo needs no credential.
+        assert_eq!(
+            catalog.security_scheme("pets"),
+            Ok(crate::providers::SecurityScheme::NoCredential)
+        );
+        assert!(catalog
+            .allows(
+                "pets",
+                "GET",
+                "/atomic-plugins/overlays/pets-demo/1.0.0/api/pets"
+            )
+            .is_some());
         assert!(catalog
             .allows("github-issues", "GET", "/repositories/123/issues")
             .is_some());
+        // atomic-plugins#147: the issue-tracker app's repository picker read
+        // and its `atomic:doing` label writes.
+        let repos = "/user/repos";
+        assert!(catalog.allows("github-issues", "GET", repos).is_some());
+        for method in ["POST", "PATCH", "PUT", "DELETE"] {
+            assert!(
+                catalog.allows("github-issues", method, repos).is_none(),
+                "{method} {repos}"
+            );
+        }
+        assert!(catalog
+            .validate_request(
+                "github-issues",
+                "GET",
+                repos,
+                Some("per_page=100&page=2&sort=updated"),
+                None,
+                false
+            )
+            .is_ok());
+        assert_eq!(
+            catalog.validate_request(
+                "github-issues",
+                "GET",
+                repos,
+                Some("sort=stars"),
+                None,
+                false
+            ),
+            Err("query parameter value is not permitted")
+        );
+        // Other users' and organizations' listings stay outside the document.
+        for path in ["/users/octocat/repos", "/orgs/ontola/repos", "/user/orgs"] {
+            assert!(
+                catalog.allows("github-issues", "GET", path).is_none(),
+                "{path}"
+            );
+        }
+        let labels = "/repos/owner/repo/issues/7/labels";
+        let doing = "/repos/owner/repo/issues/7/labels/atomic%3Adoing";
+        assert!(catalog.allows("github-issues", "POST", labels).is_some());
+        assert!(catalog.allows("github-issues", "DELETE", doing).is_some());
+        // Neither replacing every label nor listing or clearing them.
+        for method in ["GET", "PUT", "DELETE"] {
+            assert!(
+                catalog.allows("github-issues", method, labels).is_none(),
+                "{method} {labels}"
+            );
+        }
+        for method in ["GET", "POST", "PATCH"] {
+            assert!(
+                catalog.allows("github-issues", method, doing).is_none(),
+                "{method} {doing}"
+            );
+        }
+        // Repository label definitions are not issue labels.
+        assert!(catalog
+            .allows("github-issues", "POST", "/repos/owner/repo/labels")
+            .is_none());
+        assert!(catalog
+            .allows("github-issues", "DELETE", "/repos/owner/repo/labels/bug")
+            .is_none());
+        assert!(catalog
+            .validate_request(
+                "github-issues",
+                "POST",
+                labels,
+                None,
+                Some("application/json"),
+                true
+            )
+            .is_ok());
+        assert_eq!(
+            catalog.validate_request("github-issues", "POST", labels, None, None, false),
+            Err("operation requires a request body")
+        );
+        assert_eq!(
+            catalog.validate_request(
+                "github-issues",
+                "DELETE",
+                doing,
+                None,
+                Some("application/json"),
+                true
+            ),
+            Err("operation does not accept a request body")
+        );
+        // Still the one `repo` scope: labels need no scope of their own.
+        let github = catalog.oauth_provider("github-issues").unwrap();
+        assert_eq!(github.scopes, vec!["repo".to_string()]);
         // atomic-plugins#5 Phase 1: the composed google-calendar document
         // now allows the one write operation Devonian's lens sends.
         assert!(catalog
@@ -931,6 +1001,57 @@ mod tests {
                 "/calendar/v3/calendars/team%40example.com/events/id"
             )
             .is_some());
+        // atomic-plugins#123 M0: the Clockify time-entry write overlay. The
+        // document's server URL is https://api.clockify.me/api, so request
+        // paths carry the /api prefix.
+        let entry = "/api/v1/workspaces/ws/time-entries/entry-1";
+        for method in ["GET", "PUT", "DELETE"] {
+            assert!(
+                catalog.allows("clockify", method, entry).is_some(),
+                "{method}"
+            );
+        }
+        assert!(catalog.allows("clockify", "PATCH", entry).is_none());
+        assert!(catalog
+            .allows("clockify", "POST", "/api/v1/workspaces/ws/time-entries")
+            .is_some());
+        // The timesheets app's setup reads (read overlays, not the write one).
+        for path in ["/api/v1/user", "/api/v1/workspaces"] {
+            assert!(catalog.allows("clockify", "GET", path).is_some(), "{path}");
+            assert!(catalog.allows("clockify", "POST", path).is_none(), "{path}");
+            assert!(catalog
+                .validate_request("clockify", "GET", path, None, None, false)
+                .is_ok());
+        }
+        let list = "/api/v1/workspaces/ws/user/u/time-entries";
+        assert!(catalog.allows("clockify", "GET", list).is_some());
+        assert!(catalog.allows("clockify", "POST", list).is_none());
+        // Writes carry a JSON body; the delete does not accept one.
+        for (method, path) in [
+            ("POST", "/api/v1/workspaces/ws/time-entries"),
+            ("PUT", entry),
+        ] {
+            assert!(catalog
+                .validate_request(
+                    "clockify",
+                    method,
+                    path,
+                    None,
+                    Some("application/json"),
+                    true
+                )
+                .is_ok());
+            assert!(catalog
+                .validate_request("clockify", method, path, None, None, false)
+                .is_err());
+        }
+        assert!(catalog
+            .validate_request("clockify", "DELETE", entry, None, None, false)
+            .is_ok());
+        assert_eq!(
+            catalog.required_headers("clockify", "PUT", entry),
+            Some(vec![])
+        );
     }
 
     /// Tests a specific, separately identified catalog revision (not the
@@ -1240,25 +1361,10 @@ mod tests {
                 )
             })
             .collect();
-        crate::router(AppState {
-            oauth_client: oauth2::basic::BasicClient::new(
-                oauth2::ClientId::new("test".into()),
-                None,
-                oauth2::AuthUrl::new("https://example.com/auth".into()).unwrap(),
-                None,
-            ),
-            app_auth_userinfo_url: "https://accounts.example/userinfo".into(),
-            app_auth_label: "OIDC".into(),
-            app_auth_identity_namespace: None,
-            http_client: crate::build_http_client(),
-            identity_http_client: crate::build_identity_http_client(),
-            key: axum_extra::extract::cookie::Key::generate(),
-            server_secret: "test".into(),
-            base_url: "http://localhost".into(),
-            catalog: Catalog { documents, selections: [("moneybird".into(), serde_json::json!({"query_overrides": [{"path":"/records", "values":{"include_archived":true}}]}))].into() },
-            security: None,
-            test_upstream: None,
-        })
+        let mut state = crate::test_support::state(None);
+        state.base_url = "http://localhost".into();
+        state.catalog = Catalog { documents, selections: [("moneybird".into(), serde_json::json!({"query_overrides": [{"path":"/records", "values":{"include_archived":true}}]}))].into() };
+        crate::router(state)
     }
 
     #[tokio::test]
@@ -1382,12 +1488,22 @@ mod tests {
     async fn router_reaches_parameterized_oauth_handlers() {
         let app = test_router();
         for provider in ["github-issues", "google-calendar", "moneybird", "discord"] {
-            for (action, query) in [
-                ("start", "redirect_uri=https%3A%2F%2Fexample.com&ts=0&nonce=test&challenge=test&tenant_id=test&user_id=test&user_id_sig=test&response=test"),
-                ("callback", "code=test&state=test"),
-            ] {
-                let response = app.clone().oneshot(Request::builder().uri(format!("/oauth/{provider}/{action}?{query}")).body(Body::empty()).unwrap()).await.unwrap();
-                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{provider}/{action}");
+            for (action, query) in [("callback", "code=test&state=test")] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/oauth/{provider}/{action}?{query}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{provider}/{action}"
+                );
                 let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
                 assert_eq!(&body[..], b"OAuth request could not be completed");
             }

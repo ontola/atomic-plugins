@@ -112,6 +112,38 @@ Add a `lanes.test.mjs` case asserting every directory under `integrations/`
 that is not `tooling/` has a lane entry — that is the check that would have
 caught `calendar/`.
 
+Two optional fields came later ([#134](https://github.com/ontola/atomic-plugins/issues/134)):
+
+- `pluginRoutes`: a `--plugin-routes` level (`off`, `read-only`,
+  `read-write`) or a list of distinct ones, for a lane that needs
+  atomic-server built with the `plugin-routes` Cargo feature
+  (`docs/design/server-plugin-routes.md`, section 0). Its live and e2e tiers
+  run once per level, each on a fresh server started with
+  `--plugin-routes <level> --routes-origin http://routes.localhost:<port>`,
+  and the tests read `PLUGIN_ROUTES_LEVEL` and `PLUGIN_ROUTES_ORIGIN`. The
+  server comes from `ATOMIC_SERVER_ROUTES_BINARY` in CI; locally from the
+  `:<sha>-plugin-routes` image when `ATOMIC_SERVER_IMAGE` (or
+  `ATOMIC_SERVER_ROUTES_IMAGE`) is set, with the flags as container
+  arguments; otherwise, or when that image is missing or lacks the feature,
+  from `~/.cache/atomic-plugins/atomic-server/<sha>-plugin-routes`, which
+  `tooling/server-build.mjs` builds on first use under a `<dir>.lock` lock. In CI only a run whose matrix
+  holds such a lane starts `build-server-plugin-routes`, which pulls
+  `ghcr.io/ontola/atomic-server-e2e:<sha>-plugin-routes` (the e2e image
+  workflow's second variant) and builds from source only without it.
+  `build-server` and the `:<sha>` image stay the default build. Lanes
+  without the field are unchanged.
+- `dir`: a tooling lane (not a plugin) lives in `integrations/tooling` or a
+  directory under it instead of `integrations/<id>`. Its filter is only its
+  `paths`, which must be listed and may name files under
+  `integrations/tooling/`, `.atomic-server-ref` and shared packages. The
+  `shared` filter does not select it, so a tooling change that it doesn't
+  depend on doesn't run it; a merge-queue or manual run (`all`) does. The
+  `plugin-routes` lane is one: it names its spec, its fixtures,
+  `manifest-http.mjs`, `catalog-requires.mjs`, `server-build.mjs`,
+  `serve.mjs`, `run-lane.mjs` and the pin, because each run costs a
+  feature build or image pull. The node tests of those files run in
+  shared-checks with every other tooling test.
+
 ## 2. Job graph: build once, fan out
 
 The expensive part is `cargo build --profile e2e` plus `build.rs`'s embedded
@@ -123,10 +155,9 @@ frontend. That must not run once per lane.
         └────┬─────┘
              │
         ┌────▼─────────────┐
-        │ build-server     │  pinned atomic-server → upload target/e2e binary
-        │ (cache key =     │     + browser/data-browser/dist
-        │  .atomic-server- │
-        │  ref + vite env) │
+        │ build-server     │  pull ghcr.io/ontola/atomic-server-e2e:<pin>
+        │                  │  (else build from source) → upload the
+        │                  │  target/e2e binary
         └────┬─────────────┘
              │
    ┌─────────┼──────────┬──────────┬─────────┐
@@ -138,9 +169,16 @@ frontend. That must not run once per lane.
 ```
 
 - **`build-server`** is gated on `changes.outputs.any` only. Its artifact is
-  the `atomic-server` binary and the built `data-browser/dist`. Keyed on
-  `.atomic-server-ref` plus a hash of the `VITE_*` values, it is a cache hit
-  on every PR that does not bump the pin — which is almost all of them.
+  the `atomic-server` binary, with the data-browser frontend and its WASM
+  embedded. It copies that binary out of
+  `ghcr.io/ontola/atomic-server-e2e:<pin>`, which
+  `atomic-server-e2e-image.yml` publishes once per pinned SHA (on push to
+  main, on demand, and from a same-repo PR that bumps the pin). That takes
+  about a minute. It builds from source (about 15 minutes, since the cargo
+  cache doesn't carry over between PRs) only when no image exists for the
+  pin. That is almost only a PR that bumps it, and only until the PR's own
+  `publish-image` job has pushed one. The `CI` gate does not wait for
+  `publish-image`: if it fails, later runs fall back to that source build.
 - **`lane`** is `strategy: matrix: lane: ${{ fromJSON(needs.changes.outputs.lanes) }}`
   with **`fail-fast: false`**. That is the change that makes a run report every
   broken plugin instead of the first one.
@@ -239,6 +277,10 @@ Two failure modes are reported by cause rather than by symptom:
 - a missing `target/e2e/atomic-server` prints the `cargo build` line, instead
   of an async spawn `ENOENT` followed by the full readiness timeout.
 
+With `ATOMIC_SERVER_IMAGE` set, `serve.mjs` runs that image with `docker run`
+on the same port instead of the local binary, and pulls it first if it is
+missing. See AGENTS.md, "Shared pinned atomic-server build".
+
 ## 4. Mock fixtures per platform
 
 **Done:** the registry, the migration of the four existing platforms, and
@@ -297,9 +339,11 @@ integrations/tooling/fixtures/
 ```
 
 - `mock-proxy.mjs` keeps ownership of the parts that are _protocol_, not
-  platform: PKCE, `/connect`, `/connect/redeem`, single-use connection codes,
-  `X-Connection-Code` rotation, `redirect_uri` origin validation. Those are
-  already correct and should not be duplicated per platform.
+  platform: the integration proxy's 0.2 flow (#54 phase 2) — PKCE,
+  `/connect`, `/connect/redeem` signed by the owner, connections,
+  delegations and runtimes, v2 request signatures, frame capabilities —
+  and `redirect_uri` origin validation (`localthought/README.md`). Those
+  should not be duplicated per platform.
 - `MOCK_PROXY_PLATFORMS=github-issues,todoist` restricts which fixtures load,
   so `/catalog` returns exactly that lane's platforms.
 - **"Realistic" has to be enforced, not asserted.** `record.mjs` writes `api/`
@@ -382,17 +426,17 @@ Rules that keep parallel worktrees from fighting:
 
 - **Quarantined e2e.** None of the lane e2e tiers are held back any more.
   `pets` (#52) and `notion` (#68) are back: both drive their drive app in its
-  plugin iframe through the host proxy relay (store.proxy), so they need an
-  `.atomic-server-ref` that contains ontola/atomic-server#1657 (#1624's host
-  relay). The pin does: it is `bae5cdbe3`, the head of atomic-server's
-  `feat/plugin-debug` after #1657 and #1658 (the Notion code removal) were
-  merged there, no longer a PR head. The `e2e-plugin-system` job is required
-  again since #71.
-- **`timesheets` has no e2e tier, and nothing is left to move.** The
-  upstream Clockify tests were deleted in atomic-server `4bab16ee6` (in the
-  pin), together with the UI they drove (#44). A new timesheets e2e needs a
-  new entry point, most likely #20's timesheets drive app once
-  atomic-server#1624 and an install flow exist. See
+  plugin iframe through `store.proxy`, which since #54 phase 2 needs an
+  `.atomic-server-ref` with frame capabilities (ontola/atomic-server#1697)
+  and the v2 request signatures (#1696): the mock proxy refuses the older
+  relay's rotating connection codes. The pin, `11264e83e` on
+  `claude/atomic-plugins-pin-phase2`, has both. The `e2e-plugin-system` job
+  is required again since #71.
+- **`timesheets`' e2e is new, not moved.** The upstream Clockify tests were
+  deleted in atomic-server `4bab16ee6` (in the pin), together with the UI
+  they drove (#44). `integrations/timesheets/e2e/clockify.spec.ts` (#96)
+  drives the timesheets drive app through `store.proxy` instead, with a
+  test-side install until #94. See
   [`HANDOFF-e2e-split.md`](HANDOFF-e2e-split.md).
 - `integrations/money/` has one tier, `e2e` (#95): `money.spec.ts` drives
   the Bank statements importer through atomic-server's generic file entry

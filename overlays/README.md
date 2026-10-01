@@ -28,19 +28,59 @@ to `main` changes what the proxy composes at its next start. The OAD
 Overlays are applied in the order `catalog.json` lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
 `crud-causality-overlay.yaml` is listed first because it defines the
-projects/users paths its auth and pagination overlays target.
+projects/users paths its auth and pagination overlays target, and the
+two setup reads the timesheets app makes (`GET /v1/user`, `GET
+/v1/workspaces`); those stay in the read overlays. Its
+`time-entry-write-overlay.yaml` is listed last and carries its own
+`security`, so removing that one line returns Clockify to read-only; it adds
+create (`POST`), full-replacement update (`PUT`) and delete on time entries
+for the timesheets app's two-way sync (ontola/atomic-plugins#123). Its
+request shapes follow Clockify's published reference and are not verified
+against a live account.
+
+GitHub Issues' `repositories-read-overlay.yaml` comes right after its
+pagination overlay, whose `nextLink` scheme it names, and carries its own
+`security`: it adds `GET /user/repos`, the issue-tracker drive app's
+repository picker (ontola/atomic-plugins#147), as a plain read, not a
+`crudResources` collection. The same app's two label writes, adding one
+label to an issue (`POST .../issues/{issue_number}/labels`) and removing one
+(`DELETE .../labels/{name}`), are in `crud-causality-overlay.yaml` as partial
+updates of `issue`; there is no endpoint that replaces or lists an issue's
+labels. All three use the `repo` scope the GitHub OAuth app already asks
+for, which covers issue labels and private repositories, so the requested
+scope is unchanged. Their shapes follow GitHub's REST reference and are not
+verified against a live account.
+
+The `pets` platform (ontola/atomic-plugins#174) is different: there is no
+third-party API behind it. `pets-demo/1.0.0/openapi.json` is its whole
+document, authored here rather than pinned from `openapi-directory`, so it
+has no overlays. Its server is
+`https://ontola.github.io/atomic-plugins/overlays/pets-demo/1.0.0/api`, and
+the one operation it declares, `GET /pets`, is the static file
+`pets-demo/1.0.0/api/pets` (five synthetic pets, one page, no `Link`
+header; Pages serves it as `application/octet-stream`). It declares
+top-level `security: []` and no security scheme, which
+`atomic-integration-proxy` 0.2.3 and later connect without a credential;
+0.2.2 and earlier list the platform but refuse to connect it. The Pets drive app
+bundles the same document (`integrations/pets/app/openapi.json`). A change
+to either the document or the data is a change to what live users of the
+demo read, so give it a new version folder rather than editing `1.0.0` in
+place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): every catalog overlay URL maps
-  to a file in this folder, and the identity tests below pass. It reads the
+- `.github/workflows/overlays-ci.yml` (PRs): every catalog overlay URL, and
+  every OAD URL under the Pages base, maps to a file in this folder, and the
+  tests below pass (`tests/test_identity_overlays.py` also checks the pets
+  demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
   Pages serves it.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose this `catalog.json` with the proxy's runtime loader, reading
   overlays from this folder.
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
-  served `catalog.json` and every overlay it lists match the built commit.
+  served `catalog.json`, every overlay and Pages-published OAD it lists, and
+  the pets demo's data match the built commit.
 
 ## Authenticated principal overlays
 

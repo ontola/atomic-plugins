@@ -10,6 +10,14 @@ name: CI
 # source, unmodified, to get a server to test against. Bump
 # .atomic-server-ref to track feat/plugin-debug.
 #
+# That build is published once per pinned commit as
+# ghcr.io/ontola/atomic-server-e2e:<sha> by atomic-server-e2e-image.yml, and
+# `build-server` copies the binary out of that image when it exists. It
+# builds from source only when it doesn't, which is typically a PR that
+# bumps the pin. A same-repo pin-bump PR also publishes the image for its
+# new commit (`publish-image`), so its later runs, other PRs on the same pin
+# and the merge queue all skip the build.
+#
 # atomic-server's own checkout is never mutated: this repo's integrations/
 # is not copied into it before the build. (Since feat/plugin-debug 4bab16ee6
 # atomic-server no longer embeds any integrations at build time either.)
@@ -26,17 +34,22 @@ name: CI
 #     dev-server.mjs for why it no longer proxies).
 #   - `integrations/localthought/mock-proxy.mjs` (the same fixture
 #     atomic-server's own dagger e2e pipeline runs) stands in for the real
-#     LocalThought integration proxy, so the Integrations-page flow can run
-#     without live provider credentials.
+#     integration proxy (`integration-proxy/`): it checks the proxy's 0.2
+#     signatures, capabilities and delegations the same way, with
+#     per-platform provider fixtures instead of live credentials.
 #
 # ## Job graph
 #
 #   changes -> build-server -> { lane (matrix), hosting-surface, e2e-plugin-system }
+#           -> build-sidecars (only for lanes that declare `sidecars`) -> lane
 #           -> shared-checks
+#           -> publish-image (same-repo PRs that change .atomic-server-ref;
+#                             not required by the `CI` gate)
 #
 # `build-server` exists because `cargo build --profile e2e` plus build.rs's
-# embedded frontend is the entire cost of this pipeline; it runs once and
-# every downstream job downloads the binary. The `lane` matrix then fans out
+# embedded frontend is the entire cost of this pipeline (about 15 minutes
+# cold; about 1 when the image for the pin exists); it runs once and every
+# downstream job downloads the binary. The `lane` matrix then fans out
 # one job per plugin, with `fail-fast: false` so a run reports every broken
 # plugin rather than the first. Wall clock is `build-server + slowest lane`,
 # not the sum of all of them.
@@ -57,9 +70,8 @@ name: CI
 #
 # No Rust/WASM tests run here: not the sandboxTests declared in each
 # package's atomicCertification (those are atomic-server's own `cargo test`
-# suite, run by its CI), and not localthought's browser-smoke.mjs (it
-# needs a full Vite app). Building the atomic-server binary itself is unavoidable
-# infrastructure, not a test.
+# suite, run by its CI). Building the atomic-server binary itself is
+# unavoidable infrastructure, not a test.
 
 on:
   pull_request:
@@ -88,8 +100,27 @@ jobs:
       any: ${{ steps.decide.outputs.any }}
       matrix: ${{ steps.decide.outputs.matrix }}
       has-lanes: ${{ steps.decide.outputs.has-lanes }}
+      plugin-routes: ${{ steps.decide.outputs.plugin-routes }}
+      sidecars: ${{ steps.decide.outputs.sidecars }}
+      pin: ${{ steps.pin.outputs.sha }}
+      pin-changed: ${{ steps.pin-filter.outputs.pin || 'false' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read pinned atomic-server commit
+        id: pin
+        run: echo "sha=$(cat .atomic-server-ref)" >> "$GITHUB_OUTPUT"
+
+      # Separate from the lane filters below: a pin bump is not a lane, it
+      # decides whether this PR publishes the e2e image for its new commit.
+      - name: Did this PR change the pin?
+        id: pin-filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            pin:
+              - .atomic-server-ref
 
       # Generated rather than written out, so adding a lane to lanes.json is
       # the only edit needed to gate it.
@@ -119,7 +150,8 @@ jobs:
         id: decide
         env:
           # `changes` is dorny's JSON array of the filter names that matched.
-          CHANGED: ${{ github.event_name != 'pull_request' && '["shared"]' || steps.filter.outputs.changes }}
+          # `all` also selects tooling lanes, which `shared` alone does not.
+          CHANGED: ${{ github.event_name != 'pull_request' && '["shared","all"]' || steps.filter.outputs.changes }}
           ANY: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.any }}
         run: |
           set -eu
@@ -127,17 +159,31 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "any=$ANY" >> "$GITHUB_OUTPUT"
           echo "has-lanes=$([ "$matrix" = '[]' ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          # true when a lane in the matrix declares `pluginRoutes`, which
+          # starts build-server-plugin-routes.
+          echo "plugin-routes=$(node integrations/tooling/lanes.mjs plugin-routes "$CHANGED")" >> "$GITHUB_OUTPUT"
+          # The operator sidecars those lanes start (lanes.json `sidecars`), a
+          # JSON array that build-sidecars fans out over.
+          echo "sidecars=$(node integrations/tooling/lanes.mjs sidecars "$CHANGED")" >> "$GITHUB_OUTPUT"
           echo "changed: $CHANGED"
           echo "matrix:  $matrix"
 
+  # Produces the same artifact either way (`atomic-server-binary`, the one
+  # file atomic-server/target/e2e/atomic-server), so no job downstream knows
+  # or cares where it came from. Every step after "Use the published image"
+  # is the source-build fallback and is skipped when that step found one.
   build-server:
     name: Build atomic-server (pinned)
     needs: changes
     if: needs.changes.outputs.any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
     outputs:
       sha: ${{ steps.pin.outputs.sha }}
+      from-image: ${{ steps.image.outputs.hit }}
     steps:
       - name: Checkout atomic-plugins
         uses: actions/checkout@v4
@@ -148,7 +194,51 @@ jobs:
         id: pin
         run: echo "sha=$(cat atomic-plugins/.atomic-server-ref)" >> "$GITHUB_OUTPUT"
 
+      # Only needed while the package is private (see the header of
+      # atomic-server-e2e-image.yml). Once it is public an anonymous pull
+      # works too, including from fork PRs. Never fatal: a failed login just
+      # means the pull below fails and the job builds from source.
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The image's label has to name the pinned commit and the binary has to
+      # run. Anything else (no image yet, a pull error, a mismatch) falls
+      # through to the source build rather than failing the run.
+      - name: Use the published image for this pin, if there is one
+        id: image
+        env:
+          IMAGE: ghcr.io/ontola/atomic-server-e2e:${{ steps.pin.outputs.sha }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          set -u
+          hit=false
+          if docker pull --platform linux/amd64 "$IMAGE"; then
+            label=$(docker image inspect --format '{{ index .Config.Labels "dev.atomicdata.atomic-server.sha" }}' "$IMAGE")
+            cid=$(docker create --platform linux/amd64 "$IMAGE")
+            mkdir -p extracted
+            docker cp "$cid:/usr/local/bin/atomic-server" extracted/atomic-server
+            docker rm "$cid" > /dev/null
+            if [ "$label" != "$SHA" ]; then
+              echo "::warning::$IMAGE is labelled '$label', not $SHA; building from source"
+            elif ! extracted/atomic-server --version; then
+              echo "::warning::the binary in $IMAGE does not run here; building from source"
+            else
+              mkdir -p atomic-server/target/e2e
+              mv extracted/atomic-server atomic-server/target/e2e/atomic-server
+              hit=true
+            fi
+          else
+            echo "No image for $SHA yet; building from source"
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
       - name: Checkout atomic-server at the pinned commit
+        if: steps.image.outputs.hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: ontola/atomic-server
@@ -156,14 +246,17 @@ jobs:
           path: atomic-server
 
       - uses: actions/setup-node@v4
+        if: steps.image.outputs.hit != 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - uses: pnpm/action-setup@v4
+        if: steps.image.outputs.hit != 'true'
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Install Rust
+        if: steps.image.outputs.hit != 'true'
         uses: dtolnay/rust-toolchain@stable
 
       # wasm32-wasip2 builds the server-side plugin runtime component
@@ -179,6 +272,7 @@ jobs:
       # the checkout resolves the pinned toolchain and adds it there —
       # the same thing atomic-server's own dagger pipeline does.
       - name: Add the plugin-runtime target to the pinned toolchain
+        if: steps.image.outputs.hit != 'true'
         working-directory: atomic-server
         run: |
           set -eu
@@ -190,18 +284,21 @@ jobs:
           rustup target list --installed | grep -qx wasm32-wasip2
 
       - name: Cache cargo
+        if: steps.image.outputs.hit != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: atomic-server -> target
           prefix-key: atomic-server-${{ steps.pin.outputs.sha }}
 
       - name: Cache pnpm store
+        if: steps.image.outputs.hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-${{ steps.pin.outputs.sha }}-${{ hashFiles('atomic-server/browser/pnpm-lock.yaml') }}
 
       - name: Install JS dependencies
+        if: steps.image.outputs.hit != 'true'
         working-directory: atomic-server/browser
         run: pnpm install --frozen-lockfile
 
@@ -218,6 +315,7 @@ jobs:
       # GitHub is the flakiness SKIP_WASM_BUILD was originally added to avoid;
       # the e2e tests need a working module, not a small one.
       - name: Build the browser WASM bundle
+        if: steps.image.outputs.hit != 'true'
         working-directory: atomic-server
         run: |
           set -eu
@@ -248,7 +346,11 @@ jobs:
       # playwright.config.ts from PLUGIN_CATALOG_URL / INTEGRATION_PROXY_URL,
       # so one unmodified binary serves every lane on its own ports and the
       # step that used to grep dist/ for the baked literals is gone with them.
+      # integrations/tooling/atomic-server-e2e/Dockerfile runs this same
+      # build for the published image. Keep the two in step
+      # (workflow.test.mjs compares the cargo and wasm-pack commands).
       - name: Build atomic-server (e2e profile, unmodified pinned checkout)
+        if: steps.image.outputs.hit != 'true'
         working-directory: atomic-server
         env:
           SKIP_WASM_BUILD: "1"
@@ -261,6 +363,310 @@ jobs:
           name: atomic-server-binary
           path: atomic-server/target/e2e/atomic-server
           retention-days: 1
+
+  # The pin built with the `plugin-routes` Cargo feature
+  # (docs/design/server-plugin-routes.md, section 0.2), for the lanes that
+  # declare `pluginRoutes` in lanes.json; see
+  # integrations/tooling/server-build.mjs, which makes the same build locally.
+  # Runs only when such a lane is in this run's matrix. Like build-server, it
+  # first tries the published image for the pin, here its plugin-routes
+  # variant (ghcr.io/ontola/atomic-server-e2e:<sha>-plugin-routes, from
+  # atomic-server-e2e-image.yml), and builds from source only without one;
+  # every step after "Use the published image" is that fallback. Its own
+  # job, not steps in build-server, so that job's image-or-source contract
+  # (workflow.test.mjs) is untouched and the two run side by side.
+  build-server-plugin-routes:
+    name: Build atomic-server (pinned, plugin-routes feature)
+    needs: changes
+    if: needs.changes.outputs.plugin-routes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout atomic-plugins
+        uses: actions/checkout@v4
+        with:
+          path: atomic-plugins
+
+      - name: Read pinned atomic-server commit
+        id: pin
+        run: echo "sha=$(cat atomic-plugins/.atomic-server-ref)" >> "$GITHUB_OUTPUT"
+
+      # As in build-server: never fatal.
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same checks as build-server's, plus the features label: a binary
+      # built without `plugin-routes` refuses to start with `--plugin-routes`,
+      # so the lanes would only fail later and less clearly.
+      - name: Use the published plugin-routes image for this pin, if there is one
+        id: image
+        env:
+          IMAGE: ghcr.io/ontola/atomic-server-e2e:${{ steps.pin.outputs.sha }}-plugin-routes
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          set -u
+          hit=false
+          if docker pull --platform linux/amd64 "$IMAGE"; then
+            label=$(docker image inspect --format '{{ index .Config.Labels "dev.atomicdata.atomic-server.sha" }}' "$IMAGE")
+            features=$(docker image inspect --format '{{ index .Config.Labels "dev.atomicdata.atomic-server.features" }}' "$IMAGE")
+            cid=$(docker create --platform linux/amd64 "$IMAGE")
+            mkdir -p extracted
+            docker cp "$cid:/usr/local/bin/atomic-server" extracted/atomic-server
+            docker rm "$cid" > /dev/null
+            if [ "$label" != "$SHA" ]; then
+              echo "::warning::$IMAGE is labelled '$label', not $SHA; building from source"
+            elif ! printf '%s' "$features" | tr ',' '\n' | grep -qx plugin-routes; then
+              echo "::warning::$IMAGE was built with features '$features', without plugin-routes; building from source"
+            elif ! extracted/atomic-server --version; then
+              echo "::warning::the binary in $IMAGE does not run here; building from source"
+            else
+              mkdir -p atomic-server/target/e2e
+              mv extracted/atomic-server atomic-server/target/e2e/atomic-server
+              hit=true
+            fi
+          else
+            echo "No plugin-routes image for $SHA yet; building from source"
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout atomic-server at the pinned commit
+        if: steps.image.outputs.hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ontola/atomic-server
+          ref: ${{ steps.pin.outputs.sha }}
+          path: atomic-server
+
+      - uses: actions/setup-node@v4
+        if: steps.image.outputs.hit != 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        if: steps.image.outputs.hit != 'true'
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Rust
+        if: steps.image.outputs.hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      # As in build-server: from inside the checkout, so the targets land in
+      # the toolchain rust-toolchain.toml pins.
+      - name: Add the plugin-runtime target to the pinned toolchain
+        if: steps.image.outputs.hit != 'true'
+        working-directory: atomic-server
+        run: |
+          set -eu
+          rustup target add wasm32-wasip2 wasm32-unknown-unknown
+          rustup target list --installed | grep -qx wasm32-wasip2
+
+      # Its own key: the feature changes what cargo builds, so sharing
+      # build-server's cache would make the two evict each other.
+      - name: Cache cargo
+        if: steps.image.outputs.hit != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: atomic-server -> target
+          prefix-key: atomic-server-plugin-routes-${{ steps.pin.outputs.sha }}
+
+      - name: Cache pnpm store
+        if: steps.image.outputs.hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ steps.pin.outputs.sha }}-${{ hashFiles('atomic-server/browser/pnpm-lock.yaml') }}
+
+      - name: Install JS dependencies
+        if: steps.image.outputs.hit != 'true'
+        working-directory: atomic-server/browser
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the browser WASM bundle
+        if: steps.image.outputs.hit != 'true'
+        working-directory: atomic-server
+        run: |
+          set -eu
+          sh .dagger/scripts/install-wasm-pack.sh "$HOME/.local/bin"
+          cd wasm
+          CARGO_ENCODED_RUSTFLAGS='--cfg'$'\x1f''getrandom_backend="wasm_js"' \
+            "$HOME/.local/bin/wasm-pack" build --target web --out-dir pkg --no-opt
+          mkdir -p ../browser/data-browser/public/wasm
+          cp pkg/atomic_wasm.js pkg/atomic_wasm_bg.wasm ../browser/data-browser/public/wasm/
+
+      # build-server's build plus `plugin-routes`. A pin without that feature
+      # (older than atomic-server#1726) fails here, naming the feature.
+      - name: Build atomic-server (e2e profile, plugin-routes feature)
+        if: steps.image.outputs.hit != 'true'
+        working-directory: atomic-server
+        env:
+          SKIP_WASM_BUILD: "1"
+          VITE_E2E: "true"
+        run: cargo build --profile e2e -p atomic-server --no-default-features --features wasm-plugins,plugin-routes
+
+      - name: Upload the server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: atomic-server-binary-plugin-routes
+          path: atomic-server/target/e2e/atomic-server
+          retention-days: 1
+
+  # One image per operator sidecar a lane in this run starts (lanes.json
+  # `sidecars`; today only nextgraph), from integrations/<name>/sidecar/.
+  # Why a job of its own and not a `docker build` inside the spec: the
+  # nextgraph sidecar compiles nextgraph-rs and its bundled RocksDB, and cold
+  # that outlasted the lane's whole 45-minute budget (PR #223, run
+  # 36703010952). Here it runs in parallel with build-server, with its own
+  # timeout and its output in the log.
+  #
+  # Where the image comes from, cheapest first:
+  #   1. ghcr.io/ontola/atomic-sidecar-<name>:<source>, where <source> is the
+  #      sha256 of `git ls-files -s integrations/<name>/sidecar` (every
+  #      tracked file's blob hash, so any edit to the recipe or the code is a
+  #      new tag). Label-checked like build-server's image.
+  #   2. Otherwise a buildx build, with the Actions cache (type=gha, mode=min:
+  #      the final image only, about 100 MB) for reruns of the same source,
+  #      e.g. on a fork PR. Then pushed as (1) when this run's token may
+  #      write packages (not fork PRs), never overwriting an existing tag.
+  # The registry is what makes the merge queue fast: a merge_group run
+  # selects every lane, and it cannot read Actions caches written by PR
+  # branches (and main never runs this workflow), so an Actions cache alone
+  # would rebuild the sidecar cold in every queue run.
+  # Either way the job's artifact is the same `docker save` of the image,
+  # tagged atomic-sidecar-<name>:ci, which the lane loads.
+  build-sidecars:
+    name: Build sidecar image (${{ matrix.sidecar }})
+    needs: changes
+    if: needs.changes.outputs.sidecars != '[]' && needs.changes.outputs.sidecars != ''
+    runs-on: ubuntu-latest
+    # A cold nextgraph build is 45+ minutes on a hosted runner; a hit is ~1.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        sidecar: ${{ fromJSON(needs.changes.outputs.sidecars) }}
+    steps:
+      - name: Checkout atomic-plugins
+        uses: actions/checkout@v4
+        with:
+          path: atomic-plugins
+
+      - name: Name the image after its source
+        id: tag
+        working-directory: atomic-plugins
+        env:
+          SIDECAR: ${{ matrix.sidecar }}
+        run: |
+          set -eu
+          dir="integrations/$SIDECAR/sidecar"
+          test -f "$dir/Dockerfile"
+          source=$(git ls-files -s "$dir" | sha256sum | cut -d' ' -f1)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "context=$dir" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/ontola/atomic-sidecar-$SIDECAR:$source" >> "$GITHUB_OUTPUT"
+          echo "local=atomic-sidecar-$SIDECAR:ci" >> "$GITHUB_OUTPUT"
+          echo "$dir -> $source"
+
+      # Never fatal, as in build-server: without a login a private package's
+      # pull fails and the job builds instead.
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use the published image for this source, if there is one
+        id: image
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+          LOCAL: ${{ steps.tag.outputs.local }}
+          SOURCE: ${{ steps.tag.outputs.source }}
+        run: |
+          set -u
+          hit=false
+          if docker pull --platform linux/amd64 "$IMAGE"; then
+            label=$(docker image inspect --format '{{ index .Config.Labels "dev.atomicdata.sidecar.source" }}' "$IMAGE")
+            if [ "$label" = "$SOURCE" ]; then
+              docker tag "$IMAGE" "$LOCAL"
+              hit=true
+            else
+              echo "::warning::$IMAGE is labelled '$label', not $SOURCE; building"
+            fi
+          else
+            echo "No image for this source yet; building"
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        if: steps.image.outputs.hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile's `cargo test` runs here too, so a red sidecar unit
+      # test fails this job.
+      - name: Build the image
+        if: steps.image.outputs.hit != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: atomic-plugins/${{ steps.tag.outputs.context }}
+          platforms: linux/amd64
+          load: true
+          tags: |
+            ${{ steps.tag.outputs.local }}
+            ${{ steps.tag.outputs.image }}
+          labels: dev.atomicdata.sidecar.source=${{ steps.tag.outputs.source }}
+          cache-from: type=gha,scope=sidecar-${{ matrix.sidecar }}
+          cache-to: type=gha,scope=sidecar-${{ matrix.sidecar }},mode=min
+
+      # Fork PRs get a read-only token; everything else (same-repo PRs, the
+      # merge queue, a dispatch) publishes, so the next run pulls. A tag is a
+      # content hash and is never overwritten, so a race only pushes the same
+      # source twice. Not fatal: a failed push costs later runs a build.
+      - name: Publish the image for this source
+        if: >-
+          steps.image.outputs.hit != 'true'
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -eu
+          if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "$IMAGE already exists; not overwriting it"
+          else
+            docker push "$IMAGE"
+          fi
+
+      - name: Save the image
+        env:
+          LOCAL: ${{ steps.tag.outputs.local }}
+          SIDECAR: ${{ matrix.sidecar }}
+        run: |
+          set -eu
+          docker image inspect --format '{{ .Size }} bytes' "$LOCAL"
+          docker save "$LOCAL" | gzip -1 > "sidecar-$SIDECAR.tar.gz"
+          ls -l "sidecar-$SIDECAR.tar.gz"
+
+      - name: Upload the image
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-image-${{ matrix.sidecar }}
+          path: sidecar-${{ matrix.sidecar }}.tar.gz
+          retention-days: 1
+          if-no-files-found: error
 
   # Not gated per lane: certify.mjs discovers and reports every certified
   # package in one pass regardless of what changed, and this layer is local
@@ -323,10 +729,14 @@ jobs:
       # pnpm-lock.yaml and has them installed in its own folder, so the
       # certification below typechecks, tests and builds against exactly
       # those versions. Every lockfile, not a list: nothing to keep in sync.
+      # A drive app whose plugin folder is not a certified sandbox package
+      # (issue-tracker) keeps its lockfile in app/, where certify.mjs does not
+      # look for a package.json. Test-only dependencies of a lane's e2e specs
+      # (remotestorage: the remotestorage.js client) live in e2e/.
       - name: Install plugin npm dependencies
         working-directory: atomic-plugins
         run: |
-          for lock in integrations/*/pnpm-lock.yaml; do
+          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml integrations/*/e2e/pnpm-lock.yaml; do
             [ -e "$lock" ] || continue
             (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile)
           done
@@ -335,13 +745,22 @@ jobs:
         working-directory: atomic-plugins
         run: |
           node --test \
+            integrations/tooling/apps.test.mjs \
+            integrations/tooling/catalog-requires.test.mjs \
             integrations/tooling/certify.test.mjs \
+            integrations/tooling/deps.test.mjs \
             integrations/tooling/dev-server.test.mjs \
             integrations/tooling/lanes.test.mjs \
             integrations/tooling/link-atomic-server.test.mjs \
+            integrations/tooling/manifest-http.test.mjs \
+            integrations/tooling/serve.test.mjs \
+            integrations/tooling/server-contract.test.mjs \
+            integrations/tooling/server-build.test.mjs \
             integrations/tooling/workflow.test.mjs \
             integrations/localthought/mock-proxy.test.mjs \
-            integrations/localthought/no-credentials-in-graph.test.mjs
+            integrations/localthought/no-credentials-in-graph.test.mjs \
+            ontology-kit/ontology.test.mjs \
+            ontology-kit/resolver.test.mjs
 
       # plugin.js is a committed esbuild output (verified byte-for-byte against
       # a fresh bundle by the "reproducible-bundle" check below), not
@@ -350,11 +769,11 @@ jobs:
       # __toESM interop helper (pulled in by notion's plugin.js) uses `!=`.
       - name: Lint (oxlint)
         working-directory: atomic-plugins
-        run: browser/node_modules/.bin/oxlint -c browser/.oxlintrc.json --ignore-pattern '**/plugin.js' integrations
+        run: browser/node_modules/.bin/oxlint -c browser/.oxlintrc.json --ignore-pattern '**/plugin.js' integrations ontology-kit
 
       - name: Format check (oxfmt)
         working-directory: atomic-plugins
-        run: browser/node_modules/.bin/oxfmt -c browser/.oxfmtrc.json --check integrations
+        run: browser/node_modules/.bin/oxfmt -c browser/.oxfmtrc.json --check integrations ontology-kit
 
       # Playwright transpiles the lane specs without typechecking them, so a
       # type error in integrations/<lane>/e2e/*.spec.ts would otherwise only
@@ -367,6 +786,37 @@ jobs:
       - name: Typecheck e2e specs
         working-directory: atomic-plugins
         run: browser/node_modules/.bin/tsc -p integrations/tsconfig.e2e.json --noEmit
+
+      # Each drive app's catalog entry must point at its committed
+      # apps/<id>/<version>/ui.js (what GitHub Pages serves), whose sha384 is
+      # the pinned integrity the host checks before it installs, and which a
+      # fresh build of its folder reproduces. On a PR or in the merge queue it
+      # also fails when a version file already on main was changed or deleted:
+      # installed apps recorded those URLs. See integrations/README.md,
+      # "Publishing a drive app".
+      - name: Fetch main, for the published drive app versions
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        working-directory: atomic-plugins
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Drive app catalog entries match their committed modules and builds
+        working-directory: atomic-plugins
+        env:
+          PUBLISHED: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'origin/main' || '' }}
+        run: node integrations/tooling/apps.mjs check ${PUBLISHED:+--published "$PUBLISHED"}
+
+      # The shared ontology (#177): ontology/ must be exactly what
+      # `ontology-kit/ontology.mjs build` writes from ontology-kit/source.json
+      # and base.json; on a PR or in the merge queue no term file already on
+      # main may change or disappear (servers fetch a term once and keep it),
+      # except by a base move; the base is written only in base.json; and,
+      # while it is on github.io, every catalog entry that uses it is
+      # `enabled: false`. See ontology-kit/README.md.
+      - name: Shared ontology is fresh, immutable and gated
+        working-directory: atomic-plugins
+        env:
+          PUBLISHED: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'origin/main' || '' }}
+        run: node ontology-kit/ontology.mjs check ${PUBLISHED:+--published "$PUBLISHED"}
 
       - name: Offline certification (typecheck, bundle reproducibility, fixture tests)
         working-directory: atomic-plugins
@@ -382,8 +832,17 @@ jobs:
 
   lane:
     name: "Lane: ${{ matrix.lane }} (${{ matrix.tiers }})"
-    needs: [changes, build-server]
-    if: needs.changes.outputs.has-lanes == 'true'
+    needs: [changes, build-server, build-server-plugin-routes, build-sidecars]
+    # build-server-plugin-routes and build-sidecars are skipped on most runs,
+    # and a skipped need skips this job too unless the condition names a
+    # status check itself. A failed sidecar build does not hold back the
+    # other lanes: the lane that needs it fails at its download, and the
+    # gate fails on build-sidecars itself.
+    if: >-
+      !cancelled()
+      && needs.changes.outputs.has-lanes == 'true'
+      && needs.build-server.result == 'success'
+      && needs.build-server-plugin-routes.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -446,7 +905,7 @@ jobs:
       - name: Install plugin npm dependencies
         working-directory: atomic-plugins
         run: |
-          for lock in integrations/*/pnpm-lock.yaml; do
+          for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml integrations/*/e2e/pnpm-lock.yaml; do
             [ -e "$lock" ] || continue
             (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile)
           done
@@ -461,6 +920,45 @@ jobs:
       - name: Make the server binary executable
         if: contains(matrix.tiers, 'live') || contains(matrix.tiers, 'e2e')
         run: chmod +x atomic-server/target/e2e/atomic-server
+
+      # A lane that declares `pluginRoutes` (matrix.plugin-routes, from
+      # lanes.mjs) runs its server tiers on the feature build instead;
+      # serve.mjs finds it through ATOMIC_SERVER_ROUTES_BINARY below.
+      - name: Download the plugin-routes server binary
+        if: matrix.plugin-routes == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: atomic-server-binary-plugin-routes
+          path: atomic-server-plugin-routes
+
+      - name: Make the plugin-routes server binary executable
+        if: matrix.plugin-routes == 'true'
+        run: chmod +x atomic-server-plugin-routes/atomic-server
+
+      # A lane that declares `sidecars` (matrix.sidecars, from lanes.mjs)
+      # gets the images build-sidecars made, and its spec gets each one's tag
+      # in <NAME>_SIDECAR_IMAGE (lanes.mjs sidecarImageEnv), so it never
+      # builds one itself.
+      - name: Download the sidecar images
+        if: matrix.sidecars != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sidecar-image-*
+          path: sidecar-images
+          merge-multiple: true
+
+      - name: Load the sidecar images
+        if: matrix.sidecars != ''
+        env:
+          SIDECARS: ${{ matrix.sidecars }}
+        run: |
+          set -eu
+          for name in $(printf '%s' "$SIDECARS" | tr ',' ' '); do
+            gunzip -c "sidecar-images/sidecar-$name.tar.gz" | docker load
+            var="$(printf '%s' "$name" | tr 'a-z-' 'A-Z_')_SIDECAR_IMAGE"
+            echo "$var=atomic-sidecar-$name:ci" >> "$GITHUB_ENV"
+            echo "$var=atomic-sidecar-$name:ci"
+          done
 
       # plugins.spec.ts resolves `@tomic/lib` to its built `dist/index.cjs`.
       # In the old single-job workflow that file happened to exist because
@@ -485,6 +983,7 @@ jobs:
         working-directory: atomic-plugins
         env:
           ATOMIC_SERVER_CHECKOUT: ${{ github.workspace }}/atomic-server
+          ATOMIC_SERVER_ROUTES_BINARY: ${{ matrix.plugin-routes == 'true' && format('{0}/atomic-server-plugin-routes/atomic-server', github.workspace) || '' }}
         run: node integrations/tooling/run-lane.mjs ${{ matrix.lane }}
 
       - name: Upload Playwright report
@@ -564,18 +1063,62 @@ jobs:
           ')
           dev=$(echo "$ports" | cut -d' ' -f1)
           upstream=$(echo "$ports" | cut -d' ' -f2)
+          # check <url path> <expected bytes on stdin>: the dev-server serves
+          # exactly those bytes at that path.
           check() {
             local path="$1" expected actual
-            expected=$(sha256sum "$path" | cut -d' ' -f1)
-            actual=$(curl -sf "http://localhost:$dev/integrations/${path#integrations/}" | sha256sum | cut -d' ' -f1)
+            expected=$(sha256sum | cut -d' ' -f1)
+            actual=$(curl -sf "http://localhost:$dev$path" | sha256sum | cut -d' ' -f1)
             if [ "$expected" != "$actual" ]; then
               echo "mismatch serving $path from the dev-server" >&2
               exit 1
             fi
           }
-          check integrations/catalog.json
+          # The catalog is served byte for byte, except that each drive app's
+          # `app-module` has its GitHub Pages prefix replaced by the
+          # dev-server's own origin (dev-server.mjs localCatalog), which then
+          # serves the committed apps/ files under the same paths, and that a
+          # drive app entry (one with `app-module`) may be served with
+          # `enabled: true` where the committed catalog says false
+          # (DEV_SERVER_ENABLE_APPS, which serve.mjs sets for the lanes, so an
+          # e2e can install an app that is published but not yet launched).
+          # Nothing else may differ.
+          sed -E 's#("https://atomicdata\.dev/integrations/properties/app-module": ")https://ontola\.github\.io/atomic-plugins/#\1http://localhost:'"$dev"'/#g' \
+            integrations/catalog.json > "$RUNNER_TEMP/expected-catalog.json"
+          curl -sf "http://localhost:$dev/integrations/catalog.json" > "$RUNNER_TEMP/served-catalog.json"
+          node --input-type=module - "$RUNNER_TEMP/expected-catalog.json" "$RUNNER_TEMP/served-catalog.json" <<'JS'
+          import { readFileSync } from 'node:fs';
+          const [expected, served] = process.argv.slice(2).map(f => readFileSync(f, 'utf8'));
+          const ENABLED = 'https://atomicdata.dev/integrations/properties/enabled';
+          const MODULE = 'https://atomicdata.dev/integrations/properties/app-module';
+          const fail = message => { console.error(`catalog: ${message}`); process.exit(1); };
+          const a = expected.split('\n');
+          const b = served.split('\n');
+          if (a.length !== b.length) fail('served catalog has a different number of lines');
+          let flipped = 0;
+          a.forEach((line, i) => {
+            if (line === b[i]) return;
+            const off = line.match(/^(\s*"https:\/\/atomicdata\.dev\/integrations\/properties\/enabled": )false(,?)$/);
+            if (!off || b[i] !== `${off[1]}true${off[2]}`) fail(`line ${i + 1} differs: ${b[i]}`);
+            flipped++;
+          });
+          const before = JSON.parse(expected);
+          const after = JSON.parse(served);
+          let apps = 0;
+          before.forEach((entry, i) => {
+            if (entry?.[ENABLED] === after[i]?.[ENABLED]) return;
+            if (typeof entry[MODULE] !== 'string') fail(`entry ${i} is not a drive app, yet served enabled`);
+            apps++;
+          });
+          if (apps !== flipped) fail('an enabled override is not on a top-level drive app entry');
+          console.log(`catalog: served as committed; ${flipped} drive app entr(y/ies) enabled for the lanes`);
+          JS
           for plugin in integrations/*/plugin.js; do
-            check "$plugin"
+            check "/$plugin" < "$plugin"
+          done
+          for module in apps/*/*/ui.js; do
+            [ -e "$module" ] || continue
+            check "/$module" < "$module"
           done
           curl -sf -o /dev/null "http://localhost:$dev/integrations/issue-tracker/README.md" && \
             { echo "dev-server must not host non-catalog integration files" >&2; exit 1; }
@@ -729,6 +1272,34 @@ jobs:
           [ -f serve.pid ] && kill "$(cat serve.pid)" 2>/dev/null || true
           cat serve.log || true
 
+  # A same-repo PR that bumps .atomic-server-ref publishes the e2e image for
+  # its new commit (linux/amd64 only; main's push rebuilds it for both
+  # platforms and has the last word). It runs alongside build-server, which
+  # still builds from source this once, so it adds no wall-clock time before
+  # the lanes. The next push to this PR, any other PR on the same pin and the
+  # merge queue then pull the image instead.
+  #
+  # Fork PRs never get here: their GITHUB_TOKEN can't write packages. For a
+  # same-repo branch this grants nothing its author couldn't already do by
+  # pushing a workflow of their own. The reusable workflow never overwrites
+  # an existing tag, so a PR can't replace an image main already built.
+  #
+  # Not a dependency of the `CI` gate (see its `needs`): a failure here
+  # doesn't block a merge, because build-server falls back to a source build.
+  publish-image:
+    name: Publish the e2e image for the new pin
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.changes.outputs.pin-changed == 'true'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/atomic-server-e2e-image.yml
+    with:
+      sha: ${{ needs.changes.outputs.pin }}
+
   # The single context the `main merge queue` ruleset should require.
   #
   # Per-lane job names are dynamic (`Lane: pets (e2e)` only exists on a run
@@ -743,10 +1314,17 @@ jobs:
     needs:
       - changes
       - build-server
+      - build-server-plugin-routes
+      - build-sidecars
       - shared-checks
       - lane
       - hosting-surface
       - e2e-plugin-system
+      # Deliberately not `publish-image`: it only warms a cache. If it fails,
+      # `build-server` on later runs finds no image for the pin and builds
+      # from source, so nothing this gate vouches for is lost. Listing it
+      # would also hold the gate for the whole ~15-minute image build.
+      # workflow.test.mjs names it as the one allowed exception.
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any job failed or was cancelled

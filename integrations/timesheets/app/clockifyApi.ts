@@ -1,9 +1,10 @@
 // @wc-ignore-file
-import { clockifyImportQuery, type LookbackDays } from '../localthought.js';
+import { isTimeZone } from './timeZone.js';
 import { ProxyError, requestJson, type ProxyTransport } from './transport.js';
 
 /**
- * Clockify list endpoints as reached through the integration proxy
+ * Clockify's setup and naming endpoints as reached through the integration
+ * proxy (time entries are read by `clockifyObserve.ts`)
  * (`/proxy/clockify` + these paths, the same paths
  * `integrations/timesheets/fixtures/clockify/scenario.mjs` serves). Paging follows the
  * pageNumber scheme that mock documents: 1-indexed `page`/`page-size`, a
@@ -53,25 +54,121 @@ async function fetchAllPages<T>(
   throw new Error(`Clockify ${path} returned more than ${MAX_PAGES} pages`);
 }
 
+export interface ClockifyUser {
+  id: string;
+  name?: string;
+  email?: string;
+  activeWorkspace?: string;
+  settings?: { timeZone?: string; weekStart?: string };
+}
+
+export interface ClockifyWorkspace extends RawNamed {
+  settings?: { forceProjects?: boolean };
+}
+
+/** What a sync needs to know about the account besides its entries. */
+export interface AccountContext {
+  /** The profile time zone the list's bounds are read in, if known. */
+  timeZone?: string;
+  /**
+   * The workspace setting (checked live): with it on, Clockify refuses a
+   * create or update without `projectId`, so "worked, no project" cannot
+   * be written back there.
+   */
+  forceProjects?: boolean;
+  /** The profile's first day of the week (`MONDAY` …), for the views. */
+  weekStart?: string;
+  /** Display names for the views' header: the account and the workspace. */
+  userName?: string;
+  workspaceName?: string;
+  warnings: string[];
+}
+
 /**
- * The same rolling window as the LocalThought path: `clockifyImportQuery`
- * computes `start`/`end` at each run, never stored.
+ * The user's time zone (`GET /user` → `settings.timeZone`) and the
+ * workspace's `forceProjects` (`GET /workspaces`), read on every sync so a
+ * changed profile takes effect. A 403/404 on either is a warning; the time
+ * zone is then unknown and the sync narrows what it claims to have read.
  */
-export function fetchTimeEntries(
+export async function fetchAccountContext(
   transport: ProxyTransport,
   workspaceId: string,
-  userId: string,
-  lookbackDays: LookbackDays,
-  now = Date.now(),
-): Promise<RawTimeEntry[]> {
-  const { start, end } = clockifyImportQuery({ lookbackDays }, now)
-    .query_overrides[0].values;
+): Promise<AccountContext> {
+  const context: AccountContext = { warnings: [] };
 
-  return fetchAllPages<RawTimeEntry>(
+  const soft = (error: unknown) => {
+    if (
+      !(error instanceof ProxyError) ||
+      (error.status !== 403 && error.status !== 404)
+    )
+      throw error;
+    context.warnings.push(error.message);
+  };
+
+  try {
+    const user = await requestJson<ClockifyUser>(transport, '/api/v1/user');
+    const zone = user?.settings?.timeZone;
+    if (typeof user?.settings?.weekStart === 'string')
+      context.weekStart = user.settings.weekStart;
+    const userName = user?.name ?? user?.email;
+    if (typeof userName === 'string' && userName) context.userName = userName;
+    if (isTimeZone(zone)) context.timeZone = zone;
+    else
+      context.warnings.push(
+        'Clockify did not name a known time zone for this account; the window is read less precisely.',
+      );
+  } catch (error) {
+    soft(error);
+  }
+
+  try {
+    const workspaces = await requestJson<ClockifyWorkspace[]>(
+      transport,
+      '/api/v1/workspaces',
+    );
+    const workspace = Array.isArray(workspaces)
+      ? workspaces.find(w => w?.id === workspaceId)
+      : undefined;
+    const force = workspace?.settings?.forceProjects;
+    if (typeof workspace?.name === 'string' && workspace.name)
+      context.workspaceName = workspace.name;
+    if (typeof force === 'boolean') context.forceProjects = force;
+  } catch (error) {
+    soft(error);
+  }
+
+  return context;
+}
+
+export interface SetupOptions {
+  user: ClockifyUser;
+  workspaces: RawNamed[];
+}
+
+/**
+ * What setup offers: the connected account (`/api/v1/user`; a Clockify API
+ * key belongs to exactly one user) and the workspaces it can see
+ * (`/api/v1/workspaces`, one unpaged list). Only ids are stored afterwards.
+ */
+export async function fetchSetupOptions(
+  transport: ProxyTransport,
+): Promise<SetupOptions> {
+  const user = await requestJson<ClockifyUser>(transport, '/api/v1/user');
+  if (!user || typeof user.id !== 'string' || !user.id)
+    throw new Error('Clockify did not say which account is connected');
+  const workspaces = await requestJson<RawNamed[]>(
     transport,
-    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/user/${encodeURIComponent(userId)}/time-entries`,
-    { start, end },
+    '/api/v1/workspaces',
   );
+  if (!Array.isArray(workspaces))
+    throw new Error('Clockify /api/v1/workspaces did not return a list');
+
+  return {
+    user,
+    workspaces: workspaces.filter(
+      w => w && typeof w.id === 'string' && typeof w.name === 'string',
+    ),
+  };
 }
 
 /**

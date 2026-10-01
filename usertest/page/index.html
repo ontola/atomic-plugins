@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atomic user test</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --fg: #1d1d1b;
+        --muted: #62625d;
+        --card: #ffffff;
+        --line: #deded8;
+        --accent: #2d5bd7;
+        --warn: #9a3412;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161615;
+          --fg: #ececea;
+          --muted: #a3a39c;
+          --card: #1f1f1d;
+          --line: #34342f;
+          --accent: #7ea0ff;
+          --warn: #fdba74;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main { max-width: 38rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1.25rem;
+        margin: 1rem 0;
+      }
+      ul { padding-left: 1.2rem; }
+      label { display: block; margin: 0.75rem 0 0.25rem; }
+      input[type='text'], select, textarea {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      textarea { resize: vertical; min-height: 4.5rem; }
+      #typed-form { margin: 1rem 0; }
+      #typed-form p { margin: 0.5rem 0 0; }
+      .check { display: flex; gap: 0.5rem; align-items: flex-start; }
+      .check input { margin-top: 0.3rem; }
+      button {
+        font: inherit;
+        padding: 0.6rem 1.1rem;
+        border-radius: 8px;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary { background: transparent; color: var(--accent); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .muted { color: var(--muted); font-size: 0.9rem; }
+      .warn { color: var(--warn); }
+      #status { font-weight: 600; }
+      #log p { margin: 0.4rem 0; }
+      #log .me { color: var(--muted); }
+      #langs {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+      }
+      #langs button { padding: 0.3rem 0.7rem; font-size: 0.9rem; }
+      #langs button[aria-pressed='false'] {
+        background: transparent;
+        color: var(--accent);
+      }
+      h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      #level {
+        height: 0.75rem;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        overflow: hidden;
+        margin: 0.25rem 0;
+      }
+      #level-bar {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 80ms linear;
+      }
+      #retry { margin-top: 0.5rem; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- Texts come from i18n.js, in the language picked here. -->
+      <nav id="langs" aria-label="Language"></nav>
+      <h1 data-text="title"></h1>
+
+      <section id="intro" class="card">
+        <div data-html="intro"></div>
+        <label for="plan" data-text="plan"></label>
+        <select id="plan"></select>
+      </section>
+
+      <section id="consent" class="card">
+        <div data-html="consent"></div>
+        <label for="name" data-text="name"></label>
+        <input id="name" type="text" autocomplete="given-name" />
+        <p class="muted" data-text="sessionLanguage"></p>
+        <p class="check">
+          <input id="agree" type="checkbox" />
+          <label for="agree" style="margin: 0" data-text="agree"></label>
+        </p>
+      </section>
+
+      <!-- Sound check: nothing here is recorded or sent to the moderator
+           (the optional speech check goes through the browser's
+           recognizer, which in Chrome is Google's speech service). -->
+      <section id="check" class="card">
+        <h2 data-text="check.heading"></h2>
+        <p class="muted" data-text="check.intro"></p>
+        <p class="row">
+          <button id="mic-test" type="button" data-text="check.micButton"></button>
+          <button id="type-instead" type="button" class="secondary" data-text="check.typeInstead"></button>
+        </p>
+        <div id="level-row" hidden>
+          <span class="muted" id="level-label" data-text="check.levelLabel"></span>
+          <div id="level" role="meter" aria-labelledby="level-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="level-bar"></div>
+          </div>
+        </div>
+        <p id="mic-status" aria-live="polite"></p>
+        <p id="mic-error" class="warn" hidden></p>
+        <div id="speech-row" hidden>
+          <p class="row">
+            <button id="speech-test" type="button" class="secondary" data-text="check.speechButton"></button>
+          </p>
+          <p class="muted" data-text="check.speechNote"></p>
+          <p id="speech-status" aria-live="polite"></p>
+        </div>
+        <p class="row">
+          <button id="speaker-test" type="button" class="secondary" data-text="check.speakerButton"></button>
+        </p>
+        <p id="speaker-status" class="muted" aria-live="polite"></p>
+        <div id="voice-row" hidden>
+          <label for="voice-select" data-text="check.voiceLabel"></label>
+          <p class="row">
+            <select id="voice-select"></select>
+            <button id="voice-try" type="button" class="secondary" data-text="check.voiceTry"></button>
+          </p>
+        </div>
+      </section>
+
+      <section id="go" class="card">
+        <p id="need-check" class="muted" data-text="check.needCheck"></p>
+        <button id="start" data-text="start" disabled></button>
+        <p id="error" class="warn" hidden></p>
+        <button id="retry" type="button" class="secondary" data-text="errors.retry" hidden></button>
+      </section>
+
+      <section id="session" class="card" hidden>
+        <p>
+          <span id="status"></span>
+          <span class="muted" id="rec"></span>
+        </p>
+        <p class="muted" id="voice-note" data-text="noVoice" hidden></p>
+        <p class="muted" id="heard"></p>
+        <p id="ask-row">
+          <button id="ask" data-text="ask"></button>
+          <span class="muted" data-text="askHint"></span>
+        </p>
+        <form id="typed-form">
+          <label for="typed" id="typed-label" data-text="typedLabel"></label>
+          <textarea id="typed" rows="3" data-placeholder="typedPlaceholder"></textarea>
+          <p>
+            <button id="send" type="submit" data-text="send"></button>
+            <span class="muted" data-text="sendHint"></span>
+          </p>
+        </form>
+        <div id="log"></div>
+        <button id="end" class="secondary" data-text="end"></button>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

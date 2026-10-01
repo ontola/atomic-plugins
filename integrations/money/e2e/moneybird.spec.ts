@@ -59,7 +59,7 @@ test.describe('moneybird integration', () => {
     ).toBeVisible();
     await page
       .getByRole('button', {
-        name: 'Use LocalThought to sync Moneybird with your Atomic Data Hub',
+        name: 'Use LocalThought to sync Moneybird with this destination',
         exact: true,
       })
       .click();

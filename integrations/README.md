@@ -1,7 +1,8 @@
 # Integration maintenance
 
-Each provider lives in its own directory and ships a bundled ES module. The
-runtime, permissions, reconciliation and recovery stay shared. Packages remain
+Each provider lives in its own directory; implemented plugins ship a bundled
+ES module. The runtime, permissions, reconciliation and recovery stay shared.
+Packages remain
 experimental until their advertised capabilities have current live evidence.
 [READINESS.md](READINESS.md) records, per plugin, which runtime its current
 code uses, how it is installed on the pinned atomic-server, and which of its
@@ -14,7 +15,7 @@ in atomic-server and is not run by this repo's CI.
 
 ## Local setup
 
-Every package imports atomic-server's `browser/` tree by relative path
+Implemented packages import atomic-server's `browser/` tree by relative path
 (`../../browser/lib/src/...`, `../../browser/tsconfig.build.json`,
 `../../browser/node_modules/...`), which does not exist in this repo. From the
 repository root, once per clone or worktree and again after
@@ -44,7 +45,7 @@ skips step 1 and still verifies the commit. `--no-install` skips step 3.
 CI's `shared-checks`, `lane` and `e2e-plugin-system` jobs run it with
 `--no-fetch --no-install` after their own `actions/checkout` and
 `pnpm install`, so the local layout is CI's layout. `run-lane.mjs` prints the
-step-4 problems as warnings before it runs any tier.
+step-4 problems as warnings before it runs implementation tiers.
 
 With that in place, no server is needed for:
 
@@ -57,31 +58,58 @@ node integrations/tooling/certify.mjs --layer js                 # every package
 Not covered by the script:
 
 - the atomic-server binary. The `live` and `e2e` tiers need it; build it
-  once in the checkout with the `cargo build` line `serve.mjs` prints.
-- certify's `--layer sandbox` and `--layer all` (the default). Both run
+  once in the checkout with the `cargo build` line `serve.mjs` prints, or
+  set `ATOMIC_SERVER_IMAGE` to run the published
+  `ghcr.io/ontola/atomic-server-e2e:<pin>` image in Docker instead (AGENTS.md,
+  "Shared pinned atomic-server build").
+- certify's `--layer sandbox` and `--layer all` (the default is `--layer js`). Both run
   `cargo test -p atomic-server` from this repo's root for the Rust tests
   named in each `package.json`'s `atomicCertification.sandboxTests`. That
   has not been verified to work in this symlinked layout, and it cannot pass
   at the current pin: atomic-server `4bab16ee6` removed those tests. CI runs
   `--layer js` only.
 
+## Server protocol scaffolds
+
+A protocol assessment may begin as `integrations/<id>/plugin.json` and a
+README, with a `contract` tier in `lanes.json`. This is planning metadata,
+not a runtime manifest or installable release. Declare `status: scaffold`,
+`runtime: quickjs`, the scope, proposed host capabilities, tracking issue
+and first interoperability milestone. The README records host requirements
+and an implementation checklist. Run its check with:
+
+```sh
+node integrations/tooling/run-lane.mjs <id> --tier contract
+```
+
+This tier needs only Node locally. CI selects it through the same per-folder
+lane filters as implemented plugins. Passing validates the planning contract
+and documentation; it does not execute QuickJS, prove protocol interoperability
+or produce certification evidence. Add implementation tiers as code lands.
+QuickJS executes JavaScript, not native Rust crates; native extensions or
+sidecars require a separate placement decision (see below). Proposed host
+capabilities in the contract are requirements, not claims of host support.
+
 ## One certification command
 
 From the repository root:
 
 ```sh
-node integrations/tooling/certify.mjs --layer js
+node integrations/tooling/certify.mjs            # same as --layer js
 ```
 
 This discovers every integration with a `package.json` (today `money`,
 `notion` and `pets`), validates required metadata/files, checks the committed
-bundle against a fresh build, typechecks and runs fixture tests. Without
-`--layer js` it also runs exact named Rust tests through QuickJS/WASM, which
-the current pin no longer has (see [Local setup](#local-setup)).
+bundle against a fresh build, typechecks and runs fixture tests. `--layer js`
+is the default. `--layer sandbox` or `--layer all` (selected explicitly) also
+runs exact named Rust tests through QuickJS/WASM, which the current pin no
+longer has (see [Local setup](#local-setup)). Store evidence
+(`tooling/evidence.mjs`) accepts only an `all`-layer report, so a default run
+never produces it.
 It fails if a requested test matches nothing. It never rebuilds the shipped file
 in place to make a reproducibility failure disappear.
 
-Options: `--integration notion`, `--layer js|sandbox|all`, and `--output /path`.
+Options: `--integration notion`, `--layer js|sandbox|all` (default `js`), and `--output /path`.
 Default output: `artifacts/integration-certification/report.json` plus logs and
 Vitest JSON. Use separate output directories for concurrent runs. A report is
 marked running until finished; failed validation replaces old successful evidence.
@@ -150,6 +178,291 @@ offer an update. No host does this at the current pin
 ([#94](https://github.com/ontola/atomic-plugins/issues/94)). Bump
 `package.json` `version` (and the matching catalog entry) whenever an
 integration's shipped `plugin.js` changes.
+
+The same card carries `requires` when the package's manifest is version 3 or
+needs the `plugin-routes` feature: the sorted list the host derives from the
+manifest (ontola/atomic-server#1732), for example `["persistent-host",
+"plugin-routes:read-only", "public-origin", "wasm-sandbox"]`. Nobody writes
+it by hand. `tooling/catalog-requires.mjs` reads the `manifest` each
+`integrations/<id>/plugin.js` exports and derives the list with
+`tooling/manifest-http.mjs`, a port of the host's rules that runs the host's
+own shared fixtures (`tooling/fixtures/plugin-manifest/`, copied from the
+commit named in `source.json` there):
+
+```sh
+node integrations/tooling/catalog-requires.mjs write   # after a manifest change
+node integrations/tooling/catalog-requires.mjs check   # what CI checks
+```
+
+`certify.mjs` refuses a gated package whose card lacks it or disagrees. No
+package here has a version-3 manifest yet, so no card carries it today.
+
+## Publishing a drive app
+
+A drive app (an `integrations/<id>/app/` whose `build.mjs` builds one ES
+module exporting `view({ root, store })`) is installable from the catalog when
+its entry carries:
+
+| Catalog property                      | Meaning                                                                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                             | As above: equals `integrations/<id>/package.json` `version`, or, in a folder with only an app and no certified package, a `private` `app/package.json`. |
+| `app-module`                          | `https://ontola.github.io/atomic-plugins/apps/<id>/<version>/ui.js`: the built module for exactly that version. Not `pluginUrl`, which links to source. |
+| `app-module-integrity`                | `sha384-…` (Subresource Integrity) of those bytes.                                                                                                      |
+| `app-row-name`, `app-row-name-plural` | Optional names for the app's table rows.                                                                                                                |
+
+The host (atomic-server#1689, in the current `.atomic-server-ref` pin, not
+yet merged upstream) lists these entries under **Drive apps** on the
+Integrations page, with the same `enabled`/`experimental`/`requires-api-plugins`
+gates as other entries. **Install** downloads `app-module`, refuses it unless
+its bytes match `app-module-integrity`, and creates an ordinary app from it:
+app, ontology, row class, table, entry point and app identity (`createApp`).
+The app records its catalog id, installed version, module URL and integrity.
+The card then shows **Installed <version>** and **Open**. When the catalog's
+version is newer than the installed one it offers **Update to <version>**,
+which replaces only the entry point's source (`updateApp`), so rows, schema,
+identity and rights stay. It never offers a downgrade.
+
+The module is committed to this repository at `apps/<id>/<version>/ui.js`.
+GitHub Pages publishes `main` from the repository root (legacy build, with
+the root `.nojekyll`, so files are served byte-for-byte), which puts it at the
+`app-module` URL above. There is no separate publish step and no npm
+package. Every released version keeps its own file and URL: installed apps
+recorded that URL, so a version file that is on `main` is never changed or
+deleted.
+
+To release a new version:
+
+```sh
+# 1. change integrations/<id>/app/, then bump the version in both places:
+#    integrations/<id>/package.json and its catalog.json entry
+# 2. build into apps/<id>/<version>/ui.js and record its URL and integrity.
+#    Refuses to overwrite a version that is already on origin/main.
+node integrations/tooling/apps.mjs write <id>
+# 3. confirm, as CI's shared checks do
+node integrations/tooling/apps.mjs check --published origin/main
+# 4. commit apps/<id>/<version>/ui.js with the catalog change
+```
+
+`apps.mjs check` fails when:
+
+- an entry's `app-module` is not the Pages URL of `apps/<id>/<version>/ui.js`,
+  or that file is not committed;
+- the committed file's sha384 is not `app-module-integrity`;
+- a fresh build of `integrations/<id>/app/` differs from the committed file
+  for the current version, including after an atomic-server pin bump that
+  changes esbuild's output (the fix is a new version once the old one is on
+  `main`);
+- anything under `apps/` is not an `<id>/<version>/ui.js` file;
+- with `--published <ref>`: a file under `apps/` at `<ref>` was changed or
+  deleted. CI passes `--published origin/main` on pull requests and in the
+  merge queue. Locally it defaults to `origin/main` when that ref exists.
+
+Builds pin esbuild's `absWorkingDir` to the repository root, so the bytes do
+not depend on the directory the build ran from.
+
+### Bundle size
+
+The module is stored as a string property on a resource, so its size is
+checked, not guessed at. The rule for every drive app:
+
+- **Minify, JS and CSS.** `app/build.mjs` passes `minify: true` to
+  `esbuild.build`. CSS that the module embeds as a string (a `<style>` it
+  injects) is minified too, with
+  `(await esbuild.transform(css, { loader: 'css', minify: true })).code`,
+  using the same esbuild as the JS (`browser/`'s, from the pinned
+  atomic-server).
+- **The size limit is the measured size plus about 10%.** The
+  `expect(bytes).toBeLessThan(...)` assertion in `app/build.test.ts` is the
+  minified `bytes` that `build()` returns, rounded up by about 10%, and the
+  line carries a comment stating the measured size and the date it was
+  measured, for example:
+
+  ```ts
+  // Measured 41,212 bytes minified on 2026-09-24; limit is that plus ~10%.
+  expect(bytes).toBeLessThan(45_400);
+  ```
+
+- **No silent headroom.** A round-number ceiling far above the real size
+  (`160 * 1024` for a 40 KB module) hides growth until it is large. When a
+  change pushes the module past its limit, re-measure, and raise the limit
+  and the comment together in the same commit, so the growth is visible in
+  review. Lowering it after a size win follows the same rule.
+
+Not every app follows this yet: at the time of writing, the app builds on
+`main` do not pass `minify` and their tests use round ceilings (64 KiB to
+160 KiB). An app moves to this rule the next time its build or its limit
+changes; a change of the build output needs a new version (see above).
+
+Pages itself is mutable: anyone who can push to `main` can change a file
+there. The host's integrity check is what makes that safe. A module that no
+longer matches the catalog's pin is refused, and nothing is installed or
+updated. The check does not catch a module and its pin changed together.
+For changes that go through a pull request, `--published origin/main`
+covers that case. A direct push to `main` skips it. After each Pages build,
+[`apps-published.yml`](../.github/workflows/apps-published.yml) fetches every
+catalog `app-module` and compares its sha384 with the pin.
+
+Trade-offs, compared with an npm package per app:
+
+- The repository grows by each released version's bundle, which is about
+  50–100 KB (Pets 0.1.0 is 46,830 bytes, about 12 KB gzipped), and old
+  versions are never removed.
+- There is no CDN beyond Pages' own. Pages serves with
+  `cache-control: max-age=600` and `access-control-allow-origin: *`.
+- A merge is live only once Pages has deployed it, usually a minute or two
+  later. Until then, installing the new version fails with a download error
+  and nothing is created.
+
+In the e2e lanes, `dev-server.mjs` stands in for Pages. It serves the
+committed `apps/<id>/<version>/ui.js` files at `/apps/...` and points the
+served catalog's `app-module` there, leaving the integrity as committed. The
+host's check therefore still applies.
+
+## Choosing a placement
+
+Before writing code, decide where each part of a package runs. The full
+rationale, the proposed manifest additions and the per-protocol assessment
+are in the accepted design
+[`docs/design/server-plugin-routes.md`](../docs/design/server-plugin-routes.md)
+(sections 0 and 1, from [#88](https://github.com/ontola/atomic-plugins/issues/88)).
+This section summarises it for plugin authors. Only placements A and B, and
+the class-extender hooks of D, exist at the current pin; everything else
+below is **planned**, with the atomic-server issue that would build it.
+
+- **A. Iframe view.** A drive app (shape 1 in
+  [Plugin runtimes](../AGENTS.md#plugin-runtimes)), run in the user's
+  browser in a null-origin iframe when a person opens it. Exists.
+- **B. Sandbox job.** A sandbox plugin (shape 2), run in AtomicServer in
+  QuickJS inside wasmtime on a `manual`, `cron` or `query` trigger. The
+  runtime exists. At the pin, a file importer can be created as a draft
+  from a published release and run from its plugin page's Import tab
+  (atomic-server#1653), as `money/` is; publishing the bundle to a server
+  is still manual ([#94](https://github.com/ontola/atomic-plugins/issues/94)).
+  [READINESS.md](READINESS.md) has the per-plugin state.
+- **C. Sandbox route.** The same sandbox as B, invoked fresh for each
+  inbound HTTP request from anyone. Planned and gated:
+  ontola/atomic-server#1711–#1716 (phase 1: gates, manifest v3, catalog and
+  install review, route registry, `http` trigger, well-known dispatcher),
+  #1717–#1721 (phase 2: writes, keys and tokens, deliveries, blob bodies,
+  endpoint health), #1722 (phase 3: WebSockets, design first).
+- **D. Server extension** (`world: server-extension`). Runs in AtomicServer,
+  installed by the operator. Class-extender hooks on reads and commits
+  exist; raw listeners are planned, gated and design-first in
+  ontola/atomic-server#1723.
+- **E. Sidecar.** A separate daemon the operator runs next to AtomicServer,
+  speaking its own protocol. It is outside AtomicServer; letting a plugin
+  reach it through declared operations to a loopback address is planned,
+  gated and design-first in ontola/atomic-server#1723.
+
+A package may use several placements (a view **and** a job **and** routes);
+decide each part separately. Answer these in order; the first "yes" sets the
+minimum placement:
+
+1. **Does it answer requests from another server or a remote client while
+   no user of this drive is present?** Then C, or D/E if rule 4 also
+   applies. A browser tab has no address and is not always on, so it cannot
+   be a federation endpoint.
+2. **Must it run when no browser tab is open** (a schedule, a trigger on
+   data changes, retries of outbound deliveries)? Then B.
+3. **Does it hold a credential that must not reach a browser** (a provider
+   API key, a server signing key, an OAuth client secret)? Then B or C, with
+   the credential in host secrets. Exception: a LocalThought connection's
+   rotating code stays in the top page, so a view (A) may use it through the
+   host's proxy relay.
+4. **Does it need a long-lived connection it terminates itself** (a
+   WebSocket firehose, a raw TCP/UDP/QUIC listener), memory that persists
+   across requests, a non-HTTP port, or more sustained CPU than the route
+   limits allow? Then D (native Rust, installed by the operator) or E. The
+   sandbox starts fresh for every invocation and is meant to stay that way.
+5. **Must it take part in reading or committing Atomic resources**
+   (validation, derived properties)? Then D, a class extender. Never C.
+6. **Otherwise** use A: interactive UI, reading the user's own connected
+   accounts, local-first two-way sync through Devonian. A is the only
+   placement that works on sessions without a server runtime.
+
+Examples from the design: the Pets and Notion drive apps are A; Notion
+scheduled sync and a bank-statement upload (`money/`) are B; a WebFinger
+responder or a remoteStorage server is C; an ActivityPub actor is C (inbox)
+plus B (delivery retries); an atproto PDS or Willow live sync (WGPS) is D or
+E; a Willow drop-file import is B.
+
+The design also proposes that the host **derives** a release's `requires`
+list (ontola/atomic-server#1535) from these declarations instead of the
+author writing it: a cron/query trigger implies `persistent-host`, non-empty
+`secrets` imply `host-credentials`, and any route or well-known claim
+implies `public-origin` and `plugin-routes:<level>`. That derivation is
+planned in ontola/atomic-server#1712 (implemented in #1732, which the pin has);
+this repo's catalog and certification support for it is
+[#134](https://github.com/ontola/atomic-plugins/issues/134), described at the
+end of the next section.
+
+### Public endpoints need a gated server
+
+**None of this is implemented.** It is the accepted design (section 0), and
+it applies to every surface that lets strangers reach a plugin: sandbox
+routes (C), `/.well-known/` claims, inbound writes, host-held keys and
+tokens, route-enqueued deliveries and wildcard-host egress, host-mediated
+WebSockets, listeners and sidecar access. Such a surface needs **all three**
+of these:
+
+1. **Build gate.** AtomicServer compiled with the Cargo feature
+   `plugin-routes`. It is not in `default` or `light`, and the release and
+   atomic.place feature sets are meant to exclude it (a CI check for that is
+   part of ontola/atomic-server#1711).
+2. **Runtime gate.** The operator starts that build with
+   `--plugin-routes <level>` or `ATOMIC_PLUGIN_ROUTES=<level>`, where
+   `<level>` is `off` (the default), `read-only` (anonymous `GET`/`HEAD`
+   routes and well-known claims; no inbound request can cause a write or an
+   outbound request) or `read-write` (everything above). Listeners and
+   sidecars additionally need `ATOMIC_PLUGIN_LISTENERS` /
+   `ATOMIC_PLUGIN_SIDECARS` entries, and only at `read-write`. Setting the
+   option on a build without the feature is meant to make the server refuse
+   to start. Planned in ontola/atomic-server#1711.
+3. **Install consent.** A person allowed to install plugins on that node
+   approves the specific Installation after a review that lists every public
+   endpoint. Bundled templates, auto-install and drive imports never carry
+   that consent. Planned in ontola/atomic-server#1712 (refusal at install,
+   upgrade and release pin) and #1713 (catalog marking and the review's
+   "Public endpoints" section).
+
+**atomic.place builds without `plugin-routes`**, so on atomic.place no
+plugin can open a public endpoint, whatever its manifest or the install
+review says; the design has its catalog hide such plugins there. Only a
+self-hoster who builds with the feature, starts the server with the switch
+and then approves the install gets one. A node whose gate closes after
+install is meant to keep the Installation in a degraded state: routes answer
+404, deliveries pause, and its views and ungated jobs keep working.
+
+Nothing else is gated: views (A), jobs (B), class-extender hooks (D),
+secrets, and outbound operations to fixed hosts work the same on every
+build. A package that needs a gated surface should keep its ungated parts
+(a view, a job) useful on their own, so it still does something on
+atomic.place. The pinned atomic-server has the gates (#1726), manifest v3
+(#1732), the route registry (#1749) and route execution (#1751), all
+unmerged upstream; they exist only in a build with `--features
+plugin-routes`.
+
+**Tooling for gated packages** ([#134](https://github.com/ontola/atomic-plugins/issues/134)):
+
+- **Catalog.** A gated package's card carries the derived `requires` (see
+  [Version and catalog entry](#version-and-catalog-entry)).
+- **Certification.** `certify.mjs` refuses a gated package without that
+  `requires`, and runs its sandbox tests on a build with
+  `light,wasm-plugins,plugin-routes`, recording the feature in the report.
+  `tooling/evidence.mjs` accepts evidence for a gated package only when the
+  report also records the `--plugin-routes` level the server ran at, at least
+  the one the manifest needs. Cargo tests are not a running server, so
+  `certify.mjs` never records a level: a gated package's capabilities stay
+  "declared" until live evidence at that level exists.
+- **Lanes.** A lane can set `pluginRoutes` in `lanes.json` to a level (or a
+  list of levels); its live and e2e tiers then run on a build with the
+  feature, once per level (see [PARALLEL_LANES.md](PARALLEL_LANES.md)).
+  The `plugin-routes` lane uses that to check, against a real host, that
+  `tooling/fixtures/gated-plugin/` pins, installs through the review dialog
+  and answers its `drive-prefix` route (`/_routes/<slug>/hello`) at
+  `read-only`, and that at `off` pinning is refused, Install is disabled and
+  that installation's handler no longer runs. It covers no other mount,
+  no well-known claim and nothing that needs `read-write`.
 
 ## Building an uploader plugin
 
@@ -297,8 +610,9 @@ data-browser, built on `BrowserIntegrations` (`localthought/browser.ts`),
 with catalog `platform` entries, lens hooks and the generic sandbox mapper
 `localthought/plugin.ts`. atomic-server removed that flow (`f3efedf65`,
 `c707ca4ed`), and the data-browser no longer imports anything from this
-repo. [`localthought/README.md`](localthought/README.md) still documents
-it, as history.
+repo. `browser.ts` and `settings.ts` spoke the proxy's rotating connection
+codes, which #54 retired; they were deleted in #54 phase 2.
+[`localthought/README.md`](localthought/README.md) says what is left.
 
 ### The stack, top to bottom
 
@@ -306,29 +620,54 @@ it, as history.
   provider credentials (never the frame, the drive or AtomicServer),
   publishes a **catalog** of supported platforms, and serves each platform's
   OpenAPI document, already patched with the overlays it needs (see below).
-- **The host relay** — atomic-server's top page holds the proxy connection
-  (a rotating connection code in its own `localStorage`, bound to the proxy
-  origin, drive, agent and app) and answers the frame's
+- **The host's proxy access** (#54 phase 2; ontola/atomic-server#1696
+  and #1697, in the pin). The proxy account is the user's Atomic agent. A
+  **connection** (platform + sealed provider token) lives at the proxy and
+  belongs to the agent that redeemed it; a **delegation** says "this app's
+  agent may use connection C". The app's frame keeps using
   `store.proxy.request({ platform, connectionId, path, method, query, body, ifMatch })`
-  with `{ status, headers, body }` only. `store.proxy.connections` lists the
-  app's connections, and `store.proxy.connect` asks the host to draw a
-  consent bar and start the PKCE handoff. This is
-  ontola/atomic-server#1657 (`helpers/proxyConnections.ts`, a port of
-  `localthought/browser.ts`), in the pin. It is an interim shape: #40/#54
-  and atomic-server#1624 are meant to replace the rotating code with a
-  scoped capability without changing the apps.
-  **The connection code never reaches the frame or the graph.** Never
-  write it into an Atomic resource, not an App resource, config or row: a
-  resource syncs, its drive can be shared, and the proxy has no per-code
-  revocation ([#21](https://github.com/ontola/atomic-plugins/issues/21)).
-  `localthought/no-credentials-in-graph.test.mjs` (`node --test`, run by
-  CI's "Tooling unit tests" step) fails the build if any shipped source
-  under `integrations/` contains a `…/properties/…connection-code` URL, or
-  mentions `x-connection-code` outside `browser.ts`. It is a text scan, not
-  data-flow analysis.
+  and gets `{ status, headers, body }`; what changed is underneath:
+  - `store.proxy.connect({ platform })` draws the host's consent bar. If
+    the person already has a connection for the platform, the bar offers
+    "Use existing connection": the page delegates it to the app and
+    `connect` resolves `{ status: 'connected', connectionId, platform }`,
+    with no reload. Otherwise the page sends the tab to the proxy's
+    `/connect` (no login, no `user_id`), and back to `/app/integrations`,
+    where it redeems the handoff with a request signed by the user's key
+    (the signer becomes the owner) and delegates the connection to the
+    app's agent (`GET /app-agent`); the view reloads and `connect` never
+    settles. A cancel resolves `{ status: 'cancelled' }`.
+  - `store.proxy.connections({ platform })` lists the connections the
+    person delegated to this app, from the proxy's `GET /connections`.
+  - For `request`, view-client.js makes a non-extractable Ed25519 key in
+    the frame's memory, asks the page for a **capability** for it (signed
+    by the user's key after the page checked the delegation; at most
+    10 minutes at the pin, 15 at the proxy), and calls
+    `{proxy}/proxy/{connection_id}/{platform}{path}` itself, with
+    `Authorization: Capability …` and an Atomic v2 request signature by the
+    frame key (method, full URL, timestamp, body hash). It mints a new
+    capability once on `401 capability_expired`.
+  - The proxy's own refusals come back as responses, `{ error, message }`
+    with an `integration-proxy/src/api_error.rs` code (`not_delegated`,
+    `unknown_connection`, …). Each app's transport throws them rather than
+    treating them as the provider's answer (`proxyRefusal` in
+    `pets/app/transport.ts` and its siblings); a lost delegation or a
+    deleted connection says "Connect again".
+    **Nothing credential-like reaches the frame's own code or the graph.**
+    The page's localStorage holds only a PKCE verifier for the ten minutes of
+    a handoff. Never write a connection code, capability or verifier into an
+    Atomic resource: a resource syncs and its drive can be shared
+    ([#21](https://github.com/ontola/atomic-plugins/issues/21)).
+    `localthought/no-credentials-in-graph.test.mjs` (`node --test`, run by
+    CI's "Tooling unit tests" step) fails the build if shipped source under
+    `integrations/` contains a property URL naming a connection code,
+    capability or code verifier, mentions the retired `x-connection-code`
+    header, or signs requests itself (`x-atomic-signature`, the capability
+    prefix): that is the host's job. It is a text scan, not data-flow
+    analysis.
 - **Syncables** — the npm `syncables` package, used in the frame as
   `syncables/browser` (`readPlatform`, `describePlatform`, a `Transport`
-  over the relay). It reads an OpenAPI document plus its
+  over `store.proxy.request`). It reads an OpenAPI document plus its
   [CRUD Causality Extension](https://github.com/pondersource/openapi-extensions/tree/main/spec/crud-causality)
   (`components.crudResources`) block, discovers the resource model and
   pages through it, so the app carries no provider-specific paging code.
@@ -348,7 +687,8 @@ it, as history.
 ### Two shapes, pick one
 
 **(a) Read-only import.** Model it on `pets/app/`: a `transport.ts` that
-turns syncables' requests into relay calls and refuses any URL outside the
+turns syncables' requests into `store.proxy.request` calls, throws the
+proxy's own refusals, and refuses any URL outside the
 document's `servers[0].url`; a `sync.ts` that creates one Property per field
 under the app's ontology, adds them to the row class's `recommends`, and
 upserts rows under the app's table keyed by a provider id; a `controller.ts`
@@ -376,8 +716,32 @@ Give every native resource a stable identity independent of matching text
 title/body equality), journal writes before sending them (the provider side
 has no idempotent create, so an uncertain/lost response must stop rather
 than retry blindly), and treat a missing record as a conflict to resolve,
-never an implicit deletion. The relay passes `method` and `ifMatch`, so
-conditional `PATCH` requests are possible from a frame.
+never an implicit deletion. `store.proxy.request` passes `method` and
+`ifMatch`, so conditional `PATCH` requests are possible from a frame. A
+thrown request (a lost response or a timeout) may have reached the
+provider; a proxy refusal (`{ error }` with a proxy code) did not.
+
+### Sandbox plugins and the proxy
+
+A server-executed sandbox plugin (shape 1 in
+[Plugin runtimes](../AGENTS.md#plugin-runtimes)) reaches the proxy with
+`ctx.http`, not `store.proxy`. The pin has the host side
+(ontola/atomic-server#1702, #1710, #1725): a manifest declares
+`proxy: ["clockify"]`, its operations name `atomic-proxy:/clockify/<path>`
+URLs, and the host resolves one to
+`{--integration-proxy-url}/proxy/{connection_id}/clockify/<path>` for the
+connection delegated to the installation (`ctx.connections`), signing it as
+this node's agent for the installation. An `atomic-proxy:` request must
+still match a declared operation.
+
+**No plugin in this repo uses it yet.** The calendar, issue-tracker and
+Notion sandbox adapters call the provider directly with a plugin secret
+(`secrets`), and moving them to proxy connections is #54 decision 11's
+later step. It also needs the page to register a node's agent as a runtime
+of the installation (`POST /runtimes`), which #1700 lists as still to do.
+The mock proxy accepts runtime-signed requests (`POST /runtimes`, then a
+request signed by the runtime agent), and `serve.mjs` passes the mock's
+origin as `ATOMIC_INTEGRATION_PROXY_URL`, but no lane exercises that path.
 
 ### OpenAPI overlays and the pondersource extensions
 
@@ -446,6 +810,12 @@ exists off the browser/WASM path.
    `package.json`. For a drive app, see
    [the drive-app shapes](#two-shapes-pick-one) and add its lane tiers to
    `lanes.json`. Update [READINESS.md](READINESS.md) in the same PR.
+   A folder with its own `pnpm-lock.yaml` also gets a copy of
+   [`pets/pnpm-workspace.yaml`](pets/pnpm-workspace.yaml) (its
+   `minimumReleaseAgeExclude` lets pnpm 11+ install our own just-published
+   `syncables`, `devonian` and `@tomic/*`). If pnpm 11+ then reports ignored
+   build scripts, add an `allowBuilds` entry as
+   [`notion/pnpm-workspace.yaml`](notion/pnpm-workspace.yaml) does.
 2. Metadata identifies owner, support tier, pinned API version, supported scope
    and fully qualified Rust sandbox test names. A new package without metadata
    fails CI rather than silently escaping it.
@@ -562,3 +932,20 @@ consent and schedule activation belong to installation, never the distributed
 document. Imported packages are not yet exposed in the store UI or installable
 through a generic sandbox setup. Schema bindings currently refer to external
 resources; bundled schema/template graphs remain future work.
+
+## Executable Node test lanes
+
+Portable QuickJS-compatible modules can use the `node` lane tier for executable
+unit and adapter tests. Declare an explicit non-empty `nodeTests` list of
+`integrations/<lane>/*.test.mjs` paths in `lanes.json`. The runner checks the files
+exist and invokes Node's built-in test runner; a failing suite fails that lane.
+No browser workspace or package install is required for dependency-free suites.
+
+```sh
+node integrations/tooling/run-lane.mjs <lane> --tier node
+```
+
+This tier tests JavaScript behavior; it does not certify execution in the actual
+QuickJS host, route authorization or storage persistence. Keep host integration
+evidence separate and replace the `contract` scaffold tier when executable
+implementation tests are present.

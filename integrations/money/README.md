@@ -5,7 +5,7 @@
 This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
 on a plugin's page; merged as atomic-server#1691). The pinned
-`.atomic-server-ref`, `2f403624e`, includes it; see [Verified](#verified).
+`.atomic-server-ref`, `bc39dac4b`, includes it; see [Verified](#verified).
 
 1. **Publish** (once per server, by whoever maintains it): create a Plugin,
    replace its source with this folder's `plugin.js`, name it "Bank
@@ -15,10 +15,15 @@ on a plugin's page; merged as atomic-server#1691). The pinned
 2. **Find it**: Integrations → Show experimental plugins → Community
    plugins → Bank statements → Open → Create draft.
 3. **Set up**: on the draft's Import tab, choose Set up. This creates the
-   banking properties and the Bank transactions class in the drive ontology,
-   and a Bank transactions table with a default view beneath the importer. It
-   stores `{ table, rowClass, properties }` as the importer's config, under
-   the key `money`.
+   banking properties and the Bank transaction and Bank statement classes in
+   the drive ontology, and two tables with default views beneath the
+   importer: Bank transactions, and Imported statements (one row per
+   statement with its reconciled opening and closing balances, through the
+   manifest's `destination.tables`, atomic-server#1768). It stores
+   `{ table, rowClass, properties, tables: { statements: { table, rowClass } } }`
+   as the importer's config, under the key `money`. An importer set up before
+   the statements table existed pauses on the missing `tables`; running Set
+   up again adds only the missing table.
 4. **Import**: choose an MT940 or camt.053 (ISO 20022 XML) file, then
    Preview import, then Apply. The format is detected from the file contents:
    XML is read as camt.053, and anything else as MT940. Nothing is written
@@ -46,6 +51,15 @@ what Set up creates; the plugin itself never creates schema.
 No network operations or secrets are declared. File contents are runtime input,
 not plugin source. Proposals and approved transactions contain financial data
 and are handled by the user's AtomicServer; they are not sent to an LLM.
+
+`app/` is a separate drive app (shape 1 in AGENTS.md), the Money view of the
+same Bank transactions table ([design](design/DESIGN.md), #89). It never runs
+in the QuickJS sandbox and never writes imported bank fields: the importer
+above stays their only writer. `app/build.mjs` bundles it to one ES module
+exporting `view({ root, store })`, with no stylesheet file and no network
+code. It reads the table the host points it at (`store.getData()`), finds the
+banking properties through the table's row class, and subscribes to the table
+so rows from a new import appear without a reload.
 
 Amounts are exact signed decimal **strings**, not floating point numbers.
 Opening/closing balances are reconciled with integer arithmetic (up to five
@@ -94,6 +108,16 @@ offline peers still need collision resolution after synchronization.
   since-removed `ImportMT940` upload dialog. Private bank data is not committed. Synthetic fixtures
   test format behavior; this does not establish compatibility with every bank's
   dialect.
+- `money-category` and `money-note` (the person's own category and note,
+  edited in the Money app) are declared on the Bank transaction class but
+  never written by the importer, so a reimport leaves them alone
+  (`plugin.test.ts`). The category is free text; a Category resource was
+  the alternative (issues.md M-5) and is not built. Installations set up
+  before these properties existed do not have them: running Set up again
+  goes through `ensureSchema`, which creates missing terms by `localId`,
+  but whether it also adds them to an existing class's `recommends` is not
+  verified. Until the class declares both, the app shows Category and Note
+  as unavailable instead of writing undeclared properties.
 - Set up reuses the table and view (found by `localId` beneath the importer)
   when it runs again after a lost response. Schema creation goes through the
   host's `ensureSchema`, which finds existing terms by `localId`.
@@ -112,15 +136,94 @@ Bundle: `./browser/node_modules/.bin/esbuild integrations/money/plugin.ts --pres
 Browser: `node integrations/tooling/run-lane.mjs money --tier e2e` runs
 `e2e/money.spec.ts` against `ATOMIC_SERVER_CHECKOUT`'s `target/e2e` build.
 
+## Money app (`app/`)
+
+A drive app (DESIGN.md in [`design/`](design/DESIGN.md), #89) that shows the
+Bank transactions table as a ledger. It is a view of the table it is opened
+on (`store.getData()`), so it belongs on the importer's table as an app
+view; the table's own Table tab stays next to it.
+
+- **Transactions**: account switcher (account + currency), a strip per
+  account + currency (never summed across currencies) with the latest stored
+  closing balance in the period and its date, or the period's net where no
+  statement ends in it (never a balance computed from rows), money in and
+  out; search over description and reference, period, direction and
+  Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
+  a list of buttons below), 200 rows at a time. Amounts are formatted from
+  their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
+- **Detail**: the bank's fields read-only with the verbatim narrative;
+  category and note (`money-category`, `money-note`) saved on change. The
+  host lets an app edit the rows of the table it views only after the
+  person allows it (`rowAccess`/`requestRowAccess`, atomic-server#1788):
+  the detail says so up front, saving asks in the host's bar while the typed
+  text stays, and a refusal is shown with a way to ask again.
+- **Import statement**: checks a chosen or dropped file in the browser
+  with the importer's own readers and identity rules (`app/check.ts`,
+  `identity.ts`), shows the reconciliation per statement and what is new,
+  already imported or blocked, or a designed error, and then imports it
+  through the importer with the host's own review (`importer.run`,
+  atomic-server#1774). Nothing is written before Apply there.
+- **Imports**: the stored statements, with period, opening → closing,
+  entries and import date; on a table without them, one row per statement
+  the transactions came from.
+- **Sources**: statement files; Moneybird and QuickBooks shown as not
+  available yet.
+
+Each host call is feature-detected (`getMany`, `getTheme`/`onThemeChange`,
+`--t-color-success`, `openResource`, `rowAccess`, `importer.run`,
+`getData().tables`), so on an older host the app falls back: rows one by
+one, a pointer to the importer's Import tab instead of Import, the host's
+refusal instead of a save, statements derived from the rows.
+
+Evidence: unit tests with a fake store that models both a current and an
+older host (`app/*.test.ts`), screenshots and axe from
+`app/harness/screenshots.mjs`, and a host E2E test in `e2e/money.spec.ts`
+against `bc39dac4b`: it sets up the importer, installs the built app
+test-side as a new App that renders bank transactions, adds it as a
+read-only view through Add view, imports the synthetic MT940 from inside
+the app through the host's review, checks the strip's closing balance and
+the Imports tab, saves a category after clicking the host's "Allow
+editing", and checks the in-app check (nothing new; a changed transaction
+blocks).
+
+Catalog: the `money` entry in `integrations/catalog.json` carries the app
+(`app-module` `apps/money/<version>/ui.js`, the same version as this
+package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
+with `enabled: false`, so the Integrations page does not offer it. Not yet
+a working install path, and not tested: at pin `2567fc30b` a catalog
+Install creates the app with a row class and table of its own
+(`createApp`), the importer's table offers under Add view only apps whose
+`renders` lists its row class (`useDriveApps.ts` `appsForClass`), and
+`store.importer.run` refuses an app that is not a view of an importer's
+table (`hostStore.ts`). The E2E adds the Bank transaction class to the
+app's `renders` test-side instead.
+
+Build: `node integrations/money/app/build.mjs` (writes `app/dist/ui.js`,
+minified, one module). Screenshots, axe and the render budget:
+`node integrations/money/app/harness/screenshots.mjs --axe` (writes to
+`app/dist/screenshots/`).
+
 ## Verified
 
-`e2e/money.spec.ts` passed on 2026-09-24 against the pinned atomic-server
-`2f403624e` (which includes #1691, the change for atomic-server#1653), with this
-package at version 0.2.0 (`plugin.js` sha256 `e189564805c807ffc60177b62e50eca8a39b6d2701cc26f7a63e204daae91f8c`). It covers these
+`e2e/money.spec.ts` passed on 2026-09-25 against the pinned atomic-server
+`bc39dac4b` (earlier against `007869464`, `11264e83e` and `2f403624e`, which includes #1691,
+the change for atomic-server#1653), with this package at version 0.2.0
+(`plugin.js` sha256 `a8f84cd07899984529b505d2719e83b1ec4bed805c9e2459e895c0956f784efe`,
+the bundle with the annotations, structured errors and the statements
+table). Version 0.3.0 is that bundle with only the manifest's `version`
+changed (#148 changed the importer's behaviour at 0.2.0: the statements
+table and `tables` in `config.required`). At 0.3.0 (`plugin.js` sha256
+`5d5ab941d41734d088e7be6da528b3decbfbf3db81e56cfae59e69558054733b`) both
+E2E tests passed once on 2026-09-29 against pin `2567fc30b` and once
+against pin `1432e244a`, which fixes atomic-server#1846 (both the published
+e2e image). The
+spec picks the release it just published by its id, so it also passes on a
+lane store kept from earlier runs (checked twice in a row). It covers these
 steps, all with the synthetic files in `fixtures/` and generated variants:
 
 - publish, then discover under Community plugins, then create a draft;
-- Set up, then an MT940 preview (2 new, "1 statements reconciled"), then
+- Set up, then an MT940 preview (2 new transactions and their statement,
+  "Apply 3 changes", "1 statements reconciled"), then
   Apply, then a full page reload, then the rows in the table;
 - a reimport of the same file: "2 previously imported transactions skipped",
   and nothing to apply;
@@ -152,18 +255,20 @@ the same shape as `integrations/pets/app/`. It is not part of the sandbox
 bundle above and does not touch the Bank transactions table.
 
 - **Scope.** One collection, contacts, of one administration the person
-  chooses. Every call is a GET through the host's proxy relay
-  (`store.proxy.request`); the frame holds no credential and makes no network
-  call of its own (`moneybird/build.test.ts` checks the bundle). Nothing is
-  written to Moneybird.
+  chooses. Every call is a GET through `store.proxy.request`; the
+  connection lives at the integration proxy, owned by the user's agent and
+  delegated to the app's (#54 phase 2). The frame holds no credential and
+  makes no network call of its own (`moneybird/build.test.ts` checks the
+  bundle). Nothing is written to Moneybird.
 - **Deferred.** The catalog card used to advertise contacts, sales invoices,
   purchase invoices, financial mutations "and the other collections". None of
   those but contacts is imported. `financial_mutations.json` has no
   pagination overlay (`overlays/moneybird.com/api/v2/pagination-overlay.yaml`)
   and needs a period `filter`, so it is the likely next collection, but it is
   not attempted here.
-- **Flow.** Connect Moneybird (host consent bar, LocalThought proxy), then
-  choose an administration (`GET /administrations.json`; the choice is
+- **Flow.** Connect Moneybird (host consent bar, then the proxy's own
+  connect page), then choose an administration
+  (`GET /administrations.json`; the choice is
   stored on the App resource as `moneybird-administration`), then import. It
   reads `GET /{administration_id}/contacts.json?per_page=100&include_archived=true`
   and follows `Link: <…>; rel="next"` only within that collection, for at
@@ -202,12 +307,16 @@ administration on page 2 with 503; both are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
 administration and API token**; the steps are in `scenario.mjs`'s header.
 
-**Install.** Test-side only, like Pets: `e2e/moneybird.spec.ts` creates a
-`New app` and replaces its entry point with `node
-integrations/money/moneybird/build.mjs`'s bundle. The generic catalog install
-for drive apps is #94.
+**Install.** Test-side only: `e2e/moneybird.spec.ts` creates a `New app`
+and replaces its entry point with `node
+integrations/money/moneybird/build.mjs`'s bundle. The `moneybird` catalog
+entry stays `enabled: false` and has no `app-module`: the app is not
+published under `apps/` yet (see
+[Publishing a drive app](../README.md#publishing-a-drive-app)), so the
+catalog's Drive apps install cannot offer it.
 
 Tests: the money vitest command above includes `moneybird/*.test.ts`. The
-host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It passed on
-2026-09-24 against the pinned atomic-server `2f403624e` (it needs only the
-host proxy relay, atomic-server#1657).
+host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It first
+passed on 2026-09-24 against atomic-server `2f403624e`, and again on
+2026-10-01 against the pin `a12b74a6783b`, after the connect page's button
+changed with the proxy's 0.2 protocol.

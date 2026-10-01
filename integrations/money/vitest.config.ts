@@ -8,5 +8,12 @@ export default {
       ).pathname,
     },
   },
-  test: { include: ['*.test.ts', 'moneybird/*.test.ts'] },
+  test: {
+    include: [
+      '*.test.ts',
+      'app/*.test.ts',
+      'app/ui/*.test.ts',
+      'moneybird/*.test.ts',
+    ],
+  },
 };

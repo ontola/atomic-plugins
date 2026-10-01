@@ -1,4 +1,4 @@
-import { project, issueFields } from './lens/index.js';
+import { project, issueFields, issueExtras } from './lens/index.js';
 import { core, dataBrowser } from '@tomic/lib';
 import { assertEnumerable, assertSaved } from './target.mjs';
 
@@ -39,7 +39,10 @@ export class GitHubPort {
       return {
         id: raw.number,
         value: project(raw),
-        metadata: this.metadata(raw, { number: raw.number }),
+        metadata: this.metadata(raw, {
+          number: raw.number,
+          ...issueExtras(raw),
+        }),
       };
     }
 
@@ -230,12 +233,21 @@ export class AtomicPort {
       throw new Error('Message belongs to another issue');
     let metadata = r.get(this.config.provenance);
     if (typeof metadata === 'string') metadata = JSON.parse(metadata);
-    if (entity !== 'issue')
+
+    if (entity !== 'issue') {
+      // A Message imported from GitHub names its comment in its provenance:
+      // an identity, like an issue row's number column, so a Message whose
+      // import was never checkpointed binds back instead of looking new.
+      const remoteId = metadata?.commentId;
+
       return {
         id: r.subject,
+        ...(Number.isSafeInteger(remoteId) && remoteId > 0 ? { remoteId } : {}),
         value: { body: r.get(core.properties.description) ?? '' },
         ...(metadata ? { metadata } : {}),
       };
+    }
+
     const statuses = r.get(c.status) ?? [c.tags.Todo];
     const status = Object.keys(c.tags).find(s => c.tags[s] === statuses[0]);
     if (statuses.length !== 1 || !status)

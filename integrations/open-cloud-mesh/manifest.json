@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 3,
+  "name": "open-cloud-mesh",
+  "namespace": "ontola",
+  "capabilities": [
+    {
+      "name": "storage",
+      "reason": "Stores each received share as a File, with the fetched copy, in the folder you choose."
+    }
+  ],
+  "config": {
+    "key": "open-cloud-mesh",
+    "properties": {
+      "sharesFolder": {
+        "type": "string",
+        "description": "Subject of the folder received shares are stored in. Receiving is off until it is set."
+      },
+      "allowedPeers": {
+        "type": "object",
+        "description": "Object mapping the domains of OCM servers you accept shares from (e.g. cloud.example.org) to true. Every other server gets 403."
+      },
+      "recipients": {
+        "type": "object",
+        "description": "Object mapping the user part of the OCM addresses on this server that may receive shares (bob for bob@<this host>) to their display name."
+      },
+      "providerName": {
+        "type": "string",
+        "description": "Name shown to other OCM servers in discovery. Defaults to Atomic Server."
+      }
+    },
+    "required": ["sharesFolder"]
+  },
+  "operations": [
+    {
+      "id": "fetch-file",
+      "method": "GET",
+      "url": "https://*/{*rest}",
+      "effect": "read"
+    },
+    {
+      "id": "notify",
+      "method": "POST",
+      "url": "https://*/{*rest}",
+      "effect": "write"
+    }
+  ],
+  "http": {
+    "mount": "installation-origin",
+    "routes": [
+      {
+        "id": "discovery",
+        "path": "/ocm-provider",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none",
+        "cors": "any-origin-no-credentials"
+      },
+      {
+        "id": "jwks",
+        "path": "/ocm/jwks",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none",
+        "cors": "any-origin-no-credentials"
+      },
+      {
+        "id": "shares",
+        "path": "/ocm/shares",
+        "methods": ["POST"],
+        "principal": "installation",
+        "auth": "http-signature",
+        "body": "json",
+        "accept": ["application/json"],
+        "maxBodyBytes": 65536,
+        "writes": ["received"],
+        "enqueues": ["notify"],
+        "fetches": ["fetch-file"]
+      },
+      {
+        "id": "notifications",
+        "path": "/ocm/notifications",
+        "methods": ["POST"],
+        "principal": "installation",
+        "auth": "http-signature",
+        "body": "json",
+        "accept": ["application/json"],
+        "maxBodyBytes": 65536,
+        "writes": ["received"]
+      }
+    ],
+    "wellKnown": [
+      {
+        "name": "ocm",
+        "kind": "exclusive",
+        "route": "discovery"
+      }
+    ],
+    "writeTargets": [
+      {
+        "id": "received",
+        "parent": "config:sharesFolder",
+        "classes": ["https://atomicdata.dev/classes/File"]
+      }
+    ],
+    "keys": [
+      {
+        "name": "ocm-key",
+        "alg": "ed25519",
+        "reason": "Signs the OCM notifications this drive sends, and is published at /ocm/jwks for other servers to verify them."
+      }
+    ],
+    "reason": "Lets servers that speak Open Cloud Mesh 1.5 with RFC 9421 signatures share files with people on this drive. Anyone can call these endpoints; only servers you allow, with a valid signature, can store anything."
+  }
+}

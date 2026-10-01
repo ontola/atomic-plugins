@@ -3,8 +3,9 @@
 This folder holds two independent things:
 
 1. **`app/`: the Pets drive app** (atomic-plugins#52). It is a browser-only
-   iframe plugin that reads Pets through the LocalThought integration proxy.
-   It never holds a credential. See [Drive app](#drive-app-app) below.
+   iframe plugin that reads the Pets demo provider through the integration
+   proxy. It never holds a credential, and the demo provider needs none. See
+   [Drive app](#drive-app-app) below.
 2. **`plugin.ts`: the static sandbox demo**, described next. It has five
    built-in pets and no network access.
 
@@ -20,8 +21,7 @@ Historically, Integrations → Pets → Set up connection created a Pets table
 beneath the installed connection and imported the five demo pets; re-running
 skipped unchanged pets. atomic-server `4bab16ee6` removed that dialog
 (`ConnectPets`), so at the current pin nothing installs or runs this bundle.
-The catalog's `pets` card still describes this demo rather than the drive
-app.
+The catalog's `pets` card describes the drive app below, not this bundle.
 
 ## Architecture
 
@@ -50,6 +50,18 @@ plugin frame calls inside a null-origin, `allow-scripts`-only iframe. It
 follows `integrations/timesheets/app/`: plain DOM, no framework, and no
 stylesheet.
 
+- **Provider.** The `pets` platform in the proxy's default catalog
+  (`overlays/catalog.json`, atomic-plugins#174) is a static, read-only JSON
+  API that GitHub Pages publishes from this repository:
+  `GET https://ontola.github.io/atomic-plugins/overlays/pets-demo/1.0.0/api/pets`
+  answers the five pets in `fixtures/pets/scenario.mjs`, in one page (no
+  `Link` header). Its document, `overlays/pets-demo/1.0.0/openapi.json`,
+  declares `security: []`, so the proxy's consent page asks for nothing and
+  the connection holds no credential. That needs `atomic-integration-proxy`
+  0.2.3 or later; 0.2.2 and earlier list `pets` but refuse to connect it. Pages serves
+  the file as `application/octet-stream`; the host and syncables parse the
+  body as JSON regardless. `app/openapi.json` is the same document
+  (`app/sync.test.ts` checks this).
 - **Reading.** `syncables/browser`'s `readPlatform` walks the bundled Pets
   OpenAPI document (`app/openapi.json`, the same file the mock proxy serves)
   and follows the `Link: rel="next"` pagination. The document's
@@ -58,19 +70,28 @@ stylesheet.
   `package.json` and `pnpm-lock.yaml` and installed with
   `pnpm install --frozen-lockfile` in this folder; this repo's
   `syncables/src/` is not bundled.
-- **Network.** Every request goes through the host's proxy relay,
+- **Network.** Every request goes through
   `store.proxy.request({ platform, connectionId, path, method, body })`
-  (`app/transport.ts`). The top page holds the LocalThought connection (its
-  rotating code, in its own `localStorage`, bound to this app) and returns
-  only `{ status, headers, body }`. `transport.ts` refuses any URL outside
+  (`app/transport.ts`). The connection lives at the integration proxy,
+  owned by the signed-in user and delegated to this app; the host's frame
+  client calls the proxy with a short-lived capability from the page and a
+  key only it holds, and returns `{ status, headers, body }`. A refusal by
+  the proxy itself is thrown, not read as Pets' answer. The path keeps the
+  server URL's base path (`/atomic-plugins/overlays/pets-demo/1.0.0/api/pets`),
+  because the proxy matches catalog paths after it; 0.1.1 and earlier sent
+  `/pets`, which only a mock proxy accepts. `transport.ts` refuses any URL outside
   the document's `servers[0].url`, including provider-sent links. The bundle
   contains no `fetch`, storage or `Authorization` handling
   (`app/build.test.ts` checks this).
 - **Connecting.** "Connect Pets" calls `store.proxy.connect({ platform:
 'pets' })`. The host, not the frame, draws a consent bar. Only a click
   there starts the PKCE handoff to the proxy. The proxy returns to
-  `/app/integrations`, the host redeems the code and navigates back to the
-  app, and the app finds its connection with `store.proxy.connections(...)`.
+  `/app/integrations`, the host redeems the code (signed with the user's
+  key), delegates the connection to the app and navigates back, and the app
+  finds its connection with `store.proxy.connections(...)`. If the person
+  already has a Pets connection, the bar offers "Use existing connection":
+  that only delegates it, and `connect` resolves `connected` without a
+  reload.
   There is no Pets-specific setup code in atomic-server.
 - **Writing.** `app/sync.ts` writes only inside the app's own subtree. It
   adds one Property per API field under the app's ontology, typed from the
@@ -79,18 +100,32 @@ stylesheet.
   upserts one row per pet under the app's table, matched by `id`. A re-sync
   with no remote change writes nothing.
 
-**Host requirement.** This needs the relay ops `proxy`, `proxyConnections`
-and `proxyConnect` in atomic-server (atomic-server#1657, for #1624, merged
-into `feat/plugin-debug` and in the pin). On a host without them the app says
-so and stops. The
-relay is the interim shape. #1624's scoped capability (#40, #54) is meant to
-replace the rotating code without changing this app.
+**Host requirement.** This needs `store.proxy` with frame capabilities
+(atomic-server#1697, #54 phase 2, in the pin; its view ops are
+`proxyCapability`, `proxyConnections` and `proxyConnect`). On a host without
+`store.proxy` the app says so and stops. An older host with the #1657 relay
+still has `store.proxy`, but its rotating connection codes are refused by
+the 0.2 proxy.
 
-**Install.** Declared, not yet built: no catalog install flow for drive apps
-exists yet. The e2e (`e2e/pets.spec.ts`) installs the app test-side. It
-creates a `New app`, replaces its entry point's source with the bundle, then
-connects through the mock proxy and checks the five rows and their
-datatypes.
+**Install.** The `pets` catalog entry is a drive app entry (#94):
+`app-module` is
+`https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js`, the
+committed `apps/pets/0.1.2/ui.js` (`app/build.mjs`'s output) as GitHub Pages
+serves it, and `app-module-integrity` pins its bytes. Open
+Integrations, turn on "Show experimental plugins", and choose **Install** on
+the Pets card under **Drive apps**. See
+[Publishing a drive app](../README.md#publishing-a-drive-app) for the release
+steps. The host side is atomic-server#1689, in the current pin. Until this
+change is merged to `main` and Pages has deployed it, the Pages URL is a 404,
+so installing from the public catalog fails with a download error and
+creates nothing.
+
+The e2e (`e2e/pets.spec.ts`) goes through the catalog, with the lane's
+dev-server standing in for GitHub Pages: discover the card → install → connect through
+the mock proxy → first import (five rows, typed columns) → reopen from the
+card ("Installed 0.1.2", re-sync unchanged) → update from a rewound "0.0.1"
+back to 0.1.2 with the rows kept. It no longer replaces the app's source
+from the test.
 
 **Shared code.** `app/store.ts` (the host store types) is a copy of
 `integrations/timesheets/app/store.ts` plus the relay ops. The Notion app

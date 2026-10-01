@@ -1,158 +1,247 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
 import {
-  clockifyEntries,
-  clockifyFixture,
+  PROJECT,
+  PROJECTS,
   USER,
   WORKSPACE,
 } from '../fixtures/clockify/scenario.mjs';
-import type { ConnectionReference } from './config.js';
-import { fakeStore, PARENT, IS_A } from './fakeStore.js';
-import { NAME, row, TIME_ENTRY_CLASS } from './ontology.js';
-import type { HostProxyRequest } from './store.js';
-import { syncClockify } from './sync.js';
-import { hostTransport, type ProxyTransport } from './transport.js';
+import type { Settings } from './config.js';
+import { fixtureProxy } from './fixtureProxy.js';
+import {
+  fakeStore,
+  IS_A,
+  ONTOLOGY,
+  PARENT,
+  ROW_CLASS,
+  TABLE,
+} from './fakeStore.js';
+import { atomic, NAME } from './ontology.js';
+import { ensureSchema, findSchema } from './schema.js';
+import { GENERATED_TABLE_NOTE, syncClockify } from './sync.js';
+import { saysDeleted } from './clockifyObserve.js';
+import { relayTransport, type ProxyTransport } from './transport.js';
 
 const NOW = Date.parse('2026-09-23T12:00:00Z');
+const CONNECTION = { platform: 'clockify', connectionId: 'conn-1' };
+/** A column someone added in Atomic; the import does not know it. */
+const NOTE = 'did:ad:note';
 
-const reference: ConnectionReference = {
-  platform: 'clockify',
-  connectionId: 'conn-1',
+const settings: Settings = {
   workspaceId: WORKSPACE.id,
   userId: USER.id,
   lookbackDays: 7,
 };
 
-/** The shared mock proxy's Clockify fixture, reached the way a host relay would. */
-function fixtureProxy() {
-  const fixture = clockifyFixture();
-  // Pin the fixture's relative timestamps so the window is deterministic.
-  fixture.state.entries = clockifyEntries(NOW);
-  const seen: HostProxyRequest[] = [];
+async function setup(options?: { withNames?: boolean }) {
+  const proxy = fixtureProxy(NOW, options);
+  const store = fakeStore({ proxy: proxy.request });
+  const schema = await ensureSchema(store);
+  const transport = relayTransport(store.proxy!, CONNECTION);
+  const run = (at = NOW) =>
+    syncClockify(store, transport, settings, schema, at);
+  const rows = () =>
+    [...store.resources.entries()].filter(([, r]) => r[PARENT] === TABLE);
 
-  const request = async (req: HostProxyRequest) => {
-    seen.push(req);
-    const url = new URL(
-      `/proxy/${req.platform}${req.path}`,
-      'http://proxy.test',
-    );
-    for (const [k, v] of Object.entries(req.query ?? {}))
-      url.searchParams.set(k, v);
-
-    return fixture.request('GET', url);
-  };
-
-  return { fixture, seen, request };
+  return { proxy, store, schema, transport, run, rows };
 }
+
+describe('ensureSchema', () => {
+  it('creates typed Properties under the app ontology once, and lists the row fields as columns', async () => {
+    const store = fakeStore();
+
+    expect((await findSchema(store)).row).toEqual({});
+    const schema = await ensureSchema(store);
+    const writes = store.writes.length;
+    expect(await ensureSchema(store)).toEqual(schema);
+    expect(store.writes.length).toBe(writes);
+
+    const property = (subject: string) => store.resources.get(subject)!;
+    expect(property(schema.row.start)[atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/timestamp',
+    );
+    expect(property(schema.row.billable)[atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/boolean',
+    );
+    expect(property(schema.settings.lookbackDays)[atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/integer',
+    );
+    expect(property(schema.row.start)[PARENT]).toBe(ONTOLOGY);
+    // 8 row fields, 3 settings, 4 log fields, 3 sync extras (#123 M3).
+    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(18);
+    const recommends = store.resources.get(ROW_CLASS)![
+      atomic.recommends
+    ] as string[];
+    expect(recommends).toEqual([NAME, ...Object.values(schema.row)]);
+    // Sync bookkeeping stays on the row, but not as a column (#123 M3).
+    for (const extra of Object.values(schema.sync))
+      expect(recommends).not.toContain(extra);
+    // Settings are stored on the App, not shown as table columns.
+    expect(recommends).not.toContain(schema.settings.workspaceId);
+    expect(await findSchema(store)).toEqual(schema);
+  });
+
+  it('refuses a same-named field with another datatype', async () => {
+    const store = fakeStore();
+    store.resources.set('did:ad:odd', {
+      [PARENT]: ONTOLOGY,
+      [IS_A]: [atomic.propertyClass],
+      [atomic.shortname]: 'start',
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/string',
+    });
+    store.resources.get(ONTOLOGY)![atomic.properties] = ['did:ad:odd'];
+
+    await expect(ensureSchema(store)).rejects.toThrow(
+      /"Start" already exists with another datatype/,
+    );
+  });
+
+  it('needs a table with a row class', async () => {
+    await expect(ensureSchema(fakeStore({ withTable: false }))).rejects.toThrow(
+      /no table/,
+    );
+  });
+});
 
 describe('syncClockify against the shared Clockify mock', () => {
   it('imports completed entries in the window, skipping running timers and breaks', async () => {
-    const proxy = fixtureProxy();
-    const store = fakeStore({
-      table: 'did:ad:table',
-      rowClass: 'did:ad:class',
-      proxy: proxy.request,
+    const { proxy, store, schema, run, rows } = await setup();
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      created: 2,
+      updated: 0,
+      unchanged: 0,
+      removed: 0,
+      warnings: [],
+      log: {
+        incrementals: 1,
+        snapshotWritten: false,
+        candidates: 0,
+        unknownMs: 0,
+      },
+      account: {
+        timeZone: 'Europe/Amsterdam',
+        forceProjects: false,
+        weekStart: 'MONDAY',
+        userName: USER.name,
+        workspaceName: WORKSPACE.name,
+      },
     });
-    const transport = hostTransport(store, reference)!;
-
-    const result = await syncClockify(store, transport, reference, NOW);
-
-    expect(result).toMatchObject({ created: 2, updated: 0, unchanged: 0 });
-    const rows = [...store.resources.values()].filter(
-      r => r[PARENT] === 'did:ad:table',
-    );
-    expect(rows.map(r => r[row.entryId]).sort()).toEqual([
+    // What the timesheet views read (#89): the mirror and the names.
+    // 7-day window: entry-3 (20 days ago) is not read.
+    expect(Object.keys(result.mirror.records)).toHaveLength(4);
+    expect(result.projects.map(p => p.id)).toEqual(PROJECTS.map(p => p.id));
+    expect(result.members.map(m => m.id)).toEqual([USER.id]);
+    // Rows are projected from the mirror in start order.
+    expect(rows().map(([, r]) => r[schema.row.entryId])).toEqual([
       'entry-1',
       'entry-2',
     ]);
-    const first = rows.find(r => r[row.entryId] === 'entry-1')!;
+    // Marked as generated (#97 answer 2).
+    expect(store.resources.get(TABLE)![atomic.description]).toBe(
+      GENERATED_TABLE_NOTE,
+    );
+    const first = rows().find(
+      ([, r]) => r[schema.row.entryId] === 'entry-1',
+    )![1];
     expect(first[NAME]).toBe('Fix plugin source loading');
-    expect(first[IS_A]).toEqual(['did:ad:class']);
-    expect(first[row.start]).toBe(NOW - 86_400_000 - 4 * 3_600_000);
-    expect(first[row.end]).toBe(NOW - 86_400_000 - 2 * 3_600_000);
-    expect(first[row.projectId]).toBe('cccccccccccccccccccccccc');
-    // The mock serves no projects/users lists: names are unavailable, not fatal.
-    expect(first[row.projectName]).toBeUndefined();
-    expect(result.warnings).toHaveLength(2);
-    // Every call carried the reference, and the 7-day window as the LocalThought path computes it.
+    expect(first[IS_A]).toEqual([ROW_CLASS]);
+    expect(first[schema.row.start]).toBe(NOW - 86_400_000 - 4 * 3_600_000);
+    expect(first[schema.row.end]).toBe(NOW - 86_400_000 - 2 * 3_600_000);
+    expect(first[schema.row.projectId]).toBe(PROJECT.id);
+    expect(first[schema.row.projectName]).toBe(PROJECT.name);
+    expect(first[schema.row.memberName]).toBe(USER.name);
+    expect(first[schema.row.billable]).toBe(true);
+    // Every call carried the reference, and the 7-day window, read from
+    // 24 h earlier (the margin, #123 §2.3), as wall-clock time in the
+    // user's profile time zone (Amsterdam, UTC+2 in September): Clockify
+    // ignores the Z (checked live).
     expect(
       proxy.seen.every(
         r => r.connectionId === 'conn-1' && r.platform === 'clockify',
       ),
     ).toBe(true);
-    expect(proxy.fixture.state.requests[0]).toBe(
+    expect(
+      proxy.fixture.state.requests.find(r => r.includes('/time-entries')),
+    ).toBe(
       `GET /proxy/clockify/api/v1/workspaces/${WORKSPACE.id}/user/${USER.id}/time-entries` +
-        '?start=2026-09-16T12%3A00%3A00Z&end=2026-09-23T12%3A00%3A00Z&page=1&page-size=50',
+        '?start=2026-09-15T14%3A00%3A00Z&end=2026-09-23T14%3A00%3A00Z&page=1&page-size=50',
     );
   });
 
-  it('is idempotent: a second run creates nothing and rewrites nothing', async () => {
-    const proxy = fixtureProxy();
-    const store = fakeStore({ table: 'did:ad:table', proxy: proxy.request });
-    const transport = hostTransport(store, reference)!;
-    await syncClockify(store, transport, reference, NOW);
-    const writes = store.writes.length;
+  it('keeps raw ids and warns when project and user names are unavailable', async () => {
+    const { schema, run, rows } = await setup({ withNames: false });
 
-    const again = await syncClockify(store, transport, reference, NOW);
+    const result = await run();
 
-    expect(again).toMatchObject({ created: 0, updated: 0, unchanged: 2 });
-    expect(store.writes.length).toBe(writes);
+    expect(result.warnings).toHaveLength(2);
+    const [, first] = rows()[0];
+    expect(first[schema.row.projectId]).toBe(PROJECT.id);
+    expect(first[schema.row.projectName]).toBeUndefined();
   });
 
-  it('updates a changed entry in place and keeps a local-only property', async () => {
-    const proxy = fixtureProxy();
-    const store = fakeStore({ table: 'did:ad:table', proxy: proxy.request });
-    const transport = hostTransport(store, reference)!;
-    await syncClockify(store, transport, reference, NOW);
+  it('is idempotent: a second run creates nothing and rewrites no row', async () => {
+    const { store, run } = await setup();
+    await run();
+    const writes = store.writes.length;
+
+    const again = await run();
+
+    expect(again).toMatchObject({ created: 0, updated: 0, unchanged: 2 });
+    // Only the log head is saved (its coverage is confirmed again).
+    expect(store.writes.slice(writes).map(w => w.op)).toEqual(['save']);
+  });
+
+  it('rolls the look-back window forward with the clock', async () => {
+    const { proxy, run } = await setup();
+    await run(NOW);
+    await run(NOW + 86_400_000);
+
+    const starts = proxy.fixture.state.requests
+      .filter(r => r.includes('/time-entries'))
+      .map(r => new URL(r.slice(4), 'http://x').searchParams.get('start'));
+    expect(starts).toEqual(['2026-09-15T14:00:00Z', '2026-09-16T14:00:00Z']);
+  });
+
+  it('updates a changed entry in place and keeps a property the import does not map', async () => {
+    const { store, schema, proxy, run } = await setup();
+    await run();
     const [subject] = await store.query({
-      property: row.entryId,
-      value: 'entry-2',
+      property: schema.row.entryId,
+      value: 'entry-1',
     });
-    store.resources.get(subject)!['did:ad:local-note'] = 'mine';
-    proxy.fixture.state.entries.find(
-      (e: { id: string }) => e.id === 'entry-2',
-    ).description = 'Renamed';
+    store.resources.set(NOTE, { [IS_A]: [atomic.propertyClass] });
+    store.resources.get(subject)![NOTE] = 'mine';
+    proxy.fixture.state.entries[0].description = 'Renamed in Clockify';
 
-    const again = await syncClockify(store, transport, reference, NOW);
+    const result = await run();
 
-    expect(again).toMatchObject({ created: 0, updated: 1, unchanged: 1 });
-    expect(store.resources.get(subject)![NAME]).toBe('Renamed');
-    expect(store.resources.get(subject)!['did:ad:local-note']).toBe('mine');
+    expect(result).toMatchObject({ created: 0, updated: 1, unchanged: 1 });
+    expect(store.resources.get(subject)![NAME]).toBe('Renamed in Clockify');
+    expect(store.resources.get(subject)![NOTE]).toBe('mine');
   });
 
   it("does not adopt another installation's row with the same Clockify id", async () => {
-    const proxy = fixtureProxy();
-    const store = fakeStore({ table: 'did:ad:table', proxy: proxy.request });
+    const { store, schema, run } = await setup();
     store.resources.set('did:ad:elsewhere', {
       [PARENT]: 'did:ad:other-table',
-      [row.entryId]: 'entry-1',
+      [schema.row.entryId]: 'entry-1',
     });
-    const transport = hostTransport(store, reference)!;
 
-    const result = await syncClockify(store, transport, reference, NOW);
+    const result = await run();
 
     expect(result.created).toBe(2);
     expect(store.resources.get('did:ad:elsewhere')).toEqual({
       [PARENT]: 'did:ad:other-table',
-      [row.entryId]: 'entry-1',
+      [schema.row.entryId]: 'entry-1',
     });
   });
 
-  it('writes under the app with the fallback class when the host names no table', async () => {
-    const proxy = fixtureProxy();
-    const store = fakeStore({ proxy: proxy.request });
-
-    await syncClockify(store, hostTransport(store, reference)!, reference, NOW);
-
-    const rows = [...store.resources.values()].filter(
-      r => r[PARENT] === 'did:ad:app',
-    );
-    expect(rows).toHaveLength(2);
-    expect(rows[0][IS_A]).toEqual([TIME_ENTRY_CLASS]);
-  });
-
   it('surfaces a failing time-entries request and writes nothing', async () => {
-    const store = fakeStore({ table: 'did:ad:table' });
+    const { store, schema } = await setup();
+    const writes = store.writes.length;
     const transport: ProxyTransport = {
       request: async () => ({
         status: 401,
@@ -161,13 +250,25 @@ describe('syncClockify against the shared Clockify mock', () => {
     };
 
     await expect(
-      syncClockify(store, transport, reference, NOW),
+      syncClockify(store, transport, settings, schema, NOW),
     ).rejects.toThrow(/failed with 401: Reconnect Clockify/);
-    expect(store.writes).toEqual([]);
+    expect(store.writes.length).toBe(writes);
+  });
+
+  it('keeps existing rows readable through a proxy failure and recovers on the next run', async () => {
+    const { proxy, rows, run } = await setup();
+    await run();
+    const before = rows();
+    proxy.fixture.state.failures = { count: 1, status: 503 };
+
+    await expect(run()).rejects.toThrow(/failed with 503/);
+    expect(rows()).toEqual(before);
+
+    expect(await run()).toMatchObject({ created: 0, unchanged: 2 });
   });
 
   it('pages until a short page', async () => {
-    const store = fakeStore({ table: 'did:ad:table' });
+    const { store, schema } = await setup();
     const entry = (i: number) => ({
       id: `e${i}`,
       description: `Entry ${i}`,
@@ -194,9 +295,32 @@ describe('syncClockify against the shared Clockify mock', () => {
       },
     };
 
-    const result = await syncClockify(store, transport, reference, NOW);
+    const result = await syncClockify(store, transport, settings, schema, NOW);
 
     expect(pages).toEqual(['1', '2']);
     expect(result.created).toBe(53);
+  });
+});
+
+describe('relayTransport and the integration proxy', () => {
+  it("throws the proxy's own refusal instead of reading it as Clockify's answer", async () => {
+    const transport = relayTransport(
+      {
+        request: async () => ({
+          status: 404,
+          headers: {},
+          body: { error: 'unknown_connection', message: 'no such connection' },
+        }),
+        connections: async () => [],
+        connect: async () => ({ status: 'cancelled' as const }),
+      },
+      CONNECTION,
+    );
+    await expect(transport.request('/v1/user')).rejects.toThrow(
+      'The integration proxy refused this connection (unknown_connection: no such connection). Connect again.',
+    );
+    // The proxy's own 404 must never read as "this entry was deleted".
+    const refused = await transport.request('/v1/user').catch(e => e);
+    expect(saysDeleted(refused)).toBe(false);
   });
 });

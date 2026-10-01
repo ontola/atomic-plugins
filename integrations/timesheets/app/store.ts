@@ -5,14 +5,22 @@
  * `server/src/plugins/assets/view-client.js`, served from
  * `/plugin-ui?format=client`), never bundled here. These types are kept in
  * sync with that file by hand because there is no package to import them
- * from; if they disagree, view-client.js is ground truth.
+ * from; if they disagree, view-client.js is ground truth. The Pets and Notion
+ * apps keep their own copies (per-plugin containment).
  *
- * Differences from the Phase 1 scaffold on the unmerged
- * `claude/hopeful-hawking-kqlrdy` branch, checked against view-client.js and
- * `browser/data-browser/src/chunks/AppPage/hostStore.ts`:
+ * Checked against view-client.js and
+ * `browser/data-browser/src/chunks/AppPage/hostStore.ts` at the pinned
+ * atomic-server (`.atomic-server-ref`):
  * - `getApp()` resolves to the app's subject string, not an object.
- * - `proxy` is not part of the host today. It is the op this app expects
- *   atomic-server#1624 to add; see `transport.ts`.
+ * - `save()` sends only the properties set since the last save, plus any
+ *   removed with `remove()`; the host writes the removals as an `/app-write`
+ *   `remove` and then sets the rest (atomic-server#1690). Afterwards the
+ *   host re-reads the resource, so the next `get` sees the write.
+ * - `proxy`: `request`, `connections` and `connect`. Since
+ *   ontola/atomic-plugins#54 phase 2 view-client.js calls the integration
+ *   proxy itself, with a capability from the page and a key only the frame
+ *   holds; the frame names a connection id, never a credential.
+ *   Feature-detected, never assumed.
  */
 
 export type JSONValue =
@@ -39,18 +47,62 @@ export interface PluginResource {
   destroy(): Promise<void>;
 }
 
-/** One proxy call relayed by the host. Carries a connection reference, never a credential. */
+/** One proxy call, made by the host's frame client. Carries a connection reference, never a credential. */
 export interface HostProxyRequest {
   platform: string;
   connectionId: string;
+  /** Provider path after the proxy's `/proxy/<connection>/<platform>` prefix. */
   path: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   query?: Record<string, string>;
+  /** JSON text. */
+  body?: string;
 }
 
 export interface HostProxyResponse {
   status: number;
+  /** Lower-cased; only `link`, `retry-after`, `etag`, `content-type`. */
+  headers?: Record<string, string>;
+  /** Parsed JSON when the response was JSON, the raw text otherwise. */
   body: unknown;
 }
+
+/** A connection at the proxy, named by public ids only. */
+export interface ConnectionReference {
+  platform: string;
+  connectionId: string;
+}
+
+/** What `proxy.connect` resolves to, when it resolves. */
+export type ConnectResult =
+  | { status: 'cancelled' }
+  | { status: 'connected'; connectionId: string; platform: string };
+
+export interface HostProxy {
+  request(request: HostProxyRequest): Promise<HostProxyResponse>;
+  /** Connections for `platform` the person delegated to this app, at the proxy. */
+  connections(args: { platform: string }): Promise<ConnectionReference[]>;
+  /**
+   * Shows the host's consent bar. Resolves `connected` when the person picks
+   * a connection they already have (the host delegates it to this app; no
+   * reload), `cancelled` when they cancel. Connecting a new account sends the
+   * page to the proxy and back, which reloads this view, so then it never
+   * settles.
+   */
+  connect(args: { platform: string }): Promise<ConnectResult>;
+  /**
+   * Removes this app's delegation of its `platform` connections (the
+   * connection itself stays the person's). Feature-detected: older hosts
+   * lack it, and the app then offers no Disconnect.
+   */
+  disconnect?(args: { platform: string }): Promise<{
+    status: 'disconnected';
+    platform: string;
+    connectionIds: string[];
+  }>;
+}
+
+export type ColorScheme = 'light' | 'dark';
 
 export interface PluginStore {
   getApp(): Promise<string>;
@@ -64,13 +116,23 @@ export interface PluginStore {
   }): Promise<PluginResource>;
   /** `handler` takes no argument; re-fetch via getResource for the new data. */
   subscribe(subject: string, handler: () => void): () => void;
+  /** Feature-detected: hosts without integration-proxy support lack it. */
+  proxy?: HostProxy;
   /**
-   * Not provided by any host yet (atomic-server#1624). Feature-detected, never
-   * assumed.
+   * Opens an http(s) link in a new tab once the person confirms it: the
+   * frame has no popup rights. Feature-detected, like the three below.
    */
-  proxy?: {
-    request(request: HostProxyRequest): Promise<HostProxyResponse>;
-  };
+  openExternal?(url: string): Promise<{ status: 'opened' | 'cancelled' }>;
+  /** Shows a resource the person can read in the host page, leaving the app. */
+  openResource?(
+    subject: string,
+  ): Promise<{ status: 'opened'; subject: string }>;
+  /** The host's light or dark setting. */
+  getTheme?(): { colorScheme: ColorScheme };
+  /** Calls back when the person switches it; returns an unsubscribe. */
+  onThemeChange?(
+    handler: (theme: { colorScheme: ColorScheme }) => void,
+  ): () => void;
 }
 
 export interface ViewArgs {

@@ -49,12 +49,10 @@ README) with this lens's error classification.
   per connection). Pass the IndexedDB database that already holds the bridge
   snapshot and transport journal, so every context sees the same schedule.
 - Every pass holds a lease (`navigator.locks` by default, so it is shared by
-  tabs and the service worker and released when a context dies). The
-  rotating proxy code is single-use, so everything else that spends it —
-  a manual "Sync now", an interactive write — must go through
-  `sync.withLock(fn)` or `sync.syncNow()`. `proxyTransport`'s
-  `getCode`/`setCode` may be async so the code can live in that same
-  IndexedDB database. `sessionStorage` is invisible to a service worker.
+  tabs and the service worker and released when a context dies). Run a
+  manual "Sync now" or an interactive write through `sync.withLock(fn)` or
+  `sync.syncNow()` too, so two contexts never write the same connection at
+  once. `sessionStorage` is invisible to a service worker.
 - Transient failures back off exponentially: `intervalMs`, then 2×, 4×, …,
   up to `maxBackoffMs` (default: one hour, or `intervalMs` if that is
   longer). Failures that need a person pause the schedule until `resume()`:
@@ -62,8 +60,9 @@ README) with this lens's error classification.
   `Missing … record`, `State belongs to another connection`, `Duplicate …`;
   the Atomic port's `Recovered Atomic create was edited` and
   `Atomic write rejected`; and the transport's `Uncertain GitHub write`,
-  `Operation identity reused`, a missing or unexposed connection code, and
-  GitHub `401`. The list is `permanentSyncErrors`. Nothing is retried in a
+  `Operation identity reused`, a connection that is no longer delegated to
+  the app (`No … connection … is delegated to this app`), and GitHub
+  `401`. The list is `permanentSyncErrors`. Nothing is retried in a
   loop, and neither side is modified while paused.
 
 A browser host wires three triggers into the same `BackgroundSync`:
@@ -265,10 +264,31 @@ share a bridge snapshot or write journal.
 
 ### Host integration
 
-This lens has no host at the moment. atomic-server's browser demo
-(`DevonianDemo/demo.mjs` and `DevonianDemoRoute.tsx`) was removed in
-ontola/atomic-server#1612, and nothing in atomic-server imports devonian now.
-A future host that targets the user's real drive would:
+The current host is the issue-tracker **drive app**
+([`../../app/`](../../app/), see the plugin README's "Drive app"). It runs
+this Bridge unchanged in the host's null-origin frame:
+
+- `proxyTransport` with `dispatch` over the host's `store.proxy.request`.
+  Since ontola/atomic-plugins#54 phase 2 the frame calls the integration
+  proxy itself, with a short-lived capability from the host page and a key
+  only the host's frame client holds; this lens never sees a credential.
+  `proxyTransport` has no other transport any more.
+- `AtomicPort` over an adapter (`app/frameStore.ts`) that gives the frame's
+  `PluginStore` the store predicates `target.mjs` reads, and corrects for
+  the host's reads lagging the app's own writes.
+- Snapshot and journal as JSON text on a resource in the app's own subtree,
+  not IndexedDB (a null-origin frame has none), so neither
+  `provisionTracker`/`buildTable` nor `trackerStateKey` nor `background.mjs`
+  is used there: the app creates its columns itself, one app is one
+  repository, and it syncs only while open.
+- `reviewGate` (`review.mjs`) in front of the GitHub port: provider writes
+  wait for a person's approval, and `bridge.held` lists them.
+  `Bridge.resolveConflict(subject, keep)` settles a same-field conflict.
+
+atomic-server's earlier browser demo (`DevonianDemo/demo.mjs` and
+`DevonianDemoRoute.tsx`) was removed in ontola/atomic-server#1612. A
+data-browser host that targets the user's real drive directly, with
+IndexedDB, would still:
 
 - Call `provisionTracker` on an existing drive, such as `store.getDrive()`,
   instead of creating a new drive and calling `registerLocalOnlyDrive`.
@@ -277,6 +297,27 @@ A future host that targets the user's real drive would:
 
 The earlier demo's design notes are in atomic-server's
 `planning/devonian-reconnect.md`.
+
+### Review and recovery (`review.mjs`, `Bridge`)
+
+- `reviewGate(port, approved)` wraps a provider port. `create`/`update`
+  throw `ReviewRequired` before any request unless
+  `proposalKey(entity, id, value)` is in `approved`. The key covers the
+  content, so an approval survives re-planning but not an edit.
+- `Bridge.sync()` records a held write in `bridge.held` (subject, entity,
+  remote id, before/after) and carries on with the rest of the pass. A held
+  write never sent anything, so the next pass plans it again from both
+  sides. A saved operation that is held when it resumes was let through
+  before and may have reached the provider: it is flagged `unconfirmed`.
+  Creates keep their provider key across re-planning, so the journal still
+  refuses to resend one whose response was lost.
+- Conflict errors carry `subject`, `entity` and `fields`.
+  `resolveConflict(subject, 'local' | 'remote')` moves only those fields'
+  baseline to the other side's current value, writes nothing, and lets the
+  next pass carry the kept side over.
+- `proxyTransport`'s `dispatch` errors keep the host's message. Only an
+  error marked `notSent` drops the journal entry; anything else leaves the
+  write uncertain.
 
 ### Not yet verified or supported
 

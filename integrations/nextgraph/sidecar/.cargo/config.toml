@@ -1,0 +1,5 @@
+# Copied from nextgraph-rs's own .cargo/config.toml at the pinned commit:
+# its bundled RocksDB does not compile with newer C++ toolchains without it.
+[env]
+CXXFLAGS = { value = "-include cstdint", force = true }
+RUST_MIN_STACK = "16777216"

@@ -1,4 +1,15 @@
-# Clockify (LocalThought)
+# Clockify
+
+The supported path is the **drive app** in `app/` (below): catalog entry
+`timesheets` (published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it), installed once enabled from the Integrations page's **Drive apps** section
+(experimental plugins shown), which downloads
+`apps/timesheets/<version>/ui.js` from GitHub Pages and checks it against the
+catalog's integrity hash (see
+[Publishing a drive app](../README.md#publishing-a-drive-app)). Since 0.2.0
+it writes reviewed edits back to Clockify (#123 M3, below); it is
+mock-tested only, so that capability is declared, not verified. The first sections describe the Clockify
+lens and the LocalThought extension flow it was written for; the pinned host
+no longer has that flow.
 
 Clockify runs entirely in the browser through LocalThought: no AtomicServer-side
 code, no stored secret, no server-initiated calls to Clockify. The personal API
@@ -42,87 +53,331 @@ nothing written back to Clockify.
 
 Live account data must never be checked into fixtures.
 
-## Drive-plugin app (`app/`, in progress — ontola/atomic-plugins#20)
+## Drive-plugin app (`app/`)
 
-`app/` is the planned replacement for the LocalThought extension path above:
-Clockify as an Atomic **App** ("drive plugin") whose module is fetched once at
-install time, stored as the App's `plugin-source` string, and served back by
-the host (`plugin_ui.rs`), which calls its exported `view({ root, store })`.
-No build-time coupling to `atomic-server` or `data-browser`.
+`app/` is the replacement for the LocalThought extension path above:
+Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
+into one minified ES module (`app/dist/ui.js`, about 118 KB, no imports) that
+exports only `view({ root, store })`; the host stores it as the App's
+entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
+(`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
+into the view root.
 
-What it does today, covered by unit tests only:
+- **Views** (#89, design on branch `claude/design-timesheets`). `app/ui/`
+  renders the design's frames from `controller.ts`'s state and a
+  `Timesheet` (`app/model/types.ts`) built from the observation log's
+  mirror (`app/model/source.ts`), never from the table's rows: Week grid
+  (project × day), Entries (by day), Projects (the whole window), a
+  read-only entry drawer, the settings sheet, and the set-up, empty and
+  error states. Below 560px of frame width the week becomes a strip of day
+  tabs. `app/ui/theme.ts` maps every `--pl-*` token from the host's
+  `--t-*` theme variables, so dark mode is the host's. `app/ui/theme.ts`,
+  `components.ts` and `dom.ts` know nothing of Clockify: shared-kit
+  candidates. View, week and open entry live in memory only.
+  `app/ui/preview.ts` renders every frame from the mockup's sample data
+  for the DOM tests and the e2e's screenshot and axe pass.
 
-- `sync.ts` fetches the rolling look-back window (`clockifyImportQuery`, the
-  same window as above), plus projects and users for naming, runs the one
-  Clockify lens (`devonian/clockify/`) over them, and
-  reconciles rows into the host's data table (`store.getData()`), or under the
-  App when there is none. Identity is a stored `entry-id` found via
-  `store.query()`, restricted to children of that table; `create` in
-  `app_write.rs` never accepts a caller-chosen subject. Import only: nothing is
-  written back to Clockify, and a vanished entry is never deleted.
-- The App resource holds only a **connection reference** (`connection-id`,
-  `workspace-id`, `user-id`, `lookback-days`; see `ontology.ts`). No connection
-  code, token or capability is ever stored or held by the frame (#21).
-- All provider traffic goes through `ProxyTransport` (`transport.ts`). The only
-  implementation is `hostTransport()`, which feature-detects the host relay's
-  `store.proxy.request`. The pinned host provides it (ontola/atomic-server#1657),
-  but this app does not yet call `store.proxy.connect`/`.connections`, so it
-  still depends on a connection reference nothing writes (#96). Without the
-  relay the app says it cannot sync and fetches nothing. There is
-  deliberately no fallback that holds a code.
-- `build.mjs` bundles `main.ts` into one ES module (~17 KB, no imports, exports
-  only `view`). `@tomic/lib` is aliased to `tomic-lib-shim.ts`, because the lens
-  needs only `Datatype.TIMESTAMP` from it.
+- **Connecting.** "Connect Clockify" calls
+  `store.proxy.connect({ platform: 'clockify' })`. The host, not the frame,
+  draws a consent bar; only a click there starts the PKCE handoff to the
+  integration proxy, where the person enters their Clockify API key; the
+  proxy keeps it, sealed. The host redeems the handoff (signed with the
+  user's key, so the user owns the connection), delegates it to this app
+  and navigates back. The app finds the connection with
+  `store.proxy.connections({ platform: 'clockify' })`. The app's code and
+  the drive never hold a key, token or capability (#21); the frame's
+  requests are signed by the host's frame client.
+  Connections live at the proxy under the user's agent, so another browser
+  signed in as the same user finds the same connection (not tried in the
+  e2e, which uses one browser).
+- **Setup.** Once connected, the frame reads the account (`/api/v1/user`)
+  and its workspaces (`/api/v1/workspaces`) through the proxy and asks for
+  a workspace and a 7- or 30-day look-back. It stores only the workspace id,
+  the account id and the look-back on the App resource, as three Properties
+  (`clockify-workspace`, `clockify-account`, `clockify-lookback-days`).
+  "Change settings" reopens the same form.
+- **Schema.** A host's `/app-write` rejects a property URL that does not
+  resolve to a Property. So `app/schema.ts` creates one Property per field
+  under the row class's ontology (inside the app's own subtree), finds them
+  again by shortname on later runs, and adds the row fields to the row
+  class's `recommends` so the table shows them: `start`/`end` (timestamp),
+  `billable` (boolean), `clockify-entry-id`, `clockify-project-id`,
+  `project`, `clockify-user-id`, `member` (string). The same pattern as the
+  Pets and Notion drive apps.
+- **Observation log** (#123 M1, design #97). Once set up, the app syncs on
+  open and on "Sync now". Each pass records what it _saw_ in Clockify, not
+  what Clockify "is":
+  - `clockifyObserve.ts` reads the rolling look-back window, starting 24 h
+    earlier (the margin), as one observation: all pages, with its scope
+    (workspace, user, `start` in `[from, to)`) and the fields returned.
+    Clockify reads the list's bounds as wall-clock time in the user's
+    profile time zone, so each pass reads that zone (`GET /user` →
+    `settings.timeZone`, `timeZone.ts`) and the workspace's `forceProjects`
+    (`GET /workspaces`), sends local wall-clock bounds with a `Z`, and
+    records the UTC span they cover. When a bound falls in a repeated DST
+    hour, the span recorded is the smaller of the two readings; if the zone
+    is unknown, 14 h is taken off each end.
+    Each entry is kept canonically: exact instant strings, and every field
+    the app does not interpret (`timeZone`, `duration`, …) verbatim in
+    `extra`.
+  - `observations.ts` (generic, pure) diffs it against the mirror (the
+    mask-diff) and folds it in, ordered by `(receivedAt, id)`. An entry a
+    complete read no longer returns is only an absence _candidate_; the
+    next pass confirms it with `GET /time-entries/{id}`: Clockify's 400
+    "Time entry doesn't belong to Workspace" (or a 404 from Clockify) is a
+    deletion, 200 restores it (it was skipped between pages, or moved), and
+    any other answer leaves the candidate with a warning.
+  - `observationLog.ts` stores each non-empty diff as its own resource
+    under a log head in the app's subtree, writes a snapshot every 50
+    diffs or 256 KB, and keeps everything (nothing is pruned). A pass with
+    no change stores no diff; it only confirms the coverage in the head.
+  - **Coverage.** Time in the window that no complete read covers is
+    _unknown_, never "not worked". Starts are known from where reads
+    looked; a moment counts as known only if starts are covered back by
+    the longest entry seen (at least 24 h), so an entry longer than the
+    margin leaves the window's first part unknown until an older range is
+    read.
+  - **Rows.** The table's rows follow the mirror: completed `REGULAR`
+    entries through the one Clockify lens (`devonian/clockify/`; running
+    timers and breaks skipped), by `clockify-entry-id` among the table's
+    children, with project and user names. A row whose entry Clockify
+    confirmed deleted is removed. Since 0.2.0 an edit made in the table is
+    kept and listed to send (write-back, below), no longer overwritten
+    (#177 Q5 reverses #97 answer 2); the table's description says so.
+  - **Status line.** Created/updated/unchanged as before, plus rows
+    removed, entries waiting for a re-check, how much of the window is not
+    loaded, and whether the workspace requires a project on every entry
+    (`forceProjects`: "worked, no project" cannot be written back there),
+    each only when it applies.
+    A sync writes nothing to Clockify. Requests are sequential; each is
+    one relay round trip.
+- **Write-back** (#123 M3, following #177 §4; 0.2.0). Mock-tested only:
+  - _What can change:_ an entry's Name (its description), project,
+    billable flag, start and end, in the entry drawer (Edit) or anywhere
+    else the row can be edited (the table, another view, another device);
+    and Delete entry ("did not work" for all of it). Changed start and end
+    snap down to whole minutes (#97 answer 7). Not yet: splitting,
+    trimming or filling a range, creating entries, resolving overlap
+    conflicts (M4); tags, tasks, custom fields.
+  - _Not editable_ (`blockers` in the lens, checked when listing and again
+    on the fresh read): running timers, breaks and other non-`REGULAR`
+    entries, locked entries, entries with custom field values (the request
+    shape is unverified), an end in the future, a start not before the end,
+    no project under `forceProjects`, and an unknown or archived project.
+  - _Bookkeeping on the row_ (#177 Q4), as provider extras that are not
+    table columns: `clockify-sync-baseline` (JSON: the values the row and
+    Clockify last agreed on), `clockify-outbox` (a marker written before a
+    write and cleared once a read settled it) and `clockify-delete`.
+  - _Finding changes_ is comparing each row with its baseline, on open and
+    on every sync (the host has no change feed yet, #177 H6). A three-way
+    `reconcileRecord` (the host's `plugin-reconcile.ts`, the calendar's
+    engine) over baseline, row and Clockify takes a Clockify-only change
+    into the row, keeps a row-only change and lists it, and for a field
+    changed on both sides **keeps Clockify's value** (#177 §4.4), naming
+    the dropped value under "Changes to send".
+  - _Sending_, only from "Changes to send" (every send is reviewed while
+    testing, #177 §4.3), per entry and one request at a time: the row is
+    re-read (changed since the list: not sent); a fresh `GET` by id, the
+    only concurrency check Clockify allows (no ETag or If-Match); the
+    three-way check against it (a conflict sends nothing); the outbox
+    marker; one full-replacement `PUT` that the lens
+    (`devonian/clockify/lens/writeBack.ts` `putBody`) builds from the fresh
+    full record, replacing only changed fields and always sending `start`,
+    `end`, `billable`, `description`, `tagIds` and `type` (a project change
+    drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and
+    row advance only after that read, to what Clockify then holds
+    ("adjusted" if it differs from what was sent). Every read and write
+    response goes into the observation log.
+  - _Failures:_ a thrown call or a 5xx is uncertain (it may have been
+    applied): the batch stops, the marker stays, and the next sync reads
+    the entry back and settles it either way. A 4xx is shown and not
+    retried. A 429 waits for `retry-after` (at most 60 s) once. A proxy
+    refusal, or the proxy's 404 for a catalog without the write overlay,
+    stops the batch with that reason.
+  - _Known limits:_ a change made in Clockify between the fresh read and
+    the write is overwritten (the verification read shows the result); a
+    row deleted in the table is not noticed (needs the host's change list
+    with tombstones, #177 H6b); two devices sending at once are not
+    coordinated (the lease is M5); changes are found only while the app
+    is open.
+  - _Prerequisites, checked at the pin:_ the host's frame client allows
+    `PUT` and `DELETE` to the proxy (`PROXY_METHODS` in
+    `server/src/plugins/assets/view-client.js`, also at candidate14
+    `1432e244a`), and the proxy catalog's Clockify entry lists the
+    time-entry write overlay
+    (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`).
+- **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
+  recompute on every build (not measured; #97 §3.2 estimates single-digit
+  ms at 2,000 entries):
+  - _Map_ (`devonian/clockify/lens/claims.ts`): each entry becomes at most
+    one claim over `[start, end)` with the exact instant strings:
+    `worked(P)`, `worked(none)` (no project: a label, not a conflict, #97
+    answer 3), a running timer up to now (`open`), and `didNotWork` with a
+    badge for `BREAK`, `HOLIDAY` and `TIME_OFF` (the last two are spec enum
+    values, never seen live). Locked entries and entries with custom field
+    values are flagged.
+  - _Aggregate_ (`app/timeline/sweep.ts`): a sweep over the claims and the
+    coverage gives non-overlapping segments per local day in the profile
+    time zone, from the day holding the window's start up to now; DST days
+    are 23 or 25 h. A segment is `unknown` where M1's coverage says so
+    (absence candidates included; this wins over any claim), `didNotWork`
+    where coverage is complete and no entry claims it, `worked`, `worked`
+    - `duplicate` (same project twice), or `conflict`: "unclear which
+      project" (different projects, "no project" included) or "unclear
+      whether worked" (work overlapping a break, holiday or time off). Each
+      segment lists why it would not be editable (running, locked, entry
+      type, custom fields, and `worked(none)` under `forceProjects`).
+      Sorted throughout, so equal mirrors give equal timelines.
+  - _View model_: `app/model/source.ts` fills the #89 views' `Timesheet`
+    hooks from it: `unknown` (the window's unknown spans) and `conflicts`
+    (`app/timeline/types.ts` `TimelineConflict`: the views' `Conflict` plus
+    kind, span, entries and candidates). `app/ui/coverage.ts` renders them
+    as a "Not loaded" note and a read-only "Conflicts in Clockify" list.
+    Nothing can be resolved from the app yet (M4).
+- **Errors.** If the window's first page fails, the pass fails and rows
+  are not touched ("Import failed: …. Rows already in the table are
+  kept."). If a later page fails, what was read is kept as an incomplete
+  observation (no absences, no coverage) and the pass fails the same way.
+  A failing re-check `GET` is a warning; the candidate is re-checked next
+  time. A 403/404 on projects or users is a warning, and rows keep raw ids.
+- **Checked against a live account** (2026-09-24, findings on #123; the
+  mock models them): the list's bounds as wall-clock time in the profile
+  time zone, the filter on an entry's start in `[start, end)`, newest
+  start first with `Last-Page`, a running timer from `PUT` without `end`,
+  400 for GET of a deleted entry and 404 for DELETE of one, overlapping
+  entries allowed, instants truncated to whole seconds, and 400 without a
+  project under `forceProjects`.
+- **Not verified live:** how Clockify resolves a bound inside a repeated or
+  skipped DST hour (the app assumes the reading that covers least), that a
+  deletion between pages really skips an entry (inferred from the order),
+  custom fields, and locked entries. Whether atomic-server accepts a
+  snapshot of ~1 MB (about 2,000 entries) in one commit is not checked.
+  Two devices saving the log head at the same moment can drop one's diff
+  from the head (no compare-and-swap on `/app-write`; M5).
 
 ```sh
 # from an atomic-server checkout with this repo's integrations/ in place (AGENTS.md)
-node integrations/tooling/run-lane.mjs timesheets   # typecheck + unit, includes app/
-node integrations/timesheets/app/build.mjs          # -> app/dist/ui.js (git-ignored)
+node integrations/tooling/run-lane.mjs timesheets               # typecheck + unit
+node integrations/tooling/run-lane.mjs timesheets --tier e2e    # real host + mock proxy
+node integrations/timesheets/app/build.mjs                      # -> app/dist/ui.js (git-ignored)
 ```
 
-Not verified: the app has not been loaded by a real host. It has not been
-tested against the real integration proxy. The `/api/v1/...` request paths
-match `localthought/mock-clockify.mjs`, not a live proxy. It is also unknown
-whether `/app-write` accepts the provisional property URLs in `ontology.ts`,
-which do not resolve.
+### What is verified, and how
 
-App writes are signed by the node that holds the app's key, so they work on
-one node only for now (ontola/atomic-plugins#41).
+- **Unit** (`app/*.test.ts`, mock fixture `fixtures/clockify/scenario.mjs`
+  through an in-memory store that rejects unknown properties like the host
+  does): setup, schema creation, window, paging, idempotency, updates,
+  failures. The observation log's #123 scenarios S1–S5, S8 and S27
+  (`app/observationLog.test.ts`), and fold property tests over 40 seeded
+  random observation sets (`app/observations.test.ts`): appending equals
+  refolding, any permutation folds the same, snapshot + tail equals the
+  full fold, two devices' diffs fold the same, fields equal the latest read.
+  The timeline's #123 scenarios S1, S6 and S7 (display only), conflict
+  kinds, `forceProjects`, the DST days of 29 March and 25 October 2026 in
+  Europe/Amsterdam, the rendering hooks, and the merge property over 40
+  seeded observation sets (any fold order and record order gives equal
+  segments and conflicts) are in `app/timeline/timeline.test.ts`.
+  Write-back (#123 M3): the lens's get/put, blockers and a PutGet property
+  over 40 seeded edits against the mock's `PUT`
+  (`devonian/clockify/lens/writeBack.test.ts`); bookkeeping on the row,
+  compare on open, Clockify winning a both-sides change, and #123's S9
+  (as a field edit), S13, S14, S16–S18, S20, S23–S26, deletes, project
+  names typed into the table and `forceProjects`
+  (`app/writeBack.test.ts`); the controller's edit/delete/discard/send
+  (`app/controllerViews.test.ts`); and the drawer's edit form through to
+  a send in the DOM (`app/ui/ui.test.ts`, frames N1 and N2).
+- **Host e2e** (`e2e/clockify.spec.ts`, the `timesheets` lane's `e2e` tier)
+  against the pinned atomic-server (`.atomic-server-ref`, which includes
+  frame capabilities from atomic-server#1697) and the local mock proxy,
+  which checks the proxy's 0.2 signatures: install from the catalog's
+  Drive apps section (the committed `apps/timesheets/<version>/ui.js`, served
+  by the lane's dev-server), connect through the consent bar, setup in the
+  frame, Property and row writes through the
+  real `/app-write`, 2 completed entries imported (running timer and break
+  not), reopen with no duplicates, a changed entry updated in place, the
+  window start moving forward between runs (from the mock's request log),
+  7 → 30 days adding exactly the older entry, and a 503 that leaves the
+  three rows readable in the table and recovers on reopen; then an M2
+  "unclear which project" conflict and not-loaded time in the #89 views.
+  A second test (#123 M3) edits an entry's description and project in
+  the drawer, checks nothing is written before Send and that the edit
+  survives a reload, sends it as one `PUT` through the host's frame
+  client and the mock proxy's catalog check, reopens with the row in
+  agreement, and sees the refusal of a proxy whose catalog lacks the
+  write overlay.
+  Provider changes
+  and failures are driven through the mock proxy's local-only
+  `POST /__fixture/clockify`.
+- **Mock endpoints** (`app/fixture.test.ts`, #123 M0), modelled on
+  Clockify behaviour checked against a live account on 2026-09-24 (the
+  findings on #123), not on a recording:
+  - lists: `start`/`end` are wall-clock time in the user's profile time
+    zone (`GET /user` → `settings.timeZone`, Europe/Amsterdam by default
+    here); a `Z` or offset is required but ignored; the filter is the
+    entry's start in `[start, end)`; newest start first, with `Last-Page`;
+  - `GET` one entry, and a 400 "Time entry doesn't belong to Workspace"
+    for a deleted or unknown id; `DELETE` of a deleted one is a 404;
+  - `POST`, and `PUT` as full replacement (`start` required, fields left
+    out cleared, no `end` makes a running timer), instants truncated to
+    whole seconds, a 400 without `projectId` when the workspace's
+    `forceProjects` is on; overlapping entries are allowed;
+  - not checked live, the mock's own choices: 400 on a locked entry, and
+    how a wall-clock bound in a repeated or skipped DST hour resolves
+    (as java.time's `atZone`);
+  - a 404 for any operation the catalog document does not declare, as the
+    proxy answers.
 
-### Host bugs found while porting (atomic-server, not fixed here)
+  Test switches on `POST /__fixture/clockify`: `settings` (`timeZone`,
+  `forceProjects`), `forbid` (403 without applying), `catalog`
+  (`readOnly`: the catalog before the write overlay), `applyThenDrop`,
+  `failBefore`, `onNextRequest`, `deleteDuringPaging`, `add`, `delete`.
+  The project list has a second active project and an archived one, so a
+  project change and its refusal are testable.
 
-Read from `server/src/plugins/assets/view-client.js` and
-`browser/data-browser/src/chunks/AppPage/hostStore.ts` on a recent
-`atomic-server` branch. Not reproduced in a running host.
+- **Not verified:** a real integration proxy or a real Clockify account.
+  The `/api/v1/...` paths match the mock fixture, not a recorded live
+  response. No live evidence is recorded, so every capability here is
+  declared, not verified.
 
-- `hostStore.ts` answers `get`/`create` with `{ subject, title, propVals }`,
-  but `view-client.js` builds resources from `result.props`. So
-  `resource.get(...)` would always return `undefined` in a real frame. This
-  app's config read would then report "not connected". Reconciliation avoids
-  depending on reads (membership comes from two `query` calls), but without
-  reads every run counts every existing row as "updated" and re-saves it.
-- `getApp()` resolves to the app's subject string, not an object. The Phase 1
-  scaffold typed it as an object.
+### Known host limits (atomic-server)
 
-### What still has to happen outside this repo
+Read from the pinned atomic-server, and reproduced by the e2e where noted.
 
-1. **Proxy access for the frame** (atomic-server#1624): either a host relay op,
-   where the parent's `BrowserIntegrations` performs the call and returns
-   `{ status, body }` (the shape `store.proxy` expects here), or a capability
-   minted as the app agent against #40's DID-bound connections. #40 is not
-   accepted yet.
-2. **Install flow**: catalog entry → fetch the built module → App resource with
-   `plugin-source`, a data table, and properties for `ontology.ts`, modelled on
-   `ConnectPets.tsx`'s `ensureInstallationResource`. The catalog needs a field
-   for the module URL, distinct from `pluginUrl`. It is not added yet, and no
-   host reads one.
-3. **Connect flow in the parent page** (PKCE is a full-page redirect and cannot
-   run in the frame), which writes the connection reference onto the App.
-4. **Publishing** `dist/ui.js` next to the gh-pages `catalog.json`.
-5. **Removal** of the LocalThought-extension Clockify path in `data-browser`,
-   and pruning `localthought.ts` to what `app/` still imports.
+- **Stale reads after an app write**: fixed at the current pin. Earlier
+  pins kept the page's pre-write copy of a row after an `/app-write`, so a
+  second sync in the same page re-saved its own last write. The pin
+  (`2f403624e`, with atomic-server#1690) re-reads a resource after an app
+  saves it; the e2e now runs "Sync now" twice in one page without reopening.
+- **Local-first reads on open** (reproduced, intermittently). The host
+  reads memory, then its local database, then the server, so right after a
+  reload the App can come back without settings saved moments before. The
+  app subscribes to the App and, while it is still asking for settings,
+  re-reads them when the host reports a change.
+- **Removing a value.** Earlier pins dropped `resource.remove()` in the
+  frame. The current pin sends it as an `/app-write` `remove`
+  (atomic-server#1690). This app does not remove values, so nothing here
+  verifies that path.
+- App writes are signed by the node that holds the app's key, so they work
+  on one node only for now (#41).
 
-The Phase 1/2 code on the unmerged branch `claude/hopeful-hawking-kqlrdy`
-(`integrations/clockify/app/`) is superseded by `app/` and should not be
-merged. It persisted the rotating code on the App resource (#21). No shipped
-host ever installed it, so no drive holds that property.
+### What still has to happen
+
+Done since this list was written: the catalog install (Drive apps,
+`apps/timesheets/0.1.0/ui.js`), and, from atomic-server 007869464 (in the
+pin), Disconnect (`store.proxy.disconnect`), "Open Clockify" through
+`store.openExternal` and "Open row in Atomic" through `store.openResource`,
+each feature-detected. The data-browser's LocalThought-extension path was
+removed upstream (`c707ca4ed`).
+
+1. **Range edits and conflict resolution** (#123 M4): "worked on P" and
+   "did not work" over a range (trims, splits, creates), and resolving
+   overlap conflicts from the app. M3's field edits and deletes are done
+   (0.2.0), mock-tested only.
+2. **Live evidence**: a run of the app against a live account through the
+   real integration proxy, in a dedicated test workspace. For write-back
+   that includes #123 §5.4's checks: full-replacement `PUT` (a field left
+   out is cleared, `end` omitted makes a running timer), the status for
+   writing a locked entry, the custom-field request shape, and the
+   `start`/`end` list semantics once more. Until then the card's
+   capabilities are declared, not verified.
+3. **Pruning** `localthought.ts` to what `app/` imports.

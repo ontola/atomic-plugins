@@ -16,7 +16,53 @@ export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 /** Directories under integrations/ that are not a plugin lane. */
 export const NON_LANE_DIRECTORIES = ['tooling'];
 
-export const TIERS = ['typecheck', 'unit', 'live', 'e2e'];
+export const TIERS = ['contract', 'node', 'typecheck', 'unit', 'live', 'e2e'];
+
+/** `--plugin-routes` values atomic-server accepts (atomic-server#1726). */
+export const PLUGIN_ROUTES_LEVELS = ['off', 'read-only', 'read-write'];
+
+/**
+ * What a lane's `serverEnv` (lanes.json) may not set on its atomic-server:
+ * the plugin-routes gates, which come from `pluginRoutes` only, and what
+ * serve.mjs derives from the lane's ports and store (serve.mjs `serverEnv`).
+ * Anything else named `ATOMIC_*` is allowed: the debug-build test seams
+ * (`ATOMIC_PLUGIN_E2E_*`, which atomic-server ignores in release builds)
+ * and host settings a lane's e2e needs, such as `ATOMIC_SOLID_OIDC_ISSUERS`.
+ * serve.test.mjs checks this list covers both.
+ */
+export const SERVER_ENV_RESERVED = [
+  'ATOMIC_PLUGIN_ROUTES',
+  'ATOMIC_ROUTES_ORIGIN',
+  'ATOMIC_PLUGIN_LISTENERS',
+  'ATOMIC_PLUGIN_SIDECARS',
+  'ATOMIC_DATA_DIR',
+  'ATOMIC_CONFIG_DIR',
+  'ATOMIC_CACHE_DIR',
+  'ATOMIC_PORT',
+  'ATOMIC_DOMAIN',
+  'ATOMIC_REPOPULATE_DEFAULTS',
+  'ATOMIC_INTEGRATION_PROXY_URL',
+  'ATOMIC_INTEGRATION_FRONTEND_ORIGIN',
+];
+
+/**
+ * A tooling lane tests shared tooling rather than one plugin, so it owns a
+ * directory here (this one, or one under it) instead of integrations/<id>/
+ * (`dir` in lanes.json).
+ */
+export const TOOLING_LANE_ROOT = 'integrations/tooling';
+
+/** The directory a lane owns: integrations/<id>, or its tooling `dir`. */
+export const laneDir = lane => lane.dir ?? `integrations/${lane.id}`;
+
+/**
+ * The `--plugin-routes` levels a lane's server-backed tiers run at, in order:
+ * `[]` for a lane on the default build. A lane that lists several (the
+ * `plugin-routes` tooling lane: `off` and `read-only`) runs each such tier
+ * once per level, on a fresh server.
+ */
+export const pluginRoutesLevels = lane =>
+  lane.pluginRoutes === undefined ? [] : [lane.pluginRoutes].flat();
 
 export function validateConfig(config) {
   const { lanes } = config;
@@ -53,20 +99,130 @@ export function validateConfig(config) {
     for (const tier of lane.tiers)
       if (!TIERS.includes(tier))
         throw new Error(`lane ${lane.id}: unknown tier ${tier}`);
+
+    if (lane.tiers.includes('node')) {
+      if (!Array.isArray(lane.nodeTests) || !lane.nodeTests.length)
+        throw new Error(
+          `lane ${lane.id}: a node tier needs a non-empty nodeTests list`,
+        );
+
+      for (const path of lane.nodeTests) {
+        if (
+          typeof path !== 'string' ||
+          !path.startsWith(`integrations/${lane.id}/`) ||
+          !path.endsWith('.test.mjs') ||
+          path.split('/').some(part => part === '..' || part === '.') ||
+          path.includes('\\') ||
+          path.includes('*')
+        )
+          throw new Error(
+            `lane ${lane.id}: nodeTests must name explicit .test.mjs files inside its plugin folder`,
+          );
+      }
+    }
+
     if (lane.tiers.includes('e2e') && !lane.e2e?.length)
       throw new Error(`lane ${lane.id}: an e2e tier needs an e2e spec list`);
     if (lane.tiers.includes('live') && !lane.liveEnv)
       throw new Error(`lane ${lane.id}: a live tier needs a liveEnv name`);
 
+    if (lane.dir !== undefined) {
+      if (
+        typeof lane.dir !== 'string' ||
+        (lane.dir !== TOOLING_LANE_ROOT &&
+          !lane.dir.startsWith(`${TOOLING_LANE_ROOT}/`)) ||
+        lane.dir.includes('..')
+      )
+        throw new Error(
+          `lane ${lane.id}: dir must be ${TOOLING_LANE_ROOT} or a directory under it; a plugin lane owns integrations/${lane.id}/`,
+        );
+    }
+
+    if (lane.serverEnv !== undefined) {
+      const entries =
+        lane.serverEnv &&
+        typeof lane.serverEnv === 'object' &&
+        !Array.isArray(lane.serverEnv)
+          ? Object.entries(lane.serverEnv)
+          : [];
+      if (
+        !entries.length ||
+        entries.some(
+          ([key, value]) =>
+            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
+            SERVER_ENV_RESERVED.includes(key) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
+    if (lane.pluginRoutes !== undefined) {
+      const levels = pluginRoutesLevels(lane);
+      if (
+        !levels.length ||
+        levels.some(l => !PLUGIN_ROUTES_LEVELS.includes(l)) ||
+        new Set(levels).size !== levels.length
+      )
+        throw new Error(
+          `lane ${lane.id}: pluginRoutes must be one of ${PLUGIN_ROUTES_LEVELS.join(', ')}, or a list of distinct ones`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: pluginRoutes only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
+    // Operator sidecars (ATOMIC_PLUGIN_SIDECARS) the lane's server is started
+    // with, all at the lane's one `sidecar` port. atomic-server accepts them
+    // only at `read-write`; the lane's own spec starts the daemon.
+    if (lane.sidecars !== undefined) {
+      if (
+        !Array.isArray(lane.sidecars) ||
+        lane.sidecars.length !== 1 ||
+        !lane.sidecars.every(
+          name => typeof name === 'string' && /^[a-z0-9-]{1,64}$/.test(name),
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: sidecars must list one sidecar name (lowercase letters, digits and -)`,
+        );
+      if (!pluginRoutesLevels(lane).includes('read-write'))
+        throw new Error(
+          `lane ${lane.id}: sidecars need pluginRoutes read-write, the only level atomic-server accepts them at`,
+        );
+      if (config.roleOffsets?.sidecar === undefined)
+        throw new Error(
+          `lane ${lane.id}: sidecars need a sidecar port (roleOffsets.sidecar)`,
+        );
+    }
+
     if (lane.paths !== undefined) {
       if (!Array.isArray(lane.paths))
         throw new Error(`lane ${lane.id}: paths must be an array`);
       for (const path of lane.paths)
-        if (!SHARED_PACKAGES.some(pkg => path.startsWith(`${pkg}/`)))
+        if (
+          !SHARED_PACKAGES.some(pkg => path.startsWith(`${pkg}/`)) &&
+          !PLUGIN_BUILD_DEPENDENCIES[lane.id]?.includes(path) &&
+          !(lane.dir !== undefined && toolingLanePath(path))
+        )
           throw new Error(
             `lane ${lane.id}: path ${path} is not in a shared package (${SHARED_PACKAGES.join(', ')}); a lane owns only integrations/${lane.id}/`,
           );
     }
+
+    // A tooling lane's directory is shared tooling, so its whole tree would
+    // run it on every tooling change; it names the files it depends on.
+    if (lane.dir !== undefined && !lane.paths?.length)
+      throw new Error(
+        `lane ${lane.id}: a tooling lane (dir) must list the paths it depends on`,
+      );
   }
 
   return config;
@@ -100,17 +256,51 @@ export const sharedPorts = config =>
  * `devonian` package). A lane may list paths in these under `paths`, so a
  * change there still runs the plugin code that depends on it; it may never
  * list another plugin's directory.
+ *
+ * `ontology-kit` (the shared ontology's subject constants and field resolver,
+ * which a plugin bundles) and `ontology` (its published term files, which a
+ * plugin's e2e reads through the dev-server) are not npm packages, but a
+ * plugin depends on them the same way (#177).
  */
-export const SHARED_PACKAGES = ['devonian', 'syncables', 'reflector'];
+export const SHARED_PACKAGES = [
+  'devonian',
+  'syncables',
+  'reflector',
+  'ontology',
+  'ontology-kit',
+];
+
+// Reviewed exact build dependencies: reuse the existing WILLIAM3 primitive without
+// duplicating cryptographic source or granting arbitrary sibling-folder globs.
+// Willow's tests also decode its drops with the willow-drop importer's
+// committed bundle (an independent verifier) and pin the hifitime offset
+// against that importer's willow25 expectations, so a change to either
+// reruns the willow lane.
+export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
+  willow: [
+    'integrations/willow-drop/william3.ts',
+    'integrations/willow-drop/plugin.js',
+    'integrations/willow-drop/fixtures/expected.json',
+  ],
+});
 
 /**
  * The paths a lane runs on, for dorny/paths-filter: its own directory, plus
- * any shared-package `paths` it declares.
+ * any shared-package or explicitly approved build-dependency `paths`.
  */
-export const laneFilter = lane => [
-  `integrations/${lane.id}/**`,
-  ...(lane.paths ?? []),
-];
+export const laneFilter = lane =>
+  lane.dir !== undefined
+    ? lane.paths
+    : [`${laneDir(lane)}/**`, ...(lane.paths ?? [])];
+
+/**
+ * What a tooling lane's `paths` may name besides shared packages: files
+ * under integrations/tooling/, and the pin (a new atomic-server can change
+ * what a tooling lane tests).
+ */
+const toolingLanePath = path =>
+  path === '.atomic-server-ref' ||
+  (path.startsWith(`${TOOLING_LANE_ROOT}/`) && !path.includes('..'));
 
 /** Lanes that produce an actual matrix job; a tier-less lane is covered elsewhere. */
 export const activeLanes = lanes => lanes.filter(l => l.tiers.length > 0);
@@ -131,8 +321,8 @@ export function unlanedDirectories(lanes, base = root) {
 /** Lanes naming a directory that no longer exists. */
 export function danglingLanes(lanes, base = root) {
   return lanes
-    .map(l => l.id)
-    .filter(id => !existsSync(resolve(base, 'integrations', id)));
+    .filter(l => !existsSync(resolve(base, laneDir(l))))
+    .map(l => l.id);
 }
 
 /**
@@ -147,6 +337,8 @@ export const SHARED_FILTER = [
   'integrations/tsconfig.e2e.json',
   '.atomic-server-ref',
   '.github/workflows/ci.yml',
+  // ci.yml's publish-image job calls it.
+  '.github/workflows/atomic-server-e2e-image.yml',
 ];
 
 /** The `filters:` block for dorny/paths-filter, generated so it can't drift. */
@@ -161,22 +353,79 @@ export function filtersYaml(config) {
   return [
     block('shared', SHARED_FILTER),
     ...config.lanes.map(l => block(l.id, laneFilter(l))),
-    block('any', ['integrations/**', ...SHARED_FILTER, ...lanePaths]),
+    // apps/ holds the committed drive app modules; shared-checks' `apps.mjs
+    // check` guards them (and a change there comes with a catalog.json one).
+    // ontology/ and ontology-kit/ are the shared ontology; shared-checks'
+    // `ontology.mjs check` guards them.
+    block('any', [
+      'integrations/**',
+      'apps/**',
+      'ontology/**',
+      'ontology-kit/**',
+      ...SHARED_FILTER,
+      ...lanePaths,
+    ]),
   ].join('\n');
 }
 
 /**
  * The matrix for a run, from dorny/paths-filter's `changes` output (a JSON
- * array of the filter names that matched). `shared` selects every lane.
+ * array of the filter names that matched). `shared` selects every plugin
+ * lane, but not a tooling lane (`dir`): those run only when their own
+ * `paths` changed, so a tooling edit doesn't pay for, say, the plugin-routes
+ * feature build. `all` (a merge-queue or manual run) selects every lane.
  */
 export function matrixFor(config, changed) {
   const names = new Set(changed);
   const lanes = activeLanes(config.lanes).filter(
-    l => names.has('shared') || names.has(l.id),
+    l =>
+      names.has('all') ||
+      names.has(l.id) ||
+      (names.has('shared') && l.dir === undefined),
   );
 
-  return lanes.map(l => ({ lane: l.id, tiers: l.tiers.join(',') }));
+  return lanes.map(l => ({
+    lane: l.id,
+    tiers: l.tiers.join(','),
+    // ci.yml downloads the plugin-routes build for these jobs only.
+    ...(pluginRoutesLevels(l).length ? { 'plugin-routes': 'true' } : {}),
+    // ci.yml loads these sidecars' images (build-sidecars) for these jobs only.
+    ...(l.sidecars?.length ? { sidecars: l.sidecars.join(',') } : {}),
+  }));
 }
+
+/**
+ * The operator sidecars the lanes in this run start, each built by ci.yml's
+ * `build-sidecars` from `integrations/<name>/sidecar/Dockerfile`
+ * (`sidecarDockerfile`), sorted and without repeats.
+ */
+export const sidecarsFor = (config, changed) =>
+  [
+    ...new Set(
+      matrixFor(config, changed).flatMap(l =>
+        l.sidecars ? l.sidecars.split(',') : [],
+      ),
+    ),
+  ].sort();
+
+/** Where a sidecar's image recipe lives; its directory is the build context. */
+export const sidecarDockerfile = (name, base = root) =>
+  resolve(base, 'integrations', name, 'sidecar', 'Dockerfile');
+
+/**
+ * The environment variable a lane's spec reads the prebuilt image of sidecar
+ * `name` from: `nextgraph` -> `NEXTGRAPH_SIDECAR_IMAGE`.
+ */
+export const sidecarImageEnv = name =>
+  `${name.toUpperCase().replaceAll('-', '_')}_SIDECAR_IMAGE`;
+
+/**
+ * Whether any lane in this run needs atomic-server built with the
+ * `plugin-routes` feature, so ci.yml's build-server makes that second build
+ * only then.
+ */
+export const needsPluginRoutesBuild = (config, changed) =>
+  matrixFor(config, changed).some(l => l['plugin-routes'] === 'true');
 
 if (
   process.argv[1] &&
@@ -190,6 +439,15 @@ if (
     process.stdout.write(
       JSON.stringify(matrixFor(config, JSON.parse(argument ?? '[]'))) + '\n',
     );
+  else if (mode === 'plugin-routes')
+    process.stdout.write(
+      String(needsPluginRoutesBuild(config, JSON.parse(argument ?? '[]'))) +
+        '\n',
+    );
+  else if (mode === 'sidecars')
+    process.stdout.write(
+      JSON.stringify(sidecarsFor(config, JSON.parse(argument ?? '[]'))) + '\n',
+    );
   else if (mode === 'ports')
     process.stdout.write(
       JSON.stringify(
@@ -199,7 +457,9 @@ if (
       ) + '\n',
     );
   else {
-    console.error('Usage: lanes.mjs filters | matrix <changed-json> | ports');
+    console.error(
+      'Usage: lanes.mjs filters | matrix <changed-json> | plugin-routes <changed-json> | sidecars <changed-json> | ports',
+    );
     process.exit(1);
   }
 }
