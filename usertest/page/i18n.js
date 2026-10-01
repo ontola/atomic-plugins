@@ -73,6 +73,11 @@ export const TEXT = {
         </li>
       </ul>`,
     plan: 'What do you want to test?',
+    samples: {
+      heading: 'Sample files for this session',
+      intro:
+        "This session uses invented sample data, so you don't need your own. Download a file when the moderator asks for it.",
+    },
     name: 'Your first name (optional)',
     sessionLanguage:
       'The session is in English. You can switch the language at the top of this page at any time.',
@@ -218,6 +223,11 @@ export const TEXT = {
         </li>
       </ul>`,
     plan: 'Wat wil je testen?',
+    samples: {
+      heading: 'Voorbeeldbestanden voor deze sessie',
+      intro:
+        'Deze sessie gebruikt verzonnen voorbeeldgegevens, dus je hebt geen eigen gegevens nodig. Download een bestand als de gespreksleider erom vraagt.',
+    },
     name: 'Je voornaam (optioneel)',
     sessionLanguage:
       'De sessie is in het Nederlands. Je kunt de taal bovenaan deze pagina op elk moment wisselen.',

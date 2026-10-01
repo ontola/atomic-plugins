@@ -21,6 +21,14 @@
  * apps/<id>/<version>/ui.js, with the SRI hash the host checks on install.
  * Pets keeps its published module.
  *
+ * With sample data (#196): each app in SAMPLES also gets a second entry,
+ * "<App> (sample data)", whose module wraps the same built app with
+ * `sample-data/proxy.mjs` and one of the mock proxy's provider fixtures, so
+ * it runs on invented data without a provider account (sample-data/README.md).
+ * Its version is the app's plus SAMPLE_VERSION, so it changes with either.
+ * The sample bank statements for the Money app
+ * (integrations/money/fixtures/usertest/) are copied to samples/money/.
+ *
  * VERSIONS below is the only thing to edit. Bump an app's version whenever
  * its build changes: the host offers "Update to <version>" only for a new
  * version string, and a changed file under an old version fails the
@@ -30,7 +38,15 @@
  * atomic-server) and each app's dependencies installed (see README.md).
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -70,6 +86,19 @@ const APPS = {
   timesheets: { base: 'timesheets', row: ['Time entry', 'Time entries'] },
 };
 
+/**
+ * Apps that also get a sample-data entry, by their id in APPS, with the
+ * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
+ * sample-data/ or a fixture it imports changes.
+ */
+const SAMPLE_VERSION = 'sample-1';
+const SAMPLES = {
+  calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
+  'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
+  timesheets: { provider: 'Clockify', name: 'Clockify timesheets' },
+  notion: { provider: 'Notion', name: 'Notion' },
+};
+
 const LOG_URL = process.env.USERTEST_LOG_URL;
 if (LOG_URL && !/^https:\/\/[^/]+\/log$/.test(LOG_URL))
   throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
@@ -84,6 +113,77 @@ const catalog = JSON.parse(
 );
 const byShortname = name => catalog.find(r => r[A + 'shortname'] === name);
 
+const require = createRequire(resolve(repo, 'browser/package.json'));
+const esbuild = require('esbuild');
+
+/**
+ * The app's built module, wrapped so that its `store.proxy` is the sample
+ * account of sample-data/<id>.mjs. It bundles the app's built module (before
+ * the collector prelude), so the sample entry runs the same app build as the
+ * real entry, minified once more together with the wrapper.
+ */
+async function buildSample(id, appFile, file, prelude) {
+  const at = path => JSON.stringify(path);
+  const result = await esbuild.build({
+    stdin: {
+      contents: [
+        `import { view as appView } from ${at(appFile)};`,
+        `import provider from ${at(resolve(here, 'sample-data', `${id}.mjs`))};`,
+        `import { sampleView } from ${at(resolve(here, 'sample-data/proxy.mjs'))};`,
+        'export const view = sampleView(appView, provider);',
+      ].join('\n'),
+      resolveDir: repo,
+      loader: 'js',
+    },
+    absWorkingDir: repo,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    legalComments: 'none',
+    minify: true,
+    write: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        // The notion fixture reads its OpenAPI document with node:fs, only
+        // when the mock proxy asks for `document`; the frame never does.
+        name: 'no-node-fs',
+        setup(builder) {
+          builder.onResolve({ filter: /^node:fs$/ }, () => ({
+            path: 'node:fs',
+            namespace: 'no-node-fs',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'no-node-fs' }, () => ({
+            contents:
+              'export function readFileSync() { throw new Error("no file system in the frame"); }',
+            loader: 'js',
+          }));
+        },
+      },
+    ],
+  });
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, prelude + result.outputFiles[0].text);
+}
+
+/** One catalog entry for a built module. */
+function entryFor(source, id, version, bytes, fields) {
+  const entry = { ...source };
+  entry[A + 'localId'] = id;
+  entry[A + 'shortname'] = id;
+  for (const [key, value] of Object.entries(fields))
+    if (value) entry[A + key] = value;
+  // A drive app, not a sandbox plugin: it needs no API-plugins host.
+  delete entry[I + 'requires-api-plugins'];
+  entry[I + 'version'] = version;
+  entry[I + 'app-module'] = `apps/${id}/${version}/ui.js`;
+  entry[I + 'app-module-integrity'] =
+    'sha384-' + createHash('sha384').update(bytes).digest('base64');
+
+  return entry;
+}
+
 for (const [id, app] of Object.entries(APPS)) {
   const version = VERSIONS[id];
   const { build } = await import(
@@ -91,31 +191,59 @@ for (const [id, app] of Object.entries(APPS)) {
   );
   const file = resolve(out, 'apps', id, version, 'ui.js');
   mkdirSync(dirname(file), { recursive: true });
+  // The app alone, before the prelude: what a sample entry wraps.
   await build({ outfile: file });
-  if (PRELUDE && app.report)
-    writeFileSync(file, PRELUDE + readFileSync(file, 'utf8'));
+  const plain = readFileSync(file, 'utf8');
+  const prelude = app.report ? PRELUDE : '';
+  if (prelude) writeFileSync(file, prelude + plain);
   const bytes = readFileSync(file);
 
   const source = byShortname(app.base);
   if (!source) throw new Error(`catalog.json has no entry ${app.base}`);
-  const entry = { ...source };
-  entry[A + 'localId'] = id;
-  entry[A + 'shortname'] = id;
-  if (app.name) entry[A + 'name'] = app.name;
-  if (app.emoji) entry[A + 'emoji'] = app.emoji;
-  if (app.description) entry[A + 'description'] = app.description;
-  // A drive app, not a sandbox plugin: it needs no API-plugins host.
-  delete entry[I + 'requires-api-plugins'];
-  entry[I + 'version'] = version;
-  entry[I + 'app-module'] = `apps/${id}/${version}/ui.js`;
-  entry[I + 'app-module-integrity'] =
-    'sha384-' + createHash('sha384').update(bytes).digest('base64');
+  const entry = entryFor(source, id, version, bytes, {
+    name: app.name,
+    emoji: app.emoji,
+    description: app.description,
+  });
   entry[I + 'app-row-name'] = app.row[0];
   entry[I + 'app-row-name-plural'] = app.row[1];
 
   const at = catalog.indexOf(source);
   if (app.base === id) catalog[at] = entry;
   else catalog.splice(at + 1, 0, entry);
+
+  const sample = SAMPLES[id];
+  if (!sample) continue;
+  const sampleId = `${id}-sample`;
+  const sampleVersion = `${version}-${SAMPLE_VERSION}`;
+  const sampleFile = resolve(out, 'apps', sampleId, sampleVersion, 'ui.js');
+  const appFile = resolve(out, 'apps', id, version, 'plain.js');
+  writeFileSync(appFile, plain);
+  await buildSample(id, appFile, sampleFile, prelude);
+  rmSync(appFile);
+  const sampleEntry = entryFor(
+    entry,
+    sampleId,
+    sampleVersion,
+    readFileSync(sampleFile),
+    {
+      name: `${sample.name} (sample data)`,
+      description: `Try ${sample.name} on invented sample data, without a ${sample.provider} account. For user testing: nothing reaches ${sample.provider}, and its changes stay in this app.`,
+    },
+  );
+  catalog.splice(catalog.indexOf(entry) + 1, 0, sampleEntry);
+}
+
+// Sample files testers download during a session (moderator/sessions/*.md
+// name them; the page links them): catalog.<base-domain>/samples/<app>/.
+const SAMPLE_FILES = {
+  money: resolve(repo, 'integrations/money/fixtures/usertest'),
+};
+for (const [app, dir] of Object.entries(SAMPLE_FILES)) {
+  mkdirSync(resolve(out, 'samples', app), { recursive: true });
+  for (const name of readdirSync(dir))
+    if (/\.(mt940|xml)$/.test(name))
+      copyFileSync(resolve(dir, name), resolve(out, 'samples', app, name));
 }
 
 // Every drive app, Pets included: enabled, and shown without the toggle.

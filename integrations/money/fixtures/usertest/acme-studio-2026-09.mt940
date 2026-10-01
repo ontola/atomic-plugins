@@ -1,0 +1,85 @@
+:20:ACME260930
+:25:NL00BANK0000000000
+:28C:9/1
+:60F:C260901EUR12428,51
+:61:2609010901D1850,00NTRFNONREF//ACME2026090101
+:86:De Werkplaats Verhuur BV
+Huur september 2026 unit 4
+:61:2609010901D14,99NDDTNONREF//ACME2026090102
+:86:Pixelboard BV
+Pixelboard Team abonnement september
+:61:2609020902C1512,50NTRFNONREF//ACME2026090201
+:86:Bakkerij Zonnig BV
+Factuur AS-2026-035 verpakkingen
+:61:2609030903D28,90NMSCNONREF//ACME2026090301
+:86:NS Reizigers
+Treinkaartje Utrecht-Amsterdam v.v.
+:61:2609070907D640,00NTRFNONREF//ACME2026090701
+:86:Lotte Visser
+Freelance illustratie augustus 2026
+:61:2609080908D39,50NDDTNONREF//ACME2026090801
+:86:Belnet Mobiel
+Mobiel abonnement september
+:61:2609090909D16,40NMSCNONREF//ACME2026090901
+:86:Lunchroom Het Plein
+Lunch team
+:61:2609100910C484,00NTRFNONREF//ACME2026091001
+:86:Stichting Groen Plein
+Factuur AS-2026-036 nieuwsbrief
+:61:2609140914D8,99NDDTNONREF//ACME2026091401
+:86:Hostly Hosting
+Webhosting acmestudio.example september
+:61:2609150915D42,35NTRFNONREF//ACME2026091501
+:86:Koffiebranderij De Boon
+Bonen kantoor 3 kg
+:61:2609160916C2117,50NTRFNONREF//ACME2026091601
+:86:Fietsenmaker Snel VOF
+Factuur AS-2026-037 webshop fase 2
+:61:2609170917D59,90NMSCNONREF//ACME2026091701
+:86:Kantoorwinkel Pen
+Printerpapier en inkt
+:61:2609180918D520,00NTRFNONREF//ACME2026091801
+:86:Ravi Brouwer
+Freelance development augustus 2026
+:61:2609210921D118,34NDDTNONREF//ACME2026092101
+:86:Verzekeraar Veilig NV
+SEPA Incasso algemeen doorlopend
+Incassant: NL00ZZZ000000000000
+Machtiging: VV-2024-118833 bedrijfsaansprakelijkheid
+Omschrijving: Premie bedrijfsaansprakelijkheidsverzekering
+periode 01-09-2026 t/m 30-09-2026 polis 4410-2291-07
+IBAN: NL00BANK0000000099 Kenmerk: 2026092100118833
+:61:2609220922D24,50NMSCNONREF//ACME2026092201
+:86:Lunchroom Het Plein
+Lunch klantoverleg
+:61:2609230923C605,00NTRFNONREF//ACME2026092301
+:86:Theater De Kleine Zaal
+Factuur AS-2026-038 programmaboekje
+:61:2609240924D31,00NMSCNONREF//ACME2026092401
+:86:Tankstation Noord
+Tanken bestelauto
+:61:2609250925D12,50NMSCNONREF//ACME2026092501
+:86:Bank
+Kosten zakelijke rekening september
+:61:2609250925D149,00NTRFNONREF//ACME2026092502
+:86:Opleidingen Online BV
+Cursus typografie, 1 deelnemer
+:61:2609280928C302,50NTRFNONREF//ACME2026092801
+:86:Huisartsenpraktijk Lindeboom
+Factuur AS-2026-039 bewegwijzering
+:61:2609290929D80,00NTRFNONREF//ACME2026092901
+:86:Ravi Brouwer
+Onkosten treinreizen september
+:61:2609300930D21,90NMSCNONREF//ACME2026093001
+:86:Koffiebar Station
+Koffie en broodjes workshop
+:61:2609300930D60,50NDDTNONREF//ACME2026093002
+:86:Belnet Internet
+Zakelijk internet september
+:61:2609300930D35,00NTRFNONREF//ACME2026093003
+:86:Lotte Visser
+Reiskosten augustus
+:61:2609300930D14,99NMSCNONREF//ACME2026093004
+:86:Webwinkel Kabel
+USB-C kabels 3 stuks
+:62F:C260930EUR13681,25

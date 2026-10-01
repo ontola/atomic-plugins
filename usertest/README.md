@@ -30,6 +30,17 @@ toggle. The published catalog keeps these disabled until launch. Apps not yet
 in `apps/` are built from this checkout and served from the droplet. Pets
 uses its published module.
 
+It also adds a sample-data entry for four of them (#196): "Google Calendar
+(sample data)", "GitHub issues (sample data)", "Clockify timesheets (sample
+data)" and "Notion (sample data)". Each is the same built app, wrapped so
+that its provider is answered by invented data in the app's own frame,
+already connected, and nothing reaches the provider. Testers without an
+account, or sessions for which we have no account to lend, use these with
+the `-sample` session plans. See [`sample-data/README.md`](sample-data/README.md).
+The Money app needs no account; `catalog.mjs` also copies its sample bank
+statements to `https://catalog.<base-domain>/samples/money/`, which the
+session page links.
+
 Known limits, as of 2026-09-28:
 
 - Pets cannot connect: localthought.io has no `pets` platform (#174).
@@ -70,6 +81,9 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 ## Updating an app
 
 1. Change the app, then bump its entry in `VERSIONS` in `catalog.mjs`.
+   Its sample-data entry, if it has one, follows: its version is the app's
+   plus `SAMPLE_VERSION`. A change to `sample-data/` or to a fixture it
+   imports bumps `SAMPLE_VERSION` instead.
 2. Run `USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs`,
    then `sh usertest/deploy.sh root@178.62.223.35`.
 3. On Integrations, testers who installed the old version see "Update to
@@ -331,6 +345,23 @@ node usertest/e2e/run.mjs
 CHROMIUM_PATH=/path/to/chromium node usertest/e2e/run.mjs
 ```
 
+It also checks that a plan's sample files are linked (for `money`), stay
+visible during the session, and are absent for a plan without any.
+
+The sample-data apps have two checks of their own. The first needs only
+Node; the second runs the pinned atomic-server (the layout and binary from
+`AGENTS.md`, as for a lane's e2e tier) on ports 19290 to 19292, installs
+each "(sample data)" entry from a freshly built catalog into a fresh drive,
+runs its first import, and checks an invented record before and after a
+reload:
+
+```sh
+node --test usertest/sample-data/samples.test.mjs
+node usertest/e2e/samples.mjs     # or: … samples.mjs calendar notion
+```
+
+Neither runs in CI. Both passed on 2026-10-01 at pin `a12b74a6783b`.
+
 The page is in English or Dutch (Nederlands), picked with the buttons at the
 top, by `&lang=nl` in the invite link, or remembered from a previous visit.
 The choice switches the page's texts, the speech recognizer, the
@@ -461,7 +492,8 @@ sends. Bodies over 1 MB are refused.
 
 ## Privacy
 
-Testers connect real accounts. Their data is on the droplet, in the Docker
+Testers connect real accounts, unless they use a sample-data app or the
+sample bank statements, which hold invented data only. Their data is on the droplet, in the Docker
 volume `atomic-plugins-store`, and their provider tokens are in
 localthought.io's database. Error reports can contain what was on screen
 (titles in messages, URLs), and they stay in `/var/lib/usertest-logs`.

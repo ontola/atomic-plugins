@@ -19,7 +19,8 @@ This page is the short runbook, and what needs whose OK.
 | --- | --- | --- |
 | `usertest/page/` only | `deploy.sh` | none |
 | an app's source | bump `VERSIONS` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
-| `usertest/moderator/` | `deploy.sh` | moderator (`moderator/run.sh`) |
+| `usertest/sample-data/`, or a fixture it imports | bump `SAMPLE_VERSION` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
+| `usertest/moderator/` (session plans included) | `deploy.sh` | moderator (`moderator/run.sh`) |
 | `/etc/*.env` on the droplet | none | the container that reads it |
 | `usertest/collector/` | `deploy.sh` | collector (`collector/run.sh`) |
 | atomic-server version or plugin routes | `deploy.sh` if `server.sh` changed | atomic-server (`server.sh`) |
@@ -69,7 +70,9 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
   Issues go to the private `ontola/usertest-findings`. Nothing is public until
   Michiel labels a finding `approved`.
 - **Before a page PR:** `node usertest/e2e/run.mjs` (headless, fake media;
-  not in CI). Never open the page in Michiel's browser to test it (#227
+  not in CI). For `usertest/sample-data/` or `catalog.mjs`:
+  `node --test usertest/sample-data/samples.test.mjs` and
+  `node usertest/e2e/samples.mjs` (the pinned atomic-server; not in CI). Never open the page in Michiel's browser to test it (#227
   rule 9).
 
 ## The deploy workflow

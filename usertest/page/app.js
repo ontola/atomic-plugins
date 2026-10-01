@@ -12,6 +12,8 @@ import { goodEnough, rankVoices } from './voices.js';
 
 const API = '/usertest/api';
 const CATALOG_URL = `https://catalog.${location.hostname.replace(/^plugins\./, '')}/catalog.json`;
+/** Sample files (moderator/sessions/*.md, "Sample files") live next to it. */
+const SAMPLES_URL = new URL('samples/', CATALOG_URL).href;
 /** Send a turn this long after the tester stops talking (a question sooner).
  * Chrome's recognizer adds no punctuation, so questions are recognized by
  * their words; the moderator answers [WAIT] when nothing needs saying. */
@@ -642,6 +644,9 @@ async function start() {
   turn('');
 }
 
+/** The plans as the moderator listed them, with their sample files. */
+let plans = [];
+
 /** Fills the "What do you want to test?" menu from the moderator's plans.
  * The link's `session` picks the first choice; a name the moderator doesn't
  * know stays in the menu, so starting says it is unknown instead of quietly
@@ -663,6 +668,7 @@ async function loadPlans() {
   if (fallback && !list.some(p => p.id === fallback))
     list = [{ id: fallback, title: fallback }, ...list];
 
+  plans = list;
   for (const { id, title } of list) {
     const option = document.createElement('option');
     option.value = id;
@@ -671,6 +677,25 @@ async function loadPlans() {
   }
 
   $('plan').value = fallback ?? '';
+  showSamples();
+}
+
+/** Links the chosen plan's sample files, or hides the card. */
+function showSamples() {
+  const files = plans.find(p => p.id === $('plan').value)?.samples ?? [];
+  $('sample-list').replaceChildren(
+    ...files.map(path => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = new URL(path, SAMPLES_URL).href;
+      link.download = path.split('/').pop();
+      link.textContent = path.split('/').pop();
+      item.append(link);
+
+      return item;
+    }),
+  );
+  $('samples').hidden = files.length === 0;
 }
 
 /** Keeps the choice in the address, so a reload keeps it too. */
@@ -913,6 +938,7 @@ $('voice-select').addEventListener('change', chooseVoice);
 $('voice-try').addEventListener('click', testSpeaker);
 $('retry').addEventListener('click', () => retryAction?.());
 $('plan').addEventListener('change', rememberPlan);
+$('plan').addEventListener('change', showSamples);
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
 // Hands over at once, with whatever was heard so far.
