@@ -18,7 +18,13 @@
     "schema.ts",
     "app/*.ts",
     "app/ui/*.ts",
-    "app/harness/*.ts"
+    "app/harness/*.ts",
+    "moneybird/*.ts"
   ],
-  "exclude": ["app/*.test.ts", "app/ui/*.test.ts"]
+  "exclude": [
+    "app/*.test.ts",
+    "app/ui/*.test.ts",
+    "moneybird/*.test.ts",
+    "moneybird/fakeStore.ts"
+  ]
 }

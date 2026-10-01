@@ -302,6 +302,7 @@ test('connect: consent without login, signed redeem makes the owner, delegation,
       'clockify',
       'github-issues',
       'google-calendar',
+      'moneybird',
       'notion',
       'pets',
     ]);
@@ -763,7 +764,13 @@ test('an empty platform list serves every fixture', async () => {
   const { base, server, close } = await start({ platforms: '' });
 
   try {
-    for (const id of ['clockify', 'google-calendar', 'notion', 'pets'])
+    for (const id of [
+      'clockify',
+      'google-calendar',
+      'moneybird',
+      'notion',
+      'pets',
+    ])
       assert.equal((await fetch(`${base}/catalog/${id}.yaml`)).status, 200);
     assert.ok(server.github.createIssue);
     assert.ok(server.calendar.events);
