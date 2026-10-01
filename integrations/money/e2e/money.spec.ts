@@ -278,7 +278,12 @@ test.describe('money integration', () => {
     // The person adds it as a view, read-only for now (#1788).
     await page.goto(showUrl(page, table));
     await main.getByRole('button', { name: 'Add view' }).click();
-    await page.getByRole('menuitem', { name: 'New app' }).click();
+    // Add view lists the drive's apps only after reading each App's classes,
+    // which took longer than the default 10 s click timeout in CI (the item
+    // was in the menu's final snapshot), so wait for it longer.
+    await page
+      .getByRole('menuitem', { name: 'New app' })
+      .click({ timeout: 60_000 });
     await page
       .locator('dialog[open]')
       .getByRole('button', { name: 'Read-only' })
