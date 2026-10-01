@@ -11,7 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  APP_FOLDERS,
   appEntries,
+  appFolder,
   blobId,
   check,
   integrityOf,
@@ -176,6 +178,95 @@ test('an app-only folder records its version in app/package.json', () =>
       JSON.stringify({ private: true, version: '1.2.3' }),
     );
     assert.deepEqual(staticProblems(entry, base), []);
+  }));
+
+test('an app resolves to integrations/<id>/app/ unless APP_FOLDERS maps it', () => {
+  assert.equal(appFolder('gamma'), 'integrations/gamma/app');
+  assert.equal(appFolder('moneybird'), 'integrations/money/moneybird');
+  // Only own keys map: no prototype property is taken for a folder.
+  assert.equal(appFolder('constructor'), 'integrations/constructor/app');
+  assert.ok(Object.isFrozen(APP_FOLDERS));
+});
+
+/**
+ * The fixture's gamma app moved to where APP_FOLDERS puts moneybird: its
+ * build.mjs and a version-only package.json in integrations/money/moneybird/,
+ * next to a money/package.json at another version (the importer's), which
+ * must never be read for it.
+ */
+function asMapped(base, version = '1.2.3') {
+  const folder = join(base, 'integrations/money/moneybird');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'build.mjs'),
+    readFileSync(join(base, 'integrations/gamma/app/build.mjs')),
+  );
+  writeFileSync(
+    join(folder, 'package.json'),
+    JSON.stringify({ private: true, version }),
+  );
+  writeFileSync(
+    join(base, 'integrations/money/package.json'),
+    JSON.stringify({ name: '@x/money', version: '9.9.9' }),
+  );
+  rmSync(join(base, 'integrations/gamma'), { recursive: true });
+  const catalog = readCatalog(base);
+  catalog[1][terms.shortname] = 'moneybird';
+  catalog[1][terms.module] = moduleUrl('moneybird', version);
+  writeFileSync(
+    join(base, 'integrations/catalog.json'),
+    JSON.stringify(catalog, null, 2),
+  );
+  mkdirSync(join(base, `apps/moneybird/${version}`), { recursive: true });
+  writeFileSync(
+    join(base, modulePath('moneybird', version)),
+    readFileSync(join(base, modulePath('gamma', version))),
+  );
+  rmSync(join(base, 'apps/gamma'), { recursive: true });
+}
+
+test('a mapped app builds from its own folder and versions by its package.json', () =>
+  using({}, async base => {
+    asMapped(base);
+    const entry = appEntries(readCatalog(base))[0];
+    assert.deepEqual(staticProblems(entry, base), []);
+    assert.deepEqual(await check({ base }), []);
+
+    writeFileSync(
+      join(base, 'integrations/money/moneybird/package.json'),
+      JSON.stringify({ private: true, version: '1.2.4' }),
+    );
+    assert.deepEqual(staticProblems(entry, base), [
+      'moneybird: catalog version 1.2.3 does not match integrations/money/moneybird/package.json 1.2.4',
+    ]);
+
+    // The enclosing plugin's package.json is never a fallback.
+    rmSync(join(base, 'integrations/money/moneybird/package.json'));
+    rmSync(join(base, 'integrations/money/moneybird/build.mjs'));
+    assert.deepEqual(staticProblems(entry, base), [
+      'moneybird: integrations/money/moneybird/package.json does not exist to record a version',
+      'moneybird: integrations/money/moneybird/build.mjs is missing',
+    ]);
+  }));
+
+test('write builds a mapped app from its own folder', () =>
+  using({}, async base => {
+    asMapped(base);
+    writeFileSync(
+      join(base, 'integrations/money/moneybird/build.mjs'),
+      "export async function build() { return { text: 'mapped' }; }\n",
+    );
+    const [written] = await write({ only: 'moneybird', base });
+    assert.deepEqual(written, {
+      path: 'apps/moneybird/1.2.3/ui.js',
+      bytes: 6,
+      integrity: integrityOf('mapped'),
+    });
+    assert.equal(
+      readFileSync(join(base, 'apps/moneybird/1.2.3/ui.js'), 'utf8'),
+      'mapped',
+    );
+    assert.deepEqual(await check({ base }), []);
   }));
 
 test('apps/ holds only <id>/<version>/ui.js', () =>

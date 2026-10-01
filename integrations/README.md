@@ -214,7 +214,11 @@ supported client reads the v1 URL any more.
 
 A drive app (an `integrations/<id>/app/` whose `build.mjs` builds one ES
 module exporting `view({ root, store })`) is installable from the catalog when
-its entry carries:
+its entry carries the properties below. An app that lives elsewhere, such as
+Moneybird in `integrations/money/moneybird/` beside the Bank statements
+importer, is listed in `apps.mjs`'s `APP_FOLDERS` map: its `build.mjs` and a
+`private` `package.json` holding its version are in that folder, and the
+enclosing plugin's `package.json` is not read for it.
 
 | Catalog property                      | Meaning                                                                                                                                                 |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |

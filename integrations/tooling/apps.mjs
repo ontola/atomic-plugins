@@ -6,7 +6,8 @@
  * `app-module-integrity` (the SRI hash of those bytes). The host downloads the
  * module, refuses it unless the hash matches, and stores it as a new app's
  * entry point (atomic-server `browser/lib/src/catalog-app.ts`). The module is
- * `integrations/<shortname>/app/build.mjs`'s output, committed to this
+ * `integrations/<shortname>/app/build.mjs`'s output (or, for an app listed in
+ * `APP_FOLDERS`, that folder's `build.mjs`), committed to this
  * repository at `apps/<shortname>/<version>/ui.js`. GitHub Pages publishes
  * `main` from the repository root (with the root `.nojekyll`, byte for byte),
  * so the catalog points at:
@@ -86,16 +87,35 @@ export function appEntries(catalog) {
 }
 
 /**
+ * Drive apps whose source is not at `integrations/<shortname>/app/`, by
+ * catalog shortname: the folder (repository-relative) holding the app's
+ * `build.mjs` and a `private` `package.json` with just its version. For an
+ * app that lives inside another plugin's folder, such as Moneybird inside
+ * `integrations/money/` beside the Bank statements importer, whose own
+ * package.json version belongs to that importer.
+ */
+export const APP_FOLDERS = Object.freeze({
+  moneybird: 'integrations/money/moneybird',
+});
+
+/** The repository-relative folder holding an app's `build.mjs`. */
+export const appFolder = id =>
+  Object.hasOwn(APP_FOLDERS, id) ? APP_FOLDERS[id] : `integrations/${id}/app`;
+
+/**
  * Where an app's version is recorded: the plugin folder's package.json (the
  * #12 rule `certify.mjs` also enforces for a sandbox package), or, for a
  * folder that ships only an app and so has no certified package, a
- * `private` `app/package.json` holding just the version.
+ * `private` `app/package.json` holding just the version. An app in
+ * `APP_FOLDERS` records it only in that folder's package.json.
  */
 export function versionFile(id, base = root) {
-  for (const relativePath of [
-    `integrations/${id}/package.json`,
-    `integrations/${id}/app/package.json`,
-  ])
+  for (const relativePath of Object.hasOwn(APP_FOLDERS, id)
+    ? [`${APP_FOLDERS[id]}/package.json`]
+    : [
+        `integrations/${id}/package.json`,
+        `integrations/${id}/app/package.json`,
+      ])
     if (existsSync(resolve(base, relativePath))) return relativePath;
 
   return undefined;
@@ -105,7 +125,8 @@ export function versionFile(id, base = root) {
  * Everything about one app entry that does not need a build: the fields are
  * there, the version matches the folder's version file (`versionFile`), the
  * URL is the Pages one for that version, the committed module exists and its
- * hash is the pinned integrity, and the folder has an `app/build.mjs`.
+ * hash is the pinned integrity, and the app's folder (`appFolder`) has a
+ * `build.mjs`.
  */
 export function staticProblems(entry, base = root) {
   const id = entry[terms.shortname];
@@ -144,7 +165,9 @@ export function staticProblems(entry, base = root) {
 
   if (!file)
     problems.push(
-      `${id}: neither integrations/${id}/package.json nor integrations/${id}/app/package.json records a version`,
+      Object.hasOwn(APP_FOLDERS, id)
+        ? `${id}: ${APP_FOLDERS[id]}/package.json does not exist to record a version`
+        : `${id}: neither integrations/${id}/package.json nor integrations/${id}/app/package.json records a version`,
     );
   else {
     const pkg = JSON.parse(readFileSync(resolve(base, file), 'utf8'));
@@ -154,15 +177,15 @@ export function staticProblems(entry, base = root) {
       );
   }
 
-  if (!existsSync(resolve(base, 'integrations', id, 'app/build.mjs')))
-    problems.push(`${id}: integrations/${id}/app/build.mjs is missing`);
+  if (!existsSync(resolve(base, appFolder(id), 'build.mjs')))
+    problems.push(`${id}: ${appFolder(id)}/build.mjs is missing`);
 
   return problems;
 }
 
 /** The app's module, built in memory by its own build.mjs. */
 export async function buildApp(id, base = root) {
-  const file = resolve(base, 'integrations', id, 'app/build.mjs');
+  const file = resolve(base, appFolder(id), 'build.mjs');
   // Keyed by content, so a changed build.mjs is not served from the module
   // cache within one process.
   const version = createHash('sha1').update(readFileSync(file)).digest('hex');

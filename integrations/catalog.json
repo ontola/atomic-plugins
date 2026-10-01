@@ -185,7 +185,7 @@
     "https://atomicdata.dev/properties/emoji": "✅",
     "https://atomicdata.dev/properties/description": "Bring your Todoist projects and tasks into a local issue tracker.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports active tasks and projects. Tasks open in the Issues view with their title, due day and priority. Todoist lists active tasks only, so a task shows as closed only when Todoist itself reports it checked.",
-    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, then Sync now (and every five minutes while the folder is open) to pull the latest tasks.",
+    "https://atomicdata.dev/integrations/properties/events": "None at this version: no host runs the Todoist lens. Its host hook, with the LocalThought connect flow it used, was removed from atomic-server (f3efedf65, c707ca4ed), and no drive app wraps the lens yet. A drive app would connect Todoist through the host's consent bar and the integration proxy, like the other drive apps; that is planned, not built.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist. A task that stops appearing is never assumed completed. The lens can check such a task by id and mark it completed, deleted, unavailable or unconfirmed, with when it was last seen, but no host runs that check yet, and nothing has been verified against a live Todoist account.",
     "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects devonian lens local tracker issues",
     "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
@@ -224,11 +224,14 @@
     "https://atomicdata.dev/properties/emoji": "🐦",
     "https://atomicdata.dev/properties/description": "Import the contacts of one Moneybird administration, read-only.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports the contacts of one administration (archived ones included) into a typed table: name, company, e-mail, city, country, customer ID, archived, version. Invoices, financial mutations, ledger accounts and the other collections are not imported yet.",
-    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, pick an administration, then contacts refresh whenever the app is opened, or on Sync now.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar and choose an administration. Contacts refresh whenever the app is opened and on Sync now. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. Contacts only. One administration per app. Tested against a synthetic fixture, not a real Moneybird account.",
-    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration localthought",
-    "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
-    "https://atomicdata.dev/integrations/properties/platform": "moneybird"
+    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-yc2fJ42WEWVdgEEJuhhnL4Tf3fGLwiPzNq2EluOcSXQVDfu4QyWK5jrAEf+NzKIy"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",
