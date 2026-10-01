@@ -119,6 +119,28 @@ ontology; one row per issue in the app's table, the body in Atomic's own
 comments" folder under the app; and one sync resource holding the bound
 repository and the sync state as JSON text.
 
+**First import (#206).** An issue or comment that is on GitHub, never
+synced and not in the table is created from the list page GitHub returned
+(`GET …/issues?state=all&per_page=100`, `GET …/issues/{n}/comments`): no
+per-item GET, and no pending operation is checkpointed first. Pull requests
+come back in the issue list and are skipped there, so neither they nor their
+comments are fetched. The sync state holds every imported issue's text
+(about 1.26 MB for 65 issues of about 4 KB and 106 comments), so it is
+written every 25 imported records or 10 s, not before each one. Rows show on
+the board as they are imported ("Importing… 40 issues so far"). After a
+reload the import resumes: rows imported after the last state write bind
+back by their issue number column, and comment Messages by the comment id
+in their GitHub source, even when the host reads back an older sync state.
+In `app/import.test.ts` (fake host, 65 issues + 141 pull requests + 106
+comments), the import went from 581 proxy calls, 343 state writes and
+280,004,627 bytes of state written to 68 proxy calls, 7 state writes and
+6,186,807 bytes; the 187 table writes (one per imported row or Message,
+plus set-up) are unchanged. How long one `/app-write` takes on the droplet
+is not measured here. Later passes that bring in GitHub changes to issues
+already in the table still read each changed item back and checkpoint
+before writing it; for a few changed items that is fine, for hundreds it is
+slow.
+
 **Review before provider writes.** A pass never sends a create or update to
 GitHub on its own. An edit in the app (a moved card, a title, a
 description, a comment, a new issue) is written into the table at once and
@@ -149,9 +171,12 @@ replace them.
   transport's journal refuses: "Uncertain GitHub write"), and sync stays
   paused. The banner says so and links to GitHub; "Send again" is offered
   only for an update GitHub does not show. There is no in-app way out for an
-  uncertain create yet (design state 12), nor for a record missing on one
-  side (state 13, "Remove from board" / "Keep here only"): both need Bridge
-  calls, and unbinding needs an `AtomicIdentityMap` unbind in `devonian/`.
+  uncertain create yet (design state 12, "It landed", #156).
+- An issue GitHub no longer has (state 13): "Keep here only" forgets its
+  GitHub identity and clears the row's issue number, so it stays as a local
+  row; "Remove from board" forgets it on both sides and deletes its row and
+  comment Messages here (`app/sync.ts`, `AtomicIdentityMap.unbind` from
+  devonian 0.8.0). Neither sends anything to GitHub.
 - Atomic Server refusing a write: a banner with "Try again".
 - Anything else (network, 5xx, rate limit) shows on the pill only, with
   "Retry now", and is retried on a timer while the view is open. While sync
@@ -180,7 +205,11 @@ read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 **Not verified, or not supported:**
 
 - Only against the mock proxy's seeded repository (`atomic-fixture/tracker`:
-  two issues, one comment). Nothing has run against live GitHub, the real
+  two issues, one comment); once, by hand, against its synthetic
+  `user-testing` scenario (see [Mock data for user
+  testing](#mock-data-for-user-testing)); and, in `app/import.test.ts`, a
+  synthetic 206-item repository against the in-memory fake host only.
+  Nothing has run against live GitHub, the real
   integration proxy, or a repository beyond a handful of issues. The
   Collection pages at 500; larger repositories are not tested.
 - Two tabs or devices syncing the same app at once are not guarded: the sync
@@ -212,9 +241,14 @@ read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
   `store.getMany` in batches of 100.
 - Search, keyboard and drag were checked in jsdom and the e2e; drag and drop
   was not exercised in an automated test.
-- **Install.** No catalog install flow for drive apps exists yet (#94), so
-  there is no catalog entry: one would advertise a runtime a user cannot
-  reach. The e2e installs the app test-side, as pets' and notion's do.
+- **Install.** From the catalog: entry `issue-tracker` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under
+  the Integrations page's **Drive apps**, which downloads
+  `apps/issue-tracker/<version>/ui.js` from GitHub Pages and checks it
+  against the entry's integrity hash (see
+  [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
+  installs it that way, from the committed module the lane's dev-server
+  serves. A new release needs a version bump in `app/package.json` and the
+  catalog, then `node integrations/tooling/apps.mjs write issue-tracker`.
 
 `app/package.json` pins `devonian@0.8.0` from npm (install it with
 `pnpm install --frozen-lockfile` in `app/`), bundled as `devonian/atomic` plus
@@ -223,6 +257,47 @@ rather than here because `certify.mjs` treats a `package.json` in a plugin
 folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
 syncables would only add size.
+
+## Mock data for user testing
+
+The mock proxy's github-issues fixture has a second, opt-in scenario for
+trying the app by hand: start `integrations/localthought/mock-proxy.mjs`
+with `MOCK_SCENARIO=user-testing`. Its data, in
+`fixtures/github-issues/user-testing.mjs`, is synthetic: an invented studio's
+repositories, none of it recorded from GitHub.
+
+- `GET /user/repos` lists `acme-studio/website` (16 issues: 9 Todo, 3 Doing,
+  4 Done; 7 comments by four invented people), `acme-studio/brand-guide`
+  (2 issues) and `acme-studio/old-site` (issues turned off). The
+  `atomic-fixture/*` repositories are not listed in this scenario.
+- Labels are GitHub's `{ name, color }` objects (bug, enhancement, design,
+  docs, maintenance, good first issue, planning); `atomic:doing` stays a
+  plain name, as the fixture's label routes add it. Issues carry authors,
+  assignees and dates spread over the past 50 days. It includes one title of
+  about 160 characters, Markdown bodies with a task list, code blocks and
+  links, and one issue with no body (`null`).
+- The default scenario, which the e2e asserts, is unchanged.
+
+Drivers for changes on the GitHub side mid-session, as
+`POST /fixture/github-issues/<driver>` with a JSON array of arguments:
+`updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
+`commentAs` (`[repo, number, login, body]`, a comment by someone else) and
+`failNext` (`[status, count]`: the next `count` proxied requests answer 503,
+429/403 as a rate limit, or 401).
+
+For live GitHub, `fixtures/github-issues/seed-live-repo.mjs --repo
+<owner>/<name> [--yes]` puts the same `acme-studio/website` issues, labels
+(with `atomic:doing`) and comments into an empty, disposable repository. It
+runs `gh api` as whichever account the GitHub CLI is signed in as, which
+should be a dedicated test account. Everything is then authored by that
+account, and nothing is assigned. Without `--yes` it only prints what it
+would do. It was checked only for its refusals (bad arguments, a repository
+that already has issues); no repository has been seeded with it yet.
+
+Checked once, on 2026-09-25, against atomic-server `bc39dac4b` served by a
+Vite dev build: connect, the picker and importing `acme-studio/website` all
+worked. The import took about 33 s. `scenario.test.ts` covers the scenario
+and the drivers.
 
 ## Verification
 

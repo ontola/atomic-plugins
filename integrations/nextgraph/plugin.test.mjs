@@ -11,6 +11,8 @@ import {
   P,
   MAX_BYTES,
   SELECT,
+  SIDECAR_QUERY,
+  pushIntent,
 } from './plugin.mjs';
 const fixture = await readFile(
   new URL('./fixtures/select.json', import.meta.url),
@@ -260,7 +262,111 @@ test('bundle builds reproducibly without broker dependencies', async () => {
     'data:text/javascript;base64,' + Buffer.from(first).toString('base64')
   );
   assert.equal(module.ntriples(fixture), ntriples(fixture));
-  assert.equal(manifest.http, undefined);
+  // No routes, keys or listeners: the only gated surface is the sidecar.
+  assert.deepEqual(Object.keys(manifest.http), ['sidecars']);
+  assert.deepEqual(
+    manifest.http.sidecars.map(s => s.name),
+    ['nextgraph'],
+  );
+});
+
+const DOCUMENT =
+  'did:ng:o:Dn0QpE9_4jhta1mUWRl_LZh1SbXUkXfOB5eu38PNIk4A:v:Z4ihjV3KMVIqBxzjP6hogVLyjkZunLsb7MMsCR0kizQA';
+
+const pulling = (answer, calls = []) => ({
+  config: {
+    ...config,
+    mode: 'pull',
+    result: undefined,
+    document: DOCUMENT,
+  },
+  query: () => [],
+  read: () => assert.fail('unexpected read'),
+  http: request => {
+    calls.push(request);
+
+    return answer;
+  },
+});
+
+test('pull reads the document through exactly the declared sidecar read operation', () => {
+  const calls = [];
+  const result = run(pulling({ status: 200, body: fixture }, calls));
+  assert.equal(calls.length, 1);
+  const [request] = calls;
+  const declared = manifest.operations.find(o => o.id === request.operation);
+  assert.deepEqual(
+    [declared.method, declared.url, declared.effect],
+    [request.method, request.url, 'read'],
+  );
+  assert.equal(request.url, SIDECAR_QUERY);
+  assert.deepEqual(JSON.parse(request.body), { document: DOCUMENT });
+  // No credentials or identity from the plugin: the host asserts those.
+  assert.deepEqual(Object.keys(request.headers), ['content-type']);
+  const [intent] = result.intents;
+  assert.equal(intent.op, 'create');
+  assert.equal(intent.set[P.description], fixture);
+  assert.equal(intent.set[P.media], 'application/sparql-results+json');
+});
+
+test('pull refuses a refused, malformed or oversized sidecar answer without intents', () => {
+  const big = JSON.stringify({
+    head: { vars: ['s', 'p', 'o'] },
+    results: {
+      bindings: Array.from({ length: 257 }, (_, i) => ({
+        s: uri(`did:ng:z:s${i}`),
+        p: uri('did:ng:z:p'),
+        o: literal(String(i)),
+      })),
+    },
+  });
+  for (const [answer, message] of [
+    [{ status: 403, body: '{"type":"no-grant"}' }, /refused the query \(403\)/],
+    [{ status: 200, body: '{"boolean":true}' }, /SELECT/],
+    [{ status: 200, body: big }, /At most 256/],
+  ])
+    assert.throws(() => run(pulling(answer)), message);
+  for (const document of [undefined, 'https://x.example/doc', 'did:ng:o:a b'])
+    assert.throws(
+      () =>
+        run({
+          ...pulling({ status: 200, body: fixture }),
+          config: { ...pulling().config, document },
+        }),
+      /NURI/,
+    );
+});
+
+test('pushIntent is the declared write operation, keyed by the export id', () => {
+  const update = insertData(fixture);
+  const intent = pushIntent({ document: DOCUMENT, id: 'export-1', update });
+  const declared = manifest.operations.find(o => o.id === intent.operation);
+  assert.deepEqual(
+    [declared.method, declared.url, declared.effect],
+    [intent.method, intent.url, 'write'],
+  );
+  assert.equal(intent.id, 'push-export-1');
+  assert.deepEqual(JSON.parse(intent.body), {
+    document: DOCUMENT,
+    key: 'atomic-export-export-1',
+    update,
+  });
+  // Deterministic: a retried approval is the same intent, which the host
+  // journal and the sidecar both answer with the stored acknowledgement.
+  assert.deepEqual(
+    pushIntent({ document: DOCUMENT, id: 'export-1', update }),
+    intent,
+  );
+  assert.throws(
+    () =>
+      pushIntent({
+        document: DOCUMENT,
+        id: 'e',
+        update: 'DELETE WHERE { ?s ?p ?o }',
+      }),
+    /INSERT DATA/,
+  );
+  assert.throws(() => pushIntent({ document: 'x', id: 'e', update }), /NURI/);
 });
 
 test('manifest declares each consumed installation config field with host-supported types', () => {
@@ -271,6 +377,7 @@ test('manifest declares each consumed installation config field with host-suppor
     'name',
     'result',
     'sourceSubject',
+    'document',
   ]);
   assert.deepEqual(manifest.config.required, ['mode', 'parent', 'id', 'name']);
 

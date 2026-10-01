@@ -128,7 +128,7 @@ test('candidate integrity check refuses mutated payload, length and noncanonical
     checkCandidate(Uint8Array.from([...c.entryBytes, 0]), c.payload),
   );
 });
-test('run creates ordinary reviewed Atomic resource intents, never authorisations or public routes', () => {
+test('run creates ordinary reviewed Atomic resource intents, never authorisations', () => {
   const f = fixture(),
     verdict = run(f.ctx),
     [intent] = verdict.intents;
@@ -141,7 +141,9 @@ test('run creates ordinary reviewed Atomic resource intents, never authorisation
     JSON.parse(intent.set[P.description]).entryHex,
     intent.set[P.baseline].entryHex,
   );
-  assert.equal(manifest.http, undefined);
+  // The job signs nothing: only the drop route asks the host to authorise
+  // entries (route.test.mjs).
+  assert.doesNotMatch(JSON.stringify(verdict), /signature/);
   assert.deepEqual(manifest.secrets, []);
 });
 test('reruns reuse stored candidate identity and changes require an increased logical timestamp', () => {

@@ -1,15 +1,34 @@
 // @wc-ignore-file
 /**
  * The display model of the Calendar app's views: events as the rows hold
- * them, laid out per day (Agenda) and per column (Week) in the viewer's zone.
- * Pure functions only; `main.ts` and the view modules draw from these.
+ * them, laid out per day (Agenda) and per column (Week). Pure functions
+ * only; `main.ts` and the view modules draw from these.
  *
- * All-day `end` is exclusive (the day after the last day), as Google and the
- * lens store it. A timed event that crosses midnight is split into one
- * segment per day it covers.
+ * Which days an event occupies is decided exactly as the host table's own
+ * Calendar view decides it (atomic-server
+ * `browser/data-browser/src/chunks/TablePage/Calendar/CalendarView.tsx` at
+ * the pin in `.atomic-server-ref`), from the same columns, with the host's
+ * own `isAllDayOnDate` (imported from its `calendar-date.ts`, not copied):
+ *
+ * - a row is placed by its Day (`atomic-calendar-day`): the first ten
+ *   characters of the stored string. A row without one is drawn nowhere.
+ * - a row whose All day is true and that has an End day is drawn on every
+ *   day with Day <= day < End day (End day is exclusive). An End day on or
+ *   before Day, or one that is not a date, draws it nowhere.
+ * - every other row, timed ones included, is drawn on its Day only. A timed
+ *   event that runs past midnight is not continued on the next day, and its
+ *   End day is ignored.
+ *
+ * Start and End only give the clock times within that day, read in the
+ * event's own stored offset (the offset its Day is the date in), so a viewer
+ * in another zone sees the event on the same day as the host view does.
  */
 import type { Projection } from '../adapter.js';
-import { addDays, daysBetween, instant, wall } from './time.js';
+import {
+  isAllDayOnDate,
+  isCalendarDate,
+} from '../../../browser/lib/src/calendar-date.js';
+import { addDays, daysBetween, instant } from './time.js';
 
 export interface CalEvent extends Projection {
   /** The row's subject. */
@@ -27,6 +46,56 @@ export interface CalEvent extends Projection {
   /** The calendar is read-only for this person: never offer Edit. */
   readOnly: boolean;
   calendar: { name: string; color: string };
+  /** The row's Day (`atomic-calendar-day`) as stored: it places the event. */
+  day: unknown;
+  /** The row's End day (`atomic-calendar-end-day`) as stored, if any. */
+  endDay: unknown;
+}
+
+/** The host view's day key: the first ten characters of the stored Day. */
+function hostKey(event: CalEvent): string | undefined {
+  return typeof event.day === 'string' && /^\d{4}-\d{2}-\d{2}/.test(event.day)
+    ? event.day.slice(0, 10)
+    : undefined;
+}
+
+/**
+ * Whether the host table's Calendar view draws `event` on `date`: its
+ * bucketing of a row, for a table whose date column is `atomic-calendar-day`.
+ */
+export function occupies(event: CalEvent, date: string): boolean {
+  const key = hostKey(event);
+  if (event.allDay && event.endDay !== undefined)
+    return isAllDayOnDate(key, event.endDay, date);
+
+  return key !== undefined && key === date;
+}
+
+/** The first day the host view draws `event` on, if it draws it at all. */
+function firstDay(event: CalEvent): string | undefined {
+  const key = hostKey(event);
+
+  return key !== undefined && occupies(event, key) ? key : undefined;
+}
+
+/**
+ * A timed event's clock in its own stored offset: minutes since midnight of
+ * Start as written, and how long it lasts. Undefined when Start and End are
+ * not a valid timed interval.
+ */
+function clock(
+  event: Projection,
+): { startMin: number; duration: number } | undefined {
+  const m = /^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})/.exec(event.start);
+  const start = Date.parse(event.start);
+  const end = Date.parse(event.end);
+  if (!m || !Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+    return undefined;
+
+  return {
+    startMin: Number(m[1]) * 60 + Number(m[2]),
+    duration: Math.round((end - start) / 60_000),
+  };
 }
 
 /** Start and end as instants, for ordering and timed layout. */
@@ -56,63 +125,72 @@ export function bounds(
 export interface Segment {
   event: CalEvent;
   date: string;
-  /** All-day, or a timed event covering this whole day (drawn as all-day). */
+  /** Drawn in the all-day area: an all-day row, or a row without clock times. */
   allDay: boolean;
-  /** Minutes since midnight in the viewer's zone (0 when it continues from the day before). */
+  /** A row that is not all-day but has no valid Start and End to time it. */
+  untimed?: boolean;
+  /** Minutes since midnight, in the event's own stored offset. */
   startMin: number;
-  /** Minutes since midnight (1440 when it continues into the next day). */
+  /** Minutes since midnight, capped at 1440 when the event runs past midnight. */
   endMin: number;
-  /** 1-based day of a multi-day event, and how many days it covers. */
+  /** When a timed event runs past midnight: End's own date and clock. */
+  until?: { date: string; minutes: number };
+  /** 1-based day of a multi-day all-day event, and how many days it covers. */
   dayOf?: { n: number; total: number };
 }
 
-/** The per-day pieces of one event, clipped to [from, from + days). */
+/**
+ * The days of [from, from + days) the host view draws `event` on (see the
+ * file comment), one segment each.
+ */
 export function segments(
   event: CalEvent,
   from: string,
   days: number,
-  zone: string,
 ): Segment[] {
   const out: Segment[] = [];
-  const last = addDays(from, days);
+  const key = hostKey(event);
+  const total =
+    event.allDay && key !== undefined && isCalendarDate(event.endDay)
+      ? daysBetween(key, event.endDay)
+      : 1;
+  const time = event.allDay ? undefined : clock(event);
 
-  if (event.allDay) {
-    if (!bounds(event, zone)) return out;
-    const total = daysBetween(event.start, event.end);
+  for (let i = 0; i < days; i++) {
+    const date = addDays(from, i);
+    if (!occupies(event, date)) continue;
 
-    for (let d = event.start, n = 1; d < event.end; d = addDays(d, 1), n++)
-      if (d >= from && d < last)
-        out.push({
-          event,
-          date: d,
-          allDay: true,
-          startMin: 0,
-          endMin: 1440,
-          ...(total > 1 ? { dayOf: { n, total } } : {}),
-        });
+    if (event.allDay || !time) {
+      out.push({
+        event,
+        date,
+        allDay: true,
+        ...(event.allDay ? {} : { untimed: true }),
+        startMin: 0,
+        endMin: 1440,
+        ...(key !== undefined && total > 1
+          ? { dayOf: { n: daysBetween(key, date) + 1, total } }
+          : {}),
+      });
+      continue;
+    }
 
-    return out;
-  }
-
-  const b = bounds(event, zone);
-  if (!b) return out;
-  const s = wall(b.start, zone);
-  const e = wall(b.end, zone);
-  // An end at exactly midnight belongs to the day before.
-  const lastDay = e.minutes === 0 ? addDays(e.date, -1) : e.date;
-  const total = daysBetween(s.date, lastDay) + 1;
-
-  for (let d = s.date, n = 1; d <= lastDay; d = addDays(d, 1), n++) {
-    if (d < from || d >= last) continue;
-    const startMin = d === s.date ? s.minutes : 0;
-    const endMin = d === e.date ? e.minutes : 1440;
+    const endAt = time.startMin + time.duration;
+    const end = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(event.end);
     out.push({
       event,
-      date: d,
-      allDay: total > 1 && startMin === 0 && endMin === 1440,
-      startMin,
-      endMin,
-      ...(total > 1 ? { dayOf: { n, total } } : {}),
+      date,
+      allDay: false,
+      startMin: time.startMin,
+      endMin: Math.min(endAt, 1440),
+      ...(endAt > 1440 && end
+        ? {
+            until: {
+              date: end[1],
+              minutes: Number(end[2]) * 60 + Number(end[3]),
+            },
+          }
+        : {}),
     });
   }
 
@@ -140,13 +218,12 @@ export function agendaDays(
   events: CalEvent[],
   from: string,
   days: number,
-  zone: string,
 ): AgendaDay[] {
   const byDay = new Map<string, Segment[]>();
   for (let i = 0; i < days; i++) byDay.set(addDays(from, i), []);
 
   for (const event of events)
-    for (const segment of segments(event, from, days, zone))
+    for (const segment of segments(event, from, days))
       byDay.get(segment.date)!.push(segment);
 
   return [...byDay].map(([date, items]) => ({
@@ -190,14 +267,13 @@ export function packWeek(
   events: CalEvent[],
   from: string,
   count: number,
-  zone: string,
 ): WeekLayout {
   const days = Array.from({ length: count }, (_, i) => addDays(from, i));
   const barSegs = new Map<string, Segment[]>();
   const perDay: Segment[][] = days.map(() => []);
 
   for (const event of events)
-    for (const segment of segments(event, from, count, zone)) {
+    for (const segment of segments(event, from, count)) {
       if (segment.allDay) {
         const list = barSegs.get(event.subject) ?? [];
         list.push(segment);
@@ -285,20 +361,33 @@ function packColumn(sorted: Segment[]): Block[] {
   return out;
 }
 
+/**
+ * Where `event` starts as the views draw it: its first day in the host view
+ * and, for a timed event, the clock time on it. Undefined when the host view
+ * draws it nowhere.
+ */
+function placed(event: CalEvent): { date: string; at: number } | undefined {
+  const date = firstDay(event);
+  if (date === undefined) return undefined;
+  const time = event.allDay ? undefined : clock(event);
+
+  return {
+    date,
+    at: Date.parse(`${date}T00:00:00Z`) + (time?.startMin ?? 0) * 60_000,
+  };
+}
+
 /** The first event starting on or after `date`, for "Jump to next event". */
 export function nextEvent(
   events: CalEvent[],
   after: string,
-  zone: string,
 ): { event: CalEvent; date: string } | undefined {
   let best: { event: CalEvent; date: string; at: number } | undefined;
 
   for (const event of events) {
-    const b = bounds(event, zone);
-    if (!b) continue;
-    const date = event.allDay ? event.start : wall(b.start, zone).date;
-    if (date < after) continue;
-    if (!best || b.start < best.at) best = { event, date, at: b.start };
+    const p = placed(event);
+    if (!p || p.date < after) continue;
+    if (!best || p.at < best.at) best = { event, ...p };
   }
 
   return best && { event: best.event, date: best.date };
@@ -310,16 +399,13 @@ export function nextEvent(
 export function latestEvent(
   events: CalEvent[],
   before: string,
-  zone: string,
 ): { event: CalEvent; date: string } | undefined {
   let best: { event: CalEvent; date: string; at: number } | undefined;
 
   for (const event of events) {
-    const b = bounds(event, zone);
-    if (!b) continue;
-    const date = event.allDay ? event.start : wall(b.start, zone).date;
-    if (date >= before) continue;
-    if (!best || b.start > best.at) best = { event, date, at: b.start };
+    const p = placed(event);
+    if (!p || p.date >= before) continue;
+    if (!best || p.at > best.at) best = { event, ...p };
   }
 
   return best && { event: best.event, date: best.date };
@@ -330,11 +416,10 @@ export function busyDays(
   events: CalEvent[],
   from: string,
   days: number,
-  zone: string,
 ): Set<string> {
   const out = new Set<string>();
   for (const event of events)
-    for (const s of segments(event, from, days, zone)) out.add(s.date);
+    for (const s of segments(event, from, days)) out.add(s.date);
 
   return out;
 }

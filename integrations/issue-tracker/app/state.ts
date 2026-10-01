@@ -12,6 +12,11 @@
  *   one (a baseline moving after both sides already agree) are only marked
  *   dirty and written by `flush()` at the end of the pass: losing them
  *   costs a re-check next pass, never a duplicate write.
+ * - An import (a GitHub issue or comment new to the table) checkpoints no
+ *   pending operation at all (bridge.mjs); `runPass` flushes every
+ *   `IMPORT_FLUSH_EVERY` imports or `IMPORT_FLUSH_MS`, so a reload resumes
+ *   from there. Rows imported after that flush bind back by their issue
+ *   number or comment id.
  *
  * Not guarded: two tabs or devices syncing the same app at the same moment.
  * The resource syncs across devices and `/app-write` has no compare-and-swap,
@@ -60,11 +65,26 @@ export function parseState(text: unknown): PersistedState {
   } as PersistedState;
 }
 
+/**
+ * Whether a record carries an operation that may touch a side. A held one
+ * never sent anything (review.mjs) and is planned again next pass, so it
+ * does not force a write; unless it is `unconfirmed`, which a reviewer must
+ * be told about after a reload too. Before #206, one held edit made every
+ * later checkpoint of the pass write the whole state.
+ */
 const hasPending = (snapshot: unknown) =>
   Object.values(
-    (snapshot as { records?: Record<string, { pending?: unknown }> })
-      ?.records ?? {},
-  ).some(record => record.pending);
+    (
+      snapshot as {
+        records?: Record<
+          string,
+          { pending?: { held?: boolean }; unconfirmed?: boolean }
+        >;
+      }
+    )?.records ?? {},
+  ).some(
+    record => record.pending && (!record.pending.held || record.unconfirmed),
+  );
 
 export class SyncState {
   readonly state: PersistedState;
@@ -87,6 +107,11 @@ export class SyncState {
 
   async saveJournal(): Promise<void> {
     await this.flush();
+  }
+
+  /** Whether the state has changes `flush` has not written yet. */
+  get isDirty(): boolean {
+    return this.dirty;
   }
 
   async flushIfDirty(): Promise<void> {

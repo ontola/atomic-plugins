@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 3,
+  "name": "fediverse",
+  "namespace": "ontola",
+  "capabilities": [
+    {
+      "name": "storage",
+      "reason": "Reads the public profile and posts it publishes, and keeps followers and replies as resources under the folders you choose."
+    }
+  ],
+  "operations": [
+    {
+      "id": "deliver",
+      "method": "POST",
+      "url": "https://*/inbox",
+      "effect": "write"
+    }
+  ],
+  "config": {
+    "key": "fediverse",
+    "properties": {
+      "origin": {
+        "type": "string",
+        "description": "The drive host this actor lives on, e.g. https://alice.example. Every protocol id is under it."
+      },
+      "username": {
+        "type": "string",
+        "description": "The account name: @<username>@<host>. Lowercase letters, digits, - and _."
+      },
+      "profile": {
+        "type": "string",
+        "description": "A publicly readable resource; its name and description become the actor's name and summary."
+      },
+      "posts": {
+        "type": "string",
+        "description": "Folder of posts. Must be readable by the public agent. Posts published here are stored in it."
+      },
+      "followers": {
+        "type": "string",
+        "description": "Folder where followers are kept (one Bookmark per follower). Keep it private."
+      },
+      "replies": {
+        "type": "string",
+        "description": "Folder where replies to your posts are stored as Messages."
+      },
+      "publishers": {
+        "type": "array",
+        "description": "Agents allowed to post through /ap/outbox."
+      }
+    },
+    "required": [
+      "origin",
+      "username",
+      "profile",
+      "posts",
+      "followers",
+      "replies",
+      "publishers"
+    ]
+  },
+  "http": {
+    "mount": "drive-host",
+    "routes": [
+      {
+        "id": "actor",
+        "path": "/ap/actor",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "objects",
+        "path": "/ap/objects/{id}",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "activities",
+        "path": "/ap/activities/{id}",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "outbox",
+        "path": "/ap/outbox",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "publish",
+        "path": "/ap/outbox",
+        "methods": ["POST"],
+        "principal": "installation",
+        "auth": "atomic",
+        "body": "json",
+        "maxBodyBytes": 16384,
+        "writes": ["posts"],
+        "enqueues": ["deliver"]
+      },
+      {
+        "id": "followers",
+        "path": "/ap/followers",
+        "methods": ["GET", "HEAD"],
+        "principal": "installation",
+        "auth": "none"
+      },
+      {
+        "id": "inbox",
+        "path": "/ap/inbox",
+        "methods": ["POST"],
+        "principal": "installation",
+        "auth": "http-signature",
+        "body": "json",
+        "maxBodyBytes": 262144,
+        "writes": ["followers", "replies"],
+        "enqueues": ["deliver"]
+      },
+      {
+        "id": "webfinger",
+        "path": "/webfinger",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none",
+        "cors": "any-origin-no-credentials"
+      },
+      {
+        "id": "nodeinfo-links",
+        "path": "/nodeinfo",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      },
+      {
+        "id": "nodeinfo",
+        "path": "/nodeinfo/2.1",
+        "methods": ["GET", "HEAD"],
+        "principal": "anonymous",
+        "auth": "none"
+      }
+    ],
+    "wellKnown": [
+      {
+        "name": "webfinger",
+        "kind": "shared",
+        "match": {
+          "resourcePrefix": "acct:",
+          "rels": ["self"]
+        },
+        "route": "webfinger"
+      },
+      {
+        "name": "nodeinfo",
+        "kind": "exclusive",
+        "route": "nodeinfo-links"
+      }
+    ],
+    "writeTargets": [
+      {
+        "id": "posts",
+        "parent": "config:posts",
+        "classes": ["https://atomicdata.dev/classes/Message"]
+      },
+      {
+        "id": "followers",
+        "parent": "config:followers",
+        "classes": ["https://atomicdata.dev/class/Bookmark"]
+      },
+      {
+        "id": "replies",
+        "parent": "config:replies",
+        "classes": ["https://atomicdata.dev/classes/Message"]
+      }
+    ],
+    "keys": [
+      {
+        "name": "actor-key",
+        "alg": "rsa-sha256",
+        "reason": "The actor's key: published in its actor document, and signs every delivery to other fediverse servers."
+      }
+    ],
+    "reason": "One ActivityPub actor for this drive: other fediverse servers can find it (WebFinger), follow it, receive its public posts and send replies. Anyone on the internet can call these endpoints; this plugin decides what they may see and store."
+  }
+}

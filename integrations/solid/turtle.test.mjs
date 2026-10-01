@@ -28,31 +28,42 @@ const graph = [
     'https://example.org/name': [{ '@value': 'Alice', '@language': 'en' }],
   },
 ];
+const STORAGE = 'https://atomic.example/folder';
+const BASE = 'http://pod.routes.example';
 const req = (accept, method = 'GET', extra = {}) => ({
   method,
-  params: { id: 'alice' },
+  path: '/alice',
+  base: BASE,
   headers: { accept, ...extra },
+  caller: null,
 });
+/** One stored atom at `/alice`, readable by the public (a host double). */
 const context = (body = turtle, media = 'text/turtle') => ({
   config: {
-    parent: 'https://atomic.example/folder',
+    storage: STORAGE,
+    access: { public: ['read'] },
+    parent: STORAGE,
     document: { id: 'alice', name: 'Alice', body, mediaType: media },
-    exports: { alice: 'https://atomic.example/alice' },
   },
-  query: () => [],
-  read: () => ({ [P.description]: body, [P.media]: media }),
+  query: (property, value) =>
+    property === P.localId && value === 'solid:/alice'
+      ? ['https://atomic.example/alice']
+      : [],
+  read: () => ({
+    [P.description]: body,
+    [P.media]: media,
+    [P.localId]: 'solid:/alice',
+    [P.parent]: STORAGE,
+  }),
 });
 test('Turtle import uses actual PlainText atom intents and preserves source body', () => {
   const c = context();
-  const intent = run(c).intents[0];
+  const intent = run({ ...c, query: () => [] }).intents[0];
   assert.equal(intent.set[P.description], turtle);
   assert.equal(intent.set[P.media], 'text/turtle');
 
-  c.read = subject => {
-    assert.equal(subject, c.config.exports.alice);
-
-    return intent.set;
-  };
+  const read = c.read;
+  c.read = subject => ({ ...read(subject), ...intent.set });
 
   assert.equal(handle(c, req('text/turtle')).body, turtle);
   assert.deepEqual(
@@ -74,7 +85,7 @@ test('stored JSON-LD generates Turtle with rdf:type and named-node references', 
   );
   assert.equal(result.status, 200);
   assert.equal(result.headers['content-type'], 'text/turtle');
-  assert.match(result.headers.link, /#RDFSource/);
+  assert.ok(result.headers.link.some(l => l.includes('#RDFSource')));
   assert.deepEqual(parseTurtle(result.body), [
     {
       '@id': 'urn:alice',
@@ -110,7 +121,7 @@ test('representation-specific validators and HEAD apply after conversion', () =>
   const a = handle(c, req('text/turtle'));
   const b = handle(c, req('application/ld+json'));
   assert.notEqual(a.headers.etag, b.headers.etag);
-  assert.equal(b.headers.vary, 'Accept');
+  assert.equal(b.headers.vary, 'Accept, Authorization, Origin');
   assert.equal(
     handle(
       c,
@@ -140,15 +151,41 @@ test('denied Atomic read never parses or reveals a representation', () => {
 });
 test('unsupported valid Turtle forms fail closed without claiming full Turtle conformance', () => {
   for (const text of [
-    '@base <https://example.org/> . <a> <b> <c> .',
     '<relative> <urn:p> <urn:o> .',
-    '_:b <urn:p> "x" .',
-    '<urn:s> <urn:p> [] .',
     '<urn:s> <urn:p> ( <urn:o> ) .',
-    '<urn:s> <urn:p> """long""" .',
     '@prefix ex: <urn:> . ex:a.b ex:p ex:o .',
   ])
     assert.throws(() => parseTurtle(text), text);
+});
+test('base IRIs, blank nodes and long strings, which Solid documents use', () => {
+  assert.deepEqual(
+    parseTurtle('@base <https://example.org/dir/doc> . <a> <#b> <../c> .'),
+    [
+      {
+        '@id': 'https://example.org/dir/a',
+        'https://example.org/dir/doc#b': [{ '@id': 'https://example.org/c' }],
+      },
+    ],
+  );
+  assert.deepEqual(
+    parseTurtle('<#me> <urn:p> <> .', { base: 'https://pod.example/card' }),
+    [
+      {
+        '@id': 'https://pod.example/card#me',
+        'urn:p': [{ '@id': 'https://pod.example/card' }],
+      },
+    ],
+  );
+  assert.deepEqual(
+    parseTurtle('_:x <urn:p> [ <urn:q> """two\nlines""" ], _:x .'),
+    [
+      { '@id': '_:g1', 'urn:q': [{ '@value': 'two\nlines' }] },
+      { '@id': '_:b0', 'urn:p': [{ '@id': '_:g1' }, { '@id': '_:b0' }] },
+    ],
+  );
+  assert.deepEqual(parseTurtle('[ <urn:p> "x" ] .'), [
+    { '@id': '_:g1', 'urn:p': [{ '@value': 'x' }] },
+  ]);
 });
 test('malformed escapes, literal suffixes and trailing syntax are rejected', () => {
   for (const text of [
@@ -195,10 +232,12 @@ test('bounded parsing rejects excessive nodes, triples, UTF-8 and prefix expansi
 });
 test('stored malformed Turtle gets a representation error without mutation', () => {
   assert.equal(
-    handle(context('<s> <p> <o> .'), req('application/ld+json')).status,
+    handle(context('<urn:s> <urn:p> .'), req('application/ld+json')).status,
     415,
   );
-  assert.throws(() => run(context('<s> <p> <o> .')));
+  // Relative IRIs resolve against the resource's URL when served, but an
+  // import job has no URL to resolve them against.
+  assert.throws(() => run({ ...context('<s> <p> <o> .'), query: () => [] }));
 });
 
 test('expanded Turtle output cap cannot bypass native JSON-LD reads', () => {
