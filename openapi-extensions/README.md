@@ -2,6 +2,8 @@
 
 A collection of OpenAPI extensions — each proposed for inclusion in the main [OpenAPI Specification](https://spec.openapis.org/oas/latest.html) — developed and maintained by [PonderSource](https://github.com/pondersource).
 
+This folder is now maintained in [ontola/atomic-plugins](https://github.com/ontola/atomic-plugins/tree/main/openapi-extensions), next to the overlays, proxy and sync engine that implement these extensions. It was migrated from the standalone [pondersource/openapi-extensions](https://github.com/pondersource/openapi-extensions) repo with its history intact; issue and PR numbers in older commits and specs (`#13`, `#24`, ...) refer to that repo. Its CI workflow is staged at [`.github/workflows/openapi-extensions-ci.yml`](.github/workflows/openapi-extensions-ci.yml) in this folder, until it is moved to the repository root (see AGENTS.md).
+
 Each extension lives in its own directory under [`spec/`](spec/), with its own spec document, version, and (where available) reference implementation. Extensions are designed to be adoptable without modifying existing OpenAPI documents, typically via an [OpenAPI Overlay](https://spec.openapis.org/overlay/v1.0.0.html).
 
 ## Extensions
