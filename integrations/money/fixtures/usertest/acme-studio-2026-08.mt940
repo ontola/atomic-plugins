@@ -1,0 +1,104 @@
+:20:ACME260915
+:25:NL00BANK0000000000
+:28C:8/1
+:60F:C260801EUR8412,50
+:61:2608030803D1850,00NTRFNONREF//ACME2026080301
+:86:De Werkplaats Verhuur BV
+Huur augustus 2026 unit 4
+:61:2608030803D14,99NDDTNONREF//ACME2026080302
+:86:Pixelboard BV
+Pixelboard Team abonnement augustus
+:61:2608040804C2420,00NTRFNONREF//ACME2026080401
+:86:Bakkerij Zonnig BV
+Factuur AS-2026-031 huisstijl
+:61:2608050805D42,35NTRFNONREF//ACME2026080501
+:86:Koffiebranderij De Boon
+Bonen kantoor 3 kg
+:61:2608060806D28,90NMSCNONREF//ACME2026080601
+:86:NS Reizigers
+Treinkaartje Utrecht-Rotterdam v.v.
+:61:2608070807D640,00NTRFNONREF//ACME2026080701
+:86:Lotte Visser
+Freelance illustratie juli 2026
+:61:2608100810D39,50NDDTNONREF//ACME2026081001
+:86:Belnet Mobiel
+Mobiel abonnement augustus
+:61:2608110811D45,12NTRFNONREF//ACME2026081101
+:86:Fontfoundry Inc.
+Font licence Halcyon Sans, 2 seats
+USD 49.00 rate 0.9208 EUR 45.12
+:61:2608120812C968,00NTRFNONREF//ACME2026081201
+:86:Stichting Groen Plein
+Factuur AS-2026-032 website onderhoud
+:61:2608130813D18,75NMSCNONREF//ACME2026081301
+:86:Drukkerij Kleur & Co
+Visitekaartjes proefdruk
+:61:2608140814D118,34NDDTNONREF//ACME2026081401
+:86:Verzekeraar Veilig NV
+SEPA Incasso algemeen doorlopend
+Incassant: NL00ZZZ000000000000
+Machtiging: VV-2024-118833 bedrijfsaansprakelijkheid
+Omschrijving: Premie bedrijfsaansprakelijkheidsverzekering
+periode 01-08-2026 t/m 31-08-2026 polis 4410-2291-07
+IBAN: NL00BANK0000000099 Kenmerk: 2026081400118833
+:61:2608170817D24,50NMSCNONREF//ACME2026081701
+:86:Lunchroom Het Plein
+Lunch klantoverleg
+:61:2608180818C18,75NTRFNONREF//ACME2026081801
+:86:Drukkerij Kleur & Co
+Terugbetaling proefdruk, dubbel gefactureerd
+:61:2608190819D8,99NDDTNONREF//ACME2026081901
+:86:Hostly Hosting
+Webhosting acmestudio.example augustus
+:61:2608200820C3630,00NTRFNONREF//ACME2026082001
+:86:Fietsenmaker Snel VOF
+Factuur AS-2026-033 webshop fase 1
+:61:2608210821D76,80NMSCNONREF//ACME2026082101
+:86:Bouwmarkt Hamer
+Kantoorspullen en verlichting
+:61:2608240824D520,00NTRFNONREF//ACME2026082401
+:86:Ravi Brouwer
+Freelance development juli 2026
+:61:2608250825D12,50NMSCNONREF//ACME2026082501
+:86:Bank
+Kosten zakelijke rekening augustus
+:61:2608270827C726,00NTRFNONREF//ACME2026082701
+:86:Theater De Kleine Zaal
+Factuur AS-2026-034 affiches seizoen
+:61:2608280828D275,00NTRFNONREF//ACME2026082801
+:86:Belastingdienst
+Betalingskenmerk 0000 0000 0000 0001 btw Q2
+:61:2608310831D31,00NMSCNONREF//ACME2026083101
+:86:Tankstation Noord
+Tanken bestelauto
+:61:2609010901D1850,00NTRFNONREF//ACME2026090101
+:86:De Werkplaats Verhuur BV
+Huur september 2026 unit 4
+:61:2609010901D14,99NDDTNONREF//ACME2026090102
+:86:Pixelboard BV
+Pixelboard Team abonnement september
+:61:2609020902C1512,50NTRFNONREF//ACME2026090201
+:86:Bakkerij Zonnig BV
+Factuur AS-2026-035 verpakkingen
+:61:2609030903D28,90NMSCNONREF//ACME2026090301
+:86:NS Reizigers
+Treinkaartje Utrecht-Amsterdam v.v.
+:61:2609070907D640,00NTRFNONREF//ACME2026090701
+:86:Lotte Visser
+Freelance illustratie augustus 2026
+:61:2609080908D39,50NDDTNONREF//ACME2026090801
+:86:Belnet Mobiel
+Mobiel abonnement september
+:61:2609090909D16,40NMSCNONREF//ACME2026090901
+:86:Lunchroom Het Plein
+Lunch team
+:61:2609100910C484,00NTRFNONREF//ACME2026091001
+:86:Stichting Groen Plein
+Factuur AS-2026-036 nieuwsbrief
+:61:2609140914D8,99NDDTNONREF//ACME2026091401
+:86:Hostly Hosting
+Webhosting acmestudio.example september
+:61:2609150915D42,35NTRFNONREF//ACME2026091501
+:86:Koffiebranderij De Boon
+Bonen kantoor 3 kg
+:62F:C260915EUR11783,88

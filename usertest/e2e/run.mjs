@@ -421,6 +421,39 @@ await check(
   },
 );
 
+await check(
+  'sample files: money links its statements on the catalog host, notion none',
+  async () => {
+    const { page, close } = await open(fakeUi, `code=${CODE}&session=money`, {
+      permissions: ['microphone'],
+    });
+    await page.waitForFunction(() => document.querySelector('#plan option'));
+    await expectText(page, '#samples h2', EN.samples.heading);
+    const links = () =>
+      page.locator('#sample-list a').evaluateAll(list => list.map(a => a.href));
+    const hrefs = await links();
+    const want = [
+      'acme-studio-2026-08.mt940',
+      'acme-studio-2026-09.mt940',
+      'acme-studio-2026-08.camt053.xml',
+    ].map(f => `https://catalog.localhost/samples/money/${f}`);
+    if (JSON.stringify(hrefs) !== JSON.stringify(want))
+      throw new Error(`money sample links: ${hrefs}`);
+    await page.selectOption('#plan', 'notion');
+    if (await page.locator('#samples').isVisible())
+      throw new Error('notion shows sample files');
+    await page.selectOption('#plan', 'money');
+    await page.check('#agree');
+    await page.click('#type-instead');
+    await page.click('#start');
+    await expectText(page, '#log p', STUB_LINE, 10000);
+    // Still there once the session runs: the moderator points at it.
+    if (!(await page.locator('#samples').isVisible()))
+      throw new Error('sample files hidden during the session');
+    await close();
+  },
+);
+
 await check('moderator down (502): network message with retry', async () => {
   moderatorDown = true;
   try {

@@ -24,7 +24,30 @@ prefix; the moderator refuses to start when a plan has none.
 | `issue-tracker-seeded` | GitHub issues drive app, team tasks in a prepared repository | a GitHub account with write access to a test repository prepared before the session (below) |
 | `timesheets`           | Clockify drive app                                           | a Clockify account with recent entries                                                      |
 | `notion`               | Notion drive app                                             | a Notion account with a database                                                            |
-| `money`                | Bank statements (Money) drive app                            | an MT940 or camt.053 export they are willing to show on screen                              |
+| `money`                | Bank statements (Money) drive app                            | nothing: sample statements on the session page (their own export is optional)               |
+| `calendar-sample`      | Google Calendar drive app, on sample data                    | nothing                                                                                     |
+| `issue-tracker-sample` | GitHub issues drive app, on sample data                      | nothing                                                                                     |
+| `timesheets-sample`    | Clockify drive app, on sample data                           | nothing                                                                                     |
+| `notion-sample`        | Notion drive app, on sample data                             | nothing                                                                                     |
+
+## Sample data (no account needed)
+
+The `-sample` plans, and `money` by default, need no provider account
+(#196). Testers install the app's "(sample data)" entry from the test
+catalog: the same app, with its provider answered by invented data in the
+app's frame (`../../sample-data/`), already connected. So these sessions
+test the app's own screens, not signing in to the provider; that needs the
+plan without `-sample` and a real account. Each `-sample` plan says so in
+"For the moderator only", so the analysis doesn't report "couldn't connect"
+or "not my data" as findings. Use them when the tester has no account, or
+when we have no test account to lend.
+
+A plan whose tester downloads files has a line starting with
+`Sample files`, naming them in backticks as `<app>/<file>` paths. The
+moderator lists them with the plan (`GET /plans`), and the session page
+links them from `https://catalog.<base-domain>/samples/<app>/<file>`, where
+`../../catalog.mjs` puts them. The moderator can't speak a URL; the plan
+tells it to say "on the session page, under Sample files".
 
 ## Preparing `issue-tracker-seeded`
 
@@ -59,9 +82,11 @@ has not been checked against live GitHub.
   part out. The analysis (`../analyze.mjs`) gets the plan too, and reports a
   known limit only when the session adds something new about it.
 - Invented examples only: plans are public.
+- On sample data, say so in "For the moderator only": what the tester will
+  see, and which "failures" (no sign-in, not their data) are expected.
 
 The plans come from the laptop sessions of 2026-09-25 onwards (the method is
 in `.claude/skills/feature-user-testing/SKILL.md`). Those sessions used a
 local stack with seeded data and the mock proxy. Here testers bring their own
 accounts, so the tasks refer to "one of your repositories", not to seeded
-names.
+names, except in the sample-data plans above.

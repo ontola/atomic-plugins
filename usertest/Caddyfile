@@ -33,13 +33,17 @@ plugins.{$BASE_DOMAIN} {
 	}
 }
 
-# The test catalog and the drive app modules it points at (catalog.mjs).
+# The test catalog, the drive app modules it points at and the sample files
+# for sessions (catalog.mjs).
 # The data-browser fetches the catalog cross-origin; app modules are
 # downloaded by the host and checked against their SRI hash.
 catalog.{$BASE_DOMAIN} {
 	root * /srv/catalog
 	header Access-Control-Allow-Origin *
 	header Cache-Control "no-cache"
+	# Sample files for sessions (moderator/sessions/*.md): a download, not a
+	# page, whatever the browser makes of .mt940 or .xml.
+	header /samples/* Content-Disposition attachment
 	file_server
 }
 

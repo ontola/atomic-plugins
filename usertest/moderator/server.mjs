@@ -110,14 +110,27 @@ const PLANS = Object.fromEntries(
 const DEFAULT_PLAN = 'calendar';
 if (!PLANS[DEFAULT_PLAN])
   throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
+/** Files a plan has the tester download from the catalog host's
+ * `samples/` (#196): the backticked `<app>/<file>` paths on its line that
+ * starts with `Sample files`. The page links them. */
+function sampleFiles(text) {
+  const line = text.match(/^Sample files\b.*$/m)?.[0] ?? '';
+
+  return [...line.matchAll(/`([^`]+)`/g)]
+    .map(m => m[1])
+    .filter(path => /^[a-z0-9-]+\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(path));
+}
+
 /** What the page's "What do you want to test?" menu lists: each plan's
- * first line, `# Session plan: <title>`, in the order of their titles. */
+ * first line, `# Session plan: <title>`, in the order of their titles, with
+ * its sample files. */
 const PLAN_LIST = Object.entries(PLANS)
   .map(([id, text]) => {
     const title = text.match(/^# (?:Session plan: )?(.+)$/m)?.[1]?.trim();
     if (!title) throw new Error(`sessions/${id}.md has no # heading`);
+    const samples = sampleFiles(text);
 
-    return { id, title };
+    return samples.length ? { id, title, samples } : { id, title };
   })
   .sort((a, b) => a.title.localeCompare(b.title));
 const client = new Anthropic();

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Copies the built catalog (catalog.mjs), the Caddyfile, server.sh and the
-# pinned atomic-server commit (.atomic-server-ref) to the droplet, then
+# Copies the built catalog (catalog.mjs: catalog.json, apps/, samples/), the
+# Caddyfile, server.sh and the pinned atomic-server commit
+# (.atomic-server-ref) to the droplet, then
 # reloads Caddy. Existing app module versions on the droplet are
 # kept, so testers who installed an older version can still update from it.
 #
@@ -18,7 +19,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and
 # extended attributes that GNU tar on the droplet warns about.
-(cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps) |
+(cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps samples) |
   ssh "$@" "$TARGET" 'mkdir -p /srv/catalog && tar xzf - -C /srv/catalog'
 # .atomic-server-ref goes along so that server.sh without a SHA runs the pin.
 (cd "$HERE" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules -czf - Caddyfile caddy-usertest.conf server.sh collector moderator page -C .. .atomic-server-ref) |
