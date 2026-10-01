@@ -1,5 +1,14 @@
 # Google Calendar platform modules
 
+**Not the supported path.** This is the Devonian lens of the retired
+LocalThought setup-dialog flow: an unhosted library (shape 3 in AGENTS.md).
+No host at the pinned atomic-server runs it, no catalog entry installs it,
+and the Calendar drive app in [`../../app/`](../../app/), the one supported
+way to run this plugin, does not import it. It is kept, and its unit tests
+run in the calendar lane, for a future LocalThought host. Evidence gathered
+against this flow does not certify the drive app; see
+[`../../README.md`](../../README.md#what-backs-the-catalog-entry-and-what-does-not).
+
 `lens/` contains passive display/recurrence projections and reverse field mapping.
 
 This folder lives in the calendar plugin folder (it was

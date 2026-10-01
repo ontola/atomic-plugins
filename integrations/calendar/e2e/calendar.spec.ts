@@ -29,10 +29,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -255,6 +256,21 @@ test.describe('calendar drive app', () => {
         expect.stringMatching(/^atomic-proxy-connect|connection-v1/),
       ]),
     );
+
+    // The declared scope (app/operations.ts) is what the frame sent: every
+    // request the mock proxy received is one of the three declared
+    // operations, with their query parameters and If-Match (`operationFor`
+    // throws, naming the request, for anything else), and all three were
+    // used. Nothing else reached the proxy, so nothing else reached Google.
+    const sent = (await driver('received', [])) as RelayRequest[];
+    expect(sent.length).toBeGreaterThan(5);
+    const used = new Set(sent.map(request => operationFor(request).id));
+    expect([...used].sort()).toEqual(OPERATIONS.map(o => o.id).sort());
+    expect(sent.filter(r => r.method === 'PATCH').map(r => r.ifMatch)).toEqual(
+      sent
+        .filter(r => r.method === 'PATCH')
+        .map(() => expect.stringMatching(/^"v\d+"$/)),
+    );
   });
 });
 
@@ -276,13 +292,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
 
     // The host re-sends its theme into the frame; the view follows it
     // without a reload (DESIGN.md §3).
@@ -343,13 +353,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
 
     // C8: the host asks before opening Google's page for the event.
     await app.getByRole('button', { name: 'Agenda', exact: true }).click();
@@ -403,13 +407,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
     const table = await tableOf(page);
     // The mock's fixture is shared by the lane's tests, so the timed event
     // may carry an earlier test's title; it is the one with a room.
@@ -474,6 +472,23 @@ async function connectThroughHost(page: Page, app: FrameLocator) {
     })
     .click();
   await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
+}
+
+/**
+ * Imports the preselected (primary) calendar once the picker has listed it.
+ * Coming back from the proxy reloads the page, and the frame then lists the
+ * calendars; on a loaded host that can take longer than a click's own 10 s,
+ * so wait for the preselection first, as the first test does.
+ */
+async function importPrimary(app: FrameLocator) {
+  const choose = app.getByRole('form', { name: 'Choose a calendar' });
+  await expect(choose.getByRole('radio', { name: /Synthetic/ })).toBeChecked({
+    timeout: 30_000,
+  });
+  await choose.getByRole('button', { name: 'Import this calendar' }).click();
+  await expect(app.locator('.pill')).toContainText('Synced', {
+    timeout: 30_000,
+  });
 }
 
 interface MockConnection {
