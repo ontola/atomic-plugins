@@ -6,8 +6,9 @@ The supported path is the **drive app** in `app/` (below): catalog entry
 `apps/timesheets/<version>/ui.js` from GitHub Pages and checks it against the
 catalog's integrity hash (see
 [Publishing a drive app](../README.md#publishing-a-drive-app)). Since 0.2.0
-it writes reviewed edits back to Clockify (#123 M3, below); it is
-mock-tested only, so that capability is declared, not verified. The first sections describe the Clockify
+it writes reviewed edits back to Clockify (#123 M3, below), and since 0.3.0
+range edits and conflict resolutions (#123 M4); both are mock-tested only,
+so those capabilities are declared, not verified. The first sections describe the Clockify
 lens and the LocalThought extension flow it was written for; the pinned host
 no longer has that flow.
 
@@ -156,9 +157,10 @@ into the view root.
     billable flag, start and end, in the entry drawer (Edit) or anywhere
     else the row can be edited (the table, another view, another device);
     and Delete entry ("did not work" for all of it). Changed start and end
-    snap down to whole minutes (#97 answer 7). Not yet: splitting,
-    trimming or filling a range, creating entries, resolving overlap
-    conflicts (M4); tags, tasks, custom fields.
+    snap down to whole minutes (#97 answer 7), unless they line up with
+    another entry's start or end in Clockify (a range edit's trim or
+    extension meeting its neighbour). Range edits and conflicts: below
+    (M4). Not editable: tags, tasks, custom fields.
   - _Not editable_ (`blockers` in the lens, checked when listing and again
     on the fresh read): running timers, breaks and other non-`REGULAR`
     entries, locked entries, entries with custom field values (the request
@@ -206,6 +208,60 @@ into the view root.
     `1432e244a`), and the proxy catalog's Clockify entry lists the
     time-entry write overlay
     (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`).
+- **Range edits and conflict resolution** (#123 M4, §3.2–§3.4; 0.3.0).
+  Mock-tested only:
+  - _What:_ "Edit a time range…" marks `[from, to)` (profile time zone,
+    whole minutes) as worked on a project, worked with no project (not
+    offered under `forceProjects`), or not worked. Each conflict in the
+    "Conflicts in Clockify" list offers its resolutions over its exact
+    span (not snapped): "Keep <project>" per project claimed and "Did not
+    work" for "unclear which project", "Did not work" for "unclear whether
+    worked" (the break, holiday or time off itself stays Clockify's to
+    change), and "Remove duplicate" for the same project twice.
+  - _Planner_ (`devonian/clockify/lens/rangePlan.ts`, pure): for "did
+    not work", every editable entry in the range loses the overlap
+    (inside: deleted; sticking out: trimmed; spanning: split, the copy
+    keeping description, task and tags). For "worked on P", other
+    projects lose the overlap, except one entry covering exactly the range
+    with no P entry in it, which changes project (one `PUT`, task
+    dropped); overlapping P entries keep the earliest (by start, then id);
+    each remaining gap extends a P entry ending at its start or beginning
+    at its end (#97 answer 8), or becomes a new entry with an empty
+    description and `billable` from the project's `billable` field, false
+    when the project list does not say (#123 §7.1–§7.2, a default, see
+    #227). Refused before anything is staged: an empty range or one
+    ending in the future, a range outside the loaded window or over
+    unknown time, a running timer, a locked entry or one with custom
+    field values in it, a break, holiday or time off in a "worked" range,
+    an unknown or archived project, and an entry in the range whose row
+    already has an unsent change (send or discard it first).
+  - _Staged on rows, sent after review_ (#177: bookkeeping on the row):
+    a trim, extension or project change edits that entry's row, a
+    deletion sets `clockify-delete`, and a new entry is a new row with no
+    entry id that carries `clockify-create` (JSON: the split entry it
+    copies, with its task and tags). They are listed under "Changes to
+    send" like any other change and sent in the order of #123 §3.5:
+    deletions and shrinks, then extensions and project changes, then
+    creates, so an interrupted batch leaves a gap, never an overlap.
+  - _Sending a create:_ the row is re-read; the range is read fresh (with
+    the 24 h margin); if Clockify has any entry overlapping it by then,
+    nothing is created and it is reported as a conflict, unless the only
+    one is exactly what this row would create (same start, end and
+    project) and no row is bound to it, which is an earlier send whose
+    answer was lost: the row is bound to it. Otherwise the outbox marker,
+    one `POST`, the new entry's id written to the row at once (a reload
+    never creates it twice), and a verification `GET` before the baseline
+    is set.
+  - _Uncertain creates_ (#123 S15): a thrown call or a 5xx leaves the
+    row's outbox marker and stops the batch. The next sync, before it
+    makes rows for entries it has not seen, binds such a row to an entry
+    no row is bound to with the same start, end and project (#97 §4.2);
+    with none, the create did not arrive, the marker is cleared and it is
+    listed again. Two matching entries: one is bound, the other gets its
+    own row and shows as a duplicate, which "Remove duplicate" cleans up.
+  - _Not done:_ dragging on the week grid (the form is the only way in),
+    intents as separate resources (a change is still "row differs from
+    its baseline", or a new row), and the M5 multi-device lease.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):
@@ -232,8 +288,8 @@ into the view root.
     hooks from it: `unknown` (the window's unknown spans) and `conflicts`
     (`app/timeline/types.ts` `TimelineConflict`: the views' `Conflict` plus
     kind, span, entries and candidates). `app/ui/coverage.ts` renders them
-    as a "Not loaded" note and a read-only "Conflicts in Clockify" list.
-    Nothing can be resolved from the app yet (M4).
+    as a "Not loaded" note and a "Conflicts in Clockify" list, whose
+    resolve buttons (M4, above) appear once connected and synced.
 - **Errors.** If the window's first page fails, the pass fails and rows
   are not touched ("Import failed: …. Rows already in the table are
   kept."). If a later page fails, what was read is kept as an incomplete
@@ -286,6 +342,16 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   (`app/writeBack.test.ts`); the controller's edit/delete/discard/send
   (`app/controllerViews.test.ts`); and the drawer's edit form through to
   a send in the DOM (`app/ui/ui.test.ts`, frames N1 and N2).
+  Range edits (#123 M4): the planner's cases, refusals, S11 and S12 as
+  plans, and the §5.3 planner property over 200 seeded random mirrors of
+  up to 20 entries (target holds over the range, nothing changes outside
+  it, no instant is claimed more often mid-plan than before or after,
+  every `PUT` carries `end`; `devonian/clockify/lens/rangePlan.test.ts`);
+  S6 and S7 (resolution), S9 as a range split, S10, S11, S12, S15, a
+  failed create sent again, a create refused where Clockify has time by
+  then, Discard of a new row and the refusals, against the mock through
+  the controller (`app/rangeEdit.test.ts`); and the resolve buttons and
+  the range form through to a send in the DOM (`app/ui/ui.test.ts`).
 - **Host e2e** (`e2e/clockify.spec.ts`, the `timesheets` lane's `e2e` tier)
   against the pinned atomic-server (`.atomic-server-ref`, which includes
   frame capabilities from atomic-server#1697) and the local mock proxy,
@@ -304,7 +370,11 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   survives a reload, sends it as one `PUT` through the host's frame
   client and the mock proxy's catalog check, reopens with the row in
   agreement, and sees the refusal of a proxy whose catalog lacks the
-  write overlay.
+  write overlay. A third (#123 M4) resolves an "unclear which project"
+  conflict with "Keep Atomic plugins" and marks a free hour "Worked on
+  Research" in the range form, checks nothing is written before Send and
+  that both survive a reload, sends them as a `DELETE` then a `POST`, and
+  reopens with one row for the new entry and nothing left to send.
   Provider changes
   and failures are driven through the mock proxy's local-only
   `POST /__fixture/clockify`.
@@ -369,15 +439,17 @@ pin), Disconnect (`store.proxy.disconnect`), "Open Clockify" through
 each feature-detected. The data-browser's LocalThought-extension path was
 removed upstream (`c707ca4ed`).
 
-1. **Range edits and conflict resolution** (#123 M4): "worked on P" and
-   "did not work" over a range (trims, splits, creates), and resolving
-   overlap conflicts from the app. M3's field edits and deletes are done
-   (0.2.0), mock-tested only.
+1. **Multiple devices** (#123 M5): concurrent edits across devices, the
+   advisory lease, compaction by two devices. M3's field edits (0.2.0)
+   and M4's range edits and conflict resolution (0.3.0) are done,
+   mock-tested only.
 2. **Live evidence**: a run of the app against a live account through the
    real integration proxy, in a dedicated test workspace. For write-back
    that includes #123 §5.4's checks: full-replacement `PUT` (a field left
    out is cleared, `end` omitted makes a running timer), the status for
    writing a locked entry, the custom-field request shape, and the
-   `start`/`end` list semantics once more. Until then the card's
+   `start`/`end` list semantics once more; for M4, a `POST` of a new
+   entry and of a split's copy (tags and task carried over), and what
+   `billable` a project's list entry carries. Until then the card's
    capabilities are declared, not verified.
 3. **Pruning** `localthought.ts` to what `app/` imports.

@@ -9,7 +9,11 @@
  * render them read-only; each returns `null` when there is nothing to show.
  */
 import type { Interval, Timesheet } from '../model/types.js';
-import { renderConflictList, renderUnknownSpans } from '../timeline/render.js';
+import {
+  renderConflictList,
+  renderUnknownSpans,
+  type ConflictActions,
+} from '../timeline/render.js';
 import type { H } from './dom.js';
 
 /**
@@ -33,12 +37,16 @@ export function renderUnknown(
  * Called once at the top of the content area of every data view, above the
  * error banners' data. `sheet.conflicts` may be empty.
  *
- * M2: a read-only list, one line per conflict (`../timeline/render.ts`);
- * nothing when there is none. Design frame N's banner with a side-by-side
- * compare and the resolve actions are M4.
+ * One line per conflict (`../timeline/render.ts`); nothing when there is
+ * none. With `actions` (#123 M4) each line offers its resolutions; without,
+ * it is read-only (no connection, or not synced yet).
  */
-export function renderConflicts(h: H, sheet: Timesheet): HTMLElement | null {
-  return renderConflictList(h, sheet);
+export function renderConflicts(
+  h: H,
+  sheet: Timesheet,
+  actions?: ConflictActions,
+): HTMLElement | null {
+  return renderConflictList(h, sheet, actions);
 }
 
 /** Spans shorter than this are not shown: the views count whole minutes,

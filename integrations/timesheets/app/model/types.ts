@@ -30,8 +30,9 @@ export interface TimeEntry {
   project?: Project;
   member?: string;
   /** A change made in the drive and not yet sent to Clockify (#123 M3):
-   * the entry shows the values that would be sent. */
-  pending?: 'update' | 'delete';
+   * the entry shows the values that would be sent. `create`: a new entry
+   * from a range edit (M4), not in Clockify yet. */
+  pending?: 'update' | 'delete' | 'create';
 }
 
 /** `[from, to)` in epoch ms. */

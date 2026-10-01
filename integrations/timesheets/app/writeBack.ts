@@ -26,14 +26,27 @@
  *   in Clockify between the fresh read and the write is overwritten; the
  *   verification read shows what won.
  *
- * Not here: range edits ("worked on P over [a, b)", trims and splits; #123
- * M4), the multi-device lease (M5), and noticing a row deleted in the
+ * - **Range edits** (#123 M4): "worked on P" or "did not work" over a range,
+ *   and resolving a conflict, are planned by the lens (`planRange`) and
+ *   staged on rows like any other edit (`stageRangePlan`): a trim, an
+ *   extension or a project change edits that entry's row, a deletion marks
+ *   it, and a new entry (a gap filled, the right part of a split) is a new
+ *   row without an entry id that carries `clockify-create`. Sending one
+ *   reads the range fresh first: if Clockify has any entry there by then,
+ *   nothing is created (a conflict), unless it is exactly the entry this
+ *   row would create, left by an earlier send that lost its answer: then
+ *   the row is bound to it. A sync does the same binding for a create
+ *   whose send was uncertain (`settleCreates`).
+ *
+ * Not here: the multi-device lease (M5), and noticing a row deleted in the
  * table (needs the host's change list with tombstones, #177 H6b).
  */
 import { reconcileRecord } from '../../../browser/lib/src/plugin-reconcile.js';
 import {
   blockers,
   changedFields,
+  clockifyInstant,
+  descriptionOf,
   ENTRY_FIELDS,
   entryValues,
   NO_DESCRIPTION,
@@ -43,14 +56,17 @@ import {
   type ClockifyTimeEntry,
   type EntryField,
   type EntryValues,
+  type PlanStep,
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
 import type { RawTimeEntry } from './clockifyApi.js';
 import {
   canonicalEntry,
   ENTRY_MASK,
+  MARGIN_MS,
   rawFromCanonical,
   readOne,
+  readRange,
   TIME_ENTRY,
   timeEntries,
   type ReadContext,
@@ -80,26 +96,55 @@ export interface RowState {
 
 /** Written before a write goes out, cleared once a read confirmed it. */
 export interface OutboxMarker {
-  op: 'put' | 'delete';
+  op: 'put' | 'delete' | 'post';
   /** ISO 8601. */
   sentAt: string;
 }
 
+/**
+ * `clockify-create` on a new row (#123 M4): the entry still has to be
+ * created. A split's right part names the entry it copies, with the task
+ * and tags to carry over (the row holds the rest).
+ */
+export interface CreateMarker {
+  copyOf?: string;
+  taskId?: string;
+  tagIds?: string[];
+}
+
+/** A new row, not yet created in Clockify. */
+export interface CreateState {
+  subject: string;
+  local: EntryValues;
+  create: CreateMarker;
+  outbox?: OutboxMarker;
+}
+
+/** A create change's `entryId`: the row's subject, as the list's key. */
+export const CREATE_KEY = 'new:';
+export const createKey = (subject: string) => `${CREATE_KEY}${subject}`;
+export const isCreateKey = (key: string) => key.startsWith(CREATE_KEY);
+
 export interface PendingChange {
-  kind: 'update' | 'delete';
+  /** `create`: a new entry (#123 M4); `entryId` is then `createKey(row)`. */
+  kind: 'update' | 'delete' | 'create';
   entryId: string;
   subject: string;
   /** The entry's Name as Clockify last had it. */
   title: string;
-  /** The baseline: Clockify's values when the row last agreed. */
+  /** The baseline: Clockify's values when the row last agreed. For a
+   * create, what would be created. */
   base: EntryValues;
   /** The row as it was when this change was listed (the review). */
   local: EntryValues;
   /** What would be sent: the row, with changed times snapped to minutes
    * and a typed project name resolved to its id. */
   desired: EntryValues;
-  /** `base` → `desired`, in display order. Empty for a deletion. */
+  /** `base` → `desired`, in display order. Empty for a deletion or a
+   * create. */
   fields: EntryField[];
+  /** For a create: the split entry it copies, if any. */
+  copyOf?: string;
   /** Why it cannot be sent, if it cannot. */
   blockers: string[];
 }
@@ -137,7 +182,10 @@ export type SendStatus =
   /** The row changed after the review: not sent; review it again. */
   | 'changed'
   /** Deleted in Clockify: the row was removed. */
-  | 'gone';
+  | 'gone'
+  /** A create found the entry it would make already there (an earlier
+   * send's lost answer): the row was bound to it, nothing was written. */
+  | 'bound';
 
 export interface SendOutcome {
   entryId: string;
@@ -275,7 +323,12 @@ export function newRowValues(
 function setBookkeeping(
   row: PluginResource,
   schema: CompleteSchema,
-  p: { baseline?: EntryValues; outbox?: OutboxMarker | null; delete?: boolean },
+  p: {
+    baseline?: EntryValues;
+    outbox?: OutboxMarker | null;
+    delete?: boolean;
+    create?: CreateMarker | null;
+  },
 ): boolean {
   let changed = false;
 
@@ -292,6 +345,8 @@ function setBookkeeping(
   if (p.outbox !== undefined)
     put(schema.sync.outbox, p.outbox ? JSON.stringify(p.outbox) : '');
   if (p.delete !== undefined) put(schema.sync.deleteRequested, p.delete);
+  if (p.create !== undefined)
+    put(schema.sync.create, p.create ? JSON.stringify(p.create) : '');
 
   return changed;
 }
@@ -318,20 +373,25 @@ export const projectNames =
  * What would be sent for a row: its values, with changed times snapped to
  * whole minutes (#97 answer 7), an empty Name as "no description", and a
  * project name typed into the table resolved to that project's id (an
- * exact, active name; otherwise a blocker).
+ * exact, active name; otherwise a blocker). A changed time that equals one
+ * of `boundaries` (the start or end of an entry in Clockify) is not snapped.
  */
 export function desiredValues(
   local: EntryValues,
   base: EntryValues,
   projects: ClockifyProject[],
+  boundaries: ReadonlySet<number> = new Set(),
 ): { desired: EntryValues; problems: string[] } {
   const problems: string[] = [];
   const desired: EntryValues = {
     ...ordered(local),
     name: local.name.trim() || NO_DESCRIPTION,
   };
-  if (desired.start !== base.start) desired.start = snapToMinute(desired.start);
-  if (desired.end !== base.end) desired.end = snapToMinute(desired.end);
+  // A time that lines up with another entry's start or end (a trim or an
+  // extension from a range edit meeting its neighbour) is kept exact.
+  const snap = (at: number) => (boundaries.has(at) ? at : snapToMinute(at));
+  if (desired.start !== base.start) desired.start = snap(desired.start);
+  if (desired.end !== base.end) desired.end = snap(desired.end);
 
   if (desired.projectId === base.projectId && desired.project !== base.project)
     if (!desired.project) desired.projectId = null;
@@ -367,6 +427,7 @@ export function planChange(
   state: RowState,
   entry: ClockifyTimeEntry | undefined,
   context: WriteContext,
+  boundaries?: ReadonlySet<number>,
 ): PendingChange | undefined {
   const base = state.baseline;
   if (!base) return undefined;
@@ -394,6 +455,7 @@ export function planChange(
     state.local,
     base,
     context.projects,
+    boundaries,
   );
   const changed = changedFields(base, desired);
   // A project name that resolves to no project still changed the row.
@@ -560,16 +622,338 @@ export async function requestDelete(
   if (setBookkeeping(row, schema, { delete: wanted })) await row.save();
 }
 
-/** Puts the row back to its baseline and drops a requested deletion. */
+/** Puts the row back to its baseline and drops a requested deletion; a
+ * new row not yet created in Clockify is removed. */
 export async function discardChange(
   row: PluginResource,
   schema: CompleteSchema,
 ): Promise<void> {
+  if (readCreateState(row, schema)) return row.destroy();
   const state = readRowState(row, schema);
   if (!state?.baseline) return;
   const changed = setRowValues(row, schema, state.baseline);
   const flag = setBookkeeping(row, schema, { delete: false });
   if (changed || flag) await row.save();
+}
+
+// ---- range edits: new rows (#123 M4) ---------------------------------------
+
+/** A new row's state, if it is one: no entry id, and `clockify-create`. */
+export function readCreateState(
+  row: PluginResource,
+  schema: CompleteSchema,
+): CreateState | undefined {
+  if (text(row.get(schema.row.entryId))) return undefined;
+  const create = parseJson<CreateMarker>(row.get(schema.sync.create));
+  const local = localValues(row, schema);
+  if (!create || typeof create !== 'object' || !local) return undefined;
+  const outbox = parseJson<OutboxMarker>(row.get(schema.sync.outbox));
+
+  return {
+    subject: row.subject,
+    local,
+    create,
+    ...(outbox?.op ? { outbox } : {}),
+  };
+}
+
+/** Why a new entry with these values cannot be created. */
+export function createBlockers(
+  desired: EntryValues,
+  context: WriteContext,
+): string[] {
+  const reasons: string[] = [];
+  if (!(desired.start < desired.end))
+    reasons.push('Start has to be before end.');
+  if (desired.end > context.now) reasons.push('End is in the future.');
+  if (context.forceProjects && !desired.projectId)
+    reasons.push('This workspace requires a project on every entry.');
+
+  if (desired.projectId) {
+    const project = context.projects.find(p => p.id === desired.projectId);
+    if (!project)
+      reasons.push('The project is not one of this workspace’s projects.');
+    else if (project.archived === true)
+      reasons.push(`The project ${project.name} is archived.`);
+  }
+
+  return reasons;
+}
+
+/** The create a new row holds. Its times are sent as they are. */
+export function planCreate(
+  state: CreateState,
+  context: WriteContext,
+): PendingChange {
+  // Against itself with the project's own name, so a project name typed
+  // into the table is resolved and the times are not snapped.
+  const base = {
+    ...ordered(state.local),
+    project: state.local.projectId
+      ? (projectNames(context.projects)(state.local.projectId) ?? null)
+      : null,
+  };
+  const { desired, problems } = desiredValues(
+    state.local,
+    base,
+    context.projects,
+  );
+
+  return {
+    kind: 'create',
+    entryId: createKey(state.subject),
+    subject: state.subject,
+    title: desired.name,
+    base: desired,
+    local: state.local,
+    desired,
+    fields: [],
+    ...(state.create.copyOf ? { copyOf: state.create.copyOf } : {}),
+    blockers: [
+      ...(state.outbox
+        ? [
+            'An earlier send of this entry did not get an answer. Sync first: that settles whether it arrived.',
+          ]
+        : []),
+      ...problems,
+      ...createBlockers(desired, context),
+    ],
+  };
+}
+
+/** Every start and end of a live entry in the mirror, epoch ms. */
+export function entryBoundaries(mirror: Mirror): Set<number> {
+  const out = new Set<number>();
+
+  for (const r of timeEntries(mirror)) {
+    if (r.deletedAt) continue;
+    for (const value of [r.fields.start, r.fields.end])
+      if (typeof value === 'string') out.add(Date.parse(value));
+  }
+
+  return out;
+}
+
+/** The table's rows, by subject. */
+async function tableRows(store: PluginStore, schema: CompleteSchema) {
+  return store.query({ property: atomic.parent, value: schema.table });
+}
+
+/** The entry ids rows are bound to. */
+async function boundIds(
+  store: PluginStore,
+  schema: CompleteSchema,
+  subjects: Iterable<string>,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+
+  for (const subject of subjects) {
+    const id = text((await store.getResource(subject)).get(schema.row.entryId));
+    if (id) ids.add(id);
+  }
+
+  return ids;
+}
+
+/**
+ * Writes a range plan (`planRange`) to the rows: an update edits the
+ * entry's row, a deletion marks it, a create adds a new row carrying
+ * `clockify-create`. Nothing is sent. `rowOf` finds an entry's row.
+ */
+export async function stageRangePlan(
+  store: PluginStore,
+  schema: CompleteSchema,
+  mirror: Mirror,
+  steps: PlanStep[],
+  rowOf: (entryId: string) => Promise<string | undefined>,
+): Promise<void> {
+  const row = async (entryId: string) => {
+    const subject = await rowOf(entryId);
+    if (!subject) throw new Error(`Entry ${entryId} has no row in the table.`);
+
+    return store.getResource(subject);
+  };
+
+  for (const step of steps) {
+    if (step.op === 'update') {
+      const r = await row(step.entryId);
+      if (setRowValues(r, schema, step.desired)) await r.save();
+    } else if (step.op === 'delete')
+      await requestDelete(await row(step.entryId), schema, true);
+    else {
+      const source = step.copyOf ? mirrorEntry(mirror, step.copyOf) : undefined;
+      const marker: CreateMarker = {
+        ...(step.copyOf ? { copyOf: step.copyOf } : {}),
+        ...(typeof source?.taskId === 'string'
+          ? { taskId: source.taskId }
+          : {}),
+        ...(Array.isArray(source?.tagIds) && source.tagIds.length
+          ? { tagIds: [...source.tagIds] }
+          : {}),
+      };
+      const values = step.values;
+      await store.newResource({
+        parent: schema.table,
+        isA: [schema.rowClass],
+        propVals: {
+          [NAME]: values.name,
+          [schema.row.start]: values.start,
+          [schema.row.end]: values.end,
+          [schema.row.billable]: values.billable,
+          ...(values.projectId
+            ? { [schema.row.projectId]: values.projectId }
+            : {}),
+          ...(values.project
+            ? { [schema.row.projectName]: values.project }
+            : {}),
+          [schema.sync.create]: JSON.stringify(marker),
+        },
+      });
+    }
+  }
+}
+
+/** This user's live entries in the mirror overlapping `[from, to)`. */
+function entriesOverlapping(
+  mirror: Mirror,
+  userId: string,
+  span: { from: number; to: number },
+  now: number,
+): ClockifyTimeEntry[] {
+  return timeEntries(mirror)
+    .filter(
+      r =>
+        !r.deletedAt &&
+        !r.absentSince &&
+        (r.fields.userId ?? userId) === userId,
+    )
+    .map(r => rawFromCanonical(r) as ClockifyTimeEntry)
+    .filter(e => {
+      const start = Date.parse(e.timeInterval.start ?? '');
+      const end = e.timeInterval.end ? Date.parse(e.timeInterval.end) : now;
+
+      return start < span.to && end > span.from;
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+/** Is `entry` exactly what a create of `values` makes? */
+const madeBy = (entry: ClockifyTimeEntry, values: EntryValues) => {
+  const made = entryValues(entry);
+
+  return (
+    !!made &&
+    made.start === values.start &&
+    made.end === values.end &&
+    made.projectId === values.projectId
+  );
+};
+
+/** Who tracked an entry, as the table's Member columns (sync sets the
+ * same on imported rows). */
+export interface Member {
+  id: string;
+  name?: unknown;
+}
+
+function setMember(
+  row: PluginResource,
+  schema: CompleteSchema,
+  entry: ClockifyTimeEntry,
+  members: Member[] = [],
+) {
+  const id = typeof entry.userId === 'string' ? entry.userId : undefined;
+  if (!id) return;
+  row.set(schema.row.memberId, id);
+  const name = members.find(m => m.id === id)?.name;
+  if (typeof name === 'string' && name) row.set(schema.row.memberName, name);
+}
+
+/** Binds a new row to the entry created for it. */
+async function bindRow(
+  row: PluginResource,
+  schema: CompleteSchema,
+  entry: ClockifyTimeEntry,
+  remote: EntryValues,
+  members?: Member[],
+) {
+  row.set(schema.row.entryId, entry.id);
+  setMember(row, schema, entry, members);
+  setRowValues(row, schema, remote);
+  setBookkeeping(row, schema, { baseline: remote, create: null, outbox: null });
+  await row.save();
+}
+
+export interface SettledCreate {
+  subject: string;
+  title: string;
+  /** The entry it was bound to; absent: the send had not arrived. */
+  entryId?: string;
+}
+
+/**
+ * Settles new rows whose create was sent without an answer (#123 S15),
+ * from a sync's complete read: an entry no row is bound to, with exactly
+ * the row's start, end and project, is taken to be that create's result
+ * and the row is bound to it (#97 §4.2's binding rule); with none, the
+ * send did not arrive, and the create is listed again. Run before rows
+ * are created for unbound entries, so an applied create gets no second row.
+ * Returns what it settled, and the new rows still to create (one pass over
+ * the table's rows).
+ */
+export async function settleCreates(
+  store: PluginStore,
+  schema: CompleteSchema,
+  mirror: Mirror,
+  context: Pick<ReadContext, 'userId'> & {
+    now: number;
+    projects: ClockifyProject[];
+    members?: Member[];
+  },
+): Promise<{ settled: SettledCreate[]; pending: CreateState[] }> {
+  const creates: Array<{ row: PluginResource; state: CreateState }> = [];
+  const bound = new Set<string>();
+
+  for (const subject of await tableRows(store, schema)) {
+    const row = await store.getResource(subject);
+    const id = text(row.get(schema.row.entryId));
+    const state = id ? undefined : readCreateState(row, schema);
+    if (id) bound.add(id);
+    if (state) creates.push({ row, state });
+  }
+
+  const settled: SettledCreate[] = [];
+  const pending: CreateState[] = [];
+
+  for (const { row, state } of creates) {
+    const { subject, local } = state;
+
+    if (state.outbox?.op !== 'post') {
+      pending.push(state);
+      continue;
+    }
+
+    const match = entriesOverlapping(
+      mirror,
+      context.userId,
+      { from: local.start, to: local.end },
+      context.now,
+    ).find(e => !bound.has(e.id) && madeBy(e, local));
+
+    if (match) {
+      const remote = entryValues(match, projectNames(context.projects))!;
+      await bindRow(row, schema, match, remote, context.members);
+      bound.add(match.id);
+      settled.push({ subject, title: remote.name, entryId: match.id });
+    } else {
+      setBookkeeping(row, schema, { outbox: null });
+      await row.save();
+      settled.push({ subject, title: local.name });
+      pending.push({ subject, local, create: state.create });
+    }
+  }
+
+  return { settled, pending };
 }
 
 export interface SendContext {
@@ -578,6 +962,8 @@ export interface SendContext {
   log: ObservationLog;
   read: ReadContext;
   write: WriteContext;
+  /** The workspace's users, for a new entry's Member column. */
+  members?: Member[];
   /** Waits before retrying a 429. Defaults to `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
   onProgress?: (done: number, total: number) => void;
@@ -627,7 +1013,13 @@ export async function sendChanges(
     }
 
     try {
-      outcomes.push({ ...base, ...(await sendOne(context, change)) });
+      outcomes.push({
+        ...base,
+        ...(await (change.kind === 'create' ? sendCreate : sendOne)(
+          context,
+          change,
+        )),
+      });
     } catch (error) {
       if (error instanceof Uncertain) {
         outcomes.push({ ...base, status: 'uncertain', message: error.message });
@@ -856,6 +1248,190 @@ async function sendOne(
     : { status: 'sent' };
 }
 
+/**
+ * Creates one new entry (#123 M4): the row is re-read; the range is read
+ * fresh (with the margin), and if Clockify has any entry there now nothing
+ * is created, unless it is exactly this create's result from an earlier
+ * send whose answer was lost (then the row is bound to it); the outbox
+ * marker; one `POST`; a verification `GET` of the new entry. Only then is
+ * the row bound and given a baseline.
+ */
+async function sendCreate(
+  context: SendContext,
+  change: PendingChange,
+): Promise<Result> {
+  const { store, schema, log } = context;
+  const row = await store.getResource(change.subject);
+  const state = readCreateState(row, schema);
+
+  if (!state || !same(ordered(state.local), ordered(change.local)))
+    return {
+      status: 'changed',
+      message: 'The row changed after this list was made. Review it again.',
+    };
+
+  const desired = change.desired;
+  const names = projectNames(context.write.projects);
+  let read: Awaited<ReturnType<typeof readRange>>;
+
+  try {
+    read = await readRange(
+      context.read,
+      desired.start - MARGIN_MS,
+      desired.end,
+    );
+  } catch (error) {
+    return {
+      status: 'failed',
+      message: `Could not read this range from Clockify first (${message(error)}). Nothing was created.`,
+    };
+  }
+
+  await log.append(read.observation);
+  if (read.error)
+    return {
+      status: 'failed',
+      message: `Could not read all of this range from Clockify first (${message(read.error)}). Nothing was created.`,
+    };
+
+  const there = entriesOverlapping(
+    log.mirror,
+    context.read.userId,
+    { from: desired.start, to: desired.end },
+    context.write.now,
+  );
+
+  if (there.length) {
+    const bound = await boundIds(store, schema, await tableRows(store, schema));
+    const match = there.find(e => !bound.has(e.id) && madeBy(e, desired));
+
+    if (match && there.length === 1) {
+      await bindRow(
+        row,
+        schema,
+        match,
+        entryValues(match, names)!,
+        context.members,
+      );
+
+      return {
+        status: 'bound',
+        message: 'Clockify already had it, from an earlier send.',
+      };
+    }
+
+    return {
+      status: 'conflict',
+      message:
+        'Clockify has time in this range now, so nothing was created. Discard this and edit the range again.',
+    };
+  }
+
+  const reasons = createBlockers(desired, context.write);
+  if (reasons.length) return { status: 'refused', message: reasons.join(' ') };
+
+  const body = {
+    start: clockifyInstant(desired.start),
+    end: clockifyInstant(desired.end),
+    billable: desired.billable,
+    description: descriptionOf(desired.name),
+    ...(desired.projectId ? { projectId: desired.projectId } : {}),
+    ...(state.create.taskId ? { taskId: state.create.taskId } : {}),
+    tagIds: [...(state.create.tagIds ?? [])],
+    type: 'REGULAR',
+  };
+  const sentAt = new Date(context.read.clock()).toISOString();
+  setBookkeeping(row, schema, { outbox: { op: 'post', sentAt } });
+  await row.save();
+
+  const response = await write(
+    context,
+    `/api/v1/workspaces/${encodeURIComponent(context.read.workspaceId)}/time-entries`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+
+  if (response.status < 200 || response.status >= 300) {
+    setBookkeeping(row, schema, { outbox: null });
+    await row.save();
+    const detail = bodyMessage(response.body);
+
+    if (response.status === 404 && detail === NOT_IN_CATALOG)
+      throw new Stop(
+        'The integration proxy does not allow writing to Clockify (its catalog has no time-entry write overlay).',
+      );
+
+    return {
+      status: 'failed',
+      message: `Clockify answered ${response.status}${detail ? `: ${detail}` : ''}.`,
+    };
+  }
+
+  const made = response.body as RawTimeEntry | null;
+  if (!made || typeof made.id !== 'string')
+    throw new Uncertain(
+      'Clockify’s answer did not name the new entry. The next sync looks for it.',
+    );
+
+  await log.append({
+    id: context.read.newId(),
+    device: context.read.device,
+    sentAt,
+    receivedAt: new Date(context.read.clock()).toISOString(),
+    kind: 'write-response',
+    scope: { type: 'id', collection: TIME_ENTRY, id: made.id },
+    mask: ENTRY_MASK,
+    complete: true,
+    records: [canonicalEntry(made)],
+  });
+  // Bound now, so a reload never creates it twice; the marker stays until
+  // the verification read below (or the next sync) settles it.
+  row.set(schema.row.entryId, made.id);
+  setMember(row, schema, made as ClockifyTimeEntry, context.members);
+  setBookkeeping(row, schema, { create: null, baseline: desired });
+  await row.save();
+
+  let verified: ClockifyTimeEntry | undefined;
+
+  try {
+    verified = await readEntry(context, made.id);
+  } catch (error) {
+    throw new Uncertain(
+      `Created, but the check afterwards failed (${message(error)}). The next sync reads it back.`,
+    );
+  }
+
+  const after = verified && entryValues(verified, names);
+
+  if (!after) {
+    if (!verified) await row.destroy();
+    else {
+      setBookkeeping(row, schema, { outbox: null });
+      await row.save();
+    }
+
+    return {
+      status: verified ? 'failed' : 'gone',
+      ...(verified
+        ? { message: 'Clockify does not list it as a completed entry.' }
+        : {}),
+    };
+  }
+
+  setRowValues(row, schema, after);
+  setBookkeeping(row, schema, { baseline: after, outbox: null });
+  await row.save();
+  const differs = changedFields(desired, after);
+
+  return differs.length
+    ? {
+        status: 'adjusted',
+        fields: differs,
+        message:
+          'Clockify stored other values than were sent; the row has them.',
+      }
+    : { status: 'sent' };
+}
+
 /** GET by id, appended to the log; undefined when Clockify says deleted. */
 async function readEntry(
   context: SendContext,
@@ -917,18 +1493,24 @@ export async function planAll(
   context: WriteContext,
 ): Promise<PendingChange[]> {
   const changes: PendingChange[] = [];
+  const boundaries = entryBoundaries(mirror);
 
-  for (const subject of await store.query({
-    property: atomic.parent,
-    value: schema.table,
-  })) {
+  for (const subject of await tableRows(store, schema)) {
     const row = await store.getResource(subject);
+    const created = readCreateState(row, schema);
+
+    if (created) {
+      changes.push(planCreate(created, context));
+      continue;
+    }
+
     const state = readRowState(row, schema);
     if (!state) continue;
     const change = planChange(
       state,
       mirrorEntry(mirror, state.entryId),
       context,
+      boundaries,
     );
     if (change) changes.push(change);
   }
@@ -936,7 +1518,27 @@ export async function planAll(
   return sortChanges(changes);
 }
 
+/**
+ * The order changes are sent in (#123 §3.5): deletions and changes that
+ * only take time away first, then the rest, then new entries; by start
+ * within each. An interrupted batch then leaves a gap, never an overlap.
+ */
+export function sendPhase(change: PendingChange): number {
+  if (change.kind === 'delete') return 0;
+  if (change.kind === 'create') return 2;
+  const { base, desired } = change;
+
+  return desired.start >= base.start &&
+    desired.end <= base.end &&
+    desired.projectId === base.projectId
+    ? 0
+    : 1;
+}
+
 export const sortChanges = (changes: PendingChange[]) =>
   [...changes].sort(
-    (a, b) => a.base.start - b.base.start || (a.entryId < b.entryId ? -1 : 1),
+    (a, b) =>
+      sendPhase(a) - sendPhase(b) ||
+      a.desired.start - b.desired.start ||
+      (a.entryId < b.entryId ? -1 : 1),
   );

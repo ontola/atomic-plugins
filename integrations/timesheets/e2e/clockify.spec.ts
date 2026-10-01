@@ -29,7 +29,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 /** The fixture's workspace (`../fixtures/clockify/scenario.mjs`). */
 const WORKSPACE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -434,7 +434,149 @@ test.describe('timesheets drive app', () => {
     });
     await fixture({ action: 'catalog', readOnly: false });
   });
+
+  test('#123 M4: a range edit and a conflict resolution reach Clockify after review', async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(240_000);
+    await fixture({ action: 'reset' });
+    // Inside "Fix plugin source loading" (Atomic plugins, 28–26 h ago): an
+    // invented Research entry, so the timeline shows "unclear which project".
+    const now = Date.now();
+    await fixture({
+      action: 'add',
+      entry: {
+        id: 'entry-q',
+        description: 'Overlapping research',
+        userId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+        workspaceId: WORKSPACE_ID,
+        billable: false,
+        projectId: 'eeeeeeeeeeeeeeeeeeeeeeee',
+        taskId: null,
+        tagIds: null,
+        isLocked: false,
+        type: 'REGULAR',
+        timeInterval: {
+          start: clockifyInstant(now - 27 * 3_600_000),
+          end: clockifyInstant(now - 26.5 * 3_600_000),
+          duration: 'PT30M',
+        },
+      },
+    });
+    await installFromCatalog(page);
+    const appUrl = page.url();
+    const app = page.frameLocator(APP_FRAME);
+    const status = app.getByRole('status');
+    await app.getByRole('button', { name: 'Connect Clockify' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page.getByLabel('API key').fill('synthetic-clockify-key');
+    await page
+      .getByRole('button', { name: 'Connect Clockify', exact: true })
+      .click();
+    await expect(status).toContainText('Choose the workspace', {
+      timeout: 30_000,
+    });
+    await app.getByRole('radio', { name: 'Test workspace' }).check();
+    await app.getByRole('button', { name: 'Last 7 days' }).click();
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '3 created,',
+      { timeout: 60_000 },
+    );
+
+    // Resolve: keep Atomic plugins over the overlap. Staged, not sent.
+    const conflicts = app.getByRole('region', {
+      name: 'Conflicts in Clockify',
+    });
+    await expect(conflicts).toContainText(
+      'Unclear which project: Atomic plugins · Research',
+    );
+    await conflicts
+      .getByRole('button', { name: 'Keep Atomic plugins' })
+      .click();
+    const changes = app.getByRole('region', { name: 'Changes to send' });
+    await expect(changes).toContainText('Delete this entry in Clockify', {
+      timeout: 30_000,
+    });
+
+    // S10: "worked on Research" over a free hour (6–5 h ago, profile zone).
+    const hour = Math.floor(now / 3_600_000) * 3_600_000;
+    await app.getByRole('button', { name: 'Edit a time range…' }).click();
+    const form = app.getByRole('form', { name: 'Edit a time range' });
+    await form.getByLabel(/^From/).fill(amsterdamInput(hour - 6 * 3_600_000));
+    await form.getByLabel(/^To/).fill(amsterdamInput(hour - 5 * 3_600_000));
+    await form
+      .getByLabel('What happened')
+      .selectOption({ label: 'Worked on Research' });
+    await app.getByRole('button', { name: 'Plan changes' }).click();
+    await expect(changes).toContainText('2 changes to send', {
+      timeout: 30_000,
+    });
+    await expect(changes).toContainText('Create a new entry');
+    let log = (await fixture({ action: 'requests' })) as {
+      writes: Array<{ method: string; path: string; body: unknown }>;
+    };
+    expect(log.writes).toEqual([]);
+
+    // Both survive a reload (bookkeeping on the rows), then go out: the
+    // deletion before the create.
+    await page.goto(appUrl);
+    await expect(status.filter({ hasText: 'Last synced' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(changes).toContainText('2 changes to send');
+    await changes.getByRole('button', { name: 'Send 2 to Clockify' }).click();
+    await expect(changes).toContainText('“Overlapping research”: Sent', {
+      timeout: 60_000,
+    });
+    log = (await fixture({ action: 'requests' })) as typeof log;
+    expect(log.writes).toEqual([
+      expect.objectContaining({
+        method: 'DELETE',
+        path: expect.stringContaining('/time-entries/entry-q'),
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        path: expect.stringMatching(
+          new RegExp(`/workspaces/${WORKSPACE_ID}/time-entries$`),
+        ),
+        body: expect.objectContaining({
+          start: clockifyInstant(hour - 6 * 3_600_000),
+          end: clockifyInstant(hour - 5 * 3_600_000),
+          projectId: 'eeeeeeeeeeeeeeeeeeeeeeee',
+        }),
+      }),
+    ]);
+    await expect(conflicts).toHaveCount(0);
+
+    // Reopen: the new entry has exactly one row, nothing is left to send.
+    await page.goto(appUrl);
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '0 created, 0 updated, 3 unchanged',
+      { timeout: 60_000 },
+    );
+    await expect(changes).toHaveCount(0);
+  });
 });
+
+/** `datetime-local` text for `at` in the fixture's profile zone. */
+const amsterdamInput = (at: number) =>
+  new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Amsterdam',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+    .format(at)
+    .replace(' ', 'T');
 
 /** Clockify's instant form: whole seconds, `Z`. */
 const clockifyInstant = (at: number) =>

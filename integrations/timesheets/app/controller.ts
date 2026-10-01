@@ -26,11 +26,19 @@ import { ObservationLog } from './observationLog.js';
 import {
   blockers,
   descriptionOf,
+  planRange,
+  snapToMinute,
   type ClockifyProject,
+  type ClockifyTimeEntry,
+  type RangeTarget,
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
+import { rawFromCanonical, timeEntries } from './clockifyObserve.js';
+import type { TimelineConflict } from './timeline/types.js';
 import {
   discardChange,
+  entryBoundaries,
+  isCreateKey,
   localValues,
   mirrorEntry,
   planAll,
@@ -40,6 +48,7 @@ import {
   sendChanges,
   setRowValues,
   sortChanges,
+  stageRangePlan,
   type EntryValues,
   type PendingChange,
   type ProviderWon,
@@ -125,6 +134,18 @@ export type EntryEdit = Partial<
   Pick<EntryValues, 'name' | 'start' | 'end' | 'billable' | 'projectId'>
 >;
 
+/**
+ * A range edit (#123 M4): "worked on P" (`projectId` null: worked, no
+ * project) or "did not work" over `[from, to)`. A range typed by a person
+ * snaps to whole minutes (#97 answer 7); a conflict's span is `exact`.
+ */
+export interface RangeRequest {
+  from: number;
+  to: number;
+  target: RangeTarget;
+  exact?: boolean;
+}
+
 export interface SettingsChoice {
   workspaceId: string;
   lookbackDays: LookbackDays;
@@ -169,8 +190,17 @@ export interface Controller {
   editEntry(entryId: string, edit: EntryEdit): Promise<void>;
   /** Asks to delete the entry in Clockify (listed to send). */
   deleteEntry(entryId: string): Promise<void>;
-  /** Puts the row back as Clockify has it and drops the change. */
+  /** Puts the row back as Clockify has it and drops the change; a new
+   * entry not yet sent is removed. */
   discard(entryId: string): Promise<void>;
+  /** Plans a range edit and stages it on the rows, to send after review.
+   * False when it was refused (`changes().error` says why). */
+  editRange(request: RangeRequest): Promise<boolean>;
+  /** Resolves a conflict (#123 §4): `target` over its exact span. */
+  resolveConflict(
+    conflict: TimelineConflict,
+    target: RangeTarget,
+  ): Promise<boolean>;
   /** Sends the listed changes that can be sent, one at a time. */
   send(): Promise<ViewState>;
 }
@@ -577,6 +607,10 @@ export function createController(
     changes: () => changes,
 
     editBlockers(entryId) {
+      if (isCreateKey(entryId))
+        return [
+          'It is not in Clockify yet: it is created when you send it. Discard it to undo.',
+        ];
       if (!input) return ['Nothing has been read from Clockify yet.'];
       const entry = mirrorEntry(input.mirror, entryId);
       if (!entry) return ['This entry is not in what was last read.'];
@@ -623,8 +657,122 @@ export function createController(
     },
 
     async discard(entryId) {
-      await changeRow(entryId, (row, schema) => discardChange(row, schema));
+      if (!isCreateKey(entryId)) {
+        await changeRow(entryId, (row, schema) => discardChange(row, schema));
+
+        return;
+      }
+
+      try {
+        if (running) throw new Error('Wait for the sync or send to finish.');
+        const change = changes.review.find(c => c.entryId === entryId);
+        const schema = await ensureSchema(store);
+        if (change)
+          await discardChange(await store.getResource(change.subject), schema);
+        changes = {
+          ...changes,
+          review: changes.review.filter(c => c.entryId !== entryId),
+        };
+        delete changes.error;
+      } catch (error) {
+        changes = { ...changes, error: message(error) };
+      }
+
+      onChange(current);
     },
+
+    async editRange(request) {
+      try {
+        if (running) throw new Error('Wait for the sync or send to finish.');
+        const settings =
+          current.kind === 'ready' && store.proxy
+            ? current.settings
+            : undefined;
+        if (!settings || !input) throw new Error('Connect and sync first.');
+        const from = request.exact ? request.from : snapToMinute(request.from);
+        const to = request.exact ? request.to : snapToMinute(request.to);
+        const sheet = controller.sheet();
+        const window = sheet?.window;
+        if (!sheet || !window || from < window.from || to > window.to)
+          throw new Error(
+            `The range has to be inside the last ${settings.lookbackDays} days, which are what is loaded.`,
+          );
+        if (sheet.unknown.some(u => u.from < to && u.to > from))
+          throw new Error(
+            'Part of this range is not loaded from Clockify. Sync, or load older entries, first.',
+          );
+
+        const entries = timeEntries(input.mirror)
+          .filter(
+            r =>
+              !r.deletedAt &&
+              !r.absentSince &&
+              (r.fields.workspaceId ?? settings.workspaceId) ===
+                settings.workspaceId &&
+              (r.fields.userId ?? settings.userId) === settings.userId,
+          )
+          .map(r => rawFromCanonical(r) as ClockifyTimeEntry);
+        const projects = (input.projects ?? []) as ClockifyProject[];
+        const plan = planRange(
+          entries,
+          { from, to, target: request.target },
+          {
+            ...writeContext(),
+            billableDefault: id =>
+              projects.find(p => p.id === id)?.billable === true,
+          },
+        );
+        if (plan.refused.length) throw new Error(plan.refused.join(' '));
+        if (!plan.steps.length)
+          throw new Error(
+            'Nothing to change: Clockify already says this for that range.',
+          );
+
+        // One change per entry at a time: an entry with an unsent change,
+        // or a new entry not sent yet, in the way is refused.
+        const pending = new Set(
+          changes.review.filter(c => c.kind !== 'create').map(c => c.entryId),
+        );
+        if (
+          plan.steps.some(s => s.op !== 'create' && pending.has(s.entryId)) ||
+          changes.review.some(
+            c =>
+              c.kind === 'create' &&
+              c.desired.start < to &&
+              c.desired.end > from,
+          )
+        )
+          throw new Error(
+            'An entry in this range has a change that is not sent yet. Send or discard it first.',
+          );
+
+        const schema = await ensureSchema(store);
+        await stageRangePlan(store, schema, input.mirror, plan.steps, id =>
+          rowSubject(schema, id),
+        );
+        changes = {
+          ...changes,
+          review: await planAll(store, schema, input.mirror, writeContext()),
+        };
+        delete changes.error;
+        onChange(current);
+
+        return true;
+      } catch (error) {
+        changes = { ...changes, error: message(error) };
+        onChange(current);
+
+        return false;
+      }
+    },
+
+    resolveConflict: (conflict, target) =>
+      controller.editRange({
+        from: conflict.from,
+        to: conflict.to,
+        target,
+        exact: true,
+      }),
 
     async send() {
       if (current.kind !== 'ready' || !store.proxy || running) return current;
@@ -658,6 +806,7 @@ export function createController(
               device: 'frame-send',
             },
             write: writeContext(),
+            members: input?.members ?? [],
             onProgress: (done, total) => {
               changes = { ...changes, sending: { done, total } };
               onChange(current);
@@ -745,6 +894,7 @@ export function createController(
           state,
           input ? mirrorEntry(input.mirror, entryId) : undefined,
           writeContext(),
+          input ? entryBoundaries(input.mirror) : undefined,
         );
       changes = {
         ...changes,
@@ -765,10 +915,29 @@ export function createController(
   function withPending(sheet: Timesheet): Timesheet {
     if (!changes.review.length) return sheet;
     const byId = new Map(changes.review.map(c => [c.entryId, c]));
+    const created: Timesheet['entries'] = changes.review
+      .filter(c => c.kind === 'create')
+      .map(({ entryId, desired }) => {
+        const project = projectOf(
+          desired.projectId ?? undefined,
+          input?.projects ?? [],
+        );
+
+        return {
+          id: entryId,
+          description: descriptionOf(desired.name),
+          start: desired.start,
+          end: desired.end,
+          billable: desired.billable,
+          ...(project ? { project } : {}),
+          pending: 'create' as const,
+        };
+      });
 
     return {
       ...sheet,
-      entries: sheet.entries.map(entry => {
+      entries: [...sheet.entries, ...created].map(entry => {
+        if (entry.pending === 'create') return entry;
         const change = byId.get(entry.id);
         if (!change) return entry;
         if (change.kind === 'delete') return { ...entry, pending: 'delete' };

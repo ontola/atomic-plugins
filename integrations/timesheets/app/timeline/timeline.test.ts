@@ -638,7 +638,7 @@ describe('rendering hooks (ui/coverage.ts)', () => {
 
     expect(list.getAttribute('aria-label')).toBe('Conflicts in Clockify');
     expect(list.textContent).toBe(
-      '1 conflict in Clockify (read-only for now: fix them in Clockify)' +
+      '1 conflict in Clockify (read-only here: fix them in Clockify)' +
         'Unclear which project: Atomic plugins · No project (2 entries), 22 Sep 11:00 – 12:00',
     );
     const plain: Timesheet = {

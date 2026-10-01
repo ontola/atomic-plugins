@@ -24,9 +24,13 @@ import type { CompleteSchema } from './schema.js';
 import type { JSONValue, PluginStore } from './store.js';
 import type { ProxyTransport } from './transport.js';
 import {
+  createKey,
+  entryBoundaries,
   mirrorEntry,
   newRowValues,
   planChange,
+  planCreate,
+  settleCreates,
   sortChanges,
   syncRow,
   type EntryValues,
@@ -229,6 +233,7 @@ export async function syncClockify(
       projects: projects.items,
     },
     options.onProgress,
+    settings.userId,
   );
 
   return {
@@ -265,6 +270,7 @@ async function projectRows(
   members: RawNamed[],
   write: WriteContext,
   onProgress?: SyncOptions['onProgress'],
+  userId = '',
 ) {
   const result = {
     created: 0,
@@ -275,13 +281,34 @@ async function projectRows(
     providerWon: [] as ProviderWon[],
     recovered: [] as Recovered[],
   };
+  // New rows whose create got no answer: bound to what Clockify made, or
+  // listed again (#123 S15). Before the loop, so no entry gets two rows.
+  const { settled, pending } = await settleCreates(store, schema, log.mirror, {
+    userId,
+    now: write.now,
+    projects: write.projects,
+    members,
+  });
+  const boundNow = new Map(
+    settled.filter(s => s.entryId).map(s => [s.entryId!, s.subject]),
+  );
+
+  for (const s of settled)
+    result.recovered.push({
+      entryId: s.entryId ?? createKey(s.subject),
+      title: s.title,
+      applied: !!s.entryId,
+    });
+
   const own = new Set(
     await store.query({ property: atomic.parent, value: schema.table }),
   );
   const rowOf = async (entryId: string) =>
+    boundNow.get(entryId) ??
     (await store.query({ property: schema.row.entryId, value: entryId })).find(
       s => own.has(s),
     );
+  const boundaries = entryBoundaries(log.mirror);
 
   const table = await store.getResource(schema.table);
   const note = table.get(atomic.description);
@@ -339,9 +366,13 @@ async function projectRows(
       synced.state,
       mirrorEntry(log.mirror, entry.entryId),
       write,
+      boundaries,
     );
     if (change) result.review.push(change);
   }
+
+  // New rows from range edits, not yet created in Clockify.
+  for (const created of pending) result.review.push(planCreate(created, write));
 
   for (const gone of entries.filter(r => r.deletedAt)) {
     const subject = await rowOf(gone.id);

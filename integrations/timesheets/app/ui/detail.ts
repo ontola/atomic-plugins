@@ -174,7 +174,9 @@ export function entryDetail(
             pendingTag(h, entry.pending),
             entry.pending === 'delete'
               ? ' Deleting it in Clockify is listed under “Changes to send”.'
-              : ' Shown with your change, which is listed under “Changes to send”.',
+              : entry.pending === 'create'
+                ? ' A new entry from a range edit, listed under “Changes to send”. It is created in Clockify only when you send it.'
+                : ' Shown with your change, which is listed under “Changes to send”.',
           )
         : null,
       confirming && edit

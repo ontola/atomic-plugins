@@ -32,8 +32,9 @@ import type { ColorScheme } from '../store.js';
 import { dayList, projectSummary, weekGrid } from '../model/views.js';
 import { button, header, pill, type PillState } from './components.js';
 import { renderConflicts, renderUnknown, unknownIn } from './coverage.js';
-import { entryDetail, type Overlay } from './detail.js';
+import { entryDetail, sheet as modal, type Overlay } from './detail.js';
 import { renderChanges } from './edit.js';
+import { rangeEditor } from './rangeEdit.js';
 import { builder, type Child } from './dom.js';
 import { dayCard, dayCards, weekStrip, type Highlight } from './entries.js';
 import { projectsView } from './projects.js';
@@ -75,6 +76,10 @@ interface Ui {
   entryId?: string;
   /** The open drawer is editing, or asking to confirm a delete. */
   editing?: 'edit' | 'confirm-delete';
+  /** "Edit a time range" is open (#123 M4), and why its last save was
+   * refused. */
+  rangeOpen?: boolean;
+  rangeError?: string;
   /** `data-k` of the row that opened the drawer, to return focus to. */
   opener?: string;
   /** Settings was asked for over the data (sheet), not first-run setup. */
@@ -526,7 +531,38 @@ export function mountShell(
         state.kind !== 'ready' || !!controller.changes().sending,
       ),
     );
-    content.push(renderConflicts(h, sheet));
+    const canEdit = state.kind === 'ready' && !controller.changes().sending;
+    if (state.kind === 'ready' && sheet.window)
+      content.push(
+        h(
+          'div',
+          { class: 'row' },
+          button(h, 'Edit a time range…', {
+            variant: 'sec',
+            key: 'range-open',
+            disabled: !canEdit,
+            onClick: update(() => {
+              ui.rangeOpen = true;
+              ui.rangeError = undefined;
+              ui.opener = 'range-open';
+            }),
+          }),
+        ),
+      );
+    content.push(
+      renderConflicts(
+        h,
+        sheet,
+        state.kind === 'ready'
+          ? {
+              enabled: canEdit,
+              projectRequired: controller.projectChoices().required,
+              onResolve: (conflict, target) =>
+                void controller.resolveConflict(conflict, target),
+            }
+          : undefined,
+      ),
+    );
     if (state.kind === 'no-proxy') content.push(noRelay(h));
 
     if (failed)
@@ -681,6 +717,7 @@ export function mountShell(
       ? sheet.entries.find(e => e.id === ui.entryId)
       : undefined;
     if (ui.entryId && !entry) ui.entryId = undefined;
+    if (state.kind !== 'ready') ui.rangeOpen = false;
 
     return {
       body: [
@@ -713,8 +750,42 @@ export function mountShell(
               edit: editProps(entry.id, sheet.timeZone),
             }),
           }
-        : {}),
+        : ui.rangeOpen
+          ? { overlay: rangeSheet(sheet) }
+          : {}),
     };
+  }
+
+  /** "Edit a time range" (#123 M4): staged on save, listed to send. */
+  function rangeSheet(sheet: Timesheet): Overlay {
+    const close = update(() => {
+      ui.rangeOpen = false;
+      ui.rangeError = undefined;
+    });
+    const { projects, required } = controller.projectChoices();
+    const form = rangeEditor(h, {
+      timeZone: sheet.timeZone,
+      projects,
+      projectRequired: required,
+      now: now(),
+      ...(ui.rangeError ? { error: ui.rangeError } : {}),
+      onSave: request => {
+        void controller.editRange(request).then(ok => {
+          if (ok) ui.rangeOpen = false;
+          ui.rangeError = ok ? undefined : controller.changes().error;
+          render();
+        });
+      },
+      onCancel: close,
+    });
+
+    return modal(h, {
+      title: 'Edit a time range',
+      full: size !== 'wide',
+      body: [form.body],
+      footer: form.footer,
+      onClose: close,
+    });
   }
 
   /** Edit and Delete in the drawer (#123 M3); absent without a sync. */
