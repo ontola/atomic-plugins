@@ -6,7 +6,7 @@
  * against the fake store and the Clockify mock.
  */
 import { createRequire } from 'node:module';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USER, WORKSPACE } from '../../fixtures/clockify/scenario.mjs';
 import { APP, fakeStore } from '../fakeStore.js';
 import { fixtureProxy } from '../fixtureProxy.js';
@@ -384,7 +384,16 @@ describe('frames', () => {
 });
 
 describe('view() against the fake store and the Clockify mock', () => {
-  const NOW = Date.now();
+  // A Wednesday noon. The fixture's entries sit a day before it, and the
+  // Entries tab shows only the current week, so on a real Monday they would
+  // fall into last week and the tab would be empty. Only Date is faked:
+  // expect.poll still needs real timers.
+  const NOW = Date.parse('2026-09-23T12:00:00Z');
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
 
   async function mount(configured: boolean, host: Partial<PluginStore> = {}) {
     const proxy = fixtureProxy(NOW);
