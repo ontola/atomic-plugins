@@ -292,13 +292,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
 
     // The host re-sends its theme into the frame; the view follows it
     // without a reload (DESIGN.md §3).
@@ -359,13 +353,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
 
     // C8: the host asks before opening Google's page for the event.
     await app.getByRole('button', { name: 'Agenda', exact: true }).click();
@@ -419,13 +407,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
-    await app
-      .getByRole('form', { name: 'Choose a calendar' })
-      .getByRole('button', { name: 'Import this calendar' })
-      .click();
-    await expect(app.locator('.pill')).toContainText('Synced', {
-      timeout: 30_000,
-    });
+    await importPrimary(app);
     const table = await tableOf(page);
     // The mock's fixture is shared by the lane's tests, so the timed event
     // may carry an earlier test's title; it is the one with a room.
@@ -490,6 +472,23 @@ async function connectThroughHost(page: Page, app: FrameLocator) {
     })
     .click();
   await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
+}
+
+/**
+ * Imports the preselected (primary) calendar once the picker has listed it.
+ * Coming back from the proxy reloads the page, and the frame then lists the
+ * calendars; on a loaded host that can take longer than a click's own 10 s,
+ * so wait for the preselection first, as the first test does.
+ */
+async function importPrimary(app: FrameLocator) {
+  const choose = app.getByRole('form', { name: 'Choose a calendar' });
+  await expect(choose.getByRole('radio', { name: /Synthetic/ })).toBeChecked({
+    timeout: 30_000,
+  });
+  await choose.getByRole('button', { name: 'Import this calendar' }).click();
+  await expect(app.locator('.pill')).toContainText('Synced', {
+    timeout: 30_000,
+  });
 }
 
 interface MockConnection {
