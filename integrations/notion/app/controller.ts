@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import type { OpenApiDocument } from 'syncables/browser';
+import { localChanges, type Conflicts, type RowChange } from './changes.js';
 import { classifyFailure, type ProviderFailure } from './errors.js';
 import {
   loadRecord,
@@ -10,6 +11,12 @@ import {
   type SyncRecord,
 } from './record.js';
 import { loadRows, type Row } from './rows.js';
+import {
+  discardChange,
+  resolveConflict,
+  sendChanges,
+  type SendOutcome,
+} from './send.js';
 import type { PluginStore } from './store.js';
 import {
   NOTION_DOCUMENT,
@@ -32,6 +39,16 @@ export interface Connected {
   last?: SyncRecord;
   /** Rows the latest sync created or changed, for a short highlight. */
   changed?: string[];
+  /**
+   * Edits to synced rows not yet in Notion, found by comparing each row
+   * with its baseline (`changes.ts`), with conflicts the last sync or send
+   * found. Set on every state that carries rows; empty when there are none.
+   */
+  changes?: RowChange[];
+  /** What the last Send did, per row, until the next Send or sync. */
+  outcomes?: SendOutcome[];
+  /** A Send is running. */
+  sending?: boolean;
 }
 
 /**
@@ -72,7 +89,9 @@ export const isConnected = (state: ViewState): state is ConnectedState =>
   'rows' in state;
 
 export const isRunning = (state: ViewState): boolean =>
-  state.kind === 'syncing' || state.kind === 'importing';
+  state.kind === 'syncing' ||
+  state.kind === 'importing' ||
+  (isConnected(state) && !!state.sending);
 
 export interface Controller {
   state(): ViewState;
@@ -94,6 +113,19 @@ export interface Controller {
   disconnect?(): Promise<ViewState>;
   /** Re-reads the rows (after the table changed elsewhere). */
   refreshRows(): Promise<ViewState>;
+  /**
+   * Sends every reviewed change that can be sent (no conflict, no problem)
+   * to Notion (`send.ts`). Only from `ready`, with a connection.
+   */
+  send(): Promise<ViewState>;
+  /** Puts a row's changed fields back to the baseline. */
+  discard(subject: string): Promise<ViewState>;
+  /** Resolves one conflicting field: keep the row's value, or take Notion's. */
+  resolve(
+    subject: string,
+    shortname: string,
+    keep: 'mine' | 'notion',
+  ): Promise<ViewState>;
 }
 
 const upstream = (doc: OpenApiDocument) =>
@@ -110,8 +142,14 @@ export function createController(
   let current: ViewState = { kind: 'loading' };
   let schema: Schema | undefined;
   let running = false;
+  let conflicts: Conflicts = new Map();
 
   const set = (next: ViewState) => {
+    if (isConnected(next))
+      next = {
+        ...next,
+        changes: localChanges(next.rows, next.last, conflicts),
+      };
     current = next;
     onChange(next);
 
@@ -191,8 +229,13 @@ export function createController(
       // view; picking an existing one resolves `connected`, with no reload
       // (#54 phase 2). Cancelling returns to the state it started from.
       const result = await proxy.connect({ platform: PLATFORM });
+      if (result?.status !== 'connected') return set(before);
+      // Picking an existing connection does not reload the frame, so the
+      // first sync (or the one after choosing other pages) starts here; a
+      // new account comes back through view(), which syncs on open.
+      const state = await this.load();
 
-      return result?.status === 'connected' ? this.load() : set(before);
+      return isConnected(state) && state.connectionId ? this.sync() : state;
     },
 
     ...(store.proxy?.disconnect
@@ -213,6 +256,84 @@ export function createController(
       const rows = await loadRows(store, schema);
 
       return set({ ...current, rows });
+    },
+
+    async send() {
+      const proxy = store.proxy;
+      if (
+        !proxy ||
+        running ||
+        current.kind !== 'ready' ||
+        !current.connectionId ||
+        !current.changes?.length
+      )
+        return current;
+      schema ??= await loadSchema(store);
+      if (!schema) return current;
+      running = true;
+      const outcomes: SendOutcome[] = [];
+      const before = current;
+      set({ ...before, sending: true, outcomes: [] });
+
+      try {
+        await sendChanges({
+          store,
+          proxy,
+          connectionId: before.connectionId!,
+          schema,
+          changes: before.changes!,
+          onOutcome: outcome => {
+            outcomes.push(outcome);
+            if (outcome.status === 'changed')
+              conflicts.set(
+                outcome.subject,
+                new Map(Object.entries(outcome.notion)),
+              );
+            if (isConnected(current) && current.sending)
+              set({ ...current, outcomes: [...outcomes] });
+          },
+        });
+      } catch (error) {
+        outcomes.push({
+          subject: '',
+          name: '',
+          status: 'failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      try {
+        const rows = await loadRows(store, schema);
+
+        return set({ ...before, rows, outcomes, sending: false });
+      } finally {
+        running = false;
+      }
+    },
+
+    async discard(subject) {
+      if (running || !isConnected(current)) return current;
+      const change = current.changes?.find(c => c.subject === subject);
+      schema ??= await loadSchema(store);
+      if (!change || !schema) return current;
+      await discardChange(store, schema, change);
+      conflicts.delete(subject);
+
+      return this.refreshRows();
+    },
+
+    async resolve(subject, shortname, keep) {
+      if (running || !isConnected(current)) return current;
+      const change = current.changes?.find(c => c.subject === subject);
+      const field = change?.fields.find(f => f.shortname === shortname);
+      schema ??= await loadSchema(store);
+      if (!change || !field?.conflict || !schema) return current;
+      await resolveConflict(store, schema, change, field, keep);
+      const open = conflicts.get(subject);
+      open?.delete(shortname);
+      if (!open?.size) conflicts.delete(subject);
+
+      return this.refreshRows();
     },
 
     async sync() {
@@ -306,6 +427,7 @@ export function createController(
               .filter(r => previous.get(r.subject) !== fingerprint(r))
               .map(r => r.subject)
           : [];
+        if (result) conflicts = result.conflicts;
         const after: Connected = {
           connectionId,
           rows,
