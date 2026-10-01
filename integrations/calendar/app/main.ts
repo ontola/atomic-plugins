@@ -18,6 +18,7 @@ import type { Ctx } from './context.js';
 import {
   banner as bannerCopy,
   createController,
+  LOCAL_NOTE,
   pill as pillModel,
   reviewCount,
   syncedAgo,
@@ -261,29 +262,31 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     const opens = p.opens;
     const changes = `${count} ${count === 1 ? 'change' : 'changes'}`;
     const action =
-      count > 0
-        ? h(
-            doc,
-            'button',
-            {
-              class: 'btn btn-primary',
-              'data-key': 'primary',
-              'aria-label': `Review ${changes}`,
-              onclick: () => void openReview(),
-            },
-            narrow ? `Review ${count}` : `Review ${changes}`,
-          )
-        : h(
-            doc,
-            'button',
-            {
-              class: 'btn',
-              'data-key': 'primary',
-              disabled: busy || !snap.meta,
-              onclick: () => void controller.refresh(),
-            },
-            'Sync now',
-          );
+      snap.state.kind === 'local'
+        ? undefined
+        : count > 0
+          ? h(
+              doc,
+              'button',
+              {
+                class: 'btn btn-primary',
+                'data-key': 'primary',
+                'aria-label': `Review ${changes}`,
+                onclick: () => void openReview(),
+              },
+              narrow ? `Review ${count}` : `Review ${changes}`,
+            )
+          : h(
+              doc,
+              'button',
+              {
+                class: 'btn',
+                'data-key': 'primary',
+                disabled: busy || !snap.meta,
+                onclick: () => void controller.refresh(),
+              },
+              'Sync now',
+            );
 
     return header(doc, {
       title: 'Calendar',
@@ -358,6 +361,19 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   function banners(snap: Snapshot): HTMLElement | undefined {
     const state = snap.state;
+
+    if (state.kind === 'local')
+      return h(
+        doc,
+        'div',
+        { class: 'banners' },
+        banner(doc, {
+          tone: 'info',
+          role: 'status',
+          title: 'Not synced with Google Calendar.',
+          body: LOCAL_NOTE,
+        }),
+      );
 
     if (state.kind !== 'error') {
       lastProblem = undefined;
@@ -767,7 +783,13 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       ui.view === 'week' && days === 7 ? mondayOf(ui.anchor) : ui.anchor;
 
     return [
-      h(doc, 'header', {}, headerRow(snap, narrow), cbar(snap)),
+      h(
+        doc,
+        'header',
+        {},
+        headerRow(snap, narrow),
+        state.kind === 'local' ? null : cbar(snap),
+      ),
       h(
         doc,
         'main',

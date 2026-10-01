@@ -35,7 +35,8 @@
       "index": 0,
       "platforms": ["google-calendar"],
       "tiers": ["typecheck", "unit", "e2e"],
-      "note": "e2e installs the Calendar drive app from the catalog (Integrations, Drive apps; the dev-server serves the committed apps/calendar/<version>/ui.js in place of GitHub Pages) and drives it in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers.",
+      "paths": ["ontology/**", "ontology-kit/**"],
+      "note": "paths: the app bundles ontology-kit/terms.mjs and resolver.mjs and syncs into the shared event-v1 class (#177), so an ontology change runs this lane too. e2e installs the Calendar drive app from the catalog (Integrations, Drive apps; the dev-server serves the committed apps/calendar/<version>/ui.js in place of GitHub Pages) and drives it in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers. The rows are event-v1 with the published GitHub Pages subjects, which the server and browser fetch themselves, so the e2e needs network access to ontola.github.io; it first checks Pages serves the class and its properties with the committed bytes (ontology-kit/served.mjs). One test adds the app as a view of a hand-made event-v1 table through Add view.",
       "e2e": ["integrations/calendar/e2e/calendar.spec.ts"]
     },
     {
