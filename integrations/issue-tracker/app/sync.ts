@@ -19,7 +19,11 @@ import {
 import { Datatype } from '@tomic/lib';
 // Plain JS modules of the lens; see devonian/github-issues/README.md.
 import { Bridge } from '../devonian/github-issues/bridge.mjs';
-import { AtomicPort, GitHubPort } from '../devonian/github-issues/ports.mjs';
+import {
+  AtomicPort,
+  digest,
+  GitHubPort,
+} from '../devonian/github-issues/ports.mjs';
 import { proxyTransport } from '../devonian/github-issues/proxy.mjs';
 import { reviewGate } from '../devonian/github-issues/review.mjs';
 import {
@@ -98,6 +102,39 @@ export interface ConflictField {
   remote: unknown;
 }
 
+/** A GitHub record that matches what an uncertain create sent. */
+export interface Candidate {
+  /** GitHub issue number or comment id. */
+  id: number;
+  title?: string;
+  body: string;
+  url?: string;
+  author?: string;
+  createdAt?: string;
+}
+
+/**
+ * A create that was sent to GitHub and never answered (design state 12).
+ * The transport will not send it again; a person says whether it landed
+ * (`settleLanded`) or not (`sendAgain`).
+ */
+export interface Uncertain {
+  subject: string;
+  /** `issue`, or `comment:<issue subject>`. */
+  entity: string;
+  /** What the create sent. */
+  sent: { title?: string; body: string };
+  /**
+   * Unbound GitHub records with exactly that title and body (a comment: that
+   * body, on the same issue). They are not imported while this is open.
+   */
+  candidates: Candidate[];
+  /** The table row or Message it is about. */
+  local?: string;
+  /** For a comment: its issue's GitHub number. */
+  issueNumber?: number;
+}
+
 export interface PassResult {
   issues: number;
   comments: number;
@@ -107,6 +144,8 @@ export interface PassResult {
   /** Creates and updates sent to GitHub (approved ones only). */
   sentToGitHub: number;
   held: Held[];
+  /** Creates whose outcome on GitHub is unknown; not in `held`. */
+  uncertain: Uncertain[];
   /** The table's issues after the pass, as the Bridge reads them. */
   rows: IssueRow[];
 }
@@ -266,6 +305,33 @@ function bridgeFor(options: PassOptions) {
       options.dispatch ?? relayDispatch(options.proxy, options.connectionId),
   });
   const remote = new GitHubPort(undefined, { repository }, transport);
+  const journal = state.state.journal as Record<
+    string,
+    { signature?: string; receipt?: unknown } | undefined
+  >;
+  // The transport's journal id of a create, as GitHubPort derives it from
+  // AtomicLens's idempotency key.
+  const createId = (entity: string, subject: string) =>
+    digest(`${JSON.stringify([remote.scope, entity, subject])}:create`);
+  const uncertain = {
+    async sent(entity: string, subject: string) {
+      const entry = journal[await createId(entity, subject)];
+      if (!entry?.signature || entry.receipt) return undefined;
+      const { args } = JSON.parse(entry.signature) as {
+        args: { title?: string; body?: string };
+      };
+
+      return entity === 'issue'
+        ? { title: args.title, body: args.body ?? '' }
+        : { body: args.body ?? '' };
+    },
+    async forget(entity: string, subject: string) {
+      const id = await createId(entity, subject);
+      if (journal[id]?.receipt) return;
+      delete journal[id];
+      await state.saveJournal();
+    },
+  };
   const sent = { value: 0 };
   let sinceFlush = 0;
   let flushedAt = Date.now();
@@ -307,6 +373,7 @@ function bridgeFor(options: PassOptions) {
     base: BRIDGE_BASE,
     snapshot: state.state.snapshot,
     save: (snapshot: unknown) => state.saveSnapshot(snapshot),
+    uncertain,
   });
 
   return { bridge, atomicStore, sent, local };
@@ -346,7 +413,51 @@ async function summary(
         ? withLocal
         : { ...withLocal, issueNumber };
     }),
+    uncertain: [
+      ...(bridge.unsettled as Map<string, BridgeUnsettled>).values(),
+    ].map(u => {
+      const at = bridge.id('local', u.entity, u.subject);
+      const issueNumber =
+        u.entity === 'issue'
+          ? undefined
+          : bridge.id('remote', 'issue', u.entity.slice('comment:'.length));
+
+      return {
+        subject: u.subject,
+        entity: u.entity,
+        sent: u.sent,
+        candidates: u.candidates.map(candidate),
+        ...(typeof at === 'string' ? { local: at } : {}),
+        ...(typeof issueNumber === 'number' ? { issueNumber } : {}),
+      };
+    }),
     rows,
+  };
+}
+
+interface BridgeUnsettled {
+  subject: string;
+  entity: string;
+  sent: { title?: string; body: string };
+  candidates: ImportedRow[];
+}
+
+function candidate(row: ImportedRow): Candidate {
+  const m = row.metadata ?? {};
+  const value = row.value as { title?: string; body?: string };
+  const optional = {
+    title: text(value.title),
+    url: text(m.url),
+    author: text(m.author),
+    createdAt: text(m.createdAt),
+  };
+
+  return {
+    id: Number(row.id),
+    body: value.body ?? '',
+    ...Object.fromEntries(
+      Object.entries(optional).filter(([, v]) => v !== undefined),
+    ),
   };
 }
 
@@ -584,5 +695,53 @@ export async function removeFromBoard(
   for (const id of local) {
     const resource = await options.store.getResource(id).catch(() => undefined);
     await resource?.destroy();
+  }
+}
+
+/**
+ * "It landed as #N": binds an uncertain create to the GitHub record it
+ * became (`Bridge.landed`), and writes an issue's number into its row.
+ * Reads that record from GitHub first; sends nothing to it.
+ */
+export async function settleLanded(
+  options: PassOptions,
+  subject: string,
+  id: number,
+): Promise<void> {
+  const { bridge, atomicStore } = bridgeFor(options);
+  let entity: string | undefined;
+
+  try {
+    await bridge.landed(subject, id);
+    entity = (bridge.records as Record<string, { entity: string }>)[subject]
+      ?.entity;
+  } finally {
+    await options.state.flush();
+  }
+
+  const row = bridge.id('local', 'issue', subject);
+
+  if (entity === 'issue' && typeof row === 'string') {
+    const resource = await atomicStore.getResource(row);
+    resource.set(options.tracker.properties.number, id);
+    await resource.save();
+  }
+}
+
+/**
+ * "It did not arrive": GitHub shows nothing matching an uncertain create,
+ * so its journal entry goes and the create is held for review again
+ * (`Bridge.notArrived`, which refuses while a match exists).
+ */
+export async function sendAgain(
+  options: PassOptions,
+  subject: string,
+): Promise<void> {
+  const { bridge } = bridgeFor(options);
+
+  try {
+    await bridge.notArrived(subject);
+  } finally {
+    await options.state.flush();
   }
 }

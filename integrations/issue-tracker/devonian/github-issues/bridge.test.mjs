@@ -43,7 +43,7 @@ function fixture(snapshot) {
   });
   const local = makePort('https://atomic.example/bridge');
   const remote = makePort('https://github.com/acme/repo');
-  const open = () =>
+  const open = (options = {}) =>
     new Bridge({
       devonian,
       local,
@@ -53,6 +53,7 @@ function fixture(snapshot) {
       save: async s => {
         saved = structuredClone(s);
       },
+      ...options,
     });
 
   return {
@@ -359,4 +360,116 @@ it('forgets a record gone from GitHub on both sides', async () => {
   await f.open().sync();
   expect(f.local.writes + f.remote.writes).toBe(writes);
   expect(f.open().records[subject]).toBeUndefined();
+});
+
+/**
+ * A create whose answer was lost, behind the review gate as in the app: the
+ * gate holds its resumption, as the GitHub transport's journal would refuse
+ * it. `journal` stands in for that journal: what each create sent.
+ */
+async function uncertainCreate({ lands }) {
+  const f = fixture();
+  f.local.rows.set(1, issue(1, 'Written here'));
+  const journal = new Map();
+  const uncertain = {
+    sent: async (_entity, subject) => journal.get(subject),
+    forget: async (_entity, subject) => {
+      journal.delete(subject);
+    },
+  };
+  const approved = new Set();
+  const open = () =>
+    f.open({ remote: reviewGate(f.remote, approved), uncertain });
+  const bridge = open();
+  await bridge.sync();
+  const [proposal] = bridge.held.values();
+  approved.add(proposal.key);
+  const subject = proposal.subject;
+  const create = f.remote.create;
+
+  if (lands) f.remote.lose = true;
+  else
+    f.remote.create = async () => {
+      throw new Error('Lost response');
+    };
+
+  journal.set(subject, { title: 'Written here', body: '' });
+  await expect(open().sync()).rejects.toThrow('Lost response');
+  f.remote.create = create;
+  approved.clear();
+
+  return { f, open, subject, approved, journal };
+}
+
+it('offers the issue an uncertain create became, without importing it, and binds it on request', async () => {
+  const { f, open, subject } = await uncertainCreate({ lands: true });
+  f.remote.rows.set(2, issue(2, 'Someone else’s'));
+  const bridge = open();
+  await bridge.sync();
+
+  // Not imported as a second row, not offered for sending again.
+  expect([...f.local.rows.values()].map(r => r.value.title).sort()).toEqual([
+    'Someone else’s',
+    'Written here',
+  ]);
+  expect(bridge.held.size).toBe(0);
+  const [unsettled] = bridge.unsettled.values();
+  expect(unsettled).toMatchObject({
+    subject,
+    entity: 'issue',
+    sent: { title: 'Written here', body: '' },
+  });
+  expect(unsettled.candidates.map(c => c.id)).toEqual([1]);
+
+  await expect(bridge.landed(subject, 2)).rejects.toThrow(/Already bound: #2/);
+  await bridge.landed(subject, 1);
+  expect(bridge.id('remote', 'issue', subject)).toBe(1);
+  await expect(bridge.landed(subject, 1)).rejects.toThrow(/No uncertain/);
+
+  const writes = f.remote.writes;
+  const after = open();
+  await after.sync();
+  expect(after.unsettled.size).toBe(0);
+  expect(after.held.size).toBe(0);
+  expect(f.local.rows.size).toBe(2);
+  expect(f.remote.writes).toBe(writes);
+
+  // Bound like any synced record: a later edit here is proposed as an update.
+  f.local.rows.get(1).value.title = 'Renamed here';
+  const edited = open();
+  await edited.sync();
+  expect([...edited.held.values()]).toMatchObject([
+    { subject, remoteId: 1, after: { title: 'Renamed here' } },
+  ]);
+});
+
+it('creates again only after a person says an uncertain create did not arrive', async () => {
+  const { f, open, subject, approved, journal } = await uncertainCreate({
+    lands: false,
+  });
+  let bridge = open();
+  await bridge.sync();
+  expect(bridge.unsettled.get(subject).candidates).toEqual([]);
+  expect(bridge.held.size).toBe(0);
+
+  // A matching issue shows up: that is the answer, not a second create.
+  f.remote.rows.set(7, issue(7, 'Written here'));
+  await expect(bridge.notArrived(subject)).rejects.toThrow(
+    /may have landed: #7/,
+  );
+  expect(journal.has(subject)).toBe(true);
+  f.remote.rows.delete(7);
+
+  await bridge.notArrived(subject);
+  expect(journal.has(subject)).toBe(false);
+  bridge = open();
+  await bridge.sync();
+  const [proposal] = bridge.held.values();
+  expect(proposal).toMatchObject({ subject, after: { title: 'Written here' } });
+  expect(proposal.unconfirmed).toBeUndefined();
+  approved.add(proposal.key);
+  await open().sync();
+  expect([...f.remote.rows.values()].map(r => r.value.title)).toEqual([
+    'Written here',
+  ]);
 });

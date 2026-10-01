@@ -14,7 +14,7 @@ import {
   short,
   typing,
 } from './model.js';
-import type { Held, IssueRow, PassResult } from './sync.js';
+import type { Held, IssueRow, PassResult, Uncertain } from './sync.js';
 import { sizeFor } from './ui/theme.js';
 
 const row = (n: number, patch: Partial<IssueRow> = {}): IssueRow => ({
@@ -29,13 +29,18 @@ const row = (n: number, patch: Partial<IssueRow> = {}): IssueRow => ({
   ...patch,
 });
 
-const result = (rows: IssueRow[], held: Held[] = []): PassResult => ({
+const result = (
+  rows: IssueRow[],
+  held: Held[] = [],
+  uncertain: Uncertain[] = [],
+): PassResult => ({
   issues: rows.length,
   comments: 0,
   addedHere: 0,
   updatedHere: 0,
   sentToGitHub: 0,
   held,
+  uncertain,
   rows,
 });
 
@@ -287,6 +292,103 @@ describe('banners', () => {
       'Check on GitHub',
       'Send again',
     ]);
+  });
+
+  describe('a create GitHub never answered', () => {
+    const create = (candidates: Uncertain['candidates']): Uncertain => ({
+      subject: 'b',
+      entity: 'issue',
+      sent: { title: 'Fix the footer', body: '' },
+      candidates,
+      local: 's9',
+    });
+    const at = (u: Uncertain) =>
+      ready({
+        last: {
+          at: 1,
+          result: result([row(1), row(9, { number: undefined })], [], [u]),
+        },
+      });
+
+    it('offers the one matching issue to link, and marks the row', () => {
+      const state = at(
+        create([
+          {
+            id: 7,
+            title: 'Fix the footer',
+            body: '',
+            author: 'mock-user',
+            url: 'https://github.com/o/r/issues/7',
+          },
+        ]),
+      );
+      const banner = bannerFor(state)!;
+      expect(banner.title).toBe(
+        '“Fix the footer” was sent to GitHub, but no answer came back.',
+      );
+      expect(banner.text).toMatch(/^GitHub has #7 with the same title/);
+      expect(banner.actions).toEqual([
+        {
+          label: 'Check #7 on GitHub',
+          action: 'open-github',
+          url: 'https://github.com/o/r/issues/7',
+        },
+        {
+          label: 'It landed as #7',
+          action: 'landed',
+          subject: 'b',
+          id: 7,
+          primary: true,
+        },
+      ]);
+      expect(markers(state).get('s9')).toBe('unconfirmed');
+    });
+
+    it('lets a person pick among several, at most three', () => {
+      const candidates = [3, 4, 5, 6].map(id => ({
+        id,
+        title: 'Fix the footer',
+        body: '',
+      }));
+      const banner = bannerFor(at(create(candidates)))!;
+      expect(banner.text).toMatch(/^GitHub has 4 issues with the same title/);
+      expect(banner.actions.map(a => a.label)).toEqual([
+        'Check on GitHub',
+        'It landed as #3',
+        'It landed as #4',
+        'It landed as #5',
+      ]);
+    });
+
+    it('offers to send again only when GitHub shows no match', () => {
+      const banner = bannerFor(at(create([])))!;
+      expect(banner.text).toMatch(/probably did not arrive/);
+      expect(banner.actions).toEqual([
+        { label: 'Check on GitHub', action: 'open-github' },
+        {
+          label: 'Send again',
+          action: 'send-again',
+          subject: 'b',
+          primary: true,
+        },
+      ]);
+    });
+
+    it('names a comment by its issue', () => {
+      const banner = bannerFor(
+        at({
+          ...create([{ id: 41, body: 'Looks good' }]),
+          entity: 'comment:x',
+          sent: { body: 'Looks good' },
+          issueNumber: 1,
+        }),
+      )!;
+      expect(banner.title).toMatch(/^Your comment on #1 was sent/);
+      expect(banner.actions.map(a => a.label)).toEqual([
+        'Check comment 41 on GitHub',
+        'It landed as comment 41',
+      ]);
+    });
   });
 
   it('explains the first import and keeps moving off until it completes', () => {

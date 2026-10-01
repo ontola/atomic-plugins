@@ -343,34 +343,135 @@ group('GitHub issues drive app', () => {
     },
   );
 
-  it('never sends a create twice after its response was lost', async () => {
+  /** A new row's create, approved and sent, whose answer is lost. */
+  async function lostCreate(lands: boolean) {
     const { store, controller } = await bound();
     const status = property(store, 'issue-status');
-    const todo = [...store.resources.entries()].find(
-      ([, p]) => p[PARENT] === status && p[SHORTNAME] === 'todo',
+    const doing = [...store.resources.entries()].find(
+      ([, p]) => p[PARENT] === status && p[SHORTNAME] === 'doing',
     )![0];
-    await store.newResource({
+    const { subject } = await store.newResource({
       parent: TABLE,
       isA: ['did:ad:class-item'],
-      propVals: { [NAME]: 'Written here first', [status]: [todo] },
+      propVals: { [NAME]: 'Written here first', [status]: [doing] },
     });
     const proposed = ready(await controller.sync());
     expect(proposed.last?.result.held.map(describeHeld)).toEqual([
-      'Create issue “Written here first” (Todo)',
+      'Create issue “Written here first” (Doing)',
     ]);
     store.fail = 'The host did not answer proxy in time.';
     store.failWritesOnly = true;
-    await controller.send();
+    store.lostWriteLands = lands;
+    const lost = ready(await controller.send());
+    expect(lost.problem?.message).toMatch(/Proxy request failed/);
     store.fail = undefined;
-    const posts = () => store.calls.filter(c => c.method === 'POST').length;
-    const sent = posts();
+    // Issue creates only; adding the atomic:doing label is a POST too.
+    const posts = () =>
+      store.calls.filter(c => c.method === 'POST' && /\/issues$/.test(c.path))
+        .length;
 
-    await controller.sync();
-    const paused = ready(await controller.send());
-    expect(paused.problem?.kind).toBe('paused');
-    expect(paused.problem?.message).toMatch(/Uncertain GitHub write/);
+    return { store, controller, subject, posts, sent: posts() };
+  }
+
+  it('never sends a create twice after its response was lost', async () => {
+    const { store, controller, subject, posts, sent } = await lostCreate(true);
+    const next = ready(await controller.sync());
+    expect(next.problem).toBeUndefined();
+    // Reported as uncertain, not as a write to approve: "Send" sends nothing.
+    expect(next.last?.result.held).toEqual([]);
+    expect(next.last?.result.uncertain).toMatchObject([
+      {
+        local: subject,
+        entity: 'issue',
+        sent: { title: 'Written here first' },
+      },
+    ]);
+    const again = ready(await controller.send());
+    expect(again.problem).toBeUndefined();
     expect(posts()).toBe(sent);
-    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(2);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(3);
+  });
+
+  it('links a lost create to the issue it became, without importing it twice', async () => {
+    const { store, controller, subject, posts, sent } = await lostCreate(true);
+    const number = property(store, 'github-issue-number');
+    const next = ready(await controller.sync());
+    const [uncertain] = next.last!.result.uncertain;
+    expect(uncertain.candidates).toMatchObject([
+      { id: 3, title: 'Written here first' },
+    ]);
+    // GitHub's #3 is offered, not imported as a second row.
+    expect(rows(store)).toHaveLength(3);
+    expect(next.last?.result.rows.map(r => r.title).sort()).toEqual([
+      'Export the board as CSV',
+      'Keep the selected calendar after refresh',
+      'Written here first',
+    ]);
+
+    const linked = ready(await controller.landed(uncertain.subject, 3));
+    expect(linked.problem).toBeUndefined();
+    expect(linked.last?.result.uncertain).toEqual([]);
+    expect(rows(store)).toHaveLength(3);
+    expect(store.resources.get(subject)![number]).toBe(3);
+    expect(posts()).toBe(sent);
+    // GitHub created it as Todo; the row's Doing is proposed as an update.
+    expect(linked.last?.result.held.map(describeHeld)).toEqual([
+      'Update #3: status Todo → Doing (add the atomic:doing label)',
+    ]);
+    await controller.send();
+    expect(
+      store.github.snapshot(SEEDED_REPOSITORY).issues.map(i => i.title),
+    ).toEqual([
+      'Keep the selected calendar after refresh',
+      'Export the board as CSV',
+      'Written here first',
+    ]);
+    expect(ready(await controller.sync()).last?.result.held).toEqual([]);
+  });
+
+  it('sends a lost create again only once a person says it did not arrive', async () => {
+    const { store, controller, subject, posts, sent } = await lostCreate(false);
+    const next = ready(await controller.sync());
+    const [uncertain] = next.last!.result.uncertain;
+    expect(uncertain).toMatchObject({ local: subject, candidates: [] });
+
+    const asked = ready(await controller.sendAgain(uncertain.subject));
+    expect(asked.problem).toBeUndefined();
+    expect(asked.last?.result.uncertain).toEqual([]);
+    // Held for review like any new issue; nothing went yet.
+    expect(asked.last?.result.held.map(describeHeld)).toEqual([
+      'Create issue “Written here first” (Doing)',
+    ]);
+    expect(posts()).toBe(sent);
+    const done = ready(await controller.send());
+    expect(done.problem).toBeUndefined();
+    expect(posts()).toBe(sent + 1);
+    const issues = store.github.snapshot(SEEDED_REPOSITORY).issues;
+    expect(issues.filter(i => i.title === 'Written here first')).toHaveLength(
+      1,
+    );
+    await controller.sync();
+    expect(
+      store.resources.get(subject)![property(store, 'github-issue-number')],
+    ).toBe(3);
+  });
+
+  it('refuses to send a lost create again while GitHub shows a match', async () => {
+    const { store, controller, sent, posts } = await lostCreate(false);
+    const [uncertain] = ready(await controller.sync()).last!.result.uncertain;
+    // It turns up after all (or someone made the same one meanwhile).
+    store.github.createIssue(SEEDED_REPOSITORY, {
+      title: 'Written here first',
+      body: '',
+    });
+    const refused = ready(await controller.sendAgain(uncertain.subject));
+    expect(refused.problem?.message).toMatch(/may have landed: #3/);
+    expect(posts()).toBe(sent);
+    const next = ready(await controller.sync());
+    expect(next.last?.result.uncertain[0].candidates).toMatchObject([
+      { id: 3 },
+    ]);
+    expect(rows(store)).toHaveLength(3);
   });
 
   it('classifies failures into what the view can offer', () => {

@@ -411,6 +411,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       ui.confirmRemove = false;
       void controller.removeFromBoard();
     },
+
+    landed(subject, id) {
+      void controller.landed(subject, id);
+    },
+
+    sendAgain(subject) {
+      void controller.sendAgain(subject);
+    },
   };
 
   // ---------------------------------------------------------- keyboard

@@ -487,3 +487,42 @@ describe('an issue gone from GitHub', () => {
     );
   });
 });
+
+describe('a create GitHub never answered', () => {
+  it('links the row to the issue it became, and sends nothing', async () => {
+    const store = fakeStore();
+    const c = createController(store);
+    await c.load();
+    await c.choose(SEEDED_REPOSITORY);
+    await c.create({ title: 'Fix the footer', body: '', status: 'Todo' });
+    store.fail = 'The host did not answer proxy in time.';
+    store.failWritesOnly = true;
+    store.lostWriteLands = true;
+    await c.send();
+    store.fail = undefined;
+    const creates = () =>
+      store.calls.filter(r => r.method === 'POST' && /\/issues$/.test(r.path))
+        .length;
+    expect(creates()).toBe(1);
+
+    const { root } = await mount({ store, bind: false });
+    const banner = () => root.querySelector<HTMLElement>('.pl-banner');
+    expect(banner()?.textContent).toContain(
+      '“Fix the footer” was sent to GitHub, but no answer came back.',
+    );
+    // GitHub's #3 is offered, not imported as a second card.
+    expect(root.querySelectorAll('[data-issue]')).toHaveLength(3);
+    expect(cardOf(root, 'New').textContent).toContain(
+      'Sent, but GitHub did not answer',
+    );
+    const landed = [...banner()!.querySelectorAll('button')].find(
+      b => b.textContent === 'It landed as #3',
+    )!;
+    landed.click();
+    await settle(root);
+    expect(banner()).toBeNull();
+    expect(root.querySelectorAll('[data-issue]')).toHaveLength(3);
+    expect(cardOf(root, '#3')).toBeDefined();
+    expect(creates()).toBe(1);
+  });
+});
