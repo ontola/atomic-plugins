@@ -84,15 +84,25 @@ export function domain(value, field = 'domain') {
   return host;
 }
 
-/** `user@domain`, split at the last `@` (OCM addresses may contain more). */
+/**
+ * `user@domain`, split at the last `@` (OCM addresses may contain more).
+ * Nextcloud (35.0.1 checked) puts the recipient server's URL in
+ * `shareWith` (`bob@https://host`, or `bob@http://host` for a plain-http
+ * server); that scheme and a trailing `/` are dropped. The domain itself
+ * stays strict.
+ */
 export function address(value, field) {
   text(value, field);
   const at = value.lastIndexOf('@');
   if (at < 1) refuse(400, `Invalid ${field}`);
+  const server = value
+    .slice(at + 1)
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/$/, '');
 
   return {
     user: value.slice(0, at),
-    domain: domain(value.slice(at + 1), field),
+    domain: domain(server, field),
   };
 }
 
@@ -163,6 +173,14 @@ function json(body, what) {
  * `sharedSecret`, without requirements this receiver cannot meet. Returns
  * the metadata, and the access details separately (`access`), so callers
  * cannot persist the secret by accident.
+ *
+ * Also the legacy shape Nextcloud sends to a receiver that does not
+ * advertise `exchange-token` (35.0.1 checked): `{ name: "webdav", options:
+ * { sharedSecret, permissions: "{http://open-cloud-mesh.org/ns}share-permissions" } }`,
+ * with no `uri`, and permissions as a WebDAV property name rather than a
+ * list. `access.uri` is then `undefined` and `access.legacy` true: the
+ * caller derives the location from the signing server. Such permissions
+ * are recorded as `read`, the only access this receiver uses.
  */
 export function parseShare(body) {
   const value = json(body, 'share');
@@ -181,8 +199,12 @@ export function parseShare(body) {
         : protocol.options
       : undefined;
   if (!isRecord(dav)) refuse(501, 'Only WebDAV access is supported');
-  const uri = text(dav.uri, 'WebDAV uri', 2048);
-  if (!/^https?:\/\/[^/@?#\\\s]+\/[^\s#]*$/i.test(uri))
+  const legacy =
+    protocol.name === 'webdav' &&
+    !isRecord(protocol.webdav) &&
+    dav.uri === undefined;
+  const uri = legacy ? undefined : text(dav.uri, 'WebDAV uri', 2048);
+  if (!legacy && !/^https?:\/\/[^/@?#\\\s]+\/[^\s#]*$/i.test(uri))
     refuse(
       501,
       'Only absolute WebDAV URIs are supported (webdav-receive uri: absolute)',
@@ -201,7 +223,10 @@ export function parseShare(body) {
     accessTypes.some(t => !['remote', 'datatx'].includes(t))
   )
     refuse(400, 'Invalid WebDAV accessTypes');
-  const permissions = dav.permissions ?? ['read'];
+  const permissions =
+    legacy && typeof dav.permissions === 'string'
+      ? ['read']
+      : (dav.permissions ?? ['read']);
   if (
     !Array.isArray(permissions) ||
     !permissions.length ||
@@ -247,7 +272,7 @@ export function parseShare(body) {
         ? {}
         : { expiration: String(value.expiration) }),
     },
-    access: { uri, secret },
+    access: { uri, secret, legacy },
   };
 }
 
@@ -300,7 +325,11 @@ export function parseNotification(body) {
 
   return {
     notificationType: value.notificationType,
-    senderDomain: domain(value.senderDomain, 'senderDomain'),
+    // REQUIRED in OCM 1.5, but Nextcloud 35.0.1 leaves it out of
+    // SHARE_UNSHARED; the signer the host verified is the sender then.
+    ...(value.senderDomain === undefined
+      ? {}
+      : { senderDomain: domain(value.senderDomain, 'senderDomain') }),
     providerId,
     ...(permissions ? { permissions } : {}),
   };
@@ -404,6 +433,56 @@ export function identity(peer, providerId) {
   return [IDENTITY, peer, providerId].map(encodeURIComponent).join(' ');
 }
 
+/**
+ * Where a legacy share (no `uri`) is read: the root of the signing server's
+ * public WebDAV endpoint, `/public.php/webdav/`, with the shared secret as
+ * the Basic user name and an empty password. That is the path Nextcloud
+ * publishes as `protocols.webdav` in its discovery, and how Nextcloud's own
+ * receiver reads such shares. This code cannot read the sender's discovery
+ * itself, so the path is fixed, and only ever on the origin the host
+ * fetched the signer's discovery and keys from (`caller.owner`).
+ */
+function legacyAccess(request, peer, access) {
+  const origin = request.caller.owner;
+  if (typeof origin !== 'string' || hostOf(origin) !== peer)
+    refuse(501, 'Shares without a WebDAV uri need the signing server origin');
+
+  return {
+    // Its own operation: `fetch-file`'s `{*rest}` matches no trailing `/`.
+    operation: 'fetch-legacy-webdav',
+    uri: `${origin.replace(/\/$/, '')}/public.php/webdav/`,
+    authorization: `Basic ${base64(`${access.secret}:`)}`,
+  };
+}
+
+/**
+ * Base64 of a string's UTF-8 bytes, with no `btoa`, `Buffer` or
+ * `TextEncoder` (none is promised in the host's QuickJS).
+ */
+export function base64(value) {
+  const bytes = [];
+  encodeURIComponent(value).replace(/%([0-9A-F]{2})|[^%]/g, (m, hex) => {
+    bytes.push(hex ? parseInt(hex, 16) : m.charCodeAt(0));
+
+    return '';
+  });
+  const table =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n =
+      (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    out +=
+      table[(n >> 18) & 63] +
+      table[(n >> 12) & 63] +
+      (i + 1 < bytes.length ? table[(n >> 6) & 63] : '=') +
+      (i + 2 < bytes.length ? table[n & 63] : '=');
+  }
+
+  return out;
+}
+
 function receiveShare(ctx, request) {
   const peer = signer(request);
   const c = config(ctx);
@@ -428,7 +507,14 @@ function receiveShare(ctx, request) {
     Number(share.expiration) * 1000 <= Date.now()
   )
     refuse(400, 'The share has already expired');
-  if (!/^https:\/\//i.test(access.uri))
+  const source = access.legacy
+    ? legacyAccess(request, peer, access)
+    : {
+        operation: 'fetch-file',
+        uri: access.uri,
+        authorization: `Bearer ${access.secret}`,
+      };
+  if (!/^https:\/\//i.test(source.uri))
     refuse(400, 'The WebDAV URI must use HTTPS');
 
   const key = identity(peer, share.providerId);
@@ -442,9 +528,9 @@ function receiveShare(ctx, request) {
 
   try {
     fetched = ctx.blobs.fetch({
-      operation: 'fetch-file',
-      url: access.uri,
-      headers: { authorization: `Bearer ${access.secret}` },
+      operation: source.operation,
+      url: source.uri,
+      headers: { authorization: source.authorization },
     });
   } catch (error) {
     refuse(
@@ -457,6 +543,20 @@ function receiveShare(ctx, request) {
     refuse(
       400,
       `The shared file could not be fetched: the sending server answered ${fetched?.status}`,
+    );
+  // Nextcloud (35.0.1 checked) sends a shared folder as `resourceType:
+  // file` too, and its public WebDAV root then answers `200` with an HTML
+  // page ("This is the WebDAV interface…") instead of the file. Without a
+  // PROPFIND, an HTML answer for a name that is not an HTML file is taken
+  // to be that page. The fetched blob stays in the store, unreferenced.
+  if (
+    access.legacy &&
+    /^text\/html\b/i.test(String(fetched.blob.type ?? '')) &&
+    !/\.x?html?$/i.test(share.name)
+  )
+    refuse(
+      501,
+      'Only file shares are supported; the sending server served a folder',
     );
 
   const meta = {
@@ -525,7 +625,10 @@ function receiveNotification(ctx, request) {
   const c = config(ctx);
   if (!c.sharesFolder) refuse(503, 'This receiver is not configured');
   const notification = parseNotification(request.body);
-  if (notification.senderDomain !== peer)
+  if (
+    notification.senderDomain !== undefined &&
+    notification.senderDomain !== peer
+  )
     refuse(403, 'senderDomain must be the signing server');
   if (!allowedPeer(c.allowedPeers, peer))
     refuse(
