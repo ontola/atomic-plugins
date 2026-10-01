@@ -1,14 +1,18 @@
 // @wc-ignore-file
 /**
- * How the views show the timeline's `unknown` spans and conflicts (#123 §4,
- * M2: read-only, no actions yet). `../ui/coverage.ts` calls these from its
- * two hooks. The text is built by pure functions so it is testable without a
- * DOM; the elements only carry it.
+ * How the views show the timeline's `unknown` spans and conflicts (#123 §4).
+ * `../ui/coverage.ts` calls these from its two hooks. M2 rendered conflicts
+ * read-only; with `actions` (M4) each one offers its resolutions, which
+ * stage a range edit over the conflict's exact span, listed under "Changes
+ * to send". The text is built by pure functions so it is testable without
+ * a DOM; the elements only carry it.
  */
 import { dayKey, formatDay, formatTime } from '../model/time.js';
 import type { Conflict, Interval, Timesheet } from '../model/types.js';
 import { projectLabel } from '../model/views.js';
+import { button } from '../ui/components.js';
 import type { H } from '../ui/dom.js';
+import type { RangeTarget } from '../../devonian/clockify/lens/index.js';
 import type { TimeLabel, TimelineConflict } from './types.js';
 
 const BADGE_TEXT = {
@@ -61,6 +65,68 @@ export function conflictText(conflict: Conflict, sheet: Timesheet): string {
   }
 }
 
+export interface Resolution {
+  label: string;
+  target: RangeTarget;
+}
+
+/**
+ * What a conflict can be resolved to (#123 §4): "Keep" each project
+ * claimed ("No project" too, unless the workspace requires one) and "Did
+ * not work" for "unclear which project"; "Did not work" for "unclear
+ * whether worked" (the break, holiday or time off itself is Clockify's to
+ * change); "Remove duplicate" for the same project twice.
+ */
+export function resolutions(
+  conflict: Conflict,
+  sheet: Timesheet,
+  projectRequired = false,
+): Resolution[] {
+  if (!isTimelineConflict(conflict)) return [];
+  const notWorked: Resolution = {
+    label: 'Did not work',
+    target: { kind: 'didNotWork' },
+  };
+
+  switch (conflict.kind) {
+    case 'duplicate': {
+      const label = conflict.candidates[0];
+
+      return label?.kind === 'worked'
+        ? [
+            {
+              label: 'Remove duplicate',
+              target: { kind: 'worked', projectId: label.projectId },
+            },
+          ]
+        : [];
+    }
+
+    case 'whetherWorked':
+      return [notWorked];
+    case 'whichProject':
+      return [
+        ...conflict.candidates
+          .filter(
+            (l): l is Extract<TimeLabel, { kind: 'worked' }> =>
+              l.kind === 'worked' && !(projectRequired && l.projectId === null),
+          )
+          .map(l => ({
+            label: `Keep ${labelText(l, sheet)}`,
+            target: { kind: 'worked' as const, projectId: l.projectId },
+          })),
+        notWorked,
+      ];
+  }
+}
+
+export interface ConflictActions {
+  onResolve: (conflict: TimelineConflict, target: RangeTarget) => void;
+  /** No sync or send running, and connected. */
+  enabled: boolean;
+  projectRequired: boolean;
+}
+
 export function renderUnknownSpans(
   h: H,
   sheet: Timesheet,
@@ -77,9 +143,32 @@ export function renderUnknownSpans(
   );
 }
 
-export function renderConflictList(h: H, sheet: Timesheet): HTMLElement | null {
+export function renderConflictList(
+  h: H,
+  sheet: Timesheet,
+  actions?: ConflictActions,
+): HTMLElement | null {
   if (!sheet.conflicts.length) return null;
   const n = sheet.conflicts.length;
+
+  const actionsFor = (conflict: Conflict) => {
+    if (!actions || !isTimelineConflict(conflict)) return null;
+    const options = resolutions(conflict, sheet, actions.projectRequired);
+    if (!options.length) return null;
+
+    return h(
+      'div',
+      { class: 'row', role: 'group', 'aria-label': 'Resolve' },
+      ...options.map(o =>
+        button(h, o.label, {
+          variant: 'sec',
+          key: `resolve:${conflict.from}:${o.label}`,
+          disabled: !actions.enabled,
+          onClick: () => actions.onResolve(conflict, o.target),
+        }),
+      ),
+    );
+  };
 
   return h(
     'section',
@@ -92,12 +181,16 @@ export function renderConflictList(h: H, sheet: Timesheet): HTMLElement | null {
         null,
         `${n} ${n === 1 ? 'conflict' : 'conflicts'} in Clockify`,
       ),
-      ' (read-only for now: fix them in Clockify)',
+      actions
+        ? ' Choose what is right. It is listed under “Changes to send” first, and reaches Clockify only when you send it.'
+        : ' (read-only here: fix them in Clockify)',
     ),
     h(
       'ul',
       null,
-      sheet.conflicts.map(c => h('li', null, conflictText(c, sheet))),
+      sheet.conflicts.map(c =>
+        h('li', null, h('span', null, conflictText(c, sheet)), actionsFor(c)),
+      ),
     ),
   );
 }

@@ -7,7 +7,12 @@
  */
 import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { USER, WORKSPACE } from '../../fixtures/clockify/scenario.mjs';
+import {
+  clockifyEntry,
+  PROJECT_2,
+  USER,
+  WORKSPACE,
+} from '../../fixtures/clockify/scenario.mjs';
 import { APP, fakeStore } from '../fakeStore.js';
 import { fixtureProxy } from '../fixtureProxy.js';
 import { view } from '../main.js';
@@ -389,14 +394,20 @@ describe('view() against the fake store and the Clockify mock', () => {
   // fall into last week and the tab would be empty. Only Date is faked:
   // expect.poll still needs real timers.
   const NOW = Date.parse('2026-09-23T12:00:00Z');
+  const HOUR = 3_600_000;
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);
   });
   afterEach(() => vi.useRealTimers());
 
-  async function mount(configured: boolean, host: Partial<PluginStore> = {}) {
+  async function mount(
+    configured: boolean,
+    host: Partial<PluginStore> = {},
+    entries: (list: Array<Record<string, unknown>>) => void = () => {},
+  ) {
     const proxy = fixtureProxy(NOW);
+    entries(proxy.fixture.state.entries);
     const store = Object.assign(fakeStore({ proxy: proxy.request }), host);
 
     if (configured) {
@@ -545,6 +556,112 @@ describe('view() against the fake store and the Clockify mock', () => {
       ),
     ).toMatchObject({ description: 'Weekly sync (notes)', billable: true });
     expect(root.querySelector('.entry .tag-pending')).toBeNull();
+  }, 60_000);
+
+  const changesOf = (root: Element) =>
+    root.querySelector('section[aria-label="Changes to send"]');
+
+  it('#123 M4: resolves a conflict with "Keep", reviewed and then sent', async () => {
+    const { root, proxy } = await mount(true, {}, list =>
+      list.push(
+        clockifyEntry(
+          'entry-q',
+          'Inside another',
+          NOW - 27 * HOUR,
+          NOW - 26.5 * HOUR,
+          { projectId: PROJECT_2.id },
+        ),
+      ),
+    );
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Last synced');
+    const conflicts = root.querySelector(
+      'section[aria-label="Conflicts in Clockify"]',
+    )!;
+    expect(text(conflicts)).toContain(
+      'Unclear which project: Atomic plugins · Research',
+    );
+    buttons(conflicts, 'Keep Atomic plugins')[0].click();
+
+    await expect
+      .poll(() => text(changesOf(root)))
+      .toContain('Delete this entry in Clockify');
+    expect(proxy.fixture.state.writes).toEqual([]);
+    buttons(root, 'Send 1 to Clockify')[0].click();
+    await expect
+      .poll(() => text(changesOf(root)))
+      .toContain('“Inside another”: Sent');
+    expect(proxy.fixture.state.writes).toMatchObject([{ method: 'DELETE' }]);
+    expect(
+      root.querySelector('section[aria-label="Conflicts in Clockify"]'),
+    ).toBeNull();
+  }, 60_000);
+
+  it('#123 M4: "Edit a time range" plans a new entry, listed until sent', async () => {
+    const { root, proxy } = await mount(true);
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Last synced');
+    buttons(root, 'Edit a time range…')[0].click();
+    const form = root.querySelector('form[aria-label="Edit a time range"]')!;
+    expect(text(form.querySelector('label[for="rg-from"]'))).toBe(
+      'From (Europe/Amsterdam)',
+    );
+    (form.querySelector('#rg-from') as HTMLInputElement).value =
+      '2026-09-23T08:00';
+    (form.querySelector('#rg-to') as HTMLInputElement).value =
+      '2026-09-23T09:00';
+    (form.querySelector('#rg-what') as HTMLSelectElement).value =
+      `worked:${PROJECT_2.id}`;
+    buttons(root, 'Plan changes')[0].click();
+
+    await expect
+      .poll(() => text(changesOf(root)))
+      .toContain('Create a new entry: 23 Sep 08:00 – 09:00, Research');
+    expect(
+      root.querySelector('form[aria-label="Edit a time range"]'),
+    ).toBeNull();
+    expect(proxy.fixture.state.writes).toEqual([]);
+
+    buttons(root, 'Send 1 to Clockify')[0].click();
+    await expect.poll(() => text(changesOf(root))).toContain(': Sent');
+    expect(proxy.fixture.state.writes).toMatchObject([
+      {
+        method: 'POST',
+        body: {
+          start: '2026-09-23T06:00:00Z',
+          end: '2026-09-23T07:00:00Z',
+          projectId: PROJECT_2.id,
+        },
+      },
+    ]);
+  }, 60_000);
+
+  it('#123 M4: a refused range stays open and says why', async () => {
+    const { root, proxy } = await mount(true);
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Last synced');
+    buttons(root, 'Edit a time range…')[0].click();
+    const form = root.querySelector('form[aria-label="Edit a time range"]')!;
+    // Over the running timer (it started an hour before NOW).
+    (form.querySelector('#rg-from') as HTMLInputElement).value =
+      '2026-09-23T13:00';
+    (form.querySelector('#rg-to') as HTMLInputElement).value =
+      '2026-09-23T13:30';
+    buttons(root, 'Plan changes')[0].click();
+
+    await expect
+      .poll(() =>
+        text(
+          root.querySelector(
+            'form[aria-label="Edit a time range"] [role="alert"]',
+          ),
+        ),
+      )
+      .toContain('A running timer is in this range');
+    expect(proxy.fixture.state.writes).toEqual([]);
   }, 60_000);
 });
 

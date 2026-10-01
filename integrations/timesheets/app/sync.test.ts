@@ -67,8 +67,8 @@ describe('ensureSchema', () => {
       'https://atomicdata.dev/datatypes/integer',
     );
     expect(property(schema.row.start)[PARENT]).toBe(ONTOLOGY);
-    // 8 row fields, 3 settings, 4 log fields, 3 sync extras (#123 M3).
-    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(18);
+    // 8 row fields, 3 settings, 4 log fields, 4 sync extras (#123 M3, M4).
+    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(19);
     const recommends = store.resources.get(ROW_CLASS)![
       atomic.recommends
     ] as string[];

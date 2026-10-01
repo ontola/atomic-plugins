@@ -253,6 +253,8 @@ function stub(
     editEntry: async () => {},
     deleteEntry: async () => {},
     discard: async () => {},
+    editRange: async () => false,
+    resolveConflict: async () => false,
     send: async () => state,
   };
 

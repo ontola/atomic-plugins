@@ -70,6 +70,10 @@ export function valueText(
 /** One line per changed field: `Start: 22 Sep 09:00 → 22 Sep 09:15`. */
 export function changeLines(change: PendingChange, timeZone: string): string[] {
   if (change.kind === 'delete') return ['Delete this entry in Clockify'];
+  if (change.kind === 'create')
+    return [
+      `${change.copyOf ? 'Create the rest of the split entry' : 'Create a new entry'}: ${valueText('start', change.desired, timeZone)} – ${formatTime(change.desired.end, timeZone)}, ${valueText('projectId', change.desired, timeZone)}`,
+    ];
 
   return change.fields.map(
     f =>
@@ -88,6 +92,7 @@ const OUTCOME_TEXT: Record<SendOutcome['status'], string> = {
   'not-sent': 'Not sent (stopped after an earlier one)',
   changed: 'Not sent: changed after review',
   gone: 'Deleted in Clockify; row removed',
+  bound: 'Clockify already had it',
 };
 
 export function outcomeText(outcome: SendOutcome): string {
@@ -299,7 +304,11 @@ export const pendingTag = (h: H, kind: TimeEntry['pending']) =>
     ? h(
         'span',
         { class: 'tag-pending' },
-        kind === 'delete' ? 'Delete not sent' : 'Not sent',
+        kind === 'delete'
+          ? 'Delete not sent'
+          : kind === 'create'
+            ? 'New, not sent'
+            : 'Not sent',
       )
     : null;
 

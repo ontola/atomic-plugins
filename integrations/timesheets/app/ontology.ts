@@ -179,6 +179,12 @@ export const SYNC_FIELDS = {
     datatypes.boolean,
     'True when someone asked to delete this entry in Clockify and it has not been sent yet.',
   ),
+  create: field(
+    'clockify-create',
+    'Clockify create',
+    datatypes.string,
+    'JSON text: this row is a new entry still to be created in Clockify (a range edit, #123 M4), and what it copies; empty once created. Written by the timesheets app; do not edit.',
+  ),
 } as const;
 
 export type RowKey = keyof typeof ROW_FIELDS;
