@@ -59,9 +59,11 @@
       "paths": [
         "devonian/src/**",
         "devonian/package.json",
-        "devonian/pnpm-lock.yaml"
+        "devonian/pnpm-lock.yaml",
+        "ontology/**",
+        "ontology-kit/**"
       ],
-      "note": "paths: devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. The e2e installs the GitHub issues drive app (app/, npm devonian from app/package.json) from the catalog's Drive apps section, as the committed apps/issue-tracker/<version>/ui.js, and drives it through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository.",
+      "note": "paths: the app bundles ontology-kit/terms.mjs and resolver.mjs and its rows are of the shared issue-v1 class (#177 item 6), so an ontology change runs this lane too; the e2e reads issue-v1 from its published GitHub Pages subject (checked first with ontology-kit/served.mjs), so it needs network access to ontola.github.io. devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. The e2e installs the GitHub issues drive app (app/, npm devonian from app/package.json) from the catalog's Drive apps section, as the committed apps/issue-tracker/<version>/ui.js, and drives it through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository.",
       "e2e": ["integrations/issue-tracker/e2e/issue-tracker.spec.ts"]
     },
     {

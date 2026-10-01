@@ -42,6 +42,13 @@ export interface PersistedState {
   stale: string[];
   /** Board/List choice and filters (IT-14). Kept here, not in frame storage, which a null-origin frame lacks. */
   view?: ViewPrefs;
+  /**
+   * Local-only rows a person chose "Publish to GitHub" for, until the next
+   * pass has them in the Bridge (held for review, then sent).
+   */
+  publish?: string[];
+  /** Set once a 0.1.x table's rows were rewritten as `issue-v1` (`migrateRows`). */
+  migrated?: 'issue-v1';
 }
 
 const empty = (): PersistedState => ({

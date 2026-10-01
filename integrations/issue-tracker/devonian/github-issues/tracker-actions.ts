@@ -34,6 +34,20 @@ const definitions = [
     ['number'],
   ],
   [
+    'add_blocked_label',
+    'Mark an issue as blocked',
+    'blocked-add',
+    { number: integer },
+    ['number'],
+  ],
+  [
+    'remove_blocked_label',
+    'Remove the blocked label',
+    'blocked-remove',
+    { number: integer },
+    ['number'],
+  ],
+  [
     'list_comments',
     'List issue comments',
     'comments-list',
@@ -180,6 +194,23 @@ export function trackerAction(
         operation,
         'DELETE',
         `${root}/${args.number}/labels/atomic%3Adoing`,
+        'action',
+      );
+    case 'add_blocked_label':
+      return request(
+        operation,
+        'POST',
+        `${root}/${args.number}/labels`,
+        'action',
+        {
+          labels: ['atomic:blocked'],
+        },
+      );
+    case 'remove_blocked_label':
+      return request(
+        operation,
+        'DELETE',
+        `${root}/${args.number}/labels/atomic%3Ablocked`,
         'action',
       );
     case 'update_issue':

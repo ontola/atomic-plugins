@@ -286,7 +286,13 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     move(subject, status, via) {
       const state = readyState();
       const row = rowOf(subject);
-      if (!state || !row || row.status === status || !canMove(state)) return;
+      if (
+        !state ||
+        !row ||
+        (row.status === status && !row.statusAsIs) ||
+        !canMove(state)
+      )
+        return;
       live.say(`Moved ${refOf(row)} to ${status}`);
       if (via === 'key') ui.focus = subject;
       void controller.edit(subject, { status });
@@ -429,6 +435,11 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
     sendAgain(subject) {
       void controller.sendAgain(subject);
+    },
+
+    publish(subject) {
+      live.say('Publishing to GitHub after your review');
+      void controller.publish(subject);
     },
   };
 

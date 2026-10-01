@@ -83,6 +83,18 @@
       "method": "DELETE",
       "url": "https://api.github.com/repos/atomic-fixtures/issues/issues/{number}/labels/atomic%3Adoing",
       "effect": "write"
+    },
+    {
+      "id": "blocked-add",
+      "method": "POST",
+      "url": "https://api.github.com/repos/atomic-fixtures/issues/issues/{number}/labels",
+      "effect": "write"
+    },
+    {
+      "id": "blocked-remove",
+      "method": "DELETE",
+      "url": "https://api.github.com/repos/atomic-fixtures/issues/issues/{number}/labels/atomic%3Ablocked",
+      "effect": "write"
     }
   ]
 }

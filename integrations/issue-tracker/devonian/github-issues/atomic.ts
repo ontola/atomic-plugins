@@ -81,6 +81,7 @@ export async function install(
   const tags: Record<Status, string> = {
     Todo: taskSchema.tags.Todo,
     Doing: taskSchema.tags.Doing,
+    Blocked: taskSchema.tags.Blocked,
     Done: taskSchema.tags.Done,
   };
   const number = await create(plugin.subject, [core.classes.property], {

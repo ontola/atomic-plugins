@@ -19,7 +19,7 @@ const issue: Issue & { assignee: string } = {
 };
 
 describe('passive GitHub issues lens', () => {
-  it.each(['Todo', 'Doing', 'Done'] as const)(
+  it.each(['Todo', 'Doing', 'Blocked', 'Done'] as const)(
     'round trips GitHub %s without changing unrelated data',
     status => {
       const desired = { title: 'After', body: 'Edited', status };
@@ -33,6 +33,26 @@ describe('passive GitHub issues lens', () => {
       expect(unproject(desired, result)).toEqual(result);
     },
   );
+
+  it('maps atomic:blocked to Blocked, ahead of atomic:doing, and closed to Done (#177 Q8)', () => {
+    const open = (...labels: string[]) => ({ ...issue, labels });
+    expect(project(open('atomic:blocked')).status).toBe('Blocked');
+    expect(project(open('ATOMIC:BLOCKED', 'atomic:doing')).status).toBe(
+      'Blocked',
+    );
+    expect(project(open('atomic:doing')).status).toBe('Doing');
+    expect(project({ ...open('atomic:blocked'), state: 'closed' }).status).toBe(
+      'Done',
+    );
+    const result = unproject(
+      { title: 'T', body: '', status: 'Blocked' },
+      open('bug', 'atomic:doing'),
+    );
+    expect(result.labels).toEqual(['bug', 'atomic:blocked']);
+    expect(issueExtras(open('bug', 'atomic:blocked')).labels).toEqual([
+      { name: 'bug' },
+    ]);
+  });
 
   it('keeps the GitHub runtime patch minimal', () => {
     const before = project(issue);
