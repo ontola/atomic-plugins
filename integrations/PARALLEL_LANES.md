@@ -282,6 +282,22 @@ With `ATOMIC_SERVER_IMAGE` set, `serve.mjs` runs that image with `docker run`
 on the same port instead of the local binary, and pulls it first if it is
 missing. See AGENTS.md, "Shared pinned atomic-server build".
 
+Lanes run in parallel with each other; the tests inside one lane do not. The
+e2e tier runs Playwright with one worker unless `PLAYWRIGHT_WORKERS` is set,
+which is what CI gets anyway (`browser/e2e/scripts/concurrency.mjs` gives CI
+1 and a local run up to 2). Every test in a lane shares the lane's one mock
+proxy, atomic-server and store, and the specs read that shared state: a
+platform's connection list at the proxy, a provider fixture's rows. On
+2026-10-01, at pin `a12b74a`, the timesheets lane with
+`PLAYWRIGHT_WORKERS=2` failed 2 of its 4 tests. The first found two Clockify
+connections where it expects one, because the M3 test had connected at the
+same time. The M3 test counted rows the first test had changed in the shared
+Clockify fixture ("1 created, 2 updated" where it expects "2 unchanged"). With
+one worker all 4 passed. The pets lane passed with 2 workers, but it has a
+single test, so that says nothing about isolation. Making specs independent
+would mean a mock proxy and fixture namespace per test; until a lane does
+that, leave `PLAYWRIGHT_WORKERS` unset for its e2e tier.
+
 ## 4. Mock fixtures per platform
 
 **Done:** the registry, the migration of the four existing platforms, and
