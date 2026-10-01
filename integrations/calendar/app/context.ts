@@ -5,7 +5,7 @@
  * event into the words the views and screen readers use.
  */
 import type { Projection } from '../adapter.js';
-import type { CalEvent, Segment } from './events.js';
+import { dayOnly, type CalEvent, type Segment } from './events.js';
 import { LABELS } from './sync.js';
 import {
   addDays,
@@ -89,7 +89,10 @@ export function when(
     typeof event.day === 'string' && isDate(event.day.slice(0, 10))
       ? longDay(event.day.slice(0, 10))
       : 'No date set';
-  if (event.allDay && (!isDate(event.start) || !isDate(event.end)))
+  if (
+    (event.allDay && (!isDate(event.start) || !isDate(event.end))) ||
+    dayOnly(event)
+  )
     return { day, time: 'All day' };
   if (!event.allDay && (!event.start || !event.end))
     return { day, time: 'No time set' };
