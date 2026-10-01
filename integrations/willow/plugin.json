@@ -1,11 +1,35 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "name": "willow",
   "namespace": "atomic-plugins",
-  "version": "0.2.0",
-  "description": "Prepare exact unsigned Willow Entry signing bytes from explicitly selected Atomic properties.",
+  "version": "0.3.0",
+  "description": "Publish explicitly selected public Atomic properties as a Willow drop of host-signed, Meadowcap-authorised entries.",
   "operations": [],
   "secrets": [],
+  "http": {
+    "mount": "drive-prefix",
+    "routes": [
+      {
+        "id": "drop",
+        "path": "/willow.drop",
+        "methods": ["GET"],
+        "principal": "anonymous",
+        "auth": "none"
+      }
+    ],
+    "keys": [
+      {
+        "name": "willow",
+        "alg": "ed25519",
+        "willow": {
+          "namespace": "config:namespace",
+          "pathPrefix": "config:pathPrefix"
+        },
+        "reason": "This installation's Willow subspace key. The host signs Willow entries with it, only in the configured communal namespace and under the configured path prefix."
+      }
+    ],
+    "reason": "Serves the selected resources, as far as anyone may read them, as a Willow drop that other Willow peers can import."
+  },
   "capabilities": [
     {
       "name": "storage",
@@ -31,15 +55,15 @@
       },
       "outputParent": {
         "type": "string",
-        "description": "Atomic parent for reviewed unsigned export candidates"
+        "description": "Unsigned candidate job only: Atomic parent for reviewed unsigned export candidates"
       },
       "namespace": {
         "type": "string",
-        "description": "Willow namespace public key, 64 hex characters"
+        "description": "Willow namespace id, 64 hex characters. The drop route needs a communal one (last byte even)."
       },
       "subspace": {
         "type": "string",
-        "description": "Willow subspace public key, 64 hex characters"
+        "description": "Unsigned candidate job only: Willow subspace id, 64 hex characters. The drop route uses the installation's own key."
       },
       "pathPrefix": {
         "type": "array",
@@ -50,17 +74,9 @@
       },
       "timestamp": {
         "type": "string",
-        "description": "Explicit logical Willow U64 timestamp as decimal text; increase after source changes"
+        "description": "Unsigned candidate job only: explicit logical Willow U64 timestamp as decimal text; increase after source changes"
       }
     },
-    "required": [
-      "subjects",
-      "properties",
-      "outputParent",
-      "namespace",
-      "subspace",
-      "pathPrefix",
-      "timestamp"
-    ]
+    "required": ["subjects", "properties", "namespace", "pathPrefix"]
   }
 }

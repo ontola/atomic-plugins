@@ -22,8 +22,10 @@ As for [Bank statements](../money/README.md#setup): publish this folder's
 Integrations page find "Willow drop" among the community plugins, create a
 draft, choose **Set up** on its Import tab (this creates the Willow entry
 properties, the Willow entry class and a "Willow entries" table), and import a
-drop file with **Preview import** and **Apply**. There is no catalog entry
-yet; the issue did not ask for one.
+drop file with **Preview import** and **Apply**. The catalog entry
+(`willow-drop` in [`catalog.json`](../catalog.json)) is `enabled: false`
+during the soft launch; like the Bank statements entry it describes the
+plugin and does not install it.
 
 A drop can be uploaded as the raw `.drop` file or base64-encoded (`.b64`).
 
@@ -153,8 +155,8 @@ Declared, not verified:
   them that way, converted to UTC with the leap seconds up to 2017-01-01.
   willow25 0.7.9 converts through hifitime, whose `J2000_REF_EPOCH` is
   2000-01-02 12:00 TAI, so its reading of the same timestamp is 86,432.184 s
-  later (`mapping.test.ts` pins that difference). The raw value is kept in
-  `willow-timestamp`.
+  later (`mapping.test.ts` pins that difference; it is being reported
+  upstream). The raw value is kept in `willow-timestamp`.
 - Encrypted drops (the spec recommends encrypting drops for transport) are
   not supported: the spec defines no encryption format.
 

@@ -26,14 +26,16 @@ import {
   dockerRunArgs,
   IMAGE_STORE,
   imagePinProblem,
+  laneServerEnv,
   pluginRoutesArgs,
   PLUGIN_ROUTES_ENV,
   routesImageFor,
   routesOrigin,
   serverEnv,
+  sidecarUrl,
   storeVolume,
 } from './serve.mjs';
-import { root } from './lanes.mjs';
+import { root, SERVER_ENV_RESERVED } from './lanes.mjs';
 
 const ports = { atomicServer: 41001, mockProxy: 41002, devServer: 41003 };
 const pin = 'a'.repeat(40);
@@ -77,6 +79,31 @@ test('serverEnv is the same for the binary and the image, apart from the store',
   for (const key of Object.keys(binary))
     if (!/_DIR$/.test(key)) assert.equal(binary[key], image[key], key);
   assert.equal(binary.ATOMIC_CACHE_DIR, '/checkout/.lane-store/pets/cache');
+});
+
+test("a lane's serverEnv can set nothing serve.mjs or pluginRoutes owns", () => {
+  for (const key of [
+    ...Object.keys(serverEnv(ports, IMAGE_STORE)),
+    ...PLUGIN_ROUTES_ENV,
+  ])
+    assert.ok(SERVER_ENV_RESERVED.includes(key), key);
+});
+
+test('laneServerEnv fills in the lane ports', () => {
+  assert.deepEqual(
+    laneServerEnv(
+      {
+        ATOMIC_A: 'http://127.0.0.1:{mockProxy}/{atomicServer}/{devServer}',
+        ATOMIC_B: 'integrations/x/ca.pem',
+      },
+      ports,
+    ),
+    {
+      ATOMIC_A: 'http://127.0.0.1:41002/41001/41003',
+      ATOMIC_B: 'integrations/x/ca.pem',
+    },
+  );
+  assert.deepEqual(laneServerEnv(undefined, ports), {});
 });
 
 test('each label gets its own store volume', () => {
@@ -283,6 +310,27 @@ test('a plugin-routes lane runs the feature binary with its level, never the ima
     process.env = saved;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a lane sidecar is named to the server at read-write only, on the lane sidecar port', () => {
+  const withSidecar = { ...ports, sidecar: 41004 };
+  assert.equal(sidecarUrl(withSidecar), 'http://127.0.0.1:41004');
+  assert.deepEqual(pluginRoutesArgs('read-write', withSidecar, ['nextgraph']), [
+    '--plugin-routes',
+    'read-write',
+    '--routes-origin',
+    'http://routes.localhost:41001',
+    '--plugin-sidecars',
+    'nextgraph=http://127.0.0.1:41004',
+  ]);
+  // atomic-server refuses --plugin-sidecars below read-write.
+  for (const level of ['off', 'read-only'])
+    assert.ok(
+      !pluginRoutesArgs(level, withSidecar, ['nextgraph']).includes(
+        '--plugin-sidecars',
+      ),
+    );
+  assert.deepEqual(pluginRoutesArgs(undefined, withSidecar, ['nextgraph']), []);
 });
 
 test('routesImageFor: an explicit image, else the -plugin-routes variant of ATOMIC_SERVER_IMAGE', () => {

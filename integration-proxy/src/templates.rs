@@ -120,6 +120,17 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
     out
 }
 
+/// What the consent screen asks for, from the platform's security scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectKind {
+    /// Continue to the provider's own authorization.
+    OAuth,
+    /// Paste an API key here.
+    ApiKey,
+    /// Nothing: the platform's document requires no security.
+    NoCredential,
+}
+
 /// Renders the consent screen for one selected platform. `destination` is
 /// where the browser returns to (an origin, or the app's deep link).
 pub fn render_platform_connect(
@@ -127,23 +138,27 @@ pub fn render_platform_connect(
     platform: &str,
     destination: &str,
     csrf: &str,
-    requires_api_key: bool,
+    kind: ConnectKind,
 ) -> String {
-    let (api_key_field, button_label) = if requires_api_key {
-        (
+    let (api_key_field, button_label) = match kind {
+        ConnectKind::ApiKey => (
             r#"<p class="secret-help">Find this in your account settings on the platform's own site. It is stored encrypted on this proxy and never sent back to the destination.</p>
                <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="password" name="api_key" autocomplete="off" placeholder="API key" required />"#,
             format!("Connect {}", escape(&platform_label(platform))),
-        )
-    } else {
-        (
+        ),
+        ConnectKind::OAuth | ConnectKind::NoCredential => (
             "",
             format!(
                 "Use {} to sync {} with this destination",
                 escape(&operator.name),
                 escape(&platform_label(platform))
             ),
-        )
+        ),
+    };
+    let what = if kind == ConnectKind::NoCredential {
+        "{platform} needs no account: this proxy reads it without a credential and stores none. Connecting only records the connection."
+    } else {
+        "Connecting lets this proxy use your {platform} account on your behalf."
     };
     let run_by = if operator.is_named() {
         operator.linked_name()
@@ -156,22 +171,91 @@ pub fn render_platform_connect(
           <h1>Connect {platform}</h1>
           <p class="operator">Integration proxy <strong>{host}</strong>, run by {run_by}.</p>
           <p>Destination: <span class="email">{destination}</span></p>
-          <p class="secret-help">Connecting lets this proxy use your {platform} account on your behalf. The destination finishes connecting by signing with your Atomic key; it becomes the connection's owner.</p>
+          <p class="secret-help">{what} The destination finishes connecting by signing with your Atomic key; it becomes the connection's owner.</p>
           <form method="post" action="/connect/authorize">
             <input type="hidden" name="csrf" value="{csrf}" />
             {api_key_field}
             <button class="button" type="submit">{button_label}</button>
           </form>
         </div>
+        <script>{script}</script>
         "#,
+        script = CONSENT_SCRIPT,
         platform = escape(&platform_label(platform)),
         host = escape(&operator.host),
         destination = escape(destination),
         csrf = escape(csrf),
+        what = what.replace("{platform}", &escape(&platform_label(platform))),
     );
     page(
         operator,
         &format!("Connect {}", platform_label(platform)),
+        "",
+        &body,
+    )
+}
+
+/// The consent page's only script: it disables the approve button once the
+/// form is submitted, so a double click cannot send a second approval that
+/// would find the first one's single-use consent already spent. A page
+/// restored from the back/forward cache gets its button back (approving
+/// again then says it was already approved). The consent page's CSP allows
+/// exactly this text by hash ([`consent_script_hash`]); nothing else runs.
+pub(crate) const CONSENT_SCRIPT: &str = r#"(function(){var f=document.forms[0];if(!f)return;var b=f.querySelector('button[type="submit"]');f.addEventListener('submit',function(e){if(f.getAttribute('data-sent')){e.preventDefault();return;}f.setAttribute('data-sent','1');if(b)b.disabled=true;});window.addEventListener('pageshow',function(e){if(e.persisted){f.removeAttribute('data-sent');if(b)b.disabled=false;}});})();"#;
+
+/// The CSP source (`'sha256-…'`) that allows [`CONSENT_SCRIPT`] and nothing
+/// else.
+pub(crate) fn consent_script_hash() -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sha2::{Digest, Sha256};
+    format!(
+        "'sha256-{}'",
+        STANDARD.encode(Sha256::digest(CONSENT_SCRIPT.as_bytes()))
+    )
+}
+
+/// The page `POST /connect/authorize` answers for an OAuth platform: a
+/// `<meta>` refresh to `authorization_url`, with the same address as a
+/// button in case the browser does not follow refreshes.
+///
+/// It is a page rather than a `303` because a form submission's whole
+/// redirect chain is held to the consent page's CSP `form-action`: a
+/// provider whose authorization endpoint first redirects to another origin
+/// of its own (an API host handing over to a separate sign-in host) would be
+/// blocked there. A navigation this page starts is not a form submission, so
+/// `form-action` does not govern it, and the proxy never needs to know which
+/// origins a provider passes through.
+pub fn render_oauth_continue(
+    operator: &Operator,
+    platform: &str,
+    authorization_url: &str,
+) -> String {
+    let destination = url::Url::parse(authorization_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let head = format!(
+        r#"<meta http-equiv="refresh" content="0;url={url}" />
+  <meta name="referrer" content="no-referrer" />"#,
+        url = escape(authorization_url),
+    );
+    let body = format!(
+        r#"
+        <div class="card">
+          <h1>Continue to {platform}</h1>
+          <p>Taking you to <strong>{destination}</strong> to authorize the connection.</p>
+          <a class="button" href="{url}" rel="noreferrer">Continue to {platform}</a>
+          <p class="secret-help">If nothing happens, use the button. Approving again on the previous page will not work: each approval is used once.</p>
+        </div>
+        "#,
+        platform = escape(&platform_label(platform)),
+        destination = escape(&destination),
+        url = escape(authorization_url),
+    );
+    page(
+        operator,
+        &format!("Continue to {}", platform_label(platform)),
+        &head,
         &body,
     )
 }
@@ -190,13 +274,15 @@ fn platform_label(platform: &str) -> String {
         .join(" ")
 }
 
-fn page(operator: &Operator, heading: &str, body: &str) -> String {
+/// `head` is trusted, already-escaped markup for `<head>` (or empty).
+fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {head}
   <title>{heading} · {host}</title>
   <link rel="icon" type="image/png" href="/logo.png" />
   <style>
@@ -258,6 +344,7 @@ fn page(operator: &Operator, heading: &str, body: &str) -> String {
 </body>
 </html>"#,
         heading = escape(heading),
+        head = head,
         host = escape(&operator.host),
         title = operator.title(),
         body = body
@@ -342,14 +429,15 @@ mod tests {
             "google-calendar",
             "https://hub.example/\"><script>alert(1)</script>",
             "csrf&<\"'",
-            false,
+            ConnectKind::OAuth,
         );
         assert!(html.contains("Google Calendar"));
         assert!(html
             .contains("Use this integration proxy to sync Google Calendar with this destination"));
         assert_eq!(html.matches(r#"action="/connect/authorize""#).count(), 1);
         assert!(html.contains("name=\"csrf\" value=\"csrf&amp;&lt;&quot;&#39;\""));
-        assert!(!html.contains("<script>"));
+        assert!(!html.contains("<script>alert"));
+        assert_eq!(html.matches("<script>").count(), 1, "only CONSENT_SCRIPT");
         assert!(!html.contains("api_key"));
         assert!(!html.contains("LocalThought"));
         assert!(!html.to_lowercase().contains("log in"));
@@ -362,7 +450,7 @@ mod tests {
             "google-calendar",
             "https://hub.example",
             "csrf",
-            false,
+            ConnectKind::OAuth,
         );
         assert!(html.contains("<title>Connect Google Calendar · integrations.atomic.place</title>"));
         assert!(html.contains(
@@ -374,8 +462,13 @@ mod tests {
 
     #[test]
     fn consent_page_without_an_operator_name_still_shows_the_host() {
-        let html =
-            render_platform_connect(&unnamed(), "clockify", "https://hub.example", "csrf", true);
+        let html = render_platform_connect(
+            &unnamed(),
+            "clockify",
+            "https://hub.example",
+            "csrf",
+            ConnectKind::ApiKey,
+        );
         assert!(html.contains(
             "Integration proxy <strong>proxy.example.org</strong>, run by an operator it does not name."
         ));
@@ -393,9 +486,10 @@ mod tests {
             "google-calendar",
             "https://hub.example",
             "csrf",
-            false,
+            ConnectKind::OAuth,
         );
-        assert!(!html.contains("<script>"));
+        assert_eq!(html.matches("<script>").count(), 1, "only CONSENT_SCRIPT");
+        assert!(!html.contains(r#""><script>"#));
         assert!(!html.contains("<img src=x"));
         assert!(!html.contains(r#"" onmouseover="#));
         assert!(html.contains("Evil &lt;img src=x onerror=alert(1)&gt; &#39;Co&#39;"));
@@ -408,10 +502,81 @@ mod tests {
 
     #[test]
     fn api_key_platforms_ask_for_the_key_on_the_proxy_page() {
-        let html =
-            render_platform_connect(&unnamed(), "clockify", "https://hub.example", "csrf", true);
+        let html = render_platform_connect(
+            &unnamed(),
+            "clockify",
+            "https://hub.example",
+            "csrf",
+            ConnectKind::ApiKey,
+        );
         assert!(html.contains(r#"name="api_key""#));
         assert!(html.contains("Connect Clockify"));
+    }
+
+    #[test]
+    fn no_credential_platforms_ask_for_nothing_and_say_so() {
+        let html = render_platform_connect(
+            &unnamed(),
+            "pets",
+            "https://hub.example",
+            "csrf",
+            ConnectKind::NoCredential,
+        );
+        assert!(!html.contains("api_key"));
+        assert!(html.contains(
+            "Pets needs no account: this proxy reads it without a credential and stores none."
+        ));
+        assert!(!html.contains("use your Pets account"));
+        assert!(!html.contains("{platform}"));
+        assert!(html.contains("Use this integration proxy to sync Pets with this destination"));
+        assert!(html.contains(&format!("<script>{CONSENT_SCRIPT}</script>")));
+    }
+
+    #[test]
+    fn oauth_continue_page_refreshes_to_the_provider_and_links_it() {
+        let url = "https://api.provider.example/v1/oauth/authorize?client_id=c&state=s&scope=a+b";
+        let html = render_oauth_continue(&named(), "notion", url);
+        let escaped =
+            "https://api.provider.example/v1/oauth/authorize?client_id=c&amp;state=s&amp;scope=a+b";
+        assert!(html.contains(&format!(
+            r#"<meta http-equiv="refresh" content="0;url={escaped}" />"#
+        )));
+        assert!(html.contains(&format!(
+            r#"<a class="button" href="{escaped}" rel="noreferrer">Continue to Notion</a>"#
+        )));
+        assert!(html.contains(r#"<meta name="referrer" content="no-referrer" />"#));
+        assert!(html.contains("<strong>api.provider.example</strong>"));
+        assert!(html.contains("<title>Continue to Notion · integrations.atomic.place</title>"));
+        assert!(!html.contains("<script"));
+        assert!(!html.contains("<form"));
+    }
+
+    #[test]
+    fn oauth_continue_page_escapes_the_address() {
+        let html = render_oauth_continue(
+            &unnamed(),
+            "x",
+            r#"https://auth.example/a?b="><script>alert(1)</script>"#,
+        );
+        assert!(!html.contains("<script"));
+        assert!(html.contains("&quot;&gt;&lt;script&gt;"));
+    }
+
+    #[test]
+    fn the_consent_script_hash_is_its_sha256() {
+        // Independently of the helper: base64 of SHA-256 over the exact text.
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use sha2::{Digest, Sha256};
+        let expected = STANDARD.encode(Sha256::digest(CONSENT_SCRIPT.as_bytes()));
+        assert_eq!(consent_script_hash(), format!("'sha256-{expected}'"));
+        let html = render_platform_connect(
+            &unnamed(),
+            "clockify",
+            "https://hub.example",
+            "csrf",
+            ConnectKind::ApiKey,
+        );
+        assert!(html.contains(&format!("<script>{CONSENT_SCRIPT}</script>")));
     }
 
     #[test]

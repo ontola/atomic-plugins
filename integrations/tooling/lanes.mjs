@@ -22,6 +22,30 @@ export const TIERS = ['contract', 'node', 'typecheck', 'unit', 'live', 'e2e'];
 export const PLUGIN_ROUTES_LEVELS = ['off', 'read-only', 'read-write'];
 
 /**
+ * What a lane's `serverEnv` (lanes.json) may not set on its atomic-server:
+ * the plugin-routes gates, which come from `pluginRoutes` only, and what
+ * serve.mjs derives from the lane's ports and store (serve.mjs `serverEnv`).
+ * Anything else named `ATOMIC_*` is allowed: the debug-build test seams
+ * (`ATOMIC_PLUGIN_E2E_*`, which atomic-server ignores in release builds)
+ * and host settings a lane's e2e needs, such as `ATOMIC_SOLID_OIDC_ISSUERS`.
+ * serve.test.mjs checks this list covers both.
+ */
+export const SERVER_ENV_RESERVED = [
+  'ATOMIC_PLUGIN_ROUTES',
+  'ATOMIC_ROUTES_ORIGIN',
+  'ATOMIC_PLUGIN_LISTENERS',
+  'ATOMIC_PLUGIN_SIDECARS',
+  'ATOMIC_DATA_DIR',
+  'ATOMIC_CONFIG_DIR',
+  'ATOMIC_CACHE_DIR',
+  'ATOMIC_PORT',
+  'ATOMIC_DOMAIN',
+  'ATOMIC_REPOPULATE_DEFAULTS',
+  'ATOMIC_INTEGRATION_PROXY_URL',
+  'ATOMIC_INTEGRATION_FRONTEND_ORIGIN',
+];
+
+/**
  * A tooling lane tests shared tooling rather than one plugin, so it owns a
  * directory here (this one, or one under it) instead of integrations/<id>/
  * (`dir` in lanes.json).
@@ -114,6 +138,31 @@ export function validateConfig(config) {
         );
     }
 
+    if (lane.serverEnv !== undefined) {
+      const entries =
+        lane.serverEnv &&
+        typeof lane.serverEnv === 'object' &&
+        !Array.isArray(lane.serverEnv)
+          ? Object.entries(lane.serverEnv)
+          : [];
+      if (
+        !entries.length ||
+        entries.some(
+          ([key, value]) =>
+            !/^ATOMIC_[A-Z0-9_]+$/.test(key) ||
+            SERVER_ENV_RESERVED.includes(key) ||
+            typeof value !== 'string',
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: serverEnv maps ATOMIC_* names to strings, and never sets ${SERVER_ENV_RESERVED.join(', ')}`,
+        );
+      if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
+        throw new Error(
+          `lane ${lane.id}: serverEnv only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
     if (lane.pluginRoutes !== undefined) {
       const levels = pluginRoutesLevels(lane);
       if (
@@ -127,6 +176,30 @@ export function validateConfig(config) {
       if (!lane.tiers.includes('e2e') && !lane.tiers.includes('live'))
         throw new Error(
           `lane ${lane.id}: pluginRoutes only affects the live and e2e tiers, and it has neither`,
+        );
+    }
+
+    // Operator sidecars (ATOMIC_PLUGIN_SIDECARS) the lane's server is started
+    // with, all at the lane's one `sidecar` port. atomic-server accepts them
+    // only at `read-write`; the lane's own spec starts the daemon.
+    if (lane.sidecars !== undefined) {
+      if (
+        !Array.isArray(lane.sidecars) ||
+        lane.sidecars.length !== 1 ||
+        !lane.sidecars.every(
+          name => typeof name === 'string' && /^[a-z0-9-]{1,64}$/.test(name),
+        )
+      )
+        throw new Error(
+          `lane ${lane.id}: sidecars must list one sidecar name (lowercase letters, digits and -)`,
+        );
+      if (!pluginRoutesLevels(lane).includes('read-write'))
+        throw new Error(
+          `lane ${lane.id}: sidecars need pluginRoutes read-write, the only level atomic-server accepts them at`,
+        );
+      if (config.roleOffsets?.sidecar === undefined)
+        throw new Error(
+          `lane ${lane.id}: sidecars need a sidecar port (roleOffsets.sidecar)`,
         );
     }
 
@@ -197,10 +270,18 @@ export const SHARED_PACKAGES = [
   'ontology-kit',
 ];
 
-// Reviewed exact build dependency: reuse the existing WILLIAM3 primitive without
+// Reviewed exact build dependencies: reuse the existing WILLIAM3 primitive without
 // duplicating cryptographic source or granting arbitrary sibling-folder globs.
+// Willow's tests also decode its drops with the willow-drop importer's
+// committed bundle (an independent verifier) and pin the hifitime offset
+// against that importer's willow25 expectations, so a change to either
+// reruns the willow lane.
 export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
-  willow: ['integrations/willow-drop/william3.ts'],
+  willow: [
+    'integrations/willow-drop/william3.ts',
+    'integrations/willow-drop/plugin.js',
+    'integrations/willow-drop/fixtures/expected.json',
+  ],
 });
 
 /**
@@ -308,8 +389,35 @@ export function matrixFor(config, changed) {
     tiers: l.tiers.join(','),
     // ci.yml downloads the plugin-routes build for these jobs only.
     ...(pluginRoutesLevels(l).length ? { 'plugin-routes': 'true' } : {}),
+    // ci.yml loads these sidecars' images (build-sidecars) for these jobs only.
+    ...(l.sidecars?.length ? { sidecars: l.sidecars.join(',') } : {}),
   }));
 }
+
+/**
+ * The operator sidecars the lanes in this run start, each built by ci.yml's
+ * `build-sidecars` from `integrations/<name>/sidecar/Dockerfile`
+ * (`sidecarDockerfile`), sorted and without repeats.
+ */
+export const sidecarsFor = (config, changed) =>
+  [
+    ...new Set(
+      matrixFor(config, changed).flatMap(l =>
+        l.sidecars ? l.sidecars.split(',') : [],
+      ),
+    ),
+  ].sort();
+
+/** Where a sidecar's image recipe lives; its directory is the build context. */
+export const sidecarDockerfile = (name, base = root) =>
+  resolve(base, 'integrations', name, 'sidecar', 'Dockerfile');
+
+/**
+ * The environment variable a lane's spec reads the prebuilt image of sidecar
+ * `name` from: `nextgraph` -> `NEXTGRAPH_SIDECAR_IMAGE`.
+ */
+export const sidecarImageEnv = name =>
+  `${name.toUpperCase().replaceAll('-', '_')}_SIDECAR_IMAGE`;
 
 /**
  * Whether any lane in this run needs atomic-server built with the
@@ -336,6 +444,10 @@ if (
       String(needsPluginRoutesBuild(config, JSON.parse(argument ?? '[]'))) +
         '\n',
     );
+  else if (mode === 'sidecars')
+    process.stdout.write(
+      JSON.stringify(sidecarsFor(config, JSON.parse(argument ?? '[]'))) + '\n',
+    );
   else if (mode === 'ports')
     process.stdout.write(
       JSON.stringify(
@@ -346,7 +458,7 @@ if (
     );
   else {
     console.error(
-      'Usage: lanes.mjs filters | matrix <changed-json> | plugin-routes <changed-json> | ports',
+      'Usage: lanes.mjs filters | matrix <changed-json> | plugin-routes <changed-json> | sidecars <changed-json> | ports',
     );
     process.exit(1);
   }

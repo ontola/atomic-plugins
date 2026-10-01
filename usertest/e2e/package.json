@@ -1,0 +1,12 @@
+{
+  "name": "usertest-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Headless checks of the session page's sound check and start errors; see run.mjs",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -1,11 +1,24 @@
 # Willow Atomic export adapter
 
-Status: **experimental partial implementation** in QuickJS JavaScript.
-This package implements real Willow Entry encodings and creates reviewed
-unsigned export candidates from Atomic resources. It does **not** implement
-WGPS, Willow Confidential Sync, a peer listener, Meadowcap signing or live sync.
-The existing [Willow drop importer](../willow-drop/README.md) remains unchanged
-and handles the separate signed file-import workflow.
+Status: **experimental**, in QuickJS JavaScript. This package has two parts:
+
+- a **drop route**, `GET /_routes/<installation-slug>/willow.drop`: the
+  selected resources, as far as the public may read them, as one
+  [Willow Drop Format](https://willowprotocol.org/specs/drop-format/) file
+  whose entries the host signs with the installation's own Ed25519 subspace
+  key, under a communal
+  [Meadowcap](https://willowprotocol.org/specs/meadowcap/) capability. Any
+  Willow'25 peer that reads drops can ingest it. It needs atomic-server with
+  the `plugin-routes` feature at `--plugin-routes read-write`, and the host
+  pieces from atomic-server `claude/plugin-willow-host`, which are in pin
+  candidate17 (`7dbd054a`, see [Host contract](#host-contract));
+- the earlier **unsigned-candidate job** (#164), unchanged: it stages exact
+  `encode_entry` bytes as reviewed Atomic resources and signs nothing.
+
+It does **not** implement WGPS, Willow Confidential Sync, a listener, owned
+namespaces, capability delegations or live sync ([why](#not-done-and-why)).
+The [Willow drop importer](../willow-drop/README.md) is the separate import
+direction, and this package's tests use it as an independent verifier.
 
 ## Implemented protocol slice
 
@@ -29,7 +42,7 @@ An Entry contains metadata and a payload digest; decoding it does not verify
 an authorisation token or establish that the bytes represent an authorised
 write. These APIs intentionally make no such claim.
 
-## Actual Atomic adapter
+## The unsigned-candidate job
 
 `exportCandidate(ctx, config, subject)` reads the selected resource through the
 host's existing scoped `ctx.read`, copies only explicitly selected property
@@ -69,7 +82,7 @@ primitive, codec and adapter into a standalone `plugin.js`. An explicitly
 allowlisted CI dependency causes Willow tests to run when that one shared
 primitive changes; arbitrary sibling-folder dependencies remain rejected.
 
-## Configuration and use
+### Configuring the job
 
 Install the generated `plugin.js` as a sandbox job and supply configuration:
 
@@ -111,21 +124,103 @@ This is a bounded reviewed export, not continuous sync, a source snapshot
 transaction, or an atomic batch apply. Loro editor state, blob bytes and linked
 resources are not recursively exported: only the selected JSON-AD atoms are.
 
-## Required host bridge for live sync
+## The drop route
 
-A host-owned signer must validate Meadowcap authority against the actual
-namespace, subspace, path and timestamp, then sign these exact bytes and produce
-an AuthorisedEntry. It must bind the selected source revision and output target
-to the actor/installation approval, enforce quotas and revocation, and reject
-stale approvals. A configured public key or an unsigned candidate is insufficient.
+Configuration (the Installation's `config`), for the route:
 
-The live engine still requires durable peer/session state, authorised blob
-storage, stream transport, confidentiality, cancellation and reconnect handling.
-QuickJS cannot open sockets or maintain a session across fresh invocations.
-The accepted design places the full engine in a host extension or sidecar;
-[atomic-server#1722](https://github.com/ontola/atomic-server/issues/1722) and
-[#1723](https://github.com/ontola/atomic-server/issues/1723) track those host
-boundaries. This package installs no route and opens no listener.
+```json
+{
+  "subjects": ["https://atomic.example/notes/hello"],
+  "properties": ["https://atomicdata.dev/properties/name"],
+  "namespace": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a02",
+  "pathPrefix": ["61746f6d6963"]
+}
+```
+
+The namespace above is invented. It must be communal (its last byte even):
+anyone may write their own subspace of a communal namespace, and the
+installation writes only its own. `subspace`, `outputParent` and `timestamp`
+are only read by the unsigned-candidate job.
+
+For each subject, in order, `handle(ctx)`:
+
+1. reads it with `ctx.read` as the route's principal, which is `anonymous`:
+   only what the public may read is exported;
+2. asks `ctx.willow.source("willow", subject)` for its revision: the
+   `lastCommit`, that commit's `createdAt` (Unix milliseconds, from the
+   host's retained signed commit envelope; a later commit is not a readable
+   resource) and the matching Willow timestamp. The plugin checks the
+   resource it read is at that commit, and that the timestamp is the data
+   model's reading of `createdAt`: microseconds of TAI since J2000, with the
+   leap seconds up to 2017-01-01;
+3. builds the payload exactly as the job does (deterministic JSON-AD of the
+   selected properties plus `@id`), its WILLIAM3 digest, and the path
+   `pathPrefix ‖ UTF-8(subject)`;
+4. asks `ctx.willow.authorise({ key: "willow", entry, source: { subject,
+commit } })` to sign the exact `encode_entry` bytes, and checks the host
+   answers for those bytes.
+
+It answers `200`, `application/octet-stream`, the drop as raw bytes
+(`bodyBase64`): each entry with its communal capability, its signature and
+its whole payload. Any failure (an unreadable subject, a missing commit, a
+host refusal, bad config) fails the whole request with `503` and a generic
+text; the reason goes to the installation's run log only, so a private
+subject's URL is not echoed to the public.
+
+Unchanged sources give byte-identical drops: the timestamp comes from the
+commit, and the host answers its recorded signature for the same Entry. An
+edit gives a newer entry at the same path, which a Willow store keeps over
+the older one.
+
+### Host contract
+
+On atomic-server `claude/plugin-willow-host` (branched from candidate14
+`1432e244a`, folded into pin candidate17 `7dbd054a`), all behind the
+`plugin-routes` feature:
+
+- `http.keys[].willow = { namespace, pathPrefix }` makes an `ed25519` key a
+  Willow subspace key. Each value is `config:<key>` or a literal. The install
+  review lists it as "Willow signing key `willow`"; it needs `read-write`.
+  Such a key never signs HTTP requests, and other keys never sign entries.
+- `ctx.willow.subspace(key)` answers the key's public half (the subspace id)
+  and the resolved namespace and prefix.
+- `ctx.willow.source(key, subject)` answers the source's `commit`,
+  `committedAt` and Willow `timestamp` (decimal text), if the route's
+  principal can read it and the host kept that commit's envelope.
+- `ctx.willow.authorise({ key, entry, source })` signs only a canonical
+  Willow'25 Entry whose namespace is the bound communal one, whose subspace is
+  the key, whose path starts with the bound prefix, whose source the route's
+  principal can read at exactly the named commit, and whose timestamp is
+  exactly that commit's time (and so at most 10 minutes ahead of the host
+  clock, on the same data-model reading).
+  It records the authorised entry per namespace, subspace and path, answers
+  the recorded signature for the same bytes, and refuses an entry older than
+  the recorded one. `ctx.willow.list(key)` lists the records (at most 256).
+- Route responses may carry raw bytes as `bodyBase64`.
+
+The host signs the payload digest the plugin states; it does not recompute
+WILLIAM3 over the payload. What ties an entry to Atomic data is the source
+subject, commit and commit time, checked at signing time and recorded with the
+signature.
+
+### Not done, and why
+
+- **WGPS / live sync.** WGPS needs a long-lived bidirectional stream with
+  session state. QuickJS starts fresh per request, and the host's sidecar and
+  stream boundaries (atomic-server #1722, #1723) are declarations and
+  operator config only, with no call path. willow25 0.7.9 has no WGPS
+  implementation to run as that sidecar either. So a drop over HTTP is the
+  transport this package can offer now.
+- **Owned namespaces and delegations.** The host issues only communal
+  capabilities. An owned namespace needs a namespace key and an initial
+  authorisation (`0x03 ‖ user key`), and delegations need the private-area
+  encodings that willow25 was still changing in September 2026.
+- **Private resources.** The route is anonymous. Exporting private resources
+  would need `auth: atomic` with the `caller` principal (being added on
+  another host branch) and a decision about who may fetch the drop.
+- **Payload persistence and prefix pruning.** The host keeps authorised
+  entries, not payloads; a newer entry at a prefix path does not remove
+  records below it.
 
 ## Validation
 
@@ -134,16 +229,58 @@ Requires Node 22.13+ for the build-time TypeScript stripping API:
 ```sh
 node integrations/willow/build.mjs
 node integrations/tooling/run-lane.mjs willow --tier node
-node --experimental-strip-types integrations/willow/verify-host.mjs /path/to/pinned/atomic-server
+node integrations/tooling/run-lane.mjs willow --tier e2e   # needs pin candidate17 or later, see below
+cargo run --release --manifest-path integrations/willow/fixtures/verify-drop/Cargo.toml -- integrations/willow/fixtures/exported.drop
 ```
 
-The node lane runs codec and adapter tests, including the 827 independent encoding vectors,
-export field confinement, unsigned intent generation, monotonic timestamps,
-local-edit/denial handling, payload integrity and bundle reproducibility.
-Fixtures simulate applying intent-shaped objects; this is unit evidence, not
-real Atomic persistence or QuickJS runtime evidence.
+Verified by the node tier (35 tests):
 
-The explicit host contract check invokes the pinned host's actual
-`validateManifest` and `parseVerdict` source functions. It passed at
-`35504494261f59e922e79d536fd437954451e6a3`. A real host apply/reload roundtrip,
-Meadowcap signer and independent peer transfer remain unverified.
+- the codec against the 827 upstream vectors, and the job as before;
+- drops we encode are decoded by the willow-drop importer's committed
+  bundle, which checks every Ed25519 signature (from invented node:crypto
+  keys), capability and WILLIAM3 digest: namespace and subspace switches,
+  shared path prefixes, binary components, a three-chunk payload, a
+  full-width U64 timestamp and an empty payload; a changed signature,
+  payload or path byte is refused;
+- `fixtures/exported.drop` is reproduced byte for byte;
+- the route against a fake host that makes the host's checks: selected
+  properties only, deterministic bytes, newer entries after an edit, and
+  all-or-nothing refusals without subjects in the response;
+- timestamps: J2000, a leap second, and the fixed 86,432.184 s between the
+  data model's reading and willow25 0.7.9's hifitime reading
+  ([worm-blossom/willow_rs#62](https://codeberg.org/worm-blossom/willow_rs/issues/62)).
+
+Verified by hand with willow25 itself: `fixtures/verify-drop` (willow25
+0.7.9's `DropDecoder`, which verifies each authorisation token) accepted both
+entries of `fixtures/exported.drop` on 2026-09-29, and reported the first
+timestamp as Unix milliseconds 1790294432184 where the data model reads 1790208000000. CI does not run it.
+
+Verified by the host's Rust tests on `claude/plugin-willow-host`: all
+accepted `encode_entry` vectors of at most 512 bytes (74) round-trip and all
+such refused ones (55) are refused; each refusal of `ctx.willow.authorise`;
+`ed25519-dalek`'s `verify_strict` accepts the host's signature; records are
+erased with the keys; `bodyBase64` bodies and their refusals.
+
+Verified by the e2e tier (`e2e/willow.spec.ts`), passed locally on
+2026-09-29 in 10 s against atomic-server `claude/plugin-willow-host`
+`fe2937474` built with `plugin-routes` and started at `--plugin-routes
+read-write`: the release publishes and pins with the `willow` key binding, the
+install review lists the signing key, and after the Installation's config is
+set, `GET /_routes/<slug>/willow.drop` answers `application/octet-stream`.
+The willow-drop importer bundle decodes and verifies both entries (the
+selected property only, one host-generated subspace, a timestamp from the
+commit time); a second request gives the same bytes; after an edit, the entry
+is newer and carries the new value; configuring a private resource answers
+`503` without naming it. The first drop that run served was then accepted by
+willow25 0.7.9's `DropDecoder` (`fixtures/verify-drop`), by hand. Rerun on
+2026-09-29 against pin candidate17 (`7dbd054a`, built with `plugin-routes`
+by `integrations/tooling/server-build.mjs`): passed, 11 s (the `DropDecoder`
+check was not repeated).
+
+Not verified in CI yet: the lane needs that host branch in the pin, so on the
+current pin (candidate14) the e2e fails at publishing (the `willow` key field
+is unknown there) rather than skipping.
+
+Declared, not verified: interoperability with any Willow implementation
+other than willow25 0.7.9 and our own importer; fuel use per signed entry;
+behaviour with more than a few subjects (the limit is 32).

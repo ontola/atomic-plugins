@@ -1,0 +1,984 @@
+import { sha256 } from './sha256.mjs';
+
+/**
+ * A single ActivityPub actor for one Atomic drive, run by the host's QuickJS
+ * route sandbox (`handle(ctx, request)`, the `http` trigger).
+ *
+ * - Reads (actor, objects, activities, outbox, WebFinger, NodeInfo) project
+ *   publicly readable Atomic resources under `config.posts`.
+ * - `POST /ap/outbox` (`auth: atomic`, a configured publisher) stores a new
+ *   post under `config.posts` and has the host queue a signed `Create` for
+ *   every follower's inbox.
+ * - `POST /ap/inbox` (`auth: http-signature`, verified by the host) handles
+ *   Follow (accepted automatically), Undo(Follow), replies to this actor's
+ *   posts, and Delete.
+ *
+ * The plugin never holds a key, never opens a socket and keeps no state
+ * between requests: followers and replies are Atomic resources it created
+ * under the configured parents, and deliveries are host queue jobs.
+ */
+
+export const AS = 'https://www.w3.org/ns/activitystreams';
+export const SECURITY = 'https://w3id.org/security/v1';
+export const PUBLIC = `${AS}#Public`;
+export const P = Object.freeze({
+  isA: 'https://atomicdata.dev/properties/isA',
+  name: 'https://atomicdata.dev/properties/name',
+  description: 'https://atomicdata.dev/properties/description',
+  parent: 'https://atomicdata.dev/properties/parent',
+  read: 'https://atomicdata.dev/properties/read',
+  localId: 'https://atomicdata.dev/properties/localId',
+  createdAt: 'https://atomicdata.dev/properties/createdAt',
+  replyTo: 'https://atomicdata.dev/properties/replyTo',
+  url: 'https://atomicdata.dev/property/url',
+});
+export const C = Object.freeze({
+  message: 'https://atomicdata.dev/classes/Message',
+  plainText: 'https://atomicdata.dev/classes/PlainText',
+  document: 'https://atomicdata.dev/classes/Document',
+  documentV2: 'https://atomicdata.dev/classes/DocumentV2',
+  bookmark: 'https://atomicdata.dev/class/Bookmark',
+});
+export const PUBLIC_AGENT = 'https://atomicdata.dev/agents/publicAgent';
+export const KEY = 'actor-key';
+export const DELIVER = 'deliver';
+
+const NOTE_CLASSES = [C.message, C.plainText];
+const DOCUMENT_CLASSES = [C.document, C.documentV2];
+const MIME = 'application/activity+json';
+const LD = `application/ld+json; profile="${AS}"`;
+const JRD = 'application/jrd+json';
+const SCHEMA = 'http://nodeinfo.diaspora.software/ns/schema/2.1';
+
+export const VERSION = '0.2.0';
+
+/** Limits, all exact. */
+export const LIMITS = Object.freeze({
+  pageSize: 10,
+  /** Children of `config.posts` a request reads. */
+  posts: 50,
+  /** Followers read per request, and so inboxes one post is queued for. */
+  followers: 100,
+  /** Stored replies scanned for duplicates and deletes. */
+  replies: 1000,
+  text: 8192,
+  name: 255,
+  url: 2048,
+});
+
+// -- validation ---------------------------------------------------------------
+
+function validText(value, max = LIMITS.text) {
+  // Control characters other than tab, newline and carriage return are refused.
+  // eslint-disable-next-line no-control-regex
+  const forbidden = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
+
+  return (
+    typeof value === 'string' && value.length <= max && !forbidden.test(value)
+  );
+}
+
+function slug(value) {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(value);
+}
+
+function httpsSubject(value) {
+  return (
+    validText(value, LIMITS.url) &&
+    /^https:\/\/[a-z0-9.-]+(?::[1-9][0-9]{0,4})?(?:\/[^\s\\]*)?$/.test(value)
+  );
+}
+
+/**
+ * A remote ActivityPub URL: HTTPS, no credentials, no whitespace. `http:`
+ * only for `localhost` and `*.localhost`, where no certificate can exist.
+ */
+export function remoteUrl(value) {
+  if (!validText(value, LIMITS.url) || /\s/.test(value)) return undefined;
+  const m =
+    /^(https?):\/\/([a-z0-9.-]+|\[[0-9a-f:]+\])(?::([1-9][0-9]{0,4}))?(\/[^#\s]*)?(#[^\s]*)?$/i.exec(
+      value,
+    );
+  if (!m) return undefined;
+  const host = m[2].toLowerCase();
+  if (m[1].toLowerCase() === 'http' && !localHost(host)) return undefined;
+
+  return { scheme: m[1].toLowerCase(), host, port: m[3], path: m[4] || '/' };
+}
+
+function localHost(host) {
+  return host === 'localhost' || host.endsWith('.localhost');
+}
+
+/** Local Atomic identifiers: HTTPS subjects, or canonical `atomic:` ids. */
+export function localSubject(value) {
+  if (!validText(value, LIMITS.url)) return undefined;
+  if (httpsSubject(value)) return value;
+  if (
+    /^http:\/\/[a-z0-9.-]*localhost(?::[1-9][0-9]{0,4})?(?:\/[^\s\\]*)?$/.test(
+      value,
+    )
+  )
+    return value;
+  if (value.startsWith('atomic://')) return undefined;
+  if (
+    !/^(?:atomic:|did:ad:)(?:(?:agent|commit|blob|node):)?[A-Za-z0-9_+/-]+={0,2}$/.test(
+      value,
+    )
+  )
+    return undefined;
+
+  return value.startsWith('did:ad:') ? 'atomic:' + value.slice(7) : value;
+}
+
+function sameSubject(a, b) {
+  const x = localSubject(a);
+
+  return x !== undefined && x === localSubject(b);
+}
+
+function resourceUrl(c, subject) {
+  return subject.startsWith('atomic:')
+    ? `${c.origin}/resource?subject=${encodeURIComponent(subject)}`
+    : subject;
+}
+
+export function html(value) {
+  return value
+    .replace(
+      /[&<>"']/g,
+      ch =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[ch],
+    )
+    .replace(/\r?\n/g, '<br>');
+}
+
+/**
+ * Remote HTML as plain text: tags dropped (a `<br>` or `</p>` becomes a
+ * newline), the five XML entities and numeric references decoded. What is
+ * stored is text, never markup.
+ */
+export function text(markup) {
+  return markup
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos|#39);/gi, (_, e) => {
+      const lower = e.toLowerCase();
+      if (lower.startsWith('#x')) return safeChar(parseInt(lower.slice(2), 16));
+      if (lower.startsWith('#')) return safeChar(parseInt(lower.slice(1), 10));
+
+      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[lower];
+    })
+    .replace(/\n+$/, '');
+}
+
+function safeChar(code) {
+  return code === 9 ||
+    code === 10 ||
+    code === 13 ||
+    (code >= 32 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff))
+    ? String.fromCodePoint(code)
+    : '';
+}
+
+// -- configuration --------------------------------------------------------------
+
+/**
+ * `origin` is the drive host the routes are mounted on; every protocol id
+ * is under it. HTTPS, except `http://localhost` and `http://*.localhost`
+ * (development and tests only: no fediverse server federates over HTTP).
+ */
+export function config(ctx) {
+  const c = ctx.config ?? {};
+  const origin =
+    typeof c.origin === 'string' &&
+    /^(https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|http:\/\/(?:[a-z0-9-]+\.)*localhost)(?::[1-9][0-9]{0,4})?$/.test(
+      c.origin,
+    ) &&
+    c.origin.length <= 255
+      ? c.origin
+      : undefined;
+  const parents = {};
+
+  for (const key of ['profile', 'posts', 'followers', 'replies']) {
+    parents[key] = localSubject(c[key]);
+    if (!parents[key]) throw new Error(`Invalid ${key} configuration`);
+  }
+
+  if (!origin || !slug(c.username))
+    throw new Error('Invalid actor configuration');
+  const publishers = c.publishers ?? [];
+  if (
+    !Array.isArray(publishers) ||
+    publishers.length > 16 ||
+    publishers.some(p => !localSubject(p))
+  )
+    throw new Error('Invalid publishers configuration');
+  const host = origin.replace(/^https?:\/\//, '');
+  const actor = `${origin}/ap/actor`;
+
+  return {
+    origin,
+    username: c.username,
+    ...parents,
+    publishers: publishers.map(localSubject),
+    actor,
+    keyId: `${actor}#main-key`,
+    account: `acct:${c.username}@${host}`,
+    followersUrl: `${origin}/ap/followers`,
+  };
+}
+
+// -- reading ----------------------------------------------------------------------
+
+function tryRead(ctx, subject) {
+  // The route's principal decides what this sees: the public agent on the
+  // anonymous GET routes, the Installation (within its grants) on POSTs.
+  try {
+    return ctx.read(subject);
+  } catch {
+    return undefined;
+  }
+}
+
+function children(ctx, parent, max) {
+  const found = ctx.query(P.parent, parent);
+  if (!Array.isArray(found) || found.length > max)
+    throw new Error('Incomplete or oversized collection');
+
+  return found;
+}
+
+function classes(row) {
+  return Array.isArray(row?.[P.isA]) ? row[P.isA] : [];
+}
+
+/**
+ * A post's local id and publication time. Posts this plugin stored have a
+ * `localId` of `<milliseconds>-<suffix>`, which carries its time exactly.
+ * Others use their `localId` (a slug) or a hash of their subject, and the
+ * host's `createdAt`. Without a time, a resource is not a post.
+ */
+export function postIdentity(subject, row) {
+  const localId = row[P.localId];
+  const stamped =
+    typeof localId === 'string'
+      ? /^([0-9]{13})-[a-z0-9]{1,24}$/.exec(localId)
+      : null;
+  const created = row[P.createdAt];
+  const ms = stamped
+    ? Number(stamped[1])
+    : Number.isSafeInteger(created) && created > 0
+      ? created
+      : undefined;
+  if (ms === undefined) return undefined;
+  const id = slug(localId) ? localId : sha256(subject).slice(0, 32);
+
+  return { id, published: new Date(ms).toISOString() };
+}
+
+export function objectFor(c, subject, row) {
+  if (!row || !sameSubject(row[P.parent], c.posts)) return undefined;
+  const identity = postIdentity(subject, row);
+  if (!identity) return undefined;
+  const isA = classes(row);
+  const note = isA.some(t => NOTE_CLASSES.includes(t));
+  const article = isA.some(t => DOCUMENT_CLASSES.includes(t));
+  if (!note && !article) return undefined;
+  if (note && !validText(row[P.description])) return undefined;
+  if (article && (!validText(row[P.name], LIMITS.name) || !row[P.name]))
+    return undefined;
+
+  return {
+    id: identity.id,
+    subject,
+    published: identity.published,
+    object: {
+      id: `${c.origin}/ap/objects/${identity.id}`,
+      type: note ? 'Note' : 'Article',
+      attributedTo: c.actor,
+      published: identity.published,
+      to: [PUBLIC],
+      cc: [c.followersUrl],
+      url: resourceUrl(c, subject),
+      ...(validText(row[P.name], LIMITS.name) && row[P.name]
+        ? { name: row[P.name] }
+        : {}),
+      ...(note
+        ? {
+            content: `<p>${html(row[P.description])}</p>`,
+            mediaType: 'text/html',
+          }
+        : { summary: 'Open the linked Atomic document to read its content.' }),
+    },
+  };
+}
+
+/** Every readable post, newest first, then by id. */
+function posts(ctx, c) {
+  const seen = new Set();
+  const out = [];
+
+  for (const raw of children(ctx, c.posts, LIMITS.posts)) {
+    const subject = localSubject(raw);
+    if (!subject) throw new Error('Invalid query result');
+    const post = objectFor(c, subject, tryRead(ctx, subject));
+    if (!post) continue;
+    if (seen.has(post.id)) throw new Error('Duplicate post id');
+    seen.add(post.id);
+    out.push(post);
+  }
+
+  return out.sort((a, b) =>
+    a.published === b.published
+      ? a.id < b.id
+        ? -1
+        : 1
+      : a.published > b.published
+        ? -1
+        : 1,
+  );
+}
+
+export function createActivity(c, post) {
+  return {
+    '@context': AS,
+    id: `${c.origin}/ap/activities/${post.id}`,
+    type: 'Create',
+    actor: c.actor,
+    published: post.published,
+    to: [PUBLIC],
+    cc: [c.followersUrl],
+    object: post.object,
+  };
+}
+
+function followers(ctx, c) {
+  const out = [];
+
+  for (const raw of children(ctx, c.followers, LIMITS.followers)) {
+    const row = tryRead(ctx, raw);
+    if (!row || !classes(row).includes(C.bookmark)) continue;
+    if (!sameSubject(row[P.parent], c.followers)) continue;
+    const actor = row[P.name];
+    const inbox = row[P.url];
+    if (remoteUrl(actor) && remoteUrl(inbox))
+      out.push({ subject: raw, actor, inbox });
+  }
+
+  return out;
+}
+
+// -- HTTP helpers ------------------------------------------------------------------
+
+// Honor explicit q=0 exclusions even in the presence of a wildcard.
+export function negotiate(accept) {
+  if (accept === undefined || accept === '') return MIME;
+  if (typeof accept !== 'string' || accept.length > 2048) return undefined;
+  const entries = accept.split(',').map(raw => {
+    const [type, ...parameters] = raw.trim().toLowerCase().split(';');
+    const q = parameters.map(p => p.trim()).find(p => p.startsWith('q='));
+    const quality = q === undefined ? 1 : Number(q.slice(2));
+
+    return {
+      type: type.trim(),
+      quality:
+        Number.isFinite(quality) && quality >= 0 && quality <= 1 ? quality : 0,
+    };
+  });
+
+  const quality = type => {
+    const exact = entries.filter(e => e.type === type);
+    const ranges = exact.length
+      ? exact
+      : entries.filter(e => e.type === 'application/*');
+    const matches = ranges.length
+      ? ranges
+      : entries.filter(e => e.type === '*/*');
+
+    return Math.max(0, ...matches.map(e => e.quality));
+  };
+
+  const a = quality(MIME),
+    l = quality('application/ld+json');
+
+  return a === 0 && l === 0 ? undefined : a >= l ? MIME : LD;
+}
+
+function reply(status, value, type = 'application/json', extra = {}) {
+  return {
+    status,
+    headers: {
+      'content-type': type,
+      'cache-control': 'no-store',
+      vary: 'Accept',
+      ...extra,
+    },
+    body: JSON.stringify(value),
+  };
+}
+
+function problem(status, error) {
+  return reply(status, { error });
+}
+
+function idOf(value) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && typeof value.id === 'string')
+    return value.id;
+
+  return undefined;
+}
+
+// -- GET ----------------------------------------------------------------------------
+
+function profile(ctx, c) {
+  const row = tryRead(ctx, c.profile);
+  if (!row || !validText(row[P.name], LIMITS.name) || !row[P.name])
+    return undefined;
+
+  return row;
+}
+
+function actorDocument(ctx, c, source) {
+  const key = ctx.keys.publicKey(KEY, { keyId: c.keyId });
+
+  return {
+    '@context': [AS, SECURITY],
+    id: c.actor,
+    type: 'Service',
+    preferredUsername: c.username,
+    name: source[P.name],
+    summary: validText(source[P.description])
+      ? html(source[P.description])
+      : '',
+    url: resourceUrl(c, c.profile),
+    inbox: `${c.origin}/ap/inbox`,
+    outbox: `${c.origin}/ap/outbox`,
+    followers: c.followersUrl,
+    manuallyApprovesFollowers: false,
+    publicKey: { id: c.keyId, owner: c.actor, publicKeyPem: key.publicKeyPem },
+  };
+}
+
+function webfinger(c, q) {
+  if (typeof q.resource !== 'string')
+    return problem(400, 'One resource parameter is required');
+  if (q.resource !== c.account && q.resource !== c.actor)
+    return problem(404, 'Not found');
+  const rels =
+    q.rel === undefined ? undefined : Array.isArray(q.rel) ? q.rel : [q.rel];
+  const links = [{ rel: 'self', type: MIME, href: c.actor }];
+
+  return reply(
+    200,
+    {
+      subject: c.account,
+      aliases: [c.actor],
+      links: rels ? links.filter(l => rels.includes(l.rel)) : links,
+    },
+    JRD,
+  );
+}
+
+function get(ctx, c, request) {
+  const path = request.path;
+  const q = request.query ?? {};
+  const source = profile(ctx, c);
+  // Without a public profile there is no actor: nothing is discoverable.
+  if (!source) return problem(404, 'Not found');
+
+  if (request.wellKnown === 'webfinger' || path === '/webfinger')
+    return webfinger(c, q);
+  if (request.wellKnown === 'nodeinfo' || path === '/nodeinfo')
+    return reply(200, {
+      links: [{ rel: SCHEMA, href: `${c.origin}/nodeinfo/2.1` }],
+    });
+  if (path === '/nodeinfo/2.1')
+    return reply(
+      200,
+      {
+        version: '2.1',
+        software: { name: 'atomic-fediverse', version: VERSION },
+        protocols: ['activitypub'],
+        services: { inbound: [], outbound: [] },
+        openRegistrations: false,
+        usage: { users: { total: 1 }, localPosts: posts(ctx, c).length },
+        metadata: {},
+      },
+      `application/json; profile="${SCHEMA}#"`,
+    );
+  const type = negotiate(request.headers?.accept);
+  if (!type)
+    return problem(406, 'Request an ActivityStreams JSON representation');
+  if (path === '/ap/actor')
+    return reply(200, actorDocument(ctx, c, source), type);
+  if (path === '/ap/followers')
+    // Only the count: who follows this actor is not published.
+    return reply(
+      200,
+      {
+        '@context': AS,
+        id: c.followersUrl,
+        type: 'OrderedCollection',
+        totalItems: followers(ctx, c).length,
+      },
+      type,
+    );
+
+  if (path === '/ap/outbox') {
+    const rows = posts(ctx, c);
+    const base = `${c.origin}/ap/outbox`;
+    if (q.page === undefined)
+      return reply(
+        200,
+        {
+          '@context': AS,
+          id: base,
+          type: 'OrderedCollection',
+          totalItems: rows.length,
+          first: `${base}?page=1`,
+        },
+        type,
+      );
+    if (typeof q.page !== 'string' || !/^[1-9][0-9]{0,2}$/.test(q.page))
+      return problem(400, 'Invalid page');
+    const page = Number(q.page),
+      start = (page - 1) * LIMITS.pageSize;
+    if (page > Math.max(1, Math.ceil(rows.length / LIMITS.pageSize)))
+      return problem(404, 'Not found');
+
+    return reply(
+      200,
+      {
+        '@context': AS,
+        id: `${base}?page=${page}`,
+        type: 'OrderedCollectionPage',
+        partOf: base,
+        orderedItems: rows
+          .slice(start, start + LIMITS.pageSize)
+          .map(row => createActivity(c, row)),
+        ...(page > 1 ? { prev: `${base}?page=${page - 1}` } : {}),
+        ...(start + LIMITS.pageSize < rows.length
+          ? { next: `${base}?page=${page + 1}` }
+          : {}),
+      },
+      type,
+    );
+  }
+
+  const match = /^\/ap\/(objects|activities)\/([a-z0-9][a-z0-9_-]{0,63})$/.exec(
+    path,
+  );
+
+  if (match) {
+    const post = posts(ctx, c).find(row => row.id === match[2]);
+    if (post)
+      return reply(
+        200,
+        match[1] === 'objects'
+          ? { '@context': AS, ...post.object }
+          : createActivity(c, post),
+        type,
+      );
+  }
+
+  return problem(404, 'Not found');
+}
+
+// -- deliveries ---------------------------------------------------------------------
+
+/**
+ * Inbox URLs the manifest's `deliver` operation (`https://*\/inbox`) can
+ * reach: HTTPS, path exactly `/inbox` (the shared inbox Mastodon, Pleroma
+ * and Misskey publish). A per-actor inbox path is refused until the host
+ * matches path wildcards in operations.
+ */
+export function deliverable(url) {
+  const parsed = remoteUrl(url);
+
+  return (
+    !!parsed &&
+    parsed.scheme === 'https' &&
+    parsed.path === '/inbox' &&
+    !url.includes('?') &&
+    !url.includes('#')
+  );
+}
+
+function delivery(c, inbox, activity, key) {
+  return {
+    operation: DELIVER,
+    url: inbox,
+    headers: { 'content-type': MIME },
+    body: activity,
+    sign: { key: KEY, keyId: c.keyId },
+    idempotencyKey: key,
+  };
+}
+
+// -- POST /ap/outbox ------------------------------------------------------------------
+
+function isPublisher(c, caller) {
+  const agent = caller && localSubject(caller.agent);
+
+  return !!agent && c.publishers.includes(agent);
+}
+
+function postId(ctx) {
+  // `trigger.at` (the frozen clock) carries the time; the request id's
+  // tail tells apart two posts in the same millisecond.
+  const at = ctx.trigger?.at;
+  const tail = String(ctx.trigger?.id ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(-12);
+  if (!Number.isSafeInteger(at) || at < 1e12 || at >= 1e13 || !tail)
+    throw new Error('No request time');
+
+  return `${at}-${tail}`;
+}
+
+function outboxPost(ctx, c, request) {
+  if (!isPublisher(c, request.caller))
+    return problem(403, 'Only a configured publisher may post');
+  let body;
+
+  try {
+    body = JSON.parse(request.body ?? '');
+  } catch {
+    return problem(400, 'The body is not JSON');
+  }
+
+  const object = body?.type === 'Create' ? body.object : body;
+  if (
+    !object ||
+    object.type !== 'Note' ||
+    typeof object.content !== 'string' ||
+    !object.content.trim() ||
+    !validText(object.content) ||
+    (object.name !== undefined &&
+      (!validText(object.name, LIMITS.name) || !object.name))
+  )
+    return problem(
+      400,
+      `Post a Note with plain-text content of at most ${LIMITS.text} characters`,
+    );
+  // Delivering copies content to other servers; only a public post may go.
+  const folder = tryRead(ctx, c.posts);
+  const readers = Array.isArray(folder?.[P.read]) ? folder[P.read] : [];
+  if (!readers.includes(PUBLIC_AGENT))
+    return problem(
+      409,
+      'The posts folder must be readable by the public agent before anything is federated',
+    );
+
+  const id = postId(ctx);
+  const published = new Date(ctx.trigger.at).toISOString();
+  const post = {
+    id,
+    published,
+    object: {
+      id: `${c.origin}/ap/objects/${id}`,
+      type: 'Note',
+      attributedTo: c.actor,
+      published,
+      to: [PUBLIC],
+      cc: [c.followersUrl],
+      ...(object.name ? { name: object.name } : {}),
+      content: `<p>${html(object.content)}</p>`,
+      mediaType: 'text/html',
+    },
+  };
+  const activity = createActivity(c, post);
+  const inboxes = [...new Set(followers(ctx, c).map(f => f.inbox))].filter(
+    deliverable,
+  );
+
+  return {
+    response: reply(
+      201,
+      { id: activity.id, object: post.object.id, queued: inboxes.length },
+      'application/json',
+      { location: post.object.id },
+    ),
+    intents: [
+      {
+        op: 'create',
+        localId: 'post',
+        parent: c.posts,
+        isA: [C.message],
+        set: {
+          [P.description]: object.content,
+          [P.localId]: id,
+          ...(object.name ? { [P.name]: object.name } : {}),
+        },
+      },
+    ],
+    enqueue: inboxes.map(inbox =>
+      delivery(c, inbox, activity, `create:${id}:${inbox}`),
+    ),
+  };
+}
+
+// -- POST /ap/inbox --------------------------------------------------------------------
+
+function accepted(note) {
+  return reply(202, { accepted: true, ...(note ? { note } : {}) });
+}
+
+function follow(ctx, c, request, activity) {
+  if (idOf(activity.object) !== c.actor) return accepted('not this actor');
+  const actor = activity.actor;
+  const endpoints = request.caller?.actor;
+  const inbox =
+    endpoints && idOf(endpoints) === actor
+      ? endpoints.sharedInbox || endpoints.inbox
+      : undefined;
+  if (!inbox || !remoteUrl(inbox))
+    return problem(
+      422,
+      "The follower's actor document names no inbox this host could verify",
+    );
+  if (!deliverable(inbox))
+    return problem(
+      422,
+      'This plugin can only deliver to an HTTPS shared inbox at /inbox',
+    );
+  const accept = {
+    '@context': AS,
+    id: `${c.actor}#accepts/${sha256(activity.id).slice(0, 32)}`,
+    type: 'Accept',
+    actor: c.actor,
+    object: {
+      id: activity.id,
+      type: 'Follow',
+      actor,
+      object: c.actor,
+    },
+  };
+  const known = followers(ctx, c).some(f => f.actor === actor);
+
+  return {
+    response: accepted(known ? 'already following' : undefined),
+    intents: known
+      ? []
+      : [
+          {
+            op: 'create',
+            localId: 'follower',
+            parent: c.followers,
+            isA: [C.bookmark],
+            set: {
+              [P.name]: actor,
+              [P.url]: inbox,
+              [P.localId]: activity.id,
+            },
+          },
+        ],
+    enqueue: [delivery(c, inbox, accept, `accept:${activity.id}`)],
+  };
+}
+
+function unfollow(ctx, c, actor) {
+  const gone = followers(ctx, c).filter(f => f.actor === actor);
+
+  return {
+    response: accepted(gone.length ? undefined : 'not following'),
+    intents: gone.map(f => ({ op: 'destroy', subject: f.subject })),
+  };
+}
+
+function storedReplies(ctx, c) {
+  const out = [];
+
+  for (const raw of children(ctx, c.replies, LIMITS.replies)) {
+    const row = tryRead(ctx, raw);
+    if (!row || !sameSubject(row[P.parent], c.replies)) continue;
+    if (typeof row[P.url] === 'string')
+      out.push({ subject: raw, id: row[P.url], actor: row[P.name] });
+  }
+
+  return out;
+}
+
+function create(ctx, c, activity) {
+  const note = activity.object;
+  if (!note || typeof note !== 'object' || note.type !== 'Note')
+    return accepted('only replies are stored');
+  const id = idOf(note);
+  const target = idOf(note.inReplyTo);
+  const prefix = `${c.origin}/ap/objects/`;
+  if (!target || !target.startsWith(prefix))
+    return accepted('not a reply to this actor');
+  if (
+    !remoteUrl(id) ||
+    remoteUrl(id).host !== remoteUrl(activity.actor).host ||
+    (note.attributedTo !== undefined &&
+      idOf(note.attributedTo) !== activity.actor)
+  )
+    return problem(400, "A reply's id and author must be the sender's");
+  if (typeof note.content !== 'string' || note.content.length > 4 * LIMITS.text)
+    return problem(400, 'A reply needs content');
+  const content = text(note.content).slice(0, LIMITS.text);
+  if (!validText(content) || !content.trim())
+    return problem(400, 'A reply needs text content');
+  const post = posts(ctx, c).find(p => p.id === target.slice(prefix.length));
+  if (!post) return accepted('reply to an unknown post');
+  if (storedReplies(ctx, c).some(r => r.id === id))
+    return accepted('already stored');
+
+  return {
+    response: accepted(),
+    intents: [
+      {
+        op: 'create',
+        localId: 'reply',
+        parent: c.replies,
+        isA: [C.message],
+        set: {
+          [P.description]: content,
+          [P.name]: activity.actor,
+          [P.url]: id,
+          [P.replyTo]: post.subject,
+        },
+      },
+    ],
+  };
+}
+
+function remove(ctx, c, activity) {
+  const target = idOf(activity.object);
+  if (target === activity.actor) return unfollow(ctx, c, activity.actor);
+  const gone = storedReplies(ctx, c).filter(
+    r => r.id === target && r.actor === activity.actor,
+  );
+
+  return {
+    response: accepted(gone.length ? undefined : 'nothing stored'),
+    intents: gone.map(r => ({ op: 'destroy', subject: r.subject })),
+  };
+}
+
+function receive(ctx, c, request) {
+  let activity;
+
+  try {
+    activity = JSON.parse(request.body ?? '');
+  } catch {
+    return problem(400, 'The body is not JSON');
+  }
+
+  if (
+    !activity ||
+    typeof activity !== 'object' ||
+    typeof activity.type !== 'string' ||
+    !remoteUrl(activity.id) ||
+    !remoteUrl(activity.actor)
+  )
+    return problem(400, 'Not an activity with an id and an actor');
+  // The host verified who signed; the activity must be theirs.
+  if (request.caller?.owner !== activity.actor)
+    return problem(401, 'The activity is not from the key that signed it');
+
+  switch (activity.type) {
+    case 'Follow':
+      return follow(ctx, c, request, activity);
+
+    case 'Undo': {
+      const undone = activity.object;
+      if (
+        undone &&
+        typeof undone === 'object' &&
+        undone.type === 'Follow' &&
+        idOf(undone.object) === c.actor &&
+        (undone.actor === undefined || undone.actor === activity.actor)
+      )
+        return unfollow(ctx, c, activity.actor);
+
+      return accepted('only an Undo of a Follow is handled');
+    }
+
+    case 'Create':
+      return create(ctx, c, activity);
+    case 'Delete':
+      return remove(ctx, c, activity);
+    default:
+      return accepted('ignored');
+  }
+}
+
+// -- entry points ----------------------------------------------------------------------
+
+function matchesTag(value, tag, weak) {
+  if (typeof value !== 'string' || value.length > 2048)
+    throw new Error('Invalid condition');
+  if (value.trim() === '*') return true;
+  const tags = value.match(/(?:W\/)?"[^"\s]*"/g) ?? [];
+  if (!tags.length || tags.join(',') !== value.trim().replace(/\s*,\s*/g, ','))
+    throw new Error('Invalid condition');
+
+  return tags.some(
+    candidate => (weak ? candidate.replace(/^W\//, '') : candidate) === tag,
+  );
+}
+
+/** Conditional GET/HEAD: a strong SHA-256 ETag over type and body. */
+function conditional(request, response) {
+  const tag =
+    '"' + sha256(response.headers['content-type'] + '\n' + response.body) + '"';
+  response.headers.etag = tag;
+
+  try {
+    const match = request.headers?.['if-match'];
+    const none = request.headers?.['if-none-match'];
+    if (match !== undefined && !matchesTag(match, tag, false))
+      return { ...response, status: 412, body: '' };
+    if (none !== undefined && matchesTag(none, tag, true))
+      return { ...response, status: 304, body: '' };
+  } catch {
+    return problem(400, 'Invalid HTTP condition');
+  }
+
+  return response;
+}
+
+export function handle(ctx, request) {
+  const method = request.method;
+  let c;
+
+  try {
+    c = config(ctx);
+  } catch {
+    return problem(503, 'Actor configuration unavailable');
+  }
+
+  try {
+    if (method === 'POST' && request.path === '/ap/inbox')
+      return receive(ctx, c, request);
+    if (method === 'POST' && request.path === '/ap/outbox')
+      return outboxPost(ctx, c, request);
+    if (method !== 'GET' && method !== 'HEAD')
+      return problem(405, 'Method not allowed');
+    let response = get(ctx, c, request);
+    if (response.status === 200) response = conditional(request, response);
+    if (method === 'HEAD') response.body = '';
+
+    return response;
+  } catch {
+    // Host errors (a failed query, an unreadable key) are not shown to
+    // strangers.
+    return problem(503, 'Temporarily unavailable');
+  }
+}
+
+export function run() {
+  return { intents: [], problems: [] };
+}

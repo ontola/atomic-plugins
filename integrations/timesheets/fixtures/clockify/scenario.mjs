@@ -648,6 +648,27 @@ export const PROJECT = {
   clientName: 'Test client',
 };
 
+/** A second active project, so an entry can be moved to another (#123 M3). */
+export const PROJECT_2 = {
+  id: 'eeeeeeeeeeeeeeeeeeeeeeee',
+  name: 'Research',
+  color: '#8E44AD',
+  clientName: 'Test client',
+};
+
+/** An archived project: listed, but not one to move an entry to. What
+ * Clockify does with a write to an archived project is not documented; the
+ * app refuses before sending. */
+export const ARCHIVED_PROJECT = {
+  id: 'ffffffffffffffffffffffff',
+  name: 'Old project',
+  color: '#999999',
+  archived: true,
+};
+
+/** The workspace's project list, as `GET …/projects` pages it. */
+export const PROJECTS = [PROJECT, PROJECT_2, ARCHIVED_PROJECT];
+
 const PREFIX = '/proxy/clockify/api';
 
 /** integration-proxy's body for a 404 it answers itself (`proxy.rs`). */
@@ -840,7 +861,7 @@ export function clockifyFixture({
       if (named[1] !== WORKSPACE.id)
         return { status: 403, body: { message: 'Forbidden' } };
       const page = Number(url.searchParams.get('page') ?? 1);
-      const all = named[2] === 'projects' ? [PROJECT] : [USER];
+      const all = named[2] === 'projects' ? PROJECTS : [USER];
 
       return { status: 200, body: page === 1 ? all : [] };
     }

@@ -43,7 +43,7 @@
       }
       ul { padding-left: 1.2rem; }
       label { display: block; margin: 0.75rem 0 0.25rem; }
-      input[type='text'], select {
+      input[type='text'], select, textarea {
         width: 100%;
         padding: 0.5rem;
         border: 1px solid var(--line);
@@ -52,6 +52,9 @@
         color: var(--fg);
         font: inherit;
       }
+      textarea { resize: vertical; min-height: 4.5rem; }
+      #typed-form { margin: 1rem 0; }
+      #typed-form p { margin: 0.5rem 0 0; }
       .check { display: flex; gap: 0.5rem; align-items: flex-start; }
       .check input { margin-top: 0.3rem; }
       button {
@@ -70,90 +73,127 @@
       #status { font-weight: 600; }
       #log p { margin: 0.4rem 0; }
       #log .me { color: var(--muted); }
+      #langs {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+      }
+      #langs button { padding: 0.3rem 0.7rem; font-size: 0.9rem; }
+      #langs button[aria-pressed='false'] {
+        background: transparent;
+        color: var(--accent);
+      }
+      h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      #level {
+        height: 0.75rem;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        overflow: hidden;
+        margin: 0.25rem 0;
+      }
+      #level-bar {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 80ms linear;
+      }
+      #retry { margin-top: 0.5rem; }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <main>
-      <h1>Try Atomic's new plugins</h1>
+      <!-- Texts come from i18n.js, in the language picked here. -->
+      <nav id="langs" aria-label="Language"></nav>
+      <h1 data-text="title"></h1>
 
       <section id="intro" class="card">
-        <p>
-          Thanks for helping! For about 25 minutes you'll try a new part of
-          Atomic while a voice moderator (Claude, an AI) asks you what you
-          see and think. There are no wrong answers: we are testing the app,
-          not you.
-        </p>
-        <ul>
-          <li>Find a quiet place where you can talk, and put on headphones.</li>
-          <li>Use Chrome or Edge on a laptop or desktop.</li>
-          <li>
-            When you start, a second window opens with your own empty Atomic
-            drive. Put it next to this one; keep this window open.
-          </li>
-          <li>
-            When Chrome asks what to share, choose your
-            <strong>entire screen</strong>, so the moderator sees the Atomic
-            window too.
-          </li>
-        </ul>
-        <p id="unsupported" class="warn" hidden>
-          This browser can't do speech recognition. Please open this page in
-          Chrome or Edge.
-        </p>
+        <div data-html="intro"></div>
+        <label for="plan" data-text="plan"></label>
+        <select id="plan"></select>
       </section>
 
       <section id="consent" class="card">
-        <p><strong>What is recorded and where it goes</strong></p>
-        <ul>
-          <li>
-            Your screen (the window or screen you choose to share) and your
-            microphone are recorded and stored on our test server.
-          </li>
-          <li>
-            Your browser turns your speech into text; Chrome does this through
-            Google's speech service.
-          </li>
-          <li>
-            That text, a screenshot of your shared screen at each turn, and
-            the app's error log are sent to Anthropic's Claude API to decide
-            what the moderator says next.
-          </li>
-          <li>
-            If you connect your own accounts (for example Google Calendar),
-            the imported data is stored on the test server too. You can
-            disconnect afterwards.
-          </li>
-          <li>
-            The recordings are only used to improve Atomic and are deleted
-            after analysis.
-          </li>
-        </ul>
-        <label for="name">Your first name (optional)</label>
+        <div data-html="consent"></div>
+        <label for="name" data-text="name"></label>
         <input id="name" type="text" autocomplete="given-name" />
-        <p class="muted">The session is in English.</p>
+        <p class="muted" data-text="sessionLanguage"></p>
         <p class="check">
           <input id="agree" type="checkbox" />
-          <label for="agree" style="margin: 0">
-            I agree to the recording and processing described above.
-          </label>
+          <label for="agree" style="margin: 0" data-text="agree"></label>
         </p>
-        <button id="start" disabled>Start the session</button>
+      </section>
+
+      <!-- Sound check: nothing here is recorded or sent to the moderator
+           (the optional speech check goes through the browser's
+           recognizer, which in Chrome is Google's speech service). -->
+      <section id="check" class="card">
+        <h2 data-text="check.heading"></h2>
+        <p class="muted" data-text="check.intro"></p>
+        <p class="row">
+          <button id="mic-test" type="button" data-text="check.micButton"></button>
+          <button id="type-instead" type="button" class="secondary" data-text="check.typeInstead"></button>
+        </p>
+        <div id="level-row" hidden>
+          <span class="muted" id="level-label" data-text="check.levelLabel"></span>
+          <div id="level" role="meter" aria-labelledby="level-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="level-bar"></div>
+          </div>
+        </div>
+        <p id="mic-status" aria-live="polite"></p>
+        <p id="mic-error" class="warn" hidden></p>
+        <div id="speech-row" hidden>
+          <p class="row">
+            <button id="speech-test" type="button" class="secondary" data-text="check.speechButton"></button>
+          </p>
+          <p class="muted" data-text="check.speechNote"></p>
+          <p id="speech-status" aria-live="polite"></p>
+        </div>
+        <p class="row">
+          <button id="speaker-test" type="button" class="secondary" data-text="check.speakerButton"></button>
+        </p>
+        <p id="speaker-status" class="muted" aria-live="polite"></p>
+        <div id="voice-row" hidden>
+          <label for="voice-select" data-text="check.voiceLabel"></label>
+          <p class="row">
+            <select id="voice-select"></select>
+            <button id="voice-try" type="button" class="secondary" data-text="check.voiceTry"></button>
+          </p>
+        </div>
+      </section>
+
+      <section id="go" class="card">
+        <p id="need-check" class="muted" data-text="check.needCheck"></p>
+        <button id="start" data-text="start" disabled></button>
         <p id="error" class="warn" hidden></p>
+        <button id="retry" type="button" class="secondary" data-text="errors.retry" hidden></button>
       </section>
 
       <section id="session" class="card" hidden>
         <p>
-          <span id="status">Starting…</span>
+          <span id="status"></span>
           <span class="muted" id="rec"></span>
         </p>
+        <p class="muted" id="voice-note" data-text="noVoice" hidden></p>
         <p class="muted" id="heard"></p>
-        <p>
-          <button id="ask">Ask the moderator</button>
-          <span class="muted">or just pause after a question</span>
+        <p id="ask-row">
+          <button id="ask" data-text="ask"></button>
+          <span class="muted" data-text="askHint"></span>
         </p>
+        <form id="typed-form">
+          <label for="typed" id="typed-label" data-text="typedLabel"></label>
+          <textarea id="typed" rows="3" data-placeholder="typedPlaceholder"></textarea>
+          <p>
+            <button id="send" type="submit" data-text="send"></button>
+            <span class="muted" data-text="sendHint"></span>
+          </p>
+        </form>
         <div id="log"></div>
-        <button id="end" class="secondary">End the session</button>
+        <button id="end" class="secondary" data-text="end"></button>
       </section>
     </main>
     <script type="module" src="app.js"></script>
