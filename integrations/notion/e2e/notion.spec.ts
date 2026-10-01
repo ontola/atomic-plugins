@@ -10,8 +10,10 @@
  * app's agent; the frame calls the proxy itself with a capability and its
  * own key (atomic-server#1697, in the pin). This spec
  * replaces the old one, which drove the `[data-integration=notion]` card that
- * atomic-server 4bab16ee6 removed (#68). Its two-way, PATCH and
- * revoked-access checks have no read-only counterpart, so they are gone.
+ * atomic-server 4bab16ee6 removed (#68). Since 0.2.0 the spec covers
+ * two-way edits again (#8): an edit made in the host's table is found when
+ * the app opens, reviewed and sent as a page PATCH, and a field changed on
+ * both sides waits for "Keep mine" or "Use Notion's".
  *
  * The app is installed from the catalog, as in the pets spec: the
  * Integrations page's Drive apps section, with the lane's dev-server serving
@@ -26,7 +28,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -154,6 +156,61 @@ async function driver(name: string, args: unknown[]) {
 }
 
 const DONE_OPTION = 'b1f5a3c2-0001-4000-8000-000000000003';
+const LAUNCH_PAGE = '1a2b3c4d-0000-4000-8000-000000000001';
+/** The column of the fixture's "Points" (property id `n%3D1`, hex-encoded). */
+const POINTS = 'notion-6e25334431';
+
+/**
+ * Sets one column (by shortname) of the row named `title` from the host
+ * page: a commit by the user, as an edit in the host's table is.
+ */
+async function setRowField(
+  page: Page,
+  title: string,
+  shortname: string,
+  value: string | number | boolean,
+) {
+  await page.evaluate(
+    async ([rowTitle, short, newValue]) => {
+      const store = window.store!;
+      const NAME = 'https://atomicdata.dev/properties/name';
+      const app = await store.getResource(
+        new URL(location.href).searchParams.get('subject')!,
+      );
+
+      for (const candidate of Object.values(app.getPropVals())) {
+        if (typeof candidate !== 'string' || !candidate.includes(':')) continue;
+        const table = await store.getResource(candidate).catch(() => undefined);
+        if (!table?.get('https://atomicdata.dev/properties/classtype'))
+          continue;
+        const members = await (
+          await table.getChildrenCollection(500)
+        ).getAllMembers();
+
+        for (const member of members) {
+          const row = await store.getResource(member);
+          if (row.get(NAME) !== rowTitle) continue;
+
+          for (const property of Object.keys(row.getPropVals())) {
+            const found = (await store.getResource(property)).get(
+              'https://atomicdata.dev/properties/shortname',
+            );
+            if (found !== short) continue;
+            await row.set(property, newValue);
+            await row.save();
+
+            return;
+          }
+
+          throw new Error(`row ${rowTitle} has no ${short}`);
+        }
+      }
+
+      throw new Error(`no row named ${rowTitle}`);
+    },
+    [title, shortname, value] as const,
+  );
+}
 
 /**
  * DESIGN.md §6 states S6–S13 in the real frame: text and roles, not pixels.
@@ -205,7 +262,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await table.getByRole('cell', { name: 'Launch plan', exact: true }).click();
     const peek = app.getByRole('complementary', { name: 'Row details' });
     await expect(peek).toContainText('Launch plan');
-    await expect(peek).toContainText('Read-only copy');
+    await expect(peek).toContainText('Review changes');
     await shot('s7-peek');
     // "Open in Notion" goes through store.openExternal: the host names the
     // destination and asks first. Cancel, so the test opens no tab.
@@ -242,6 +299,59 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(
       table.getByRole('row', { name: /Write changelog/ }),
     ).toContainText('Shipped', { timeout: 60_000 });
+
+    // S15 (#8): compare on open. An edit made in the host's table (a user's
+    // commit, as a table edit is) is found when the app opens again, with no
+    // request to Notion, and sent only after review.
+    await setRowField(page, 'Launch plan', POINTS, 5);
+    await page.reload();
+    const strip = app.locator('.nt-changes');
+    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+      timeout: 60_000,
+    });
+    await shot('s15-pending');
+    await strip.getByRole('button', { name: 'Review changes' }).click();
+    const review = app.getByRole('region', {
+      name: 'Changes to send to Notion',
+    });
+    await expect(review).toContainText('Launch plan');
+    await expect(review.locator('.nt-r-before')).toHaveText('3');
+    await expect(review.locator('.nt-r-after')).toHaveText('5');
+    expect(
+      (await driver('getPage', [LAUNCH_PAGE])).properties.Points.number,
+    ).toBe(3);
+    await shot('s15-review');
+    await review.getByRole('button', { name: 'Send 1 change' }).click();
+    await expect(review.locator('[data-outcome="sent"]')).toHaveText(
+      'Sent to Notion',
+      { timeout: 60_000 },
+    );
+    expect(
+      (await driver('getPage', [LAUNCH_PAGE])).properties.Points.number,
+    ).toBe(5);
+    await review.getByRole('button', { name: 'Close' }).click();
+
+    // S16: the same field changed here and in Notion is a conflict; neither
+    // side is overwritten until the person picks one.
+    await setRowField(page, 'Launch plan', POINTS, 6);
+    await driver('editPage', [LAUNCH_PAGE, { Points: { number: 9 } }]);
+    await syncNow();
+    await expect(strip).toContainText('1 row also changed in Notion', {
+      timeout: 60_000,
+    });
+    await strip.getByRole('button', { name: 'Review changes' }).click();
+    await expect(review).toContainText('Also changed in Notion, to 9');
+    await expect(review.getByRole('button', { name: /^Send/ })).toBeDisabled();
+    await shot('s16-conflict');
+    await review.getByRole('button', { name: 'Use Notion’s' }).click();
+    await expect(review).toContainText('Nothing left to send', {
+      timeout: 30_000,
+    });
+    expect(
+      (await driver('getPage', [LAUNCH_PAGE])).properties.Points.number,
+    ).toBe(9);
+    await review.getByRole('button', { name: 'Close' }).click();
+    await expect(strip).toHaveCount(0);
 
     // S12: rate limited, with the retry time.
     await driver('setScenario', ['rate-limited']);
