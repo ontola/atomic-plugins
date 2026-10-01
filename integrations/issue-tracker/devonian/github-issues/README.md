@@ -311,6 +311,17 @@ The earlier demo's design notes are in atomic-server's
   before and may have reached the provider: it is flagged `unconfirmed`.
   Creates keep their provider key across re-planning, so the journal still
   refuses to resend one whose response was lost.
+- An uncertain create (#156): with the optional `uncertain: { sent, forget }`
+  hook over the transport journal, a pass lists each create that was sent
+  without an answer in `bridge.unsettled`, with `candidates`: unbound
+  provider records carrying exactly what it sent (an issue's title and body,
+  a comment's body). Those are not imported while it is open, and it is not
+  in `held`. `landed(subject, id)` reads record `id`, binds it (refusing one
+  already bound to another subject) and sets the baseline to what was sent,
+  so later edits on either side reconcile as usual; nothing is sent.
+  `notArrived(subject)` lists the provider again, refuses while a candidate
+  exists, and otherwise drops the journal entry, so the create is held for
+  review again.
 - Conflict errors carry `subject`, `entity` and `fields`.
   `resolveConflict(subject, 'local' | 'remote')` moves only those fields'
   baseline to the other side's current value, writes nothing, and lets the

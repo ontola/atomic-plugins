@@ -383,3 +383,43 @@ test('sidecar images are built outside the lane, only for lanes that start one, 
   );
   assert.match(download, /if: matrix\.sidecars != ''/);
 });
+
+// #43 §2: dorny/paths-filter has no pull_request diff to read on a
+// merge_group or workflow_dispatch run. A filter that runs there anyway can
+// come back empty, skip every job and leave the run green having tested
+// nothing, so every workflow that path-gates runs the filter on pull_request
+// only and forces its outputs on for every other event.
+test('path filters run on pull_request only; other events run everything', () => {
+  const dir = resolve(root, '.github/workflows');
+  const gated = readdirSync(dir)
+    .filter(f => f.endsWith('.yml'))
+    .map(f => [f, readFileSync(resolve(dir, f), 'utf8')])
+    .filter(([, text]) => text.includes('dorny/paths-filter'));
+  assert.ok(gated.length > 0);
+
+  for (const [file, text] of gated) {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (!line.includes('uses: dorny/paths-filter')) return;
+      // The step's `if:` sits between its `- name:` and its `uses:`.
+      let start = i;
+      while (!/^\s*- /.test(lines[start])) start--;
+      const step = lines.slice(start, i).join('\n');
+      assert.match(
+        step,
+        /if: github\.event_name == 'pull_request'/,
+        `${file}:${i + 1}: run paths-filter on pull_request only`,
+      );
+    });
+
+    // Each output read from a filter falls back to on outside pull_request.
+    for (const m of text.matchAll(
+      /^ {6}([\w-]+): \$\{\{ (.*steps\.filter\.outputs\..*) \}\}$/gm,
+    ))
+      assert.match(
+        m[2],
+        /^github\.event_name != 'pull_request' && '[^']+' \|\| steps\.filter\.outputs\.[\w-]+$/,
+        `${file}: output ${m[1]} must be forced on outside pull_request`,
+      );
+  }
+});

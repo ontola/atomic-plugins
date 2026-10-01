@@ -11,6 +11,8 @@ import {
   removeFromBoard,
   resolveConflict,
   runPass,
+  sendAgain,
+  settleLanded,
   type ConflictField,
   type Held,
   type Imported,
@@ -156,6 +158,17 @@ export interface Controller {
    */
   keepHereOnly(): Promise<ViewState>;
   removeFromBoard(): Promise<ViewState>;
+  /**
+   * For a create GitHub never answered (the last pass's `uncertain`): it
+   * landed as GitHub record `id` (an issue number or comment id), so the
+   * row is bound to it; nothing is sent. Syncs again afterwards.
+   */
+  landed(subject: string, id: number): Promise<ViewState>;
+  /**
+   * For a create GitHub never answered: it did not arrive, so it is held
+   * for review again. Refused while GitHub shows a match. Syncs again.
+   */
+  sendAgain(subject: string): Promise<ViewState>;
   /** Board/list choice and filters, kept per installation. */
   prefs(): ViewPrefs;
   savePrefs(prefs: ViewPrefs): Promise<void>;
@@ -501,6 +514,11 @@ export function createController(
     return m?.side === 'remote' && m.entity === 'issue' ? m.subject : undefined;
   };
 
+  /** Whether the last pass reported `subject` as an uncertain create. */
+  const uncertainCreate = (subject: string) =>
+    current.kind === 'ready' &&
+    !!current.last?.result.uncertain?.some(u => u.subject === subject);
+
   const controller: Controller = {
     state: () => current,
 
@@ -764,6 +782,28 @@ export function createController(
       });
     },
 
+    landed(subject, id) {
+      if (!uncertainCreate(subject)) return Promise.resolve(current);
+
+      return run('resolving', async (s, ready) => {
+        const options = passOptions(s, ready.connectionId, ready.repository);
+        await settleLanded(options, subject, id);
+
+        return runPass(options);
+      });
+    },
+
+    sendAgain(subject) {
+      if (!uncertainCreate(subject)) return Promise.resolve(current);
+
+      return run('resolving', async (s, ready) => {
+        const options = passOptions(s, ready.connectionId, ready.repository);
+        await sendAgain(options, subject);
+
+        return runPass(options);
+      });
+    },
+
     prefs: () => ({ ...prefs }),
 
     async savePrefs(next) {
@@ -786,6 +826,7 @@ function emptyResult(): PassResult {
     updatedHere: 0,
     sentToGitHub: 0,
     held: [],
+    uncertain: [],
     rows: [],
   };
 }

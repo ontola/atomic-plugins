@@ -1,12 +1,13 @@
 # Parallel plugin lanes
 
-**Status: §§1–3 and §5 are implemented; §4 (fixtures) is half done.**
+**Status: §§1–3 and §5 are implemented; §4 (fixtures) is partly done.**
 `integrations/lanes.json`, `integrations/tooling/lanes.mjs`,
 `serve.mjs`, `run-lane.mjs` and the rewritten `.github/workflows/ci.yml`
 are live. `integrations/localthought/mock-proxy.mjs` now loads a per-platform
-fixture registry and honours `MOCK_PROXY_PLATFORMS`; recorded fixtures,
-`record.mjs`, `fixture.test.mjs`, the three missing platforms and the drift
-guard are not started. See §4.
+fixture registry and honours `MOCK_PROXY_PLATFORMS`. Every catalog platform
+but `todoist` has a registered fixture, none of them recorded; `todoist` has a
+recorder and replay scenario waiting on a live recording (#46). Recorded
+`api/` pages and the drift guard are not started. See §4.
 
 The goal: every package under `integrations/` gets its own CI lane and its own
 locally reproducible server, so N plugins can be worked on at once without
@@ -311,12 +312,22 @@ missing. See AGENTS.md, "Shared pinned atomic-server build".
 - `server.github`, `server.calendar` and `server.clockify` remain as aliases
   of `server.fixtures[<platform>]`, for atomic-server specs that use them.
 
-**Not started:** `api/` recordings, `record.mjs`, `fixture.test.mjs`,
-fixtures for `todoist` and `moneybird` (both need live credentials to
-record, per the "enforced, not asserted" rule below), and the drift guard.
-`notion` has an authored (not recorded) fixture,
-`integrations/notion/fixtures/notion/`, whose catalog document is composed
-from `integrations/notion/catalog/`; no lane requests it yet (#47, #68).
+**Status on 2026-10-01:**
+
+- `todoist`: `integrations/issue-tracker/fixtures/todoist/` has `record.mjs`
+  (GET-only, redacting), a replay `scenario.mjs` and the adapter check
+  `todoist-fixture.test.ts`, whose tests skip until a recording exists. It is
+  not registered in `fixtures/index.mjs` yet; #46 lists the maintainer's
+  recording steps.
+- `moneybird`: registered, but synthetic (hand-written bodies in
+  `integrations/money/fixtures/moneybird/synthetic.mjs`), not recorded. Its
+  header names what a recording needs.
+- `notion`: registered, authored (not recorded), at
+  `integrations/notion/fixtures/notion/`, its catalog document composed from
+  `integrations/notion/catalog/` (#47, #68).
+- **Not started:** recorded `api/` pages for any platform (each needs live
+  credentials, per the "enforced, not asserted" rule below) and the nightly
+  drift guard against the real `integration-proxy`.
 
 The original design:
 
