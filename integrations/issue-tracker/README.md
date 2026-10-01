@@ -79,7 +79,7 @@ states end to end, is still to be built.
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, about 123 KB) whose
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, about 134 KB) whose
 `view({ root, store })` runs in the host's null-origin frame. It hosts the
 Devonian bridge from `devonian/github-issues/` for **one repository per app
 install**, two-way for issue title, body (Markdown), Todo/Doing/Done status
@@ -166,12 +166,28 @@ replace them.
 - GitHub answers 401, or the host no longer has the connection: "Reconnect
   GitHub". The refused connection is not offered again after the reload.
 - A write whose response was lost: the next pass reads GitHub back first. If
-  the write landed, the operation just completes. If not, an update is offered
-  for review again, marked as unconfirmed; a create is never resent (the
-  transport's journal refuses: "Uncertain GitHub write"), and sync stays
-  paused. The banner says so and links to GitHub; "Send again" is offered
-  only for an update GitHub does not show. There is no in-app way out for an
-  uncertain create yet (design state 12, "It landed", #156).
+  an update landed, the operation just completes. If not, it is offered for
+  review again, marked as unconfirmed, with "Send again".
+- A create (issue or comment) whose response was lost (design state 12,
+  #156) is never resent on its own: the transport's journal refuses
+  ("Uncertain GitHub write"). The next pass looks for GitHub records that
+  are not on the board and carry exactly what the create sent (title and
+  description; a comment's text). Those are not imported as new rows while
+  the question is open, and the row is marked "Sent, but GitHub did not
+  answer". The banner offers "It landed as #N" for each match (up to 3) and
+  a link to check it. Choosing one binds the row to that issue (its number
+  is written into the row) and sends nothing; the baseline is what the
+  create sent, as GitHub creates it (Todo), so a status set here, or an
+  edit made since on either side, comes up as a normal change. With no
+  match, the banner offers "Send again": the app lists GitHub once more,
+  refuses if a match has appeared, and otherwise drops the journal entry so
+  the create is held for review like a new one. The choice is always a
+  person's: an exact match is not bound automatically, because someone may
+  have made the same issue by hand. An issue already bound to another row
+  is refused. Not covered: a create that landed and was then edited on
+  GitHub before the next pass is not offered (no exact match), and there is
+  no field to type another issue number, so "Send again" would create a
+  second issue; check GitHub before choosing it.
 - An issue GitHub no longer has (state 13): "Keep here only" forgets its
   GitHub identity and clears the row's issue number, so it stays as a local
   row; "Remove from board" forgets it on both sides and deletes its row and

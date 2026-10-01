@@ -29,7 +29,7 @@ import {
   SHORTCUTS,
   short,
   STATUSES,
-  type BannerAction,
+  type BannerModel,
   type DetailMode,
   type Filter,
   type Layout,
@@ -128,6 +128,8 @@ export interface Actions {
   disconnect(): void;
   keepHereOnly(): void;
   removeFromBoard(): void;
+  landed(subject: string, id: number): void;
+  sendAgain(subject: string): void;
 }
 
 const GLYPH: Record<Status, Glyph> = {
@@ -392,8 +394,16 @@ function bannerNode(
   const model = bannerFor(state, ui.confirmRemove);
   if (!model || state.kind !== 'ready') return null;
 
-  const run = (action: BannerAction) => {
+  const run = ({
+    action,
+    subject,
+    id,
+    url,
+  }: BannerModel['actions'][number]) => {
     if (action === 'reconnect') actions.connect();
+    else if (action === 'landed' && subject && id !== undefined)
+      actions.landed(subject, id);
+    else if (action === 'send-again' && subject) actions.sendAgain(subject);
     else if (action === 'review-conflict')
       actions.open({ kind: 'conflict', choices: {} }, 'banner-action');
     else if (action === 'send') actions.send();
@@ -403,7 +413,7 @@ function bannerNode(
     else if (action === 'cancel-remove')
       actions.setUi({ confirmRemove: false });
     else if (action === 'confirm-remove') actions.removeFromBoard();
-    else actions.openGitHub(`${repoUrl(state.repository)}/issues`);
+    else actions.openGitHub(url ?? `${repoUrl(state.repository)}/issues`);
   };
 
   return banner({
@@ -414,7 +424,7 @@ function bannerNode(
     alert: ui.alert && !!model.problem,
     ...(model.details ? { details: model.details } : {}),
     actions: model.actions.map((a, i) =>
-      button(a.label, () => run(a.action), {
+      button(a.label, () => run(a), {
         kind: a.primary ? 'primary' : a.danger ? 'danger' : '',
         sm: true,
         disabled: !!state.busy && a.action !== 'open-github',
@@ -699,12 +709,12 @@ function chooseRepository(
 
 function marker(kind: Marker | undefined): HTMLElement | null {
   if (!kind) return null;
-  if (kind === 'conflict')
+  if (kind === 'conflict' || kind === 'unconfirmed')
     return h(
       'span',
-      { class: 'sync-mark conflict', title: MARKER_TEXT.conflict },
+      { class: `sync-mark conflict ${kind}`, title: MARKER_TEXT[kind] },
       icon('warn', 14),
-      h('span', { class: 'sr' }, MARKER_TEXT.conflict),
+      h('span', { class: 'sr' }, MARKER_TEXT[kind]),
     );
 
   return h(

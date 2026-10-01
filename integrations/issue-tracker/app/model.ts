@@ -6,7 +6,7 @@
  * these into elements; the tests read them directly.
  */
 import type { Problem, Ready, ViewState } from './controller.js';
-import type { Held, IssueRow, Status } from './sync.js';
+import type { Held, IssueRow, Status, Uncertain } from './sync.js';
 import type { IconName } from './ui/dom.js';
 import type { PillState, Tone } from './ui/kit.js';
 import type { Size } from './ui/theme.js';
@@ -94,7 +94,9 @@ export type BannerAction =
   | 'keep-here'
   | 'remove'
   | 'confirm-remove'
-  | 'cancel-remove';
+  | 'cancel-remove'
+  | 'landed'
+  | 'send-again';
 
 export interface BannerModel {
   tone: Tone;
@@ -106,6 +108,12 @@ export interface BannerModel {
     action: BannerAction;
     primary?: boolean;
     danger?: boolean;
+    /** `landed`, `send-again`: the uncertain create it settles. */
+    subject?: string;
+    /** `landed`: the GitHub issue number or comment id it became. */
+    id?: number;
+    /** `open-github`: where to look; the repository's issues otherwise. */
+    url?: string;
   }[];
   details?: string;
   /** Set for problems; `views.ts` makes it an alert only when a sync raised it. */
@@ -244,6 +252,9 @@ export function bannerFor(
     };
   }
 
+  const [create] = state.last?.result.uncertain ?? [];
+  if (create && !state.busy) return uncertainBanner(create);
+
   const uncertain = unconfirmed(state);
   if (uncertain.length && !state.busy)
     return {
@@ -267,6 +278,73 @@ export function bannerFor(
     };
 
   return undefined;
+}
+
+/** Candidates the banner offers as "It landed as …" buttons. */
+export const LANDED_CHOICES = 3;
+
+/**
+ * Design state 12 for a create: it was sent and never answered. With
+ * GitHub records matching what it sent, the person picks the one it
+ * became; with none, they may send it again (held for review as usual).
+ */
+function uncertainBanner(u: Uncertain): BannerModel {
+  const issue = u.entity === 'issue';
+  const name = issue
+    ? `“${u.sent.title ?? ''}”`
+    : `Your comment on ${u.issueNumber ? `#${u.issueNumber}` : 'an issue'}`;
+  const ref = (id: number) => (issue ? `#${id}` : `comment ${id}`);
+  const same = issue ? 'the same title and description' : 'the same text';
+  const title = `${name} was sent to GitHub, but no answer came back.`;
+  const shown = u.candidates.slice(0, LANDED_CHOICES);
+  const [only] = u.candidates;
+
+  if (!only)
+    return {
+      tone: 'warn',
+      icon: 'info',
+      title,
+      text: `GitHub shows no ${issue ? 'issue' : 'comment'} with ${same}, so it probably did not arrive. Check GitHub; if it is not there, send it again. You review it before it goes.`,
+      actions: [
+        { label: 'Check on GitHub', action: 'open-github' },
+        {
+          label: 'Send again',
+          action: 'send-again',
+          subject: u.subject,
+          primary: true,
+        },
+      ],
+    };
+
+  const text =
+    u.candidates.length === 1
+      ? `GitHub has ${ref(only.id)} with ${same}${only.author ? `, by ${only.author}` : ''}. If that is it, link it here; nothing is sent again.`
+      : `GitHub has ${u.candidates.length} ${issue ? 'issues' : 'comments'} with ${same}. Check them on GitHub, then choose the one it became; nothing is sent again.`;
+
+  return {
+    tone: 'warn',
+    icon: 'info',
+    title,
+    text,
+    actions: [
+      ...(u.candidates.length === 1
+        ? [
+            {
+              label: `Check ${ref(only.id)} on GitHub`,
+              action: 'open-github' as const,
+              ...(only.url ? { url: only.url } : {}),
+            },
+          ]
+        : [{ label: 'Check on GitHub', action: 'open-github' as const }]),
+      ...shown.map((c, i) => ({
+        label: `It landed as ${ref(c.id)}`,
+        action: 'landed' as const,
+        subject: u.subject,
+        id: c.id,
+        ...(i === 0 ? { primary: true } : {}),
+      })),
+    ],
+  };
 }
 
 /** The connection bar's status line. */
@@ -294,7 +372,7 @@ export function connectionLine(state: Ready): string {
   return `Last sync ${time}${waiting}`;
 }
 
-export type Marker = 'waiting' | 'sending' | 'conflict';
+export type Marker = 'waiting' | 'sending' | 'conflict' | 'unconfirmed';
 
 /** Per-row sync marker: a hollow dot, a spinning arc, or a warning. */
 export function markers(state: Ready): Map<string, Marker> {
@@ -316,6 +394,15 @@ export function markers(state: Ready): Map<string, Marker> {
 
   for (const subject of state.touched ?? [])
     out.set(subject, state.busy === 'sending' ? 'sending' : 'waiting');
+
+  for (const u of state.last?.result.uncertain ?? []) {
+    const subject =
+      u.local && commentOwner.has(u.local)
+        ? commentOwner.get(u.local)
+        : u.local;
+    if (subject) out.set(subject, 'unconfirmed');
+  }
+
   const p = state.problem;
 
   if (p?.kind === 'conflict' && p.local) {
@@ -338,6 +425,7 @@ export const MARKER_TEXT: Record<Marker, string> = {
   waiting: 'Waiting to send',
   sending: 'Sending',
   conflict: 'Changed on both sides',
+  unconfirmed: 'Sent, but GitHub did not answer',
 };
 
 export interface Filter {

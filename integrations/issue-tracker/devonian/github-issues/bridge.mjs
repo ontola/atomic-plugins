@@ -10,8 +10,27 @@ const copy = value => structuredClone(value);
 
 /** Single-writer, checkpointed reconciliation. Ports own transport and durable writes. */
 export class Bridge {
-  constructor({ devonian, local, remote, base, snapshot, save, imported }) {
+  constructor({
+    devonian,
+    local,
+    remote,
+    base,
+    snapshot,
+    save,
+    imported,
+    uncertain,
+  }) {
     this.api = devonian;
+    /**
+     * Optional: the transport journal's view of creates. `sent(entity,
+     * subject)` resolves to the value a create of `subject` sent to the
+     * provider without an answer (`{ title, body }` or `{ body }`), or
+     * undefined; `forget(entity, subject)` drops that journal entry so the
+     * create may be sent again. See `uncertainCreates`.
+     */
+    this.uncertain = uncertain;
+    /** Creates the last pass found uncertain, by subject; see `sync`. */
+    this.unsettled = new Map();
     /** Called after each record imported from GitHub into the table; see `syncEntity`. */
     this.imported = imported;
     this.local = local;
@@ -99,6 +118,7 @@ export class Bridge {
 
   async sync() {
     this.held.clear();
+    this.unsettled.clear();
 
     // Resume saved operations BEFORE discovering their newly-created counterparts.
     for (const [subject, record] of Object.entries(this.records)) {
@@ -107,6 +127,9 @@ export class Bridge {
       if (record.pending?.held) delete record.pending;
       else if (record.pending) await this.attempt(subject, record, true);
     }
+
+    for (const [subject, entity, sent] of await this.uncertainCreates())
+      this.unsettled.set(subject, { subject, entity, sent, candidates: [] });
 
     await this.syncEntity('issue');
 
@@ -121,6 +144,10 @@ export class Bridge {
         continue;
       await this.syncEntity(`comment:${subject}`);
     }
+
+    // An uncertain create is not a write to review: approving it would only
+    // meet the journal's refusal. It waits for `landed` or `notArrived`.
+    for (const subject of this.unsettled.keys()) this.held.delete(subject);
   }
 
   /**
@@ -151,6 +178,114 @@ export class Bridge {
         ...(record.unconfirmed ? { unconfirmed: true } : {}),
       });
     }
+  }
+
+  /**
+   * Records whose provider create was sent and never answered: bound
+   * locally, not remotely, with a journal entry that has no receipt. The
+   * transport refuses to resend those, so each needs a person to say
+   * whether it landed (`landed`) or not (`notArrived`).
+   */
+  async uncertainCreates() {
+    if (!this.uncertain) return [];
+    const out = [];
+
+    for (const [subject, record] of Object.entries(this.records)) {
+      if (
+        this.id('local', record.entity, subject) === undefined ||
+        this.id('remote', record.entity, subject) !== undefined
+      )
+        continue;
+      const sent = await this.uncertain.sent(record.entity, subject);
+      if (sent) out.push([subject, record.entity, sent]);
+    }
+
+    return out;
+  }
+
+  /**
+   * Whether a provider row, not bound to any record, carries exactly what
+   * an uncertain create sent: the same title and body for an issue, the
+   * same body for a comment. Status and labels are not compared: a create
+   * sends neither (an initial status is a separate update).
+   */
+  candidate(entity, row, sent) {
+    if ((row.value?.body ?? '') !== (sent.body ?? '')) return false;
+
+    return entity !== 'issue' || row.value?.title === sent.title;
+  }
+
+  /**
+   * "It landed": an uncertain create of `subject` became provider record
+   * `remoteId`. Binds the two and settles the saved operation; nothing is
+   * sent. The baseline is what the create sent (an issue starts as Todo),
+   * so edits made on either side since then still reconcile as changes on
+   * the next pass. Refuses a record that is already bound to another
+   * subject, and one the provider does not return.
+   */
+  async landed(subject, remoteId) {
+    const record = this.records[subject];
+    if (!record) throw new Error(`Unknown record: ${subject}`);
+    const { entity } = record;
+    const sent = await this.uncertain?.sent(entity, subject);
+    if (!sent || this.id('remote', entity, subject) !== undefined)
+      throw new Error(`No uncertain create on ${subject}`);
+    const scope = this.scope('remote', entity);
+    const other = this.identities.lookup(scope, remoteId);
+    if (other !== undefined)
+      throw new Error(
+        `Already bound: ${entity === 'issue' ? `#${remoteId}` : `comment ${remoteId}`} belongs to another record on this board`,
+      );
+    // Reads it first: it must exist, be an issue (not a pull request) or,
+    // for a comment, belong to this record's issue.
+    const row = await this.remote.get(
+      entity,
+      remoteId,
+      this.context('remote', entity),
+    );
+    this.identities.bind(scope, remoteId, subject);
+    record.baseline =
+      entity === 'issue'
+        ? { title: sent.title, body: sent.body ?? '', status: 'Todo' }
+        : { body: sent.body ?? '' };
+    delete record.pending;
+    delete record.unconfirmed;
+    this.unsettled.delete(subject);
+    this.held.delete(subject);
+    await this.checkpoint();
+
+    return row;
+  }
+
+  /**
+   * "It did not arrive": the provider shows no unbound record matching
+   * what the uncertain create of `subject` sent, so its journal entry is
+   * dropped and the create is planned again, held for review like any new
+   * one. Lists the provider first and refuses while a match exists: then
+   * the answer is `landed`, never a second create.
+   */
+  async notArrived(subject) {
+    const record = this.records[subject];
+    if (!record) throw new Error(`Unknown record: ${subject}`);
+    const { entity } = record;
+    const sent = await this.uncertain?.sent(entity, subject);
+    if (!sent || this.id('remote', entity, subject) !== undefined)
+      throw new Error(`No uncertain create on ${subject}`);
+    const scope = this.scope('remote', entity);
+    const rows = await this.remote.list(entity, this.context('remote', entity));
+    const match = rows.find(
+      row =>
+        this.identities.lookup(scope, row.id) === undefined &&
+        this.candidate(entity, row, sent),
+    );
+    if (match)
+      throw new Error(
+        `It may have landed: ${entity === 'issue' ? `#${match.id}` : `comment ${match.id}`} on GitHub matches what was sent`,
+      );
+    await this.uncertain.forget(entity, subject);
+    delete record.unconfirmed;
+    this.unsettled.delete(subject);
+    await this.checkpoint();
   }
 
   /** Both sides' current rows and the reconcile decision for one record. */
@@ -321,9 +456,26 @@ export class Bridge {
       this.records[subject] ??= { entity };
     }
 
+    // A provider record that matches an uncertain create may be that
+    // create, landed: it is not imported as a second row, only offered as
+    // a candidate until a person says (`landed`, `notArrived`).
+    const unsettled = [...this.unsettled.values()].filter(
+      u => u.entity === entity,
+    );
+
     for (const side of ['remote', 'local']) {
       for (const row of lists[side].values()) {
         let subject = this.identities.lookup(this.scope(side, entity), row.id);
+
+        if (!subject && side === 'remote') {
+          const matching = unsettled.filter(u =>
+            this.candidate(entity, row, u.sent),
+          );
+
+          for (const u of matching) u.candidates.push(copy(row));
+          if (matching.length) continue;
+        }
+
         if (!subject) subject = await this.lens(side, entity).ingest(row);
         this.records[subject] ??= { entity };
       }
