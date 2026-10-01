@@ -19,7 +19,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -52,7 +51,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -140,17 +138,7 @@
     "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
     "https://atomicdata.dev/properties/shortname": "platform",
     "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The LocalThought platform id this integration's setup dialog connects through, for one that uses the generic LocalThought extension flow instead of its own setup component."
-  },
-  {
-    "@id": "https://atomicdata.dev/integrations/properties/callback-platform",
-    "https://atomicdata.dev/properties/isA": [
-      "https://atomicdata.dev/classes/Property"
-    ],
-    "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
-    "https://atomicdata.dev/properties/shortname": "callback-platform",
-    "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The platform id LocalThought's OAuth callback reports back, for an integration that owns its own setup component instead of using the generic LocalThought flow (so it has no `platform`)."
+    "https://atomicdata.dev/properties/description": "The integration-proxy platform id this integration connects through (for example `todoist`). Nothing reads it at the pin: its reader was the generic LocalThought setup dialog, which atomic-server removed with the LocalThought flow (c707ca4ed). Kept as a record of the provider the entry is for; a drive app names its platform in its own code when it calls `store.proxy.connect`."
   },
   {
     "https://atomicdata.dev/properties/localId": "calendar",
@@ -185,7 +173,7 @@
     "https://atomicdata.dev/properties/emoji": "✅",
     "https://atomicdata.dev/properties/description": "Bring your Todoist projects and tasks into a local issue tracker.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports active tasks and projects. Tasks open in the Issues view with their title, due day and priority. Todoist lists active tasks only, so a task shows as closed only when Todoist itself reports it checked.",
-    "https://atomicdata.dev/integrations/properties/events": "None at this version: no host runs the Todoist lens. Its host hook, with the LocalThought connect flow it used, was removed from atomic-server (f3efedf65, c707ca4ed), and no drive app wraps the lens yet. A drive app would connect Todoist through the host's consent bar and the integration proxy, like the other drive apps; that is planned, not built.",
+    "https://atomicdata.dev/integrations/properties/events": "Was planned as: connect through the integration proxy, then Sync now (and every five minutes while the folder is open) to pull the latest tasks. The LocalThought connect dialog and sync panel that did this were removed from atomic-server, and no drive app wraps the Todoist lens yet, so nothing runs it at the pin.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist. A task that stops appearing is never assumed completed. The lens can check such a task by id and mark it completed, deleted, unavailable or unconfirmed, with when it was last seen, but no host runs that check yet, and nothing has been verified against a live Todoist account.",
     "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects devonian lens local tracker issues",
     "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
@@ -224,14 +212,11 @@
     "https://atomicdata.dev/properties/emoji": "🐦",
     "https://atomicdata.dev/properties/description": "Import the contacts of one Moneybird administration, read-only.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports the contacts of one administration (archived ones included) into a typed table: name, company, e-mail, city, country, customer ID, archived, version. Invoices, financial mutations, ledger accounts and the other collections are not imported yet.",
-    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar and choose an administration. Contacts refresh whenever the app is opened and on Sync now. Nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, pick an administration, then contacts refresh whenever the app is opened, or on Sync now.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. Contacts only. One administration per app. Tested against a synthetic fixture, not a real Moneybird account.",
-    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
-    "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
-    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-yc2fJ42WEWVdgEEJuhhnL4Tf3fGLwiPzNq2EluOcSXQVDfu4QyWK5jrAEf+NzKIy"
+    "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts ledger finance administration localthought",
+    "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
+    "https://atomicdata.dev/integrations/properties/platform": "moneybird"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",
@@ -264,16 +249,16 @@
     "https://atomicdata.dev/integrations/properties/enabled": false,
     "https://atomicdata.dev/properties/name": "Notion",
     "https://atomicdata.dev/properties/emoji": "📓",
-    "https://atomicdata.dev/properties/description": "A read-only drive app that brings the Notion databases you share with it into a table, with table, board and list views.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Reads every Notion data source shared with the connection into one table in the drive, through Devonian lenses: plain title and text, number, checkbox, URL, email, phone, and select, status and multi-select options (shown with Notion's names and colours). Table, board and list views per database, a side peek per row, and sync details listing what could not be read. Disconnect removes only this app's access; the rows stay.",
-    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now. Nothing runs while the app is closed.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written to Notion, and a page removed or archived in Notion is left in place here. Formatted text is not imported and is listed as a warning; other property types (dates, people, relations, formulas and more) are not imported. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
-    "https://atomicdata.dev/integrations/properties/keywords": "notion database table board list rows pages read-only drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/properties/description": "A drive app that brings the Notion databases you share with it into a table, and sends edits to those rows back to Notion after you review them.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Reads every Notion data source shared with the connection into one table in the drive, through Devonian lenses: plain title and text, number, checkbox, URL, email, phone, and select, status and multi-select options (shown with Notion's names and colours). Edits to those fields, made in the app's table or anywhere else in Atomic, are found when the app opens by comparing each row with the baseline kept on it, listed under Review changes, and sent to Notion only after you press Send, one page update each. A field changed both here and in Notion waits for Keep mine or Use Notion's. Table, board and list views per database, a side peek per row, and sync details listing what could not be read. Disconnect removes only this app's access; the rows stay.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is not imported, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
+    "https://atomicdata.dev/integrations/properties/keywords": "notion database table board list rows pages two-way review drive app devonian",
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-FrLZZxyZiVFiAsyQXLelQf5+e9+/BLeAjkPvBWhQpRe7zUCaRqYLibJRI56mv0NZ"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-j4wGx+dNy9ZJeUm4MUkcBX4ebSS71WbnN6U3ESTTNLuviemGSy9+ct0Y8YzWUg9F"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",
@@ -359,7 +344,7 @@
     "https://atomicdata.dev/integrations/properties/capabilities": "Connects through the integration proxy, with no account or key (the demo provider is a static, read-only API on GitHub Pages), and imports every pet it lists into a Pets table, with typed columns (age, vaccinated, weight, updated at). Re-syncing updates changed pets and writes nothing when nothing changed.",
     "https://atomicdata.dev/integrations/properties/events": "Connect once, then Sync now whenever you want the latest pets. Nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "Demo provider only, not a real account. Import only: nothing is written back. Keep the browser open while syncing.",
-    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points localthought",
+    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
     "https://atomicdata.dev/integrations/properties/version": "0.1.2",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-qTKJ6SFE+FAFKW6rmNhAFV6um9+aHSb+VrAF5B6aRHaBMeT6vH5f5W0T5Q2WTWAt",

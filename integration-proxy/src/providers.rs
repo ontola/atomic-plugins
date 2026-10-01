@@ -28,6 +28,24 @@ struct TokenOperation {
 pub struct ApiKeyScheme {
     pub name: String,
     pub location: ApiKeyLocation,
+    /// The scheme's own `description`, shown as plain text next to the key
+    /// field.
+    pub description: Option<String>,
+    /// `x-api-key-details.helpUrl`: where the person makes or finds a key
+    /// (openapi-extensions/spec/api-key-details). Always `https`.
+    pub help_url: Option<String>,
+    /// `x-api-key-details.keyCheck`, resolved to a fixed URL.
+    pub key_check: Option<KeyCheck>,
+}
+
+/// The operation called once with a pasted key, before it is sealed: a
+/// parameterless `GET` on the document's own `https` server
+/// (openapi-extensions/spec/api-key-details, section 4.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyCheck {
+    pub url: url::Url,
+    /// JSON Pointer into the response body selecting a display label.
+    pub label_pointer: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +66,7 @@ impl ApiKeyScheme {
             .iter()
             .filter(|(_, scheme)| scheme.get("type").and_then(Value::as_str) == Some("apiKey"))
             .collect();
-        let (_, scheme) = match selected_scheme {
+        let (scheme_name, scheme) = match selected_scheme {
             Some(selected) => candidates
                 .iter()
                 .find(|(name, _)| name.as_str() == selected)
@@ -73,11 +91,156 @@ impl ApiKeyScheme {
             Some("cookie") => ApiKeyLocation::Cookie,
             _ => return Err("apiKey scheme must declare a supported 'in' location".into()),
         };
+        let (help_url, key_check) = api_key_details(document, scheme_name, scheme)?;
         Ok(Self {
             name: name.to_owned(),
             location,
+            description: scheme
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned),
+            help_url,
+            key_check,
         })
     }
+}
+
+/// Reads `x-api-key-details` (openapi-extensions/spec/api-key-details).
+/// An invalid declaration is an error, not ignored: the consent page must
+/// not silently drop a key check the document asks for.
+fn api_key_details(
+    document: &Value,
+    scheme_name: &str,
+    scheme: &Value,
+) -> Result<(Option<String>, Option<KeyCheck>), String> {
+    let Some(details) = scheme.get("x-api-key-details") else {
+        return Ok((None, None));
+    };
+    let details = details
+        .as_object()
+        .ok_or("x-api-key-details must be an object")?;
+    if details
+        .keys()
+        .any(|key| key != "helpUrl" && key != "keyCheck")
+    {
+        return Err("x-api-key-details has an unknown member".into());
+    }
+    let help_url = match details.get("helpUrl") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .and_then(|value| url::Url::parse(value).ok())
+                .filter(plain_https)
+                .ok_or("x-api-key-details.helpUrl must be an https URL without userinfo")?
+                .to_string(),
+        ),
+    };
+    let key_check = match details.get("keyCheck") {
+        None => None,
+        Some(check) => Some(key_check(document, scheme_name, check)?),
+    };
+    Ok((help_url, key_check))
+}
+
+fn plain_https(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
+fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCheck, String> {
+    let check = check
+        .as_object()
+        .ok_or("x-api-key-details.keyCheck must be an object")?;
+    if check
+        .keys()
+        .any(|key| key != "operationId" && key != "label")
+    {
+        return Err("x-api-key-details.keyCheck has an unknown member".into());
+    }
+    let operation_id = check
+        .get("operationId")
+        .and_then(Value::as_str)
+        .ok_or("x-api-key-details.keyCheck.operationId must be a string")?;
+    let label_pointer = match check.get("label") {
+        None => None,
+        Some(label) => Some(
+            label
+                .as_str()
+                .and_then(|label| label.strip_prefix("$response.body#"))
+                .filter(|pointer| pointer.is_empty() || pointer.starts_with('/'))
+                .ok_or("x-api-key-details.keyCheck.label must be a $response.body# expression")?
+                .to_owned(),
+        ),
+    };
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .ok_or("key check: document has no paths")?;
+    let mut found = paths.iter().flat_map(|(path, item)| {
+        [
+            "get", "put", "post", "delete", "options", "head", "patch", "trace",
+        ]
+        .into_iter()
+        .filter_map(move |method| {
+            let operation = item.get(method)?;
+            (operation.get("operationId").and_then(Value::as_str) == Some(operation_id))
+                .then_some((path, item, method, operation))
+        })
+    });
+    let (path, item, method, operation) = found
+        .next()
+        .ok_or("key check: operationId does not resolve")?;
+    if found.next().is_some() {
+        return Err("key check: operationId is not unique".into());
+    }
+    if method != "get" {
+        return Err("key check: operation must use GET".into());
+    }
+    let declares_parameters = |value: &Value| {
+        value
+            .get("parameters")
+            .and_then(Value::as_array)
+            .is_some_and(|parameters| !parameters.is_empty())
+    };
+    if path.contains(['{', '}'])
+        || declares_parameters(item)
+        || declares_parameters(operation)
+        || operation.get("requestBody").is_some()
+    {
+        return Err("key check: operation must take no parameters or body".into());
+    }
+    let requires_scheme = operation
+        .get("security")
+        .or_else(|| document.get("security"))
+        .and_then(Value::as_array)
+        .is_some_and(|requirements| {
+            requirements.iter().any(|requirement| {
+                requirement
+                    .as_object()
+                    .is_some_and(|members| members.len() == 1 && members.contains_key(scheme_name))
+            })
+        });
+    if !requires_scheme {
+        return Err("key check: operation must require this API key scheme".into());
+    }
+    let server = document
+        .get("servers")
+        .and_then(Value::as_array)
+        .and_then(|servers| servers.first())
+        .and_then(|server| server.get("url"))
+        .and_then(Value::as_str)
+        .ok_or("key check: document has no server")?;
+    let mut url = url::Url::parse(server)
+        .ok()
+        .filter(|url| plain_https(url) && url.query().is_none() && !server.contains(['{', '}']))
+        .ok_or("key check: the document's server must be a plain https URL")?;
+    url.set_path(&format!("{}{}", url.path().trim_end_matches('/'), path));
+    Ok(KeyCheck { url, label_pointer })
 }
 
 /// Which kind of credential a catalog platform's composed document declares.
@@ -1308,6 +1471,200 @@ mod tests {
                 .name,
             "X-Api-Key"
         );
+    }
+
+    fn api_key_details_document() -> Value {
+        serde_json::json!({
+            "servers": [{"url": "https://api.service.example/api"}],
+            "components": {"securitySchemes": {"serviceKey": {
+                "type": "apiKey", "in": "header", "name": "X-Api-Key",
+                "description": "  A personal key, from Settings.  ",
+                "x-api-key-details": {
+                    "helpUrl": "https://service.example/help/api-keys",
+                    "keyCheck": {"operationId": "getMe", "label": "$response.body#/email"}
+                }
+            }}},
+            "paths": {
+                "/v1/user": {"get": {"operationId": "getMe", "security": [{"serviceKey": []}]}},
+                "/v1/items": {"get": {"operationId": "listItems", "security": [{"serviceKey": []}]}}
+            }
+        })
+    }
+
+    #[test]
+    fn api_key_details_give_a_help_link_and_a_fixed_key_check() {
+        let scheme = ApiKeyScheme::from_document(&api_key_details_document(), None).unwrap();
+        assert_eq!(
+            scheme.description.as_deref(),
+            Some("A personal key, from Settings.")
+        );
+        assert_eq!(
+            scheme.help_url.as_deref(),
+            Some("https://service.example/help/api-keys")
+        );
+        let check = scheme.key_check.unwrap();
+        assert_eq!(
+            check.url.as_str(),
+            "https://api.service.example/api/v1/user"
+        );
+        assert_eq!(check.label_pointer.as_deref(), Some("/email"));
+
+        // Both fields are optional; a scheme without the extension has neither.
+        let scheme = ApiKeyScheme::from_document(&api_key_document(), None).unwrap();
+        assert_eq!(
+            (scheme.description, scheme.help_url, scheme.key_check),
+            (None, None, None)
+        );
+        let mut doc = api_key_details_document();
+        doc["components"]["securitySchemes"]["serviceKey"]["x-api-key-details"]["keyCheck"]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        let scheme = ApiKeyScheme::from_document(&doc, None).unwrap();
+        assert_eq!(scheme.key_check.unwrap().label_pointer, None);
+
+        // The document's top-level security counts when the operation has none.
+        let mut doc = api_key_details_document();
+        doc["security"] = serde_json::json!([{"serviceKey": []}]);
+        doc["paths"]["/v1/user"]["get"]
+            .as_object_mut()
+            .unwrap()
+            .remove("security");
+        assert!(ApiKeyScheme::from_document(&doc, None)
+            .unwrap()
+            .key_check
+            .is_some());
+    }
+
+    #[test]
+    fn api_key_details_refuse_unsafe_or_unresolvable_declarations() {
+        let details = "/components/securitySchemes/serviceKey/x-api-key-details";
+        type Change = Box<dyn Fn(&mut Value)>;
+        let cases: Vec<(&str, Change)> = vec![
+            (
+                "http help link",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["helpUrl"] =
+                        "http://service.example/help".into()
+                }),
+            ),
+            (
+                "javascript help link",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["helpUrl"] = "javascript:alert(1)".into()
+                }),
+            ),
+            (
+                "help link with userinfo",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["helpUrl"] =
+                        "https://a:b@service.example/".into()
+                }),
+            ),
+            (
+                "unknown member",
+                Box::new(move |doc| doc.pointer_mut(details).unwrap()["redirect"] = true.into()),
+            ),
+            (
+                "unknown check member",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["keyCheck"]["method"] = "POST".into()
+                }),
+            ),
+            (
+                "missing operation",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["keyCheck"]["operationId"] = "nope".into()
+                }),
+            ),
+            (
+                "label from the request",
+                Box::new(move |doc| {
+                    doc.pointer_mut(details).unwrap()["keyCheck"]["label"] =
+                        "$request.header.X-Api-Key".into()
+                }),
+            ),
+            (
+                "POST check",
+                Box::new(|doc| {
+                    let get = doc["paths"]["/v1/user"]["get"].take();
+                    doc["paths"]["/v1/user"] = serde_json::json!({"post": get});
+                }),
+            ),
+            (
+                "templated path",
+                Box::new(|doc| {
+                    let item = doc["paths"]["/v1/user"].take();
+                    doc["paths"].as_object_mut().unwrap().remove("/v1/user");
+                    doc["paths"]["/v1/users/{id}"] = item;
+                }),
+            ),
+            (
+                "query parameter",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/user"]["get"]["parameters"] =
+                        serde_json::json!([{"name": "redirect", "in": "query"}]);
+                }),
+            ),
+            (
+                "path-level parameter",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/user"]["parameters"] =
+                        serde_json::json!([{"name": "X-Other", "in": "header"}]);
+                }),
+            ),
+            (
+                "request body",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/user"]["get"]["requestBody"] = serde_json::json!({});
+                }),
+            ),
+            (
+                "not secured by the scheme",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/user"]["get"]["security"] = serde_json::json!([]);
+                }),
+            ),
+            (
+                "secured together with another scheme",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/user"]["get"]["security"] =
+                        serde_json::json!([{"serviceKey": [], "other": []}]);
+                }),
+            ),
+            (
+                "duplicate operationId",
+                Box::new(|doc| {
+                    doc["paths"]["/v1/items"]["get"]["operationId"] = "getMe".into();
+                }),
+            ),
+            (
+                "http server",
+                Box::new(|doc| {
+                    doc["servers"][0]["url"] = "http://api.service.example/api".into();
+                }),
+            ),
+            (
+                "templated server",
+                Box::new(|doc| {
+                    doc["servers"][0]["url"] = "https://{region}.service.example/api".into();
+                }),
+            ),
+            (
+                "no server",
+                Box::new(|doc| {
+                    doc.as_object_mut().unwrap().remove("servers");
+                }),
+            ),
+        ];
+        for (name, change) in cases {
+            let mut doc = api_key_details_document();
+            change(&mut doc);
+            assert!(
+                ApiKeyScheme::from_document(&doc, None).is_err(),
+                "{name} should be refused"
+            );
+        }
     }
 
     #[test]

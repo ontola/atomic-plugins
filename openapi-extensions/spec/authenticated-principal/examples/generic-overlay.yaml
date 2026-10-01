@@ -1,0 +1,20 @@
+overlay: 1.0.0
+info:
+  title: Add current-user identity metadata
+  version: 1.0.0
+actions:
+  - target: $.paths['/me'].get
+    update:
+      x-authenticated-principal:
+        kind: user
+        namespace: https://identity.example.com
+        subject: $response.body#/id
+        identifier:
+          scope: provider
+          stable: true
+          reassigned: false
+        claims:
+          name: $response.body#/displayName
+          email: $response.body#/email
+          picture: $response.body#/avatarUrl
+          email_verified: $response.body#/emailVerified

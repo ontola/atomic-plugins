@@ -198,9 +198,9 @@ describe('controller (N2)', () => {
     expect((await connecting).kind).toBe('not-connected');
   });
 
-  it('reloads when the host connects an existing account without navigating', async () => {
+  it('reloads and starts the first sync when the host connects an existing account without navigating', async () => {
     let connected = false;
-    const { controller } = setup('default', {
+    const { controller, states, proxy } = setup('default', {
       connections: async () =>
         connected ? [{ connectionId: 'conn-1', platform: 'notion' }] : [],
       connect: async () => {
@@ -214,10 +214,13 @@ describe('controller (N2)', () => {
       },
     });
     expect((await controller.load()).kind).toBe('not-connected');
-    expect(await controller.connect()).toMatchObject({
-      kind: 'ready',
-      connectionId: 'conn-1',
-    });
+    const after = await controller.connect();
+    expect(after).toMatchObject({ kind: 'ready', connectionId: 'conn-1' });
+    // #196's finding: no page reload follows this path, so the controller
+    // itself has to import; before 0.2.0 it stopped at an empty `ready`.
+    expect(states).toContain('importing');
+    expect(proxy.calls[0]).toMatchObject({ path: '/v1/search' });
+    expect(after.kind === 'ready' && after.rows.length).toBe(3);
   });
 
   it('imports first (importing), then syncs over rows (syncing)', async () => {

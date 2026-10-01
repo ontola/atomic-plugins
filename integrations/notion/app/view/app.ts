@@ -53,6 +53,7 @@ import {
   type ViewContext,
 } from './parts.js';
 import { NT_CSS } from './styles.js';
+import { renderChangesBar, renderReview } from './review.js';
 
 export const NARROW = 640;
 export const WIDE = 960;
@@ -72,6 +73,12 @@ export interface AppActions {
   openTable?(): void;
   /** Stops this app using Notion (`store.proxy.disconnect`). */
   disconnect?(): void;
+  /** Sends the reviewed changes to Notion. */
+  send?(): void;
+  /** Puts a row's unsent edits back to what Notion has. */
+  discard?(subject: string): void;
+  /** Resolves a field changed both here and in Notion. */
+  resolve?(subject: string, shortname: string, keep: 'mine' | 'notion'): void;
 }
 
 export interface AppOptions {
@@ -224,6 +231,21 @@ export function createApp(
     );
   }
 
+  const review = {
+    open: () => {
+      focusAfter = 'review';
+      update({ review: true, selected: undefined, details: false });
+    },
+    close: () => {
+      focusAfter = 'review-open';
+      update({ review: false });
+    },
+    send: () => actions.send?.(),
+    discard: (subject: string) => actions.discard?.(subject),
+    resolve: (subject: string, shortname: string, keep: 'mine' | 'notion') =>
+      actions.resolve?.(subject, shortname, keep),
+  };
+
   function header(): HTMLElement {
     if (!isConnected(state))
       return renderHeader(doc, { mark: 'N', name: 'Notion', pill: pillEl });
@@ -322,7 +344,9 @@ export function createApp(
           ? 'Access revoked'
           : state.kind === 'disconnected'
             ? 'Not connected'
-            : [icon(doc, 'lock', 'sm'), 'Read-only'],
+            : actions.send
+              ? [icon(doc, 'sync', 'sm'), 'Edits sent after review']
+              : [icon(doc, 'lock', 'sm'), 'Read-only'],
       ],
       [
         h(
@@ -544,7 +568,14 @@ export function createApp(
             : // One banner at a time: the confirmation stands in for the state's.
               stateBanner(ctx),
           ui.details ? renderDetails(ctx) : null,
-          ...content(ctx),
+          ...(actions.send
+            ? [
+                renderChangesBar(doc, state, !!ui.review, review),
+                ...(ui.review
+                  ? [renderReview(doc, state, review)]
+                  : content(ctx)),
+              ]
+            : content(ctx)),
         ),
       );
     }
