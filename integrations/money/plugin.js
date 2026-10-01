@@ -171,8 +171,8 @@ function importRecords(host, records) {
       const subject = matches[0];
       if (subject) {
         const current = read(subject);
-        const classes = current[IS_A];
-        if (!Array.isArray(classes) || record.isA.some((klass) => !classes.includes(klass)))
+        const classes2 = current[IS_A];
+        if (!Array.isArray(classes2) || record.isA.some((klass) => !classes2.includes(klass)))
           throw new Error("Import identity belongs to a different class");
         const persisted = current[IMPORT_LOCAL_ID];
         if (persisted !== void 0 && persisted !== record.sourceId)
@@ -804,6 +804,171 @@ function entries(format, statements) {
 }
 var OVERLAP_MESSAGE = "This statement overlaps an earlier import without unique bank references. Use the original statement or export a non-overlapping period.";
 
+// ontology-kit/terms.mjs
+var releases = Object.freeze({
+  v1: "https://ontola.github.io/atomic-plugins/ontology/v1"
+});
+var properties = Object.freeze({
+  "atomic-calendar-day": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-day",
+    datatype: "https://atomicdata.dev/datatypes/date"
+  }),
+  "atomic-calendar-end-day": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-end-day",
+    datatype: "https://atomicdata.dev/datatypes/date"
+  }),
+  "atomic-calendar-all-day": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-all-day",
+    datatype: "https://atomicdata.dev/datatypes/boolean"
+  }),
+  "atomic-calendar-start": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-start",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "atomic-calendar-end": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-end",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "atomic-calendar-location": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-location",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "atomic-calendar-notes": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-notes",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "atomic-calendar-recurrence": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-recurrence",
+    datatype: "https://atomicdata.dev/datatypes/json"
+  }),
+  "work-start": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/work-start",
+    datatype: "https://atomicdata.dev/datatypes/timestamp"
+  }),
+  "work-end": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/work-end",
+    datatype: "https://atomicdata.dev/datatypes/timestamp"
+  }),
+  "work-project": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/work-project",
+    datatype: "https://atomicdata.dev/datatypes/atomicURL",
+    classtype: "https://ontola.github.io/atomic-plugins/ontology/classes/work-project-v1"
+  }),
+  "work-person": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/work-person",
+    datatype: "https://atomicdata.dev/datatypes/atomicURL",
+    classtype: "https://ontola.github.io/atomic-plugins/ontology/classes/work-person-v1"
+  }),
+  "work-billable": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/work-billable",
+    datatype: "https://atomicdata.dev/datatypes/boolean"
+  }),
+  "bank-account": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-account",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "bank-currency": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-currency",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "bank-amount": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-amount",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "bank-value-date": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-value-date",
+    datatype: "https://atomicdata.dev/datatypes/date"
+  }),
+  "bank-booking-date": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-booking-date",
+    datatype: "https://atomicdata.dev/datatypes/date"
+  }),
+  "bank-description": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-description",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "bank-reference": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/bank-reference",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "money-category": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/money-category",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  }),
+  "money-note": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/properties/money-note",
+    datatype: "https://atomicdata.dev/datatypes/string"
+  })
+});
+var classes = Object.freeze({
+  "event-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/event-v1",
+    requires: Object.freeze([
+      "https://atomicdata.dev/properties/name",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-day"
+    ]),
+    recommends: Object.freeze([
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-end-day",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-all-day",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-start",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-end",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-location",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-notes",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/atomic-calendar-recurrence"
+    ])
+  }),
+  "issue-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/issue-v1",
+    requires: Object.freeze(["https://atomicdata.dev/properties/name"]),
+    recommends: Object.freeze([
+      "https://atomicdata.dev/task/v1/status",
+      "https://atomicdata.dev/task/v1/body",
+      "https://atomicdata.dev/task/v1/assignee",
+      "https://atomicdata.dev/task/v1/due-date"
+    ])
+  }),
+  "time-entry-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1",
+    requires: Object.freeze([
+      "https://ontola.github.io/atomic-plugins/ontology/properties/work-start"
+    ]),
+    recommends: Object.freeze([
+      "https://atomicdata.dev/properties/name",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/work-end",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/work-project",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/work-person",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/work-billable"
+    ])
+  }),
+  "work-project-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/work-project-v1",
+    requires: Object.freeze(["https://atomicdata.dev/properties/name"]),
+    recommends: Object.freeze([])
+  }),
+  "work-person-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/work-person-v1",
+    requires: Object.freeze(["https://atomicdata.dev/properties/name"]),
+    recommends: Object.freeze([])
+  }),
+  "bank-transaction-v1": Object.freeze({
+    subject: "https://ontola.github.io/atomic-plugins/ontology/classes/bank-transaction-v1",
+    requires: Object.freeze([
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-account",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-currency",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-amount",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-value-date"
+    ]),
+    recommends: Object.freeze([
+      "https://atomicdata.dev/properties/name",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-booking-date",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-description",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/bank-reference",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/money-category",
+      "https://ontola.github.io/atomic-plugins/ontology/properties/money-note"
+    ])
+  })
+});
+
 // integrations/money/schema.ts
 var DATE = "https://atomicdata.dev/datatypes/date";
 var STRING = "https://atomicdata.dev/datatypes/string";
@@ -836,6 +1001,18 @@ var STATEMENT_FIELDS = [
     "The date this statement was first imported."
   ]
 ];
+var SHARED_FIELDS = [
+  "bank-account",
+  "bank-currency",
+  "bank-amount",
+  "bank-value-date",
+  "bank-booking-date",
+  "bank-description",
+  "bank-reference",
+  "money-category",
+  "money-note"
+];
+var SHARED = new Set(SHARED_FIELDS);
 function bankingSchema() {
   const fields = [
     [
@@ -906,6 +1083,7 @@ function bankingSchema() {
   return {
     properties: [...fields, ...notes, ...STATEMENT_FIELDS].map(
       ([shortname, name, description]) => ({
+        ...SHARED.has(shortname) ? { subject: properties[shortname].subject } : {},
         shortname,
         name,
         description,
@@ -914,6 +1092,10 @@ function bankingSchema() {
     ),
     classes: [
       {
+        // The shared class. Its `requires`/`recommends` here mirror the
+        // published ones (without Atomic's own `name`) and are never
+        // written: the host uses a shared class as it is.
+        subject: classes["bank-transaction-v1"].subject,
         shortname: "bank-transaction",
         name: "Bank transaction",
         description: "A booked bank statement entry imported from an MT940 or camt.053 statement.",
@@ -921,10 +1103,15 @@ function bankingSchema() {
           "bank-account",
           "bank-currency",
           "bank-amount",
-          "bank-value-date",
-          "bank-source-id"
+          "bank-value-date"
         ],
-        recommends: [...fields.slice(0, 9), ...notes].map((f) => f[0])
+        recommends: [
+          "bank-booking-date",
+          "bank-description",
+          "bank-reference",
+          "money-category",
+          "money-note"
+        ]
       },
       {
         shortname: "bank-statement-record",
@@ -975,7 +1162,7 @@ var manifest = {
   schemaVersion: 2,
   name: "bank-statements",
   namespace: "atomic-plugins",
-  version: "0.3.0",
+  version: "0.4.0",
   description: "Import bank transactions from MT940 and camt.053 statement exports.",
   operations: [],
   secrets: [],

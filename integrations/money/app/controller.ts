@@ -21,10 +21,11 @@ import {
   type Filters,
   type Period,
 } from './ledger.js';
+import { adoptSharedClass } from './adopt.js';
 import {
   atomic,
   canAnnotate,
-  isBankTable,
+  classFields,
   readMany,
   readRows,
   readStatement,
@@ -151,10 +152,15 @@ export interface State {
   rowAccess: 'granted' | 'none' | 'denied' | 'unavailable' | 'unknown';
   /** Why the person or host refused editing, when they did. */
   rowAccessReason?: string;
+  /**
+   * The table shown is the app's own (an install from the catalog), not the
+   * importer's: there is no importer to import through.
+   */
+  standalone?: boolean;
 }
 
 export const NOT_A_BANK_TABLE =
-  'This app shows a Bank transactions table. Open it from the app tab of the table the Bank statements importer created.';
+  'This app shows a Bank transactions table: a table of the shared Bank transaction class (bank-transaction-v1). Open it from the app tab of the table the Bank statements importer created, or of a table you made with that class.';
 
 export interface Controller {
   state(): State;
@@ -336,18 +342,43 @@ export function createController(
       update({ view: { kind: 'loading', loaded: 0 } });
 
       try {
-        const data = await store.getData();
+        // Offered on bank-transaction-v1 tables, and its own table one too
+        // (adopt.ts). Best effort: a refusal leaves the app as installed.
+        const found = await store.getData();
+        const adopted = await adoptSharedClass(store, found).catch(
+          () => undefined,
+        );
+        const data = adopted?.data ?? found;
         if (!data?.rowClass) return fail(NOT_A_BANK_TABLE);
-        const fields = await resolveFields(store, data.rowClass);
-        if (!isBankTable(fields)) return fail(NOT_A_BANK_TABLE);
+        const statements = data.tables?.statements;
+        if (statements)
+          statementFields = await classFields(store, statements.rowClass).catch(
+            () => ({}),
+          );
+        const fields = await resolveFields(
+          store,
+          data.rowClass,
+          statements
+            ? { rowClass: statements.rowClass, fields: statementFields }
+            : undefined,
+        );
+        if (!fields) return fail(NOT_A_BANK_TABLE);
         table = data.table;
+
+        if (adopted?.own) {
+          // No importer owns this table, so nothing can import into it here.
+          state.canApply = false;
+          update({ standalone: true });
+        }
+
         const owner = store.openResource
           ? await store
               .getResource(table)
               .then(r => r.get(atomic.parent))
               .catch(() => undefined)
           : undefined;
-        if (typeof owner === 'string') update({ importer: owner });
+        if (typeof owner === 'string' && !adopted?.own)
+          update({ importer: owner });
         const subjects = await store.query({
           property: atomic.parent,
           value: table,
@@ -356,11 +387,9 @@ export function createController(
           fields,
           view: { kind: 'loading', loaded: 0, total: subjects.length },
         });
-        const statements = data.tables?.statements;
 
         if (statements) {
           statementsTable = statements.table;
-          statementFields = await resolveFields(store, statements.rowClass);
           await loadStatements().catch(() => undefined);
           unsubscribeStatements?.();
           unsubscribeStatements = store.subscribe(statementsTable, () => {

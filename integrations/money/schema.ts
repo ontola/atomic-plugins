@@ -1,8 +1,11 @@
 // @wc-ignore-file
-// Type-only: plugin.ts bundles this file into the sandbox plugin.js, so it
-// must not pull the lib's runtime in. Datatypes are therefore the literal
-// URLs of `Datatype.DATE` and `Datatype.STRING`.
+// Type-only against the lib: plugin.ts bundles this file into the sandbox
+// plugin.js, so it must not pull the lib's runtime in. Datatypes are
+// therefore the literal URLs of `Datatype.DATE` and `Datatype.STRING`. The
+// shared ontology's subject constants (`ontology-kit/terms.mjs`, plain data)
+// are bundled in.
 import type { Datatype, SchemaSpec } from '../../browser/lib/src/index.js';
+import { classes, properties } from '../../ontology-kit/terms.mjs';
 
 const DATE = 'https://atomicdata.dev/datatypes/date' as Datatype;
 const STRING = 'https://atomicdata.dev/datatypes/string' as Datatype;
@@ -42,8 +45,36 @@ export const STATEMENT_FIELDS = [
 ] as const;
 
 /**
+ * The fields of the shared class `bank-transaction-v1` (ontola/atomic-plugins
+ * #177, `ontology-kit/source.json`), by the shortname this schema uses for
+ * them. Set up binds these to the published subjects through
+ * `PropertySpec.subject`, so the host reuses them instead of minting its own.
+ */
+export const SHARED_FIELDS = [
+  'bank-account',
+  'bank-currency',
+  'bank-amount',
+  'bank-value-date',
+  'bank-booking-date',
+  'bank-description',
+  'bank-reference',
+  'money-category',
+  'money-note',
+] as const;
+
+export type SharedField = (typeof SHARED_FIELDS)[number];
+
+const SHARED = new Set<string>(SHARED_FIELDS);
+
+/**
  * The banking ontology, declared as the manifest's `destination.schema`: the
- * host creates it in the drive when the importer is set up.
+ * host binds the Bank transaction class and its fields to the shared ontology
+ * (`subject`), and creates the rest in the drive when the importer is set up:
+ * the import bookkeeping on each row (`bank-source-id`, `bank-fingerprint`,
+ * `bank-statement`, `bank-transaction-code`) and the Bank statement class
+ * with its fields. Shared terms are reused as published, never copied or
+ * edited; `ensureSchema` only checks that each is a Property of the declared
+ * datatype (or a Class).
  */
 export function bankingSchema(): SchemaSpec {
   const fields = [
@@ -119,6 +150,9 @@ export function bankingSchema(): SchemaSpec {
   return {
     properties: [...fields, ...notes, ...STATEMENT_FIELDS].map(
       ([shortname, name, description]) => ({
+        ...(SHARED.has(shortname)
+          ? { subject: properties[shortname as SharedField].subject }
+          : {}),
         shortname,
         name,
         description,
@@ -128,6 +162,10 @@ export function bankingSchema(): SchemaSpec {
     ),
     classes: [
       {
+        // The shared class. Its `requires`/`recommends` here mirror the
+        // published ones (without Atomic's own `name`) and are never
+        // written: the host uses a shared class as it is.
+        subject: classes['bank-transaction-v1'].subject,
         shortname: 'bank-transaction',
         name: 'Bank transaction',
         description:
@@ -137,9 +175,14 @@ export function bankingSchema(): SchemaSpec {
           'bank-currency',
           'bank-amount',
           'bank-value-date',
-          'bank-source-id',
         ],
-        recommends: [...fields.slice(0, 9), ...notes].map(f => f[0]),
+        recommends: [
+          'bank-booking-date',
+          'bank-description',
+          'bank-reference',
+          'money-category',
+          'money-note',
+        ],
       },
       {
         shortname: 'bank-statement-record',

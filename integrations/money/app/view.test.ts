@@ -53,6 +53,47 @@ describe('Money view: first run', () => {
   });
 });
 
+describe('Money view: the shared class (#177)', () => {
+  beforeEach(() => document.head.replaceChildren());
+
+  it('says where it belongs when opened on its own table after an install', async () => {
+    const root = await open(fakeStore({ firstOpen: true, data: 'own' }));
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Open Money on your Bank transactions table',
+    );
+    expect(text(root.querySelector('.pl-empty'))).toContain('Add view');
+    expect(
+      [...root.querySelectorAll('button')].some(
+        b => text(b) === 'Choose statement file',
+      ),
+    ).toBe(false);
+  });
+
+  it('shows "Not a valid amount" for an amount that is not one, and sums the rest', async () => {
+    const root = await open(
+      fakeStore({
+        rows: [
+          seedRow('-1.50', '2026-09-22'),
+          seedRow('twelve', '2026-09-22'),
+          seedRow('0.123456', '2026-09-22'),
+        ],
+      }),
+    );
+    const table = root.querySelector('table.m-ledger')!;
+    const invalid = [...table.querySelectorAll('.m-amt[data-dir="invalid"]')];
+    expect(invalid.map(text)).toEqual([
+      'Not a valid amount',
+      'Not a valid amount',
+    ]);
+    expect(invalid[0].getAttribute('aria-label')).toMatch(
+      /^Not a valid amount: /,
+    );
+    expect(text(table.querySelector('th[scope="rowgroup"]'))).toMatch(
+      /−€1\.50$/,
+    );
+  });
+});
+
 describe('Money view: ledger', () => {
   it('renders a captioned table with day row groups and spoken amounts at ≥560px', async () => {
     const root = await open(fakeStore({ rows: sampleRows() }));

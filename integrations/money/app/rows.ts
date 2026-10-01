@@ -1,17 +1,33 @@
 // @wc-ignore-file
 /**
- * Reading the Bank transactions table. Rows carry their values under the
- * drive's own property subjects, which the importer's Set up created from
- * `bankingSchema()` (`../schema.ts`). The app finds them through the row
- * class the table names: its `requires` and `recommends` list the property
- * subjects, and each property carries its shortname.
+ * Reading the Bank transactions table. Since 0.4.0 its rows are of the
+ * shared class `bank-transaction-v1` (ontola/atomic-plugins#177), and the
+ * app reads that class's fields by their published subjects only, through
+ * `ontology-kit`'s strict resolver: no lookup by shortname, name or column.
+ * A table of any other class is not a bank transactions table.
+ *
+ * The importer's own bookkeeping on each row (`bank-source-id`,
+ * `bank-fingerprint`, `bank-statement`, `bank-transaction-code`) and the
+ * statement rows' fields are not shared: Set up mints them in the drive's
+ * ontology (`../schema.ts`). They are found through the statements table's
+ * class, which lists most of them, and by shortname for the rest.
  */
+import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import { classes, properties } from '../../../ontology-kit/terms.mjs';
 import {
   GET_MANY_MAX,
   type JSONValue,
   type PluginResource,
   type PluginStore,
 } from './store.js';
+
+/** The shared class this app renders. */
+export const BANK_TRANSACTION = classes['bank-transaction-v1'].subject;
+
+/** Every class this app renders, for its App's `renders`. */
+export const resolver = createResolver({
+  classes: [classes['bank-transaction-v1']],
+});
 
 export const atomic = {
   parent: 'https://atomicdata.dev/properties/parent',
@@ -144,8 +160,29 @@ const list = (value: JSONValue): string[] =>
     ? value.filter((v): v is string => typeof v === 'string')
     : [];
 
-/** Resolves the class's declared properties to the shortnames the app knows. */
-export async function resolveFields(
+/** The shared class's fields, by the shortnames the app uses for them. */
+const SHARED = [
+  'bank-account',
+  'bank-currency',
+  'bank-amount',
+  'bank-value-date',
+  'bank-booking-date',
+  'bank-description',
+  'bank-reference',
+  'money-category',
+  'money-note',
+] as const satisfies readonly (BankField | NoteField)[];
+
+const SHARED_SUBJECTS = new Map<string, Shortname>(
+  SHARED.map(name => [properties[name].subject, name]),
+);
+
+/**
+ * The fields of a class that is not shared (the importer's Bank statement
+ * class): its `requires` and `recommends`, by shortname. A shared property is
+ * recognised by its subject, without reading it.
+ */
+export async function classFields(
   store: PluginStore,
   rowClass: string,
 ): Promise<Fields> {
@@ -157,22 +194,64 @@ export async function resolveFields(
     ]),
   ];
   const fields: Fields = {};
-  const properties = await Promise.all(
-    subjects.map(s => store.getResource(s).catch(() => undefined)),
+
+  for (const subject of subjects) {
+    const shared = SHARED_SUBJECTS.get(subject);
+    if (shared) fields[shared] ??= subject;
+  }
+
+  const resources = await Promise.all(
+    subjects
+      .filter(s => !SHARED_SUBJECTS.has(s))
+      .map(s => store.getResource(s).catch(() => undefined)),
   );
 
-  for (const property of properties) {
+  for (const property of resources) {
     const shortname = property?.get(atomic.shortname);
     if (typeof shortname === 'string' && KNOWN.has(shortname))
       fields[shortname as Shortname] ??= property!.subject;
   }
 
-  // `bankingSchema()` leaves the fingerprint out of the class (the importer
-  // writes it; nobody fills it in by hand), so find it, and anything else
-  // missing, by shortname: preferably the one in the class's own ontology.
-  const ontology = klass.get(atomic.parent);
+  return fields;
+}
 
-  for (const shortname of UNDECLARED) {
+/** Written by the importer on each row; not part of the shared class. */
+const IMPORTER_FIELDS: BankField[] = [
+  'bank-source-id',
+  'bank-fingerprint',
+  'bank-statement',
+  'bank-transaction-code',
+];
+
+/**
+ * The fields of a Bank transactions table, or `undefined` when `rowClass`
+ * is not one this app renders. The shared fields are the published subjects.
+ * The importer's bookkeeping comes from its statement class's fields where
+ * they are listed there (`bank-source-id`, `bank-statement`), and otherwise
+ * by shortname, preferring the ontology the statement class is in. On a
+ * table the importer did not make, rows usually carry no bookkeeping at all.
+ */
+export async function resolveFields(
+  store: PluginStore,
+  rowClass: string,
+  statement?: { rowClass: string; fields: Fields },
+): Promise<Fields | undefined> {
+  if (!resolver.accepts(rowClass)) return undefined;
+  const fields: Fields = Object.fromEntries(
+    SHARED.map(name => [name, properties[name].subject]),
+  );
+
+  for (const name of IMPORTER_FIELDS)
+    if (statement?.fields[name]) fields[name] = statement.fields[name];
+
+  const ontology = statement
+    ? await store
+        .getResource(statement.rowClass)
+        .then(r => r.get(atomic.parent))
+        .catch(() => undefined)
+    : undefined;
+
+  for (const shortname of IMPORTER_FIELDS) {
     if (fields[shortname]) continue;
     const found = await store
       .query({ property: atomic.shortname, value: shortname })
@@ -189,9 +268,6 @@ export async function resolveFields(
 
   return fields;
 }
-
-/** Written by the importer but not listed on the row class. */
-const UNDECLARED: Shortname[] = ['bank-fingerprint', 'bank-source-id'];
 
 /** The fields without which a row is not a bank transaction at all. */
 export const REQUIRED: BankField[] = [

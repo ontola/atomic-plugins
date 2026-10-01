@@ -293,7 +293,9 @@ function preview(
         banner({
           tone: 'info',
           title: 'Import this file from the Bank statements importer',
-          text: `Apps can't run the importer yet, so this check changes nothing. Open the importer's Import tab and choose ${sheet.file.name} there: it proposes the same ${plural(fresh.length, 'new transaction', 'new transactions', locale)}.`,
+          text: state.standalone
+            ? `This table is the app's own and has no importer, so this check changes nothing. Choose ${sheet.file.name} on the Bank statements importer's Import tab, or open this app on the importer's Bank transactions table.`
+            : `Apps can't run the importer yet, so this check changes nothing. Open the importer's Import tab and choose ${sheet.file.name} there: it proposes the same ${plural(fresh.length, 'new transaction', 'new transactions', locale)}.`,
           action: state.importer
             ? button('Open the importer', {
                 onClick: actions.openImporter,

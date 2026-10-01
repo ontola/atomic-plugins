@@ -11,15 +11,25 @@
  * a person does: find "Bank statements" among the community plugins, create
  * a draft, set it up, import, reload, import again.
  *
- * A second test adds the Money drive app (`app/`) as a view of the same
- * table, imports through it with the host's review (atomic-server#1774),
- * reads the statements table (#1768) and saves a category after the
- * person allows editing in the host's bar (#1788).
+ * A second test installs the Money drive app (`app/`) from the catalog,
+ * adds it as a view of the same table, imports through it with the host's
+ * review (atomic-server#1774), reads the statements table (#1768) and saves
+ * a category after the person allows editing in the host's bar (#1788).
+ *
+ * Since 0.4.0 the transactions are of the shared class `bank-transaction-v1`
+ * (#177), at its published GitHub Pages subjects: Set up binds to them, and
+ * the pinned server and the browser fetch those terms from Pages themselves,
+ * as they would in production. `beforeAll` first checks Pages serves them
+ * with the committed bytes (`ontology-kit/served.mjs`), so an unpublished
+ * term fails here with a message, not deep in Set up. This needs network
+ * access to https://ontola.github.io.
  *
  * Needs an atomic-server with manifest `accepts`/`destination` and the
  * PluginPage Import tab (atomic-server#1691, for #1653; in the pinned
- * `.atomic-server-ref`); against a host without them, publishing fails on
- * the unknown manifest field. Run it the way CI does:
+ * `.atomic-server-ref`), and since 0.4.0 one whose manifest validators accept
+ * `subject` on destination terms (not yet in the pin; see README.md,
+ * "Shared class"). Against a host without them, publishing fails on the
+ * unknown manifest field. Run it the way CI does:
  *   node integrations/tooling/run-lane.mjs money --tier e2e
  */
 import { readFileSync } from 'node:fs';
@@ -30,6 +40,11 @@ import {
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
+/** The catalog's version of the Money app (integrations/catalog.json). */
+const VERSION = '0.4.0';
+const APP_FRAME = 'iframe[title="App"]';
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+
 const read = (name: string) =>
   readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
 const bundle = read('plugin.js');
@@ -37,6 +52,19 @@ const mt940 = read('fixtures/synthetic.mt940');
 const camt = read('fixtures/synthetic.camt053.xml');
 
 test.describe('money integration', () => {
+  test.beforeAll(async () => {
+    const served = (await import(
+      '../../../ontology-kit/served.mjs' as string
+    )) as {
+      classTermPaths(name: string): string[];
+      servedProblems(paths: string[]): Promise<string[]>;
+      notServedMessage(problems: string[]): string;
+    };
+    const problems = await served.servedProblems(
+      served.classTermPaths('bank-transaction-v1'),
+    );
+    if (problems.length) throw new Error(served.notServedMessage(problems));
+  });
   test.beforeEach(before);
   test.beforeEach(async ({ page }) => {
     await enableIntegrationDiscovery(page);
@@ -254,36 +282,63 @@ test.describe('money integration', () => {
       main.getByRole('heading', { name: 'Bank transactions' }),
     ).toBeVisible({ timeout: 30_000 });
     const table = new URL(page.url()).searchParams.get('subject')!;
-    const rowClass = await page.evaluate(
-      async subject =>
-        (await window.store!.getResource(subject)).get(
-          'https://atomicdata.dev/properties/classtype',
-        ) as string,
-      table,
-    );
+    const terms = (await import(
+      '../../../ontology-kit/terms.mjs' as string
+    )) as { classes: Record<string, { subject: string }> };
+    const shared = terms.classes['bank-transaction-v1'].subject;
 
-    // A new App running the Money bundle, told it renders bank transactions
-    // (test-side: no catalog entry installs it yet).
-    await createFromCatalog(page, 'App');
-    await expect(main.locator('iframe[title="App"]')).toBeVisible({
-      timeout: 45_000,
-    });
-    const moneyApp = (
-      (await import('../app/build.mjs' as string)) as {
-        build(): Promise<{ text: string }>;
-      }
-    ).build;
-    await installApp(page, (await moneyApp()).text, rowClass);
+    // Set up bound the table to the published shared class (#177 S4).
+    expect(
+      await page.evaluate(
+        async args =>
+          (await window.store!.getResource(args.table)).get(args.classtype),
+        { table, classtype: CLASSTYPE },
+      ),
+    ).toBe(shared);
+
+    // The person installs Money from the catalog. It opens on a table of its
+    // own, which it turns into a Bank transactions table, and adds the
+    // shared class to what it renders, so Add view offers it below.
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('heading', {
+        name: 'Open Money on your Bank transactions table',
+      }),
+    ).toBeVisible({ timeout: 45_000 });
+    const installed = new URL(page.url()).searchParams.get('subject')!;
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            async args => {
+              const store = window.store!;
+              await store.reloadResource(args.app);
+
+              return Object.values(
+                (await store.getResource(args.app)).getPropVals(),
+              ).some(v => Array.isArray(v) && v.includes(args.shared));
+            },
+            { app: installed, shared },
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
 
     // The person adds it as a view, read-only for now (#1788).
     await page.goto(showUrl(page, table));
     await main.getByRole('button', { name: 'Add view' }).click();
-    await page.getByRole('menuitem', { name: 'New app' }).click();
+    // Add view lists drive apps once it has read the drive's plugin schema,
+    // whose ontology now also lists the shared github.io terms; the browser
+    // reads each after its signed request fails Pages' preflight (#177 S1,
+    // H1). Measured about 9 s on 2026-10-01, so not the default 10 s.
+    await page
+      .getByRole('menuitem', { name: 'Bank statements' })
+      .click({ timeout: 60_000 });
     await page
       .locator('dialog[open]')
       .getByRole('button', { name: 'Read-only' })
       .click();
-    const app = page.frameLocator('iframe[title="App"]');
     await expect(
       app.getByRole('heading', { name: 'Bring in your bank transactions' }),
     ).toBeVisible({ timeout: 45_000 });
@@ -379,66 +434,27 @@ test.describe('money integration', () => {
 });
 
 /**
- * Loads `source` into the App on screen and lets it render `rowClass`, as an
- * install from the catalog would. The entry point and `renders` are found by
- * value: their property subjects are minted per drive.
+ * Installs the Money app the way a user does: Integrations page,
+ * experimental plugins shown, Drive apps, Install. The host downloads the
+ * catalog's `app-module` (the lane's dev-server serves the committed
+ * `apps/money/<version>/ui.js` in place of GitHub Pages) and refuses it
+ * unless its bytes match `app-module-integrity`, then opens the new app.
  */
-async function installApp(page: Page, source: string, rowClass: string) {
-  await page.evaluate(
-    async args => {
-      const store = window.store!;
-      const subject = new URL(location.href).searchParams.get('subject')!;
-      const app = await store.getResource(subject);
-      let loaded = false;
-
-      // `renders`: the drive-local property, named so by its shortname, that
-      // the App's own class lists. A fresh App may not hold it yet, so it is
-      // not found by value (as integrations/tooling/e2e/screenshots.spec.ts).
-      let renders: string | undefined;
-
-      for (const klass of (app.get('https://atomicdata.dev/properties/isA') ??
-        []) as string[]) {
-        const schema = await store.getResource(klass);
-
-        for (const key of ['recommends', 'requires']) {
-          for (const property of (schema.get(
-            `https://atomicdata.dev/properties/${key}`,
-          ) ?? []) as string[]) {
-            const p = await store.getResource(property);
-            if (
-              p.get('https://atomicdata.dev/properties/shortname') === 'renders'
-            )
-              renders = property;
-          }
-        }
-      }
-
-      if (!renders)
-        throw new Error('could not find the app’s renders property');
-      const current = (app.get(renders) ?? []) as string[];
-      await app.set(renders, [...current, args.rowClass]);
-
-      for (const [, value] of Object.entries(app.getPropVals())) {
-        if (typeof value !== 'string' || !value.includes(':')) continue;
-        const child = await store.getResource(value).catch(() => undefined);
-        const sourceProp =
-          child &&
-          Object.entries(child.getPropVals()).find(
-            ([, v]) =>
-              typeof v === 'string' && v.includes('export async function view'),
-          )?.[0];
-        if (!child || !sourceProp) continue;
-        await child.set(sourceProp, args.source);
-        await child.save();
-        loaded = true;
-      }
-
-      await app.set('https://atomicdata.dev/properties/name', 'New app');
-      await app.save();
-      if (!loaded) throw new Error('could not find the app’s entry point');
-    },
-    { source, rowClass },
-  );
+async function installFromCatalog(page: Page) {
+  await page.goto(new URL('/app/integrations', page.url()).href);
+  const experimental = page.getByRole('checkbox', {
+    name: 'Show experimental plugins',
+  });
+  await experimental.check();
+  await expect(experimental).toBeEnabled({ timeout: 30_000 });
+  const entry = page
+    .getByRole('region', { name: 'Drive apps' })
+    .locator('[data-catalog-app="money"]');
+  await expect(entry).toContainText(`Version ${VERSION}`);
+  await entry.getByRole('button', { name: 'Install Bank statements' }).click();
+  await expect(page.getByRole('main').locator(APP_FRAME)).toBeVisible({
+    timeout: 45_000,
+  });
 }
 
 async function publishBundle(page: Page): Promise<string> {

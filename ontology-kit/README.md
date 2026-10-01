@@ -3,17 +3,18 @@
 The row classes several drive apps sync into, so that a plugin's view works on
 any table of that class, including tables the plugin never synced and rows made
 by hand. Design and decisions: [#177](https://github.com/ontola/atomic-plugins/issues/177)
-("option 4"). Every class and property here is **declared, not verified**: no
-plugin writes or reads them yet, and nothing has run against the published
-GitHub Pages URLs.
+("option 4"). Every class and property here is **declared, not verified**,
+except `bank-transaction-v1` and its properties: money 0.4.0 writes and reads
+those, and its e2e runs against their published GitHub Pages URLs (see
+[Plugin e2e tests and the published subjects](#plugin-e2e-tests-and-the-published-subjects)).
 
 Two top-level folders, split so that everything under the vocabulary's URL
 space is an immutable term and nothing else:
 
-| Folder          | Holds                                                                                                                                                                                                           | Published?                              | Changes?                      |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
-| `ontology/`     | Only the generated term files: `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`                                                                                                                          | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
-| `ontology-kit/` | `base.json`, `source.json`, the build and check (`ontology.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), their tests, this README | No                                      | Yes                           |
+| Folder          | Holds                                                                                                                                                                                                                                                         | Published?                              | Changes?                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
+| `ontology/`     | Only the generated term files: `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`                                                                                                                                                                        | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
+| `ontology-kit/` | `base.json`, `source.json`, the build and check (`ontology.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), the Pages check for e2e tests (`served.mjs`), their tests, this README | No                                      | Yes                           |
 
 Both are shared code outside the plugin folders, approved by Michiel on #177
 (question 12).
@@ -190,16 +191,63 @@ The resolver is strict (#177 decision 1):
   Whether the lensed side is materialized or computed, and with which grant a
   lens writes back, is #177 Q14 and not decided.
 
+## Plugin e2e tests and the published subjects
+
+Decided for every #177 slice (money first; calendar, issue tracker and
+timesheets next): **a plugin's e2e uses the real published subjects, and the
+pinned atomic-server and the browser fetch them from GitHub Pages
+themselves.** Nothing rewrites a bundle, and the dev-server's `/ontology/`
+copy is not used by plugin e2e tests.
+
+- **Why not rewrite subjects in the dev-server, as it does for
+  `app-module`?** A bundle with rewritten subjects is not the published
+  bundle: its integrity hash changes, so the dev-server would have to
+  recompute the catalog's `app-module-integrity`, and CI's hosting-surface
+  check (byte-identical `apps/*/*/ui.js` and `plugin.js`) would need an
+  exception. The test would then no longer install exactly the bytes users
+  get. The importer's `plugin.js` would need the same rewrite where the e2e
+  publishes it, and every write the app makes (`renders`, `classtype`, row
+  properties) would carry localhost subjects that exist nowhere else.
+- **What the real URLs cost:** network access to `https://ontola.github.io`
+  from the machine that runs the lane (CI runners and the build VPS have
+  it; a Claude Code cloud session is not verified), and a term is usable in
+  an e2e only once it is on `main` and Pages serves it. So a new class
+  version lands in its own pull request first (`build`, `check`,
+  `ontology-published.yml`), and the plugin slice that uses it follows.
+  Published terms never change, so a test can never see a different version
+  of a term than the one it bundles.
+- **Fail early:** in `beforeAll`, check that Pages serves the terms the test
+  uses with the committed bytes, and fail with a message that says what to
+  do (`served.mjs`):
+
+  ```ts
+  test.beforeAll(async () => {
+    const served = await import('../../../ontology-kit/served.mjs' as string);
+    const problems = await served.servedProblems(
+      served.classTermPaths('bank-transaction-v1'),
+    );
+    if (problems.length) throw new Error(served.notServedMessage(problems));
+  });
+  ```
+
+  The same check from a shell: `node ontology-kit/served.mjs
+classes/bank-transaction-v1`, or with no argument for every term file.
+
+- **What it exercises:** the server's first-use fetch of an external term
+  (stored for good in the lane's store, which persists across runs locally
+  and starts empty in CI) and the browser's fallback through its
+  local-database worker after the signed request's CORS preflight fails at
+  Pages (spike S1: one console CORS error per term per session, which no
+  test treats as a failure). The `ontology` tooling lane keeps checking the
+  same path against the dev-server's Pages-shaped copy, with no network.
+- **Docker image route** (`ATOMIC_SERVER_IMAGE`): the server in the
+  container fetches Pages directly, so nothing changes there (not run yet).
+
 ## Not verified
 
-- Any of these terms at the real `https://ontola.github.io/atomic-plugins/ontology/…`
-  URLs: they exist only once this is on `main`, and `ontology-published.yml`
-  then checks Pages serves them.
 - A cold browser, or a term the server first uses, while Pages is down: spike
   S1 found both fail (#177 H1).
-- `createApp({ rowClass })` and money's `ensureSchema` with these subjects
-  (#177 S4).
+- `createApp({ rowClass })` with these subjects (#177 S4, first half): no
+  plugin passes a row class; the catalog install path can't (#177 H2).
 - Any lens against a live drive (#177 S5).
-- How a plugin's e2e uses its bundled github.io subjects while the dev-server
-  serves the terms on its own origin: the dev-server rewrites only the term
-  files, not bundles.
+- Any class other than `bank-transaction-v1` written or read by a plugin.

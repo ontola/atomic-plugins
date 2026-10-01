@@ -5,7 +5,19 @@ import {
   NOT_A_BANK_TABLE,
   type State,
 } from './controller.js';
-import { fakeStore, IMPORTER, seedRow as row, TABLE } from './fakeStore.js';
+import { BASE } from '../../../ontology-kit/terms.mjs';
+import {
+  APP,
+  fakeStore,
+  IMPORTER,
+  OWN_CLASS,
+  OWN_TABLE,
+  property,
+  RENDERS,
+  ROW_CLASS,
+  seedRow as row,
+  TABLE,
+} from './fakeStore.js';
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -43,7 +55,10 @@ describe('Money controller: loading', () => {
   });
 
   it('refuses a table that is not a Bank transactions table', async () => {
-    for (const data of ['none', 'other'] as const) {
+    // `old`: money 0.3.0's drive-minted class, with the same shortnames. The
+    // view matches the shared class exactly (#177 decision 1), so it is not
+    // a Bank transactions table any more.
+    for (const data of ['none', 'other', 'old'] as const) {
       const { controller } = harness(fakeStore({ data }));
       await controller.load();
       expect(controller.state().view).toEqual({
@@ -120,13 +135,13 @@ describe('Money controller: annotations', () => {
       {
         subject,
         propVals: {
-          'did:ad:ontology/property/money-category': 'Groceries',
+          [property('money-category')]: 'Groceries',
         },
       },
       {
         subject,
         propVals: {
-          'did:ad:ontology/property/money-note': 'Team lunch\nwith receipts',
+          [property('money-note')]: 'Team lunch\nwith receipts',
         },
       },
     ]);
@@ -178,15 +193,6 @@ describe('Money controller: annotations', () => {
       message:
         "This app isn't allowed to write to the importer's table yet. Your text is kept here.",
     });
-  });
-
-  it('never writes annotations the row class does not declare', async () => {
-    const { store, controller } = await opened({
-      rowsWritable: true,
-      notes: false,
-    });
-    await controller.saveNote('category', 'Travel');
-    expect(store.saves).toEqual([]);
   });
 
   it('keeps drafts across renders and drops them with the row', async () => {
@@ -364,5 +370,76 @@ describe('Money controller: stored statements (atomic-server#1768)', () => {
     );
     await controller.load();
     expect(controller.state().statements).toBeUndefined();
+  });
+});
+
+describe('Money controller: the shared class (#177)', () => {
+  it('reads the shared fields by their published subjects', async () => {
+    const { store, controller } = harness(
+      fakeStore({ rows: [row('-1.50', '2026-09-02')] }),
+    );
+    await controller.load();
+    expect(controller.state().fields['bank-amount']).toBe(
+      `${BASE}/properties/bank-amount`,
+    );
+    expect(controller.state().fields['bank-source-id']).toBe(
+      property('bank-source-id'),
+    );
+    // Never read: the app knows the shared terms; it does not fetch them.
+    expect(store.resources.has(property('bank-amount'))).toBe(false);
+  });
+
+  it('adds the shared class to its renders on first open, once', async () => {
+    const store = fakeStore({ firstOpen: true });
+    const { controller } = harness(store);
+    await controller.load();
+    expect(store.resources.get(APP)![RENDERS]).toEqual([OWN_CLASS, ROW_CLASS]);
+    expect(store.saves.map(s => s.subject)).toEqual([APP]);
+
+    await controller.load();
+    expect(store.saves).toHaveLength(1);
+  });
+
+  it('turns its own table into a Bank transactions table, with no importer', async () => {
+    const store = fakeStore({ firstOpen: true, data: 'own' });
+    const { controller } = harness(store);
+    await controller.load();
+    const state = controller.state();
+    expect(
+      store.resources.get(OWN_TABLE)![
+        'https://atomicdata.dev/properties/classtype'
+      ],
+    ).toBe(ROW_CLASS);
+    expect(state.view).toEqual({ kind: 'empty' });
+    expect(state.standalone).toBe(true);
+    expect(state.canApply).toBe(false);
+    expect(state.importer).toBeUndefined();
+  });
+
+  it('leaves a table it does not own alone', async () => {
+    const store = fakeStore({ firstOpen: true, data: 'old' });
+    const { controller } = harness(store);
+    await controller.load();
+    expect(controller.state().view).toEqual({
+      kind: 'error',
+      message: NOT_A_BANK_TABLE,
+    });
+    expect(store.saves.map(s => s.subject)).toEqual([APP]);
+  });
+
+  it('keeps a row whose amount is not one, and leaves it out of every sum', async () => {
+    const { controller } = harness(
+      fakeStore({
+        rows: [
+          row('-1.50', '2026-09-02'),
+          row('twelve', '2026-09-03'),
+          row('1,50', '2026-09-04'),
+          row('0.123456', '2026-09-05'),
+        ],
+      }),
+    );
+    await controller.load();
+    expect(controller.state().view).toEqual({ kind: 'populated', count: 4 });
+    expect(controller.state().rows.map(r => r.amount)).toContain('twelve');
   });
 });

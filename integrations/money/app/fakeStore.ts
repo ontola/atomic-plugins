@@ -7,15 +7,20 @@
  * - by default the Bank transactions table is *not* beneath the app, as on a
  *   table's app tab, so `save` on a row is refused with the host's message.
  *   `rowsWritable: true` models a host that lets the app write them.
- * It starts with what the importer's Set up creates: banking properties, the
- * Bank transaction class and an empty table. Test-only; not bundled.
+ * It starts with what the importer's Set up creates since 0.4.0: an empty
+ * table of the shared class `bank-transaction-v1`, whose fields are the
+ * published subjects (not resources in this drive: the app never reads
+ * them), plus the importer's own bookkeeping properties and Bank statement
+ * class in the drive's ontology. The App carries `renders`, as `createApp`
+ * leaves it. Test-only; not bundled.
  */
+import { properties } from '../../../ontology-kit/terms.mjs';
 import { entries } from '../identity.js';
 import { parseBankStatement } from '../statement.js';
 import {
   atomic,
   BANK_FIELDS,
-  NOTE_FIELDS,
+  BANK_TRANSACTION,
   STATEMENT_ROW_FIELDS,
   type Shortname,
 } from './rows.js';
@@ -35,9 +40,19 @@ export const TABLE = 'did:ad:importer/table';
 export const STATEMENTS = 'did:ad:importer/statements';
 export const STATEMENT_CLASS = 'did:ad:ontology/class/bank-statement-record';
 export const ONTOLOGY = 'did:ad:ontology';
-export const ROW_CLASS = 'did:ad:ontology/class/bank-transaction';
+export const ROW_CLASS = BANK_TRANSACTION;
+/** The class money 0.3.0 minted in the drive, before the shared one. */
+export const OLD_ROW_CLASS = 'did:ad:ontology/class/bank-transaction';
+/** The App's own table and row class, as a catalog install makes them. */
+export const OWN_TABLE = `${APP}/table`;
+export const OWN_CLASS = `${APP}/ontology/class/item`;
+/** The drive's `renders` property (minted per drive by the host). */
+export const RENDERS = 'did:ad:ontology/property/renders';
+/** The subject a field has: published for the shared ones, minted otherwise. */
 export const property = (shortname: string) =>
-  `did:ad:ontology/property/${shortname}`;
+  shortname in properties
+    ? properties[shortname as keyof typeof properties].subject
+    : `did:ad:ontology/property/${shortname}`;
 
 export const REFUSED =
   'This app may only write its own data. Writing here needs rights its key does not have.';
@@ -110,7 +125,7 @@ export interface FakeStore extends PluginStore {
 
 export function fakeStore({
   rows = [],
-  notes = true,
+  firstOpen = false,
   rowsWritable = false,
   data = 'bank',
   host = 'current',
@@ -131,49 +146,57 @@ export function fakeStore({
   host?: 'current' | 'legacy';
   scheme?: ColorScheme;
   rows?: SeedRow[];
-  /** Whether the class declares money-category and money-note (M-5). */
-  notes?: boolean;
+  /**
+   * A fresh catalog install: the App's `renders` lists only its own class.
+   * Otherwise the app has been opened before and lists the shared class too.
+   */
+  firstOpen?: boolean;
   rowsWritable?: boolean;
-  /** `none`: the app has no table; `other`: a table of some other class. */
-  data?: 'bank' | 'none' | 'other';
+  /**
+   * `none`: the app has no table; `other`: a table of some other class;
+   * `old`: the importer's table of money 0.3.0's drive-minted class; `own`:
+   * the app's own table, as a catalog install creates it.
+   */
+  data?: 'bank' | 'none' | 'other' | 'old' | 'own';
 } = {}): FakeStore {
   const resources = new Map<string, Record<string, JSONValue>>();
-  const shortnames: string[] = [...BANK_FIELDS, ...(notes ? NOTE_FIELDS : [])];
+  const own = BANK_FIELDS.filter(s => !(s in properties));
   const modern = host === 'current';
   let writable = rowsWritable || (modern && access === 'granted');
   let accessStatus: 'granted' | 'none' | 'unavailable' = access;
   const runs: string[] = [];
   let accessRequests = 0;
 
-  resources.set(APP, {});
+  resources.set(APP, {
+    [RENDERS]: firstOpen ? [OWN_CLASS] : [OWN_CLASS, ROW_CLASS],
+  });
+  resources.set(RENDERS, {
+    [atomic.parent]: ONTOLOGY,
+    [atomic.isA]: [atomic.propertyClass],
+    [atomic.shortname]: 'renders',
+  });
   resources.set(IMPORTER, {});
   resources.set(ONTOLOGY, { [atomic.parent]: IMPORTER });
 
-  for (const shortname of shortnames)
+  for (const shortname of own)
     resources.set(property(shortname), {
       [atomic.parent]: ONTOLOGY,
       [atomic.isA]: [atomic.propertyClass],
       [atomic.shortname]: shortname,
     });
 
-  resources.set(ROW_CLASS, {
-    [atomic.parent]: ONTOLOGY,
-    [atomic.shortname]: 'bank-transaction',
-    [atomic.requires]: [
-      'bank-account',
-      'bank-currency',
-      'bank-amount',
-      'bank-value-date',
-      'bank-source-id',
-    ].map(property),
-    [atomic.recommends]: shortnames
-      .filter(s => !['bank-source-id', 'bank-fingerprint'].includes(s))
-      .map(property),
-  });
   resources.set(TABLE, {
     [atomic.parent]: IMPORTER,
     [atomic.classtype]:
-      data === 'other' ? 'did:ad:ontology/class/pet' : ROW_CLASS,
+      data === 'other'
+        ? 'did:ad:ontology/class/pet'
+        : data === 'old'
+          ? OLD_ROW_CLASS
+          : ROW_CLASS,
+  });
+  resources.set(OWN_TABLE, {
+    [atomic.parent]: APP,
+    [atomic.classtype]: OWN_CLASS,
   });
   if (data === 'other')
     resources.set('did:ad:ontology/class/pet', { [atomic.parent]: ONTOLOGY });
@@ -370,20 +393,25 @@ export function fakeStore({
     getData: async () =>
       data === 'none'
         ? undefined
-        : {
-            table: TABLE,
-            rowClass: resources.get(TABLE)?.[atomic.classtype] as string,
-            ...(modern
-              ? {
-                  tables: {
-                    statements: {
-                      table: STATEMENTS,
-                      rowClass: STATEMENT_CLASS,
+        : data === 'own'
+          ? {
+              table: OWN_TABLE,
+              rowClass: resources.get(OWN_TABLE)?.[atomic.classtype] as string,
+            }
+          : {
+              table: TABLE,
+              rowClass: resources.get(TABLE)?.[atomic.classtype] as string,
+              ...(modern
+                ? {
+                    tables: {
+                      statements: {
+                        table: STATEMENTS,
+                        rowClass: STATEMENT_CLASS,
+                      },
                     },
-                  },
-                }
-              : {}),
-          },
+                  }
+                : {}),
+            },
     async getResource(subject) {
       calls.get++;
       if (held) await held;

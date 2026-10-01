@@ -13,7 +13,7 @@ export const manifest = {
   schemaVersion: 2,
   name: 'bank-statements',
   namespace: 'atomic-plugins',
-  version: '0.3.0',
+  version: '0.4.0',
   description:
     'Import bank transactions from MT940 and camt.053 statement exports.',
   operations: [],

@@ -8,6 +8,7 @@ import {
   amountLabel,
   formatAmount,
   groupByDay,
+  isAmount,
   isOut,
   totals,
   type Money,
@@ -126,11 +127,11 @@ export function amountNode(
     'span',
     {
       class: 'm-amt',
-      'data-dir': isOut(amount) ? 'out' : 'in',
+      'data-dir': !isAmount(amount) ? 'invalid' : isOut(amount) ? 'out' : 'in',
       'aria-label': amountLabel(amount, currency, locale ?? 'en'),
     },
     formatAmount(amount, currency, locale, { symbol, sign }),
-    suffix ? h('small', {}, currency) : undefined,
+    suffix && isAmount(amount) ? h('small', {}, currency) : undefined,
   );
 }
 
@@ -138,6 +139,14 @@ const netText = (net: Money[], locale?: string) =>
   net.map(m => formatAmount(m.amount, m.currency, locale)).join(' · ');
 
 export function firstRun(ctx: Ctx, actions: LedgerActions): HTMLElement {
+  // Installed from the catalog and opened on its own table: nothing imports
+  // into that, so say where Money belongs instead of offering a file.
+  if (ctx.state.standalone)
+    return empty({
+      heading: 'Open Money on your Bank transactions table',
+      text: "Money shows the Bank transactions table the Bank statements importer creates. Set up that importer, open its Bank transactions table, and add this app there with Add view. This table is the app's own and has no importer, so statements can't be imported into it.",
+    });
+
   return empty({
     heading: 'Bring in your bank transactions',
     text: 'Export a statement from your bank as MT940 or camt.053 and drop it here. The file is checked in your browser and stored only in this Atomic Server.',

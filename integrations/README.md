@@ -591,6 +591,12 @@ exercise.
    `[shortname, displayName, description]` triples turned into `properties`,
    plus one or more `classes` entries with `requires`/`recommends`. This is
    what a fresh installation provisions before the importer's first run.
+   A term of the shared ontology (`ontology-kit/`, #177) is reused, not
+   minted: give its entry `subject` from `ontology-kit/terms.mjs`, as
+   money 0.4.0 does for `bank-transaction-v1`. The manifest validators at
+   the pinned host refuse `subject` ("destination: unknown field
+   `subject`"); it needs the atomic-server change that lets a destination
+   declare it (see `money/README.md`, "Shared class").
 
 7. **Follow package layout and commands.** `plugin.ts` (manifest + `run`),
    `<domain>.ts` parser/adapter modules, `schema.ts`, `tsconfig.json`

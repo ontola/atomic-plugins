@@ -14,9 +14,12 @@ on a plugin's page; merged as atomic-server#1691). The pinned
    (atomic-plugins#94), so this step is manual.
 2. **Find it**: Integrations → Show experimental plugins → Community
    plugins → Bank statements → Open → Create draft.
-3. **Set up**: on the draft's Import tab, choose Set up. This creates the
-   banking properties and the Bank transaction and Bank statement classes in
-   the drive ontology, and two tables with default views beneath the
+3. **Set up**: on the draft's Import tab, choose Set up. Since 0.4.0 this
+   binds the Bank transactions table to the shared class
+   `bank-transaction-v1` and its properties (see
+   [Shared class](#shared-class-bank-transaction-v1)), creates the
+   importer's own bookkeeping properties and the Bank statement class in the
+   drive ontology, and two tables with default views beneath the
    importer: Bank transactions, and Imported statements (one row per
    statement with its reconciled opening and closing balances, through the
    manifest's `destination.tables`, atomic-server#1768). It stores
@@ -57,9 +60,10 @@ same Bank transactions table ([design](design/DESIGN.md), #89). It never runs
 in the QuickJS sandbox and never writes imported bank fields: the importer
 above stays their only writer. `app/build.mjs` bundles it to one ES module
 exporting `view({ root, store })`, with no stylesheet file and no network
-code. It reads the table the host points it at (`store.getData()`), finds the
-banking properties through the table's row class, and subscribes to the table
-so rows from a new import appear without a reload.
+code. It reads the table the host points it at (`store.getData()`), reads its
+rows' shared fields by their published subjects (see
+[Shared class](#shared-class-bank-transaction-v1)), and subscribes to the
+table so rows from a new import appear without a reload.
 
 Amounts are exact signed decimal **strings**, not floating point numbers.
 Opening/closing balances are reconciled with integer arithmetic (up to five
@@ -189,14 +193,84 @@ blocks).
 Catalog: the `money` entry in `integrations/catalog.json` carries the app
 (`app-module` `apps/money/<version>/ui.js`, the same version as this
 package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
-with `enabled: false`, so the Integrations page does not offer it. Not yet
-a working install path, and not tested: at pin `2567fc30b` a catalog
-Install creates the app with a row class and table of its own
-(`createApp`), the importer's table offers under Add view only apps whose
-`renders` lists its row class (`useDriveApps.ts` `appsForClass`), and
-`store.importer.run` refuses an app that is not a view of an importer's
-table (`hostStore.ts`). The E2E adds the Bank transaction class to the
-app's `renders` test-side instead.
+with `enabled: false`, so the Integrations page does not offer it. The gate
+of `ontology-kit/` requires that while the shared ontology's base is on
+github.io (its `limitation` says "Waits for the stable ontology domain").
+The install path itself works since 0.4.0 (the E2E installs from the
+catalog's Drive apps section): at the pin a catalog Install creates the app
+with a row class and table of its own (`createApp` without `rowClass`), so
+on its first open the app adds `bank-transaction-v1` to its own App's
+`renders` and sets its own table's `classtype` to it (`app/adopt.ts`; #177
+spike S2). From then on Add view offers it on the importer's Bank
+transactions table and on any other table of that class
+(`useDriveApps.ts` `appsForClass`, exact subject). Opened on its own table,
+the app says to add it to the importer's table instead: `store.importer.run`
+refuses an app that is not a view of an importer's table (`hostStore.ts`).
+Once the host lets a catalog entry declare its row classes (#177 H2), the
+first-open step can go.
+
+## Shared class (`bank-transaction-v1`)
+
+Since 0.4.0 the Bank transactions table is a table of the shared class
+`bank-transaction-v1` from [`ontology/`](../../ontology-kit/README.md)
+(#177): account, currency, amount (an exact decimal string), value date,
+booking date, description, reference, and the person's own category and
+note, at their published GitHub Pages subjects. The shortnames are money
+0.3.0's, unchanged.
+
+- **Needs a host change.** The pinned atomic-server's manifest validators
+  (`server/src/plugins/manifest.rs` `validate_destination` and
+  `browser/lib/src/plugin-manifest.ts` `validateDestination`) refuse
+  `subject` on a destination's properties and classes, so publishing 0.4.0's
+  `plugin.js` there fails with "destination: unknown field `subject`". The
+  atomic-server change that accepts it (an https URL, kept verbatim, so no
+  release id moves) has to reach `.atomic-server-ref` before this version
+  works; `ensureSchema` itself already binds to such a subject.
+- **Importer.** `schema.ts` gives each shared term its published subject
+  (`PropertySpec.subject`, `ClassSpec.subject`), so the host's
+  `ensureSchema` reuses it as published instead of minting a copy; it only
+  checks that each is a Property of the declared datatype. The import
+  bookkeeping (`bank-source-id`, `bank-fingerprint`, `bank-statement`,
+  `bank-transaction-code`) and the Bank statement class stay the drive's
+  own: they are not part of the shared class. `schema.test.ts` runs the
+  host's own `ensureSchema` against the committed term files (#177 spike
+  S4); the E2E does it against the real Pages URLs.
+- **App.** It is offered only on tables whose class is exactly
+  `bank-transaction-v1` and reads the shared fields by subject only, through
+  `ontology-kit/resolver.mjs`: no lookup by shortname or column. A table of
+  money 0.3.0's drive-minted Bank transaction class is not a Bank
+  transactions table to 0.4.0. An amount that is not an exact decimal with
+  at most five fraction digits is shown as "Not a valid amount" and left out
+  of every sum; it is never parsed as a float.
+- **A table you make yourself** (#177 item 13). Until New Table's class
+  search finds external classes (#177 H10) or a template uses the shared
+  class (H3), make such a table by pasting the class URL:
+  1. New → Table → "Use existing class", paste
+     `https://ontola.github.io/atomic-plugins/ontology/classes/bank-transaction-v1`
+     into the class field and press Enter (search does not find it; typing
+     or pasting the URL does, #177 spike S3).
+  2. On the new table: Add view → the Money app (it is listed once it has
+     been opened once, see above) → Allow editing, to let it save category
+     and note.
+
+  Rows you add there need account, currency, amount and value date to show
+  in the ledger (a row without them is not shown; the #177 rule "show it as
+  incomplete" is not built yet). Importing into such a table is not
+  possible: only the importer's own table has an importer.
+
+- **Not supported: drives set up with 0.3.0 or older.** Their ontology
+  already holds drive-minted `bank-account` etc. The first 0.4.0 Set up
+  works, but adds the shared terms beside the old ones, and every Set up
+  after that fails with "ambiguous schema shortname", because the host's
+  `ensureSchema` checks shortnames across the drive's ontology, shared terms
+  included (`schema.test.ts` shows this). Old tables keep the old class, so
+  0.4.0's app refuses them. Use a fresh drive. These are test drives only,
+  because of the gate. A host fix would be for `ensureSchema` to skip the
+  shortname lookup for specs that have a `subject`.
+- **Needs GitHub Pages.** The server fetches each shared term once, on first
+  use, and keeps it; the browser fetches it through its local-database
+  worker (#177 spike S1, H1). A drive whose server never fetched a term
+  cannot use it while Pages is down.
 
 Build: `node integrations/money/app/build.mjs` (writes `app/dist/ui.js`,
 minified, one module). Screenshots, axe and the render budget:
@@ -204,6 +278,22 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.0 (`plugin.js` sha256 `d326dbe87e517d0d54c6e49f3e128f52fe8791d5db0f76877f08fb50ae94cb30`, app module
+`apps/money/0.4.0/ui.js`) both tests of `e2e/money.spec.ts` and
+`moneybird.spec.ts` passed on 2026-10-01, twice, against pin `a12b74a` plus
+the atomic-server change that lets a destination declare `subject` (a local
+build; not in any pin yet). They fetched the shared terms from the real
+GitHub Pages URLs. Against `a12b74a` itself, publishing 0.4.0 fails with
+"destination: unknown field `subject`", so the money lane needs that change
+pinned first. What the run adds over 0.3.0: Set up binds the Bank
+transactions table to `bank-transaction-v1`, the app is installed from the
+catalog (not test-side), and Add view offers it after its first open.
+Adding the view took about 9 s for the app to be listed (the drive's
+ontology now lists the github.io terms, which the browser reads after a
+failed signed request each).
+
+Earlier releases:
 
 `e2e/money.spec.ts` passed on 2026-09-25 against the pinned atomic-server
 `bc39dac4b` (earlier against `007869464`, `11264e83e` and `2f403624e`, which includes #1691,

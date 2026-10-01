@@ -18,11 +18,14 @@ describe('money drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 88,741 bytes minified (JS and embedded CSS) on 2026-09-25,
-    // at the bc39dac4b pin (candidate11); the limit is that plus about 10%,
+    // Measured 100,538 bytes minified (JS and embedded CSS) on 2026-10-01,
+    // at the a12b74a pin, for 0.4.0; the limit is that plus about 10%,
     // rounded up. It includes both statement readers (MT940 and camt.053),
-    // which the in-app check runs.
-    expect(bytes).toBeLessThan(98_000);
+    // which the in-app check runs, and since 0.4.0 the shared ontology's
+    // subject constants and resolver (`ontology-kit/terms.mjs`,
+    // `resolver.mjs`, about 11 KB: terms.mjs carries every v1 term, not
+    // only the bank ones). 0.3.0 measured 88,968 bytes.
+    expect(bytes).toBeLessThan(111_000);
   });
 
   it('embeds its stylesheets minified', () => {
