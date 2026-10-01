@@ -16,6 +16,7 @@ import {
   type ReadContext,
 } from './clockifyObserve.js';
 import type { Settings } from './config.js';
+import { leaseHeldElsewhere } from './lease.js';
 import { ObservationLog } from './observationLog.js';
 import type { Mirror } from './observations.js';
 import { atomic, type RowKey } from './ontology.js';
@@ -57,6 +58,9 @@ export interface SyncResult {
   /** Non-fatal: e.g. project names unavailable, so rows keep raw ids only. */
   warnings: string[];
   log: LogReport;
+  /** Another open copy of the app holds the send lease (#123 M5): until
+   * when, ISO 8601. Its unconfirmed creates were left alone. */
+  sendingElsewhereUntil?: string;
   /** The profile time zone used for the window, and the workspace's
    * forceProjects, as read this pass (absent when unknown). */
   account: {
@@ -117,7 +121,7 @@ export const newObservationId = (clock: () => number = Date.now) =>
   `${clock().toString(36).padStart(9, '0')}-${randomHex(8)}`;
 
 /** Generated per page load: the frame has no storage to keep one in. */
-const SESSION_DEVICE = `frame-${randomHex(6)}`;
+export const SESSION_DEVICE = `frame-${randomHex(6)}`;
 
 /** The table note before 0.2.0; replaced on the next sync. */
 export const READ_ONLY_TABLE_NOTE =
@@ -218,6 +222,10 @@ export async function syncClockify(
   );
   const snapshotWritten = await log.compactIfNeeded();
   await log.flush();
+  const holder = await leaseHeldElsewhere(store, schema, {
+    device: context.device,
+    clock,
+  });
 
   const rows = await projectRows(
     store,
@@ -234,11 +242,13 @@ export async function syncClockify(
     },
     options.onProgress,
     settings.userId,
+    !!holder,
   );
 
   return {
     ...rows,
     warnings,
+    ...(holder ? { sendingElsewhereUntil: holder.until } : {}),
     log: {
       incrementals: log.appended,
       snapshotWritten,
@@ -271,6 +281,7 @@ async function projectRows(
   write: WriteContext,
   onProgress?: SyncOptions['onProgress'],
   userId = '',
+  busy = false,
 ) {
   const result = {
     created: 0,
@@ -288,6 +299,7 @@ async function projectRows(
     now: write.now,
     projects: write.projects,
     members,
+    busy,
   });
   const boundNow = new Map(
     settled.filter(s => s.entryId).map(s => [s.entryId!, s.subject]),

@@ -62,6 +62,17 @@ export function conflictText(conflict: Conflict, sheet: Timesheet): string {
       return `Unclear which project: ${names} (${entries}), ${span}`;
     case 'whetherWorked':
       return `Unclear whether worked: ${names} (${entries}), ${span}`;
+
+    case 'local': {
+      const edits = (conflict.edits ?? [])
+        .map(
+          e =>
+            `${labelText(e.label, sheet)} (${e.here ? 'here' : 'another device or an earlier visit'}, ${formatTime(e.createdAt, sheet.timeZone)})`,
+        )
+        .join(' · ');
+
+      return `Your range edits disagree, not sent: ${edits || names}, ${span}`;
+    }
   }
 }
 
@@ -104,6 +115,19 @@ export function resolutions(
 
     case 'whetherWorked':
       return [notWorked];
+    case 'local':
+      return [
+        ...conflict.candidates
+          .filter(
+            (l): l is Extract<TimeLabel, { kind: 'worked' }> =>
+              l.kind === 'worked' && !(projectRequired && l.projectId === null),
+          )
+          .map(l => ({
+            label: `Keep ${labelText(l, sheet)}`,
+            target: { kind: 'worked' as const, projectId: l.projectId },
+          })),
+        notWorked,
+      ];
     case 'whichProject':
       return [
         ...conflict.candidates
@@ -118,6 +142,20 @@ export function resolutions(
         notWorked,
       ];
   }
+}
+
+/** `2 conflicts in Clockify`, `1 conflict between your edits`, or both. */
+export function heading(conflicts: Conflict[]): string {
+  const local = conflicts.filter(
+    c => isTimelineConflict(c) && c.kind === 'local',
+  ).length;
+  const remote = conflicts.length - local;
+  const count = (n: number) => `${n} ${n === 1 ? 'conflict' : 'conflicts'}`;
+
+  return [
+    ...(remote ? [`${count(remote)} in Clockify`] : []),
+    ...(local ? [`${count(local)} between your edits`] : []),
+  ].join(', ');
 }
 
 export interface ConflictActions {
@@ -149,7 +187,6 @@ export function renderConflictList(
   actions?: ConflictActions,
 ): HTMLElement | null {
   if (!sheet.conflicts.length) return null;
-  const n = sheet.conflicts.length;
 
   const actionsFor = (conflict: Conflict) => {
     if (!actions || !isTimelineConflict(conflict)) return null;
@@ -176,14 +213,14 @@ export function renderConflictList(
     h(
       'p',
       null,
-      h(
-        'strong',
-        null,
-        `${n} ${n === 1 ? 'conflict' : 'conflicts'} in Clockify`,
-      ),
+      h('strong', null, heading(sheet.conflicts)),
       actions
         ? ' Choose what is right. It is listed under “Changes to send” first, and reaches Clockify only when you send it.'
-        : ' (read-only here: fix them in Clockify)',
+        : sheet.conflicts.every(
+              c => isTimelineConflict(c) && c.kind === 'local',
+            )
+          ? ' (connect and sync to choose)'
+          : ' (read-only here: fix them in Clockify)',
     ),
     h(
       'ul',

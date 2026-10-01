@@ -38,9 +38,9 @@ import { syncClockify } from '../sync.js';
 import { relayTransport } from '../transport.js';
 import { renderConflicts, renderUnknown } from '../ui/coverage.js';
 import { builder } from '../ui/dom.js';
-import { conflictText, spanText } from './render.js';
+import { conflictText, resolutions, spanText } from './render.js';
 import { buildTimeline, claimsOf } from './sweep.js';
-import type { Segment, Timeline } from './types.js';
+import type { Segment, Timeline, TimelineConflict } from './types.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -648,5 +648,42 @@ describe('rendering hooks (ui/coverage.ts)', () => {
     expect(conflictText(plain.conflicts[0], plain)).toBe(
       'Entry x: projectId disagree',
     );
+  });
+
+  it('renders range edits that disagree (#123 S21) apart from Clockify’s conflicts, with their resolutions', async () => {
+    const { sheet } = await synced();
+    const local: TimelineConflict = {
+      entryId: '',
+      fields: [],
+      kind: 'local',
+      from: Date.parse('2026-09-22T11:00:00Z'),
+      to: Date.parse('2026-09-22T12:00:00Z'),
+      entryIds: [],
+      candidates: [{ kind: 'worked', projectId: P }, { kind: 'didNotWork' }],
+      edits: [
+        {
+          id: 'i-1',
+          label: { kind: 'didNotWork' },
+          here: false,
+          createdAt: Date.parse('2026-09-23T08:40:00Z'),
+        },
+        {
+          id: 'i-2',
+          label: { kind: 'worked', projectId: P },
+          here: true,
+          createdAt: Date.parse('2026-09-23T08:42:00Z'),
+        },
+      ],
+    };
+    const withLocal: Timesheet = { ...sheet, conflicts: [local] };
+
+    expect(renderConflicts(h, withLocal)!.textContent).toBe(
+      '1 conflict between your edits (connect and sync to choose)' +
+        'Your range edits disagree, not sent: Did not work (another device or an earlier visit, 10:40) · Atomic plugins (here, 10:42), 22 Sep 13:00 – 14:00',
+    );
+    expect(resolutions(local, withLocal).map(r => r.label)).toEqual([
+      'Keep Atomic plugins',
+      'Did not work',
+    ]);
   });
 });
