@@ -420,7 +420,7 @@ describe('the host Calendar view’s days', () => {
       ['2026-09-24'],
     ],
     [
-      'timed, Start and End unusable, Day set: its Day, untimed',
+      'Day only, no Start or End: its Day (drawn all-day)',
       { start: '', end: '', day: '2026-09-23' },
       ['2026-09-23'],
     ],
@@ -438,13 +438,22 @@ describe('the host Calendar view’s days', () => {
       });
     });
 
-  it('draws a row without clock times in the all-day area, saying so', () => {
+  it('draws a row with a Day and no Start or End as an all-day event (#177)', () => {
     const e = ev({ start: '', end: '', day: '2026-09-23' });
     const [segment] = agendaDays([e], '2026-09-23', 1)[0].items;
-    expect(segment).toMatchObject({ allDay: true, untimed: true });
+    expect(segment).toMatchObject({ allDay: true });
+    expect(segment.untimed).toBeUndefined();
+    expect(spoken(segment)).toBe('All day');
     expect(packWeek([e], WEEK, 7).bars).toEqual([
       expect.objectContaining({ col: 2, span: 1 }),
     ]);
+  });
+
+  it('draws a row whose Start and End are not a valid interval in the all-day area, saying so', () => {
+    const e = ev({ start: 'tomorrow', end: '', day: '2026-09-23' });
+    const [segment] = agendaDays([e], '2026-09-23', 1)[0].items;
+    expect(segment).toMatchObject({ allDay: true, untimed: true });
+    expect(spoken(segment)).toBe('No time set');
   });
 
   it('numbers the days of a multi-day all-day event from Day to End day', () => {
@@ -540,15 +549,16 @@ describe('labels for host-placed segments', () => {
     expect(
       when(ev({ allDay: true, start: '', end: '', day: '2026-09-23' }), AMS),
     ).toEqual({ day: 'Wednesday 23 September', time: 'All day' });
+    // A Day and nothing else: an all-day event on that day (#177).
     expect(when(ev({ start: '', end: '', day: '2026-09-23' }), AMS)).toEqual({
       day: 'Wednesday 23 September',
-      time: 'No time set',
+      time: 'All day',
     });
-    const [segment] = agendaDays(
-      [ev({ start: '', end: '', day: '2026-09-23' })],
-      '2026-09-23',
-      1,
-    )[0].items;
-    expect(spoken(segment)).toBe('No time set');
+    expect(
+      when(
+        ev({ start: '2026-09-23T10:00:00+02:00', end: '', day: '2026-09-23' }),
+        AMS,
+      ),
+    ).toEqual({ day: 'Wednesday 23 September', time: 'No time set' });
   });
 });

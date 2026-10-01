@@ -1,6 +1,7 @@
 // @wc-ignore-file
 /**
- * #123 M1 scenarios S1–S5, S8 and S27: the read-only observation log against
+ * #123 M1 scenarios S1–S5, S8 and S27, and M5's S28 (two devices compacting
+ * at once): the read-only observation log against
  * the Clockify mock, through the in-memory store. The mock filters on an
  * entry's start and lists newest start first; both are the mock's reading
  * of unverified live behaviour.
@@ -32,10 +33,13 @@ import {
   type SnapshotState,
 } from './observationLog.js';
 import {
+  emptyMirror,
+  fold,
   mirrorDigest,
   recordKey,
   type Incremental,
   type Mirror,
+  type Observation,
 } from './observations.js';
 import { ensureSchema } from './schema.js';
 import { syncClockify } from './sync.js';
@@ -628,3 +632,150 @@ function ready(result: Awaited<ReturnType<typeof syncClockify>>) {
     last: { ok: true as const, result, at: NOW },
   };
 }
+
+describe('two devices on one log (#123 M5)', () => {
+  /** A point read of one entry's description, as a device would append. */
+  const point = (
+    id: string,
+    at: number,
+    entryId: string,
+    description: string,
+  ): Observation => ({
+    id,
+    device: id.split('-')[0],
+    sentAt: new Date(at).toISOString(),
+    receivedAt: new Date(at).toISOString(),
+    kind: 'point',
+    scope: { type: 'id', collection: TIME_ENTRY, id: entryId },
+    mask: ['description'],
+    complete: true,
+    records: [{ id: entryId, fields: { description } }],
+  });
+  const n = (i: number) => String(i).padStart(3, '0');
+  /** Records only: coverage confirmations without an incremental live in
+   * the head, not in any snapshot. */
+  const records = (mirror: Mirror) => mirrorDigest({ ...mirror, coverage: [] });
+
+  async function twoDevices() {
+    const t = await setup();
+    await t.run();
+    const a = await t.open();
+    const b = await t.open();
+    const snapshot = (subject: string) =>
+      JSON.parse(
+        t.store.resources.get(subject)![t.schema.log.snapshot] as string,
+      ) as SnapshotState;
+    const byId = () => new Map(t.incrementals().map(i => [i.id, i]));
+
+    /** What a snapshot says it includes, folded from the log itself. */
+    const chain = (
+      subject: string,
+      seen = new Set<string>(),
+    ): Incremental[] => {
+      if (seen.has(subject)) return [];
+      seen.add(subject);
+      const s = snapshot(subject);
+      const all = byId();
+
+      return [
+        ...s.compacted.map(e => all.get(e.id)!),
+        ...(s.previous ? chain(s.previous, seen) : []),
+        ...(s.merged ?? []).flatMap(m => chain(m, seen)),
+      ];
+    };
+
+    return { ...t, a, b, snapshot, chain };
+  }
+
+  it('S28: two devices compact at once: both snapshots are valid, and the log folds to the same mirror from either', async () => {
+    const t = await twoDevices();
+
+    for (let i = 1; i <= COMPACT_AFTER_INCREMENTALS; i++) {
+      await t.a.append(point(`a-${n(i)}`, NOW + i * 1000, 'entry-1', `A ${i}`));
+      await t.b.append(
+        point(`b-${n(i)}`, NOW + i * 1000 + 500, 'entry-2', `B ${i}`),
+      );
+    }
+
+    expect(await t.a.compactIfNeeded()).toBe(true);
+    expect(await t.b.compactIfNeeded()).toBe(true);
+    await t.a.flush();
+    await t.b.flush();
+
+    // The first snapshot, and one per device.
+    expect(t.snapshots()).toHaveLength(3);
+    const head = t.head();
+    expect(head.others).toHaveLength(1);
+    expect(head.tail).toEqual([]);
+
+    // Both snapshots are valid: each is the fold of what it absorbed.
+    for (const tip of [head.snapshot, ...head.others!])
+      expect(records(t.snapshot(tip).mirror)).toBe(
+        records(fold(emptyMirror(), t.chain(tip))),
+      );
+
+    // Opened from either device, the log folds every incremental stored.
+    const everything = fold(emptyMirror(), t.incrementals());
+    const fromA = (await t.open()).mirror;
+    const fromB = (await t.open()).mirror;
+    expect(records(fromA)).toBe(records(everything));
+    expect(mirrorDigest(fromA)).toBe(mirrorDigest(fromB));
+    expect(mirrorDigest(fromA)).toBe(
+      mirrorDigest(await ObservationLog.replay(t.store, t.schema)),
+    );
+    expect(
+      fromA.records[recordKey(TIME_ENTRY, 'entry-1')].fields.description,
+    ).toBe(`A ${COMPACT_AFTER_INCREMENTALS}`);
+    expect(
+      fromA.records[recordKey(TIME_ENTRY, 'entry-2')].fields.description,
+    ).toBe(`B ${COMPACT_AFTER_INCREMENTALS}`);
+
+    // The next compaction merges the two tips into one snapshot.
+    const c = await t.open();
+    expect(await c.compactIfNeeded()).toBe(true);
+    await c.flush();
+    const merged = t.head();
+    expect(merged.others).toBeUndefined();
+    expect(t.snapshot(merged.snapshot).merged).toHaveLength(1);
+    expect(records(t.snapshot(merged.snapshot).mirror)).toBe(
+      records(everything),
+    );
+    expect(mirrorDigest((await t.open()).mirror)).toBe(mirrorDigest(fromA));
+  });
+
+  for (const order of ['appender first', 'compactor first'] as const)
+    it(`keeps another device's diffs when only one compacts (${order})`, async () => {
+      const t = await twoDevices();
+
+      for (let i = 1; i <= COMPACT_AFTER_INCREMENTALS; i++)
+        await t.a.append(
+          point(`a-${n(i)}`, NOW + i * 1000, 'entry-1', `A ${i}`),
+        );
+      for (let i = 1; i <= 3; i++)
+        await t.b.append(
+          point(`b-${n(i)}`, NOW + i * 1000 + 500, 'entry-2', `B ${i}`),
+        );
+
+      expect(await t.a.compactIfNeeded()).toBe(true);
+      expect(await t.b.compactIfNeeded()).toBe(false);
+
+      if (order === 'appender first') {
+        await t.b.flush();
+        await t.a.flush();
+      } else {
+        await t.a.flush();
+        await t.b.flush();
+      }
+
+      const head = t.head();
+      expect(head.others).toBeUndefined();
+      expect(head.tail.map(e => e.id)).toEqual(['b-001', 'b-002', 'b-003']);
+      const opened = (await t.open()).mirror;
+      expect(records(opened)).toBe(
+        records(fold(emptyMirror(), t.incrementals())),
+      );
+      expect(
+        opened.records[recordKey(TIME_ENTRY, 'entry-2')].fields.description,
+      ).toBe('B 3');
+    });
+});

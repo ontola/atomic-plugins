@@ -2,7 +2,9 @@
 /**
  * An in-memory `PluginStore` for tests, shaped after view-client.js and
  * atomic-server's `/app-write`:
- * - resources buffer `set` until `save`; `save` is a per-property set
+ * - resources buffer `set` until `save`; `save` writes only the properties
+ *   set since the last save, as the host does, so two copies of one
+ *   resource that set different properties do not undo each other
  *   (removals are not modelled: this app never removes a value);
  * - a write naming a property that is not a Property resource (or one of
  *   Atomic's own) fails, as `value_for` in `store_host.rs` does;
@@ -44,14 +46,22 @@ export function fakeStore({
   proxy,
   connections = [{ platform: 'clockify', connectionId: 'conn-1' }],
   withTable = true,
+  resources: initial,
+  idPrefix = 'new',
 }: {
   proxy?: (request: HostProxyRequest) => Promise<HostProxyResponse>;
   connections?: ConnectionReference[];
   withTable?: boolean;
+  /** Start from these resources (another device's copy of the drive);
+   * used as is, not copied. */
+  resources?: Map<string, Record<string, JSONValue>>;
+  /** New subjects are `did:ad:<idPrefix>-<n>`: distinct per device. */
+  idPrefix?: string;
 } = {}): FakeStore {
-  const resources = new Map<string, Record<string, JSONValue>>([[APP, {}]]);
+  const resources =
+    initial ?? new Map<string, Record<string, JSONValue>>([[APP, {}]]);
 
-  if (withTable) {
+  if (withTable && !initial) {
     resources.set(ONTOLOGY, { [PARENT]: APP, [atomic.properties]: [] });
     resources.set(ROW_CLASS, { [PARENT]: ONTOLOGY, [atomic.recommends]: [] });
     resources.set(TABLE, {
@@ -78,6 +88,7 @@ export function fakeStore({
     stored: Record<string, JSONValue>,
   ): PluginResource => {
     const props = { ...stored };
+    const dirty = new Set<string>();
 
     return {
       subject,
@@ -87,6 +98,7 @@ export function fakeStore({
       get: property => props[property],
       set(property, value) {
         props[property] = value;
+        dirty.add(property);
 
         return this;
       },
@@ -101,8 +113,14 @@ export function fakeStore({
           throw new Error('Simulated write failure');
         }
 
-        check(props);
-        resources.set(subject, { ...(resources.get(subject) ?? {}), ...props });
+        const changed = Object.fromEntries(
+          [...dirty].map(property => [property, props[property]]),
+        );
+        check(changed);
+        const current = { ...(resources.get(subject) ?? {}), ...changed };
+        resources.set(subject, current);
+        Object.assign(props, current);
+        dirty.clear();
         writes.push({ op: 'save', subject });
 
         return this;
@@ -135,7 +153,7 @@ export function fakeStore({
     },
     async newResource({ parent, isA = [], propVals = {} } = {}) {
       check(propVals);
-      const subject = `did:ad:new-${++next}`;
+      const subject = `did:ad:${idPrefix}-${++next}`;
       const stored = { ...propVals, [PARENT]: parent ?? APP, [IS_A]: isA };
       resources.set(subject, stored);
       writes.push({ op: 'create', subject });

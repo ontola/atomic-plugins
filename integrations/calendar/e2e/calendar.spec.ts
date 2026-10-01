@@ -24,22 +24,53 @@
  * the committed `apps/calendar/<version>/ui.js` in place of GitHub Pages and
  * the host checking it against the catalog's integrity hash.
  *
+ * From 0.2.0 the rows are the shared `event-v1` class (#177): the app's
+ * first open retargets its table and adds the class to its `renders`. The
+ * bundle carries the published GitHub Pages subjects, and the pinned server
+ * and the browser fetch those terms from Pages themselves, as in production
+ * (ontology-kit/README.md, "Plugin e2e tests and the published subjects"):
+ * this spec needs network access to ontola.github.io, and `beforeAll` first
+ * checks Pages serves the terms with the committed bytes.
+ *
  *   node integrations/tooling/run-lane.mjs calendar --tier e2e
  */
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { classes, properties } from '../../../ontology-kit/terms.mjs';
 import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.4';
+const VERSION = '0.2.0';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
 const ALL_DAY = 'atomic-calendar-all-day';
 const END_DAY = 'atomic-calendar-end-day';
 const NOTES = 'atomic-calendar-notes';
+const LOCATION = 'atomic-calendar-location';
+const START = 'atomic-calendar-start';
+const END = 'atomic-calendar-end';
+/** The shared class and its Day, as the bundle has them (#177). */
+const EVENT = classes['event-v1'].subject;
+const DAY_PROPERTY = properties['atomic-calendar-day'].subject;
+const IS_A = 'https://atomicdata.dev/properties/isA';
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+
+test.beforeAll(async () => {
+  const served = (await import(
+    '../../../ontology-kit/served.mjs' as string
+  )) as {
+    classTermPaths(name: string): string[];
+    servedProblems(paths: string[]): Promise<string[]>;
+    notServedMessage(problems: string[]): string;
+  };
+  const problems = await served.servedProblems(
+    served.classTermPaths('event-v1'),
+  );
+  if (problems.length) throw new Error(served.notServedMessage(problems));
+});
 
 test.describe('calendar drive app', () => {
   test.beforeEach(before);
@@ -103,7 +134,7 @@ test.describe('calendar drive app', () => {
         }),
         expect.objectContaining({
           name: 'Calendar timed fixture',
-          location: 'Room 4',
+          [LOCATION]: 'Room 4',
           [NOTES]: 'Synthetic agenda',
           [ALL_DAY]: false,
         }),
@@ -115,18 +146,25 @@ test.describe('calendar drive app', () => {
     );
     expect(imported).toHaveLength(3);
     const timed = imported.find(r => r.name === 'Calendar timed fixture')!;
-    expect(timed.start).toMatch(/^\d{4}-\d{2}-\d{2}T09:30:00\+02:00$/);
-    expect(timed[DAY]).toBe((timed.start as string).slice(0, 10));
+    expect(timed[START]).toMatch(/^\d{4}-\d{2}-\d{2}T09:30:00\+02:00$/);
+    expect(timed[DAY]).toBe((timed[START] as string).slice(0, 10));
     // Within one day: no End day.
     expect(timed).not.toHaveProperty(END_DAY);
     const allDay = imported.find(r => r.name === 'Calendar all-day fixture')!;
-    expect(allDay.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(allDay[DAY]).toBe(allDay.start);
+    expect(allDay[START]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(allDay[DAY]).toBe(allDay[START]);
     // The host reads End day as exclusive, as Google's all-day end is.
-    expect(allDay[END_DAY]).toBe(allDay.end);
+    expect(allDay[END_DAY]).toBe(allDay[END]);
     const trip = imported.find(r => r.name === 'Calendar three-day fixture')!;
     expect(trip[DAY]).toMatch(/^\d{4}-\d{2}-10$/);
     expect(trip[END_DAY]).toMatch(/^\d{4}-\d{2}-13$/);
+    // #177: the app's first open made its table and every row the shared
+    // event-v1 class, and added it to the App's renders.
+    expect(await classesOf(page)).toEqual({
+      table: EVENT,
+      rows: [[EVENT], [EVENT], [EVENT]],
+      renders: true,
+    });
 
     // Sync after an edit made in Google.
     await driver('editRemote', ['timed', { location: 'Room 2' }]);
@@ -137,7 +175,7 @@ test.describe('calendar drive app', () => {
     // The app writes as the app agent; the page's store sees it once the
     // commit comes back, so poll.
     await expect
-      .poll(async () => (await rowsOf(page)).map(r => r.location).sort())
+      .poll(async () => (await rowsOf(page)).map(r => r[LOCATION]).sort())
       .toEqual(['', '', 'Room 2']);
 
     // A local edit is previewed, not sent, until approved.
@@ -240,16 +278,21 @@ test.describe('calendar drive app', () => {
     await expect
       .poll(
         async () =>
-          (await rowsOf(page)).find(r => r.name === 'Calendar all-day fixture')
-            ?.end,
+          (await rowsOf(page)).find(
+            r => r.name === 'Calendar all-day fixture',
+          )?.[END],
       )
       .toBe(later);
 
     // The connection lives at the proxy, owned by the signed-in user and
     // delegated to this app; the page keeps nothing credential-like.
-    const connections = await proxyConnections('google-calendar');
+    // The mock proxy is shared by the lane's tests, which run in parallel
+    // and each sign in as a fresh user: count this user's connections only.
+    const owner = await signedInAgent(page);
+    const connections = (await proxyConnections('google-calendar')).filter(
+      c => c.owner === owner,
+    );
     expect(connections).toHaveLength(1);
-    expect(connections[0].owner).toBe(await signedInAgent(page));
     expect(connections[0].delegations).toHaveLength(1);
     expect(await page.evaluate(() => Object.keys(localStorage))).not.toEqual(
       expect.arrayContaining([
@@ -412,7 +455,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     // The mock's fixture is shared by the lane's tests, so the timed event
     // may carry an earlier test's title; it is the one with a room.
     const rows = await rowsOf(page);
-    const timed = rows.find(r => /^Room \d+$/.test(String(r.location)))!;
+    const timed = rows.find(r => /^Room \d+$/.test(String(r[LOCATION])))!;
     const trip = rows.find(r => r.name === 'Calendar three-day fixture')!;
     const allDay = rows.find(r => r.name === 'Calendar all-day fixture')!;
     await app.getByRole('button', { name: 'Month ↗' }).click();
@@ -454,6 +497,127 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
     await expect(chip(timed[DAY], timed.name)).toBeVisible();
   });
 });
+
+test.describe('calendar drive app: any event-v1 table (#177)', () => {
+  test.beforeEach(before);
+
+  test('is offered under Add view on a hand-made event-v1 table, and shows its rows without syncing', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('button', { name: 'Connect Google Calendar' }),
+    ).toBeVisible({ timeout: 45_000 });
+    // The first open added event-v1 to what the App renders.
+    await expect
+      .poll(async () => (await classesOf(page)).renders, { timeout: 30_000 })
+      .toBe(true);
+
+    // A table the person made, of the shared class, with one row that has
+    // only a Day (as the host Calendar view's "+" makes one).
+    const table = await page.evaluate(
+      async ({ klass, day, name, classtype }) => {
+        const store = window.store!;
+        const now = new Date();
+        const today = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, '0'),
+          String(now.getDate()).padStart(2, '0'),
+        ].join('-');
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team events', [classtype]: klass },
+        });
+        await made.save();
+        const row = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: 'Planning day', [day]: today },
+        });
+        await row.save();
+
+        return made.subject;
+      },
+      {
+        klass: EVENT,
+        day: DAY_PROPERTY,
+        name: NAME,
+        classtype: CLASSTYPE,
+      },
+    );
+
+    await page.goto(
+      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
+    );
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    // Add view lists drive apps once it has read the drive's plugin schema
+    // and the github.io terms (#177 S1, H1); money measured about 9 s.
+    await page
+      .getByRole('menuitem', { name: 'Google Calendar' })
+      .click({ timeout: 60_000 });
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(app.getByText('Not synced with Google Calendar.')).toBeVisible(
+      { timeout: 45_000 },
+    );
+    await expect(
+      app.getByRole('button', { name: 'Connect Google Calendar' }),
+    ).toHaveCount(0);
+    // The row has only a Day (today): drawn as an all-day event on it.
+    await app.getByRole('button', { name: 'Agenda', exact: true }).click();
+    await expect(
+      app.getByRole('button', { name: /^Planning day, All day, / }),
+    ).toBeVisible();
+    await app.getByRole('button', { name: /^Planning day, All day, / }).click();
+    await expect(app.getByRole('dialog')).toContainText('All day');
+    await expect(
+      app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
+    ).toHaveCount(0);
+  });
+});
+
+/** The app's table's class, its rows' classes, and whether the App renders event-v1. */
+async function classesOf(
+  page: Page,
+): Promise<{ table: unknown; rows: unknown[]; renders: boolean }> {
+  const table = await tableOf(page);
+
+  return page.evaluate(
+    async ({ subject, isA, classtype, event }) => {
+      const store = window.store!;
+      const app = new URL(location.href).searchParams.get('subject')!;
+      await store.reloadResource(app);
+      const renders = Object.values(
+        (await store.getResource(app)).getPropVals(),
+      ).some(v => Array.isArray(v) && v.includes(event));
+      const t = await store.fetchResourceFromServer(subject, {
+        noWebSocket: true,
+      });
+      const collection = await (
+        await store.getResource(subject)
+      ).getChildrenCollection(500);
+      const rows: unknown[] = [];
+
+      for (const member of await collection.getAllMembers())
+        rows.push(
+          (
+            await store.fetchResourceFromServer(member, { noWebSocket: true })
+          ).get(isA),
+        );
+
+      return { table: t.get(classtype), rows, renders };
+    },
+    { subject: table, isA: IS_A, classtype: CLASSTYPE, event: EVENT },
+  );
+}
 
 /** Connect, consent in the host's bar, then the mock proxy's page. */
 async function connectThroughHost(page: Page, app: FrameLocator) {
@@ -639,11 +803,11 @@ async function tableOf(page: Page): Promise<string> {
     for (const candidate of candidates) {
       const child = await store.getResource(candidate).catch(() => undefined);
       if (!child) continue;
-      const classes = child.get('https://atomicdata.dev/properties/isA');
+      const types = child.get('https://atomicdata.dev/properties/isA');
 
       if (
-        Array.isArray(classes) &&
-        classes.some(c => String(c).endsWith('/classes/Table'))
+        Array.isArray(types) &&
+        types.some(c => String(c).endsWith('/classes/Table'))
       )
         return candidate;
     }

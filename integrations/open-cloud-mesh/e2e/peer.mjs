@@ -30,9 +30,11 @@ import {
 } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -53,8 +55,8 @@ let trusted;
 
 /**
  * A throwaway CA and a `localhost`/`127.0.0.1` certificate it issued, made
- * with `openssl`. The CA certificate is written to `caPath`; its key never
- * leaves a temporary directory.
+ * with `openssl`. The CA certificate is written to `caPath`; its key stays
+ * in the OS temporary directory (see `shareCa`).
  */
 export function issueCertificate(caPath = PEER_CA_PATH) {
   const dir = mkdtempSync(join(tmpdir(), 'ocm-peer-'));
@@ -93,10 +95,11 @@ export function issueCertificate(caPath = PEER_CA_PATH) {
       '-out',
       at('ca.pem'),
       '-days',
-      '1',
+      '2',
       '-extfile',
       at('ca.cnf'),
     ]);
+    shareCa(caPath, at);
     run([
       'req',
       '-new',
@@ -129,7 +132,10 @@ export function issueCertificate(caPath = PEER_CA_PATH) {
     ]);
     mkdirSync(dirname(caPath), { recursive: true });
     const ca = readFileSync(at('ca.pem'));
-    writeFileSync(caPath, ca);
+    // Atomically: the server reads this file at each connection.
+    const staged = `${caPath}.${process.pid}.tmp`;
+    writeFileSync(staged, ca);
+    renameSync(staged, caPath);
 
     return {
       ca,
@@ -139,6 +145,52 @@ export function issueCertificate(caPath = PEER_CA_PATH) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The server trusts exactly one CA (the file at `caPath`), and Playwright
+ * runs the lane's specs in parallel workers: `ocm.spec.ts`'s peer and
+ * `nextcloud.spec.ts`'s Nextcloud must chain to the same CA. The first
+ * process of the (UTC) day publishes its CA and key as one file in the OS
+ * temporary directory, keyed by `caPath`, with an exclusive hard link; every
+ * later one replaces its fresh CA in `at('ca.key')`/`at('ca.pem')` with it.
+ * The CA is valid for two days, so one made just before midnight still
+ * covers the next day's runs.
+ */
+function shareCa(caPath, at) {
+  const shared = join(
+    tmpdir(),
+    'ocm-e2e-ca',
+    createHash('sha256').update(resolvePath(caPath)).digest('hex').slice(0, 16),
+  );
+  mkdirSync(shared, { recursive: true, mode: 0o700 });
+  const bundle = join(shared, `${new Date().toISOString().slice(0, 10)}.pem`);
+  const mine = `${bundle}.${process.pid}.tmp`;
+  writeFileSync(
+    mine,
+    Buffer.concat([readFileSync(at('ca.key')), readFileSync(at('ca.pem'))]),
+    { mode: 0o600 },
+  );
+
+  try {
+    linkSync(mine, bundle);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  } finally {
+    rmSync(mine, { force: true });
+  }
+
+  const pem = readFileSync(bundle, 'utf8');
+  const key =
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----\n/.exec(
+      pem,
+    );
+  const cert =
+    /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----\n/.exec(pem);
+  if (!key || !cert)
+    throw new Error(`${bundle} is not a CA key and certificate`);
+  writeFileSync(at('ca.key'), key[0]);
+  writeFileSync(at('ca.pem'), cert[0]);
 }
 
 const b64 = bytes => Buffer.from(bytes).toString('base64');

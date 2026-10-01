@@ -106,7 +106,7 @@ export const SCOPES: readonly string[] = [
  * that need it (README.md, "Design decisions").
  */
 export const HOST_OPERATIONS = {
-  store: ['getData', 'getResource', 'query', 'newResource'],
+  store: ['getApp', 'getData', 'getResource', 'query', 'newResource'],
   proxy: ['request', 'connections', 'connect'],
   optional: {
     store: ['openExternal', 'openResource', 'getTheme', 'onThemeChange'],

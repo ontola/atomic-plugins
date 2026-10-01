@@ -10,6 +10,7 @@
  * choices only change rows, and the next preview lists them for review.
  */
 import type { Projection } from '../adapter.js';
+import { adopt } from './adopt.js';
 import type { CalEvent } from './events.js';
 import { listCalendars, PLATFORM, type CalendarEntry } from './relay.js';
 import type { ConnectionReference, PluginStore } from './store.js';
@@ -26,6 +27,7 @@ import {
   saveLocal,
   saveMeta,
   send,
+  tableName,
   tableOf,
   type CalendarMeta,
   type Choice,
@@ -58,6 +60,13 @@ export interface Problem {
 
 export type ViewState =
   | { kind: 'loading' }
+  /**
+   * Shown as the view of a table that isn't this app's own (any `event-v1`
+   * table, through the host's "+ Add view"): its events are drawn, read
+   * only, and nothing is synced. "Sync this table" (#177 §6.2 item 14) is
+   * not built.
+   */
+  | { kind: 'local' }
   /** The host has no proxy relay (atomic-server#1657 not in this build). */
   | { kind: 'no-relay' }
   | { kind: 'disconnected' }
@@ -89,6 +98,10 @@ export type ViewState =
       at?: Date;
     };
 
+/** What the `local` state says, in the banner and to screen readers. */
+export const LOCAL_NOTE =
+  'This table isn’t synced with Google Calendar: the app syncs only its own table. Its events are shown here, read only.';
+
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
 
@@ -96,6 +109,8 @@ export function describe(state: ViewState): string {
   switch (state.kind) {
     case 'loading':
       return 'Loading…';
+    case 'local':
+      return LOCAL_NOTE;
     case 'no-relay':
       return 'This host cannot reach the integration proxy for apps yet, so nothing was fetched.';
     case 'disconnected':
@@ -348,6 +363,7 @@ export function reviewCount(snapshot: Snapshot): number {
 /** The status pill (DESIGN.md §3): text always accompanies colour. */
 export function pill(snapshot: Snapshot, now = new Date()): Pill {
   const { state, summary, at } = snapshot;
+  if (state.kind === 'local') return { text: 'Not synced', tone: 'muted' };
   if (state.kind === 'refreshing' || state.kind === 'loading')
     return { text: 'Syncing…', tone: 'accent', busy: true };
   if (state.kind === 'sending')
@@ -506,6 +522,20 @@ export function createController(
      * ends, so the host sees the view as rendered straight away.
      */
     async load(): Promise<{ refreshing?: Promise<void> }> {
+      // First open of 0.2.0 moves the app's own table onto event-v1.
+      const adopted = await adopt(store);
+
+      if (!adopted.own) {
+        meta = {
+          summary: await tableName(store),
+          color: DEFAULT_COLOR,
+          accessRole: 'reader',
+        };
+        await reload();
+
+        return (set({ kind: 'local' }), {});
+      }
+
       const proxy = store.proxy;
       if (!proxy) return (set({ kind: 'no-relay' }), {});
       connections = await proxy.connections({ platform: PLATFORM });
@@ -587,7 +617,12 @@ export function createController(
     async refresh(): Promise<void> {
       const proxy = store.proxy;
       if (!proxy) return set({ kind: 'no-relay' });
-      if (state.kind === 'refreshing' || state.kind === 'sending') return;
+      if (
+        state.kind === 'refreshing' ||
+        state.kind === 'sending' ||
+        state.kind === 'local'
+      )
+        return;
       if (!calendarId) return controller.listCalendars();
       set({ kind: 'refreshing', ...(last ? { summary: last.summary } : {}) });
 

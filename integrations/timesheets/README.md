@@ -6,9 +6,11 @@ The supported path is the **drive app** in `app/` (below): catalog entry
 `apps/timesheets/<version>/ui.js` from GitHub Pages and checks it against the
 catalog's integrity hash (see
 [Publishing a drive app](../README.md#publishing-a-drive-app)). Since 0.2.0
-it writes reviewed edits back to Clockify (#123 M3, below), and since 0.3.0
-range edits and conflict resolutions (#123 M4); both are mock-tested only,
-so those capabilities are declared, not verified. The first sections describe the Clockify
+it writes reviewed edits back to Clockify (#123 M3, below), since 0.3.0
+range edits and conflict resolutions (#123 M4), and since 0.4.0 it
+coordinates two open copies (#123 M5: the send lease, range edits made
+apart, two devices compacting the log); all are mock-tested only, so those
+capabilities are declared, not verified. The first sections describe the Clockify
 lens and the LocalThought extension flow it was written for; the pinned host
 no longer has that flow.
 
@@ -58,7 +60,7 @@ Live account data must never be checked into fixtures.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 118 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 144 KB, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -132,6 +134,11 @@ into the view root.
     under a log head in the app's subtree, writes a snapshot every 50
     diffs or 256 KB, and keeps everything (nothing is pruned). A pass with
     no change stores no diff; it only confirms the coverage in the head.
+    Saving the head re-reads it and merges what another copy saved since
+    (M5, S28): tails are united, and a snapshot another copy wrote
+    meanwhile is kept as a second tip (`others`) rather than replaced;
+    opening a head with two tips replays every incremental they reach,
+    and the next compaction writes one snapshot that merges them.
   - **Coverage.** Time in the window that no complete read covers is
     _unknown_, never "not worked". Starts are known from where reads
     looked; a moment counts as known only if starts are covered back by
@@ -199,9 +206,8 @@ into the view root.
   - _Known limits:_ a change made in Clockify between the fresh read and
     the write is overwritten (the verification read shows the result); a
     row deleted in the table is not noticed (needs the host's change list
-    with tombstones, #177 H6b); two devices sending at once are not
-    coordinated (the lease is M5); changes are found only while the app
-    is open.
+    with tombstones, #177 H6b); changes are found only while the app is
+    open. Two devices sending at once: see M5, below.
   - _Prerequisites, checked at the pin:_ the host's frame client allows
     `PUT` and `DELETE` to the proxy (`PROXY_METHODS` in
     `server/src/plugins/assets/view-client.js`, also at candidate14
@@ -259,9 +265,65 @@ into the view root.
     with none, the create did not arrive, the marker is cleared and it is
     listed again. Two matching entries: one is bound, the other gets its
     own row and shows as a duplicate, which "Remove duplicate" cleans up.
-  - _Not done:_ dragging on the week grid (the form is the only way in),
-    intents as separate resources (a change is still "row differs from
-    its baseline", or a new row), and the M5 multi-device lease.
+  - _Not done:_ dragging on the week grid (the form is the only way in).
+    Since M5 each range edit is also recorded as an intent (below); a
+    field edit is still only "row differs from its baseline".
+- **Two open copies** (#123 M5, #97 §5.2 and §6.2; 0.4.0). Two devices,
+  or two tabs, on one drive. Mock-tested only, through the in-memory
+  store, with two copies of the drive merged per property (the later save
+  wins) to model devices that edited apart; two real browsers have not
+  been tried:
+  - _Send lease_ (`app/lease.ts`, #97 answer 5): `clockify-lease` on the
+    log head, `{ device, takenAt, until }`, 60 s. A send takes it (read,
+    write, read back) and sends nothing while another copy holds one that
+    has not expired ("Another open copy of this app … is sending"; every
+    change stays listed, `not-sent`). It is renewed before each change and
+    before each write when less than half is left, and given back at the
+    end; a copy closed mid-send leaves it to expire. A copy that loses it
+    mid-batch (stalled past 60 s, taken over) stops: the rest is
+    `not-sent`. While another copy holds it, a sync leaves a create whose
+    send is unconfirmed alone (that copy may be sending it now) and the
+    status line says another copy is sending. The device id is new on
+    every page load (the frame has no storage), so a reload counts as
+    another copy. Advisory: `/app-write` has no compare-and-swap, so two
+    copies taking it within one read-write round trip can both send; the
+    worst case is a duplicate create, which the next sync shows as a
+    duplicate and "Remove duplicate" repairs.
+  - _Range edits as intents_ (`app/intents.ts`): each range edit or
+    resolution is also one resource under the log head (`clockify-intent`,
+    found by `clockify-intent-of`): its span, target, the rows it staged
+    and the intents it replaces. Written once, never edited, so two
+    devices never overwrite each other's intents even where their row
+    edits collide. Status is derived: replaced when a later intent names
+    it, open while one of its rows still has a change to send.
+  - _S22:_ a range edit made where open range edits overlap it replaces
+    them: their staged changes are put back first, then the new plan is
+    staged. One that reaches outside the new range is not cut in two:
+    the edit is refused until it is sent or discarded.
+  - _S21:_ two open range edits that overlap, where neither replaced the
+    other (made apart), are compared: the same target agrees (a second
+    create of the same entry finds the first one's entry and stops);
+    different targets are a conflict between your edits, listed with
+    Clockify's conflicts on every device that holds both ("Your range
+    edits disagree, not sent: … (here, 10:42) · … (another device or an
+    earlier visit, 10:40)"), and none of their changes is sent until one
+    of "Keep <project>" or "Did not work" is chosen over the whole span,
+    which replaces both. No clock decides between them (#97 §5.2). Not
+    shown on the week grid, only in the conflicts list.
+  - _Not covered:_ two devices editing the same field of a row directly
+    (drawer or table) apart: the row keeps the later save, as any
+    Atomic resource does; no intent records a field edit.
+  - _Two devices compacting the log_ (S28): see the observation log.
+  - _Measured_ (2026-10-01, build VPS, Node 22, synthetic entries over a
+    30-day window, mean of 20 runs; not a committed test): at
+    600 entries a full fold plus the timesheet build takes 18 ms, the
+    snapshot is 333 KB and a first sync's incremental 272 KB; at 2,000
+    entries 58 ms, 1.11 MB and 907 KB. #97 §7 estimated under 10 ms and
+    at most 300 KB / 1 MB, so both are somewhat over. atomic-server's
+    JSON extractor limit, read from the pinned source (actix's default
+    `JsonConfig`, 2 MiB; not exercised), would take a 2,000-entry
+    snapshot as one `/app-write` with little room to spare once the JSON
+    text is escaped; snapshots are not split per week yet.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):
@@ -308,8 +370,10 @@ into the view root.
   deletion between pages really skips an entry (inferred from the order),
   custom fields, and locked entries. Whether atomic-server accepts a
   snapshot of ~1 MB (about 2,000 entries) in one commit is not checked.
-  Two devices saving the log head at the same moment can drop one's diff
-  from the head (no compare-and-swap on `/app-write`; M5).
+  Two devices saving the log head at the same instant (within one
+  read-write round trip) can still drop one's diffs from the head: there
+  is no compare-and-swap on `/app-write`. The next sync's reads restore
+  the mirror, but those diffs are no longer replayed.
 
 ```sh
 # from an atomic-server checkout with this repo's integrations/ in place (AGENTS.md)
@@ -352,6 +416,15 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   then, Discard of a new row and the refusals, against the mock through
   the controller (`app/rangeEdit.test.ts`); and the resolve buttons and
   the range form through to a send in the DOM (`app/ui/ui.test.ts`).
+  Two open copies (#123 M5): S21 (the same range, and the same entry,
+  edited apart; held on both devices; resolved), equal edits made apart,
+  S22 and its refusal, and the send lease (refused while held, sent once
+  expired, kept through a batch longer than 60 s, lost mid-batch, a sync
+  leaving another copy's unconfirmed create alone) in
+  `app/multiDevice.test.ts`; S28 (two devices compacting at once, and one
+  compacting while the other appends, in both orders) in
+  `app/observationLog.test.ts`; the "between your edits" list text in
+  `app/timeline/timeline.test.ts`.
 - **Host e2e** (`e2e/clockify.spec.ts`, the `timesheets` lane's `e2e` tier)
   against the pinned atomic-server (`.atomic-server-ref`, which includes
   frame capabilities from atomic-server#1697) and the local mock proxy,
@@ -439,10 +512,9 @@ pin), Disconnect (`store.proxy.disconnect`), "Open Clockify" through
 each feature-detected. The data-browser's LocalThought-extension path was
 removed upstream (`c707ca4ed`).
 
-1. **Multiple devices** (#123 M5): concurrent edits across devices, the
-   advisory lease, compaction by two devices. M3's field edits (0.2.0)
-   and M4's range edits and conflict resolution (0.3.0) are done,
-   mock-tested only.
+1. **Multiple devices**: done as #123 M5 (0.4.0), mock-tested only; not
+   tried with two real browsers. Splitting snapshots per week, if a
+   commit of ~1 MB turns out too large, is not done.
 2. **Live evidence**: a run of the app against a live account through the
    real integration proxy, in a dedicated test workspace. For write-back
    that includes #123 §5.4's checks: full-replacement `PUT` (a field left
