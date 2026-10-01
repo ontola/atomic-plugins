@@ -363,16 +363,19 @@ included.
 ### Inviting testers
 
 There is one invite code for all testers, not a link per person. Print the
-link:
+link, with `<plan>` set to the session plan to preselect (a file name in
+[`moderator/sessions/`](moderator/sessions/) without `.md`, for example
+`calendar`):
 
 ```sh
-ssh root@178.62.223.35 '. /etc/usertest-moderator.env; echo "https://plugins.178-62-223-35.sslip.io/usertest/?code=$USERTEST_CODE"'
+ssh root@178.62.223.35 '. /etc/usertest-moderator.env; echo "https://plugins.178-62-223-35.sslip.io/usertest/?code=$USERTEST_CODE&session=<plan>"'
 ```
 
 Send it with what testers need: Chrome or Edge on a laptop, headphones, a
-quiet place, about 25 minutes, and optionally a Google account to import a
-real calendar. Anyone with the link can start a session, within the limits
-below.
+quiet place, and 20 to 30 minutes (each plan states its own range). The
+`calendar` plan can also import a real calendar, for which the tester needs
+a Google account; that part is optional. Anyone with the link can start a
+session of any plan, within the limits below.
 
 To revoke the link, make a new code. The old link stops working, and
 sessions in progress end, because this restarts the moderator:
