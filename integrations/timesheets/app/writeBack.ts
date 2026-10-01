@@ -38,8 +38,13 @@
  *   the row is bound to it. A sync does the same binding for a create
  *   whose send was uncertain (`settleCreates`).
  *
- * Not here: the multi-device lease (M5), and noticing a row deleted in the
- * table (needs the host's change list with tombstones, #177 H6b).
+ * - **One sender at a time** (#123 M5): with `lease`, a send takes the
+ *   advisory lease on the log head first (`lease.ts`) and sends nothing
+ *   while another open copy of the app holds it; a sync leaves an
+ *   unconfirmed create alone while another copy is sending.
+ *
+ * Not here: noticing a row deleted in the table (needs the host's change
+ * list with tombstones, #177 H6b).
  */
 import { reconcileRecord } from '../../../browser/lib/src/plugin-reconcile.js';
 import {
@@ -71,6 +76,12 @@ import {
   timeEntries,
   type ReadContext,
 } from './clockifyObserve.js';
+import {
+  heldMessage,
+  SendLease,
+  type LeaseOptions,
+  type LeaseState,
+} from './lease.js';
 import type { ObservationLog } from './observationLog.js';
 import type { Mirror, MirrorRecord } from './observations.js';
 import { atomic, NAME } from './ontology.js';
@@ -759,6 +770,7 @@ async function boundIds(
  * Writes a range plan (`planRange`) to the rows: an update edits the
  * entry's row, a deletion marks it, a create adds a new row carrying
  * `clockify-create`. Nothing is sent. `rowOf` finds an entry's row.
+ * Returns the rows it staged on.
  */
 export async function stageRangePlan(
   store: PluginStore,
@@ -766,10 +778,13 @@ export async function stageRangePlan(
   mirror: Mirror,
   steps: PlanStep[],
   rowOf: (entryId: string) => Promise<string | undefined>,
-): Promise<void> {
+): Promise<string[]> {
+  const touched: string[] = [];
+
   const row = async (entryId: string) => {
     const subject = await rowOf(entryId);
     if (!subject) throw new Error(`Entry ${entryId} has no row in the table.`);
+    touched.push(subject);
 
     return store.getResource(subject);
   };
@@ -792,7 +807,7 @@ export async function stageRangePlan(
           : {}),
       };
       const values = step.values;
-      await store.newResource({
+      const created = await store.newResource({
         parent: schema.table,
         isA: [schema.rowClass],
         propVals: {
@@ -809,8 +824,11 @@ export async function stageRangePlan(
           [schema.sync.create]: JSON.stringify(marker),
         },
       });
+      touched.push(created.subject);
     }
   }
+
+  return [...new Set(touched)];
 }
 
 /** This user's live entries in the mirror overlapping `[from, to)`. */
@@ -899,7 +917,9 @@ export interface SettledCreate {
  * send did not arrive, and the create is listed again. Run before rows
  * are created for unbound entries, so an applied create gets no second row.
  * Returns what it settled, and the new rows still to create (one pass over
- * the table's rows).
+ * the table's rows). While another copy of the app holds the send lease
+ * (`busy`), such a row is left as it is: that copy may be sending it now,
+ * and a read from before its `POST` landed would wrongly clear the marker.
  */
 export async function settleCreates(
   store: PluginStore,
@@ -909,6 +929,8 @@ export async function settleCreates(
     now: number;
     projects: ClockifyProject[];
     members?: Member[];
+    /** Another copy of the app holds the send lease (#123 M5). */
+    busy?: boolean;
   },
 ): Promise<{ settled: SettledCreate[]; pending: CreateState[] }> {
   const creates: Array<{ row: PluginResource; state: CreateState }> = [];
@@ -928,7 +950,7 @@ export async function settleCreates(
   for (const { row, state } of creates) {
     const { subject, local } = state;
 
-    if (state.outbox?.op !== 'post') {
+    if (state.outbox?.op !== 'post' || context.busy) {
       pending.push(state);
       continue;
     }
@@ -967,6 +989,14 @@ export interface SendContext {
   /** Waits before retrying a 429. Defaults to `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
   onProgress?: (done: number, total: number) => void;
+  /** Take the send lease as this app instance (#123 M5). Without it,
+   * nothing coordinates with other copies (unit tests of one copy). */
+  lease?: LeaseOptions;
+  /** For the lease message's time. */
+  timeZone?: string;
+  /** Set by `sendChanges` while it holds the lease: keeps it before each
+   * write, and throws when another copy took it. */
+  renew?: () => Promise<void>;
 }
 
 /** The longest `retry-after` the app waits for before giving up on a send. */
@@ -986,6 +1016,8 @@ const bodyMessage = (body: unknown) =>
 
 class Uncertain extends Error {}
 class Stop extends Error {}
+/** Another copy holds the lease now: the rest waits for it. */
+class LeaseLost extends Stop {}
 
 /**
  * Sends reviewed changes, one entry at a time, in the order given. An
@@ -998,43 +1030,98 @@ export async function sendChanges(
 ): Promise<SendOutcome[]> {
   const outcomes: SendOutcome[] = [];
   let stopped = false;
+  let lease: SendLease | undefined;
+  const lost = (holder: LeaseState) =>
+    new LeaseLost(heldMessage(holder, context.timeZone));
 
-  for (const [index, change] of changes.entries()) {
-    context.onProgress?.(index, changes.length);
-    const base = {
-      entryId: change.entryId,
-      title: change.title,
-      kind: change.kind,
-    };
+  if (context.lease) {
+    const taken = await SendLease.take(
+      context.store,
+      context.schema,
+      context.lease,
+    );
 
-    if (stopped) {
-      outcomes.push({ ...base, status: 'not-sent' });
-      continue;
+    if (!(taken instanceof SendLease)) {
+      const reason = heldMessage(taken.heldBy, context.timeZone);
+
+      return changes.map(change => ({
+        entryId: change.entryId,
+        title: change.title,
+        kind: change.kind,
+        status: 'not-sent',
+        message: reason,
+      }));
     }
 
-    try {
-      outcomes.push({
-        ...base,
-        ...(await (change.kind === 'create' ? sendCreate : sendOne)(
-          context,
-          change,
-        )),
-      });
-    } catch (error) {
-      if (error instanceof Uncertain) {
-        outcomes.push({ ...base, status: 'uncertain', message: error.message });
-        stopped = true;
-      } else if (error instanceof Stop) {
-        outcomes.push({ ...base, status: 'failed', message: error.message });
-        stopped = true;
-      } else
-        outcomes.push({ ...base, status: 'failed', message: message(error) });
-    }
+    lease = taken;
   }
 
-  context.onProgress?.(changes.length, changes.length);
-  await context.log.compactIfNeeded();
-  await context.log.flush();
+  const sending: SendContext = lease
+    ? {
+        ...context,
+        renew: async () => {
+          const holder = await lease!.renew();
+          if (holder) throw lost(holder);
+        },
+      }
+    : context;
+
+  try {
+    for (const [index, change] of changes.entries()) {
+      context.onProgress?.(index, changes.length);
+      const base = {
+        entryId: change.entryId,
+        title: change.title,
+        kind: change.kind,
+      };
+
+      if (stopped) {
+        outcomes.push({ ...base, status: 'not-sent' });
+        continue;
+      }
+
+      try {
+        await sending.renew?.();
+        outcomes.push({
+          ...base,
+          ...(await (change.kind === 'create' ? sendCreate : sendOne)(
+            sending,
+            change,
+          )),
+        });
+      } catch (error) {
+        if (error instanceof Uncertain) {
+          outcomes.push({
+            ...base,
+            status: 'uncertain',
+            message: error.message,
+          });
+          stopped = true;
+        } else if (error instanceof LeaseLost) {
+          outcomes.push({
+            ...base,
+            status: 'not-sent',
+            message: error.message,
+          });
+          stopped = true;
+        } else if (error instanceof Stop) {
+          outcomes.push({ ...base, status: 'failed', message: error.message });
+          stopped = true;
+        } else
+          outcomes.push({
+            ...base,
+            status: 'failed',
+            message: message(error),
+          });
+      }
+    }
+
+    context.onProgress?.(changes.length, changes.length);
+    await context.log.compactIfNeeded();
+    await context.log.flush();
+  } finally {
+    await lease?.release();
+  }
 
   return outcomes;
 }
@@ -1460,6 +1547,8 @@ async function write(
 
   for (let attempt = 0; ; attempt++) {
     let response: Awaited<ReturnType<ReadContext['transport']['request']>>;
+    // Still this copy's turn? (A 429's wait can outlast half the lease.)
+    await context.renew?.();
 
     try {
       response = await context.read.transport.request(path, undefined, init);

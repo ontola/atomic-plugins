@@ -2,32 +2,36 @@
 import { describe as suite, expect, it } from 'vitest';
 import { PRIMARY, TEAM } from '../fixtures/google-calendar/scenario.mjs';
 import { createController, describe, type ViewState } from './controller.js';
-import { DAY, fakeStore, ONTOLOGY, ROW_CLASS, TABLE } from './fakeStore.js';
+import {
+  APP,
+  DAY,
+  fakeStore,
+  field,
+  RENDERS,
+  ROW_CLASS,
+  ROW_EXTRAS_PROPERTY,
+  TABLE,
+} from './fakeStore.js';
+import { EVENT } from './fields.js';
 import { listCalendars } from './relay.js';
 import {
   ALL_DAY,
+  CLASSTYPE,
   DAY as DAY_FIELD,
   DESCRIPTION,
   END_DAY,
+  IS_A,
   NAME,
   NOTES,
   PARENT,
-  PROPERTIES,
   RECOMMENDS,
-  SHORTNAME,
 } from './sync.js';
 
 type Store = ReturnType<typeof fakeStore>;
 
-/** Property subject by shortname, from the app's ontology. */
+/** A row field's subject by shortname: shared, or the app's own extra. */
 function prop(store: Store, shortname: string): string {
-  const listed = store.resources.get(ONTOLOGY)![PROPERTIES] as string[];
-  const subject = listed.find(
-    s => store.resources.get(s)![SHORTNAME] === shortname,
-  );
-  if (!subject) throw new Error(`no ${shortname} property`);
-
-  return subject;
+  return field(store, shortname);
 }
 
 /** Rows by Google event id, as plain field maps. */
@@ -185,14 +189,23 @@ suite('Calendar drive app: supported path', () => {
     expect(store.resources.get(TABLE)![prop(store, 'google-calendar-id')]).toBe(
       PRIMARY,
     );
-    const klass = store.resources.get(ROW_CLASS)!;
-    expect(klass[NAME]).toBe('Event');
-    expect(klass[RECOMMENDS]).toEqual([
-      NAME,
-      ...['location', 'start', 'end', ALL_DAY, DAY_FIELD, END_DAY, NOTES].map(
+    // #177: the table and every row are the shared event-v1; the app's own
+    // class is left as it was, and its fields are the published ones.
+    expect(store.resources.get(TABLE)![CLASSTYPE]).toBe(EVENT);
+    for (const { subject } of byId.values())
+      expect(store.resources.get(subject as string)![IS_A]).toEqual([EVENT]);
+    expect(store.resources.get(ROW_CLASS)![RECOMMENDS]).toEqual([NAME]);
+    for (const s of ['location', 'start', 'end', ALL_DAY, DAY_FIELD, END_DAY])
+      expect(prop(store, s)).toMatch(
+        /^https:\/\/ontola\.github\.io\/atomic-plugins\/ontology\/properties\/atomic-calendar-/,
+      );
+    // Offered on any event-v1 table, and its row extras declared (#1849).
+    expect(store.resources.get(APP)![RENDERS]).toEqual([ROW_CLASS, EVENT]);
+    expect(store.resources.get(APP)![ROW_EXTRAS_PROPERTY]).toEqual(
+      ['google-event-id', 'google-etag', 'google-link', 'sync-baseline'].map(
         s => prop(store, s),
       ),
-    ]);
+    );
 
     // Paged (2 per page), full scan with tombstones, one calendar only.
     const lists = store.calls.filter(c => c.path.endsWith('/events'));

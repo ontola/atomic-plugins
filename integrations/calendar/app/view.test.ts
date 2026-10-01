@@ -7,13 +7,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEAM } from '../fixtures/google-calendar/scenario.mjs';
-import { fakeStore, TABLE } from './fakeStore.js';
+import { fakeStore, OTHER_TABLE, TABLE } from './fakeStore.js';
+import { EVENT, SHARED } from './fields.js';
 import { conflicts } from './sheets.js';
 import { view } from './main.js';
 
 type Store = ReturnType<typeof fakeStore>;
 
 const NAME = 'https://atomicdata.dev/properties/name';
+const PARENT = 'https://atomicdata.dev/properties/parent';
+const IS_A = 'https://atomicdata.dev/properties/isA';
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 async function settle(times = 4) {
@@ -282,6 +285,26 @@ describe('Calendar views: edit, review, send', () => {
     expect(done.textContent).toContain('Calendar timed fixture: Sent');
   });
 
+  it('on an event-v1 table that isn’t its own: the rows, read only, and no sync (#177)', async () => {
+    const store = fakeStore({ view: 'other' });
+    store.resources.set('did:ad:hand-1', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Planning day',
+      [SHARED.day]: '2026-09-24',
+    });
+    const root = await mount(store, 1120);
+    expect(root.textContent).toContain('Not synced with Google Calendar.');
+    expect(byRole(root, 'button', 'Sync now')).toEqual([]);
+    expect(byRole(root, 'button', 'Connection menu')).toEqual([]);
+    expect(byRole(root, 'button', 'Connect Google Calendar')).toEqual([]);
+    // A row with only a Day is an all-day event on that day.
+    await click(one(root, 'button', /^Planning day, All day, /));
+    const drawer = one(root, 'dialog');
+    expect(byRole(drawer, 'button', 'Edit')).toEqual([]);
+    expect(store.calls).toEqual([]);
+  });
+
   it('a read-only calendar never offers Edit', async () => {
     const store = fakeStore();
     const root = await mount(store, 1120);
@@ -456,25 +479,18 @@ describe('Calendar views: host operations of pin 007869464', () => {
   it('#192: opening the app again lists an End day edited in the host, and a column it doesn’t send', async () => {
     const { store } = await chosen(1120);
     const SHORTNAME = 'https://atomicdata.dev/properties/shortname';
-    const RECOMMENDS = 'https://atomicdata.dev/properties/recommends';
-    const endDay = [...store.resources.entries()].find(
-      ([, p]) => p[SHORTNAME] === 'atomic-calendar-end-day',
-    )![0];
+    const shortnamed = (shortname: string) =>
+      [...store.resources.entries()].find(
+        ([, p]) => p[SHORTNAME] === shortname,
+      )![0];
+    const endDay = shortnamed('atomic-calendar-end-day');
+    // event-v1 recommends Recurrence, which the app doesn't send.
+    const recurrence = shortnamed('atomic-calendar-recurrence');
     const [trip, props] = rowWith(store, 'Calendar three-day fixture');
-    const attendees = 'did:ad:prop-attendees';
-    store.resources.set(attendees, {
-      [SHORTNAME]: 'attendees',
-      [NAME]: 'Attendees',
-    });
-    const klass = store.resources.get('did:ad:class-item')!;
-    store.resources.set('did:ad:class-item', {
-      ...klass,
-      [RECOMMENDS]: [...(klass[RECOMMENDS] as string[]), attendees],
-    });
     store.resources.set(trip, {
       ...props,
       [endDay]: '2026-09-15',
-      [attendees]: 'A. Example',
+      [recurrence]: '{"freq":"weekly"}',
     });
 
     const root = await mount(store, 1120);
@@ -484,7 +500,7 @@ describe('Calendar views: host operations of pin 007869464', () => {
     // Shown as the last day, not the exclusive end: 12th → 14th.
     expect(sheet.textContent).toContain('EndSat 12 Sep→ becomes Mon 14 Sep');
     expect(sheet.textContent).toContain(
-      'Kept here only, never sent to Google: Attendees (1 event).',
+      'Kept here only, never sent to Google: Recurrence (1 event).',
     );
     expect(store.google.writes).toEqual([]);
   });

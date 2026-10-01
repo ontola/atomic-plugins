@@ -153,6 +153,24 @@ export const LOG_FIELDS = {
     datatypes.string,
     'JSON text: the Clockify mirror folded up to a point in the log. Written by the timesheets app; do not edit.',
   ),
+  lease: field(
+    'clockify-lease',
+    'Clockify send lease',
+    datatypes.string,
+    'JSON text: which open copy of the timesheets app is sending changes to Clockify, and until when (#123 M5). Advisory. Written by the timesheets app; do not edit.',
+  ),
+  intent: field(
+    'clockify-intent',
+    'Clockify range edit',
+    datatypes.string,
+    'JSON text: one range edit or conflict resolution made in the timesheets app (#123 M5), with the rows it changed and the edits it replaces. Written by the timesheets app; do not edit.',
+  ),
+  intentOf: field(
+    'clockify-intent-of',
+    'Clockify range edit of',
+    datatypes.string,
+    'The Clockify observation log head this range edit belongs to, so the app can find every range edit.',
+  ),
 } as const;
 
 /**

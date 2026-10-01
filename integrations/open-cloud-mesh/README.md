@@ -1,8 +1,11 @@
 # Open Cloud Mesh
 
-Status: **experimental receiver**. Declared, not verified against a real
-Nextcloud, ownCloud or OCIS server. `manifest.json` and `plugin.js` are the
-host release inputs; edit `plugin.mjs` and run `build.mjs`.
+Status: **experimental receiver**. Receiving a file share from a real
+Nextcloud 35.0.1 is verified by an opt-in e2e, but only on an atomic-server
+with two host fixes that no pin has yet (see "Against a real Nextcloud"); at
+the pin (`a12b74a`) Nextcloud's shares are refused. Not tried against
+ownCloud, OCIS or other Nextcloud versions. `manifest.json` and `plugin.js`
+are the host release inputs; edit `plugin.mjs` and run `build.mjs`.
 
 An Open Cloud Mesh (OCM) server can share a file with a person on this
 drive: the plugin answers OCM discovery, accepts RFC 9421 signed Share
@@ -21,9 +24,9 @@ Reference: [OCM 1.5.0](https://github.com/cs3org/OCM-API/tree/v1.5.0)
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Discovery                                        | `GET /.well-known/ocm` (exclusive claim) and the removed-in-1.4 `/ocm-provider`, both on the installation's origin: `apiVersion` `1.5.0`, `endPoint` `<base>/ocm`, `resourceTypes: [{ name: "file", shareTypes: ["user"], protocols: { "webdav-receive": { uri: "absolute" } } }]`, `capabilities: ["http-sig", "notifications"]`, `criteria: ["must-use-http-sig", "allowlist"]`, `jwksUri` `<base>/ocm/jwks`. `enabled` is `false` until `sharesFolder` is configured. |
 | HTTP Message Signatures                          | Inbound: verified by the host before this code runs (see "Host contracts"). Outbound: the host's delivery queue signs with the installation's Ed25519 key `ocm-key`, `tag="ocm"`, covering `@method`, `@target-uri`, `content-digest` and `content-length`; the key is published as `<host>#ocm-key` at `/ocm/jwks`.                                                                                                                                                     |
-| Share Creation Notification (`POST /ocm/shares`) | `shareType: user`, `resourceType: file`, WebDAV (`multi` or legacy `webdav`) with an **absolute** `uri` and a `sharedSecret`. `201 { recipientDisplayName }` on success.                                                                                                                                                                                                                                                                                                 |
-| Resource access                                  | Legacy shared-secret access only: `GET <uri>` with `Authorization: Bearer <sharedSecret>`, done by the host (`ctx.blobs.fetch`). No `PROPFIND`, no token exchange.                                                                                                                                                                                                                                                                                                       |
-| Notifications (`POST /ocm/notifications`)        | Receives `SHARE_UNSHARED` and `SHARE_CHANGE_PERMISSION` (provider ID from `notification.file.providerId`, or the deprecated top-level `providerId`). Sends `SHARE_ACCEPTED` once per share.                                                                                                                                                                                                                                                                              |
+| Share Creation Notification (`POST /ocm/shares`) | `shareType: user`, `resourceType: file`, WebDAV (`multi` or legacy `webdav`) with an **absolute** `uri` and a `sharedSecret`; or Nextcloud's legacy form, `{ name: "webdav", options: { sharedSecret, permissions: "<WebDAV property name>" } }` with no `uri` (see "Against a real Nextcloud"). `shareWith` may carry the receiver's URL (`bob@https://host`), as Nextcloud sends it. `201 { recipientDisplayName }` on success.                                        |
+| Resource access                                  | Shared-secret access only, done by the host (`ctx.blobs.fetch`): `GET <uri>` with `Authorization: Bearer <sharedSecret>`; for Nextcloud's legacy form, `GET <signer origin>/public.php/webdav/` with `Authorization: Basic base64(<sharedSecret>:)`. No `PROPFIND`, no token exchange.                                                                                                                                                                                   |
+| Notifications (`POST /ocm/notifications`)        | Receives `SHARE_UNSHARED` and `SHARE_CHANGE_PERMISSION` (provider ID from `notification.file.providerId`, or the deprecated top-level `providerId`; `senderDomain`, if present, must be the signer). Sends `SHARE_ACCEPTED` once per share.                                                                                                                                                                                                                              |
 
 Refused, with the status OCM names: unsigned or non-`tag="ocm"` requests
 (`401`, from the host or the plugin); a signing server that is not in
@@ -138,15 +141,82 @@ candidate16 (`integrations/tooling/fixtures/plugin-manifest/v3-fetches*.json`).
 - Discovery over plain `http` (OCM's testing-setup fallback): the host
   fetches `https://<domain>/.well-known/ocm` only.
 - Draft-cavage signatures and the pre-1.4 `publicKey` discovery field that
-  older Nextcloud releases use. The host still verifies cavage signatures
-  against a fetched `keyId` document, but this plugin only accepts
-  `tag="ocm"` callers.
+  Nextcloud uses towards a receiver without the `http-sig` capability (and,
+  presumably, older Nextcloud releases always; which ones was not checked).
+  The host still verifies cavage signatures against a fetched `keyId`
+  document, but this plugin only accepts `tag="ocm"` callers.
+- `SHARE_ACCEPTED` that Nextcloud accepts: Nextcloud 35.0.1 answers `400`,
+  because it wants the share's `sharedSecret` (and the deprecated top-level
+  `providerId`) in the notification, and this plugin never stores or sends
+  the secret. The received copy is unaffected; Nextcloud just does not mark
+  the share accepted.
 - Replay protection beyond the ±300 s `created` window, and atomic
   uniqueness for concurrent identical shares (two concurrent deliveries of
   the same share could both create a File; the host has no in-commit
   uniqueness check yet, #167 section 1).
 - Re-fetching after the sender changes the file, and revocation of the local
   copy on `SHARE_UNSHARED`.
+
+## Against a real Nextcloud
+
+Checked on 2026-10-01 with the official Docker image `nextcloud:35.0.1-apache`
+(`status.php` versionstring `35.0.1`, OCM `apiVersion` `1.0-proposal1`,
+`version` `1.1.2`), first against a recording stub and then by
+`e2e/nextcloud.spec.ts`. What Nextcloud sends to a receiver whose discovery
+advertises `http-sig` and a `jwksUri` (like this one):
+
+- **Discovery**: `GET https://<host>/.well-known/ocm`, then
+  `/ocm-provider`, then the same over `http://` (Nextcloud tries `https`
+  first unless the address names a scheme). User agent
+  `Nextcloud-Server-Crawler/35.0.1`. A loopback receiver also needs
+  Nextcloud's `allow_local_remote_servers`.
+- **Signature**: RFC 9421 with `tag="ocm"`, label `ocm`, covering
+  `"@method" "@target-uri" "content-digest" "content-length"`, with
+  `created` and `keyid`, no `alg`. The key is ECDSA P-256: `keyid`
+  `https://<host>/ocm#ecdsa-p256-sha256-1`, published as an `EC`/`P-256`
+  JWK with `alg` `ES256` at its `jwksUri`
+  (`/apps/cloud_federation_api/api/v1/jwks`). It also sends an uncovered
+  `Date`. Its discovery still has the pre-1.4 `publicKey` (RSA, keyId
+  `https://<host>/ocm#signature`) for draft-cavage receivers.
+- **Share**: `shareWith` `bob@http://<receiver host>` (the receiver's URL,
+  with `https://` when the address has no scheme), `owner`/`sender`
+  `alice@<host>`, `senderDomain` absent, and the legacy protocol
+  `{ "name": "webdav", "options": { "sharedSecret": "…", "permissions":
+"{http://open-cloud-mesh.org/ns}share-permissions" } }`, with no `uri`.
+  Nextcloud only sends a `webdav.uri` (`https://<host>/public.php/webdav/`)
+  and the token exchange to receivers that advertise `exchange-token`.
+  The file is then at `GET https://<host>/public.php/webdav/` with
+  `Authorization: Basic base64(<sharedSecret>:)`; `Bearer` is refused there
+  (`401`). A shared **folder** is sent the same way, as `resourceType:
+file`, and that URL then answers `200` with an HTML page.
+- **Unshare**: `SHARE_UNSHARED` with the top-level `providerId`,
+  `notification.sharedSecret`, and no `senderDomain` (which OCM 1.5
+  requires).
+
+What it took:
+
+| Gap                                                                  | Where                    | Fix                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EC`/`ES256` JWKs refused, so every Nextcloud request was a `401`    | host (`http_signatures`) | atomic-server branch `claude/plugin-ocm-es256` (`4dd4f39be`, on the pin `a12b74a`): ECDSA P-256 verification, from a JWK only.                                                                                                                                 |
+| `SHARE_UNSHARED` names no sender, so the host could not find the key | host (`route_auth`)      | Same branch: with neither `senderDomain` nor `sender` in the body, the signer domain is the `keyid`'s; the key must still be in that domain's own JWK Set.                                                                                                     |
+| Legacy `options` protocol without `uri`; `shareWith` with a scheme   | plugin                   | `parseShare`/`address`. The file is read from `<signer origin>/public.php/webdav/` with Basic auth, through its own fixed-path operation `fetch-legacy-webdav` (`fetch-file`'s `{*rest}` does not match a trailing `/`), only on the origin the host verified. |
+| No `senderDomain` in notifications                                   | plugin                   | `senderDomain` optional; when present it must still be the signer.                                                                                                                                                                                             |
+| Folders arrive as `resourceType: file`                               | plugin                   | An HTML answer for a legacy share whose name is not `.html`/`.htm`/`.xhtml` is refused (`501`); Nextcloud then reports the share as failed. The fetched page stays in the blob store, unreferenced.                                                            |
+
+Results of `OCM_NEXTCLOUD_E2E=1 node integrations/tooling/run-lane.mjs
+open-cloud-mesh --tier e2e` (both specs):
+
+- **atomic-server `a12b74a` (the pin)**, binary from
+  `ghcr.io/ontola/atomic-server-e2e:a12b74a…-plugin-routes`: `ocm.spec.ts`
+  passes; `nextcloud.spec.ts` fails at step 1, Nextcloud reporting the
+  receiver's `401` ("the OCM signing key could not be used": the `ES256`
+  JWK).
+- **atomic-server `claude/plugin-ocm-es256` (`4dd4f39be`)**, built with
+  `--features wasm-plugins,plugin-routes`: both pass. Nextcloud reports the
+  share created, the host fetches the file into the blob store, the File
+  shows "State: accepted", unsharing in Nextcloud marks it unshared, and a
+  folder share is refused. The `SHARE_ACCEPTED` delivery fails for good
+  with Nextcloud's `400` (see "Not implemented").
 
 ## Build and tests
 
@@ -160,6 +230,15 @@ The node tier runs `plugin.test.mjs` (every route with a fake host:
 discovery, JWK Set, accepted/refused/repeated shares, notifications,
 secret handling, the bundle) and `peer.test.mjs` (the e2e peer's own RFC
 9421 code).
+
+`e2e/nextcloud.spec.ts` is opt-in (skipped unless `OCM_NEXTCLOUD_E2E=1`;
+needs Docker, pulls `nextcloud:35.0.1-apache` or `OCM_NEXTCLOUD_IMAGE`, and
+uses `127.0.0.1:18443` or `OCM_NEXTCLOUD_PORT`). `e2e/nextcloud.mjs` runs
+the container on the host network with Apache bound to `127.0.0.1` only,
+HTTPS from the same throwaway test CA as the peer, SQLite and invented
+users, and removes it afterwards. The two specs share that CA through the
+OS temporary directory (`peer.mjs` `shareCa`), because the server trusts
+exactly one and Playwright runs them in parallel.
 
 The e2e tier runs `e2e/ocm.spec.ts` on atomic-server built with the
 `plugin-routes` feature at `--plugin-routes read-write`, with the invented
