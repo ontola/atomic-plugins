@@ -6,11 +6,10 @@ import {
   preview,
   project,
   planEdit,
-  manifest,
+  request,
   type Event,
   type Projection,
 } from './adapter.js';
-import { validateManifest } from '../../browser/lib/src/plugin-manifest.js';
 
 const timed = (id: string, overrides: Partial<Event> = {}): Event => ({
   id,
@@ -25,10 +24,24 @@ const timed = (id: string, overrides: Partial<Event> = {}): Event => ({
 });
 
 describe('Google Calendar package', () => {
-  it('uses a strict calendar-scoped manifest', () => {
-    expect(validateManifest(manifest('primary')).operations).toHaveLength(4);
-    expect(() => manifest('../escape')).toThrow();
-    expect(() => manifest('primary?token=x')).toThrow();
+  it('keeps the calendar id to one path segment', () => {
+    expect(endpoint('primary')).toBe(
+      'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+    );
+    expect(endpoint('team@example.com')).toContain('/team%40example.com/');
+    expect(() => endpoint('../escape')).toThrow();
+    expect(() => endpoint('primary?token=x')).toThrow();
+  });
+
+  it('names no credential in its intents; If-Match is the only conditional header', () => {
+    // The drive app is the one runtime (0.1.4): the host's relay owns the
+    // connection, so an intent carries no Authorization placeholder.
+    expect(
+      request('list', 'GET', endpoint('primary'), 'page-1').headers,
+    ).toEqual({ 'Content-Type': 'application/json' });
+    expect(
+      request('update', 'PATCH', endpoint('primary'), 'e1', {}, '"v1"').headers,
+    ).toEqual({ 'Content-Type': 'application/json', 'If-Match': '"v1"' });
   });
 
   it('reads every page and excludes recurring and cancelled events', async () => {

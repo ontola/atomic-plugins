@@ -12,19 +12,20 @@
  * Anything outside `https://www.googleapis.com/calendar/v3/` is refused here,
  * before it reaches the host.
  *
- * The adapter's `Authorization: secret:google-calendar` header is the
- * sandbox runtime's credential placeholder. It is dropped: the frame never
- * names a credential, only a connection id. `If-Match` becomes the request's
- * `ifMatch` field; no other request header crosses to the proxy.
+ * Every request is checked against the app's declared scope first
+ * (`operations.ts`): one of three operations, with the query parameters it
+ * declares, and `If-Match` on every write. The intent's headers never cross
+ * to the proxy: the frame names no credential, only a connection id, and
+ * `If-Match` becomes the request's `ifMatch` field.
  */
 import type {
   ExternalIntent,
   ExternalReceipt,
 } from '../../../browser/lib/src/plugin-connection.js';
+import { operationFor, PLATFORM, UPSTREAM } from './operations.js';
 import type { HostProxy, HostProxyResponse } from './store.js';
 
-export const PLATFORM = 'google-calendar';
-export const UPSTREAM = 'https://www.googleapis.com/calendar/v3';
+export { PLATFORM, UPSTREAM };
 
 /**
  * The call for a write threw instead of answering (a lost response, a
@@ -128,12 +129,14 @@ export function relay(proxy: HostProxy, connectionId: string): Relayed {
   const out: Relayed = {
     async read(intent) {
       const { path, query } = relayPath(intent.url);
-      const method = intent.method.toUpperCase();
-      if (method !== 'GET' && method !== 'PATCH')
-        throw new Error(`The Calendar app does not send ${method} requests`);
       const ifMatch = intent.headers?.['If-Match'];
-      if (method === 'PATCH' && !ifMatch)
-        throw new Error('Refusing a Calendar write without If-Match');
+      // Throws for anything outside the declared scope; nothing is sent.
+      const { method } = operationFor({
+        method: intent.method,
+        path,
+        query,
+        ...(ifMatch ? { ifMatch } : {}),
+      });
       let response: HostProxyResponse;
 
       try {

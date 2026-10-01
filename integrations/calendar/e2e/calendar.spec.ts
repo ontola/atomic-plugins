@@ -29,10 +29,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -254,6 +255,21 @@ test.describe('calendar drive app', () => {
       expect.arrayContaining([
         expect.stringMatching(/^atomic-proxy-connect|connection-v1/),
       ]),
+    );
+
+    // The declared scope (app/operations.ts) is what the frame sent: every
+    // request the mock proxy received is one of the three declared
+    // operations, with their query parameters and If-Match (`operationFor`
+    // throws, naming the request, for anything else), and all three were
+    // used. Nothing else reached the proxy, so nothing else reached Google.
+    const sent = (await driver('received', [])) as RelayRequest[];
+    expect(sent.length).toBeGreaterThan(5);
+    const used = new Set(sent.map(request => operationFor(request).id));
+    expect([...used].sort()).toEqual(OPERATIONS.map(o => o.id).sort());
+    expect(sent.filter(r => r.method === 'PATCH').map(r => r.ifMatch)).toEqual(
+      sent
+        .filter(r => r.method === 'PATCH')
+        .map(() => expect.stringMatching(/^"v\d+"$/)),
     );
   });
 });

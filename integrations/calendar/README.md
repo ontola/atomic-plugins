@@ -15,7 +15,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   110,466 bytes for 0.1.3) from GitHub Pages and refuses it unless it
+   111,872 bytes for 0.1.4) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -54,23 +54,33 @@ drive apps.
 The UI follows [`design/`](design/) (#89); see _Design decisions_ below for
 where it differs from the mockups.
 
-### What backs the catalog entry today
+### What backs the catalog entry, and what does not
 
-`catalog.json`'s `calendar` entry (called `devonian-google-calendar`, with
-`requires-api-plugins`, before the drive app was published) describes this
-drive app and installs it. Two other runtimes live in this folder, and
-neither is reachable from the pinned host:
+`catalog.json`'s `calendar` entry describes this drive app and installs it
+(it was called `devonian-google-calendar`, with `requires-api-plugins`,
+before the drive app was published). Its `capabilities` text names the
+app's declared scope, which is written down once, in
+[`app/operations.ts`](app/operations.ts): the three provider operations
+(see [Proxy catalog](#proxy-catalog)), the Google OAuth scopes they need,
+and the host `store` members the app calls. `app/relay.ts` refuses, before
+anything reaches `store.proxy.request`, a request that matches none of
+them. The entry point is the bundle's one export, `view()`
+(`app/build.test.ts`). Two other things live in this folder, and neither is
+a way to run the plugin:
 
-- `adapter.ts` is also written as a **sandbox-plugin** adapter (`manifest()`
-  with a `secret:google-calendar` placeholder). The drive app reuses its
-  `preview`/`planEdit`/`applyEdit` unchanged, through `app/relay.ts`. But
-  there is no `plugin.js` or certified `package.json` here (`app/package.json`
-  only records the drive app's version), so the sandbox runtime has no
-  bundle to run, and nothing certifies one.
+- `adapter.ts` is the Google mapping (paging, skip rules, three-way
+  reconciliation, minimal ETag-conditioned patches) that the drive app uses
+  through `app/relay.ts`. Up to 0.1.3 it also carried a sandbox-plugin
+  `manifest()`: a `secret:google-calendar` credential placeholder, a
+  `create_event` action and a single-event read, none of which the app
+  performs, and no `plugin.js` ever ran it. 0.1.4 removed it. The sandbox
+  runtime (shape 2 in AGENTS.md) is not a supported path for this plugin,
+  and the bundle now names no credential at all (`app/build.test.ts`).
 - [`devonian/google-calendar/`](devonian/google-calendar/) is the Devonian
-  lens of the LocalThought setup dialog flow. The pinned host has no
-  LocalThought dialog. Evidence gathered against that flow does not certify
-  the drive app.
+  lens of the retired LocalThought setup-dialog flow: an unhosted library
+  (shape 3), kept and unit-tested in this lane, with no host at the pin and
+  no catalog entry. Nothing installs it, and evidence gathered against that
+  flow does not certify the drive app.
 
 ## Mapping
 
@@ -277,7 +287,8 @@ Declared, not live-verified (see _Verification_):
 
 ## Proxy catalog
 
-The operations the app uses, confirmed against the composed `google-calendar`
+The operations the app uses, declared in [`app/operations.ts`](app/operations.ts)
+and confirmed against the composed `google-calendar`
 catalog document. The overlays in
 [`../../overlays/googleapis.com/google-calendar/v3/`](../../overlays/googleapis.com/google-calendar/v3/)
 are byte-identical to the ones GitHub Pages publishes, and the proxy fetches
@@ -286,16 +297,34 @@ those at runtime. The checked-in composition is
 Server base: `https://www.googleapis.com/calendar/v3`, so relay paths keep
 `/calendar/v3`.
 
-| Relay call                                              | Catalog operation (scope)                                                                        |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `GET /calendar/v3/users/me/calendarList`                | `calendarList.list` (`calendar.calendarlist.readonly`)                                           |
-| `GET /calendar/v3/calendars/{calendarId}/events`        | `events.list` (`calendar.events`)                                                                |
-| `PATCH /calendar/v3/calendars/{calendarId}/events/{id}` | `events.patch` (`calendar.events`), `412` declared, `sendUpdates` enum `all\|externalOnly\|none` |
+| Relay call                                              | Query the app sends                                                     | Catalog operation (scope)                                                                        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `GET /calendar/v3/users/me/calendarList`                | `maxResults=250`, `pageToken`                                           | `calendarList.list` (`calendar.calendarlist.readonly`)                                           |
+| `GET /calendar/v3/calendars/{calendarId}/events`        | `singleEvents=false`, `showDeleted=true`, `maxResults=250`, `pageToken` | `events.list` (`calendar.events`)                                                                |
+| `PATCH /calendar/v3/calendars/{calendarId}/events/{id}` | `sendUpdates=none`, always with `If-Match`                              | `events.patch` (`calendar.events`), `412` declared, `sendUpdates` enum `all\|externalOnly\|none` |
+
+Nothing else: no create, delete or single-event read, no other query
+parameter, no other value for the fixed ones. `operationFor` in
+`app/operations.ts` is that rule, and `app/relay.ts` applies it to every
+intent before the host is asked. `app/operations.test.ts` reads each
+declared operation out of the checked-in composition (its operation id, its
+one scope under both security schemes, the parameters the app sends, the
+`sendUpdates` enum and the `412`), checks that
+`overlays/.../auth-overlay.yaml` asks Google for exactly those two scopes,
+and runs the app's whole flow (calendar list, import, refresh, review,
+send) against the fake store to check that it uses all three operations and
+nothing else. The e2e checks the same declaration against what the mock
+proxy actually received from the real plugin frame
+(`POST /fixture/google-calendar/received`). These are checks against the
+checked-in composition and the mock; what Google itself permits for the
+account is only known from a live run (see _Verification_).
 
 `integration-proxy/src/identity_catalog_tests.rs`
 (`composed_google_calendar_permits_the_calendar_app_operations`) checks
-exactly these calls, with their query strings, through `Catalog::allows`,
-`required_headers` and `validate_request`. `If-Match` is not a catalog
+these calls, with their query strings, through `Catalog::allows`,
+`required_headers` and `validate_request` (it also allows a single-event
+`GET`, which the app has not sent since 0.1.4 removed `adapter.ts`'s
+`get`). `If-Match` is not a catalog
 question: `proxy.rs` `upstream_request` forwards it for any allowed
 operation, and `browser_cors()` allows it in and exposes `ETag` out. The
 Heroku deployment (`localthought/integration-proxy`) is a wrapper around
@@ -317,6 +346,13 @@ has not been checked here.
 - After an uncertain request, the page keeps the spent connection listed
   (`proxyConnections.list` still returns it). The app falls back past it to
   the newest working connection. A host that pruned it would be simpler.
+- The `store` members the app calls are listed in `app/operations.ts`
+  (`HOST_OPERATIONS`): `getData`, `getResource`, `query`, `newResource` and
+  `proxy.request`/`.connections`/`.connect` on every host with the relay;
+  `openExternal`, `openResource`, `getTheme`, `onThemeChange` and
+  `proxy.disconnect` feature-detected (pin 007869464). `app/operations.test.ts`
+  runs the controller's whole flow and mounts the view against a recording
+  store, and checks that exactly those members were touched.
 
 ## Verification
 
@@ -353,7 +389,10 @@ node --test integrations/localthought/mock-proxy.test.mjs
   conflicts; a lost response followed by a reconnect; cancellation after
   import; local-only and invalid rows. `app/compare.test.ts`: edits made
   outside the app, found on open (see the table above). `app/build.test.ts` checks that the
-  bundle is one ES module with no storage, `fetch` or credential of its own.
+  bundle is one ES module exporting only `view`, with no storage, `fetch` or
+  credential of its own. `app/operations.test.ts`: the declared scope (see
+  [Proxy catalog](#proxy-catalog)) against the relay, the composed proxy
+  catalog, the auth overlay, and what the app does.
 - **Host e2e** (`e2e/calendar.spec.ts`, lane `calendar`, tier `e2e`): the
   same path in the real plugin frame on the pinned host, with the mock
   integration proxy. Each test installs the app from the catalog's Drive
@@ -377,7 +416,11 @@ node --test integrations/localthought/mock-proxy.test.mjs
   calendar in 360, 720 and 1200px frames
   under the host's light and dark themes: no sideways scroll, no axe
   violations, and the theme switch restyles the frame without a reload.
-  Screenshots are attached to the Playwright report.
+  Screenshots are attached to the Playwright report. The first test ends by
+  reading every request the mock proxy received from the frame
+  (`POST /fixture/google-calendar/received`) and checking that each is one
+  of the three declared operations, with its query and `If-Match`, and that
+  all three were used.
 - **Live: not verified.** No run against a real Google account exists for
   this path. Evidence from the retired LocalThought/Devonian flow does not
   count for it. To verify, with authorized credentials and a disposable

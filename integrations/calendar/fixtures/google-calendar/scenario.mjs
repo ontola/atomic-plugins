@@ -298,6 +298,18 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
     state() {
       return structuredClone({ writes, events: primary });
     },
+    /** Test driver: every request received, in order, as JSON: method, the
+     * path after the mock's `/proxy/<platform>` prefix (so it keeps
+     * `/calendar/v3`), the query and the If-Match sent. What a spec checks
+     * against the app's declared operations (`app/operations.ts`). */
+    received() {
+      return structuredClone(
+        requests.map(r => ({
+          ...r,
+          path: r.path.replace(/^\/proxy\/google-calendar(?=\/)/, ''),
+        })),
+      );
+    },
     /** Test driver: the event is cancelled in Google; a tombstone remains. */
     cancel(eventId, calendarId = PRIMARY) {
       const event = find(calendarId, eventId);
@@ -356,6 +368,6 @@ export default {
   document: calendarDocument,
   jsonBody: true,
   // Callable from an e2e spec as POST /fixture/google-calendar/<name>.
-  drivers: ['editRemote', 'cancel', 'state'],
+  drivers: ['editRemote', 'cancel', 'state', 'received'],
   create: () => calendarFixture(),
 };

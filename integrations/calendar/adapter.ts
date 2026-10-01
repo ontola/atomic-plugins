@@ -99,10 +99,9 @@ export class StaleEventError extends Error {
 export const PAGE_SIZE = 250;
 export const MAX_PAGES = 100;
 
-const headers = {
-  Authorization: 'secret:google-calendar',
-  'Content-Type': 'application/json',
-};
+/** The app never names a credential: the host's relay owns the connection
+ * (app/relay.ts). `If-Match` is the only header that reaches the proxy. */
+const headers = { 'Content-Type': 'application/json' };
 
 function civilDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -223,71 +222,6 @@ export function endpoint(calendarId: string): string {
 
   return `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 }
-export function manifest(calendarId: string) {
-  const url = endpoint(calendarId);
-
-  return {
-    schemaVersion: 1,
-    actions: [
-      {
-        name: 'get_event',
-        title: 'Get an event',
-        description: 'Read one event from this connected calendar.',
-        operation: 'get',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: 'Google event id' },
-          },
-          required: ['id'],
-          additionalProperties: false,
-        },
-      },
-      {
-        name: 'create_event',
-        title: 'Create an event',
-        description:
-          'Prepare a new event on this calendar for review. Nothing is sent until approved.',
-        operation: 'create',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Event title' },
-            description: { type: 'string', description: 'Event description' },
-            start: {
-              type: 'string',
-              description: 'YYYY-MM-DD or an offset-qualified date-time',
-            },
-            end: {
-              type: 'string',
-              description: 'YYYY-MM-DD or an offset-qualified date-time',
-            },
-            allDay: {
-              type: 'boolean',
-              description: 'Whether this is an all-day event',
-            },
-          },
-          required: ['title', 'start', 'end', 'allDay'],
-          additionalProperties: false,
-        },
-      },
-    ],
-    secrets: [
-      {
-        name: 'google-calendar',
-        origin: 'https://www.googleapis.com',
-        description:
-          'Google OAuth token with Calendar events read/write access to this calendar',
-      },
-    ],
-    operations: [
-      { id: 'list', method: 'GET', url, effect: 'read' },
-      { id: 'get', method: 'GET', url: `${url}/{id}`, effect: 'read' },
-      { id: 'create', method: 'POST', url, effect: 'write' },
-      { id: 'update', method: 'PATCH', url: `${url}/{id}`, effect: 'write' },
-    ],
-  };
-}
 
 function parse<T>(response: ExternalReceipt): T {
   if (response.status < 200 || response.status >= 300)
@@ -315,22 +249,6 @@ export function request(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   };
 }
-export async function get(
-  host: Host,
-  root: string,
-  id: string,
-): Promise<Event> {
-  const event = parse<Event>(
-    await host.read(
-      request('get', 'GET', `${root}/${encodeURIComponent(id)}`, 'read'),
-    ),
-  );
-  if (event.id !== id)
-    throw new Error('Expected an event with the requested id');
-
-  return event;
-}
-
 /** Full scans avoid interpreting a partial page as deletion. A pilot cap fails loudly. */
 export async function preview(
   host: Host,

@@ -43,7 +43,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 
 /** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
 const VERSIONS = {
-  calendar: 'usertest-7',
+  calendar: 'usertest-8',
   'issue-tracker': 'usertest-3',
   money: 'usertest-2',
   notion: 'usertest-3',
