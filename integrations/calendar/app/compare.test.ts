@@ -8,9 +8,11 @@
  * day is translated back into Google's start and end (`hostValue`).
  */
 import { describe as suite, expect, it } from 'vitest';
+import { properties } from '../../../ontology-kit/terms.mjs';
 import { PRIMARY } from '../fixtures/google-calendar/scenario.mjs';
+import { EVENT } from './fields.js';
 import { createController, describe, type ViewState } from './controller.js';
-import { DAY, fakeStore, ONTOLOGY, ROW_CLASS, TABLE } from './fakeStore.js';
+import { DAY, fakeStore, field, TABLE } from './fakeStore.js';
 import {
   ALL_DAY,
   DAY as DAY_FIELD,
@@ -20,22 +22,13 @@ import {
   NAME,
   NOTES,
   PARENT,
-  PROPERTIES,
   readEvents,
-  RECOMMENDS,
-  SHORTNAME,
 } from './sync.js';
 
 type Store = ReturnType<typeof fakeStore>;
 
 function prop(store: Store, shortname: string): string {
-  const listed = store.resources.get(ONTOLOGY)![PROPERTIES] as string[];
-  const subject = listed.find(
-    s => store.resources.get(s)![SHORTNAME] === shortname,
-  );
-  if (!subject) throw new Error(`no ${shortname} property`);
-
-  return subject;
+  return field(store, shortname);
 }
 
 function row(store: Store, eventId: string) {
@@ -361,7 +354,7 @@ suite('compare on open: edits made in the host table', () => {
     const store = await imported();
     await store.newResource({
       parent: TABLE,
-      isA: [ROW_CLASS],
+      isA: [EVENT],
       propVals: {
         [NAME]: 'Added in the host',
         [prop(store, DAY_FIELD)]: '2026-09-20',
@@ -387,33 +380,24 @@ suite('compare on open: edits made in the host table', () => {
 
   it('a column the app doesn’t map is listed as kept here, never silently dropped', async () => {
     const store = await imported();
-    const attendees = 'did:ad:prop-attendees';
-    store.resources.set(attendees, {
-      [PARENT]: ONTOLOGY,
-      [SHORTNAME]: 'attendees',
-      [NAME]: 'Attendees',
-    });
-    const klass = store.resources.get(ROW_CLASS)!;
-    store.resources.set(ROW_CLASS, {
-      ...klass,
-      [RECOMMENDS]: [...(klass[RECOMMENDS] as string[]), attendees],
-    });
+    // event-v1 recommends Recurrence, which the app doesn't import or send.
+    const recurrence = properties['atomic-calendar-recurrence'].subject;
     const subject = row(store, 'timed')!.subject;
     store.resources.set(subject, {
       ...store.resources.get(subject)!,
-      [attendees]: 'A. Example',
+      [recurrence]: '{"freq":"weekly"}',
       // The core Description is not Notes: not sent either.
       [DESCRIPTION]: 'Typed in the wrong column',
     });
     hostEdit(store, 'timed', { location: 'Room 5' });
     const { controller, state } = await reopen(store);
-    expect(state.summary.unmapped).toEqual([{ column: 'Attendees', rows: 1 }]);
+    expect(state.summary.unmapped).toEqual([{ column: 'Recurrence', rows: 1 }]);
     expect(describe(state)).toContain(
-      '1 column the app doesn’t send (Attendees) is kept here only.',
+      '1 column the app doesn’t send (Recurrence) is kept here only.',
     );
     await controller.send();
     expect(store.google.writes[0].patch).toEqual({ location: 'Room 5' });
-    expect(store.resources.get(subject)![attendees]).toBe('A. Example');
+    expect(store.resources.get(subject)![recurrence]).toBe('{"freq":"weekly"}');
   });
 });
 

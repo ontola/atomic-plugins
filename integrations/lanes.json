@@ -27,15 +27,19 @@
         "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
         "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/open-cloud-mesh/e2e/.peer/ca.pem"
       },
-      "e2e": ["integrations/open-cloud-mesh/e2e/ocm.spec.ts"],
-      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams, and the route field `fetches` of pin candidate16); pin candidate16 (38306758) has all of them, and the e2e passed there on 2026-09-29; it fails at a pin without them. No interoperability claim with a real Nextcloud/ownCloud peer."
+      "e2e": [
+        "integrations/open-cloud-mesh/e2e/ocm.spec.ts",
+        "integrations/open-cloud-mesh/e2e/nextcloud.spec.ts"
+      ],
+      "note": "OCM 1.5 receiver: discovery, JWK Set, RFC 9421 (tag=ocm) signed shares and notifications, the shared file fetched into the blob store, SHARE_ACCEPTED sent back. The e2e runs at --plugin-routes read-write against an invented OCM peer fixture (e2e/peer.mjs, HTTPS on loopback with a throwaway test CA), which the debug-build seams in serverEnv let the server reach. Needs an .atomic-server-ref with atomic-server branch claude/plugin-ocm-host (OCM key discovery, tagged signing, JWKs, blobs.fetch, on top of claude/plugin-fediverse-host for the seams, and the route field `fetches` of pin candidate16); pin candidate16 (38306758) has all of them, and the e2e passed there on 2026-09-29; it fails at a pin without them. nextcloud.spec.ts (opt-in, skipped unless OCM_NEXTCLOUD_E2E=1; needs Docker) has a real Nextcloud 35.0.1 (official image, loopback only) share a file with the plugin through its own OCS API; on 2026-10-01 it failed at the pin a12b74a (the host refuses Nextcloud's ES256 key) and passed on atomic-server branch claude/plugin-ocm-es256 (4dd4f39be). Not tried with ownCloud or OCIS."
     },
     {
       "id": "calendar",
       "index": 0,
       "platforms": ["google-calendar"],
       "tiers": ["typecheck", "unit", "e2e"],
-      "note": "e2e installs the Calendar drive app from the catalog (Integrations, Drive apps; the dev-server serves the committed apps/calendar/<version>/ui.js in place of GitHub Pages) and drives it in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers.",
+      "paths": ["ontology/**", "ontology-kit/**"],
+      "note": "paths: the app bundles ontology-kit/terms.mjs and resolver.mjs and syncs into the shared event-v1 class (#177), so an ontology change runs this lane too. e2e installs the Calendar drive app from the catalog (Integrations, Drive apps; the dev-server serves the committed apps/calendar/<version>/ui.js in place of GitHub Pages) and drives it in its plugin iframe: connect through the host's consent bar, choose a calendar, import and refresh through the host proxy relay, then preview and send edits with If-Match (atomic-server#1657's ifMatch, in the pin), against the mock proxy's stateful google-calendar fixture and its test drivers. The rows are event-v1 with the published GitHub Pages subjects, which the server and browser fetch themselves, so the e2e needs network access to ontola.github.io; it first checks Pages serves the class and its properties with the committed bytes (ontology-kit/served.mjs). One test adds the app as a view of a hand-made event-v1 table through Add view.",
       "e2e": ["integrations/calendar/e2e/calendar.spec.ts"]
     },
     {

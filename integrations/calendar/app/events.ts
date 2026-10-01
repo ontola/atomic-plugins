@@ -98,6 +98,16 @@ function clock(
   };
 }
 
+/**
+ * A row with a Day and neither Start nor End: one made in a table or in the
+ * host's Calendar view (`+`), or by another app on an `event-v1` table. It
+ * is drawn as an all-day event on the days the host view draws it (#177
+ * §3.2: before 0.2.0 such a row was drawn as "No time set").
+ */
+export function dayOnly(event: Projection): boolean {
+  return !event.allDay && !event.start && !event.end;
+}
+
 /** Start and end as instants, for ordering and timed layout. */
 export function bounds(
   event: Projection,
@@ -127,7 +137,7 @@ export interface Segment {
   date: string;
   /** Drawn in the all-day area: an all-day row, or a row without clock times. */
   allDay: boolean;
-  /** A row that is not all-day but has no valid Start and End to time it. */
+  /** A row that is not all-day and has a Start or End, but no valid timed interval. */
   untimed?: boolean;
   /** Minutes since midnight, in the event's own stored offset. */
   startMin: number;
@@ -165,7 +175,7 @@ export function segments(
         event,
         date,
         allDay: true,
-        ...(event.allDay ? {} : { untimed: true }),
+        ...(event.allDay || dayOnly(event) ? {} : { untimed: true }),
         startMin: 0,
         endMin: 1440,
         ...(key !== undefined && total > 1

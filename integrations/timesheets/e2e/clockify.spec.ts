@@ -29,7 +29,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 /** The fixture's workspace (`../fixtures/clockify/scenario.mjs`). */
 const WORKSPACE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 

@@ -15,7 +15,19 @@ import { atomic } from './ontology.js';
 import { ensureSchema, findSchema, type CompleteSchema } from './schema.js';
 import type { ConnectionReference, PluginStore } from './store.js';
 import {
+  heldRows,
+  intentConflicts,
+  loadIntents,
+  openIntents,
+  recordIntent,
+  targetLabel,
+  toSupersede,
+  type IntentConflict,
+  type StoredIntent,
+} from './intents.js';
+import {
   newObservationId,
+  SESSION_DEVICE,
   syncClockify,
   type Recovered,
   type SyncResult,
@@ -34,7 +46,8 @@ import {
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
 import { rawFromCanonical, timeEntries } from './clockifyObserve.js';
-import type { TimelineConflict } from './timeline/types.js';
+import type { TimeLabel, TimelineConflict } from './timeline/types.js';
+import { spanText } from './timeline/render.js';
 import {
   discardChange,
   entryBoundaries,
@@ -208,16 +221,44 @@ export interface Controller {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/** Why a change waits: two range edits disagree over its time (S21). */
+export const HELD_BY_CONFLICT =
+  'Two range edits not sent yet disagree about this time (made apart, for example on two devices). Choose one under Conflicts first.';
+
+/**
+ * `device` names this open copy of the app: in the log, in its range edits
+ * and in the send lease (#123 M5). The frame has no storage, so it is new
+ * on every page load.
+ */
 export function createController(
   store: PluginStore,
   onChange: (state: ViewState) => void = () => {},
   now: () => number = Date.now,
+  device: string = SESSION_DEVICE,
 ): Controller {
   let current: ViewState = { kind: 'loading' };
   let running = false;
   let input: SheetInput | undefined;
   let changes: ChangesState = { review: [], providerWon: [], recovered: [] };
+  /** Range edits (#123 M5), as last read, and the ones written here. */
+  let intents: StoredIntent[] = [];
+  const written = new Set<string>();
   const timeZone = browserTimeZone();
+
+  const refreshIntents = async (schema: CompleteSchema) => {
+    try {
+      intents = await loadIntents(store, schema, written);
+    } catch {
+      // Keep what was read before: a failed read only hides conflicts
+      // until the next one.
+    }
+  };
+
+  /** Open range edits that disagree, from the current list (S21). */
+  const disagreements = (): IntentConflict[] =>
+    intentConflicts(
+      openIntents(intents, new Set(changes.review.map(c => c.subject))),
+    );
 
   const settingsOf = (state: ViewState): Settings | undefined =>
     state.kind === 'ready' || state.kind === 'syncing'
@@ -415,10 +456,12 @@ export function createController(
           now(),
           {
             clock: now,
+            device,
             onProgress: ({ done, total }) =>
               progress({ phase: 'save', done, total }),
           },
         );
+        await refreshIntents(schema);
         changes = {
           review: result.review,
           providerWon: result.providerWon,
@@ -604,7 +647,19 @@ export function createController(
       );
     },
 
-    changes: () => changes,
+    changes() {
+      const held = heldRows(disagreements());
+      if (!held.size) return changes;
+
+      return {
+        ...changes,
+        review: changes.review.map(c =>
+          held.has(c.subject)
+            ? { ...c, blockers: [...c.blockers, HELD_BY_CONFLICT] }
+            : c,
+        ),
+      };
+    },
 
     editBlockers(entryId) {
       if (isCreateKey(entryId))
@@ -728,14 +783,36 @@ export function createController(
             'Nothing to change: Clockify already says this for that range.',
           );
 
+        const schema = await ensureSchema(store);
+        // Fresh: rows and range edits may have changed elsewhere since.
+        await refreshIntents(schema);
+        const review = await planAll(
+          store,
+          schema,
+          input.mirror,
+          writeContext(),
+        );
+        // Range edits not sent yet over this range are replaced (#123 S22),
+        // unless one reaches outside it.
+        const { replace, outside } = toSupersede(
+          openIntents(intents, new Set(review.map(c => c.subject))),
+          { from, to },
+        );
+        if (outside.length)
+          throw new Error(
+            `A range edit not sent yet (${outside.map(i => spanText(i, input!.timeZone ?? timeZone)).join('; ')}) reaches outside this range. Send or discard it first, or edit a range that covers all of it.`,
+          );
+        const replaced = new Set(replace.flatMap(i => i.rows));
+        const others = review.filter(c => !replaced.has(c.subject));
+
         // One change per entry at a time: an entry with an unsent change,
         // or a new entry not sent yet, in the way is refused.
         const pending = new Set(
-          changes.review.filter(c => c.kind !== 'create').map(c => c.entryId),
+          others.filter(c => c.kind !== 'create').map(c => c.entryId),
         );
         if (
           plan.steps.some(s => s.op !== 'create' && pending.has(s.entryId)) ||
-          changes.review.some(
+          others.some(
             c =>
               c.kind === 'create' &&
               c.desired.start < to &&
@@ -746,10 +823,31 @@ export function createController(
             'An entry in this range has a change that is not sent yet. Send or discard it first.',
           );
 
-        const schema = await ensureSchema(store);
-        await stageRangePlan(store, schema, input.mirror, plan.steps, id =>
-          rowSubject(schema, id),
+        // Put back what the replaced edits staged, then stage this one.
+        for (const change of review.filter(c => replaced.has(c.subject)))
+          await discardChange(await store.getResource(change.subject), schema);
+        const rows = await stageRangePlan(
+          store,
+          schema,
+          input.mirror,
+          plan.steps,
+          id => rowSubject(schema, id),
         );
+        const createdAt = new Date(now()).toISOString();
+        const intent = {
+          v: 1 as const,
+          id: newObservationId(now),
+          device,
+          createdAt,
+          from,
+          to,
+          target: request.target,
+          rows,
+          supersedes: replace.map(i => i.id),
+        };
+        const subject = await recordIntent(store, schema, intent);
+        written.add(subject);
+        intents = [...intents, { ...intent, subject }];
         changes = {
           ...changes,
           review: await planAll(store, schema, input.mirror, writeContext()),
@@ -776,7 +874,9 @@ export function createController(
 
     async send() {
       if (current.kind !== 'ready' || !store.proxy || running) return current;
-      const sendable = changes.review.filter(c => !c.blockers.length);
+      const sendable = controller
+        .changes()
+        .review.filter(c => !c.blockers.length);
       if (!sendable.length) return current;
       running = true;
       const { connection, settings } = current;
@@ -803,10 +903,12 @@ export function createController(
               ...(input?.timeZone ? { timeZone: input.timeZone } : {}),
               clock: now,
               newId: () => newObservationId(now),
-              device: 'frame-send',
+              device,
             },
             write: writeContext(),
             members: input?.members ?? [],
+            lease: { device, clock: now },
+            ...(input?.timeZone ? { timeZone: input.timeZone } : {}),
             onProgress: (done, total) => {
               changes = { ...changes, sending: { done, total } };
               onChange(current);
@@ -911,8 +1013,50 @@ export function createController(
     onChange(current);
   }
 
-  /** The views show a listed change as it would be, marked not sent. */
-  function withPending(sheet: Timesheet): Timesheet {
+  /** Range edits made apart that disagree, as the views' conflicts. */
+  function localConflicts(): TimelineConflict[] {
+    return disagreements().map(c => {
+      // As the sweep orders them: projects by id, no project, not worked.
+      const rank = (l: TimeLabel) =>
+        l.kind === 'didNotWork'
+          ? '2'
+          : l.projectId === null
+            ? '1'
+            : `0${l.projectId}`;
+      const labels: TimeLabel[] = [];
+
+      for (const i of c.intents) {
+        const label = targetLabel(i.target);
+        if (!labels.some(l => rank(l) === rank(label))) labels.push(label);
+      }
+
+      labels.sort((x, y) => (rank(x) < rank(y) ? -1 : 1));
+
+      return {
+        entryId: '',
+        fields: [],
+        kind: 'local',
+        from: c.from,
+        to: c.to,
+        entryIds: [],
+        candidates: labels,
+        edits: c.intents.map(i => ({
+          id: i.id,
+          label: targetLabel(i.target),
+          here: i.device === device,
+          createdAt: Date.parse(i.createdAt),
+        })),
+      };
+    });
+  }
+
+  /** The views show a listed change as it would be, marked not sent, and
+   * range edits that disagree as conflicts. */
+  function withPending(base: Timesheet): Timesheet {
+    const local = localConflicts();
+    const sheet = local.length
+      ? { ...base, conflicts: [...base.conflicts, ...local] }
+      : base;
     if (!changes.review.length) return sheet;
     const byId = new Map(changes.review.map(c => [c.entryId, c]));
     const created: Timesheet['entries'] = changes.review
@@ -1023,6 +1167,9 @@ export function describe(state: ViewState): string {
         (log.unknownMs ? ` ${hours(log.unknownMs)} not loaded.` : '') +
         (state.last.result.account.forceProjects
           ? ' This workspace requires a project on every entry.'
+          : '') +
+        (state.last.result.sendingElsewhereUntil
+          ? ' Another open copy of this app is sending changes to Clockify.'
           : '') +
         (warnings.length ? ` Warnings: ${warnings.join('; ')}` : '')
       );

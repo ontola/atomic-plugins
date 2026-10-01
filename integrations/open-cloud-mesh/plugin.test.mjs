@@ -7,6 +7,8 @@ import {
   parseShare,
   parseNotification,
   domain,
+  address,
+  base64,
   describe,
   identity,
   run,
@@ -592,7 +594,10 @@ test('the bundle rebuilds reproducibly and matches the manifest', async () => {
 
   // The download is a `fetches` read operation, never borrowed from
   // `enqueues` (atomic-server candidate16).
-  assert.deepEqual(routes.shares.fetches, ['fetch-file']);
+  assert.deepEqual(routes.shares.fetches, [
+    'fetch-file',
+    'fetch-legacy-webdav',
+  ]);
   assert.deepEqual(routes.shares.enqueues, ['notify']);
   const operations = Object.fromEntries(
     manifest.operations.map(o => [o.id, o]),
@@ -603,9 +608,19 @@ test('the bundle rebuilds reproducibly and matches the manifest', async () => {
     url: 'https://*/{*rest}',
     effect: 'read',
   });
+  assert.deepEqual(operations['fetch-legacy-webdav'], {
+    id: 'fetch-legacy-webdav',
+    method: 'GET',
+    url: 'https://*/public.php/webdav/',
+    effect: 'read',
+  });
   assert.equal(operations.notify.effect, 'write');
   const blobFetches = [];
   post('shares', share(), {}).calls.fetch.forEach(c => blobFetches.push(c));
+  post('shares', nextcloudShare(), {}).calls.fetch.forEach(c =>
+    blobFetches.push(c),
+  );
+  assert.equal(blobFetches.length, 2);
   for (const c of blobFetches)
     assert.ok(routes.shares.fetches.includes(c.operation));
 
@@ -618,6 +633,197 @@ test('the bundle rebuilds reproducibly and matches the manifest', async () => {
     const r = built.handle(ctx({ route: id }), request('GET'));
     assert.notEqual(r.status ?? r.response?.status, 404, id);
   }
+});
+
+/**
+ * The body Nextcloud 35.0.1 sent in the 2026-10-01 spike (see README,
+ * "Against a real Nextcloud"), with an invented secret and our test hosts:
+ * the legacy `webdav` protocol with `options` and no `uri`, `shareWith`
+ * carrying the receiver's URL, no `senderDomain`.
+ */
+const nextcloudShare = (overrides = {}) => ({
+  shareWith: `bob@https://${HOST}`,
+  shareType: 'user',
+  name: 'spec.txt',
+  resourceType: 'file',
+  description: '',
+  providerId: '1',
+  owner: `alice@${PEER}`,
+  ownerDisplayName: 'alice',
+  sharedBy: `alice@${PEER}`,
+  sharedByDisplayName: 'alice',
+  sender: `alice@${PEER}`,
+  senderDisplayName: 'alice',
+  protocol: {
+    name: 'webdav',
+    options: {
+      sharedSecret: SECRET,
+      permissions: '{http://open-cloud-mesh.org/ns}share-permissions',
+    },
+  },
+  ...overrides,
+});
+
+test("a Nextcloud legacy share is read from the signer's public WebDAV root with Basic auth", () => {
+  const { verdict, status, answer, calls } = post(
+    'shares',
+    nextcloudShare(),
+    {},
+  );
+  assert.equal(status, 201, JSON.stringify(answer));
+  assert.deepEqual(calls.fetch, [
+    {
+      operation: 'fetch-legacy-webdav',
+      url: `https://${PEER}/public.php/webdav/`,
+      headers: {
+        authorization: `Basic ${Buffer.from(`${SECRET}:`).toString('base64')}`,
+      },
+    },
+  ]);
+  const [create] = verdict.intents;
+  assert.equal(create.set[P.localId], `ocm-share-v2 ${PEER} 1`);
+  assert.match(create.set[P.description], /^- Permissions: read$/m);
+  assert.match(
+    create.set[P.description],
+    new RegExp(`^- Recipient: bob@https://`, 'm'),
+  );
+  const { response, ...effects } = verdict;
+  assert.ok(!JSON.stringify(effects).includes(SECRET));
+  assert.ok(!JSON.stringify(response).includes(SECRET));
+  // Plain-http receiver address, as Nextcloud spells it for one.
+  assert.equal(
+    post('shares', nextcloudShare({ shareWith: `bob@http://${HOST}/` }), {})
+      .status,
+    201,
+  );
+});
+
+test("a Nextcloud folder share (its WebDAV root's HTML page) is refused, an HTML file is not", () => {
+  const html = name =>
+    post(
+      'shares',
+      nextcloudShare({ name }),
+      {},
+      {
+        fetch: () => ({
+          status: 200,
+          blob: {
+            hash: HASH,
+            size: 112,
+            type: 'text/html; charset=UTF-8',
+            subject: `atomic:blob:${HASH}`,
+          },
+        }),
+      },
+    );
+  const folder = html('folder');
+  assert.equal(folder.status, 501);
+  assert.match(folder.answer.message, /served a folder/);
+  assert.equal(folder.verdict.intents, undefined);
+  assert.equal(folder.verdict.enqueue, undefined);
+  assert.equal(html('page.html').status, 201);
+});
+
+test('a legacy share is only fetched from the https origin that signed it', () => {
+  for (const owner of [
+    undefined,
+    `https://other.example`,
+    `http://${PEER}`,
+    `https://${PEER}.evil.example`,
+  ]) {
+    const { status, calls, verdict } = post('shares', nextcloudShare(), {
+      owner,
+    });
+    assert.ok([400, 501].includes(status), `${owner}: ${status}`);
+    assert.equal(calls.fetch.length, 0);
+    assert.equal(verdict.intents, undefined);
+  }
+
+  // A `uri` next to `options`, or a new-style `webdav` block without one,
+  // is not the legacy shape.
+  const withUri = nextcloudShare();
+  withUri.protocol.options.uri = 'share-1';
+  assert.equal(post('shares', withUri, {}).status, 501);
+  assert.equal(
+    post(
+      'shares',
+      nextcloudShare({
+        protocol: { name: 'webdav', webdav: { sharedSecret: SECRET } },
+      }),
+      {},
+    ).status,
+    400,
+  );
+  assert.equal(
+    post(
+      'shares',
+      nextcloudShare({
+        protocol: { name: 'multi', options: { sharedSecret: SECRET } },
+      }),
+      {},
+    ).status,
+    400,
+  );
+});
+
+test('a Nextcloud SHARE_UNSHARED without senderDomain is matched to the signer', () => {
+  // The notification Nextcloud 35.0.1 sent: top-level providerId, the
+  // secret inside `notification`, no senderDomain.
+  const body = {
+    notificationType: 'SHARE_UNSHARED',
+    resourceType: 'file',
+    providerId: 'share-123',
+    notification: {
+      sharedSecret: SECRET,
+      message: 'file is no longer shared with you',
+    },
+  };
+  const { verdict, status } = post(
+    'notifications',
+    body,
+    {},
+    {
+      rows: received(),
+    },
+  );
+  assert.equal(status, 201);
+  assert.match(verdict.intents[0].set[P.description], /^- State: unshared$/m);
+  assert.ok(!JSON.stringify(verdict).includes(SECRET));
+  // From another signer it names no share of that signer.
+  assert.equal(
+    post(
+      'notifications',
+      body,
+      { domain: 'other.example' },
+      {
+        rows: received(),
+        config: { allowedPeers: { 'other.example': true } },
+      },
+    ).status,
+    404,
+  );
+});
+
+test('addresses may carry the server URL, domains may not', () => {
+  assert.deepEqual(address('bob@https://Host.Example:8443/', 'x'), {
+    user: 'bob',
+    domain: 'host.example:8443',
+  });
+  assert.deepEqual(address('a@b@http://host.example', 'x'), {
+    user: 'a@b',
+    domain: 'host.example',
+  });
+  for (const bad of [
+    'bob@https://host.example/path',
+    'bob@ftp://host.example',
+    'bob@https://',
+  ])
+    assert.throws(() => address(bad, 'x'), undefined, bad);
+});
+
+test('base64 matches Buffer for ASCII and UTF-8', () => {
+  for (const value of ['', 'a', 'ab', 'abc', 'invented-secret:', 'é€😀:'])
+    assert.equal(base64(value), Buffer.from(value).toString('base64'), value);
 });
 
 test('share identities are plain text the host planner keeps as is', () => {
