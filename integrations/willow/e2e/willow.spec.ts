@@ -92,7 +92,7 @@ test.describe('willow export route', () => {
     await expect(dialog).toContainText('Willow subspace key');
     const reviewUrl = page.url();
     await dialog.getByRole('button', { name: 'Install', exact: true }).click();
-    await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
+    await leftReview(page, reviewUrl);
     const installation = subjectOf(page.url());
     const slug = routeSlug(installation);
 
@@ -292,6 +292,30 @@ async function openReview(page: Page, releaseId: string) {
   await expect(dialog).toBeVisible({ timeout: 30_000 });
 
   return dialog;
+}
+
+/**
+ * Waits for Install to open the new Installation. On #118 (run 36834223383)
+ * the page stayed on /app/integrations for 60 s in 3 of 4 attempts, with no
+ * server log after the click; it did not reproduce in 9 local runs or in the
+ * 18 CI runs before it. The store keeps the user there in three ways: an
+ * inline refusal in the dialog, a toast.error, or a dialog closed without
+ * navigating. The failure names which one, so the next occurrence doesn't
+ * need the trace.
+ */
+async function leftReview(page: Page, reviewUrl: string) {
+  try {
+    await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
+  } catch (err) {
+    const dialog = await page.locator('dialog[open]').allInnerTexts();
+    const toasts = await page.locator('[role="status"]').allInnerTexts();
+    throw new Error(
+      `Install did not leave the review.\n` +
+        `Open dialog: ${dialog.length ? dialog.join('\n---\n') : '(none)'}\n` +
+        `Toasts: ${toasts.length ? toasts.join(' | ') : '(none)'}\n` +
+        String(err),
+    );
+  }
 }
 
 function subjectOf(url: string) {
