@@ -34,12 +34,23 @@ import type { PluginStore } from './store.js';
  *   absorbed and the snapshot before it, so the whole log can be replayed.
  * - Every resource is found from the head, never through `query`.
  *
- * Not solved here (M5): two devices saving the head at the same moment. The
- * head is re-read and merged just before each save, which narrows that race
- * but, without compare-and-swap on `/app-write`, does not close it; an
- * incremental dropped from the head that way is not folded until it is read
- * again. Whether atomic-server accepts a snapshot string of ~1 MB in one
- * commit is not verified.
+ * - **Two devices** (#123 M5, S28). Saving the head re-reads it first and
+ *   merges what another device saved since: tail entries are united, and a
+ *   snapshot another device wrote meanwhile is kept as a second tip
+ *   (`others`) instead of being replaced. Opening a head with more than one
+ *   tip replays every incremental the tips and the tail reach (deduplicated
+ *   by id: the fold is order-independent), and the next compaction writes
+ *   one snapshot that merges them (`merged`). So two devices compacting at
+ *   once leave two valid snapshots and one log that folds to the same
+ *   mirror from either.
+ *
+ * Not solved: two saves of the head at the same instant. `/app-write` has
+ * no compare-and-swap, so a save that did not see the other one's can
+ * still drop that one's tail entries or tip from the head. Those
+ * incrementals are then no longer folded; the next sync's reads restore the
+ * mirror itself, but that part of the history is not replayed. Whether
+ * atomic-server accepts a snapshot string of ~1 MB in one commit is not
+ * verified.
  */
 
 export const COMPACT_AFTER_INCREMENTALS = 50;
@@ -61,6 +72,9 @@ export interface HeadState {
   coverage: CoverageSegment[];
   /** `receivedAt` of the last complete range read. */
   lastComplete?: string;
+  /** Snapshots another device wrote at the same time as `snapshot` (#123
+   * S28): further tips of the log, merged by the next compaction. */
+  others?: string[];
 }
 
 export interface SnapshotState {
@@ -71,6 +85,8 @@ export interface SnapshotState {
   previous: string | null;
   /** The incrementals folded into this snapshot since `previous`. */
   compacted: TailEntry[];
+  /** Other tips this snapshot merged (two devices compacted at once). */
+  merged?: string[];
   writtenAt: string;
 }
 
@@ -96,6 +112,10 @@ export class ObservationLog {
   appended = 0;
   snapshotsWritten = 0;
   private dirty = false;
+  /** Snapshots a tip of this head already includes. */
+  private readonly ancestors = new Set<string>();
+  /** Incremental ids a snapshot of this head absorbed. */
+  private readonly absorbed = new Set<string>();
 
   private constructor(
     private readonly store: PluginStore,
@@ -133,13 +153,16 @@ export class ObservationLog {
     const snapshot = await readSnapshot(store, fields, head.snapshot);
     const tail = await readIncrementals(store, fields, head.tail);
     // An incremental that sorts before the snapshot's cut (another device's,
-    // arriving late) cannot be folded on top of it: replay the whole log.
-    const late = head.tail.some(entry => !after(entry, snapshot.cut));
+    // arriving late), or a second tip, cannot be folded on top of the
+    // snapshot: replay the whole log.
+    const late =
+      !!head.others?.length ||
+      head.tail.some(entry => !after(entry, snapshot.cut));
     const mirror = late
-      ? fold(emptyMirror(), [
-          ...(await readChain(store, fields, snapshot)),
-          ...tail,
-        ])
+      ? fold(
+          emptyMirror(),
+          unique([...(await readChain(store, fields, tips(head))), ...tail]),
+        )
       : fold(snapshot.mirror, tail);
     mirror.coverage = mergeCoverage(mirror.coverage, head.coverage);
 
@@ -170,11 +193,13 @@ export class ObservationLog {
       (await store.getResource(headSubject)).get(fields.head),
       'Clockify log head',
     );
-    const snapshot = await readSnapshot(store, fields, head.snapshot);
-    const mirror = fold(emptyMirror(), [
-      ...(await readChain(store, fields, snapshot)),
-      ...(await readIncrementals(store, fields, head.tail)),
-    ]);
+    const mirror = fold(
+      emptyMirror(),
+      unique([
+        ...(await readChain(store, fields, tips(head))),
+        ...(await readIncrementals(store, fields, head.tail)),
+      ]),
+    );
     mirror.coverage = mergeCoverage(mirror.coverage, head.coverage);
 
     return mirror;
@@ -236,11 +261,13 @@ export class ObservationLog {
     return incremental;
   }
 
-  /** Writes a snapshot when the tail is long enough (#97 §2.5). */
+  /** Writes a snapshot when the tail is long enough (#97 §2.5), or to
+   * merge the tips two devices left (#123 S28). */
   async compactIfNeeded(): Promise<boolean> {
     if (!this.head) return false;
     const bytes = this.head.tail.reduce((sum, e) => sum + e.bytes, 0);
     if (
+      !this.head.others?.length &&
       this.head.tail.length < COMPACT_AFTER_INCREMENTALS &&
       bytes < COMPACT_AFTER_BYTES
     )
@@ -262,16 +289,57 @@ export class ObservationLog {
       }
     })();
 
-    // Keep what another device appended since this one read the head.
-    if (stored && stored.snapshot === this.head.snapshot) {
-      const known = new Set(this.head.tail.map(e => e.id));
-      this.head.tail.push(...stored.tail.filter(e => !known.has(e.id)));
-      this.head.coverage = mergeCoverage(this.head.coverage, stored.coverage);
-    }
+    // Keep what another device saved since this one read the head.
+    if (stored) await this.merge(stored);
 
     resource.set(this.fields.head, JSON.stringify(this.head));
     await resource.save();
     this.dirty = false;
+  }
+
+  /**
+   * Merges the head as stored into this one (#123 S28): the tips are both
+   * heads' snapshots, less any that another tip already includes; the tail
+   * is both tails, less what a tip absorbed.
+   */
+  private async merge(stored: HeadState) {
+    const head = this.head!;
+    const cuts = new Map<string, Position | null>([[head.snapshot, head.cut]]);
+
+    for (const tip of tips(stored)) {
+      if (this.ancestors.has(tip) || tips(head).includes(tip)) continue;
+      // A snapshot another device wrote: what it includes.
+      const snapshot = await readSnapshot(this.store, this.fields, tip);
+      cuts.set(tip, snapshot.cut);
+      for (const e of snapshot.compacted) this.absorbed.add(e.id);
+      for (const parent of [snapshot.previous, ...(snapshot.merged ?? [])])
+        if (parent) this.ancestors.add(parent);
+    }
+
+    const all = [...new Set([...tips(head), ...tips(stored)])].filter(
+      t => !this.ancestors.has(t),
+    );
+    const primary = all.includes(head.snapshot) ? head.snapshot : all[0];
+    if (cuts.has(primary)) head.cut = cuts.get(primary)!;
+    head.snapshot = primary;
+    const others = all.filter(t => t !== primary).sort();
+    if (others.length) head.others = others;
+    else delete head.others;
+
+    const seen = new Set<string>();
+    head.tail = [...head.tail, ...stored.tail].filter(e => {
+      if (seen.has(e.id) || this.absorbed.has(e.id)) return false;
+      seen.add(e.id);
+
+      return true;
+    });
+    head.coverage = mergeCoverage(head.coverage, stored.coverage);
+    if (
+      stored.lastComplete &&
+      (!head.lastComplete ||
+        Date.parse(stored.lastComplete) > Date.parse(head.lastComplete))
+    )
+      head.lastComplete = stored.lastComplete;
   }
 
   private async ensureHead(): Promise<HeadState> {
@@ -327,6 +395,7 @@ export class ObservationLog {
       cut: cut && { receivedAt: cut.receivedAt, id: cut.id },
       previous: head.snapshot,
       compacted: head.tail,
+      ...(head.others?.length ? { merged: head.others } : {}),
       writtenAt,
     };
     const created = await this.store.newResource({
@@ -336,8 +405,11 @@ export class ObservationLog {
         [this.fields.snapshot]: JSON.stringify(state),
       },
     });
+    for (const tip of tips(head)) this.ancestors.add(tip);
+    for (const e of head.tail) this.absorbed.add(e.id);
+    const { others: _, ...rest } = head;
     this.head = {
-      ...head,
+      ...rest,
       snapshot: created.subject,
       cut: state.cut,
       tail: [],
@@ -376,21 +448,36 @@ async function readIncrementals(
   return out;
 }
 
-/** Every incremental any snapshot in the chain absorbed. */
+/** Every snapshot tip of a head. */
+const tips = (head: HeadState) => [head.snapshot, ...(head.others ?? [])];
+
+/** Each incremental once, by id. */
+const unique = (incrementals: Incremental[]) => {
+  const seen = new Set<string>();
+
+  return incrementals.filter(i => !seen.has(i.id) && !!seen.add(i.id));
+};
+
+/** Every incremental any snapshot reachable from `from` absorbed: through
+ * `previous` and, where two devices compacted at once, `merged`. */
 async function readChain(
   store: PluginStore,
   fields: CompleteSchema['log'],
-  newest: SnapshotState,
+  from: string[],
 ): Promise<Incremental[]> {
   const all: Incremental[] = [];
-  let snapshot: SnapshotState | undefined = newest;
+  const visited = new Set<string>();
+  const todo = [...from];
 
-  while (snapshot) {
+  while (todo.length) {
+    const subject = todo.pop()!;
+    if (visited.has(subject)) continue;
+    visited.add(subject);
+    const snapshot = await readSnapshot(store, fields, subject);
     all.push(...(await readIncrementals(store, fields, snapshot.compacted)));
-    snapshot = snapshot.previous
-      ? await readSnapshot(store, fields, snapshot.previous)
-      : undefined;
+    if (snapshot.previous) todo.push(snapshot.previous);
+    todo.push(...(snapshot.merged ?? []));
   }
 
-  return all;
+  return unique(all);
 }
