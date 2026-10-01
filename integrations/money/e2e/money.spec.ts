@@ -391,23 +391,34 @@ async function installApp(page: Page, source: string, rowClass: string) {
       const app = await store.getResource(subject);
       let loaded = false;
 
-      for (const [property, value] of Object.entries(app.getPropVals())) {
-        if (Array.isArray(value)) {
-          // `renders`: the drive's own property listing the classes this app
-          // can show (Atomic's own, like isA, are not it).
-          if (property.startsWith('https://atomicdata.dev/')) continue;
-          const first = await store
-            .getResource(String(value[0]))
-            .catch(() => undefined);
-          const isA = first?.get('https://atomicdata.dev/properties/isA');
-          if (
-            Array.isArray(isA) &&
-            isA.includes('https://atomicdata.dev/classes/Class')
-          )
-            await app.set(property, [...value, args.rowClass]);
-          continue;
-        }
+      // `renders`: the drive-local property, named so by its shortname, that
+      // the App's own class lists. A fresh App may not hold it yet, so it is
+      // not found by value (as integrations/tooling/e2e/screenshots.spec.ts).
+      let renders: string | undefined;
 
+      for (const klass of (app.get('https://atomicdata.dev/properties/isA') ??
+        []) as string[]) {
+        const schema = await store.getResource(klass);
+
+        for (const key of ['recommends', 'requires']) {
+          for (const property of (schema.get(
+            `https://atomicdata.dev/properties/${key}`,
+          ) ?? []) as string[]) {
+            const p = await store.getResource(property);
+            if (
+              p.get('https://atomicdata.dev/properties/shortname') === 'renders'
+            )
+              renders = property;
+          }
+        }
+      }
+
+      if (!renders)
+        throw new Error('could not find the app’s renders property');
+      const current = (app.get(renders) ?? []) as string[];
+      await app.set(renders, [...current, args.rowClass]);
+
+      for (const [, value] of Object.entries(app.getPropVals())) {
         if (typeof value !== 'string' || !value.includes(':')) continue;
         const child = await store.getResource(value).catch(() => undefined);
         const sourceProp =
