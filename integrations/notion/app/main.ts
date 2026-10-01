@@ -48,6 +48,10 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     ...(store.proxy?.disconnect
       ? { disconnect: () => void controller?.disconnect?.() }
       : {}),
+    send: () => void controller?.send(),
+    discard: subject => void controller?.discard(subject),
+    resolve: (subject, shortname, keep) =>
+      void controller?.resolve(subject, shortname, keep),
   });
   if (store.getTheme) app.setColorScheme(store.getTheme().colorScheme);
   store.onThemeChange?.(({ colorScheme }) => app.setColorScheme(colorScheme));

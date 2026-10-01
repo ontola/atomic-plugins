@@ -880,6 +880,24 @@ mod tests {
                 }
             }
         }
+        // atomic-plugins#121: Clockify's key field links to where a key is
+        // made, and a pasted key is checked with GET /v1/user first.
+        let crate::providers::SecurityScheme::ApiKey(clockify) =
+            catalog.security_scheme("clockify").unwrap()
+        else {
+            panic!("clockify: expected an apiKey scheme");
+        };
+        assert!(clockify
+            .help_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("https://clockify.me/help/")));
+        assert!(clockify
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("Manage API keys")));
+        let check = clockify.key_check.unwrap();
+        assert_eq!(check.url.as_str(), "https://api.clockify.me/api/v1/user");
+        assert_eq!(check.label_pointer.as_deref(), Some("/email"));
         let google = catalog.oauth_provider("google-calendar").unwrap();
         assert!(google.use_pkce);
         assert!(google

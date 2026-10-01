@@ -1,6 +1,6 @@
 /**
  * Synthetic Notion fixture for the mock integration proxy: one shared data
- * source with three pages, read-only. Authored from Notion's documented
+ * source with three pages. Authored from Notion's documented
  * response shapes (API version 2026-03-11), not recorded from a live
  * workspace; see PARALLEL_LANES.md for the recorder that does not exist yet.
  *
@@ -11,7 +11,13 @@
  *   so the third page is only reachable by sending `next_cursor` back as the
  *   body's `start_cursor`. An unknown cursor is a 400, as in Notion;
  * - search honours `filter.value` (`data_source` or `page`);
- * - every other method is a 403: nothing here accepts a write.
+ * - `GET /v1/pages/{id}` reads one page;
+ * - `PATCH /v1/pages/{id}` updates page properties the way Notion documents
+ *   it: properties keyed by id or name, each `{ [type]: value }` with the
+ *   property's own type, options by id (an unknown option id is a 400), a
+ *   page that is archived or in trash is a 400, and `last_edited_time`
+ *   becomes the current time. It answers the whole updated page;
+ * - every other write (page creation, DELETE, data-source PATCH) is a 403.
  *
  * `requests` records `{ method, path, body }` for tests.
  *
@@ -28,6 +34,9 @@
  * - `bad-gateway`: every request answers 502.
  * `renameOption(id, name)` renames a select/status/multi-select option in
  * every schema, as a rename in Notion does; pages keep the option's id.
+ * `editPage(id, properties)` changes a page as someone editing it in Notion
+ * would (the same `properties` a PATCH body carries), `getPage(id)` reads
+ * one whatever the scenario, and `archivePage(id)` moves it to the trash.
  */
 import { readFileSync } from 'node:fs';
 
@@ -328,6 +337,73 @@ function paginate(items, body, type) {
   );
 }
 
+/** Rich text objects for plain `content` parts, as Notion stores them. */
+const richText = parts =>
+  parts.map(part => text(String(part?.text?.content ?? '')));
+
+/**
+ * Applies a PATCH body's `properties` to `page` as Notion would, or returns
+ * the error Notion would answer. Nothing changes unless every property is
+ * valid.
+ */
+function patchPage(target, schemaOf, properties) {
+  if (target.archived || target.in_trash)
+    return error(
+      400,
+      'validation_error',
+      "Can't edit block that is archived. You must unarchive the block before editing.",
+    );
+  const next = structuredClone(target.properties);
+
+  for (const [key, change] of Object.entries(properties ?? {})) {
+    const name = Object.keys(next).find(n => n === key || next[n].id === key);
+    if (!name)
+      return error(
+        400,
+        'validation_error',
+        `${key} is not a property that exists.`,
+      );
+    const { type } = next[name];
+    if (!change || typeof change !== 'object' || !(type in change))
+      return error(
+        400,
+        'validation_error',
+        `${name} is expected to be ${type}.`,
+      );
+    const value = change[type];
+    const options = schemaOf[name]?.[type]?.options ?? [];
+    const known = v => options.find(o => o.id === v?.id);
+
+    if (type === 'title' || type === 'rich_text') {
+      if (!Array.isArray(value))
+        return error(400, 'validation_error', `${name} is not an array.`);
+      next[name][type] = richText(value);
+    } else if (type === 'select' || type === 'status') {
+      if (value !== null && !known(value))
+        return error(400, 'validation_error', `Invalid ${type} option.`);
+      next[name][type] = value === null ? null : known(value);
+    } else if (type === 'multi_select') {
+      if (!Array.isArray(value) || !value.every(known))
+        return error(400, 'validation_error', 'Invalid multi_select option.');
+      next[name][type] = value.map(known);
+    } else if (
+      ['number', 'checkbox', 'url', 'email', 'phone_number'].includes(type)
+    ) {
+      next[name][type] = value;
+    } else
+      return error(
+        400,
+        'validation_error',
+        `${name} cannot be edited in this fixture.`,
+      );
+  }
+
+  target.properties = next;
+  target.last_edited_time = new Date().toISOString();
+
+  return { status: 200, body: target };
+}
+
 export function notionFixture({ scenario = 'default' } = {}) {
   const requests = [];
   // Per instance, so a rename in one test or lane never leaks into another.
@@ -338,6 +414,16 @@ export function notionFixture({ scenario = 'default' } = {}) {
     ],
   });
   let current = scenario;
+
+  // Any page, whatever the scenario shares, with the data source it is in.
+  const locate = id => {
+    for (const { source, pages: sourcePages } of data.sources) {
+      const found = sourcePages.find(p => normalize(p.id) === normalize(id));
+      if (found) return { page: found, source };
+    }
+
+    return undefined;
+  };
 
   const shared = () =>
     current === 'empty'
@@ -381,6 +467,29 @@ export function notionFixture({ scenario = 'default' } = {}) {
       if (!renamed) throw new Error(`No option ${id}`);
 
       return { renamed };
+    },
+    editPage(id, properties) {
+      const found = locate(id);
+      if (!found) throw new Error(`No page ${id}`);
+      const result = patchPage(found.page, found.source.properties, properties);
+      if (result.status !== 200) throw new Error(result.body.message);
+
+      return { last_edited_time: found.page.last_edited_time };
+    },
+    getPage(id) {
+      const found = locate(id);
+      if (!found) throw new Error(`No page ${id}`);
+
+      return structuredClone(found.page);
+    },
+    archivePage(id) {
+      const found = locate(id);
+      if (!found) throw new Error(`No page ${id}`);
+      found.page.archived = true;
+      found.page.in_trash = true;
+      found.page.last_edited_time = new Date().toISOString();
+
+      return { archived: id };
     },
     request(method, url, body) {
       const path = url.pathname.replace(/^\/proxy\/notion/, '');
@@ -443,7 +552,15 @@ export function notionFixture({ scenario = 'default' } = {}) {
           : error(404, 'object_not_found', 'Page not found');
       }
 
-      // Anything else that is not a read: page creation (POST /v1/pages),
+      if (method === 'PATCH' && one) {
+        const found = locate(one[1]);
+        if (!found || !shared().some(s => s.source.id === found.source.id))
+          return error(404, 'object_not_found', 'Page not found');
+
+        return patchPage(found.page, found.source.properties, body?.properties);
+      }
+
+      // Any other write: page creation (POST /v1/pages), a data-source
       // PATCH, DELETE.
       if (method !== 'GET')
         return error(403, 'restricted_resource', 'This fixture is read-only');
@@ -469,5 +586,11 @@ export default {
   },
   jsonBody: true,
   create: () => notionFixture(),
-  drivers: ['setScenario', 'renameOption'],
+  drivers: [
+    'setScenario',
+    'renameOption',
+    'editPage',
+    'getPage',
+    'archivePage',
+  ],
 };

@@ -118,9 +118,13 @@ describe('syncNotion', () => {
     expect(store.resources.get(ONTOLOGY)![atomic.properties]).toEqual([
       ...byShortname.values(),
     ]);
-    expect(store.resources.get(ROW_CLASS)![atomic.recommends]).toEqual([
-      ...byShortname.values(),
-    ]);
+    // The baseline is bookkeeping on the row, never a column.
+    expect(store.resources.get(ROW_CLASS)![atomic.recommends]).toEqual(
+      [...byShortname]
+        .filter(([shortname]) => shortname !== 'notion-sync-baseline')
+        .map(([, subject]) => subject),
+    );
+    expect(byShortname.has('notion-sync-baseline')).toBe(true);
 
     const rows = [...store.resources.values()].filter(p => p[PARENT] === TABLE);
     expect(rows.map(r => r[atomic.name])).toEqual([

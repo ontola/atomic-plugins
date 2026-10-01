@@ -75,6 +75,104 @@ pub struct OAuthContext {
 struct Handoff {
     platform: String,
     credential: crate::proxy::StoredCredential,
+    /// From an API-key platform's key check; see [`check_api_key`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+/// The longest connection label kept, in characters (as for delegation
+/// labels in `connections.rs`).
+const MAX_KEY_LABEL: usize = 200;
+/// The longest key-check response read for a label.
+const MAX_KEY_CHECK_BODY: usize = 64 * 1024;
+
+/// What a platform's key check said about a pasted key.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyCheck {
+    /// 2xx, or no key check declared; with the declared label, if any.
+    Accepted(Option<String>),
+    /// 401 or 403.
+    Rejected,
+    /// Anything else, including no answer or a redirect.
+    Undetermined,
+}
+
+/// Calls the scheme's `x-api-key-details.keyCheck` once with `key`
+/// (openapi-extensions/spec/api-key-details, section 4.3). The shared client
+/// follows no redirects; this call also gets a 10-second timeout. Nothing
+/// here logs, and no error carries the key or the request URL.
+async fn check_api_key(
+    state: &AppState,
+    scheme: &crate::providers::ApiKeyScheme,
+    key: &str,
+) -> KeyCheck {
+    let Some(check) = &scheme.key_check else {
+        return KeyCheck::Accepted(None);
+    };
+    let mut url = check.url.clone();
+    #[cfg(test)]
+    if let Some(upstream) = &state.test_upstream {
+        url = Url::parse(&format!("{}{}", upstream.trim_end_matches('/'), url.path())).unwrap();
+    }
+    let request = match scheme.location {
+        crate::providers::ApiKeyLocation::Header => {
+            state.http_client.get(url).header(scheme.name.as_str(), key)
+        }
+        crate::providers::ApiKeyLocation::Query => {
+            url.query_pairs_mut().append_pair(&scheme.name, key);
+            state.http_client.get(url)
+        }
+        crate::providers::ApiKeyLocation::Cookie => return KeyCheck::Undetermined,
+    };
+    let Ok(response) = request
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    else {
+        return KeyCheck::Undetermined;
+    };
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return KeyCheck::Rejected;
+    }
+    if !status.is_success() {
+        return KeyCheck::Undetermined;
+    }
+    let Some(pointer) = &check.label_pointer else {
+        return KeyCheck::Accepted(None);
+    };
+    let mut response = response;
+    let mut body = Vec::new();
+    let read = loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= MAX_KEY_CHECK_BODY => {
+                body.extend_from_slice(&chunk)
+            }
+            Ok(None) => break Ok(body),
+            // Too long for a label, or broken off: accept without one.
+            _ => break Err(()),
+        }
+    };
+    let label = match read {
+        Ok(body) => serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|body| {
+                body.pointer(pointer)
+                    .and_then(serde_json::Value::as_str)
+                    .map(|label| {
+                        label
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .take(MAX_KEY_LABEL)
+                            .collect::<String>()
+                            .trim()
+                            .to_owned()
+                    })
+            })
+            .filter(|label| !label.is_empty()),
+        _ => None,
+    };
+    KeyCheck::Accepted(label)
 }
 
 pub fn random() -> String {
@@ -214,16 +312,36 @@ pub async fn page(
         CONSENT_COOKIE,
         serde_json::to_string(&consent).unwrap(),
     ));
+    consent_page(&state, jar, &consent, &target, &scheme, None)
+}
+
+/// The consent screen for `consent`, with the headers `page` documents.
+/// `problem` is set when the page asks for an API key again.
+fn consent_page(
+    state: &AppState,
+    jar: PrivateCookieJar,
+    consent: &Consent,
+    target: &Url,
+    scheme: &crate::providers::SecurityScheme,
+    problem: Option<&str>,
+) -> Response {
+    let request = &consent.request;
     let mut response = protected((
         jar,
         Html(templates::render_platform_connect(
             &state.operator,
             &request.platform,
-            &destination_label(&target),
+            &destination_label(target),
             &consent.csrf,
             match scheme {
                 crate::providers::SecurityScheme::OAuth(_) => templates::ConnectKind::OAuth,
-                crate::providers::SecurityScheme::ApiKey(_) => templates::ConnectKind::ApiKey,
+                crate::providers::SecurityScheme::ApiKey(scheme) => {
+                    templates::ConnectKind::ApiKey(templates::ApiKeyHelp {
+                        description: scheme.description.as_deref(),
+                        help_url: scheme.help_url.as_deref(),
+                        problem,
+                    })
+                }
                 crate::providers::SecurityScheme::NoCredential => {
                     templates::ConnectKind::NoCredential
                 }
@@ -248,14 +366,14 @@ pub async fn page(
         .unwrap()
         .to_owned();
     let script = templates::consent_script_hash();
-    let policy = match &scheme {
+    let policy = match scheme {
         crate::providers::SecurityScheme::OAuth(_) => {
             format!("{base}; script-src {script}; form-action 'self'")
         }
         crate::providers::SecurityScheme::ApiKey(_)
         | crate::providers::SecurityScheme::NoCredential => format!(
             "{base}; script-src {script}; form-action 'self' {}",
-            form_action_source(&target)
+            form_action_source(target)
         ),
     };
     response
@@ -319,13 +437,36 @@ pub async fn authorize(
         return error("Connections are unavailable");
     };
     // Refuse an unusable API key before the consent is spent, so correcting
-    // it and approving again works.
-    if matches!(
-        state.catalog.security_scheme(&consent.request.platform),
-        Ok(crate::providers::SecurityScheme::ApiKey(_))
-    ) && valid_api_key(&approval).is_none()
+    // it and approving again works. That includes a key the platform's key
+    // check (`x-api-key-details.keyCheck`) rejects: the page asks again.
+    let mut key_label = None;
+    if let Ok(scheme @ crate::providers::SecurityScheme::ApiKey(_)) =
+        state.catalog.security_scheme(&consent.request.platform)
     {
-        return error("Enter a valid API key");
+        let crate::providers::SecurityScheme::ApiKey(api_key) = &scheme else {
+            unreachable!("matched as ApiKey above");
+        };
+        let Some(key) = valid_api_key(&approval) else {
+            return error("Enter a valid API key");
+        };
+        match check_api_key(&state, api_key, key).await {
+            KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected => {
+                let Ok(target) = consent.request.validate() else {
+                    return error("Connection request expired or invalid; start again from your hub");
+                };
+                let problem = format!(
+                    "{} did not accept that API key. Check it and enter it again.",
+                    templates::platform_label(&consent.request.platform)
+                );
+                return consent_page(&state, jar, &consent, &target, &scheme, Some(&problem));
+            }
+            KeyCheck::Undetermined => {
+                return error(
+                    "Could not check the API key with the platform; nothing was stored. Try again later",
+                )
+            }
+        }
     }
     match security
         .consume_nonce(&format!("consent:{}", consent.csrf))
@@ -353,10 +494,11 @@ pub async fn authorize(
                 provider: consent.request.platform.clone(),
                 key: key.to_owned(),
             };
-            let code = match handoff(security, &consent.request, credential).await {
-                Ok(code) => code,
-                Err(()) => return error("Could not complete connection"),
-            };
+            let code =
+                match labelled_handoff(security, &consent.request, credential, key_label).await {
+                    Ok(code) => code,
+                    Err(()) => return error("Could not complete connection"),
+                };
             finish_with_connection_code(jar, &consent.request.redirect_uri, &code)
         }
         Ok(crate::providers::SecurityScheme::NoCredential) => {
@@ -447,9 +589,20 @@ pub(crate) async fn handoff(
     request: &Request,
     credential: crate::proxy::StoredCredential,
 ) -> Result<String, ()> {
+    labelled_handoff(security, request, credential, None).await
+}
+
+/// [`handoff`] with the display label the connection will carry.
+async fn labelled_handoff(
+    security: &Security,
+    request: &Request,
+    credential: crate::proxy::StoredCredential,
+    label: Option<String>,
+) -> Result<String, ()> {
     let handoff = Handoff {
         platform: request.platform.clone(),
         credential,
+        label,
     };
     let envelope = security
         .seal(&serde_json::to_vec(&handoff).map_err(|_| ())?, HANDOFF_AAD)
@@ -512,14 +665,23 @@ async fn redeem_inner(
         .ok_or(ApiError::InvalidHandoff)?;
     let credential = serde_json::to_vec(&handoff.credential).map_err(|_| ApiError::Internal)?;
     let connection_id = security
-        .create_connection(&handoff.platform, owner.as_str(), &credential)
+        .create_labelled_connection(
+            &handoff.platform,
+            owner.as_str(),
+            &credential,
+            handoff.label.as_deref(),
+        )
         .await
         .map_err(|_| ApiError::Unavailable)?;
-    Ok(Json(serde_json::json!({
+    let mut answer = serde_json::json!({
         "connection_id": connection_id,
         "platform": handoff.platform,
         "owner": owner.as_str(),
-    })))
+    });
+    if let Some(label) = handoff.label {
+        answer["label"] = label.into();
+    }
+    Ok(Json(answer))
 }
 
 #[cfg(test)]
@@ -1047,6 +1209,247 @@ mod tests {
         // Single use.
         let reused = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
         assert_eq!(reused.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// An API-key document whose `x-api-key-details` declare a help link and
+    /// a key check (openapi-extensions/spec/api-key-details).
+    fn key_check_document(location: &str) -> serde_json::Value {
+        serde_json::json!({
+            "servers": [{"url": "https://api.service.example/api"}],
+            "components": {"securitySchemes": {"serviceKey": {
+                "type": "apiKey", "in": location, "name": "X-Api-Key",
+                "description": "A personal key, made under Preferences, Advanced.",
+                "x-api-key-details": {
+                    "helpUrl": "https://service.example/help/api-keys",
+                    "keyCheck": {"operationId": "getMe", "label": "$response.body#/email"}
+                }
+            }}},
+            "security": [{"serviceKey": []}],
+            "paths": {
+                "/v1/user": {"get": {"operationId": "getMe"}},
+                "/v1/workspaces": {"get": {}}
+            }
+        })
+    }
+
+    /// A stand-in provider for the key check: `/api/v1/user` answers by the
+    /// key it gets, in the `X-Api-Key` header or the query.
+    async fn key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/v1/user",
+            axum::routing::get(
+                |headers: HeaderMap, OriginalUri(uri): OriginalUri| async move {
+                    let key = headers
+                        .get("x-api-key")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            uri.query()
+                                .and_then(|q| q.strip_prefix("X-Api-Key="))
+                                .map(str::to_owned)
+                        })
+                        .unwrap_or_default();
+                    match key.as_str() {
+                        "good-key" => (
+                            StatusCode::OK,
+                            r#"{"id":"u1","email":"ada@example.test"}"#.to_owned(),
+                        )
+                            .into_response(),
+                        "long-label-key" => (
+                            StatusCode::OK,
+                            serde_json::json!({"email": format!("\u{7}{}", "x".repeat(300))})
+                                .to_string(),
+                        )
+                            .into_response(),
+                        "no-label-key" => (StatusCode::OK, r#"{"email":7}"#).into_response(),
+                        "forbidden-key" => StatusCode::FORBIDDEN.into_response(),
+                        "moving-key" => (
+                            StatusCode::FOUND,
+                            [(header::LOCATION, "https://elsewhere.example/")],
+                        )
+                            .into_response(),
+                        "broken-key" => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                        _ => StatusCode::UNAUTHORIZED.into_response(),
+                    }
+                },
+            ),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}"), server)
+    }
+
+    #[tokio::test]
+    async fn the_key_check_accepts_rejects_or_cannot_tell() {
+        let (upstream, server) = key_check_upstream().await;
+        let mut s = state(None);
+        s.test_upstream = Some(upstream);
+        let header_scheme =
+            crate::providers::ApiKeyScheme::from_document(&key_check_document("header"), None)
+                .unwrap();
+        for (key, expected) in [
+            (
+                "good-key",
+                KeyCheck::Accepted(Some("ada@example.test".into())),
+            ),
+            ("no-label-key", KeyCheck::Accepted(None)),
+            ("wrong-key", KeyCheck::Rejected),
+            ("forbidden-key", KeyCheck::Rejected),
+            ("moving-key", KeyCheck::Undetermined),
+            ("broken-key", KeyCheck::Undetermined),
+        ] {
+            assert_eq!(
+                check_api_key(&s, &header_scheme, key).await,
+                expected,
+                "{key}"
+            );
+        }
+        // A label loses control characters and stops at 200 characters.
+        assert_eq!(
+            check_api_key(&s, &header_scheme, "long-label-key").await,
+            KeyCheck::Accepted(Some("x".repeat(MAX_KEY_LABEL)))
+        );
+        // Query-located keys go in the query, as the scheme says.
+        let query_scheme =
+            crate::providers::ApiKeyScheme::from_document(&key_check_document("query"), None)
+                .unwrap();
+        assert_eq!(
+            check_api_key(&s, &query_scheme, "good-key").await,
+            KeyCheck::Accepted(Some("ada@example.test".into()))
+        );
+        // A cookie-located key is not sent anywhere.
+        let cookie_scheme =
+            crate::providers::ApiKeyScheme::from_document(&key_check_document("cookie"), None)
+                .unwrap();
+        assert_eq!(
+            check_api_key(&s, &cookie_scheme, "good-key").await,
+            KeyCheck::Undetermined
+        );
+        // Without a key check every well-formed key is accepted, unlabelled,
+        // and nothing is called.
+        let mut plain = key_check_document("header");
+        plain["components"]["securitySchemes"]["serviceKey"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        let plain = crate::providers::ApiKeyScheme::from_document(&plain, None).unwrap();
+        server.abort();
+        let _ = server.await;
+        assert_eq!(
+            check_api_key(&s, &plain, "wrong-key").await,
+            KeyCheck::Accepted(None)
+        );
+        // No answer at all: undetermined. A fresh client, so no pooled
+        // connection to the stopped server is reused.
+        let mut fresh = state(None);
+        fresh.test_upstream = s.test_upstream.clone();
+        assert_eq!(
+            check_api_key(&fresh, &header_scheme, "good-key").await,
+            KeyCheck::Undetermined
+        );
+    }
+
+    #[tokio::test]
+    async fn the_api_key_consent_page_shows_the_description_and_help_link() {
+        let mut s = state(None);
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            key_check_document("header"),
+            serde_json::json!({}),
+        );
+        let (status, html) = get_body(s, &connect_uri(&api_key_request())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("A personal key, made under Preferences, Advanced."));
+        assert!(html.contains(
+            r#"<a href="https://service.example/help/api-keys" target="_blank" rel="noopener noreferrer">Where to find your Clockify API key</a>"#
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_rejected_key_is_asked_again_and_an_accepted_one_keeps_its_label() {
+        let (upstream, server) = key_check_upstream().await;
+        let security = crate::test_support::security().await;
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream);
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            key_check_document("header"),
+            serde_json::json!({}),
+        );
+        let consent = Consent {
+            request: api_key_request(),
+            csrf: random(),
+            expires: crate::now_secs() + 600,
+        };
+        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+            CONSENT_COOKIE,
+            serde_json::to_string(&consent).unwrap(),
+        ));
+        let approve = |key: &str| {
+            authorize(
+                State(s.clone()),
+                jar.clone(),
+                HeaderMap::new(),
+                Form(Approval {
+                    csrf: consent.csrf.clone(),
+                    api_key: Some(key.into()),
+                }),
+            )
+        };
+        // Rejected: the consent page again, with the reason, the same CSRF
+        // token and its CSP, and the key nowhere in it.
+        let rejected = approve("wrong-key").await;
+        assert_eq!(rejected.status(), StatusCode::OK);
+        assert!(rejected.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("form-action 'self' https://hub.example"));
+        let html = body_text(rejected).await;
+        assert!(html.contains("Clockify did not accept that API key."));
+        assert!(html.contains(&consent.csrf));
+        assert!(!html.contains("wrong-key"));
+        // Undetermined: an error, and still nothing spent.
+        let broken = approve("broken-key").await;
+        assert_eq!(broken.status(), StatusCode::BAD_REQUEST);
+        let text = body_text(broken).await;
+        assert!(text.starts_with("Could not check the API key"));
+        assert!(!text.contains("broken-key"));
+        // Accepted: the same consent still works.
+        let accepted = approve("good-key").await;
+        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+        server.abort();
+        let location = Url::parse(accepted.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = location
+            .query_pairs()
+            .find(|(k, _)| k == "connection_code")
+            .unwrap()
+            .1
+            .into_owned();
+        let owner = Agent::new(22);
+        let ok = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body = body_json(ok).await;
+        assert_eq!(body["label"], "ada@example.test");
+        assert!(!body.to_string().contains("good-key"));
+        let listed = crate::router(s.clone())
+            .oneshot(signed_request(
+                &s,
+                &owner,
+                "GET",
+                "/connections",
+                Vec::new(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed = body_json(listed).await;
+        assert_eq!(listed["connections"][0]["label"], "ada@example.test");
+        assert_eq!(
+            listed["connections"][0]["connection_id"],
+            body["connection_id"]
+        );
     }
 
     fn no_credential_catalog() -> crate::catalog::Catalog {

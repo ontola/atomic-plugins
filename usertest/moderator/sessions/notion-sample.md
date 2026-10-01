@@ -1,6 +1,6 @@
 # Session plan: Notion drive app, with sample data (no account needed)
 
-The tester needs no Notion account. They install "Notion (sample data)" from Integrations, which is the same Notion app connected to an invented workspace instead of Notion: a "Roadmap" database with three items and a "Reading list" with two. Nothing reaches Notion. The app only reads.
+The tester needs no Notion account. They install "Notion (sample data)" from Integrations, which is the same Notion app connected to an invented workspace instead of Notion: a "Roadmap" database with three items and a "Reading list" with two. Nothing reaches Notion. Edits sent from the app change only the invented workspace.
 
 ## The session
 
@@ -32,6 +32,5 @@ What success looks like, never to be said:
 
 Known limits (only new detail about them is a finding):
 
-- Read-only: no changes go back to Notion (atomic-plugins#8).
-- A local edit may be overwritten on the next sync (atomic-plugins#97), so don't ask them to edit here.
+- Edits go back to Notion only from the data table, after "Review changes" → Send (atomic-plugins#8, notion 0.2.0). This plan has no editing task; if they edit anyway, whether they find the review is a finding.
 - The sample workspace doesn't change, so "Sync now" never brings anything new.

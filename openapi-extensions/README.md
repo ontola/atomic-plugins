@@ -19,6 +19,7 @@ Each extension lives in its own directory under [`spec/`](spec/), with its own s
 - [Throttling](spec/throttling/README.md): announced request-count windows and shared partitions, without consumer scheduling policy (draft for issue #13).
 
 - [Filtering and per-item Links](spec/filtering/README.md): API field predicates, authentication-dependent views, and minimal extensions to standard OpenAPI Links (draft for issue #17).
+- [API Key Details](spec/api-key-details/README.md): a help link and a key-check operation for an `apiKey` security scheme (`x-api-key-details`), so a client can link to where a key is made and test a pasted key before storing it (draft for ontola/atomic-plugins#121).
 - [OAuth Authentication Scheme Details](spec/oauth-authentication-details/README.md): token-endpoint authentication capabilities, PKCE requirements, authorization-request parameters, and token-issuance semantics (draft for issues #14, #15, and #16).
 
 ## Adding a new extension

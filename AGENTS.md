@@ -211,7 +211,8 @@ commit history included via `git subtree` (#115). These are the extensions
 the rest of this repo implements: `overlays/` declares them for real
 providers, `syncables/` reads Pagination Schemes and CRUD Causality, and
 `integration-proxy/` reads `x-oauth-authentication-details` (the OAuth
-Authentication Scheme Details draft). The Authenticated Principal operations
+Authentication Scheme Details draft) and `x-api-key-details` (API Key
+Details, #121). The Authenticated Principal operations
 in `overlays/` were for the tenant-identity login #54 removed; the proxy no
 longer reads them. A new extension, or a change to
 one, is specified here first, from [`spec/TEMPLATE.md`](openapi-extensions/spec/TEMPLATE.md),

@@ -10,6 +10,7 @@ import document from '../catalog/notion.json' with { type: 'json' };
 import {
   isNotionFieldType,
   notionFieldShortname,
+  notionFieldValue,
   NotionRowLenses,
   notionColumns,
   notionDataSourceTitles,
@@ -19,8 +20,20 @@ import {
   type FetchedRecord,
   type NotionColumn,
   type Term,
+  type JSONValue as LensValue,
 } from '../devonian/notion/index.js';
-import type { PluginResource, PluginStore } from './store.js';
+import { Datatype } from '@tomic/lib';
+import {
+  BASELINE_SHORTNAME,
+  editableFields,
+  localValue,
+  parseBaseline,
+  reconcile,
+  type Baseline,
+  type Conflicts,
+  type EditableField,
+} from './changes.js';
+import type { JSONValue, PluginResource, PluginStore } from './store.js';
 import { observedTransport, PLATFORM } from './transport.js';
 
 /** The composed catalog document (catalog/notion.json), bundled. */
@@ -51,6 +64,12 @@ export interface SyncResult {
   readErrors: string[];
   /** The same counts and warnings per data source, plus its schema. */
   perDataSource: DataSourceReport[];
+  /**
+   * Fields changed both here and in Notion since the baseline, differently:
+   * Notion's value by row subject and column shortname. Neither side was
+   * overwritten.
+   */
+  conflicts: Conflicts;
 }
 
 /** One option of a select, status or multi-select property. */
@@ -298,6 +317,100 @@ export function schemaProperties(
   return out;
 }
 
+/**
+ * The row's sync bookkeeping (`changes.ts`): a Property in the app's
+ * ontology that is never a column.
+ */
+const BASELINE_COLUMN: NotionColumn = {
+  shortname: BASELINE_SHORTNAME,
+  name: 'Notion sync baseline',
+  datatype: Datatype.STRING,
+  description:
+    'Written by the Notion app on each synced row: JSON of the values Notion and this row last agreed on, so a sync can tell an edit made here from one made in Notion.',
+};
+
+/** Notion's value for a field, or `UNREADABLE` (formatted text, no such property). */
+const UNREADABLE = Symbol('unreadable');
+
+function remoteValue(
+  page: FetchedRecord,
+  field: EditableField,
+): JSONValue | undefined | typeof UNREADABLE {
+  for (const raw of Object.values(record(page.values.properties))) {
+    const property = record(raw);
+    if (property.id !== field.id) continue;
+    if (property.type !== field.type) return UNREADABLE;
+    const value = notionFieldValue(field.type, property[field.type]);
+
+    return value === undefined ? UNREADABLE : (value ?? undefined);
+  }
+
+  return UNREADABLE;
+}
+
+/**
+ * Compare on sync, per editable field (three-way: the row, Notion, the
+ * baseline; `changes.ts`'s `reconcile`). Returns the row's next baseline,
+ * the host properties whose local value must be kept rather than replaced
+ * by Notion's (a local edit, or a conflict), and Notion's value for each
+ * conflict. A row without a baseline (new, or imported before 0.2.0) takes
+ * Notion's values, as an import always did. A field Notion holds as
+ * formatted text is left alone on both sides.
+ */
+function compareOnSync(
+  fields: readonly EditableField[],
+  page: FetchedRecord,
+  dataSource: string,
+  bound: ReadonlyMap<string, string>,
+  existing: PluginResource | undefined,
+  baselineProperty: string,
+) {
+  const previous = existing
+    ? parseBaseline(existing.get(baselineProperty))
+    : undefined;
+  const base = previous?.dataSource === dataSource ? previous : undefined;
+  const next: Baseline = { version: 1, dataSource, fields: {} };
+  const keep = new Set<string>();
+  const conflicts = new Map<string, JSONValue | undefined>();
+  const local: Record<string, JSONValue> = {};
+
+  for (const field of fields)
+    local[field.shortname] = existing?.get(bound.get(field.shortname)!);
+
+  for (const field of fields) {
+    const property = bound.get(field.shortname)!;
+    const remote = remoteValue(page, field);
+    const before = base?.fields[field.shortname];
+    let agreed: JSONValue | undefined;
+
+    if (remote === UNREADABLE) {
+      agreed = before;
+    } else if (!base) {
+      agreed = remote;
+    } else {
+      const mine = localValue(
+        field,
+        local,
+        existing?.get(atomic.name),
+        base.fields,
+      );
+      const outcome = reconcile(field.type, mine, remote, before);
+      agreed = outcome === 'local' || outcome === 'conflict' ? before : remote;
+
+      if (outcome === 'local' || outcome === 'conflict') {
+        keep.add(property);
+        if (field.id === 'title') keep.add(atomic.name);
+      }
+
+      if (outcome === 'conflict') conflicts.set(field.shortname, remote);
+    }
+
+    if (agreed !== undefined) next.fields[field.shortname] = agreed;
+  }
+
+  return { baseline: next, keep, conflicts };
+}
+
 const values = (resource: PluginResource, property: string): string[] => {
   const raw = resource.get(property);
 
@@ -315,6 +428,7 @@ async function ensureColumns(
   rowClass: string,
   columns: readonly NotionColumn[],
   warnings: string[],
+  extras: readonly NotionColumn[] = [],
 ): Promise<Map<string, string>> {
   const klass = await store.getResource(rowClass);
   const ontologySubject = klass.get(atomic.parent);
@@ -332,7 +446,7 @@ async function ensureColumns(
   const bound = new Map<string, string>();
   const added: string[] = [];
 
-  for (const column of columns) {
+  for (const column of [...columns, ...extras]) {
     const found = existing.get(column.shortname);
 
     if (found) {
@@ -369,8 +483,12 @@ async function ensureColumns(
     await ontology.save();
   }
 
+  // Extras are bookkeeping on the row, not columns: never recommended.
   const recommends = values(klass, atomic.recommends);
-  const missing = [...bound.values()].filter(s => !recommends.includes(s));
+  const extra = new Set(extras.map(e => bound.get(e.shortname)));
+  const missing = [...bound.values()].filter(
+    s => !recommends.includes(s) && !extra.has(s),
+  );
 
   if (missing.length) {
     klass.set(atomic.recommends, [...recommends, ...missing]);
@@ -402,12 +520,18 @@ export async function syncNotion(
       observedTransport(transport, progressTap(onProgress)),
       read,
     );
-  const bound = await ensureColumns(store, data.rowClass, columns, warnings);
+  const bound = await ensureColumns(store, data.rowClass, columns, warnings, [
+    BASELINE_COLUMN,
+  ]);
   const pageId = bound.get('notion-page-id');
   if (!pageId) throw new Error('No column to key rows by Notion page id');
+  const baselineProperty = bound.get(BASELINE_SHORTNAME);
 
   const lenses = new NotionRowLenses({ columns, bound });
-  const managed = lenses.managed();
+  const managed = [
+    ...lenses.managed(),
+    ...(baselineProperty ? [baselineProperty] : []),
+  ];
   const result: SyncResult = {
     created: 0,
     updated: 0,
@@ -416,6 +540,7 @@ export async function syncNotion(
     warnings,
     readErrors,
     perDataSource: reports,
+    conflicts: new Map(),
   };
   const own = new Set(
     await store.query({ property: atomic.parent, value: data.table }),
@@ -424,6 +549,9 @@ export async function syncNotion(
   for (const [index, source] of sources.entries()) {
     const report = reports[index]!;
     const lens = lenses.lens(source.dataSource, source.title, source.pages);
+    const fields = (
+      editableFields([report]).get(source.dataSource) ?? []
+    ).filter(f => bound.has(f.shortname));
     onProgress({
       dataSource: source.dataSource,
       title: source.title,
@@ -443,6 +571,22 @@ export async function syncNotion(
       const row = lenses.store.get(await lens.ingest(page));
       if (!row) throw new Error(`The lens produced no row for ${page.id}`);
       const propVals = lenses.toHost(row);
+
+      if (baselineProperty) {
+        const { baseline, keep, conflicts } = compareOnSync(
+          fields,
+          page,
+          source.dataSource,
+          bound,
+          existing,
+          baselineProperty,
+        );
+        for (const property of keep)
+          propVals[property] = existing?.get(property) as LensValue;
+        propVals[baselineProperty] = JSON.stringify(baseline);
+        if (existing && conflicts.size)
+          result.conflicts.set(existing.subject, conflicts);
+      }
 
       if (!existing) {
         const created = await store.newResource({

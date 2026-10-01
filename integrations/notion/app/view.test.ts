@@ -471,7 +471,7 @@ describe('view (DOM)', () => {
     expect(peek.textContent).toContain('Not copied from this page');
     expect(peek.textContent).toContain('Owner');
     expect(peek.textContent).toContain('has formatting');
-    expect(peek.textContent).toContain('Read-only copy');
+    expect(peek.textContent).toContain('Review changes');
     key(peek, 'ArrowDown');
     expect(q('aside h3')?.textContent).toBe('Thinking in Systems');
     key(q('aside')!, 'Escape');
@@ -577,6 +577,142 @@ describe('view (DOM)', () => {
     expect(open).toHaveBeenCalledWith('https://example.org/book', '_blank');
     expect(q('.pl-copy code')?.textContent).toBe('https://example.org/book');
     open.mockRestore();
+  });
+
+  describe('S15/S16: changes to send and conflicts (#8)', () => {
+    const two = {
+      sync: vi.fn(),
+      connect: vi.fn(),
+      send: vi.fn(),
+      discard: vi.fn(),
+      resolve: vi.fn(),
+    };
+    const changes = [
+      {
+        subject: 'row1',
+        pageId: 'p1',
+        name: 'Launch plan',
+        dataSource: 'd1',
+        dataSourceTitle: 'Roadmap',
+        fields: [
+          {
+            id: 'st',
+            shortname: 'notion-st',
+            name: 'Status',
+            type: 'status' as const,
+            before: 's2',
+            after: 's3',
+          },
+        ],
+      },
+      {
+        subject: 'row2',
+        pageId: 'p2',
+        name: 'Write changelog',
+        dataSource: 'd1',
+        dataSourceTitle: 'Roadmap',
+        fields: [
+          {
+            id: 'pt',
+            shortname: 'notion-pt',
+            name: 'Points',
+            type: 'number' as const,
+            before: 0,
+            after: 2,
+            notion: 5,
+            conflict: true as const,
+          },
+        ],
+      },
+    ];
+
+    beforeEach(() => {
+      app.destroy();
+      for (const f of Object.values(two)) f.mockClear();
+      app = createApp(root, two, {
+        now: () => NOW,
+        locale: 'en-GB',
+        width: () => width,
+      });
+    });
+
+    it('counts unsent changes in a strip and says edits are sent after review', () => {
+      app.render({ ...ready, changes: [] });
+      expect(q('.nt-changes')).toBeNull();
+      expect(q('.pl-connbar')?.textContent ?? root.textContent).toContain(
+        'Edits sent after review',
+      );
+      app.render({ ...ready, changes });
+      expect(q('.nt-changes')?.textContent).toContain(
+        '2 changes in 2 rows not sent to Notion yet · 1 row also changed in Notion',
+      );
+    });
+
+    it('reviews before → after with option names, sends only what can be sent', () => {
+      app.render({ ...ready, changes });
+      q<HTMLButtonElement>('[data-key="review-open"]')!.click();
+      const review = q('.nt-review')!;
+      // The review stands in for the rows.
+      expect(q('.nt-tablewrap')).toBeNull();
+      const [first, second] = all('.nt-r-list > li');
+      expect(first!.querySelector('.nt-r-before')?.textContent).toBe(
+        'In progress',
+      );
+      expect(first!.querySelector('.nt-r-after')?.textContent).toBe('Done');
+      expect(second!.textContent).toContain('Also changed in Notion, to 5');
+      const send = q<HTMLButtonElement>('[data-key="review-send"]')!;
+      expect(send.textContent).toBe('Send 1 change');
+      expect(review.textContent).toContain('1 row held back until resolved');
+      send.click();
+      expect(two.send).toHaveBeenCalledTimes(1);
+      q<HTMLButtonElement>('[data-key="use-notion:row2:notion-pt"]')!.click();
+      expect(two.resolve).toHaveBeenCalledWith('row2', 'notion-pt', 'notion');
+      q<HTMLButtonElement>('[data-key="discard:row1"]')!.click();
+      expect(two.discard).toHaveBeenCalledWith('row1');
+    });
+
+    it('shows each row’s outcome, and disables Send while sending', () => {
+      app.render({ ...ready, changes });
+      q<HTMLButtonElement>('[data-key="review-open"]')!.click();
+      app.render({
+        ...ready,
+        changes: changes.slice(1),
+        sending: true,
+        outcomes: [
+          { subject: 'row1', name: 'Launch plan', status: 'sent', fields: 1 },
+        ],
+      });
+      expect(q<HTMLButtonElement>('[data-key="review-send"]')!.disabled).toBe(
+        true,
+      );
+      expect(q('[data-outcome="sent"]')?.textContent).toBe('Sent to Notion');
+      app.render({
+        ...ready,
+        changes: [],
+        outcomes: [
+          {
+            subject: 'row1',
+            name: 'Launch plan',
+            status: 'unknown',
+            message: 'No answer',
+          },
+        ],
+      });
+      expect(q('[data-outcome="unknown"]')?.textContent).toContain(
+        'Unknown whether Notion applied it',
+      );
+      q<HTMLButtonElement>('[data-key="review-close"]')!.click();
+      expect(q('.nt-review')).toBeNull();
+      expect(q('.nt-changes')?.textContent).toContain('Show results');
+    });
+
+    it('stays read-only in wording when the app has no send action', () => {
+      app.destroy();
+      app = createApp(root, actions, { now: () => NOW, width: () => width });
+      app.render({ ...ready, changes });
+      expect(q('.nt-changes')).toBeNull();
+      expect(root.textContent).toContain('Read-only');
+    });
   });
 
   describe('host operations since atomic-server 007869464', () => {

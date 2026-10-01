@@ -30,6 +30,5 @@ What success looks like, never to be said:
 
 Known limits (only new detail about them is a finding):
 
-- Read-only: no changes go back to Notion (atomic-plugins#8).
-- A local edit may be overwritten on the next sync (atomic-plugins#97), so don't ask them to edit here.
+- Edits go back to Notion only from the data table, after "Review changes" → Send (atomic-plugins#8, notion 0.2.0). This plan has no editing task; if they edit anyway, whether they find the review is a finding.
 - Nothing has run against a real Notion account through the proxy yet. If connecting fails, that is a finding: note it, and go on to the wrap-up.

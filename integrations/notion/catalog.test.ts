@@ -173,17 +173,78 @@ describe('Notion fixture', () => {
         {},
       ).status,
     ).toBe(404);
-    expect(
-      api.request('PATCH', url(`/v1/pages/${pages[0]!.id}`), {}).status,
-    ).toBe(403);
     expect(api.request('POST', url('/v1/pages'), {}).status).toBe(403);
+    expect(
+      api.request('PATCH', url(`/v1/data_sources/${DATA_SOURCE}`), {}).status,
+    ).toBe(403);
     expect(api.requests.map(r => r.method)).toEqual([
       'POST',
       'POST',
       'POST',
-      'PATCH',
       'POST',
+      'PATCH',
     ]);
+  });
+
+  it('updates page properties by id or name, and refuses what Notion refuses', () => {
+    const api = notionFixture();
+    const page = url(`/v1/pages/${pages[0]!.id}`);
+    const patch = (properties: unknown) =>
+      api.request('PATCH', page, { properties });
+
+    const ok = patch({
+      title: { title: [{ type: 'text', text: { content: 'Launch' } }] },
+      Points: { number: 5 },
+      '%3AUPp': { status: { id: 'b1f5a3c2-0001-4000-8000-000000000003' } },
+      Tags: { multi_select: [] },
+    });
+    expect(ok.status).toBe(200);
+    const body = ok.body as {
+      last_edited_time: string;
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(body.properties.Name!.title).toMatchObject([
+      { plain_text: 'Launch', annotations: { bold: false } },
+    ]);
+    expect(body.properties.Points!.number).toBe(5);
+    expect(body.properties.Status!.status).toMatchObject({ name: 'Done' });
+    expect(body.properties.Tags!.multi_select).toEqual([]);
+    expect(body.last_edited_time).not.toBe(pages[0]!.last_edited_time);
+
+    // An unknown option, the wrong type key or an unknown property: 400, no change.
+    expect(patch({ Status: { status: { id: 'nope' } } }).status).toBe(400);
+    expect(patch({ Points: { checkbox: true } }).status).toBe(400);
+    expect(patch({ Nope: { number: 1 } }).status).toBe(400);
+    expect(
+      (api.request('GET', page).body as typeof body).properties.Points!.number,
+    ).toBe(5);
+
+    // Archived in Notion (the driver): a PATCH is refused, a GET still reads it.
+    api.archivePage(pages[0]!.id);
+    expect(patch({ Points: { number: 6 } }).status).toBe(400);
+    expect(api.request('GET', page).body).toMatchObject({ archived: true });
+    expect(
+      api.request(
+        'PATCH',
+        url('/v1/pages/00000000-0000-4000-8000-0000000000ff'),
+        {
+          properties: {},
+        },
+      ).status,
+    ).toBe(404);
+  });
+
+  it('edits a page as someone in Notion would (editPage driver)', () => {
+    const api = notionFixture();
+    api.editPage(pages[1]!.id, { Done: { checkbox: false } });
+    expect(
+      (
+        api.request('GET', url(`/v1/pages/${pages[1]!.id}`)).body as {
+          properties: Record<string, Record<string, unknown>>;
+        }
+      ).properties.Done!.checkbox,
+    ).toBe(false);
+    expect(() => api.editPage(pages[1]!.id, { Done: { number: 1 } })).toThrow();
   });
 });
 
