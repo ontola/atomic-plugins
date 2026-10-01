@@ -14,6 +14,7 @@ import {
   createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
+  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
 
 // Playwright loads the specs as CommonJS, so __dirname rather than import.meta.
@@ -41,6 +42,19 @@ export async function installServer(page: Page, folderName: string) {
 
 /** A Plugin draft in the test's drive whose source is the unchanged bundle. */
 export async function createPlugin(page: Page) {
+  // `createFromCatalog` reloads the SPA at /app/new and then fills the
+  // template search with Playwright's default 10 s action timeout. On a CI
+  // runner the reload stayed on the boot splash for longer than that
+  // (run 36891774224: the page snapshot was only the "Atomic Place" logo).
+  // Load the page and wait for the search box here with room to spare, so
+  // the helper's own reload finds a warm app.
+  await waitForSynced(page);
+  await page.goto(new URL('/app/new', page.url()).href);
+  await expect(
+    page.getByRole('searchbox', {
+      name: 'Search templates and resource types',
+    }),
+  ).toBeVisible({ timeout: 60_000 });
   await createFromCatalog(page, 'Plugin');
   await expect(
     page
@@ -122,6 +136,12 @@ export async function install(page: Page, releaseId: string, folder: string) {
   await dialog.getByRole('button', { name: 'Install', exact: true }).click();
   await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
   const url = new URL(page.url());
+  // The install saves the Installation and then the folder's write grant for
+  // the plugin's agent, and navigates as soon as both are saved locally. Until
+  // the server has them, a route write into the folder is refused as
+  // `500 route-write-failed` (CI run 36891774224, the retry's first PUT
+  // within a second of the install). Wait for the outbox to drain.
+  await waitForSynced(page, 60_000);
 
   return url.searchParams.get('subject') ?? `${url.origin}${url.pathname}`;
 }
