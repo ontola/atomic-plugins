@@ -38,6 +38,12 @@
       "effect": "read"
     },
     {
+      "id": "fetch-legacy-webdav",
+      "method": "GET",
+      "url": "https://*/public.php/webdav/",
+      "effect": "read"
+    },
+    {
       "id": "notify",
       "method": "POST",
       "url": "https://*/{*rest}",
@@ -74,7 +80,7 @@
         "maxBodyBytes": 65536,
         "writes": ["received"],
         "enqueues": ["notify"],
-        "fetches": ["fetch-file"]
+        "fetches": ["fetch-file", "fetch-legacy-webdav"]
       },
       {
         "id": "notifications",

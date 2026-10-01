@@ -7,15 +7,18 @@
  * reconciliation, minimal ETag-conditioned patches). This file only maps its
  * `Card`/`ConnectionState` onto rows:
  *
- * - The six mapped fields are ordinary columns: Name (title), Location,
- *   Start, End, All day and Notes (Google's description). Start and End are
+ * - The mapped fields are the shared `event-v1` class's (#177, `fields.ts`):
+ *   Name (title), Location, Start, End, All day, Notes (Google's
+ *   description), Day and End day, by their published subjects. They are
+ *   read through `ontology-kit`'s strict resolver only. Start and End are
  *   the exact strings Google sent (`YYYY-MM-DD`, or a date-time with its UTC
  *   offset), never parsed into numbers or `Date`s for storage.
- * - All day, Day, End day and Notes use the host's shared calendar field
- *   names (`calendarFields` in atomic-server `browser/lib/src/calendar-date.ts`:
- *   `atomic-calendar-all-day`, `-day`, `-end-day`, `-notes`), so the host
- *   table's own Calendar view (the app's Month) places the row, and spans
- *   an all-day range over its days. Day is the civil date of Start. End day
+ * - All day, Day and End day have the host's shared calendar field
+ *   shortnames (`calendarFields` in atomic-server
+ *   `browser/lib/src/calendar-date.ts`: `atomic-calendar-all-day`, `-day`,
+ *   `-end-day`), so the host table's own Calendar view (the app's Month)
+ *   places the row, and spans an all-day range over its days. Day is the
+ *   civil date of Start. End day
  *   follows the host's reading of it (`isAllDayOnDate`: start <= day < end):
  *   for an all-day event it is Google's exclusive end date, the day after the
  *   last day; for a timed event that ends on a later date it is that date,
@@ -26,7 +29,9 @@
  *   rows by them, as the host view does (`events.ts`).
  * - The binding lives on the row, not in a separate store: the Google event
  *   id, the ETag last read, and the baseline — the projection both sides
- *   last agreed on, as JSON text. The baseline is what lets a refresh tell a
+ *   last agreed on, as JSON text. These provider extras are Properties in
+ *   the app's own ontology, declared on the App as `row-extras`
+ *   (`adopt.ts`). The baseline is what lets a refresh tell a
  *   local edit from a Google edit, and report both-changed as a conflict
  *   instead of overwriting either (adapter.ts, `reconcileRecord`).
  *
@@ -51,6 +56,7 @@ import {
   nextCalendarDate,
 } from '../../../browser/lib/src/calendar-date.js';
 import type { CalEvent } from './events.js';
+import { EVENT, fields, SHARED, sharedValues } from './fields.js';
 import { addDays, daysBetween } from './time.js';
 import { relay, UncertainWriteError, type Relayed } from './relay.js';
 import type {
@@ -72,112 +78,66 @@ export const RECOMMENDS = `${A}/properties/recommends`;
 export const REQUIRES = `${A}/properties/requires`;
 export const PROPERTIES = `${A}/properties/properties`;
 export const PROPERTY_CLASS = `${A}/classes/Property`;
+export const CLASSTYPE = `${A}/properties/classtype`;
+export const DEFAULT_ONTOLOGY = `${A}/ontology/server/property/default-ontology`;
 const DT = `${A}/datatypes`;
 
 interface Spec {
   name: string;
   datatype: string;
   description: string;
-  /** Shown as a table column (in the row class's `recommends`). */
-  column: boolean;
 }
 
 /**
- * The host's shared calendar field names (`@tomic/lib` `calendarFields`).
- * Its Calendar view matches them by shortname, so only these names get
- * all-day and multi-day handling there.
+ * The host's shared calendar field shortnames (`@tomic/lib`
+ * `calendarFields`), which the `event-v1` properties carry. Its Calendar
+ * view matches them by shortname, so only these names get all-day and
+ * multi-day handling there.
  */
 export const DAY = 'atomic-calendar-day';
 export const ALL_DAY = 'atomic-calendar-all-day';
 export const END_DAY = 'atomic-calendar-end-day';
 export const NOTES = 'atomic-calendar-notes';
 
-/** Shortname -> Property. Created under the app's ontology on first import. */
+/**
+ * The app's own Properties, by shortname: its provider extras. Created under
+ * the app's ontology on first use. The first four are kept on each row, and
+ * declared on the App as `row-extras` (`ROW_EXTRAS`); the last two on the
+ * app's own table.
+ */
 export const SPECS: Record<string, Spec> = {
-  location: {
-    name: 'Location',
-    datatype: `${DT}/string`,
-    description: 'Where the event takes place, as Google Calendar has it.',
-    column: true,
-  },
-  start: {
-    name: 'Start',
-    datatype: `${DT}/string`,
-    description:
-      'YYYY-MM-DD for an all-day event, otherwise a date-time with its UTC offset.',
-    column: true,
-  },
-  end: {
-    name: 'End',
-    datatype: `${DT}/string`,
-    description:
-      'Exclusive: the day after the last day for an all-day event, otherwise a date-time with its UTC offset.',
-    column: true,
-  },
-  [ALL_DAY]: {
-    name: 'All day',
-    datatype: `${DT}/boolean`,
-    description: 'Whether Start and End are dates rather than date-times.',
-    column: true,
-  },
-  [DAY]: {
-    name: 'Day',
-    datatype: `${DT}/date`,
-    description:
-      'The date of Start, for calendar views. Derived from Start; editing it moves the event, and the Calendar app offers that move to Google for review.',
-    column: true,
-  },
-  [END_DAY]: {
-    name: 'End day',
-    datatype: `${DT}/date`,
-    description:
-      'For calendar views: the day after the last day of an all-day event (exclusive, as Google has it), or the end date of a timed event that ends on a later day. Derived from End; editing it changes the end, and the Calendar app offers that to Google for review.',
-    column: true,
-  },
-  [NOTES]: {
-    name: 'Notes',
-    datatype: `${DT}/string`,
-    description: 'The event’s description, as Google Calendar has it.',
-    column: true,
-  },
   'google-event-id': {
     name: 'Google event id',
     datatype: `${DT}/string`,
     description: 'The Google Calendar event this row is bound to.',
-    column: false,
   },
   'google-etag': {
     name: 'Google ETag',
     datatype: `${DT}/string`,
     description: 'The event version last read from Google Calendar.',
-    column: false,
   },
   'google-link': {
     name: 'Google Calendar link',
     datatype: `${DT}/string`,
     description:
       'The event’s page in Google Calendar (its htmlLink), as last read. Display only.',
-    column: false,
   },
   'sync-baseline': {
     name: 'Sync baseline',
     datatype: `${DT}/string`,
     description:
       'JSON of the fields as both sides last agreed; tells local edits from Google edits.',
-    column: false,
   },
   'google-calendar-id': {
     name: 'Google calendar id',
     datatype: `${DT}/string`,
     description: 'The one Google calendar this table imports (on the table).',
-    column: false,
   },
   'google-calendar-meta': {
     name: 'Google calendar details',
     datatype: `${DT}/string`,
     description:
       'JSON of the imported calendar’s name, colour, access role and account, as Google listed them (on the table; display only).',
-    column: false,
   },
 };
 
@@ -191,6 +151,14 @@ export interface CalendarMeta {
   account?: string;
 }
 
+/** The extras kept on rows: declared on the App as its `row-extras`. */
+export const ROW_EXTRAS = [
+  'google-event-id',
+  'google-etag',
+  'google-link',
+  'sync-baseline',
+] as const;
+
 export const DEFAULT_COLOR = '#4986e7';
 
 export const isReadOnly = (accessRole: string) =>
@@ -199,9 +167,14 @@ export const isReadOnly = (accessRole: string) =>
 export type Props = Record<keyof typeof SPECS, string>;
 
 export interface Layout {
+  app: string;
   table: string;
+  /** The table's row class: `event-v1` once the app adopted it (`adopt.ts`). */
   rowClass: string;
+  /** The app's own ontology, where its provider extras are. */
   ontology: string;
+  /** Whether the table is the app's own (under the App), not one it is a view of. */
+  own: boolean;
 }
 
 const asList = (value: JSONValue): string[] =>
@@ -209,33 +182,41 @@ const asList = (value: JSONValue): string[] =>
     ? value.filter((v): v is string => typeof v === 'string')
     : [];
 
+/**
+ * Where the app's data is: the table the host hands it, and the app's own
+ * ontology (the App's `default-ontology`, as `createApp` sets it; failing
+ * that, the parent of a row class of the app's own, which is the same
+ * ontology for an install `createApp` made).
+ */
 export async function layout(store: PluginStore): Promise<Layout> {
   const data = await store.getData();
   if (!data?.rowClass)
     throw new Error('This app has no table with a row class to sync into.');
-  const klass = await store.getResource(data.rowClass);
-  const ontology = klass.get(PARENT);
-  if (typeof ontology !== 'string')
-    throw new Error('The row class has no parent ontology to add fields to.');
+  const app = await store.getApp();
+  let ontology = (await store.getResource(app)).get(DEFAULT_ONTOLOGY);
 
-  return { table: data.table, rowClass: data.rowClass, ontology };
+  if (typeof ontology !== 'string' && data.rowClass !== EVENT)
+    ontology = (await store.getResource(data.rowClass)).get(PARENT);
+  if (typeof ontology !== 'string')
+    throw new Error('This app has no ontology of its own to add fields to.');
+  const table = await store.getResource(data.table);
+
+  return {
+    app,
+    table: data.table,
+    rowClass: data.rowClass,
+    ontology,
+    own: table.get(PARENT) === app,
+  };
 }
 
 /** The existing Properties, by shortname; `create` adds the missing ones. */
 export async function properties(
   store: PluginStore,
-  where: Layout,
+  where: Pick<Layout, 'ontology'>,
   create: boolean,
 ): Promise<Props | undefined> {
-  const ontology = await store.getResource(where.ontology);
-  const listed = asList(ontology.get(PROPERTIES));
-  const found = new Map<string, string>();
-
-  for (const subject of listed) {
-    const shortname = (await store.getResource(subject)).get(SHORTNAME);
-    if (typeof shortname === 'string') found.set(shortname, subject);
-  }
-
+  const found = await existing(store, where);
   const missing = Object.keys(SPECS).filter(s => !found.has(s));
   if (missing.length && !create) return undefined;
   const created: string[] = [];
@@ -256,35 +237,22 @@ export async function properties(
     created.push(property.subject);
   }
 
-  if (created.length)
-    await ontology.set(PROPERTIES, [...listed, ...created]).save();
+  if (created.length) {
+    const ontology = await store.getResource(where.ontology);
+    await ontology
+      .set(PROPERTIES, [...asList(ontology.get(PROPERTIES)), ...created])
+      .save();
+  }
 
-  const props = Object.fromEntries(
+  return Object.fromEntries(
     Object.keys(SPECS).map(s => [s, found.get(s)!]),
   ) as Props;
-
-  const klass = await store.getResource(where.rowClass);
-  const recommends = asList(klass.get(RECOMMENDS));
-  const wanted = [
-    NAME,
-    ...Object.keys(SPECS)
-      .filter(s => SPECS[s].column)
-      .map(s => props[s]),
-  ];
-  const merged = [
-    ...recommends,
-    ...wanted.filter(s => !recommends.includes(s)),
-  ];
-  if (merged.length !== recommends.length || klass.get(NAME) !== 'Event')
-    await klass.set(RECOMMENDS, merged).set(NAME, 'Event').save();
-
-  return props;
 }
 
 /** Existing Properties by shortname, without creating any. */
-async function existing(
+export async function existing(
   store: PluginStore,
-  where: Layout,
+  where: Pick<Layout, 'ontology'>,
 ): Promise<Map<string, string>> {
   const ontology = await store.getResource(where.ontology);
   const found = new Map<string, string>();
@@ -367,27 +335,33 @@ export async function chooseCalendar(
   return meta;
 }
 
-const text = (value: JSONValue): string =>
+const text = (value: unknown): string =>
   typeof value === 'string' ? value : '';
 
 /**
- * The row as the adapter's projection. For a synced row, Start, End and All
- * day come through `hostValue`, so an edit to Day or End day made in the
- * host is read, not overwritten. `reason` says why the row's columns can't
- * be turned into something Google can take; the value is then the row's own
- * Start and End.
+ * The row as the adapter's projection, from its shared `event-v1` fields
+ * (read through the resolver, `fields.ts`) and the app's own extras. For a
+ * synced row, Start, End and All day come through `hostValue`, so an edit to
+ * Day or End day made in the host is read, not overwritten. `reason` says
+ * why the row's columns can't be turned into something Google can take; the
+ * value is then the row's own Start and End.
  */
 function cardOf(row: PluginResource, props: Props): Card & { reason?: string } {
   const id = row.get(props['google-event-id']);
   const bound = typeof id === 'string' && !!id;
+  const shared = sharedValues(row.props);
   const own = {
-    start: text(row.get(props.start)),
-    end: text(row.get(props.end)),
-    allDay: row.get(props[ALL_DAY]) === true,
+    start: text(shared[SHARED.start]),
+    end: text(shared[SHARED.end]),
+    allDay: shared[SHARED.allDay] === true,
   };
   const when = bound
     ? hostValue(
-        { ...own, day: row.get(props[DAY]), endDay: row.get(props[END_DAY]) },
+        {
+          ...own,
+          day: shared[SHARED.day] as JSONValue,
+          endDay: shared[SHARED.endDay] as JSONValue,
+        },
         baselineOf(row, props),
       )
     : own;
@@ -396,9 +370,9 @@ function cardOf(row: PluginResource, props: Props): Card & { reason?: string } {
     subject: row.subject,
     ...(bound ? { id } : {}),
     value: {
-      title: text(row.get(NAME)),
-      description: text(row.get(props[NOTES])),
-      location: text(row.get(props.location)),
+      title: text(shared[NAME]),
+      description: text(shared[SHARED.notes]),
+      location: text(shared[SHARED.location]),
       ...('reason' in when ? own : when),
     },
     ...('reason' in when ? { reason: when.reason } : {}),
@@ -533,13 +507,6 @@ export interface Rows {
   unmapped: Array<{ column: string; rows: number }>;
 }
 
-/**
- * Version 0.1.0's Day and All day, derived from Start: not columns a person
- * fills. (Its other old column, the core Description, is listed: a value
- * there is not sent; Notes is.)
- */
-const LEGACY = new Set(['day', 'all-day']);
-
 const filled = (value: JSONValue) =>
   value !== undefined &&
   value !== null &&
@@ -548,7 +515,7 @@ const filled = (value: JSONValue) =>
 
 /**
  * The table's columns (the row class's `requires` and `recommends`) that
- * the app neither writes nor sends: ones a person added in the host. Their
+ * the app neither writes nor sends: on `event-v1`, its Recurrence. Their
  * values stay on the rows; this only finds them, so the app can say they
  * aren't sent.
  */
@@ -560,21 +527,16 @@ async function otherColumns(
   const klass = await store.getResource(where.rowClass);
   const own = new Set<string>([
     NAME,
+    ...Object.values(SHARED),
     ...Object.values(props as Record<string, string>),
   ]);
-  const out: string[] = [];
 
-  for (const subject of new Set([
-    ...asList(klass.get(REQUIRES)),
-    ...asList(klass.get(RECOMMENDS)),
-  ])) {
-    if (own.has(subject)) continue;
-    const shortname = (await store.getResource(subject)).get(SHORTNAME);
-    if (typeof shortname === 'string' && LEGACY.has(shortname)) continue;
-    out.push(subject);
-  }
-
-  return out;
+  return [
+    ...new Set([
+      ...asList(klass.get(REQUIRES)),
+      ...asList(klass.get(RECOMMENDS)),
+    ]),
+  ].filter(subject => !own.has(subject));
 }
 
 async function readRows(
@@ -756,18 +718,24 @@ export function endDayOf(value: When): string | undefined {
   return end > day ? end : undefined;
 }
 
-/** Row values for `value`; `undefined` means the property is removed. */
-function valuesOf(props: Props, value: Projection): Record<string, JSONValue> {
-  return {
-    [NAME]: value.title,
-    [props[NOTES]]: value.description,
-    [props.location]: value.location,
-    [props.start]: value.start,
-    [props.end]: value.end,
-    [props[ALL_DAY]]: value.allDay,
-    [props[DAY]]: value.start.slice(0, 10),
-    [props[END_DAY]]: endDayOf(value),
-  };
+/**
+ * Row values for `value`, as shared `event-v1` fields (the resolver refuses
+ * anything else); `undefined` means the property is removed.
+ */
+function valuesOf(value: Projection): Record<string, JSONValue> {
+  return fields.write(
+    {
+      [NAME]: value.title,
+      [SHARED.notes]: value.description,
+      [SHARED.location]: value.location,
+      [SHARED.start]: value.start,
+      [SHARED.end]: value.end,
+      [SHARED.allDay]: value.allDay,
+      [SHARED.day]: value.start.slice(0, 10),
+      [SHARED.endDay]: endDayOf(value),
+    },
+    EVENT,
+  ) as Record<string, JSONValue>;
 }
 
 /** `valuesOf` without the removed properties, for a new row. */
@@ -784,7 +752,7 @@ function writeRow(
 ): boolean {
   let changed = false;
 
-  for (const [property, v] of Object.entries(valuesOf(props, value)))
+  for (const [property, v] of Object.entries(valuesOf(value)))
     if (row.get(property) !== v) {
       if (v === undefined) row.remove(property);
       else row.set(property, v);
@@ -880,9 +848,9 @@ export async function refresh(
     if (!change.subject) {
       await store.newResource({
         parent: where.table,
-        isA: [where.rowClass],
+        isA: [EVENT],
         propVals: {
-          ...defined(valuesOf(props!, change.desired)),
+          ...defined(valuesOf(change.desired)),
           [props!['google-event-id']]: change.id,
           [props!['google-etag']]: change.etag ?? '',
           [props!['sync-baseline']]: baseline,
@@ -1077,6 +1045,7 @@ export async function readEvents(
   })) {
     const row = await store.getResource(subject);
     const card = cardOf(row, props);
+    const shared = sharedValues(row.props);
     const baseline = baselineOf(row, props);
     const link = row.get(props['google-link']);
 
@@ -1097,8 +1066,8 @@ export async function readEvents(
       readOnly: readOnly || !card.id,
       calendar: { name: meta.summary, color: meta.color },
       // What the host's Calendar view places the row by; the views do too.
-      day: row.get(props[DAY]),
-      endDay: row.get(props[END_DAY]),
+      day: shared[SHARED.day],
+      endDay: shared[SHARED.endDay],
     });
   }
 
@@ -1214,6 +1183,13 @@ export async function keepAsLocal(
     .remove(props['google-etag'])
     .remove(props['sync-baseline'])
     .save();
+}
+
+/** The table's name, as the host shows it. */
+export async function tableName(store: PluginStore): Promise<string> {
+  const name = (await store.getResource((await layout(store)).table)).get(NAME);
+
+  return typeof name === 'string' && name ? name : 'Events';
 }
 
 /** The app's table, for handing off to the host's own views. */

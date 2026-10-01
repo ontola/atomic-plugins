@@ -79,13 +79,29 @@ export interface TimelineDay extends Interval {
   segments: Segment[];
 }
 
+/** One side of a `local` conflict: a range edit not sent yet (#123 M5). */
+export interface ConflictingEdit {
+  /** The intent's id. */
+  id: string;
+  label: TimeLabel;
+  /** Made by this open copy of the app (this page load). */
+  here: boolean;
+  /** Epoch ms. */
+  createdAt: number;
+}
+
 /** A `Conflict` as the views know it, plus what the timeline knows. */
 export interface TimelineConflict extends Conflict, Interval {
-  /** `duplicate`: same project twice, not a question of which. */
-  kind: ConflictKind | 'duplicate';
-  /** Every entry involved; `entryId` is the first of them. */
+  /** `duplicate`: same project twice, not a question of which. `local`:
+   * range edits made apart (two devices) that disagree, not sent yet
+   * (#123 S21); not from Clockify. */
+  kind: ConflictKind | 'duplicate' | 'local';
+  /** Every entry involved; `entryId` is the first of them. Empty for
+   * `local`. */
   entryIds: string[];
   candidates: TimeLabel[];
+  /** For `local`: the edits, oldest first. */
+  edits?: ConflictingEdit[];
 }
 
 export interface Timeline {

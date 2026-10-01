@@ -19,7 +19,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -52,7 +51,6 @@
       "https://atomicdata.dev/integrations/properties/keywords",
       "https://atomicdata.dev/integrations/properties/requires-api-plugins",
       "https://atomicdata.dev/integrations/properties/platform",
-      "https://atomicdata.dev/integrations/properties/callback-platform",
       "https://atomicdata.dev/integrations/properties/pluginUrl",
       "https://atomicdata.dev/integrations/properties/version",
       "https://atomicdata.dev/integrations/properties/app-module",
@@ -140,17 +138,7 @@
     "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
     "https://atomicdata.dev/properties/shortname": "platform",
     "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The LocalThought platform id this integration's setup dialog connects through, for one that uses the generic LocalThought extension flow instead of its own setup component."
-  },
-  {
-    "@id": "https://atomicdata.dev/integrations/properties/callback-platform",
-    "https://atomicdata.dev/properties/isA": [
-      "https://atomicdata.dev/classes/Property"
-    ],
-    "https://atomicdata.dev/properties/parent": "https://atomicdata.dev/integrations/ontology/catalog",
-    "https://atomicdata.dev/properties/shortname": "callback-platform",
-    "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string",
-    "https://atomicdata.dev/properties/description": "The platform id LocalThought's OAuth callback reports back, for an integration that owns its own setup component instead of using the generic LocalThought flow (so it has no `platform`)."
+    "https://atomicdata.dev/properties/description": "The integration-proxy platform id this integration connects through (for example `todoist`). Nothing reads it at the pin: its reader was the generic LocalThought setup dialog, which atomic-server removed with the LocalThought flow (c707ca4ed). Kept as a record of the provider the entry is for; a drive app names its platform in its own code when it calls `store.proxy.connect`."
   },
   {
     "https://atomicdata.dev/properties/localId": "calendar",
@@ -163,15 +151,15 @@
     "https://atomicdata.dev/properties/name": "Google Calendar",
     "https://atomicdata.dev/properties/emoji": "🗓️",
     "https://atomicdata.dev/properties/description": "A drive app that imports one Google calendar's events and sends the edits you review back to Google.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Imports one calendar's single (non-recurring) events with title, description, location, start and end into the app's table, shown as an agenda and a week in the app and as a month through the table's own Calendar view, where all-day events spanning several days cover each of their days. Edits to those five fields are listed for review and sent to Google only when you approve them, each with If-Match (refused if the event changed in Google since it was read) and sendUpdates=none. A field changed on both sides waits until you pick a side. Declared scope: three Google Calendar operations through the integration proxy (list calendars, list events, patch an event), with the Google scopes calendar.calendarlist.readonly and calendar.events; the app holds no token and sends nothing else.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports one calendar's single (non-recurring) events with title, description, location, start and end into the app's table, as rows of the shared Event class (event-v1, ontola/atomic-plugins#177), shown as an agenda and a week in the app and as a month through the table's own Calendar view, where all-day events spanning several days cover each of their days. Edits to those five fields are listed for review and sent to Google only when you approve them, each with If-Match (refused if the event changed in Google since it was read) and sendUpdates=none. A field changed on both sides waits until you pick a side. Added as a view of another Event table, it shows that table's events, read only, and syncs nothing. Declared scope: three Google Calendar operations through the integration proxy (list calendars, list events, patch an event), with the Google scopes calendar.calendarlist.readonly and calendar.events; the app holds no token and sends nothing else.",
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Calendar through the host's consent bar and choose a calendar. It syncs when opened and on Sync now; Send sends the reviewed edits. Nothing runs while the app is closed.",
-    "https://atomicdata.dev/integrations/properties/limitation": "One calendar per app, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. Mock-tested only: not yet verified against a live Google account.",
+    "https://atomicdata.dev/integrations/properties/limitation": "One calendar per app, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. Only the app's own table is synced. Waits for the stable ontology domain. Mock-tested only: not yet verified against a live Google account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google calendar events agenda week month schedule drive app two-way review",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.4",
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.1.4/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-/9nEUTUO3U6UC9BgdpPjLqybVVMHHAFVFTPm6KUwU+QK6orol5Ijk3TAu8V+tbt4"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-YCh0XA/74ulx5QYL6uIXiCDI3oXaGSH2AzgurOivVp3kUZCTSx1pCwPzRu2ZfzIY"
   },
   {
     "https://atomicdata.dev/properties/localId": "devonian-todoist",
@@ -185,7 +173,7 @@
     "https://atomicdata.dev/properties/emoji": "✅",
     "https://atomicdata.dev/properties/description": "Bring your Todoist projects and tasks into a local issue tracker.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Imports active tasks and projects. Tasks open in the Issues view with their title, due day and priority. Todoist lists active tasks only, so a task shows as closed only when Todoist itself reports it checked.",
-    "https://atomicdata.dev/integrations/properties/events": "Connect through LocalThought, then Sync now (and every five minutes while the folder is open) to pull the latest tasks.",
+    "https://atomicdata.dev/integrations/properties/events": "Was planned as: connect through the integration proxy, then Sync now (and every five minutes while the folder is open) to pull the latest tasks. The LocalThought connect dialog and sync panel that did this were removed from atomic-server, and no drive app wraps the Todoist lens yet, so nothing runs it at the pin.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist. A task that stops appearing is never assumed completed. The lens can check such a task by id and mark it completed, deleted, unavailable or unconfirmed, with when it was last seen, but no host runs that check yet, and nothing has been verified against a live Todoist account.",
     "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects devonian lens local tracker issues",
     "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
@@ -241,15 +229,15 @@
     "https://atomicdata.dev/properties/name": "Clockify",
     "https://atomicdata.dev/properties/emoji": "⏱️",
     "https://atomicdata.dev/properties/description": "A drive app that brings your Clockify time entries into a week view and a table of its own, and sends edits you review back to Clockify.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Reads your own time entries in one workspace over a rolling 7- or 30-day look-back, keeps what each read saw in an observation log in the drive, and shows a week grid, the entries by day and hours per project. Completed entries become rows in the app's table (start, end, project, billable). A timeline shows overlapping entries and work over a break as conflicts, and time no read has covered as not loaded, never as not worked. An entry's description, project, billable flag, start and end can be edited in the app or in the table, or the entry deleted; a time range can be marked as worked on a project or as not worked, which trims, splits, extends or creates entries over exactly that range; and a conflict can be resolved by keeping one project, marking it not worked, or removing a duplicate. Each change is listed under Changes to send and written to Clockify only when sent, after a fresh read, and confirmed by a read afterwards. If Clockify changed the same field, Clockify's value is kept; a new entry is not created where Clockify has time by then.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Reads your own time entries in one workspace over a rolling 7- or 30-day look-back, keeps what each read saw in an observation log in the drive, and shows a week grid, the entries by day and hours per project. Completed entries become rows in the app's table (start, end, project, billable). A timeline shows overlapping entries and work over a break as conflicts, and time no read has covered as not loaded, never as not worked. An entry's description, project, billable flag, start and end can be edited in the app or in the table, or the entry deleted; a time range can be marked as worked on a project or as not worked, which trims, splits, extends or creates entries over exactly that range; and a conflict can be resolved by keeping one project, marking it not worked, or removing a duplicate. Each change is listed under Changes to send and written to Clockify only when sent, after a fresh read, and confirmed by a read afterwards. If Clockify changed the same field, Clockify's value is kept; a new entry is not created where Clockify has time by then. With the app open on two devices or in two tabs, one sends at a time, and range edits made on each without seeing the other's are shown as a conflict between your edits and held until one is chosen.",
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited, time ranges cannot be split or filled yet, and overlap conflicts cannot be resolved from the app. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited. Coordination between two open copies is advisory (the drive has no compare-and-swap), so two copies starting to send in the same moment can still both send, at worst creating a duplicate that the app then offers to remove; it has been tested with simulated devices only, not with two real browsers. The same field edited directly on two devices keeps the later edit. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.4.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.3.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-TLYICHvPUIJd1XVYAs3fpdjQouWQxe5gMM7qJGyKmM9N6foQF2f5EIfzX1n0xMFi"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.4.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-1vg5yfFSuTK8b++5NRFH8tNkdwSOfFWJSFj5YdBfv80frvmEqr6xJVB8+p4zhBTT"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",
@@ -356,7 +344,7 @@
     "https://atomicdata.dev/integrations/properties/capabilities": "Connects through the integration proxy, with no account or key (the demo provider is a static, read-only API on GitHub Pages), and imports every pet it lists into a Pets table, with typed columns (age, vaccinated, weight, updated at). Re-syncing updates changed pets and writes nothing when nothing changed.",
     "https://atomicdata.dev/integrations/properties/events": "Connect once, then Sync now whenever you want the latest pets. Nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "Demo provider only, not a real account. Import only: nothing is written back. Keep the browser open while syncing.",
-    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points localthought",
+    "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
     "https://atomicdata.dev/integrations/properties/version": "0.1.2",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-qTKJ6SFE+FAFKW6rmNhAFV6um9+aHSb+VrAF5B6aRHaBMeT6vH5f5W0T5Q2WTWAt",

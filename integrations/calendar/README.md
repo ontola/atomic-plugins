@@ -1,7 +1,8 @@
 # Google Calendar ↔ Atomic calendar
 
 Imports one Google calendar's single (non-recurring) events into an Atomic
-table, and sends edits of five fields back to Google after you review them.
+table, as rows of the shared `event-v1` class (#177), and sends edits of five
+fields back to Google after you review them.
 
 ## Supported path: the Calendar drive app
 
@@ -15,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   111,872 bytes for 0.1.4) from GitHub Pages and refuses it unless it
+   122,135 bytes for 0.2.0) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -82,18 +83,74 @@ a way to run the plugin:
   no catalog entry. Nothing installs it, and evidence gathered against that
   flow does not certify the drive app.
 
+## Shared class: `event-v1` (#177)
+
+From 0.2.0 the app's rows are the shared Event class,
+`https://ontola.github.io/atomic-plugins/ontology/classes/event-v1`, which
+`ontology-kit/` defines and GitHub Pages publishes (see
+[`ontology-kit/README.md`](../../ontology-kit/README.md)). Its subjects are
+inlined into the bundle from `ontology-kit/terms.mjs`; the views read the
+shared fields by subject only, through `ontology-kit`'s strict resolver
+(`app/fields.ts`), never by shortname, name or column.
+
+- **First open** (`app/adopt.ts`; #177 §5, §6.2 items 3 and 12, spike S2).
+  A catalog install at the pin makes the App with a class of its own
+  ("Event"), so on its first open the app, inside its own subtree:
+  1. moves its own table's rows onto `event-v1` in place: `isA` becomes
+     `event-v1`, and each value written by 0.1.x under the app's own
+     Properties (`location`, `start`, `end`, `atomic-calendar-day`, `-all-day`,
+     `-end-day`, `-notes`) is copied to the shared property (unless the row
+     already has one) and removed. The provider extras keep their subjects,
+     so an edit not sent to Google yet is still found against its baseline
+     after the update (#177 Q10: migrate where unsent edits could be lost);
+  2. then sets its own table's `classtype` to `event-v1`, only once every row
+     is done (a row the pass did not reach is done on the next open);
+  3. adds `event-v1` to the App's `renders`, so the host's "+ Add view"
+     offers the app on any `event-v1` table;
+  4. declares its four row extras (`google-event-id`, `google-etag`,
+     `google-link`, `sync-baseline`) as the App's `row-extras`
+     (atomic-server #1849, in the pin): what an "Allow editing" grant on
+     another table would also cover.
+
+  Every step is skipped once done. The old class and Properties stay in
+  the app's ontology, unused. The same update reaches an install made
+  before 0.2.0 through the Integrations page's "Update to 0.2.0"; a new
+  install starts on `event-v1`. Declared by `app/adopt.test.ts`; the e2e
+  checks a fresh install only.
+
+- **On a table that isn't its own.** Added through "+ Add view" to another
+  `event-v1` table (one made with New table and the class URL pasted, #177
+  S3), the app draws that table's events from their shared fields, read
+  only, says "Not synced with Google Calendar", and makes no proxy request
+  and no write. "Sync this table to Google Calendar" (#177 §6.2 item 14) is
+  not built; it would need the row extras above, which the pin's row grant
+  now covers, plus a place for the calendar binding that isn't the table.
+- **Gate.** The catalog entry stays `enabled: false` while the ontology base
+  is on github.io (`ontology.mjs check`; card copy "Waits for the stable
+  ontology domain."). Test-side installs (the e2e, the user-testing
+  catalog) are not gated.
+- **Pages.** The pinned server fetches an external term once, on first use,
+  and keeps it; the browser reads it through its local-database worker after
+  its signed request fails Pages' CORS preflight (one console error per term
+  per session; #177 S1). A browser that has never seen the class, while
+  Pages is down, shows the table with no columns (#177 H1, not fixed at the
+  pin).
+
 ## Mapping
 
-| Google Calendar                            | Atomic column (shortname)                                    |
-| ------------------------------------------ | ------------------------------------------------------------ |
-| `summary`                                  | Name                                                         |
-| `description` (missing becomes empty text) | Notes (`atomic-calendar-notes`)                              |
-| `location` (missing becomes empty text)    | Location (`location`)                                        |
-| All-day `start.date` / `end.date`          | Start / End (plain `YYYY-MM-DD`; End exclusive)              |
-| Timed `start.dateTime` / `end.dateTime`    | Start / End (offset-qualified)                               |
-| whether `start.date` is set                | All day (`atomic-calendar-all-day`)                          |
-| —                                          | Day (`atomic-calendar-day`): the date part of Start          |
-| —                                          | End day (`atomic-calendar-end-day`): see below; may be unset |
+| Google Calendar                            | `event-v1` property (shortname)                                           |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| `summary`                                  | Name (Atomic's `name`)                                                    |
+| `description` (missing becomes empty text) | Notes (`atomic-calendar-notes`)                                           |
+| `location` (missing becomes empty text)    | Location (`atomic-calendar-location`)                                     |
+| All-day `start.date` / `end.date`          | Start / End (`atomic-calendar-start`, `-end`; plain dates, End exclusive) |
+| Timed `start.dateTime` / `end.dateTime`    | Start / End (offset-qualified)                                            |
+| whether `start.date` is set                | All day (`atomic-calendar-all-day`)                                       |
+| —                                          | Day (`atomic-calendar-day`): the date part of Start                       |
+| —                                          | End day (`atomic-calendar-end-day`): see below; may be unset              |
+
+`event-v1`'s Recurrence (`atomic-calendar-recurrence`) is not written or
+sent; a value someone puts there is listed as "Kept here only".
 
 Start and End are stored as the exact strings Google sent. They are never
 converted to numbers or to `Date` for storage.
@@ -125,7 +182,10 @@ the core Description; the host view drew its all-day and multi-day events
 on their first day only. A table first imported by 0.1.0 keeps those old
 Properties (0.1.1 no longer writes them) and gets the new ones on its next
 sync; installs of 0.1.0 were experimental, so nothing migrates the old
-values beyond that re-import.
+values beyond that re-import. 0.1.1 to 0.1.4 wrote the fields as Properties
+of the app's own ontology, under the shortnames `location`, `start`, `end`
+and `atomic-calendar-*`; 0.2.0 moves them onto `event-v1` on first open (see
+[Shared class](#shared-class-event-v1-177)).
 
 ### Which days the Agenda and Week draw an event on
 
@@ -136,14 +196,14 @@ follow the host, not Google's UI). `app/events.ts` imports the host's
 `isAllDayOnDate` from `browser/lib/src/calendar-date.ts` and applies
 `CalendarView.tsx`'s bucketing to the same columns, at the pin:
 
-| Row                                                        | Host view and app views                   |
-| ---------------------------------------------------------- | ----------------------------------------- |
-| All day, End day after Day                                 | Day up to, not including, End day         |
-| All day, End day equal to or before Day, or no date        | nowhere                                   |
-| All day, no End day                                        | Day only                                  |
-| Not all day (timed), any End day                           | Day only, End day ignored                 |
-| No Day (or one that doesn't start with `YYYY-MM-DD`)       | nowhere                                   |
-| Made with the host view's `+` (Day, End day, no Start/End) | Day (the app draws it untimed, read-only) |
+| Row                                                        | Host view and app views                    |
+| ---------------------------------------------------------- | ------------------------------------------ |
+| All day, End day after Day                                 | Day up to, not including, End day          |
+| All day, End day equal to or before Day, or no date        | nowhere                                    |
+| All day, no End day                                        | Day only                                   |
+| Not all day (timed), any End day                           | Day only, End day ignored                  |
+| No Day (or one that doesn't start with `YYYY-MM-DD`)       | nowhere                                    |
+| Made with the host view's `+` (Day, End day, no Start/End) | Day, drawn as an all-day event (read-only) |
 
 Consequences, which differ from 0.1.1 and from Google's own UI:
 
@@ -171,7 +231,9 @@ LocalThought lens in `devonian/google-calendar/lens/projection.ts`; a
 write-back sends Google the exclusive end.
 
 Each row also carries its binding, outside the table's columns: the Google
-event id, the ETag last read, and the sync baseline. The baseline is JSON of
+event id, the ETag last read, the event's Google link and the sync baseline,
+as Properties of the app's own ontology, declared on the App as its
+`row-extras`. The baseline is JSON of
 the five fields as both sides last agreed, keyed by field (`title`,
 `description`, …), not by column, so the renamed columns leave it as it
 was. It is what lets a refresh tell a local edit from a Google edit.
@@ -179,10 +241,15 @@ was. It is what lets a refresh tell a local edit from a Google edit.
 ## Edits made outside the app (compare on open)
 
 Per #177 (Q4–Q7) and #192. The bookkeeping lives on each row, as provider
-extras: `google-event-id`, `google-etag` and `sync-baseline`. The host
-gives the app no change events yet (#177 H6), so the app compares instead:
-every time it opens, and on "Sync now", it reads Google and compares each
-synced row with its baseline. Any difference is a local change, however it
+extras: `google-event-id`, `google-etag` and `sync-baseline`. The pin has
+the host side of #177 H6: a per-table change list with tombstones
+(`GET /changes`, atomic-server #1850; `browser/lib/src/table-changes.ts`)
+and a durable `afterCommit` hook (#1851, only with `--plugin-after-commit`).
+Neither is reachable from a drive app's frame store at the pin
+(`view-client.js` has no operation for either, and the frame cannot sign a
+request as the person), so the app still compares instead: every time it
+opens, and on "Sync now", it reads Google and compares each synced row with
+its baseline. Any difference is a local change, however it
 was made: the host's table, the host's Calendar view, another view, another
 device. It goes into the same "Review N changes" list as an edit made in the
 app, and nothing is sent until you press Send. A send is a `PATCH` with
@@ -222,8 +289,8 @@ column the app doesn't map: Notes is what is sent.
   its baseline with it, so there is nothing left to compare: the next sync
   imports the Google event again as a new row, and the event stays in
   Google. Noticing a local deletion needs the host's per-table change list
-  with tombstones (#177 H6), which doesn't exist at the pin. Declared
-  limitation.
+  with tombstones (#177 H6b), which the pin has but a drive app's frame
+  cannot read yet (see above). Declared limitation.
 - **Only while the app is open.** Edits made while it is closed are found
   the next time it opens; nothing is sent in the background.
 
@@ -346,8 +413,14 @@ has not been checked here.
 - After an uncertain request, the page keeps the spent connection listed
   (`proxyConnections.list` still returns it). The app falls back past it to
   the newest working connection. A host that pruned it would be simpler.
+- **Shared class** (#177, from 0.2.0): app writes (`/app-write`) of a
+  table `classtype`, a row `isA` and row properties whose subjects are on
+  GitHub Pages, and an App `row-extras` property (atomic-server #1849).
+  Checked at pin `a12b74a` by a throwaway spike through the frame protocol
+  and by the e2e. Pages must be reachable the first time the server or a
+  browser uses a term (see [Shared class](#shared-class-event-v1-177)).
 - The `store` members the app calls are listed in `app/operations.ts`
-  (`HOST_OPERATIONS`): `getData`, `getResource`, `query`, `newResource` and
+  (`HOST_OPERATIONS`): `getApp`, `getData`, `getResource`, `query`, `newResource` and
   `proxy.request`/`.connections`/`.connect` on every host with the relay;
   `openExternal`, `openResource`, `getTheme`, `onThemeChange` and
   `proxy.disconnect` feature-detected (pin 007869464). `app/operations.test.ts`
@@ -388,7 +461,10 @@ node --test integrations/localthought/mock-proxy.test.mjs
   cancelled skips; refresh; review; `If-Match` on send; `412`; both-changed
   conflicts; a lost response followed by a reconnect; cancellation after
   import; local-only and invalid rows. `app/compare.test.ts`: edits made
-  outside the app, found on open (see the table above). `app/build.test.ts` checks that the
+  outside the app, found on open (see the table above). `app/adopt.test.ts`:
+  the first-open move of a table as 0.1.4 left it onto `event-v1`, with an
+  unsent edit kept, idempotence, `row-extras` skipped on a host without it,
+  and the read-only view of another `event-v1` table. `app/build.test.ts` checks that the
   bundle is one ES module exporting only `view`, with no storage, `fetch` or
   credential of its own. `app/operations.test.ts`: the declared scope (see
   [Proxy catalog](#proxy-catalog)) against the relay, the composed proxy
@@ -397,7 +473,11 @@ node --test integrations/localthought/mock-proxy.test.mjs
   same path in the real plugin frame on the pinned host, with the mock
   integration proxy. Each test installs the app from the catalog's Drive
   apps section (the committed `apps/calendar/<version>/ui.js`, served by the
-  lane's dev-server). It connects through the consent bar, chooses a
+  lane's dev-server). The rows use the published GitHub Pages subjects, so
+  the lane needs network access to `ontola.github.io`; `beforeAll` first
+  checks Pages serves `event-v1` and its properties with the committed
+  bytes (`ontology-kit/served.mjs`). After the import it checks that the
+  table and every row are `event-v1` and that the App renders it. It connects through the consent bar, chooses a
   calendar, imports and checks the rows, then refreshes after a Google-side
   edit made through the mock's test drivers
   (`POST /fixture/google-calendar/…`). It then sends a reviewed edit
@@ -416,6 +496,10 @@ node --test integrations/localthought/mock-proxy.test.mjs
   calendar in 360, 720 and 1200px frames
   under the host's light and dark themes: no sideways scroll, no axe
   violations, and the theme switch restyles the frame without a reload.
+  Another (#177) makes an `event-v1` table as the signed-in user, with one
+  row that has only a Day, adds the app to it through "+ Add view"
+  (read-only), and checks the "Not synced" banner and the row drawn as an
+  all-day event, with no Edit.
   Screenshots are attached to the Playwright report. The first test ends by
   reading every request the mock proxy received from the frame
   (`POST /fixture/google-calendar/received`) and checking that each is one

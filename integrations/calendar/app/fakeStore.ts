@@ -20,13 +20,65 @@ import type {
   PluginResource,
   PluginStore,
 } from './store.js';
-import { IS_A, NAME, PARENT, PROPERTIES, RECOMMENDS } from './sync.js';
+import { classes, properties } from '../../../ontology-kit/terms.mjs';
+import { EVENT, LEGACY_SHORTNAMES, SHARED, type SharedKey } from './fields.js';
+import {
+  CLASSTYPE,
+  DEFAULT_ONTOLOGY,
+  IS_A,
+  NAME,
+  PARENT,
+  PROPERTIES,
+  RECOMMENDS,
+  REQUIRES,
+  SHORTNAME,
+} from './sync.js';
 
 export const APP = 'did:ad:app';
+export const APP_CLASS = 'did:ad:class-app';
+export const RENDERS = 'did:ad:property-renders';
+export const ROW_EXTRAS_PROPERTY = 'did:ad:property-row-extras';
 export const ONTOLOGY = 'did:ad:ontology';
 export const ROW_CLASS = 'did:ad:class-item';
 export const TABLE = 'did:ad:table-items';
+/** An `event-v1` table that isn't the app's own: one it is a view of. */
+export const OTHER_TABLE = 'did:ad:table-team-events';
 export const DAY = '2026-09-24';
+
+/** The `event-v1` properties' names (ontology-kit/source.json). */
+const PUBLISHED_NAMES = {
+  'atomic-calendar-day': 'Day',
+  'atomic-calendar-end-day': 'End day',
+  'atomic-calendar-all-day': 'All day',
+  'atomic-calendar-start': 'Start',
+  'atomic-calendar-end': 'End',
+  'atomic-calendar-location': 'Location',
+  'atomic-calendar-notes': 'Notes',
+  'atomic-calendar-recurrence': 'Recurrence',
+} as const;
+
+/**
+ * A row field's subject by the shortname tests use: the shared `event-v1`
+ * property for the mapped fields (by their 0.1.x or shared shortname), else
+ * the app's own Property of that shortname (its provider extras).
+ */
+export function field(
+  store: { resources: Map<string, Record<string, JSONValue>> },
+  shortname: string,
+): string {
+  const key = (Object.keys(LEGACY_SHORTNAMES) as SharedKey[]).find(
+    k =>
+      LEGACY_SHORTNAMES[k] === shortname || SHARED[k].endsWith(`/${shortname}`),
+  );
+  if (key) return SHARED[key];
+  const listed = store.resources.get(ONTOLOGY)![PROPERTIES] as string[];
+  const subject = listed.find(
+    s => store.resources.get(s)![SHORTNAME] === shortname,
+  );
+  if (!subject) throw new Error(`no ${shortname} property`);
+
+  return subject;
+}
 
 type Fixture = ReturnType<typeof calendarFixture>;
 
@@ -55,20 +107,56 @@ export function fakeStore({
   connected = true,
   relay = true,
   hostOps = true,
+  view = 'own',
 }: {
   connected?: boolean;
   relay?: boolean;
   /** The operations of pin 007869464: open links and resources, theme, disconnect. */
   hostOps?: boolean;
+  /** Which table the host hands the app: its own, or another `event-v1` table. */
+  view?: 'own' | 'other';
 } = {}): FakeStore {
   const opened: FakeStore['opened'] = { external: [], resources: [] };
   let scheme: ColorScheme = 'light';
   const themeListeners = new Set<(t: { colorScheme: ColorScheme }) => void>();
+  const event = classes['event-v1'];
   const resources = new Map<string, Record<string, JSONValue>>([
-    [APP, { [NAME]: 'New app' }],
+    // As `createApp` lays an app out at the pin, with the drive's App class
+    // and its `renders` and `row-extras` Properties.
+    [
+      APP,
+      {
+        [NAME]: 'New app',
+        [IS_A]: [APP_CLASS],
+        [DEFAULT_ONTOLOGY]: ONTOLOGY,
+        [RENDERS]: [ROW_CLASS],
+      },
+    ],
+    [APP_CLASS, { [RECOMMENDS]: [RENDERS, ROW_EXTRAS_PROPERTY] }],
+    [RENDERS, { [SHORTNAME]: 'renders' }],
+    [ROW_EXTRAS_PROPERTY, { [SHORTNAME]: 'row-extras' }],
     [ONTOLOGY, { [PARENT]: APP, [PROPERTIES]: [] }],
     [ROW_CLASS, { [PARENT]: ONTOLOGY, [NAME]: 'Item', [RECOMMENDS]: [NAME] }],
-    [TABLE, { [PARENT]: APP, [NAME]: 'Items' }],
+    [TABLE, { [PARENT]: APP, [NAME]: 'Items', [CLASSTYPE]: ROW_CLASS }],
+    [
+      OTHER_TABLE,
+      { [PARENT]: 'did:ad:drive', [NAME]: 'Team events', [CLASSTYPE]: EVENT },
+    ],
+    // The published class and its properties, as the host reads them from
+    // GitHub Pages.
+    [
+      EVENT,
+      {
+        [REQUIRES]: [...event.requires],
+        [RECOMMENDS]: [...event.recommends],
+      },
+    ],
+    ...Object.entries(PUBLISHED_NAMES).map(
+      ([shortname, name]): [string, Record<string, JSONValue>] => [
+        properties[shortname as keyof typeof PUBLISHED_NAMES].subject,
+        { [SHORTNAME]: shortname, [NAME]: name },
+      ],
+    ),
   ]);
   const writes: FakeStore['writes'] = [];
   const calls: HostProxyRequest[] = [];
@@ -220,7 +308,14 @@ export function fakeStore({
       canned = { throws: message };
     },
     getApp: async () => APP,
-    getData: async () => ({ table: TABLE, rowClass: ROW_CLASS }),
+    async getData() {
+      const table = view === 'own' ? TABLE : OTHER_TABLE;
+
+      return {
+        table,
+        rowClass: resources.get(table)![CLASSTYPE] as string,
+      };
+    },
     async getResource(subject) {
       const stored = resources.get(subject);
       if (!stored) throw new Error(`No resource ${subject}`);
