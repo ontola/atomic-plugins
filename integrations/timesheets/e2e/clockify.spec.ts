@@ -887,7 +887,22 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
         classtype: CLASSTYPE,
       },
     );
-    const untouched = await sharedOf(page, table);
+
+    // The table and its entries, as committed (Add view adds a View under
+    // the table, which is the host's, not the app's).
+    const entries = async () => {
+      const { table: klass, rows } = await sharedOf(page, table);
+
+      return {
+        klass,
+        rows: rows.filter(
+          r => Array.isArray(r.isA) && r.isA.includes(TIME_ENTRY),
+        ),
+      };
+    };
+
+    const untouched = await entries();
+    expect(untouched.rows).toHaveLength(1);
 
     await page.goto(
       `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
@@ -918,7 +933,7 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     await expect(detail).toContainText('Compiler');
     await expect(detail.getByRole('button', { name: 'Edit' })).toHaveCount(0);
     // Nothing was written to the table or its row.
-    expect(await sharedOf(page, table)).toEqual(untouched);
+    expect(await entries()).toEqual(untouched);
   });
 });
 
