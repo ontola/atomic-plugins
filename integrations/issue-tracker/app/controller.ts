@@ -127,6 +127,12 @@ export interface IssueInput {
 export interface Controller {
   state(): ViewState;
   load(): Promise<ViewState>;
+  /**
+   * `load`, then the step that state needs: the repository list for the
+   * picker, or the first sync once a repository is bound. The view's open
+   * and `connect` both go through here, so they cannot drift apart.
+   */
+  start(): Promise<ViewState>;
   connect(): Promise<ViewState>;
   /**
    * Takes this app's delegation off its GitHub connection (the host's
@@ -551,6 +557,14 @@ export function createController(
       });
     },
 
+    async start() {
+      const state = await this.load();
+      if (state.kind === 'choose-repository') return this.listRepositories();
+      if (state.kind === 'ready') return this.sync();
+
+      return state;
+    },
+
     async connect() {
       if (!store.proxy) return current;
       // A refused connection is not offered again after the reload.
@@ -565,10 +579,12 @@ export function createController(
       set({ kind: 'connecting' });
       // Resolves when the person cancels or picks an existing connection;
       // connecting a new account navigates away and the view comes back
-      // fresh. Either way, the connections decide what shows next.
+      // fresh. Either way, the connections decide what shows next. Picking
+      // an existing connection does not reload the frame, so the repository
+      // list (or the first sync) starts here, as on open.
       await store.proxy.connect({ platform: PLATFORM });
 
-      return this.load();
+      return this.start();
     },
 
     async disconnect() {

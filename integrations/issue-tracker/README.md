@@ -339,7 +339,9 @@ bundle and typechecks `app/`. The e2e (`e2e/issue-tracker.spec.ts`) covers
 connect, picking the repository, import, reload with an unchanged refresh,
 a reviewed update (closing #1), a title conflict settled for GitHub's side
 in the review panel, a card moved with the `3` key and a comment, each
-sent after review.
+sent after review, then Disconnect GitHub and connecting again through the
+host's "Use existing connection" with no reload, after which the app syncs
+by itself (the unit tests also cover the repository-picker case).
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and

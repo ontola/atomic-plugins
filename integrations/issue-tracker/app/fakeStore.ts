@@ -57,10 +57,17 @@ export interface FakeStore extends PluginStore {
 
 export function fakeStore({
   connected = true,
+  existing = false,
   relay = true,
   hostApis = true,
 }: {
   connected?: boolean;
+  /**
+   * The person has a GitHub connection this app is not delegated yet:
+   * `proxy.connect` resolves `connected` (the host's "Use existing
+   * connection", no reload) instead of never settling.
+   */
+  existing?: boolean;
   relay?: boolean;
   /** The host calls of atomic-server pin 007869464 (getMany, openExternal, …). */
   hostApis?: boolean;
@@ -188,7 +195,16 @@ export function fakeStore({
     async connections({ platform }) {
       return connected ? [{ connectionId: 'c1', platform }] : [];
     },
-    connect: () => new Promise(() => {}),
+    connect: ({ platform }) => {
+      if (!existing) return new Promise(() => {});
+      connected = true;
+
+      return Promise.resolve({
+        status: 'connected' as const,
+        connectionId: 'c1',
+        platform,
+      });
+    },
     ...(hostApis
       ? {
           async disconnect({ platform }: { platform: string }) {
