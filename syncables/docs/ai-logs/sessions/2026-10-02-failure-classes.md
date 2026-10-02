@@ -102,3 +102,23 @@ classifier calls `auth`.
   5xx other than 503) and that has no usable key becomes `uncertain`.
 - Three regression tests, each of which fails on the previous commit, and
   README, JSDoc and CLAUDE.md updates.
+
+## Turn 4
+
+**Human (via the oversight session, relaying a third review of PR #313):**
+`refused` is computed with the default classifier only, so a custom
+classifier with its own `afterRenewal` rule can re-block after a renewal.
+For requests sent after a renewal, ask the classifier in use again with
+`afterRenewal: false`. Test that scenario and the reverse case, and update
+the docs.
+
+**Assistant:** Changes:
+
+- When a request was sent after a renewal and the class is not `auth`,
+  `classify` now asks the classifier in use again (`classOf`, which keeps
+  the same fallback to the default) with `afterRenewal: false`. `refused`
+  is whether that second answer is `auth`.
+- Added the reviewer's scenario as a test: every write fails with 400, the
+  client is not blocked, and the classifier's calls are checked.
+- Added the reverse case as a test.
+- Updated the JSDoc, README and CLAUDE.md.

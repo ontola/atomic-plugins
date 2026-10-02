@@ -87,8 +87,11 @@ export interface WriteFailure {
    * True when, as this request was sent, the latest `authRenewed()` had not
    * yet been followed by an accepted response: a response to a request sent
    * after that renewal that is not a refusal (a 2xx, or a failure classified
-   * `retry`, `permanent` or `satisfied`, except one the default classes call
-   * `auth` without the renewal, such as a 403 failed because of it).
+   * `retry`, `permanent` or `satisfied`, except one the classifier in use
+   * calls `auth` when asked again with `afterRenewal: false`, such as a 403
+   * failed because of the renewal). A custom classifier is therefore called
+   * twice for a failure of a request sent after a renewal that it does not
+   * call `auth`.
    */
   afterRenewal: boolean;
 }
@@ -1399,10 +1402,10 @@ export function createApiClient(
 
   /**
    * The class of a failed write, and whether the response refused the
-   * credentials: classified `auth`, or `auth` by default had the request not
-   * been sent after a renewal (a 403 made `permanent` by `afterRenewal`).
-   * The latter uses the default classifier only, so a custom one is called
-   * once.
+   * credentials: classified `auth`, or, for a request sent after a renewal,
+   * classified `auth` by the same classifier with `afterRenewal: false` (a
+   * 403 made `permanent` by the renewal rule). For such a request a custom
+   * classifier is called twice.
    */
   function classify(
     write: QueuedWrite,
@@ -1424,20 +1427,29 @@ export function createApiClient(
       id: write.id,
       afterRenewal: sentAfterRenewal,
     };
-    let result: WriteFailureClass = defaultWriteFailureClass(failure);
+    let result = classOf(failure);
+    if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
+    const refused =
+      result === 'auth' ||
+      (sentAfterRenewal &&
+        classOf({ ...failure, afterRenewal: false }) === 'auth');
+    return { result, refused };
+  }
+
+  /** The classifier in use, falling back to the default. */
+  function classOf(failure: WriteFailure): WriteFailureClass {
     if (options.classifyWriteFailure) {
       try {
-        const custom = options.classifyWriteFailure(failure);
-        if (FAILURE_CLASSES.has(custom)) result = custom;
+        const custom = options.classifyWriteFailure({
+          ...failure,
+          headers: { ...failure.headers },
+        });
+        if (FAILURE_CLASSES.has(custom)) return custom;
       } catch {
         // Falls back to the default classification.
       }
     }
-    if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
-    const refused =
-      result === 'auth' ||
-      defaultWriteFailureClass({ ...failure, afterRenewal: false }) === 'auth';
-    return { result, refused };
+    return defaultWriteFailureClass(failure);
   }
 
   async function drainQueue(initialKey: string): Promise<void> {

@@ -711,6 +711,85 @@ describe('auth failures: review of #313', () => {
     expect(writes).toHaveLength(3);
   });
 
+  it('lets a custom classifier with its own renewal rule fail every write instead of re-blocking', async () => {
+    const seen: boolean[] = [];
+    const { writes, transport } = provider([rex, milo], () =>
+      response({ error: 'insufficient_scope' }, 400),
+    );
+    const client = createApiClient(document(), {
+      transport,
+      classifyWriteFailure: (f) => {
+        seen.push(f.afterRenewal);
+        return f.status === 400 && f.body.includes('insufficient_scope')
+          ? f.afterRenewal
+            ? 'permanent'
+            : 'auth'
+          : defaultWriteFailureClass(f);
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.authBlocked()).toMatchObject({ status: 400 }),
+    );
+    await client.update('/pets', '1', { tag: 'wolf' });
+    await client.update('/pets', '2', { name: 'Milo II' });
+    await client.authRenewed();
+    await vi.waitFor(() =>
+      expect(
+        client
+          .pendingWrites()
+          .map(({ id, state, lastStatus }) => [id, state, lastStatus]),
+      ).toEqual([
+        ['1', 'failed', 400],
+        ['1', 'failed', 400],
+        ['2', 'failed', 400],
+      ]),
+    );
+    await settle();
+    expect(client.authBlocked()).toBeUndefined();
+    expect(writes).toHaveLength(4);
+    // Asked once before the renewal; twice for each failure after it.
+    expect(seen).toEqual([false, true, false, true, false, true, false]);
+  });
+
+  it('does not count a custom 403 made permanent by the renewal as accepted credentials', async () => {
+    let renewed = false;
+    const { writes, transport } = provider([rex, milo], () =>
+      renewed ? response({}, 403) : response({}, 401),
+    );
+    const client = createApiClient(document(), {
+      transport,
+      // Rex's 403 is a per-record permission once credentials are renewed;
+      // everything else follows the defaults.
+      classifyWriteFailure: (f) =>
+        f.status === 403 && f.id === '1' && f.afterRenewal
+          ? 'permanent'
+          : defaultWriteFailureClass(f),
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(client.authBlocked()).toBeDefined());
+    renewed = true;
+    await client.authRenewed();
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed', lastStatus: 403 },
+      ]),
+    );
+    // Rex's refusal did not show the credentials accepted: Milo's 403 fails
+    // by the default renewal rule instead of blocking the client again.
+    await client.update('/pets', '2', { name: 'Milo II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed' },
+        { id: '2', state: 'failed', lastStatus: 403 },
+      ]),
+    );
+    expect(client.authBlocked()).toBeUndefined();
+    expect(writes).toHaveLength(3);
+  });
+
   it('makes a create that a classifier calls auth on a 5xx uncertain, not blocked', async () => {
     const { writes, transport } = provider([], () => response({}, 502));
     const client = createApiClient(document(), {

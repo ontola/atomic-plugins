@@ -215,11 +215,17 @@ after the renewal and before any response showed the renewed credentials
 accepted, so a permission that new credentials do not grant cannot hold all
 writes back. Accepted means: a response to a request sent after the latest
 renewal that is not a refusal, that is a 2xx or a failure classified
-`retry`, `permanent` or `satisfied`, except a failure the default classes
-would call `auth` without the renewal (such as the 403 that this rule makes
-`permanent`): a refusal never counts as acceptance, so several writes the
-renewed credentials may not make all fail rather than block again. Whether a request counts as sent after
-the renewal is decided when it is sent, not when its answer arrives. A 401
+`retry`, `permanent` or `satisfied`, except a failure that the classifier in
+use (`classifyWriteFailure`, or the defaults) calls `auth` when asked again
+with `afterRenewal: false`, such as the 403 that this rule makes
+`permanent`. A refusal never counts as acceptance, so several writes the
+renewed credentials may not make all fail rather than block again. For a
+failure of a request sent after a renewal that it does not call `auth`, a
+custom classifier is therefore called a second time, with `afterRenewal:
+false`; one that returns a class other than `auth` regardless of
+`afterRenewal` makes that response count as acceptance. Whether a request
+counts as sent after the renewal is decided when it is sent, not when its
+answer arrives. A 401
 or 403 for a request sent before the latest renewal is sent again at once,
 without counting an attempt.
 

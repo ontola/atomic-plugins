@@ -135,9 +135,10 @@ Data flows through four stages, each its own directory under `src/`:
    renewal before an accepted response, then `permanent`; `afterRenewal`
    and `authEpoch` are captured after the in-flight store, just before
    sending, and any response at the current epoch that `classify` does
-   not report `refused` clears `afterRenewal`; `refused` also covers a 403
-   that is `auth` by default without the renewal flag). `onAuthFailure:
-   'retry'` turns `auth` into `retry` and drops a stored block on restore.
+   not report `refused` clears `afterRenewal`; `refused` also covers a
+   response the classifier in use (`classOf`, called a second time with
+   `afterRenewal: false` for requests sent after a renewal) calls
+   `auth`). `onAuthFailure: 'retry'` turns `auth` into `retry` and drops a stored block on restore.
    A create classified `auth` that `mayHaveApplied` (custom classifier on a
    5xx) without a usable key goes the `retry` path, so it becomes
    `uncertain`.
