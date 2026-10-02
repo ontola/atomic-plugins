@@ -164,6 +164,21 @@ into the view root.
     no observation log for that table yet, so no window, coverage or
     conflicts. From 0.6.0 it offers "Sync this table to Clockify"; see
     [Syncing a table the app didn't make](#syncing-a-table-the-app-didnt-make).
+  - _Incomplete rows_ (0.6.2): `time-entry-v1` requires Start. A row without
+    one (or whose Start is not a timestamp) is read through the resolver's
+    `missing` and listed above the Week and Entries views under "N rows are
+    incomplete" with "Incomplete: missing Start" (or "Start is not a time")
+    and an "Open row" button (`store.openResource`) to fill the column in
+    the table: ontology-kit's rule for every shared-class view, shown as
+    incomplete rather than skipped (before 0.6.2 such a row was counted as a
+    running timer). It is not an entry, so it has no place in the week or
+    the totals, and nothing of it is sent. A row with a Start but no End is
+    still a running timer. In a synced table the same rule holds for the
+    rows the app does not own; a synced row whose Start is cleared in the
+    table gets Clockify's values back at the next sync (Clockify owns bound
+    rows' values, `writeBack.ts` `syncRow`), and `listChanges` lists nothing
+    for it meanwhile. Unit (`app/adopt.test.ts`, `app/ui/ui.test.ts`) and
+    the hand-made table e2e.
   - _Not verified:_ the published terms are fetched from GitHub Pages by
     the server and the browser (the e2e needs ontola.github.io); a cold
     browser or server during a Pages outage fails as #177 spike S1 found

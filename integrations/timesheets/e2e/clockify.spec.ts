@@ -43,7 +43,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.6.1';
+const VERSION = '0.6.2';
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;
@@ -876,6 +876,17 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
           },
         });
         await row.save();
+        // A row missing the class's required Start (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped).
+        const partial = await store.newResource({
+          parent: made.subject,
+          isA: [entry],
+          propVals: {
+            [name]: 'Forgot the start',
+            [work.end]: today.getTime() + 7_200_000,
+          },
+        });
+        await partial.save();
 
         return made.subject;
       },
@@ -902,7 +913,7 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     };
 
     const untouched = await entries();
-    expect(untouched.rows).toHaveLength(1);
+    expect(untouched.rows).toHaveLength(2);
 
     await page.goto(
       `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
@@ -928,11 +939,25 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     ).toHaveCount(0);
     await expect(app.getByRole('button', { name: 'Sync now' })).toHaveCount(0);
     await app.getByRole('tab', { name: 'Entries' }).click();
+    // The row without a Start is listed as incomplete, with a way to the
+    // row, not as an entry; the complete row is an entry as usual.
+    const incomplete = app.getByRole('note', { name: 'Incomplete rows' });
+    await expect(incomplete).toContainText('1 row is incomplete');
+    await expect(incomplete).toContainText('Forgot the start');
+    await expect(incomplete).toContainText('Incomplete: missing Start');
+    await expect(
+      incomplete.getByRole('button', { name: 'Open row Forgot the start' }),
+    ).toBeVisible();
+    await expect(
+      app.getByRole('button', { name: /Forgot the start/ }).filter({
+        hasNot: incomplete,
+      }),
+    ).toHaveCount(0);
     await app.getByRole('button', { name: /Pairing on the parser/ }).click();
     const detail = app.getByRole('dialog', { name: 'Pairing on the parser' });
     await expect(detail).toContainText('Compiler');
     await expect(detail.getByRole('button', { name: 'Edit' })).toHaveCount(0);
-    // Nothing was written to the table or its row.
+    // Nothing was written to the table or its rows.
     expect(await entries()).toEqual(untouched);
   });
 

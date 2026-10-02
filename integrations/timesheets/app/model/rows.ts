@@ -5,15 +5,17 @@
  * on any table of that class, #177 §3.2): there is no observation log for
  * it, so no window, coverage or conflicts, only the rows. Fields are read
  * through `ontology-kit`'s strict resolver (`../fields.ts`), never by
- * shortname or column. A row without a start or an end (a running timer,
- * or an incomplete row) is counted as running, not listed. The project is
- * the linked project row's name; the person, the linked person row's.
+ * shortname or column. A row with a start but no end (a running timer) is
+ * counted as running, not listed. A row without a start lacks the class's
+ * required field: it is listed as `incomplete` with its note, never
+ * skipped (#177; ontology-kit's rule). The project is the linked project
+ * row's name; the person, the linked person row's.
  */
-import { SHARED, sharedValues } from '../fields.js';
+import { incompleteOf, SHARED, sharedValues } from '../fields.js';
 import { atomic, NAME } from '../ontology.js';
 import type { PluginStore } from '../store.js';
 import { weekStartOf } from './time.js';
-import type { Project, Timesheet, TimeEntry } from './types.js';
+import type { IncompleteRow, Project, Timesheet, TimeEntry } from './types.js';
 
 export async function timesheetFromRows(
   store: PluginStore,
@@ -37,6 +39,7 @@ export async function timesheetFromRows(
   };
 
   const entries: TimeEntry[] = [];
+  const incomplete: IncompleteRow[] = [];
   let running = 0;
 
   for (const subject of await store.query({
@@ -48,6 +51,22 @@ export async function timesheetFromRows(
     const values = sharedValues(row.props);
     const start = values[SHARED.start];
     const end = values[SHARED.end];
+    // A Start that is present but not a timestamp is as unusable as none.
+    const note =
+      incompleteOf(row.props) ??
+      (typeof start !== 'number'
+        ? 'Incomplete: Start is not a time'
+        : undefined);
+
+    if (note) {
+      const name = values[NAME];
+      incomplete.push({
+        id: subject,
+        description: typeof name === 'string' ? name : '',
+        note,
+      });
+      continue;
+    }
 
     if (typeof start !== 'number' || typeof end !== 'number') {
       running++;
@@ -75,10 +94,12 @@ export async function timesheetFromRows(
   }
 
   entries.sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1));
+  incomplete.sort((a, b) => (a.id < b.id ? -1 : 1));
 
   return {
     entries,
     running,
+    ...(incomplete.length ? { incomplete } : {}),
     breaks: 0,
     weekStart: weekStartOf(undefined),
     timeZone,

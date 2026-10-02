@@ -13,7 +13,8 @@ import {
   USER,
   WORKSPACE,
 } from '../../fixtures/clockify/scenario.mjs';
-import { APP, fakeStore } from '../fakeStore.js';
+import { APP, fakeStore, IS_A, OTHER_TABLE, PARENT } from '../fakeStore.js';
+import { SHARED, TIME_ENTRY } from '../fields.js';
 import { fixtureProxy } from '../fixtureProxy.js';
 import { view } from '../main.js';
 import { ensureSchema } from '../schema.js';
@@ -425,6 +426,63 @@ describe('view() against the fake store and the Clockify mock', () => {
 
     return { root, store, proxy };
   }
+
+  it('on a table that is not its own, lists a row missing its Start as incomplete, with Open row (#177)', async () => {
+    const proxy = fixtureProxy(NOW);
+    const shown: string[] = [];
+    const store = Object.assign(
+      fakeStore({ proxy: proxy.request, view: 'other' }),
+      {
+        openResource: async (subject: string) => {
+          shown.push(subject);
+
+          return { status: 'opened' as const, subject };
+        },
+      },
+    );
+    const NAME = 'https://atomicdata.dev/properties/name';
+    const { start, end } = SHARED;
+    // Rows the person made (the app may not write to this table).
+    const whole = 'did:ad:drive/team-hours/whole';
+    const partial = 'did:ad:drive/team-hours/partial';
+    store.resources.set(whole, {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Pairing',
+      [start]: NOW - 3 * HOUR,
+      [end]: NOW - HOUR,
+    });
+    store.resources.set(partial, {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Forgot the start',
+      [end]: NOW - HOUR,
+    });
+    const dom = new JSDOM('<!doctype html><body><div id="root"></div></body>');
+    const root = dom.window.document.getElementById('root')!;
+    await view({ root, store });
+
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Not synced with Clockify.',
+    );
+    const note = root.querySelector('[aria-label="Incomplete rows"]')!;
+    expect(text(note)).toContain('1 row is incomplete');
+    expect(text(note)).toContain('Forgot the start');
+    expect(text(note)).toContain('Incomplete: missing Start');
+    expect(note.querySelector(`[data-incomplete="${partial}"]`)).not.toBeNull();
+    expect(note.querySelector(`[data-incomplete="${whole}"]`)).toBeNull();
+    // The complete row is an entry as usual (the Entries tab lists it).
+    [...root.querySelectorAll<HTMLElement>('[role="tab"]')]
+      .find(tab => text(tab) === 'Entries')!
+      .click();
+    expect(root.querySelectorAll('.entry')).toHaveLength(1);
+    expect(text(root.querySelector('.entry'))).toContain('Pairing');
+    expect(
+      text(root.querySelector('[aria-label="Incomplete rows"]')),
+    ).toContain('Forgot the start');
+    buttons(root, 'Open row Forgot the start')[0].click();
+    expect(shown).toEqual([partial]);
+  });
 
   it('on a table that is not its own, offers Sync this table, then sets up and syncs into it (#177 item 14)', async () => {
     const proxy = fixtureProxy(NOW);
