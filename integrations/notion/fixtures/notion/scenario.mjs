@@ -433,6 +433,7 @@ function patchPage(target, schemaOf, properties) {
 
 export function notionFixture({ scenario = 'default', blank = false } = {}) {
   const requests = [];
+
   // Per instance, so a rename in one test or lane never leaks into another.
   const seed = () => {
     const sources = structuredClone([
@@ -443,6 +444,7 @@ export function notionFixture({ scenario = 'default', blank = false } = {}) {
 
     return sources;
   };
+
   const data = { sources: seed() };
   let current = scenario;
   let created = 0;
