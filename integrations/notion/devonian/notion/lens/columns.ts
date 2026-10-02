@@ -11,8 +11,15 @@ import type { FetchedRecord, Term } from './types.js';
 export interface NotionColumn {
   shortname: string;
   name: string;
+  /** The lens's datatype: what the lens store holds (option ids for options). */
   datatype: Datatype;
   description: string;
+  /**
+   * Set for a select or status (`single`) or multi-select (`multiple`)
+   * property. The lens holds option ids; the host column is the host's own
+   * select column, holding one Tag per option (`app/options.ts`).
+   */
+  options?: 'single' | 'multiple';
 }
 
 /** Columns every Notion row gets, besides one per projected Notion property. */
@@ -105,12 +112,19 @@ export function notionColumns(
       .filter(term => term.kind === 'property')
       .map(term => {
         const id = notionPropertyId(term);
+        const options: NotionColumn['options'] =
+          term.notionType === 'multi_select'
+            ? 'multiple'
+            : term.notionType === 'select' || term.notionType === 'status'
+              ? 'single'
+              : undefined;
 
         return {
           shortname: term.shortname,
           name: names.get(id) ?? id,
           datatype: term.datatype,
           description: term.description,
+          ...(options ? { options } : {}),
         };
       }),
   ];

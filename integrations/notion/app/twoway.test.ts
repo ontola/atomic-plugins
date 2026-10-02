@@ -17,6 +17,7 @@ import {
 } from './changes.js';
 import { createController, type ViewState } from './controller.js';
 import { fakeStore, fixtureProxy, PARENT, TABLE } from './fakeStore.js';
+import { OPTION_ID_SHORTNAME } from './options.js';
 import { loadSchema } from './record.js';
 import type { HostProxy, JSONValue } from './store.js';
 import { atomic } from './sync.js';
@@ -57,6 +58,11 @@ async function synced(overrides: Partial<HostProxy> = {}) {
 
   const value = (pageId: string, shortname: string) =>
     rowOf(pageId)[1][column(shortname)];
+  /** The Tag subject of a Notion option. */
+  const tagOf = (optionId: string) =>
+    [...store.resources].find(
+      ([, p]) => p[column(OPTION_ID_SHORTNAME)] === optionId,
+    )![0];
   const notion = (pageId: string) =>
     proxy.api.request(
       'GET',
@@ -73,6 +79,7 @@ async function synced(overrides: Partial<HostProxy> = {}) {
     rowOf,
     edit,
     value,
+    tagOf,
     notion,
     patches,
   };
@@ -206,7 +213,7 @@ describe('compare on open', () => {
 
 describe('review and send', () => {
   it('sends only the changed properties, by property id, and advances the baseline', async () => {
-    const { controller, edit, notion, patches, value, rowOf, column } =
+    const { controller, edit, notion, patches, value, rowOf, column, tagOf } =
       await synced();
     edit(LAUNCH, POINTS, 5);
     edit(LAUNCH, STATUS, SHIPPED);
@@ -230,7 +237,9 @@ describe('review and send', () => {
     ]);
     expect(changesOf(state)).toEqual([]);
     expect(notion(LAUNCH).properties.Points!.number).toBe(5);
-    expect(value(LAUNCH, STATUS)).toBe(SHIPPED);
+    // The host cell holds the option's Tag (options.ts); the raw option id
+    // the edit wrote was read as that option and sent by id.
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
     expect(
       parseBaseline(rowOf(LAUNCH)[1][column(BASELINE_SHORTNAME)])!.fields[
         POINTS
@@ -370,6 +379,138 @@ describe('review and send', () => {
     expect(changesOf(state)).toEqual([]);
     expect(value(LAUNCH, POINTS)).toBe(3);
     expect(rowOf(LAUNCH)[1][atomic.name]).toBe('Launch plan');
+  });
+});
+
+describe('select cells (options.ts)', () => {
+  const DOING = 'b1f5a3c2-0001-4000-8000-000000000002';
+  const DOCS = 'c2e6b4d3-0002-4000-8000-000000000001';
+  const RELEASE = 'c2e6b4d3-0002-4000-8000-000000000002';
+  const TAGS = notionFieldShortname('Tg%5Cq');
+
+  it('an option picked in the host’s select cell is a change by option id, sent by id', async () => {
+    const { controller, edit, tagOf, patches, notion, value } = await synced();
+    edit(LAUNCH, STATUS, [tagOf(SHIPPED)]);
+    edit(LAUNCH, TAGS, [tagOf(DOCS)]);
+    const state = await controller.refreshRows();
+    expect(changesOf(state)).toMatchObject([
+      {
+        fields: [
+          { name: 'Status', before: DOING, after: SHIPPED },
+          { name: 'Tags', before: [DOCS, RELEASE], after: [DOCS] },
+        ],
+      },
+    ]);
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: {
+        '%3AUPp': { status: { id: SHIPPED } },
+        'Tg%5Cq': { multi_select: [{ id: DOCS }] },
+      },
+    });
+    expect(notion(LAUNCH).properties.Status!.status).toMatchObject({
+      id: SHIPPED,
+    });
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(value(LAUNCH, TAGS)).toEqual([tagOf(DOCS)]);
+  });
+
+  it('a status cell given two Tags is held back: Notion’s status takes one', async () => {
+    const { controller, edit, tagOf, patches } = await synced();
+    edit(LAUNCH, STATUS, [tagOf(DOING), tagOf(SHIPPED)]);
+    const state = await controller.refreshRows();
+    expect(changesOf(state)).toMatchObject([
+      {
+        fields: [
+          {
+            name: 'Status',
+            after: [DOING, SHIPPED],
+            problem: 'holds 2 options; Notion’s Status takes one',
+          },
+        ],
+      },
+    ]);
+    await controller.send();
+    expect(patches()).toEqual([]);
+  });
+
+  it('a Tag cleared in the host is sent as Notion’s empty, and the row is kept empty', async () => {
+    const { controller, edit, patches, notion, value } = await synced();
+    edit(LAUNCH, STATUS, []);
+    await controller.refreshRows();
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: { '%3AUPp': { status: null } },
+    });
+    expect(notion(LAUNCH).properties.Status!.status).toBeNull();
+    expect(value(LAUNCH, STATUS)).toBeUndefined();
+  });
+
+  it('upgrades 0.3.0 columns in place: raw option ids become Tags, and an unsent edit survives', async () => {
+    const { store, controller, column, rowOf, edit, tagOf, value, patches } =
+      await synced();
+    // Put the store in its 0.3.0 shape: string/json columns, raw ids in the
+    // cells, no Tags.
+    const status = store.resources.get(column(STATUS))!;
+    const tags = store.resources.get(column(TAGS))!;
+    for (const [property, datatype] of [
+      [status, 'https://atomicdata.dev/datatypes/string'],
+      [tags, 'https://atomicdata.dev/datatypes/json'],
+    ] as const) {
+      property[atomic.datatype] = datatype;
+      property['https://atomicdata.dev/properties/isA'] = [atomic.propertyClass];
+      for (const key of [
+        'https://atomicdata.dev/properties/classtype',
+        'https://atomicdata.dev/properties/allowsOnly',
+        'https://atomicdata.dev/properties/max',
+      ])
+        delete property[key];
+    }
+    for (const [subject, props] of [...store.resources])
+      if (props[PARENT] === column(STATUS) || props[PARENT] === column(TAGS))
+        store.resources.delete(subject);
+    const raw: Record<string, [string, string[]]> = {
+      [LAUNCH]: [DOING, [DOCS, RELEASE]],
+      [CHANGELOG]: [SHIPPED, []],
+      [RETRO]: ['b1f5a3c2-0001-4000-8000-000000000001', [DOCS]],
+    };
+    for (const [pageId, [s, t]] of Object.entries(raw)) {
+      rowOf(pageId)[1][column(STATUS)] = s;
+      rowOf(pageId)[1][column(TAGS)] = t;
+    }
+    // An edit made in the table before the upgrade, as 0.3.0 cells held it.
+    edit(LAUNCH, STATUS, SHIPPED);
+    expect(changesOf(await controller.load())).toMatchObject([
+      { fields: [{ name: 'Status', before: DOING, after: SHIPPED }] },
+    ]);
+
+    const state = await controller.sync();
+    expect(store.resources.get(column(STATUS))).toMatchObject({
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/resourceArray',
+      'https://atomicdata.dev/properties/isA': [
+        atomic.propertyClass,
+        'https://atomicdata.dev/classes/SelectProperty',
+      ],
+      'https://atomicdata.dev/properties/max': 1,
+    });
+    expect(
+      (
+        store.resources.get(column(STATUS))![
+          'https://atomicdata.dev/properties/allowsOnly'
+        ] as string[]
+      ).length,
+    ).toBe(3);
+    expect(value(CHANGELOG, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(value(RETRO, TAGS)).toEqual([tagOf(DOCS)]);
+    // The local edit is kept, now as a Tag, and still waits for review.
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(changesOf(state)).toMatchObject([
+      { fields: [{ name: 'Status', before: DOING, after: SHIPPED }] },
+    ]);
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: { '%3AUPp': { status: { id: SHIPPED } } },
+    });
   });
 });
 

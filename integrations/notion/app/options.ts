@@ -171,20 +171,17 @@ export function lensOptionValue(
 
 /**
  * Lens value (an option id, or ids) -> the Tag subjects the host cell holds.
- * Every id must have a Tag: the sync makes one per option it reads
- * (`ensureOptions`), so a missing one is a bug, and throws rather than
- * writing a value the host's column would not accept.
+ * No option (`undefined`) is no value; a multi-select's empty list stays a
+ * list, as the lens holds it. Every id must have a Tag: the sync makes one
+ * per option it reads (`ensureOptions`), so a missing one is a bug, and
+ * throws rather than writing a value the host's column would not accept.
  */
 export function hostOptionValue(
   value: JSONValue | undefined,
   index: OptionIndex,
 ): string[] | undefined {
-  const ids = Array.isArray(value)
-    ? value
-    : value === undefined || value === null || value === ''
-      ? []
-      : [value];
-  if (!ids.length) return undefined;
+  if (value === undefined || value === null || value === '') return undefined;
+  const ids = Array.isArray(value) ? value : [value];
 
   return ids.map(id => {
     const subject = typeof id === 'string' ? index.byId.get(id) : undefined;

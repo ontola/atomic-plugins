@@ -12,6 +12,12 @@
  *   the columns, but is not in the row class's `recommends`, so it never
  *   becomes a column.
  */
+import {
+  dataBrowser,
+  isSelectProperty,
+  loadOptionIndex,
+  type OptionIndex,
+} from './options.js';
 import { atomic, type DataSourceReport, type SyncResult } from './sync.js';
 import type { PluginResource, PluginStore } from './store.js';
 
@@ -39,6 +45,12 @@ export interface Column {
   shortname: string;
   name: string;
   datatype: string;
+  /**
+   * A select column (the host's shape: SelectProperty, `resourceArray` of
+   * Tags): `single` when its `max` is 1 (a Notion select or status),
+   * `multiple` otherwise (multi-select). See `options.ts`.
+   */
+  options?: 'single' | 'multiple';
 }
 
 export interface Schema {
@@ -47,6 +59,8 @@ export interface Schema {
   ontology: string;
   /** By shortname. */
   columns: Map<string, Column>;
+  /** Notion option id <-> Tag subject, over every select column. */
+  options: OptionIndex;
 }
 
 const strings = (resource: PluginResource, property: string): string[] => {
@@ -80,10 +94,21 @@ export async function loadSchema(
       shortname,
       name: String(property.get(atomic.name) ?? shortname),
       datatype: String(property.get(atomic.datatype) ?? ''),
+      ...(isSelectProperty(property)
+        ? {
+            options: property.get(dataBrowser.max) === 1 ? 'single' : 'multiple',
+          }
+        : {}),
     });
   }
 
-  return { table: data.table, rowClass: data.rowClass, ontology, columns };
+  return {
+    table: data.table,
+    rowClass: data.rowClass,
+    ontology,
+    columns,
+    options: await loadOptionIndex(store, columns.values()),
+  };
 }
 
 const isLensNote = (warning: string) => warning.startsWith('Notion page ');

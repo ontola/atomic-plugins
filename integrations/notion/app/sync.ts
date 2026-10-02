@@ -33,6 +33,18 @@ import {
   type Conflicts,
   type EditableField,
 } from './changes.js';
+import {
+  dataBrowser,
+  ensureOptions,
+  hostOptionValue,
+  indexTags,
+  lensOptionValue,
+  OPTION_ID_SHORTNAME,
+  RESOURCE_ARRAY,
+  shapeSelectProperty,
+  type OptionIndex,
+  type OptionTag,
+} from './options.js';
 import type { JSONValue, PluginResource, PluginStore } from './store.js';
 import { observedTransport, PLATFORM } from './transport.js';
 
@@ -329,6 +341,19 @@ const BASELINE_COLUMN: NotionColumn = {
     'Written by the Notion app on each synced row: JSON of the values Notion and this row last agreed on, so a sync can tell an edit made here from one made in Notion.',
 };
 
+/** The Tag property carrying a Notion option id (`options.ts`): bookkeeping, never a column. */
+const OPTION_ID_COLUMN: NotionColumn = {
+  shortname: OPTION_ID_SHORTNAME,
+  name: 'Notion option id',
+  datatype: Datatype.STRING,
+  description:
+    'Written by the Notion app on each Tag of a select, status or multi-select column: the Notion option it stands for, so a rename in Notion renames the Tag and leaves the rows as they are.',
+};
+
+/** The datatype the host's Property gets: a select column holds Tags. */
+const hostDatatype = (column: NotionColumn): string =>
+  column.options ? RESOURCE_ARRAY : column.datatype;
+
 /** Notion's value for a field, or `UNREADABLE` (formatted text, no such property). */
 const UNREADABLE = Symbol('unreadable');
 
@@ -355,7 +380,8 @@ function remoteValue(
  * by Notion's (a local edit, or a conflict), and Notion's value for each
  * conflict. A row without a baseline (new, or imported before 0.2.0) takes
  * Notion's values, as an import always did. A field Notion holds as
- * formatted text is left alone on both sides.
+ * formatted text is left alone on both sides. Select cells are compared as
+ * option ids (`options.ts`).
  */
 function compareOnSync(
   fields: readonly EditableField[],
@@ -364,6 +390,7 @@ function compareOnSync(
   bound: ReadonlyMap<string, string>,
   existing: PluginResource | undefined,
   baselineProperty: string,
+  options: OptionIndex,
 ) {
   const previous = existing
     ? parseBaseline(existing.get(baselineProperty))
@@ -374,8 +401,16 @@ function compareOnSync(
   const conflicts = new Map<string, JSONValue | undefined>();
   const local: Record<string, JSONValue> = {};
 
-  for (const field of fields)
-    local[field.shortname] = existing?.get(bound.get(field.shortname)!);
+  for (const field of fields) {
+    const value = existing?.get(bound.get(field.shortname)!);
+    local[field.shortname] = isOptionType(field.type)
+      ? lensOptionValue(
+          field.type === 'multi_select' ? 'multiple' : 'single',
+          value,
+          options,
+        )
+      : value;
+  }
 
   for (const field of fields) {
     const property = bound.get(field.shortname)!;
@@ -384,7 +419,9 @@ function compareOnSync(
     let agreed: JSONValue | undefined;
 
     if (remote === UNREADABLE) {
+      // Left alone on both sides: the row keeps what it holds.
       agreed = before;
+      keep.add(property);
     } else if (!base) {
       agreed = remote;
     } else {
@@ -417,11 +454,17 @@ const values = (resource: PluginResource, property: string): string[] => {
   return Array.isArray(raw) ? raw.map(String) : [];
 };
 
+const isOptionType = (type: string) =>
+  type === 'select' || type === 'status' || type === 'multi_select';
+
 /**
  * Finds or creates one Property per column under the row class's ontology
  * (the app's own subtree, where the host lets an app write), and lists it in
  * the ontology's `properties` and the class's `recommends`. An existing
- * property with another datatype is left alone and its column skipped.
+ * property with another datatype is left alone and its column skipped,
+ * except an option column still in its 0.3.0 shape (`string` or `json` of
+ * option ids), which is upgraded in place to the host's select column
+ * (`options.ts`); its rows are rewritten by the sync that follows.
  */
 async function ensureColumns(
   store: PluginStore,
@@ -450,7 +493,13 @@ async function ensureColumns(
     const found = existing.get(column.shortname);
 
     if (found) {
-      if (found.get(atomic.datatype) !== column.datatype) {
+      if (found.get(atomic.datatype) !== hostDatatype(column)) {
+        if (column.options && shapeSelectProperty(found)) {
+          await found.save();
+          bound.set(column.shortname, found.subject);
+          continue;
+        }
+
         warnings.push(
           `Column "${column.name}" exists with another datatype; not imported`,
         );
@@ -463,12 +512,21 @@ async function ensureColumns(
 
     const created = await store.newResource({
       parent: ontologySubject,
-      isA: [atomic.propertyClass],
+      isA: column.options
+        ? [atomic.propertyClass, dataBrowser.selectProperty]
+        : [atomic.propertyClass],
       propVals: {
         [atomic.shortname]: column.shortname,
         [atomic.name]: column.name,
-        [atomic.datatype]: column.datatype,
+        [atomic.datatype]: hostDatatype(column),
         [atomic.description]: column.description,
+        ...(column.options
+          ? {
+              [dataBrowser.classtype]: dataBrowser.tag,
+              [dataBrowser.allowsOnly]: [],
+              ...(column.options === 'single' ? { [dataBrowser.max]: 1 } : {}),
+            }
+          : {}),
       },
     });
     bound.set(column.shortname, created.subject);
@@ -499,6 +557,60 @@ async function ensureColumns(
 }
 
 /**
+ * One Tag per Notion option on every select column (`options.ts`), from the
+ * data sources' schemas plus any option id the pages hold, and the index
+ * that translates between option ids and Tags. Two data sources whose
+ * select properties share a Notion property id share the column, so their
+ * options are merged.
+ */
+async function ensureAllOptions(
+  store: PluginStore,
+  columns: readonly NotionColumn[],
+  bound: ReadonlyMap<string, string>,
+  sources: readonly NotionSource[],
+  reports: readonly DataSourceReport[],
+): Promise<OptionIndex> {
+  const optionIdProperty = bound.get(OPTION_ID_SHORTNAME);
+  if (!optionIdProperty)
+    throw new Error('No property to key option tags by Notion option id');
+  const tags: OptionTag[] = [];
+
+  for (const column of columns) {
+    const property = bound.get(column.shortname);
+    if (!column.options || !property) continue;
+    const schema = new Map<string, NotionOption>();
+
+    for (const report of reports)
+      for (const p of report.properties)
+        if (p.shortname === column.shortname)
+          for (const option of p.options ?? [])
+            if (!schema.has(option.id)) schema.set(option.id, option);
+
+    const seen = new Set<string>();
+
+    for (const source of sources)
+      for (const page of source.pages) {
+        const value = page.values[column.shortname];
+        for (const id of Array.isArray(value) ? value : [value])
+          if (typeof id === 'string' && id) seen.add(id);
+      }
+
+    tags.push(
+      ...(await ensureOptions({
+        store,
+        property,
+        options: column.options,
+        schema: [...schema.values()],
+        seen,
+        optionIdProperty,
+      })),
+    );
+  }
+
+  return indexTags(tags);
+}
+
+/**
  * Read every shared data source's pages through the proxy, run them through
  * the Notion row lens (Devonian `AtomicLens.ingest`), and reconcile the lens's
  * rows into the app's data table by Notion page id. Import only: nothing is
@@ -522,12 +634,58 @@ export async function syncNotion(
     );
   const bound = await ensureColumns(store, data.rowClass, columns, warnings, [
     BASELINE_COLUMN,
+    OPTION_ID_COLUMN,
   ]);
   const pageId = bound.get('notion-page-id');
   if (!pageId) throw new Error('No column to key rows by Notion page id');
   const baselineProperty = bound.get(BASELINE_SHORTNAME);
+  const options = await ensureAllOptions(store, columns, bound, sources, reports);
 
   const lenses = new NotionRowLenses({ columns, bound });
+  const optionColumns = new Map(
+    columns.flatMap(c =>
+      c.options && bound.has(c.shortname)
+        ? [[bound.get(c.shortname)!, c.options] as const]
+        : [],
+    ),
+  );
+  /** Host row values with select cells as the lens holds them: option ids. */
+  const seedValues = (props: Readonly<Record<string, JSONValue>>) => {
+    const out: Record<string, JSONValue> = { ...props };
+
+    for (const [property, kind] of optionColumns) {
+      const ids = lensOptionValue(kind, props[property], options);
+      // A single-option cell holding several Tags seeds its first: the seed
+      // only gives the read something to unset; `keep` carries the cell.
+      const value =
+        kind === 'single' && Array.isArray(ids) ? ids[0] : ids;
+      if (value === undefined) delete out[property];
+      else out[property] = value;
+    }
+
+    return out;
+  };
+  /** Lens row values with option ids as Tag subjects, for the host. */
+  const hostValues = (lensValues: Record<string, LensValue>) => {
+    const out: Record<string, JSONValue> = { ...lensValues };
+
+    for (const property of optionColumns.keys())
+      if (property in out) {
+        const value = hostOptionValue(out[property], options);
+        if (value === undefined) delete out[property];
+        else out[property] = value;
+      }
+
+    return out;
+  };
+  /** A host cell as the host should hold it: raw option ids become Tags. */
+  const keptValue = (property: string, value: JSONValue | undefined) => {
+    const kind = optionColumns.get(property);
+
+    return kind
+      ? hostOptionValue(lensOptionValue(kind, value, options), options)
+      : value;
+  };
   const managed = [
     ...lenses.managed(),
     ...(baselineProperty ? [baselineProperty] : []),
@@ -566,11 +724,12 @@ export async function syncNotion(
 
       // The row's current values go into the lens store first, so the read's
       // `unset` has something to remove.
-      if (existing) lenses.seed(source.dataSource, page.id, existing.props);
+      if (existing)
+        lenses.seed(source.dataSource, page.id, seedValues(existing.props));
 
       const row = lenses.store.get(await lens.ingest(page));
       if (!row) throw new Error(`The lens produced no row for ${page.id}`);
-      const propVals = lenses.toHost(row);
+      const propVals = hostValues(lenses.toHost(row));
 
       if (baselineProperty) {
         const { baseline, keep, conflicts } = compareOnSync(
@@ -580,9 +739,11 @@ export async function syncNotion(
           bound,
           existing,
           baselineProperty,
+          options,
         );
-        for (const property of keep)
-          propVals[property] = existing?.get(property) as LensValue;
+        if (existing)
+          for (const property of keep)
+            propVals[property] = keptValue(property, existing.get(property));
         propVals[baselineProperty] = JSON.stringify(baseline);
         if (existing && conflicts.size)
           result.conflicts.set(existing.subject, conflicts);

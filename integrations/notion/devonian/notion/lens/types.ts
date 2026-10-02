@@ -11,6 +11,8 @@ export interface Term {
   datatype: Datatype;
   requires: string[];
   recommends: string[];
+  /** For a term the Notion projection made: the Notion property type. */
+  notionType?: string;
 }
 export interface FetchedRecord {
   resource: string;

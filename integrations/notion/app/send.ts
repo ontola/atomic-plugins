@@ -40,8 +40,14 @@ import {
   type FieldChange,
   type RowChange,
 } from './changes.js';
-import type { Schema } from './record.js';
-import type { HostProxy, JSONValue, PluginStore } from './store.js';
+import { hostValueFor } from './options.js';
+import type { Column, Schema } from './record.js';
+import type {
+  HostProxy,
+  JSONValue,
+  PluginResource,
+  PluginStore,
+} from './store.js';
 import { atomic } from './sync.js';
 import { PLATFORM, proxyRefusal } from './transport.js';
 
@@ -277,6 +283,22 @@ export async function sendChanges({
 }
 
 /**
+ * Writes a lens value (an option id or ids for a select column) into a host
+ * cell as the host holds it (Tag subjects, `options.ts`), or removes it.
+ */
+function setCell(
+  row: PluginResource,
+  schema: Schema,
+  column: Column | undefined,
+  value: JSONValue | undefined,
+): void {
+  if (!column) return;
+  const host = hostValueFor(column, value, schema.options);
+  if (host === undefined) row.remove(column.subject);
+  else row.set(column.subject, host);
+}
+
+/**
  * After Notion confirmed a PATCH: the sent fields and the baseline take the
  * values from the page Notion answered with, and so does the last-edited
  * time. Other fields are left for the next sync.
@@ -296,12 +318,9 @@ async function confirm(
   for (const field of change.fields) {
     const found = notionValue(page, field);
     const value = 'value' in found ? found.value : field.after;
-    const column = schema.columns.get(field.shortname);
     if (value === undefined) delete baseline.fields[field.shortname];
     else baseline.fields[field.shortname] = value;
-    if (column)
-      if (value === undefined) row.remove(column.subject);
-      else row.set(column.subject, value);
+    setCell(row, schema, schema.columns.get(field.shortname), value);
     if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(value));
   }
 
@@ -339,10 +358,7 @@ export async function resolveConflict(
   // the title that row value may have come from a rename of the row, so the
   // column is written either way and stays in step with the name.
   const kept = keep === 'notion' ? value : field.after;
-  const column = schema.columns.get(field.shortname);
-  if (column)
-    if (kept === undefined) row.remove(column.subject);
-    else row.set(column.subject, kept);
+  setCell(row, schema, schema.columns.get(field.shortname), kept);
   if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(kept));
 
   row.set(baselineColumn.subject, JSON.stringify(baseline));
@@ -358,11 +374,8 @@ export async function discardChange(
   const row = await store.getResource(change.subject);
 
   for (const field of change.fields) {
-    const column = schema.columns.get(field.shortname);
     const value = field.before;
-    if (column)
-      if (value === undefined) row.remove(column.subject);
-      else row.set(column.subject, value);
+    setCell(row, schema, schema.columns.get(field.shortname), value);
     if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(value));
   }
 

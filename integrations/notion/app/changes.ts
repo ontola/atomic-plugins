@@ -184,6 +184,10 @@ export function problemWith(
 
       if (!ids.every(id => typeof id === 'string'))
         return 'is not a list of option ids';
+      // The host's select cell takes any number of Tags; Notion's select
+      // and status take one.
+      if (field.type !== 'multi_select' && ids.length > 1)
+        return `holds ${ids.length} options; Notion’s ${field.name} takes one`;
       const unknown = ids.filter(
         id => field.options && !field.options.includes(id as string),
       );
