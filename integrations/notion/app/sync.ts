@@ -464,7 +464,8 @@ const isOptionType = (type: string) =>
  * property with another datatype is left alone and its column skipped,
  * except an option column still in its 0.3.0 shape (`string` or `json` of
  * option ids), which is upgraded in place to the host's select column
- * (`options.ts`); its rows are rewritten by the sync that follows.
+ * (`options.ts`); its rows are rewritten by the sync that follows. A stray
+ * Page-field column of 0.1.0–0.4.0 (`isStrayRawColumn`) is retired.
  */
 async function ensureColumns(
   store: PluginStore,
@@ -479,10 +480,12 @@ async function ensureColumns(
     throw new Error('The row class has no parent ontology to add columns to');
   const ontology = await store.getResource(ontologySubject);
   const existing = new Map<string, PluginResource>();
+  const listed: PluginResource[] = [];
 
   for (const subject of values(ontology, atomic.properties)) {
     const property = await store.getResource(subject);
     const shortname = property.get(atomic.shortname);
+    listed.push(property);
     if (typeof shortname === 'string') existing.set(shortname, property);
   }
 
@@ -533,27 +536,62 @@ async function ensureColumns(
     added.push(created.subject);
   }
 
-  if (added.length) {
+  // Up to 0.4.0 the platform's own Page fields became columns too (#303):
+  // one Property per field of the Page schema, named by its raw term path.
+  // The lens never wrote them, so their cells are empty. Retire them: off
+  // the class and the ontology, then destroyed. Only that auto-named shape,
+  // and only when no column of this sync binds it; a person's own column
+  // with such a shortname has another name and stays, as do the rows.
+  const kept = new Set(bound.values());
+  const retired = listed.filter(
+    p => !kept.has(p.subject) && isStrayRawColumn(p),
+  );
+  const gone = new Set(retired.map(p => p.subject));
+
+  if (added.length || retired.length) {
     ontology.set(atomic.properties, [
-      ...values(ontology, atomic.properties),
+      ...values(ontology, atomic.properties).filter(s => !gone.has(s)),
       ...added,
     ]);
     await ontology.save();
   }
 
   // Extras are bookkeeping on the row, not columns: never recommended.
-  const recommends = values(klass, atomic.recommends);
+  const before = values(klass, atomic.recommends);
+  const recommends = before.filter(s => !gone.has(s));
   const extra = new Set(extras.map(e => bound.get(e.shortname)));
   const missing = [...bound.values()].filter(
     s => !recommends.includes(s) && !extra.has(s),
   );
 
-  if (missing.length) {
+  if (missing.length || recommends.length !== before.length) {
     klass.set(atomic.recommends, [...recommends, ...missing]);
     await klass.save();
   }
 
+  for (const property of retired) await property.destroy();
+
   return bound;
+}
+
+/**
+ * `<document title>/property/<shortname>`: the name 0.1.0–0.4.0 gave a
+ * column made from one of syncables' Page-schema terms (`object`, `id`,
+ * `created-time`, `last-edited-time`, `title`, `properties`, `parent`,
+ * `url`, `archived`, `in-trash`), being that term's path. A column of a
+ * Notion property is `notion-<hex>`, and a column a person adds is named by
+ * them, so neither matches.
+ */
+const RAW_TERM_NAME = /\/property\/([^/]+)$/;
+
+/** Whether an ontology Property is a stray Page-field column of an earlier version. */
+export function isStrayRawColumn(property: PluginResource): boolean {
+  const name = property.get(atomic.name);
+  const shortname = property.get(atomic.shortname);
+  if (typeof name !== 'string' || typeof shortname !== 'string') return false;
+  if (shortname.startsWith('notion-')) return false;
+
+  return RAW_TERM_NAME.exec(name)?.[1] === shortname;
 }
 
 /**

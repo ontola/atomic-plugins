@@ -33,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -130,9 +130,11 @@ test.describe('notion drive plugin', () => {
       const klass = await store.getResource(
         table.get('https://atomicdata.dev/properties/classtype') as string,
       );
-      const fields = klass.get(
-        'https://atomicdata.dev/properties/recommends',
-      ) as string[];
+      // Without the host's own `name`, which `createApp` recommends on every
+      // row class and which the app never touches.
+      const fields = (
+        klass.get('https://atomicdata.dev/properties/recommends') as string[]
+      ).filter(s => s !== 'https://atomicdata.dev/properties/name');
       const properties = await Promise.all(
         fields.map((s: string) => store.getResource(s)),
       );
@@ -167,6 +169,25 @@ test.describe('notion drive plugin', () => {
         datatype: 'https://atomicdata.dev/datatypes/timestamp',
       },
     });
+    // No column of the platform's own Page fields (`object`, `id`, `url`, …,
+    // which 0.4.0 added, named by their raw term path; #303): exactly the
+    // fixed columns and one per Notion property.
+    expect(Object.keys(datatypes).sort()).toEqual(
+      [
+        'Notion page id',
+        'Data source',
+        'Notion URL',
+        'Last edited in Notion',
+        'Name',
+        'Status',
+        'Done',
+        'Points',
+        'Tags',
+        'Notes',
+      ].sort(),
+    );
+    for (const name of Object.keys(datatypes))
+      expect(name).not.toMatch(/\/property\//);
 
     // Back to the app for each of its states, against the fixture's
     // scenarios. One connection serves them all.
