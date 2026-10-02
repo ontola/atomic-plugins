@@ -28,7 +28,10 @@ export type {
   PollOptions,
   SyncResult,
   PendingWriteInfo,
+  PendingWriteState,
   PendingWriteType,
+  WriteConflict,
+  WriteResolution,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
