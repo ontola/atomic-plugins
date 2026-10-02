@@ -14,3 +14,8 @@ usertest/out/
 !/.claude/settings.json
 !/.claude/hooks/
 !/.claude/skills/
+# Default `npm init -y` output and its empty pnpm lockfile, which a stray
+# `npm init` / `pnpm add` run from integrations/ leaves behind. integrations/
+# is not a package (each plugin folder has its own), and nothing reads these.
+/integrations/package.json
+/integrations/pnpm-lock.yaml

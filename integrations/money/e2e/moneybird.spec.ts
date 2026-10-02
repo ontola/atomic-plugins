@@ -23,7 +23,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
 
 /** The catalog's version of the Moneybird app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 test.describe('moneybird integration', () => {
   test.beforeEach(before);

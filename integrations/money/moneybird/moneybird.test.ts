@@ -60,9 +60,17 @@ describe('reading', () => {
     const paths = store.calls.map(c => c.path);
     expect(paths).toHaveLength(Math.ceil(contacts[A].length / PAGE_CAP));
     expect(paths[0]).toBe(
-      `/${A}/contacts.json?per_page=100&include_archived=true`,
+      `/api/v2/${A}/contacts.json?per_page=100&include_archived=true`,
     );
     expect(paths[1]).toContain('page=2');
+  });
+
+  it('relays every path with the server URL base path, as the proxy requires', async () => {
+    const store = fakeStore();
+    await readAdministrations(get(store));
+    await readContacts(get(store), A);
+    expect(store.calls.length).toBeGreaterThan(1);
+    for (const call of store.calls) expect(call.path).toMatch(/^\/api\/v2\//);
   });
 
   it('refuses a next link outside the collection', async () => {

@@ -664,6 +664,16 @@ export function mockProxy({
 
       if (!Object.hasOwn(instances, platform)) return json(404, {});
       const fixture = fixtures[platform];
+
+      // As the real proxy does (catalog.rs `allows`): a relayed path must
+      // start with the base path of the document's `servers[0].url` and is
+      // sent upstream as is. A path without it is "not in the catalog".
+      const serverUrl = fixture.document?.servers?.[0]?.url;
+      const basePath = serverUrl
+        ? new URL(serverUrl).pathname.replace(/\/+$/, '')
+        : '';
+      if (basePath && !`/${rest}`.startsWith(`${basePath}/`))
+        return json(404, { error: 'method or path is not in the catalog' });
       let input = {};
 
       if (fixture.jsonBody && body.length) {

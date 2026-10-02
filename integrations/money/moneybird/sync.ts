@@ -56,6 +56,9 @@ export interface SyncSummary {
   unchanged: number;
 }
 
+/** The base path of UPSTREAM: what a relayed path starts with. */
+const BASE_PATH = new URL(UPSTREAM).pathname.replace(/\/+$/, '');
+
 /**
  * A `MoneybirdGet` over the host's proxy relay. The frame never holds a
  * credential or calls the network itself; the host's page makes the call.
@@ -67,10 +70,13 @@ export function relayGet(
   return async path => {
     if (!path.startsWith('/'))
       throw new Error(`Refusing a Moneybird path: ${path}`);
+    // The proxy resolves a relayed path against the composed document's
+    // `servers[0].url`, base path included: `/api/v2/administrations.json`,
+    // not `/administrations.json` (integration-proxy catalog.rs `allows`).
     const response = await proxy.request({
       platform: connection.platform,
       connectionId: connection.connectionId,
-      path,
+      path: `${BASE_PATH}${path}`,
       method: 'GET',
     });
 

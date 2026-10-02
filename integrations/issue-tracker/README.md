@@ -351,6 +351,11 @@ not re-read at the current pin `a12b74a`; read in `hostStore.ts`, `proxyConnecti
 - No IndexedDB, localStorage or Web Locks in the frame, so
   `background.mjs` is not used and nothing runs while the app is closed.
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+issue-tracker --i-understand-this-writes-to <owner/name>` runs the GitHub
+issues drive app's controller against one disposable repository and writes
+evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
+
 **Not verified, or not supported:**
 
 - Only against the mock proxy's seeded repository (`atomic-fixture/tracker`:

@@ -51,6 +51,8 @@ export default {
       'todoist-app/**/*.test.ts',
       'devonian/**/*.test.{ts,mjs}',
       'fixtures/**/*.test.ts',
+      // The live check's offline tests (the mock GitHub); never the live run.
+      'live/*.test.ts',
     ],
   },
 };
