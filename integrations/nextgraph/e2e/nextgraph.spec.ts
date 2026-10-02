@@ -197,19 +197,20 @@ function startSidecar(dir: string) {
     'HOME=/data',
     '-v',
     `${dir}:/data`,
-    '-p',
-    `127.0.0.1:${port}:14480`,
-    // The sidecar asks the host which app agent speaks for an installation.
-    '--add-host',
-    'host.docker.internal:host-gateway',
+    // Host networking, so the lane's atomic-server can stay bound to
+    // loopback (serve.mjs): the sidecar reaches it, and is reached, on
+    // 127.0.0.1. The sidecar asks the host which app agent speaks for an
+    // installation.
+    '--network',
+    'host',
     IMAGE,
     'serve',
     '--base',
     '/data',
     '--listen',
-    '0.0.0.0:14480',
+    `127.0.0.1:${port}`,
     '--atomic-server',
-    `http://host.docker.internal:${new URL(SERVER_URL).port}`,
+    `http://127.0.0.1:${new URL(SERVER_URL).port}`,
     // What the host signs: the URL it was given in --plugin-sidecars.
     '--public-url',
     SIDECAR_URL,

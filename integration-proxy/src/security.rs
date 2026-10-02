@@ -260,6 +260,29 @@ impl Security {
         Ok(rows == 1)
     }
 
+    /// Spends a signed request's replay key, as [`Self::consume_nonce`] does,
+    /// but also refuses it while `legacy_key` is recorded: that is the same
+    /// request's key in the earlier format, written by an older proxy
+    /// instance during a rolling deploy. Never writes `legacy_key`.
+    pub async fn consume_request(&self, key: &str, legacy_key: &str) -> Result<bool, String> {
+        let database = self.client().await;
+        database
+            .execute("DELETE FROM used_challenges WHERE expires_at <= NOW()", &[])
+            .await
+            .map_err(db_error)?;
+        let rows = database
+            .execute(
+                "INSERT INTO used_challenges (nonce, expires_at) \
+                 SELECT $1, NOW() + INTERVAL '10 minutes' \
+                 WHERE NOT EXISTS (SELECT 1 FROM used_challenges WHERE nonce = $2) \
+                 ON CONFLICT DO NOTHING",
+                &[&key, &legacy_key],
+            )
+            .await
+            .map_err(db_error)?;
+        Ok(rows == 1)
+    }
+
     pub fn seal(&self, plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
         let cipher = XChaCha20Poly1305::new((&self.encryption_key).into());
         let mut nonce = [0u8; 24];

@@ -16,8 +16,11 @@ prefix, so a captured request cannot be replayed with another body, method,
 path or proxy. The proxy accepts v2 only and never falls back to Atomic's v1
 message (`"{URL} {timestamp}"`), whose proofs are reusable for five minutes
 and do not cover the body. Timestamps must be within ±5 minutes; a SHA-256 of
-every accepted message is stored for ten minutes and a second use is
-refused, including across instances (PostgreSQL `used_challenges`).
+the canonical agent id and every accepted message is stored for ten minutes
+and a second use is refused, including across instances (PostgreSQL
+`used_challenges`). The record names the agent, so two agents that sign the
+same request in the same millisecond do not collide, and one agent cannot
+spend another's record in advance.
 
 ## Connections, delegations and runtimes
 
