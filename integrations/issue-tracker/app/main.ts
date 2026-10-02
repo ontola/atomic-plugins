@@ -78,6 +78,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   let retryAt: number | undefined;
   let prefsTimer: ReturnType<typeof setTimeout> | undefined;
   let previous: Map<string, string> | undefined;
+  let prefsApplied = false;
 
   const render = () => {
     ui.now = Date.now();
@@ -190,6 +191,16 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   const onState = (state: ViewState) => {
     if (state.kind === 'ready') {
+      // The saved layout and filters, once, when the app first shows its
+      // board: on open, or after connecting with no reload.
+      if (!prefsApplied) {
+        prefsApplied = true;
+        const prefs = controller.prefs();
+        if (prefs.layout) ui.layout = prefs.layout;
+        if (prefs.search) ui.search = prefs.search;
+        if (prefs.label) ui.label = prefs.label;
+      }
+
       if (state.problem?.kind !== 'paused' || !state.problem.missing)
         ui.confirmRemove = false;
       ui.alert = settled && !!state.problem;
@@ -586,18 +597,9 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   render();
 
   try {
-    const state = await controller.load();
-
-    if (state.kind === 'ready') {
-      const prefs = controller.prefs();
-      if (prefs.layout) ui.layout = prefs.layout;
-      if (prefs.search) ui.search = prefs.search;
-      if (prefs.label) ui.label = prefs.label;
-      render();
-      await controller.sync();
-    } else if (state.kind === 'choose-repository') {
-      await controller.listRepositories();
-    }
+    // Loads, then lists repositories or runs the first sync; `connect`
+    // takes the same path when the consent bar resolves with no reload.
+    await controller.start();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const p = doc.createElement('p');

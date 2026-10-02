@@ -268,6 +268,44 @@ group('issue-tracker controller: repository picker', () => {
   });
 });
 
+group('issue-tracker controller: connecting with no reload', () => {
+  // The host's "Use existing connection" resolves proxy.connect with no
+  // reload (#196 user test): what view() does on open must follow here.
+  it('lists repositories after picking an existing connection', async () => {
+    const store = fakeStore({ connected: false, existing: true });
+    const controller = createController(store);
+    expect((await controller.start()).kind).toBe('not-connected');
+    const state = await controller.connect();
+    expect(state).toMatchObject({
+      kind: 'choose-repository',
+      connectionId: 'c1',
+      listing: { kind: 'listed' },
+    });
+    expect(store.calls.at(-1)).toMatchObject({ path: '/user/repos' });
+  });
+
+  it('runs the first sync when a repository is already bound', async () => {
+    const { store, controller } = await bound(fakeStore({ existing: true }));
+    expect((await controller.disconnect()).kind).toBe('not-connected');
+    const calls = store.calls.length;
+    const state = ready(await controller.connect());
+    expect(state.repository).toBe(SEEDED_REPOSITORY);
+    expect(state.busy).toBeFalsy();
+    expect(state.problem).toBeUndefined();
+    expect(state.last?.result.rows).toHaveLength(2);
+    expect(store.calls.length).toBeGreaterThan(calls);
+  });
+
+  it('opens the same way: lists, or syncs once bound', async () => {
+    const store = fakeStore();
+    const first = createController(store);
+    expect((await first.start()).kind).toBe('choose-repository');
+    await first.choose(SEEDED_REPOSITORY);
+    const state = ready(await createController(store).start());
+    expect(state.last?.result.rows).toHaveLength(2);
+  });
+});
+
 group('issue-tracker controller: view preferences', () => {
   it('keeps the layout and filters on the app, across views', async () => {
     const { store, controller } = await bound();

@@ -17,6 +17,9 @@
  *    pauses sync; the conflict review keeps GitHub's title.
  * 5. Moving a card on the board with the keyboard, reviewed and sent.
  * 6. A comment added in the issue panel, reviewed and sent.
+ * 7. Disconnect in the app, then connect again through the host's "Use
+ *    existing connection", with no reload: the app syncs again by itself
+ *    (#196 user test; it used to stop at an unsynced board).
  *
  * GitHub-side reads and edits go through the mock's test drivers for the
  * github-issues fixture (`POST /fixture/github-issues/<driver>`), standing
@@ -33,7 +36,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const REPOSITORY = 'atomic-fixture/tracker';
 const NAME = 'https://atomicdata.dev/properties/name';
 
@@ -217,6 +220,38 @@ test.describe('GitHub issues drive app', () => {
         expect.stringMatching(/^atomic-proxy-connect|connection-v1/),
       ]),
     );
+
+    // 7. Disconnect this app, then connect again through the existing
+    // connection. The consent bar resolves with no reload, so the app must
+    // start its sync itself, as it does when the view opens.
+    const appUrl = page.url();
+    await app.getByRole('button', { name: 'Connection menu' }).click();
+    await app.getByRole('menuitem', { name: 'Disconnect GitHub' }).click();
+    await expect(status).toContainText('Not connected', { timeout: 30_000 });
+    expect((await proxyConnections('github-issues'))[0].delegations).toEqual(
+      [],
+    );
+    await app.getByRole('button', { name: 'Connect GitHub' }).click();
+    await consent
+      .getByRole('button', { name: 'Use existing connection' })
+      .click();
+    await expect(consent).toBeHidden();
+    await expect(bar).toHaveAttribute(
+      'title',
+      /2 issues and 2 comments in sync with atomic-fixture\/tracker/,
+      { timeout: 60_000 },
+    );
+    // Nothing new to send. "Updated here" is left open: the comment sent
+    // in step 6 changed #1's updated_at on GitHub after the last pass.
+    await expect(bar).toHaveAttribute(
+      'title',
+      /0 added and \d+ updated here, 0 sent to GitHub/,
+    );
+    await expect(status).toContainText('Synced');
+    expect(page.url()).toBe(appUrl);
+    const again = await proxyConnections('github-issues');
+    expect(again).toHaveLength(1);
+    expect(again[0].delegations).toHaveLength(1);
   });
 });
 
