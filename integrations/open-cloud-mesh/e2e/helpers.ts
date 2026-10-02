@@ -11,11 +11,13 @@ import { resolve } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import { Agent, signedRequestInit } from '@tomic/lib';
 import {
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
-  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 
 export const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
 export const ROUTES_ORIGIN = process.env.PLUGIN_ROUTES_ORIGIN ?? '';
@@ -55,12 +57,7 @@ export async function installReceiver(
   const reviewUrl = page.url();
   await dialog.getByRole('button', { name: 'Install', exact: true }).click();
   await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
-  // The install navigates once the Installation and the folder's write grant
-  // are saved locally, before the server has them; a route write in that
-  // window is refused as `500 route-write-failed` (the remoteStorage lane's
-  // race, #248; open-cloud-mesh on PR #280, run 37033430608). Wait for the
-  // outbox to drain before any route request.
-  await waitForSynced(page, 60_000);
+  await waitForOutboxDrained(page);
   const installation = subjectOf(page.url());
   const host = `${routeSlug(installation)}.${new URL(ROUTES_ORIGIN).host}`;
   const base = `http://${host}`;
@@ -85,25 +82,7 @@ export async function installReceiver(
 
 /** A Folder for received shares, and a Plugin draft whose source is the bundle. */
 export async function createPluginAndFolder(page: Page) {
-  // `createFromCatalog` reloads the SPA at /app/new and then fills the
-  // template search with Playwright's default 10 s action timeout, which a
-  // slow runner can miss while the page is still on the boot splash (run
-  // 36891774224). Load the page and wait for the search box with room to
-  // spare, so the helper's own reload finds a warm app (as remotestorage's
-  // helpers do).
-  await waitForSynced(page);
-  await page.goto(new URL('/app/new', page.url()).href);
-  await expect(
-    page.getByRole('searchbox', {
-      name: 'Search templates and resource types',
-    }),
-  ).toBeVisible({ timeout: 60_000 });
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
 
   return page.evaluate(
     async ({ code, folderClass, nameProp, descriptionProp }) => {

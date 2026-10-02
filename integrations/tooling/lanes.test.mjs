@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -30,6 +31,7 @@ import {
   sidecarImageEnv,
   root,
   PLUGIN_BUILD_DEPENDENCIES,
+  ROUTE_INSTALL_HELPER,
   SHARED_PACKAGES,
 } from './lanes.mjs';
 
@@ -207,6 +209,38 @@ test('lane paths are limited to shared packages', () => {
   assert.throws(
     () => validateConfig(cfg(lane({ paths: 'devonian/**' }))),
     /paths must be an array/,
+  );
+});
+
+test('the shared route-install e2e helper is listed by exactly the lanes that import it', () => {
+  const importers = config.lanes
+    .filter(l => laneFilter(l).includes(ROUTE_INSTALL_HELPER))
+    .map(l => l.id)
+    .sort();
+  const expected = [
+    'atproto',
+    'fediverse',
+    'open-cloud-mesh',
+    'remotestorage',
+    'solid',
+    'willow',
+    'willow-drop',
+  ];
+  assert.deepEqual(importers, expected);
+
+  for (const id of expected) {
+    const dir = resolve(root, `integrations/${id}/e2e`);
+    const text = readdirSync(dir)
+      .filter(f => f.endsWith('.ts'))
+      .map(f => readFileSync(resolve(dir, f), 'utf8'))
+      .join('\n');
+    assert.match(text, /tooling\/e2e\/route-install/, id);
+  }
+
+  assert.throws(
+    () =>
+      validateConfig(cfg(lane({ id: 'pets', paths: [ROUTE_INSTALL_HELPER] }))),
+    /not in a shared package/,
   );
 });
 
