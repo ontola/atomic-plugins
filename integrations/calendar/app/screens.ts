@@ -22,6 +22,24 @@ const PROVIDERS = [
   { name: 'Apple Calendar', mark: '', color: '#8e8e93' },
 ];
 
+/**
+ * What the setup screens add on a table that isn't the app's own, after
+ * "Sync this table" (#177 §6.2 item 14): its name, and a way back to not
+ * synced before a calendar is chosen.
+ */
+export interface ExistingTable {
+  table: string;
+  onNotNow: () => void;
+}
+
+const notNow = (doc: Document, existing: ExistingTable) =>
+  h(
+    doc,
+    'button',
+    { class: 'link', 'data-key': 'not-now', onclick: existing.onNotNow },
+    'Not now',
+  );
+
 /** 5.2 and 5.3: one primary action, and what will and won't happen. */
 export function firstRun(
   doc: Document,
@@ -29,8 +47,17 @@ export function firstRun(
     connecting,
     onConnect,
     onCancel,
-  }: { connecting: boolean; onConnect: () => void; onCancel: () => void },
+    ...rest
+  }: {
+    connecting: boolean;
+    onConnect: () => void;
+    onCancel: () => void;
+  } & Partial<ExistingTable>,
 ): HTMLElement {
+  const existing =
+    rest.table !== undefined && rest.onNotNow
+      ? (rest as ExistingTable)
+      : undefined;
   const google = h(
     doc,
     'li',
@@ -68,8 +95,12 @@ export function firstRun(
   );
 
   return emptyState(doc, {
-    title: 'Bring your calendar into Atomic',
-    text: 'Events are copied into this table. Nothing is sent to Google until you review it.',
+    title: existing
+      ? `Sync ${existing.table} with Google Calendar`
+      : 'Bring your calendar into Atomic',
+    text: existing
+      ? 'Google’s events are added to this table as rows; the rows already here stay here only. Nothing is sent to Google until you review it.'
+      : 'Events are copied into this table. Nothing is sent to Google until you review it.',
     children: [
       h(
         doc,
@@ -123,6 +154,7 @@ export function firstRun(
             'p',
             { class: 'fine' },
             'Recurring events aren’t imported yet.',
+            ...(existing ? [' ', notNow(doc, existing)] : []),
           ),
     ],
   });
@@ -145,8 +177,16 @@ export function picker(
   {
     calendars,
     onImport,
-  }: { calendars: CalendarEntry[]; onImport: (id: string) => void },
+    ...rest
+  }: {
+    calendars: CalendarEntry[];
+    onImport: (id: string) => void;
+  } & Partial<ExistingTable>,
 ): HTMLElement {
+  const existing =
+    rest.table !== undefined && rest.onNotNow
+      ? (rest as ExistingTable)
+      : undefined;
   const initial =
     calendars.find(c => c.primary)?.id ?? calendars[0]?.id ?? undefined;
   const list = h(
@@ -197,12 +237,21 @@ export function picker(
     doc,
     'div',
     { class: 'panel', role: 'form', 'aria-label': 'Choose a calendar' },
-    h(doc, 'h2', {}, 'Which calendar should come in?'),
+    h(
+      doc,
+      'h2',
+      {},
+      existing
+        ? `Which calendar should ${existing.table} sync with?`
+        : 'Which calendar should come in?',
+    ),
     h(
       doc,
       'p',
       {},
-      'This app keeps one calendar. For a second calendar, add another Calendar app. Read-only calendars are imported, but their events can’t be edited here.',
+      existing
+        ? 'A table syncs with one calendar, and never switches. Its events are added as rows; the rows already here stay here only. Read-only calendars are imported, but their events can’t be edited here.'
+        : 'This app keeps one calendar. For a second calendar, add another Calendar app. Read-only calendars are imported, but their events can’t be edited here.',
     ),
     calendars.length
       ? list
@@ -222,6 +271,7 @@ export function picker(
         { class: 'fine' },
         'Recurring events aren’t imported yet.',
       ),
+      existing ? notNow(doc, existing) : null,
       h(
         doc,
         'button',

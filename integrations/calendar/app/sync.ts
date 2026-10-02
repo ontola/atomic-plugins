@@ -1,7 +1,10 @@
 // @wc-ignore-file
 /**
- * The Calendar app's table: one row per imported Google event, under the
- * app's own table, which is all a view may write.
+ * The Calendar app's table: one row per imported Google event. The table is
+ * the app's own (under the App), or, after "Sync this table to Google
+ * Calendar" (#177 §6.2 item 14), another `event-v1` table the app is a view
+ * of, which it writes only through the person's "Allow editing" grant
+ * (atomic-server#1740) widened to its `row-extras` (#1849).
  *
  * `adapter.ts` owns the Google side (paging, skip rules, three-way
  * reconciliation, minimal ETag-conditioned patches). This file only maps its
@@ -131,17 +134,24 @@ export const SPECS: Record<string, Spec> = {
   'google-calendar-id': {
     name: 'Google calendar id',
     datatype: `${DT}/string`,
-    description: 'The one Google calendar this table imports (on the table).',
+    description:
+      'The one Google calendar a table syncs with (on the app’s own table, or on its sync binding for another table).',
   },
   'google-calendar-meta': {
     name: 'Google calendar details',
     datatype: `${DT}/string`,
     description:
-      'JSON of the imported calendar’s name, colour, access role and account, as Google listed them (on the table; display only).',
+      'JSON of the synced calendar’s name, colour, access role and account, as Google listed them (next to the calendar id; display only).',
+  },
+  'synced-table': {
+    name: 'Synced table',
+    datatype: `${DT}/atomicURL`,
+    description:
+      'The table, not the app’s own, that this sync binding keeps in step with Google Calendar (on a binding under the app).',
   },
 };
 
-/** What the app shows about the imported calendar; kept on the table. */
+/** What the app shows about the imported calendar; kept next to its id. */
 export interface CalendarMeta {
   summary: string;
   /** Google's `backgroundColor`, e.g. `#9fe1e7`. */
@@ -284,7 +294,120 @@ function parseMeta(raw: JSONValue): CalendarMeta | undefined {
   }
 }
 
-/** The calendar this table imports, once chosen, and what was kept about it. */
+/**
+ * Where the table's calendar choice (`google-calendar-id` and `-meta`) is
+ * kept. On the app's own table: the table. On a table the app is a view of:
+ * a binding resource under the App, whose `synced-table` names that table,
+ * because a row grant never lets the app write the table itself
+ * (`app_row_grant.rs`: "never the table or its views"). Undefined when that
+ * table has no binding yet, which is "not synced".
+ */
+export async function bindingOf(
+  store: PluginStore,
+  where: Pick<Layout, 'app' | 'table' | 'own' | 'ontology'>,
+): Promise<string | undefined> {
+  if (where.own) return where.table;
+  const found = await existing(store, where);
+  const property = found.get('synced-table');
+  if (!property) return undefined;
+
+  for (const subject of await store.query({ property, value: where.table })) {
+    // Only the app's own: anyone can make a resource that names the table.
+    const binding = await store.getResource(subject).catch(() => undefined);
+    if (binding?.get(PARENT) === where.app) return subject;
+  }
+
+  return undefined;
+}
+
+/**
+ * "Sync this table to Google Calendar": the binding for a table the app is
+ * a view of, made in the app's own subtree when missing. No calendar yet;
+ * `chooseCalendar` adds it. Returns its subject.
+ */
+export async function bindTable(store: PluginStore): Promise<string> {
+  const where = await layout(store);
+  if (where.own) return where.table;
+  const props = (await properties(store, where, true))!;
+  const found = await bindingOf(store, where);
+  if (found) return found;
+  const binding = await store.newResource({
+    parent: where.app,
+    propVals: {
+      [NAME]: `Google Calendar sync of ${await tableName(store)}`,
+      [props['synced-table']]: where.table,
+    },
+  });
+
+  return binding.subject;
+}
+
+/**
+ * "Not now" before a calendar was chosen: the table goes back to not
+ * synced. A binding that already names a calendar is kept.
+ */
+export async function unbindTable(store: PluginStore): Promise<void> {
+  const where = await layout(store);
+  if (where.own) return;
+  const binding = await bindingOf(store, where);
+  if (!binding) return;
+  const props = (await properties(store, where, true))!;
+  const resource = await store.getResource(binding);
+  const id = resource.get(props['google-calendar-id']);
+  if (typeof id === 'string' && id) return;
+  await resource.destroy();
+}
+
+/** The subjects of the row extras (`ROW_EXTRAS`), as the App declares them. */
+export async function rowExtraSubjects(store: PluginStore): Promise<string[]> {
+  const props = (await properties(store, await layout(store), true))!;
+
+  return ROW_EXTRAS.map(shortname => props[shortname]);
+}
+
+/**
+ * Whether the person's grant on the table the app is a view of covers its
+ * columns and every row extra (`rowAccess().extras`). Always true on the
+ * app's own table, which needs no grant.
+ */
+export async function hasRowAccess(store: PluginStore): Promise<boolean> {
+  const where = await layout(store);
+  if (where.own) return true;
+  if (!store.rowAccess) return false;
+  const access = await store.rowAccess();
+  if (access.status !== 'granted') return false;
+  const wanted = await rowExtraSubjects(store);
+
+  return wanted.every(extra => access.extras.includes(extra));
+}
+
+/**
+ * Asks for "Allow editing" when the grant is missing or doesn't cover the
+ * row extras; the host's bar asks the person, and says the app keeps data
+ * of its own on rows. Never writes the table.
+ */
+export async function ensureRowAccess(
+  store: PluginStore,
+): Promise<{ status: 'granted' } | { status: 'denied'; reason: string }> {
+  if (await hasRowAccess(store)) return { status: 'granted' };
+  if (!store.requestRowAccess)
+    return {
+      status: 'denied',
+      reason: 'This host can’t let an app edit another table’s rows.',
+    };
+  const answer = await store.requestRowAccess();
+  if (answer.status !== 'granted') return answer;
+  // The host grants what the App declares now; check it covers the extras.
+  if (await hasRowAccess(store)) return answer;
+
+  return {
+    status: 'denied',
+    reason:
+      'The grant doesn’t cover the Google ids, ETags and baselines the app keeps on rows.',
+  };
+}
+
+/** The calendar this table syncs with, once chosen, and what was kept about it. */
 export async function chosenCalendar(
   store: PluginStore,
 ): Promise<{ id: string; meta?: CalendarMeta } | undefined> {
@@ -292,11 +415,13 @@ export async function chosenCalendar(
   const found = await existing(store, where);
   const idProp = found.get('google-calendar-id');
   if (!idProp) return undefined;
-  const table = await store.getResource(where.table);
-  const id = table.get(idProp);
+  const subject = await bindingOf(store, where);
+  if (!subject) return undefined;
+  const binding = await store.getResource(subject);
+  const id = binding.get(idProp);
   if (typeof id !== 'string' || !id) return undefined;
   const metaProp = found.get('google-calendar-meta');
-  const meta = metaProp ? parseMeta(table.get(metaProp)) : undefined;
+  const meta = metaProp ? parseMeta(binding.get(metaProp)) : undefined;
 
   return { id, ...(meta ? { meta } : {}) };
 }
@@ -314,8 +439,9 @@ export async function chooseCalendar(
 ): Promise<CalendarMeta> {
   const where = await layout(store);
   const props = (await properties(store, where, true))!;
-  const table = await store.getResource(where.table);
-  const current = table.get(props['google-calendar-id']);
+  const subject = where.own ? where.table : await bindTable(store);
+  const binding = await store.getResource(subject);
+  const current = binding.get(props['google-calendar-id']);
   if (typeof current === 'string' && current && current !== calendar.id)
     throw new Error(
       'This table already imports another calendar. Use a new Calendar app for a second one.',
@@ -326,11 +452,13 @@ export async function chooseCalendar(
     accessRole: calendar.accessRole ?? 'reader',
     ...(account ? { account } : {}),
   };
-  await table
+  binding
     .set(props['google-calendar-id'], calendar.id)
-    .set(props['google-calendar-meta'], JSON.stringify(meta))
-    .set(NAME, calendar.summary)
-    .save();
+    .set(props['google-calendar-meta'], JSON.stringify(meta));
+  // The app's own table is named after its calendar; a table it is a view
+  // of keeps the name the person gave it (a grant never writes the table).
+  if (where.own) binding.set(NAME, calendar.summary);
+  await binding.save();
 
   return meta;
 }
@@ -781,8 +909,10 @@ export async function refresh(
 ): Promise<ImportSummary> {
   const where = await layout(store);
   const props = await properties(store, where, true);
-  const table = await store.getResource(where.table);
-  const calendarId = table.get(props!['google-calendar-id']);
+  const subject = await bindingOf(store, where);
+  const calendarId = subject
+    ? (await store.getResource(subject)).get(props!['google-calendar-id'])
+    : undefined;
   if (typeof calendarId !== 'string' || !calendarId)
     throw new Error('Choose a calendar first.');
   const rows = await readRows(store, where, props!);
@@ -1081,8 +1211,10 @@ export async function saveMeta(
 ): Promise<void> {
   const where = await layout(store);
   const props = (await properties(store, where, true))!;
+  const subject = await bindingOf(store, where);
+  if (!subject) return;
   await (
-    await store.getResource(where.table)
+    await store.getResource(subject)
   )
     .set(props['google-calendar-meta'], JSON.stringify(meta))
     .save();
@@ -1197,7 +1329,10 @@ export async function tableOf(store: PluginStore): Promise<string> {
   return (await layout(store)).table;
 }
 
-/** "Remove local copy": the only delete path, and it is local. */
+/**
+ * "Remove local copy": the only delete path, and it is local. Only on the
+ * app's own table: a row grant never deletes rows (the view doesn't offer it).
+ */
 export async function removeLocal(
   store: PluginStore,
   subject: string,
