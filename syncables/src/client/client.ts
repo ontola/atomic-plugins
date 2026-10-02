@@ -580,6 +580,7 @@ export function createApiClient(
         : {}),
       ...(write.sending ? { sending: true as const } : {}),
       ...(write.lastKnown ? { lastKnown: write.lastKnown } : {}),
+      ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
     };
   }
 
@@ -710,6 +711,7 @@ export function createApiClient(
         ? { confirmedId: stored.confirmedId }
         : {}),
       ...(stored.lastKnown ? { lastKnown: stored.lastKnown } : {}),
+      ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
     };
     if (stored.sending) {
       // The process stopped between storing "about to send" and storing the
@@ -1342,54 +1344,21 @@ export function createApiClient(
   }
 
   /**
-   * After a complete read of `scope`: a pending update whose record the read
-   * did not return would send only its own fields as the whole record.
-   * It fails instead, keeping the last confirmed record for a retry. Updates
-   * behind a create of the same record, and updates in flight, are left.
-   */
-  function failMissingUpdates(
-    scope: string,
-    records: Map<string, Record<string, unknown>>,
-    previous: Map<string, Record<string, unknown>>,
-  ): void {
-    for (const failed of gaveUpWrites.values())
-      for (const write of failed)
-        if (
-          write.scope === scope &&
-          write.type === 'update' &&
-          !records.has(write.id) &&
-          !write.lastKnown &&
-          previous.has(write.id)
-        )
-          write.lastKnown = previous.get(write.id) as Record<string, unknown>;
-    for (const queue of [...writeQueues.values()]) {
-      let afterCreate = false;
-      for (const write of [...queue]) {
-        if (write.type === 'create') afterCreate = true;
-        if (
-          write.scope !== scope ||
-          write.type !== 'update' ||
-          afterCreate ||
-          write.state !== 'pending' ||
-          write.sending ||
-          write.durable === false ||
-          records.has(write.id)
-        )
-          continue;
-        failWrite(write, missingMessage(write), previous.get(write.id));
-      }
-    }
-  }
-
-  /**
    * Releases the restored updates of `scope` whose records this complete
    * read saw fresh (`isFresh`: no write to the record settled during it).
    * With `apply`, the read was not applied to the whole collection, so the
    * fresh records are taken over (and checked for conflicts) here.
+   * `previous` holds the confirmed records from before the read.
+   *
+   * A released PUT update whose record the read did not return would send
+   * only its own fields as the whole record. When it is the first unsettled
+   * write of its record, it fails instead and keeps the last confirmed
+   * record for a retry. Otherwise it goes out as before.
    */
   async function releaseRefreshed(
     scope: string,
     records: Map<string, Record<string, unknown>>,
+    previous: Map<string, Record<string, unknown>>,
     isFresh: (id: string) => boolean,
     apply: boolean,
     released: Set<QueuedWrite>,
@@ -1402,11 +1371,17 @@ export function createApiClient(
       released.add(write);
       touchedIds.add(write.id);
       const record = records.get(write.id);
-      if (!record) {
-        failWrite(write, missingMessage(write), remote(scope).get(write.id));
+      const key = keyFor(scope, write.id);
+      if (
+        !record &&
+        write.route.updateMethod === 'PUT' &&
+        writeQueues.get(key)?.[0] === write &&
+        !gaveUpWrites.get(key)?.length
+      ) {
+        failWrite(write, missingMessage(write), previous.get(write.id));
         continue;
       }
-      if (apply) fresh.set(write.id, record);
+      if (apply && record) fresh.set(write.id, record);
       delete write.awaitingRefresh;
       delete write.refreshMisses;
     }
@@ -1432,12 +1407,12 @@ export function createApiClient(
     for (const write of allWrites()) {
       if (!write.awaitingRefresh || released.has(write)) continue;
       write.refreshMisses = (write.refreshMisses ?? 0) + 1;
+      changed = true;
       if (write.refreshMisses < REFRESH_MISS_LIMIT) continue;
       failWrite(
         write,
         `Waiting for a complete refresh of ${write.route.collection.name}: ${REFRESH_MISS_LIMIT} syncs did not read this record completely`,
       );
-      changed = true;
     }
     if (!changed) return;
     await persistLater();
@@ -1484,6 +1459,7 @@ export function createApiClient(
         await releaseRefreshed(
           scope,
           records,
+          remote(scope),
           (id) =>
             (startedRecords.get(keyFor(scope, id)) ?? 0) ===
             (recordRevisions.get(keyFor(scope, id)) ?? 0),
@@ -1492,16 +1468,16 @@ export function createApiClient(
         );
         continue;
       }
+      let confirmedBefore = remote(scope);
       if (differs) {
         // A reused adapter can contain records from before this client instance.
         const before = new Set([
           ...remote(scope).keys(),
           ...persisted.map((item) => String(item[route.collection.idField])),
         ]);
-        const previous = new Map(remote(scope));
+        confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
         detectConflicts(scope, records);
-        failMissingUpdates(scope, records, previous);
         for (const id of records.keys()) before.add(id);
         // Writes not yet stored stay out of the visible records.
         for (const write of allWrites())
@@ -1515,7 +1491,14 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
-      await releaseRefreshed(scope, remote(scope), () => true, false, released);
+      await releaseRefreshed(
+        scope,
+        remote(scope),
+        confirmedBefore,
+        () => true,
+        false,
+        released,
+      );
     }
     await countRefreshMisses(released);
     if (result.errors.length)
@@ -1614,12 +1597,16 @@ export function createApiClient(
         [route.collection.itemParam ?? 'id']: id,
       });
       const existing = await storage.get(scope, id);
-      if (
-        !remote(scope).has(id) &&
-        existing &&
-        !writeQueues.has(keyFor(scope, id))
-      )
-        remote(scope).set(id, existing);
+      const key = keyFor(scope, id);
+      const failed = gaveUpWrites.get(key);
+      // The visible record carries failed changes; seeding from it would send
+      // them implicitly. With failed writes, seed from their last known record.
+      const seed = failed
+        ? failed.find((w) => w.lastKnown)?.lastKnown
+        : writeQueues.has(key)
+          ? undefined
+          : existing;
+      if (!remote(scope).has(id) && seed) remote(scope).set(id, seed);
       const record = { ...existing, ...data, [route.collection.idField]: id };
       const confirmedRecord = remote(scope).get(id);
       await enqueue({

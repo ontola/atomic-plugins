@@ -35,6 +35,8 @@ export interface StoredWrite {
   sending?: true;
   /** For an update whose record a refresh no longer had: the last confirmed record. */
   lastKnown?: Record<string, unknown>;
+  /** Syncs that ran without releasing a restored update waiting for one. */
+  refreshMisses?: number;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -94,7 +96,9 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       typeof value['idempotencyKey'] === 'string') &&
     (value['confirmedId'] === undefined ||
       typeof value['confirmedId'] === 'string') &&
-    (value['lastKnown'] === undefined || isRecord(value['lastKnown']))
+    (value['lastKnown'] === undefined || isRecord(value['lastKnown'])) &&
+    (value['refreshMisses'] === undefined ||
+      typeof value['refreshMisses'] === 'number')
   );
 }
 

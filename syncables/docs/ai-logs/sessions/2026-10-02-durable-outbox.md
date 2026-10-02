@@ -99,3 +99,20 @@ three syncs, `resolveWrite` support for waiting updates, a `lastKnown` record
 (also stored in the outbox) for updates whose record a refresh lacks, and
 skipping of not-yet-stored writes in visible rebuilds. README, JSDoc and
 CLAUDE.md updated.
+
+## Turn 4
+
+**Human (via the oversight session, relaying a third review of PR #312):**
+Failing in-memory pending updates on a missing record lost the newest edit
+(an in-flight update settling stripped a queued, now failed, one). Narrow the
+missing-record failure to restored updates waiting for a refresh, at release,
+when the update is its record's first unsettled write and a PUT; restore the
+earlier in-memory behaviour. Seed a new `update` from a failed write's last
+known record, not from the visible record. Store the refresh miss count.
+
+**Assistant:** Added four tests (all failed on the previous commit),
+including the reviewer's scenario, which now ends at the newest value on the
+server. Removed the in-memory failure, moved the check into the release step
+with the head/PUT conditions, changed `update()` seeding, and stored
+`refreshMisses` in the outbox. README and CLAUDE.md updated; the in-memory
+remote-delete case is named as still open in #260.

@@ -782,23 +782,24 @@ describe('durable outbox: review findings on #312', () => {
   });
 });
 
-describe('durable outbox: second review on #312', () => {
-  /** A first process that synced record 1 and left an update of it in flight. */
-  async function restoredUpdate(
-    pets: Pet[] = [{ id: '1', name: 'Rex', tag: 'dog' }],
-  ): Promise<CrashableStorage> {
-    const storage = new CrashableStorage();
-    const first = provider(pets, (r) =>
-      r.method === 'GET' ? undefined : 'hang-before',
-    );
-    const a = restart(storage, first.transport);
-    await a.sync();
-    await a.update('/pets', '1', { name: 'Rex II' });
-    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
-    await settle();
-    return storage.crash();
-  }
+/** A first process that synced record 1 and left an update of it in flight. */
+async function restoredUpdate(
+  pets: Pet[] = [{ id: '1', name: 'Rex', tag: 'dog' }],
+  doc: OpenApiDocument = document(),
+): Promise<CrashableStorage> {
+  const storage = new CrashableStorage();
+  const first = provider(pets, (r) =>
+    r.method === 'GET' ? undefined : 'hang-before',
+  );
+  const a = restart(storage, first.transport, {}, doc);
+  await a.sync();
+  await a.update('/pets', '1', { name: 'Rex II' });
+  await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+  await settle();
+  return storage.crash();
+}
 
+describe('durable outbox: second review on #312', () => {
   it('fails a waiting update after three syncs that could not refresh it', async () => {
     const second = provider([{ id: '1', name: 'Rex', tag: 'dog' }], (r) =>
       r.method === 'GET' ? response({ error: 'invented' }, 500) : undefined,
@@ -877,37 +878,6 @@ describe('durable outbox: second review on #312', () => {
     });
   });
 
-  it('fails a pending in-memory update whose record a complete refresh lacks', async () => {
-    let pets: Pet[] = [{ id: '1', name: 'Rex', tag: 'dog' }];
-    const sent: TransportRequest[] = [];
-    const client = createApiClient(document(), {
-      retry: slowRetry,
-      transport: async (r) => {
-        if (r.method === 'GET') return response(pets);
-        sent.push(r);
-        return response({}, 503);
-      },
-    });
-    await client.sync();
-    await client.update('/pets', '1', { name: 'Rex II' });
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    await settle();
-    pets = [];
-    await client.sync();
-    expect(client.pendingWrites()).toMatchObject([
-      {
-        state: 'failed',
-        lastError: expect.stringMatching(/not in the refreshed collection/),
-      },
-    ]);
-    // The visible record keeps the last known fields, not just the edit.
-    expect(await client.get('/pets', '1')).toEqual({
-      id: '1',
-      name: 'Rex II',
-      tag: 'dog',
-    });
-  });
-
   it('never shows a create whose own store failed, even through a sync', async () => {
     const storage = new CrashableStorage();
     let open!: () => void;
@@ -954,6 +924,115 @@ describe('durable outbox: second review on #312', () => {
       id: '1',
       name: 'Rex II',
       tag: 'wolf',
+    });
+  });
+});
+
+describe('durable outbox: third review on #312', () => {
+  it('keeps in-memory updates going when a refresh lacks their record', async () => {
+    // The reviewer's scenario: u1 in flight, u2 queued, a refresh without a.
+    const server = new Map<string, Pet>([['a', { id: 'a', name: 'A' }]]);
+    let listed = true;
+    let answer!: () => void;
+    const firstPut = new Promise<void>((resolve) => (answer = resolve));
+    let puts = 0;
+    const client = createApiClient(document(), {
+      transport: async (r) => {
+        if (r.method === 'GET')
+          return response(listed ? [...server.values()] : []);
+        puts += 1;
+        if (puts === 1) await firstPut;
+        const pet = JSON.parse(r.body ?? '{}') as Pet;
+        server.set('a', pet);
+        return response(pet);
+      },
+    });
+    await client.sync();
+    await client.update('/pets', 'a', { name: 'B' });
+    await vi.waitFor(() => expect(puts).toBe(1));
+    await client.update('/pets', 'a', { name: 'C' });
+    listed = false;
+    await client.sync();
+    expect(client.pendingWrites().map((w) => w.state)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    answer();
+    await idle(client);
+    expect(server.get('a')?.['name']).toBe('C');
+    expect(await client.get('/pets', 'a')).toMatchObject({ name: 'C' });
+  });
+
+  it('does not send the changes of a refresh-failed update through a new update', async () => {
+    const storage = new CrashableStorage();
+    const first = provider([{ id: '1', name: 'Rex', tag: 'dog' }], (r) =>
+      r.method === 'GET' ? undefined : 'hang-before',
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+
+    const second = provider([]);
+    const b = restart(storage.crash(), second.transport);
+    await b.ready();
+    await b.sync();
+    expect(b.pendingWrites()).toMatchObject([{ state: 'failed' }]);
+    await b.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(second.requests).toHaveLength(1));
+    // Built on the last confirmed record, without the failed update's name.
+    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+      id: '1',
+      name: 'Rex',
+      tag: 'wolf',
+    });
+    expect(b.pendingWrites()[0]).toMatchObject({
+      state: 'failed',
+      lastError: expect.stringMatching(/not in the refreshed collection/),
+    });
+  });
+
+  it('sends a restored PATCH update even when the refresh lacks its record', async () => {
+    const doc = document();
+    const item = doc.paths['/pets/{petId}']!;
+    item.patch = item.put!;
+    delete item.put;
+    const second = provider([], (r) =>
+      r.method === 'PATCH' ? response({ id: '1', name: 'Rex II' }) : undefined,
+    );
+    const b = restart(
+      await restoredUpdate(undefined, doc),
+      second.transport,
+      {},
+      doc,
+    );
+    await b.ready();
+    await b.sync();
+    await idle(b);
+    expect(second.requests.map((r) => r.method)).toEqual(['PATCH']);
+  });
+
+  it('keeps the refresh miss count across a restart', async () => {
+    const failing = (): ReturnType<typeof provider> =>
+      provider([{ id: '1', name: 'Rex', tag: 'dog' }], (r) =>
+        r.method === 'GET' ? response({ error: 'invented' }, 500) : undefined,
+      );
+    const storage = await restoredUpdate();
+    const b = restart(storage, failing().transport);
+    await b.ready();
+    for (let i = 0; i < 2; i++)
+      await expect(b.sync()).rejects.toThrow(/Read incomplete/);
+    await settle();
+
+    const third = failing();
+    const c = restart(storage.crash(), third.transport);
+    await c.ready();
+    expect(c.pendingWrites()[0]).toMatchObject({ awaitingRefresh: true });
+    await expect(c.sync()).rejects.toThrow(/Read incomplete/);
+    expect(c.pendingWrites()[0]).toMatchObject({
+      state: 'failed',
+      lastError: expect.stringMatching(/Waiting for a complete refresh/),
     });
   });
 });

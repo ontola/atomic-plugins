@@ -147,10 +147,13 @@ Data flows through four stages, each its own directory under `src/`:
    (`awaitingRefresh`) for a complete `sync()` of their scope before sending,
    unless a create precedes them; a settle on the same record during the read
    (`recordRevisions`) skips the release, three non-releasing syncs fail it,
-   and `resolveWrite` retries or discards it. A complete refresh lacking the
-   record of a pending update fails that update (`lastKnown` keeps the last
-   confirmed record for a retry) rather than sending a partial PUT. Writes not
-   yet durable are skipped by `rebuild`. Unknown versions are refused, not
+   and `resolveWrite` retries or discards it (the miss count is stored). A
+   released restored PUT update that is its record's first unsettled write,
+   and whose record the refresh lacks, fails (`lastKnown` keeps the last
+   confirmed record; `update()` seeds from it, not from the visible record)
+   rather than sending a partial PUT. In-memory updates are unchanged by
+   that (#260's open remote-delete item). Writes not yet durable are skipped
+   by `rebuild`. Unknown versions are refused, not
    overwritten. The README's
    "Durable outbox and restarts" has the stop-between-steps table; keep it in
    step with the code. Not stored: `lastSyncedItems`, the conditional cache and
