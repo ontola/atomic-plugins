@@ -10,8 +10,8 @@
  * afterwards) behind a TLS proxy in this process on 127.0.0.1:19943, which
  * also fronts the lane's atomic-server: the plugin's actor is
  * `https://fedi-<run>.localhost:19943/ap/actor`, and Mastodon is
- * `https://mastodon.localhost:19943`. An invented Mastodon user, through
- * Mastodon's own client API:
+ * `https://mastodon.localhost:19943`. An invented Mastodon user runs the
+ * round trip of ./client-api.ts through Mastodon's own client API:
  *
  * 1. looks the actor up by its URL: Mastodon fetches the actor and checks
  *    its handle (`news@fedi-<run>.localhost:19943`) with WebFinger;
@@ -52,16 +52,9 @@ import {
   getDevDriveSecret,
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
-import {
-  bindHost,
-  childNamed,
-  createFolders,
-  installPlugin,
-  P,
-  PORT,
-  signedPost,
-} from './helpers';
-import { atomicRequest, PEER_CA_PATH, waitFor } from './peer';
+import { roundTrip } from './client-api';
+import { bindHost, createFolders, installPlugin, PORT } from './helpers';
+import { PEER_CA_PATH } from './peer';
 
 type MastodonModule = typeof import('./mastodon.mjs');
 
@@ -104,18 +97,6 @@ test.describe('fediverse with a real Mastodon', () => {
       port: MASTODON_PORT,
     });
 
-    const dump = (error: unknown) => {
-      throw new Error(
-        `${error}\n--- proxy\n${mastodon
-          .traffic()
-          .map(
-            t =>
-              `${t.to} ${t.method} ${t.path} ${t.status} ${t.response ?? t.error ?? ''}`,
-          )
-          .join('\n')}\n${mastodon.logs()}`,
-      );
-    };
-
     try {
       testInfo.annotations.push({
         type: 'mastodon',
@@ -135,131 +116,29 @@ test.describe('fediverse with a real Mastodon', () => {
       });
       const token = mastodon.addUser('alice');
 
-      const api = async (method: string, path: string, body?: unknown) => {
-        const r = await mastodon.call(method, path, { token, body });
-        expect(r.status, `${method} ${path}: ${r.body}`).toBe(200);
+      const trip = await roundTrip({
+        name: 'Mastodon',
+        server: mastodon,
+        token,
+        page,
+        agent,
+        actor: ACTOR,
+        direct: DIRECT,
+        replies: folders.replies,
+        note: NOTE,
+        replyText: 'Welcome to the fediverse, drive!',
+      });
 
-        return JSON.parse(r.body);
-      };
-
-      const followerCount = async () =>
-        JSON.parse(
-          (
-            await atomicRequest(`${DIRECT}/ap/followers`, {
-              headers: { accept: 'application/activity+json' },
-            })
-          ).body,
-        ).totalItems as number;
-
-      let accountId = '';
-
-      await test.step('Mastodon resolves the actor', async () => {
-        // By its URL: Mastodon's search takes no port in a handle
-        // (Account::MENTION_RE), so `@news@<host>:<port>` finds nothing.
-        const found = await waitFor(
-          async () => {
-            const r = await mastodon.call(
-              'GET',
-              `/api/v2/search?type=accounts&resolve=true&q=${encodeURIComponent(ACTOR)}`,
-              { token },
-            );
-
-            return r.status === 200 && JSON.parse(r.body).accounts.length
-              ? JSON.parse(r.body).accounts[0]
-              : undefined;
-          },
-          `Mastodon to resolve ${ACTOR}`,
-          60_000,
-        ).catch(dump);
-        expect(found).toMatchObject({
+      await test.step("Mastodon's view of the actor and the post", async () => {
+        expect(trip.account).toMatchObject({
           acct: HANDLE,
           username: 'news',
           display_name: 'Atomic news',
           bot: true,
           locked: false,
         });
-        accountId = found.id;
-      });
-
-      await test.step('alice follows; Mastodon gets the Accept', async () => {
-        await api('POST', `/api/v1/accounts/${accountId}/follow`);
-        const relationship = await waitFor(
-          async () => {
-            const [r] = await api(
-              'GET',
-              `/api/v1/accounts/relationships?id[]=${accountId}`,
-            );
-
-            return r.following ? r : undefined;
-          },
-          'Mastodon to record the follow as accepted',
-          120_000,
-        ).catch(dump);
-        expect(relationship).toMatchObject({
-          following: true,
-          requested: false,
-        });
-        expect(await followerCount()).toBe(1);
-      });
-
-      let statusId = '';
-
-      await test.step('the drive posts; the Note reaches Mastodon', async () => {
-        const posted = await signedPost(agent, `${DIRECT}/ap/outbox`, {
-          type: 'Note',
-          content: NOTE,
-        });
-        expect(posted.status, posted.body).toBe(201);
-        const out = JSON.parse(posted.body);
-        expect(out.queued).toBe(1);
-        const status = await waitFor(
-          async () => {
-            const list = await api(
-              'GET',
-              `/api/v1/accounts/${accountId}/statuses`,
-            );
-
-            return list.find((s: { uri: string }) => s.uri === out.object);
-          },
-          'the post in Mastodon',
-          120_000,
-        ).catch(dump);
-        expect(status.content).toBe(`<p>${NOTE}</p>`);
-        expect(status.visibility).toBe('public');
-        const home = await waitFor(async () => {
-          const list = await api('GET', '/api/v1/timelines/home');
-
-          return list.find((s: { id: string }) => s.id === status.id);
-        }, "the post in alice's home timeline").catch(dump);
-        expect(home.account.acct).toBe(HANDLE);
-        statusId = status.id;
-      });
-
-      await test.step('alice replies; the reply is stored in the drive', async () => {
-        const reply = await api('POST', '/api/v1/statuses', {
-          status: 'Welcome to the fediverse, drive!',
-          in_reply_to_id: statusId,
-          visibility: 'public',
-        });
-        const stored = await waitFor(
-          () => childNamed(page, folders.replies, 'Welcome to the fediverse'),
-          'the stored reply',
-          120_000,
-        ).catch(dump);
-        expect(stored[P.description]).toContain(
-          'Welcome to the fediverse, drive!',
-        );
-        expect(stored[P.url]).toBe(reply.uri);
-        expect(stored[P.replyTo]).toBeTruthy();
-      });
-
-      await test.step('alice unfollows; the follower is removed', async () => {
-        await api('POST', `/api/v1/accounts/${accountId}/unfollow`);
-        await waitFor(
-          async () => ((await followerCount()) === 0 ? true : undefined),
-          'the follower to be removed',
-          120_000,
-        ).catch(dump);
+        expect(trip.status.content).toBe(`<p>${NOTE}</p>`);
+        expect(trip.home.account.acct).toBe(HANDLE);
       });
 
       await test.step('the wire, as the proxy saw it', async () => {

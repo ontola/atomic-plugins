@@ -365,6 +365,141 @@ describe('range edits on two devices (#123 M5)', () => {
   });
 });
 
+describe('a range edit after a sent one (#279)', () => {
+  it('a range edit over a row a sent range edit made is a normal edit, not a conflict between your edits', async () => {
+    const t = await setup([entry('e', at(8), at(12), { projectId: Q })]);
+    const a = await t.open(t.store, 'frame-a');
+
+    expect(
+      await a.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'worked', projectId: P },
+      }),
+    ).toBe(true);
+    await a.send();
+    expect(t.writes().map(w => w.method)).toEqual(['PUT', 'POST', 'POST']);
+    expect(a.changes().review).toEqual([]);
+
+    // Right away, "did not work" over the new middle entry.
+    expect(
+      await a.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'didNotWork' },
+      }),
+    ).toBe(true);
+    expect(local(a)).toEqual([]);
+    expect(a.changes().review).toMatchObject([
+      { kind: 'delete', blockers: [] },
+    ]);
+
+    // Also after reopening the app.
+    const again = await t.open(t.store, 'frame-a2');
+    expect(local(again)).toEqual([]);
+    expect(again.changes().review).toMatchObject([
+      { kind: 'delete', blockers: [] },
+    ]);
+
+    await again.send();
+    expect(t.writes().map(w => w.method)).toEqual([
+      'PUT',
+      'POST',
+      'POST',
+      'DELETE',
+    ]);
+  });
+
+  it('S21 still holds over a sent edit: two devices that both saw it and edit its rows apart, differently, conflict', async () => {
+    const t = await setup([entry('e', at(8), at(12), { projectId: Q })]);
+    const { a, b, reconnect } = await twoDrives(t);
+
+    await a.editRange({
+      from: at(9),
+      to: at(10),
+      target: { kind: 'worked', projectId: P },
+    });
+    await a.send();
+    expect(t.writes()).toHaveLength(3);
+    reconnect();
+    await b.sync();
+    expect(b.changes().review).toEqual([]);
+
+    // Both name the sent edit as settled, but not each other.
+    expect(
+      await a.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'didNotWork' },
+      }),
+    ).toBe(true);
+    expect(
+      await b.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'worked', projectId: Q },
+      }),
+    ).toBe(true);
+    expect(local(a)).toEqual([]);
+    expect(local(b)).toEqual([]);
+
+    reconnect();
+    await a.sync();
+    await b.sync();
+
+    for (const device of [a, b]) {
+      const [conflict] = local(device);
+      expect(conflict).toMatchObject({ from: at(9), to: at(10) });
+      expect(conflict.candidates).toEqual([
+        { kind: 'worked', projectId: Q },
+        { kind: 'didNotWork' },
+      ]);
+      for (const change of device.changes().review)
+        expect(change.blockers).toContain(HELD_BY_CONFLICT);
+    }
+
+    await a.send();
+    expect(t.writes()).toHaveLength(3);
+  });
+
+  it('a later edit over a sent edit’s range does not put back an edit of the sent one’s other row', async () => {
+    const t = await setup([entry('e', at(8), at(12), { projectId: Q })]);
+    const a = await t.open(t.store, 'frame-a');
+
+    await a.editRange({
+      from: at(9),
+      to: at(10),
+      target: { kind: 'worked', projectId: P },
+    });
+    await a.send();
+    expect(t.writes()).toHaveLength(3);
+
+    // The tail row (made by the sent edit, outside its range) is edited...
+    expect(
+      await a.editRange({
+        from: at(11),
+        to: at(12),
+        target: { kind: 'didNotWork' },
+      }),
+    ).toBe(true);
+    // ...then the sent edit's own range: the tail's change stays staged.
+    expect(
+      await a.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'didNotWork' },
+      }),
+    ).toBe(true);
+    expect(local(a)).toEqual([]);
+    expect(
+      a
+        .changes()
+        .review.map(c => `${c.kind} ${c.blockers.length}`)
+        .sort(),
+    ).toEqual(['delete 0', 'update 0']);
+  });
+});
+
 describe('one sender at a time: the lease (#123 M5)', () => {
   const take = (t: Setup, device: string) =>
     SendLease.take(t.store, t.schema as CompleteSchema, {
