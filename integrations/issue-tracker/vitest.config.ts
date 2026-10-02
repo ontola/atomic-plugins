@@ -48,6 +48,7 @@ export default {
     include: [
       '*.test.ts',
       'app/**/*.test.ts',
+      'todoist-app/**/*.test.ts',
       'devonian/**/*.test.{ts,mjs}',
       'fixtures/**/*.test.ts',
     ],

@@ -162,22 +162,25 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-YCh0XA/74ulx5QYL6uIXiCDI3oXaGSH2AzgurOivVp3kUZCTSx1pCwPzRu2ZfzIY"
   },
   {
-    "https://atomicdata.dev/properties/localId": "devonian-todoist",
+    "https://atomicdata.dev/properties/localId": "todoist",
     "https://atomicdata.dev/properties/isA": [
       "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
     ],
-    "https://atomicdata.dev/properties/shortname": "devonian-todoist",
+    "https://atomicdata.dev/properties/shortname": "todoist",
     "https://atomicdata.dev/integrations/properties/experimental": true,
     "https://atomicdata.dev/integrations/properties/enabled": false,
-    "https://atomicdata.dev/properties/name": "Todoist (Devonian)",
+    "https://atomicdata.dev/properties/name": "Todoist",
     "https://atomicdata.dev/properties/emoji": "✅",
-    "https://atomicdata.dev/properties/description": "Bring your Todoist projects and tasks into a local issue tracker.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Imports active tasks and projects. Tasks open in the Issues view with their title, due day and priority. Todoist lists active tasks only, so a task shows as closed only when Todoist itself reports it checked.",
-    "https://atomicdata.dev/integrations/properties/events": "Was planned as: connect through the integration proxy, then Sync now (and every five minutes while the folder is open) to pull the latest tasks. The LocalThought connect dialog and sync panel that did this were removed from atomic-server, and no drive app wraps the Todoist lens yet, so nothing runs it at the pin.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Read only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist. A task that stops appearing is never assumed completed. The lens can check such a task by id and mark it completed, deleted, unavailable or unconfirmed, with when it was last seen, but no host runs that check yet, and nothing has been verified against a live Todoist account.",
-    "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects devonian lens local tracker issues",
-    "https://atomicdata.dev/integrations/properties/requires-api-plugins": true,
-    "https://atomicdata.dev/integrations/properties/platform": "todoist"
+    "https://atomicdata.dev/properties/description": "Bring the active tasks of one Todoist account into an Issues table, read-only.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports the connected account's active tasks into the app's table as rows of the shared Issue class (issue-v1: title, task/v1 status, body and due date), with the Todoist priority, project, task id and presence as extra columns, so other views of that class can read them. A task that stops appearing in Todoist's active list is looked up by id once and marked completed, deleted, unavailable or unconfirmed, with when it was last seen; only completed closes it. No row is ever removed.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps and connect Todoist through the host's consent bar. Tasks refresh whenever the app is opened and on Sync now. Nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist, and a local edit to an imported column is overwritten at the next sync. Active tasks only: a task completed before the first import is never imported. A task gone from the active list is never assumed completed: when Todoist's by-id check answers 404 or fails, the row keeps its last known values and says so. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Todoist account (#46), including what Todoist answers by id for a completed task.",
+    "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects issues read-only drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-KnALQ7jjJxz3vd4jnAIjq50twSKzF+piMq1rFeDk/xTl7En7y53QU2boOmDLZK/q"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",
