@@ -335,7 +335,7 @@ describe('ambiguous creates (#260 gap 2)', () => {
   it.each([
     ['a 503', response({}, 503)],
     ['a 429', response({}, 429)],
-    ['a 400', response({}, 400)],
+    ['a 408', response({}, 408)],
   ])('keeps retrying %s automatically', async (_label, failure) => {
     const { server, requests, transport } = provider((n) =>
       n === 1 ? failure : undefined,
@@ -428,7 +428,7 @@ describe('resolveWrite on failed and pending writes', () => {
       transport: async (r) => {
         if (r.method === 'GET') return response([{ id: '1', name: 'old' }]);
         puts += 1;
-        return fail ? response({}, 400) : response(JSON.parse(r.body ?? '{}'));
+        return fail ? response({}, 500) : response(JSON.parse(r.body ?? '{}'));
       },
     });
     await client.sync();

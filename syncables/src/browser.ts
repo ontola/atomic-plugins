@@ -42,7 +42,7 @@ export type {
   TransportResponse,
   HttpMethod,
 } from './read/transport.js';
-export { createApiClient } from './client/client.js';
+export { createApiClient, defaultWriteFailureClass } from './client/client.js';
 export type {
   ApiClient,
   ApiClientOptions,
@@ -51,6 +51,9 @@ export type {
   PendingWriteType,
   WriteConflict,
   WriteResolution,
+  WriteFailure,
+  WriteFailureClass,
+  AuthBlock,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,
   PollOptions,
