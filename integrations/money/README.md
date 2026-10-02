@@ -309,7 +309,7 @@ administration and API token**; the steps are in `scenario.mjs`'s header.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).
-Version 0.1.0 is published at `apps/moneybird/0.1.0/ui.js`; its version is
+Version 0.1.1 is published at `apps/moneybird/0.1.1/ui.js` (0.1.0 relayed paths without the `/api/v2` base path, which the proxy refuses as not in the catalog; kept because a published file never changes); its version is
 recorded in `moneybird/package.json`, not in this folder's `package.json`
 (that one is the Bank statements importer's). `apps.mjs` finds the app here,
 not at `integrations/moneybird/app/`, through its `APP_FOLDERS` map. The
