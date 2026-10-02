@@ -5,13 +5,13 @@
  * every case skips unless SCREENSHOTS_DIR is set. Run it through the driver,
  * which starts the servers and passes the environment:
  *
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]
  *
  * Invented data only:
  * - Pets: the catalog install of `pets` (the lane dev-server's catalog,
  *   serving the committed `apps/pets/<version>/ui.js`), connected through the
  *   host's consent bar to the mock proxy's static `pets` fixture.
- * - Google Calendar and GitHub issues: the "(sample data)" entries of the
+ * - Google Calendar, GitHub issues, Clockify timesheets and Notion: the "(sample data)" entries of the
  *   user-testing catalog (`usertest/catalog.mjs`, `usertest/sample-data/`),
  *   which run the app built from this checkout on an invented Acme Studio
  *   account in the frame. Their yellow "Sample data" line stays in the shot.
@@ -110,6 +110,16 @@ test.describe('README screenshots', () => {
     await expect(
       app.getByText(/Design review: Bakkerij Zonnig packaging/).first(),
     ).toBeVisible({ timeout: 15_000 });
+    // The week grid scrolls to the current time, which on a late evening
+    // run leaves the working day out of view: show 08:00 onwards.
+    await app
+      .getByText('08:00', { exact: true })
+      .first()
+      .evaluate(el => {
+        el.scrollIntoView({ block: 'start' });
+        // Only the grid should scroll, not the app's header above it.
+        window.scrollTo(0, 0);
+      });
     await shoot(page, 'calendar');
   });
 
@@ -138,6 +148,30 @@ test.describe('README screenshots', () => {
       timeout: 60_000,
     });
     await shoot(page, 'issue-tracker');
+  });
+
+  test('timesheets', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(
+      page,
+      'timesheets',
+      'Clockify timesheets (sample data)',
+    );
+    await app
+      .getByText('Connected as Alex Sample')
+      .waitFor({ timeout: 30_000 });
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(app.getByText('Webshop phase 2').first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await shoot(page, 'timesheets');
+  });
+
+  test('notion', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(page, 'notion', 'Notion (sample data)');
+    await waitForNotionSync(app);
+    await shoot(page, 'notion');
   });
 
   test('money', async ({ page }) => {
@@ -240,6 +274,16 @@ test.describe('README screenshots', () => {
     await shoot(page, 'money');
   });
 });
+
+/** Waits until the Notion status view has finished its first import. */
+async function waitForNotionSync(app: FrameLocator) {
+  await expect(app.getByText('Importing your first rows')).toHaveCount(0, {
+    timeout: 90_000,
+  });
+  await expect(app.getByText('Roadmap').first()).toBeVisible({
+    timeout: 30_000,
+  });
+}
 
 /** Waits for the app frame and its first paint, then returns it. */
 async function appFrame(page: Page): Promise<FrameLocator> {

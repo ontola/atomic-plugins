@@ -60,8 +60,18 @@ on github.io.
       <br><b>🗓️ Google Calendar</b>: one calendar's events, and reviewed edits sent back to Google.
     </td>
     <td width="50%" valign="top">
-      <a href="docs/screenshots/issue-tracker.png"><img src="docs/screenshots/issue-tracker.png" alt="The GitHub issues drive app: a Todo, Doing and Done board of an invented repository's issues"></a>
+      <a href="docs/screenshots/issue-tracker.png"><img src="docs/screenshots/issue-tracker.png" alt="The GitHub issues drive app: a Todo, Doing, Blocked and Done board of an invented repository's issues"></a>
       <br><b>🐙 GitHub issues</b>: one repository's issues on a board, two-way, every write reviewed.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/timesheets.png"><img src="docs/screenshots/timesheets.png" alt="The Clockify timesheets drive app: a week grid of an invented person's hours per project, with day and week totals"></a>
+      <br><b>⏱️ Clockify</b>: your time entries as a week grid, an entries list and a project list.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/notion.png"><img src="docs/screenshots/notion.png" alt="The Notion drive app's sync status view: the two invented databases it syncs into one table, with their row counts and the last sync"></a>
+      <br><b>📓 Notion</b>: a sync-status view; the rows themselves are in the table it fills.
     </td>
   </tr>
   <tr>
@@ -76,15 +86,18 @@ on github.io.
   </tr>
 </table>
 
-The screenshots were taken on 2026-10-01 against atomic-server pin `a12b74a`,
-at 1280×800 in the light theme, with invented data only: Google Calendar and
-GitHub issues on the user-testing sample accounts
+Calendar, GitHub issues, Clockify and Notion were taken on 2026-10-02 against
+atomic-server pin `a12b74a`, at 1280×800 in the light theme, with invented
+data only, on the user-testing sample accounts
 ([`usertest/sample-data/`](usertest/sample-data/README.md); hence the yellow
-"Sample data" line), Money on the invented Acme Studio statement in
-`integrations/money/fixtures/usertest/`, and Pets on the mock proxy's static
-fixture. To retake them, set up the pinned atomic-server as in
+"Sample data" line) at the app versions in the table below. Money (taken
+2026-10-01, to be retaken once #295 lands) uses the invented Acme Studio statement
+in `integrations/money/fixtures/usertest/`, and Pets the mock proxy's static
+fixture. The Notion shot shows the app's status view only: the sample's
+table does not show its option columns readably, so there is no shot of it.
+To retake them, set up the pinned atomic-server as in
 [AGENTS.md](AGENTS.md#shared-pinned-atomic-server-build), then run
-`node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money]`.
+`node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]`.
 The checklist is in [#49](https://github.com/ontola/atomic-plugins/issues/49).
 
 | App                              | What it does (declared)                                                                                                                                                                                                                                                        | Status                                                                                                                                                                                                                                                                                                                                                                                                                                    | Code                                                             |
@@ -93,8 +106,8 @@ The checklist is in [#49](https://github.com/ontola/atomic-plugins/issues/49).
 | 🗓️ **Google Calendar**           | Imports one Google calendar's single (non-recurring) events, up to 25,000 per scan, and sends reviewed edits of five fields back with `If-Match`. No creates or deletes in Google.                                                                                             | Published (0.3.1), `enabled: false`. Rows are the shared `event-v1` class, and it can sync a hand-made `event-v1` table. Host E2E against the mock proxy. No live run of the drive app against Google yet.                                                                                                                                                                                                                                | [`integrations/calendar/`](integrations/calendar/)               |
 | 🐙 **GitHub issues**             | Keeps one repository's issues (title, body, Todo/Doing/Done, comments) on a board, two-way. Every write to GitHub is held for review.                                                                                                                                          | Published (0.3.1), `enabled: false`. Rows are the shared `issue-v1` class, and it can sync a hand-made `issue-v1` table. Host E2E against the mock proxy. No live run of the drive app against GitHub yet.                                                                                                                                                                                                                                | [`integrations/issue-tracker/`](integrations/issue-tracker/)     |
 | 🏦 **Bank statements** and Money | The importer reads MT940 (up to 512 KB) and camt.053 (up to 5 MB) files, at most 500 transactions per file, and writes nothing before the host's review. The Money app shows the result as a ledger per account and currency, with your own category and note per transaction. | Money app: published (0.4.1), `enabled: false`. A catalog install imports statements itself into rows of the shared `bank-transaction-v1` class, and lists rows missing a required field as incomplete. The importer still works as a second way in (set up from a release published to the server by hand). The screenshot predates 0.4 and shows the app as a view of the importer's table. Tested with synthetic statement files only. | [`integrations/money/`](integrations/money/)                     |
-| ⏱️ **Clockify**                  | Brings your Clockify time entries into a week view and a table, and sends reviewed edits back.                                                                                                                                                                                 | Published (0.6.2), `enabled: false`. Rows are the shared `time-entry-v1` class, and it can sync a hand-made `time-entry-v1` table. Write-back, range edits and conflicts are declared, mock-tested only. Host E2E against the mock proxy. No live run ([#123](https://github.com/ontola/atomic-plugins/issues/123) is open); its screenshot waits until that settles.                                                                     | [`integrations/timesheets/`](integrations/timesheets/)           |
-| 📓 **Notion**                    | Syncs the rows of shared Notion databases into one table, with select, status and multi-select options as the host's own select columns, and sends reviewed edits to existing pages back. A small status view shows the sync. No page creation or deletes.                     | Published (0.4.0), `enabled: false`. Host E2E against the mock proxy. No live run of the writes ([#8](https://github.com/ontola/atomic-plugins/issues/8) is open); its screenshot waits until that settles.                                                                                                                                                                                                                               | [`integrations/notion/`](integrations/notion/)                   |
+| ⏱️ **Clockify**                  | Brings your Clockify time entries into a week view and a table, and sends reviewed edits back.                                                                                                                                                                                 | Published (0.6.2), `enabled: false`. Rows are the shared `time-entry-v1` class, and it can sync a hand-made `time-entry-v1` table. Write-back, range edits and conflicts are declared, mock-tested only. Host E2E against the mock proxy. No live run ([#123](https://github.com/ontola/atomic-plugins/issues/123) is open).                                                                                                              | [`integrations/timesheets/`](integrations/timesheets/)           |
+| 📓 **Notion**                    | Syncs the rows of shared Notion databases into one table, with select, status and multi-select options as the host's own select columns, and sends reviewed edits to existing pages back. A small status view shows the sync. No page creation or deletes.                     | Published (0.4.0), `enabled: false`. Host E2E against the mock proxy. No live run of the writes ([#8](https://github.com/ontola/atomic-plugins/issues/8) is open).                                                                                                                                                                                                                                                                        | [`integrations/notion/`](integrations/notion/)                   |
 | ✅ **Todoist**                   | Imports the active tasks of a Todoist account into an `issue-v1` table, read-only. A task that left the active list is looked up once: a completed one is closed. Nothing is sent to Todoist.                                                                                  | Published (0.1.1), `enabled: false`. Host E2E on a synthetic fixture; nothing checked against real Todoist ([#99](https://github.com/ontola/atomic-plugins/issues/99), [#46](https://github.com/ontola/atomic-plugins/issues/46)).                                                                                                                                                                                                        | [`integrations/issue-tracker/`](integrations/issue-tracker/)     |
 | 🐦 **Moneybird**                 | Imports the contacts of one Moneybird administration, read-only.                                                                                                                                                                                                               | Published (0.1.1), `enabled: false`. Host E2E on a synthetic fixture; nothing checked against real Moneybird ([#102](https://github.com/ontola/atomic-plugins/issues/102)).                                                                                                                                                                                                                                                               | [`integrations/money/moneybird/`](integrations/money/moneybird/) |
 
