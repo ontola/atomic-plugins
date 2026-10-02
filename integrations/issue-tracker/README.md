@@ -73,7 +73,7 @@ there is no recorded fixture yet (#46) and no credentials here. If it
 answers 404, completed tasks will show as `unavailable`, which is still
 not a false "completed". The cases above are covered by synthetic fixture
 tests in `todoist.test.ts`. **No host calls `reconcileTodoistTasks` yet.**
-Nothing in atomic-server at the pin (`bae5cdbe3`) imports `todoist.ts` at
+Nothing in atomic-server at the pin (`a12b74a`; searched again 2026-10-02, and at `bae5cdbe3` before) imports `todoist.ts` at
 all, neither the projection nor this check (searched `browser/` and
 `server/src`), so the `devonian-todoist` catalog entry describes a flow no
 host runs today. The host journey that runs the check, and exercises these
@@ -266,7 +266,7 @@ replace them.
   is paused or failed the board still shows the table's rows.
 
 **Host behaviour it relies on or works around** (atomic-server `bae5cdbe3`,
-read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
+not re-read at the current pin `a12b74a`; read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 `app/frameStore.ts` has the detail):
 
 - No credential reaches the app's code: the bridge's `proxyTransport` runs
