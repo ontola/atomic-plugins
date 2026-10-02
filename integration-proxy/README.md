@@ -222,7 +222,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `BASE_URL` | no | Public URL of the proxy, e.g. `https://localthought.io`. Defaults to `http://localhost:8080`. Used for OAuth callback URLs, as the prefix of every signed URL, and (its origin) as a capability's `aud`. Must be exactly what clients use. |
 | `PORT` | no | Port to listen on. Defaults to `8080`. |
 | `SESSION_SECRET` | no; set it in production | Secret for the short-lived consent and OAuth-binding cookies. If unset, a random key is generated at startup (with a warning in the log), and a consent screen open during a restart must be started again. Instances behind one name must share it. |
-| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog.json`, this repository's `overlays/catalog.json` as GitHub Pages publishes it from `main`. |
+| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`, this repository's `overlays/catalog/2026-10-02.json` as GitHub Pages publishes it from `main`. |
 | `DATABASE_URL` | yes | PostgreSQL connection URL. See the TLS note below. |
 | `ENCRYPTION_KEY` | yes | Base64url-encoded, random 32-byte key for sealed provider credentials. Changing it makes every stored connection unreadable. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids (any accepted spelling) the default access policy refuses. |
@@ -291,16 +291,25 @@ scope). The initial integration imports contacts; supply the administration ID
 from the Moneybird account when connecting. OAuth tokens without `expires_in`
 remain usable until revoked; tokens with an expiry use the normal refresh flow.
 
-[`overlays/catalog.json`](../overlays/catalog.json) in this repository
+[`overlays/catalog/2026-10-02.json`](../overlays/catalog/2026-10-02.json) in this repository
 (migrated from the former `localthought/overlays` repository) is the source of
 the integration catalog. GitHub Pages publishes `overlays/` from `main` at
 `https://ontola.github.io/atomic-plugins/overlays/`, and the proxy defaults to
-the `catalog.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
+the `catalog/2026-10-02.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
 local fixture for development. Each platform names one pinned OpenAPI document
 (in `localthought/` or `ontola/openapi-directory`, at a commit) and zero or more Overlay
 Specification documents, each served from that same Pages folder. At startup
 the proxy downloads those HTTPS sources, applies each overlay's `update`
 actions in the listed order, and keeps the resulting YAML in memory.
+
+Provider overlay filenames include their kind and full OAD commit SHA under
+`overlays/APIs/`, so adding a newer OAD revision leaves existing catalog
+selections intact. Each overlay's `extends` identifies that same pinned OAD.
+The loader rejects a mismatched declaration before applying actions, resolves
+relative `extends` against the overlay URL, and continues to support older
+overlays that omit it. Published revision files are immutable; updating a
+platform means explicitly changing its `openapi` and ordered `overlays`
+selections together.
 
 A catalog entry may also contain a **selection** object. Consumer
 **query_overrides** remain separate from the composed OpenAPI document:
@@ -312,9 +321,9 @@ the one the proxy uses. The value must be a string naming a declared scheme.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
 
-Overlay URLs are no longer pinned to a commit: whatever `main` has in
-`overlays/` is what the next proxy start composes. Change the catalog in one
-PR: edit the overlays and `overlays/catalog.json` together; `Overlays CI` and
+Overlay URLs use immutable OAD-revision filenames. Publish new overlay
+filenames and a new dated catalog together, then explicitly switch
+`CATALOG_PATH` or the proxy default to that dated catalog; `Overlays CI` and
 this crate's `default_catalog_*` tests (which compose the checked-in catalog,
 reading the Pages-published overlays from `../overlays/`) validate it before
 merge; after merge, `Overlays published` checks that Pages serves the merged

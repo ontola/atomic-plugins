@@ -1,0 +1,17 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/6eaac882edcd0b668a7c7aeb7a976d74785d31e8/APIs/googleapis.com/customsearch/v1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        offset:
+          type: pageNumber
+          request:
+            queryParameters:
+              start:
+                role: offset
+              num:
+                role: pageSize

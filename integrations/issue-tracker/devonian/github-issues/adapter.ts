@@ -135,6 +135,18 @@ export function manifest(repository: string) {
         url: `${url}/{number}/labels/atomic%3Adoing`,
         effect: 'write',
       },
+      {
+        id: 'blocked-add',
+        method: 'POST',
+        url: `${url}/{number}/labels`,
+        effect: 'write',
+      },
+      {
+        id: 'blocked-remove',
+        method: 'DELETE',
+        url: `${url}/{number}/labels/atomic%3Ablocked`,
+        effect: 'write',
+      },
     ],
   };
 }

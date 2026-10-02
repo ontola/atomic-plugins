@@ -4,13 +4,20 @@ import tempfile
 import unittest
 from pathlib import Path
 import yaml
-from generate_identity_catalog_fixtures import PAGES_BASE, ROOT, apply, compose, fetch, platform_config
+from generate_identity_catalog_fixtures import CATALOG, PAGES_BASE, ROOT, apply, compose, fetch, platform_config
 
 
 class IdentityOverlayTests(unittest.TestCase):
     def composed(self, name):
         with tempfile.TemporaryDirectory() as cache:
             return compose(name, Path(cache))[0]
+
+    def test_all_catalog_platforms_compose(self):
+        with tempfile.TemporaryDirectory() as cache:
+            for platform in CATALOG["platforms"]:
+                with self.subTest(platform=platform["name"]):
+                    document, _ = compose(platform["name"], Path(cache))
+                    self.assertTrue(document["paths"])
 
     def test_google_auth_and_identity_overlay(self):
         document = self.composed("google-calendar")
@@ -83,7 +90,7 @@ class IdentityOverlayTests(unittest.TestCase):
         # They come from the read overlays: composing without the write
         # overlay's catalog line keeps them, and has no write operation.
         config = platform_config("clockify")
-        read_overlays = [u for u in config["overlays"] if not u.endswith("/time-entry-write-overlay.yaml")]
+        read_overlays = [u for u in config["overlays"] if not Path(u).name.startswith("time-entry-write-")]
         self.assertEqual(len(read_overlays), len(config["overlays"]) - 1)
         with tempfile.TemporaryDirectory() as cache:
             base, _ = fetch(config["openapi"], Path(cache))

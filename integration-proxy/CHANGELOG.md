@@ -3,7 +3,34 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## 0.2.3 (unreleased)
+## 0.2.4 (2026-10-02)
+
+- Default catalog: `overlays/catalog/2026-10-02.json`, selecting immutable
+  overlay filenames with the OAD last-change SHA. The full Discord OAD is
+  composed; connecting it awaits separate mixed-authentication support
+  (ontola/atomic-plugins#258).
+
+- Catalog loading checks an overlay's declared `extends` against the original
+  catalog OAD before applying its actions. Relative URI references resolve
+  against the overlay URL; legacy overlays without `extends` remain supported.
+
+- An `apiKey` security scheme may declare `x-api-key-details`
+  (`openapi-extensions/spec/api-key-details`, 0.1.0-draft). The consent page
+  then shows the scheme's `description` and a link to its `helpUrl`, and
+  `POST /connect/authorize` calls its `keyCheck` operation once with the
+  pasted key before sealing it. `401`/`403` shows the consent page again
+  with "did not accept that API key", without spending the consent; any
+  other non-2xx, a redirect or no answer within 10 seconds stores nothing
+  and answers `400`. A declared response label is sealed with the
+  connection and returned as `label` by `POST /connect/redeem` and
+  `GET /connections`. A malformed `x-api-key-details` makes the platform
+  unavailable for connection rather than skipping the check. The schema
+  gains a nullable `agent_connections.label_envelope` column
+  (`ADD COLUMN IF NOT EXISTS` at startup). The default catalog's `clockify`
+  entry declares a help link and `GET /v1/user` as its key check.
+  (ontola/atomic-plugins#121)
+
+## 0.2.3 (2026-09-30)
 
 - A catalog platform whose composed OpenAPI document declares top-level
   `security: []`, no security scheme, and no operation that requires one now
@@ -20,21 +47,6 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   read-only demo API on GitHub Pages that uses this. 0.2.2 and earlier load
   that catalog and list `pets`, but their consent page answers "This platform
   is not available for connection".
-- An `apiKey` security scheme may declare `x-api-key-details`
-  (`openapi-extensions/spec/api-key-details`, 0.1.0-draft). The consent page
-  then shows the scheme's `description` and a link to its `helpUrl`, and
-  `POST /connect/authorize` calls its `keyCheck` operation once with the
-  pasted key before sealing it. `401`/`403` shows the consent page again
-  with "did not accept that API key", without spending the consent; any
-  other non-2xx, a redirect or no answer within 10 seconds stores nothing
-  and answers `400`. A declared response label is sealed with the
-  connection and returned as `label` by `POST /connect/redeem` and
-  `GET /connections`. A malformed `x-api-key-details` makes the platform
-  unavailable for connection rather than skipping the check. The schema
-  gains a nullable `agent_connections.label_envelope` column
-  (`ADD COLUMN IF NOT EXISTS` at startup). The default catalog's `clockify`
-  entry declares a help link and `GET /v1/user` as its key check.
-  (ontola/atomic-plugins#121)
 - `CHANGELOG.md` is packaged with the crate.
 
 ## 0.2.2 (2026-09-29, tag `integration-proxy-v0.2.2`)

@@ -183,17 +183,27 @@ for the fuller architecture note. The `describeIntegration`/
 ## overlays/
 
 Unlike `integrations/`, `overlays/` is not a package: it is a folder of
-OpenAPI Overlay documents plus `catalog.json`, migrated in from the
+OpenAPI Overlay documents plus dated `catalog/<date>.json` platform catalogs,
+migrated in from the
 standalone `localthought/overlays` repo, full commit history included via
 `git subtree`. GitHub Pages publishes this repository's `main` from its root
 (the root `.nojekyll` keeps files byte-for-byte), so `overlays/<path>` is
 served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
-`catalog.json` references its overlays by those URLs, and
+`catalog/2026-10-02.json` references its overlays by those URLs, and
 `integration-proxy`'s default `CATALOG_PATH` is that folder's
-`catalog.json`. Those URLs are not pinned to a commit: a merge to `main`
-changes what the proxy composes at its next start. See
+`catalog/2026-10-02.json`. Dated catalogs and OAD-revision overlay filenames
+are immutable; a new overlay does not change an existing catalog selection.
+The unversioned catalog was removed after the verified localthought.io switch
+on 2026-10-02. See
 [`overlays/README.md`](overlays/README.md) for the publication model and its
-checks. Its CI is
+checks. Provider paths mirror `openapi-directory` as
+`overlays/APIs/<provider>/<service-if-any>/<version>/`.
+Overlay filenames are `<kind>-<full-oad-commit>-overlay.yaml`, and the
+standard `extends` field pins the OAD at the commit that last changed it.
+Published revision files are immutable (`validate_oad_pins.py --published
+origin/main`). Keep old revision files when adding overlays for a newer OAD;
+several kinds and revisions may coexist. The catalog selects exact filenames in order.
+Its CI is
 [`.github/workflows/overlays-ci.yml`](.github/workflows/overlays-ci.yml);
 [`.github/workflows/overlays-published.yml`](.github/workflows/overlays-published.yml)
 checks Pages after each build. Keep the root `.nojekyll`: without it Pages

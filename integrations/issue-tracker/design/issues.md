@@ -428,7 +428,7 @@ Refs #89. Design: `integrations/issue-tracker/design/DESIGN.md`.
 Blocked on DESIGN.md → Decisions needed, item 2.
 
 Outside this folder, and needing the maintainer's OK: a `jira` platform in
-`overlays/catalog.json`, an auth overlay (Atlassian OAuth 2.0 3LO; requests
+`overlays/catalog/2026-10-02.json`, an auth overlay (Atlassian OAuth 2.0 3LO; requests
 go to `api.atlassian.com/ex/jira/{cloudid}/…`, and the cloud id comes from
 `accessible-resources`), and a CRUD Causality overlay.
 

@@ -209,7 +209,7 @@ RUST_LOG=info
 | `BASE_URL` | yes in production | The exact public origin, e.g. `https://proxy.example.org`. Defaults to `http://localhost:8080`. |
 | `SESSION_SECRET` | strongly recommended | Any long random string; keys the consent and OAuth cookies. |
 | `PORT` | no | Listening port, default `8080`. The proxy always binds `0.0.0.0`. |
-| `CATALOG_PATH` | no | Catalog location. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog.json`. |
+| `CATALOG_PATH` | no | Catalog location. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. |
 | `ALLOWED_AGENTS` | no | Comma-separated agent ids. When set, only these agents may own connections. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids that may not own connections. |
 | `OPERATOR_NAME` | no, recommended | Who runs this proxy, as the landing page and the consent page name them ("Use Example Org to sync …", "run by Example Org"). The consent page also shows the host of `BASE_URL`. Defaults to `this integration proxy`, and the pages then name no one. 0.2.1 and later. |
@@ -309,7 +309,7 @@ to a commit and serve it locally:
 
 ```sh
 SHA=<an ontola/atomic-plugins commit>
-curl -fsSL "https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/catalog.json" \
+curl -fsSL "https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/catalog/2026-10-02.json" \
   | sed "s#https://ontola.github.io/atomic-plugins/overlays/#https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/#g" \
   > /etc/integration-proxy/catalog.json
 # then: CATALOG_PATH=/etc/integration-proxy/catalog.json

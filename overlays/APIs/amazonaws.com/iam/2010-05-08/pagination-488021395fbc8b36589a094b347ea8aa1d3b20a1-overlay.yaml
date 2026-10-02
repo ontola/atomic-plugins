@@ -1,0 +1,27 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/488021395fbc8b36589a094b347ea8aa1d3b20a1/APIs/amazonaws.com/iam/2010-05-08/openapi.yaml
+info:
+  title: AWS IAM API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        marker:
+          type: pageToken
+          description: >-
+            AWS IAM List operations use marker-based pagination. `Marker`
+            is the pagination token from a previous response, and `MaxItems`
+            limits the number of records returned per request. When the
+            response `IsTruncated` is true, a `Marker` value is included
+            for the next request.
+          request:
+            queryParameters:
+              Marker:
+                role: pageToken
+              MaxItems:
+                role: pageSize
+          response:
+            bodyFields:
+              Marker:
+                role: nextPageToken

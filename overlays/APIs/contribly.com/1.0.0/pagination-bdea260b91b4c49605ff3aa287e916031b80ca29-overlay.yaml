@@ -1,0 +1,25 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/bdea260b91b4c49605ff3aa287e916031b80ca29/APIs/contribly.com/1.0.0/openapi.yaml
+info:
+  title: Contribly API Pagination Schemes
+  version: 1.0.0
+actions:
+- target: "$.components"
+  update:
+    paginationSchemes:
+      pageNumber:
+        type: pageNumber
+        request:
+          queryParameters:
+            page:
+              role: page
+            pageSize:
+              role: pageSize
+        response:
+          headers:
+            X-total-count:
+              role: totalCount
+- target: "$.paths['/assignments'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber

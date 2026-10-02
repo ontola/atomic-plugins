@@ -263,7 +263,7 @@ bundle above and does not touch the Bank transactions table.
 - **Deferred.** The catalog card used to advertise contacts, sales invoices,
   purchase invoices, financial mutations "and the other collections". None of
   those but contacts is imported. `financial_mutations.json` has no
-  pagination overlay (`overlays/moneybird.com/api/v2/pagination-overlay.yaml`)
+  pagination overlay (`overlays/APIs/moneybird.com/v2-readonly/pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`)
   and needs a period `filter`, so it is the likely next collection, but it is
   not attempted here.
 - **Flow.** Connect Moneybird (host consent bar, then the proxy's own
@@ -307,13 +307,18 @@ administration on page 2 with 503; both are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
 administration and API token**; the steps are in `scenario.mjs`'s header.
 
-**Install.** Test-side only: `e2e/moneybird.spec.ts` creates a `New app`
-and replaces its entry point with `node
-integrations/money/moneybird/build.mjs`'s bundle. The `moneybird` catalog
-entry stays `enabled: false` and has no `app-module`: the app is not
-published under `apps/` yet (see
-[Publishing a drive app](../README.md#publishing-a-drive-app)), so the
-catalog's Drive apps install cannot offer it.
+**Install.** From the catalog's Drive apps section, like the other drive
+apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).
+Version 0.1.0 is published at `apps/moneybird/0.1.0/ui.js`; its version is
+recorded in `moneybird/package.json`, not in this folder's `package.json`
+(that one is the Bank statements importer's). `apps.mjs` finds the app here,
+not at `integrations/moneybird/app/`, through its `APP_FOLDERS` map. The
+`moneybird` catalog entry stays `enabled: false` until a real recording
+exists, so the published catalog does not list it; the lane's dev-server
+serves it enabled for `e2e/moneybird.spec.ts`, which installs it from the
+card. To release a new version, bump `moneybird/package.json` and the
+catalog entry's `version`, then run
+`node integrations/tooling/apps.mjs write moneybird`.
 
 Tests: the money vitest command above includes `moneybird/*.test.ts`. The
 host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It first

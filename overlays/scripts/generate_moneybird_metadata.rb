@@ -3,9 +3,16 @@
 
 require 'json'
 require 'yaml'
+require 'open3'
 
 source_dir = ARGV.fetch(0)
-target_dir = File.expand_path('../moneybird.com/api/v2', __dir__)
+target_dir = File.expand_path('../APIs/moneybird.com/v2-readonly', __dir__)
+shallow, status = Open3.capture2('git', '-C', source_dir, 'rev-parse', '--is-shallow-repository')
+abort('source_dir must be a full-history OAD checkout') unless status.success? && shallow.strip == 'false'
+sha, status = Open3.capture2('git', '-C', source_dir, 'log', '-1', '--format=%H', '--', 'openapi.yaml')
+sha = sha.strip
+abort('source_dir must be a full-history OAD checkout') unless status.success? && sha.match?(/\A[0-9a-f]{40}\z/)
+source_url = "https://raw.githubusercontent.com/ontola/openapi-directory/#{sha}/APIs/moneybird.com/v2-readonly/openapi.yaml"
 document = YAML.load_file(File.join(source_dir, 'openapi.yaml'))
 inventory = JSON.parse(File.read(File.join(source_dir, 'collections.json'))).fetch('collections')
 
@@ -145,5 +152,9 @@ end
   'crud-causality-overlay.yaml' => crud,
   'pagination-overlay.yaml' => pagination,
   'auth-overlay.yaml' => auth
-}.each { |name, value| File.write(File.join(target_dir, name), YAML.dump(value, line_width: -1)) }
+}.each do |name, value|
+  value = { 'overlay' => value.delete('overlay'), 'extends' => source_url }.merge(value)
+  versioned_name = name.sub('-overlay.yaml', "-#{sha}-overlay.yaml")
+  File.write(File.join(target_dir, versioned_name), YAML.dump(value, line_width: -1))
+end
 File.write(File.join(target_dir, 'all-records-selection.json'), JSON.pretty_generate(selection) + "\n")

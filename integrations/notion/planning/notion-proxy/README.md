@@ -4,8 +4,8 @@
 > documents it names were published since and are not copied here:
 > `notion.openapi.yaml` is `localthought/openapi-directory@0c8e229`
 > `APIs/notion.com/2026-03-11/openapi.yaml` (the same document), and
-> `auth-overlay.yaml` is `overlays/notion.com/2026-03-11/auth-overlay.yaml`,
-> both listed in `overlays/catalog.json`. The composed result is
+> `auth-overlay.yaml` is `overlays/APIs/notion.com/2026-03-11/auth-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml`,
+> both listed in `overlays/catalog/2026-10-02.json`. The composed result is
 > [`../../catalog/notion.json`](../../catalog/). `offline-certification.json`
 > is the sandbox plugin's last offline run, kept as a record.
 
@@ -28,7 +28,7 @@ Before enabling real connections:
 
 1. Review and publish the API document in `localthought/openapi-directory` and
    the overlay in `localthought/overlays`.
-2. Add a `notion` entry to the existing root `overlays/catalog.json`, using
+2. Add a `notion` entry to the existing root `overlays/catalog/2026-10-02.json`, using
    immutable public commit URLs and preserving all other entries.
 3. Verify the merged proxy release is deployed and point its catalog at the
    reviewed catalog revision.

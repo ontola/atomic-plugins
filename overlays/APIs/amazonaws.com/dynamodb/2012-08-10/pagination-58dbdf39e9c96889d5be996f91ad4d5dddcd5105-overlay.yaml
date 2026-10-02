@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/58dbdf39e9c96889d5be996f91ad4d5dddcd5105/APIs/amazonaws.com/dynamodb/2012-08-10/openapi.yaml
+info:
+  title: AWS DynamoDB API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            DynamoDB operations use a NextToken (or ExclusiveStartKey for
+            Query/Scan) in the JSON request body to resume pagination. The
+            response returns a NextToken when more results are available.
+            Limit controls the maximum number of items evaluated per request.
+          request:
+            bodyFields:
+              NextToken:
+                role: pageToken
+              Limit:
+                role: pageSize
+          response:
+            bodyFields:
+              NextToken:
+                role: nextPageToken

@@ -1,0 +1,63 @@
+---
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dc7b2bdb8b9435ce7da15e48ff3955853bcc589c/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+info:
+  title: Clockify API Authentication Profile
+  version: 1.2.0
+# x-api-key-details is openapi-extensions/spec/api-key-details (0.1.0-draft).
+# helpUrl is Clockify's help article on generating a key, checked on
+# 2026-10-01; app.clockify.me/manage-api-keys (the Timesheets README's link)
+# was not checked against a signed-in Clockify UI, so it is not used here.
+# keyCheck is GET /v1/user (getClockifyCurrentUser, added by
+# crud-causality-overlay.yaml, which the catalog applies before this one).
+# Clockify's API docs list `email` among its response fields; on 2026-10-01
+# an invalid key got 401 {"message":"Api key does not exist","code":4003}.
+actions:
+- target: "$.components.securitySchemes"
+  update:
+    clockifyApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: >-
+        A personal API key. In Clockify, open Preferences from your profile
+        menu, go to the Advanced tab and use Manage API keys, then Generate
+        new. Clockify shows a new key only once. Clockify has no OAuth2 login;
+        this is the only supported authentication mode.
+      x-api-key-details:
+        helpUrl: https://clockify.me/help/troubleshooting/general-api-troubleshooting/where-to-generate-api-key-for-account
+        keyCheck:
+          operationId: getClockifyCurrentUser
+          label: $response.body#/email
+- target: "$.paths['/v1/workspaces/{workspaceId}/user/{userId}/time-entries'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces/{workspaceId}/time-entries/{id}'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces/{workspaceId}/projects'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces/{workspaceId}/projects/{id}'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces/{workspaceId}/users'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces/{workspaceId}/users/{id}'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/user'].get"
+  update:
+    security:
+    - clockifyApiKey: []
+- target: "$.paths['/v1/workspaces'].get"
+  update:
+    security:
+    - clockifyApiKey: []

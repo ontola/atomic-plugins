@@ -179,7 +179,7 @@ Clockify's personal API keys are sent as `X-Api-Key`. Its `GET /v1/user`
 returns the key's user, including `email`; on 2026-10-01 an invalid key got
 `401` with `{"message":"Api key does not exist","code":4003}`. The overlay in
 this repository is
-[`overlays/clockify.me/1.0.0-readonly/auth-overlay.yaml`](../../../overlays/clockify.me/1.0.0-readonly/auth-overlay.yaml);
+[`overlays/APIs/clockify.me/1.0.0-readonly/auth-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml`](../../../overlays/APIs/clockify.me/1.0.0-readonly/auth-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml);
 its `helpUrl` is Clockify's help article on where API keys are generated.
 
 ## 7. Validation

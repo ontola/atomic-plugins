@@ -58,16 +58,24 @@ jobs:
         working-directory: overlays
     steps:
       - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
       - run: pip install -r requirements-identity-tests.txt
+      - name: Fetch OAD history without checking out its documents
+        run: git clone --filter=blob:none --no-checkout --single-branch https://github.com/ontola/openapi-directory.git /tmp/openapi-directory
+      - name: Validate every overlay's OAD path and last-change pin
+        run: python scripts/validate_oad_pins.py --directory /tmp/openapi-directory --published origin/main --fetch-missing
+      - run: python tests/test_oad_pins.py
+      - name: Check reviewed pagination variants against their pinned OAD schemas
+        run: python tests/test_pagination_collection.py --directory /tmp/openapi-directory
       - name: Every catalog overlay is published from overlays/
         run: |
           python - <<'PY'
           import json, pathlib
           base = "https://ontola.github.io/atomic-plugins/overlays/"
           errors = []
-          for platform in json.loads(pathlib.Path("catalog.json").read_text())["platforms"]:
+          for platform in json.loads(pathlib.Path("catalog/2026-10-02.json").read_text())["platforms"]:
               sources = platform.get("overlays", [])
               if platform["openapi"].startswith(base):
                   sources = [platform["openapi"], *sources]

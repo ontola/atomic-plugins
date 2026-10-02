@@ -3,7 +3,7 @@
 # after https://github.com/localthought/overlays/pull/139 fixed the scheme's
 # invalid `type`/response `role`)
 # Now published from this monorepo at
-# https://ontola.github.io/atomic-plugins/overlays/giphy.com/1.0/pagination-overlay.yaml
+# https://ontola.github.io/atomic-plugins/overlays/APIs/giphy.com/1.0/pagination-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml
 overlay: 1.0.0
 info:
   title: Giphy API Pagination Schemes

@@ -20,11 +20,14 @@ describe('GitHub issues drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource; keep an eye on the size.
-    // Measured 137,315 bytes (134.1 KiB) on 2026-10-01, with the JS and the
-    // embedded stylesheets minified, after resolving uncertain creates
-    // (#156); 125,472 bytes on 2026-09-24 for the designed board/list/detail
-    // UI (#89). The limit is that plus 10%, rounded up to the next KiB.
-    expect(bytes).toBeLessThan(148 * 1024);
+    // Measured 154,931 bytes (151.3 KiB) on 2026-10-01 for 0.2.0, with the
+    // JS and the embedded stylesheets minified: the shared issue-v1 class,
+    // the bundled ontology-kit terms and resolver, Blocked, Publish to
+    // GitHub and baselines on the rows (#177 item 6). Earlier: 137,315 bytes
+    // on 2026-10-01 after resolving uncertain creates (#156); 125,472 bytes
+    // on 2026-09-24 for the designed board/list/detail UI (#89). The limit is
+    // the latest plus 10%, rounded up to the next KiB.
+    expect(bytes).toBeLessThan(167 * 1024);
   });
 
   it('has no storage or network access of its own', () => {

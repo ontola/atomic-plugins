@@ -1,0 +1,74 @@
+# Source: https://docs.slack.dev/apis/web-api/pagination/
+# Verified against the pinned OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/slack.com/1.7.0/openapi.yaml
+info:
+  title: Slack cursor pagination with operation-specific item envelopes
+  version: 2.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        cursorPages:
+          type: pageToken
+          autoDetect: false
+          description: Send response_metadata.next_cursor as cursor on the next request. Stop
+            only when that cursor is empty, null or absent; a short page can still have a
+            next cursor. Page-size limits vary by method.
+          request:
+            queryParameters:
+              cursor:
+                role: cursor
+              limit:
+                role: pageSize
+          response:
+            bodyFields:
+              response_metadata.next_cursor:
+                role: nextCursor
+      schemas:
+        slackCursorResponseMetadata:
+          type: object
+          description: Cursor metadata documented for users.list; other response metadata
+            is permitted. The pinned objs_response_metadata places object fields under items
+            instead of properties.
+          properties:
+            next_cursor:
+              type: string
+              nullable: true
+              description: An empty, null or absent cursor marks the last page.
+  - target: $.paths['/users.list'].get.responses['200'].content['application/json'].schema.properties
+    update:
+      response_metadata:
+        $ref: '#/components/schemas/slackCursorResponseMetadata'
+  - target: $.paths['/conversations.list'].get
+    update:
+      x-pagination:
+        - scheme: cursorPages
+          overrides:
+            response:
+              envelope:
+                itemsField: channels
+  - target: $.paths['/conversations.members'].get
+    update:
+      x-pagination:
+        - scheme: cursorPages
+          overrides:
+            response:
+              envelope:
+                itemsField: members
+  - target: $.paths['/users.conversations'].get
+    update:
+      x-pagination:
+        - scheme: cursorPages
+          overrides:
+            response:
+              envelope:
+                itemsField: channels
+  - target: $.paths['/users.list'].get
+    update:
+      x-pagination:
+        - scheme: cursorPages
+          overrides:
+            response:
+              envelope:
+                itemsField: members

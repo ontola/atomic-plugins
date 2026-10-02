@@ -10,7 +10,10 @@ it writes reviewed edits back to Clockify (#123 M3, below), since 0.3.0
 range edits and conflict resolutions (#123 M4), and since 0.4.0 it
 coordinates two open copies (#123 M5: the send lease, range edits made
 apart, two devices compacting the log); all are mock-tested only, so those
-capabilities are declared, not verified. The first sections describe the Clockify
+capabilities are declared, not verified. Since 0.5.0 its rows are the
+shared `time-entry-v1` class, linked to rows of its own Projects and People
+tables (#177 item 7, below), which keeps its catalog entry disabled until
+the ontology moves to a stable domain. The first sections describe the Clockify
 lens and the LocalThought extension flow it was written for; the pinned host
 no longer has that flow.
 
@@ -60,7 +63,7 @@ Live account data must never be checked into fixtures.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 144 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 161 KB, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -99,14 +102,72 @@ into the view root.
   the account id and the look-back on the App resource, as three Properties
   (`clockify-workspace`, `clockify-account`, `clockify-lookback-days`).
   "Change settings" reopens the same form.
-- **Schema.** A host's `/app-write` rejects a property URL that does not
-  resolve to a Property. So `app/schema.ts` creates one Property per field
-  under the row class's ontology (inside the app's own subtree), finds them
-  again by shortname on later runs, and adds the row fields to the row
-  class's `recommends` so the table shows them: `start`/`end` (timestamp),
-  `billable` (boolean), `clockify-entry-id`, `clockify-project-id`,
-  `project`, `clockify-user-id`, `member` (string). The same pattern as the
-  Pets and Notion drive apps.
+- **Shared classes** (#177 item 7, 0.5.0). Mock-tested only, like the
+  rest; every class and property is declared, not verified:
+  - _Rows_ are the shared `time-entry-v1` class
+    (`https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1`,
+    `ontology-kit/source.json`): Atomic's `name` (the description),
+    `work-start` and `work-end` (timestamps, ms), `work-billable`, and
+    `work-project` and `work-person`, links (#177 Q11). `app/fields.ts`
+    takes the subjects from `ontology-kit/terms.mjs`, which the build
+    inlines, and every shared field is read and written through
+    `ontology-kit`'s strict resolver: by exact subject, never by shortname
+    or column.
+  - _Projects and People_ are two more tables the app makes under its App
+    on first use, "Projects" (`work-project-v1`) and "People"
+    (`work-person-v1`), each row with only a `name` from the shared class
+    (`app/links.ts`). The app owns them: a sync makes a row per active
+    Clockify project it reads (archived ones only when an entry uses
+    them) and per user an entry names, and sets their names to Clockify's,
+    so a name changed in those tables is set back on the next sync. A
+    project or user Clockify gave no name for (its list was refused) gets
+    "Clockify project <id>" or "Clockify user <id>". They are found again
+    by class among the App's children, so the App needs no pointer to them.
+  - _Provider extras_ stay Properties of the app's own ontology, created by
+    `app/schema.ts` under the App's `default-ontology` and found again by
+    shortname (a host's `/app-write` rejects a property URL that does not
+    resolve to a Property): on each time entry row `clockify-entry-id` and
+    the sync bookkeeping below; `clockify-project-id` on project rows and
+    `clockify-user-id` on person rows; the settings and the observation log
+    on the App. None is a column. The time entry rows' five extras are
+    declared on the App as `row-extras` (atomic-server #1849). The host's
+    `timeTrackingSchema` names a `work-source-id`
+    (`clockify:<workspace>:<entry id>`, #177 §2.4); it is not part of the
+    shared ontology, so `clockify-entry-id` stays the row's identity.
+  - _A project on a row_ is the linked project row: one with a
+    `clockify-project-id` stands for that Clockify project; one without
+    (added by hand, here or in a table of one's own) stands for "the active
+    project with this name", resolved when the change is listed to send,
+    as a project name typed into the table was up to 0.4.0 (two or no
+    active projects of that name block the change). Removing the link is
+    "no project". Who tracked an entry (`work-person`) is shown, never sent.
+  - _First open_ (`app/adopt.ts`, as the calendar app's 0.2.0): an
+    installation from before 0.5.0 has a row class of its own. Its rows
+    move onto `time-entry-v1` in place, not re-projected from the log, so
+    an unsent edit survives (#177 Q10): start, end and billable move to the
+    shared properties, the old project id and name and user id and name
+    become links (an unsent project name typed into the table becomes a
+    link to a project row of that name without an id), `isA` becomes
+    `time-entry-v1`, and the old properties are removed from the row. Only
+    then the table's `classtype` becomes `time-entry-v1`, `time-entry-v1`
+    is added to the App's `renders`, and `row-extras` is set. Each step is
+    skipped once done. The old class and Properties stay in the app's
+    ontology, unused.
+  - _Another `time-entry-v1` table_: since the App renders the class, the
+    host's "+ Add view" offers the app on any table of it, including one
+    made by hand (New Table → use an existing class → paste the class URL
+    above; its search does not find Pages classes, #177 H10). There the
+    app shows that table's completed rows in its week, entries and
+    projects views, read only, with "Not synced with Clockify", and syncs
+    nothing: there is no observation log for that table, so no window,
+    coverage or conflicts. "Sync this table to Clockify" (#177 §6.2 item 14) is not built.
+  - _Not verified:_ the published terms are fetched from GitHub Pages by
+    the server and the browser (the e2e needs ontola.github.io); a cold
+    browser or server during a Pages outage fails as #177 spike S1 found
+    (H1). Not tried: a drive with many projects (each sync reads every
+    project row once and renames where Clockify's name differs). Tables
+    the host's Time tracker template makes have a class of their own, so
+    the app is not offered on them (a lens is #177 §3.1, not built).
 - **Observation log** (#123 M1, design #97). Once set up, the app syncs on
   open and on "Sync now". Each pass records what it _saw_ in Clockify, not
   what Clockify "is":
@@ -148,7 +209,7 @@ into the view root.
   - **Rows.** The table's rows follow the mirror: completed `REGULAR`
     entries through the one Clockify lens (`devonian/clockify/`; running
     timers and breaks skipped), by `clockify-entry-id` among the table's
-    children, with project and user names. A row whose entry Clockify
+    children, linked to their project and person rows. A row whose entry Clockify
     confirmed deleted is removed. Since 0.2.0 an edit made in the table is
     kept and listed to send (write-back, below), no longer overwritten
     (#177 Q5 reverses #97 answer 2); the table's description says so.
@@ -213,7 +274,7 @@ into the view root.
     `server/src/plugins/assets/view-client.js`, also at candidate14
     `1432e244a`), and the proxy catalog's Clockify entry lists the
     time-entry write overlay
-    (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`).
+    (`overlays/APIs/clockify.me/1.0.0-readonly/time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml`).
 - **Range edits and conflict resolution** (#123 M4, §3.2–§3.4; 0.3.0).
   Mock-tested only:
   - _What:_ "Edit a time range…" marks `[from, to)` (profile time zone,
@@ -387,7 +448,11 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
 - **Unit** (`app/*.test.ts`, mock fixture `fixtures/clockify/scenario.mjs`
   through an in-memory store that rejects unknown properties like the host
   does): setup, schema creation, window, paging, idempotency, updates,
-  failures. The observation log's #123 scenarios S1–S5, S8 and S27
+  failures. The shared classes (#177): rows as `time-entry-v1` with
+  project and person links and a Projects row per active project
+  (`app/sync.test.ts`), the first open moving a 0.4.0 table in place with
+  an unsent edit kept, and the app as a read-only view of another
+  `time-entry-v1` table (`app/adopt.test.ts`). The observation log's #123 scenarios S1–S5, S8 and S27
   (`app/observationLog.test.ts`), and fold property tests over 40 seeded
   random observation sets (`app/observations.test.ts`): appending equals
   refolding, any permutation folds the same, snapshot + tail equals the
@@ -402,7 +467,7 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   (`devonian/clockify/lens/writeBack.test.ts`); bookkeeping on the row,
   compare on open, Clockify winning a both-sides change, and #123's S9
   (as a field edit), S13, S14, S16–S18, S20, S23–S26, deletes, project
-  names typed into the table and `forceProjects`
+  linked by hand (resolved by name) and `forceProjects`
   (`app/writeBack.test.ts`); the controller's edit/delete/discard/send
   (`app/controllerViews.test.ts`); and the drawer's edit form through to
   a send in the DOM (`app/ui/ui.test.ts`, frames N1 and N2).
@@ -448,6 +513,15 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   Research" in the range form, checks nothing is written before Send and
   that both survive a reload, sends them as a `DELETE` then a `POST`, and
   reopens with one row for the new entry and nothing left to send.
+  From 0.5.0 (#177): `beforeAll` checks GitHub Pages serves
+  `time-entry-v1`, `work-project-v1`, `work-person-v1` and their properties
+  with the committed bytes (`ontology-kit/served.mjs`), since the real
+  Pages subjects are used, never rewritten; the first test checks the
+  table is `time-entry-v1` with the published columns and that a row
+  links to its "Atomic plugins" project row and "Test Person" person row;
+  a fourth makes a `time-entry-v1` table by hand, adds the app to it under
+  Add view (read only) and sees its entry and linked project, with
+  nothing written to that table.
   Provider changes
   and failures are driven through the mock proxy's local-only
   `POST /__fixture/clockify`.
@@ -498,8 +572,11 @@ Read from the pinned atomic-server, and reproduced by the e2e where noted.
   re-reads them when the host reports a change.
 - **Removing a value.** Earlier pins dropped `resource.remove()` in the
   frame. The current pin sends it as an `/app-write` `remove`
-  (atomic-server#1690). This app does not remove values, so nothing here
-  verifies that path.
+  (atomic-server#1690). Since 0.5.0 the app removes values: the old fields
+  of a row it moves onto `time-entry-v1`, and a row's project link when the
+  project goes. The e2e reaches the first only on an install from before
+  0.5.0, which it does not make; the unit tests model `remove` in the fake
+  store.
 - App writes are signed by the node that holds the app's key, so they work
   on one node only for now (#41).
 

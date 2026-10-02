@@ -1,0 +1,25 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/28830601172fdb0f4c5455e542c67f76738134a3/APIs/amazonaws.com/cloudtrail/2013-11-01/openapi.yaml
+info:
+  title: AWS CloudTrail API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            CloudTrail list operations (e.g. LookupEvents, ListTrails,
+            ListEventDataStores) use NextToken-based pagination in the JSON
+            request body. `MaxResults` limits the results per request.
+          request:
+            bodyFields:
+              NextToken:
+                role: pageToken
+              MaxResults:
+                role: pageSize
+          response:
+            bodyFields:
+              NextToken:
+                role: nextPageToken

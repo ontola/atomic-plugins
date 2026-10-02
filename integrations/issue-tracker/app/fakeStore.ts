@@ -20,12 +20,25 @@ import type {
   PluginResource,
   PluginStore,
 } from './store.js';
-import { IS_A, NAME, PARENT, PROPERTIES, RECOMMENDS } from './tracker.js';
+import {
+  CLASSTYPE,
+  DEFAULT_ONTOLOGY,
+  IS_A,
+  NAME,
+  PARENT,
+  PROPERTIES,
+  RECOMMENDS,
+  SHORTNAME,
+} from './tracker.js';
 
 export const APP = 'did:ad:app';
 export const ONTOLOGY = 'did:ad:ontology';
 export const ROW_CLASS = 'did:ad:class-item';
 export const TABLE = 'did:ad:table-items';
+/** The drive's plugin vocabulary, as `pluginSchema()` mints it per drive. */
+export const APP_CLASS = 'did:ad:plugin-class-app';
+export const RENDERS = 'did:ad:plugin-renders';
+export const ROW_EXTRAS = 'did:ad:plugin-row-extras';
 
 export interface FakeStore extends PluginStore {
   readonly resources: Map<string, Record<string, JSONValue>>;
@@ -57,19 +70,41 @@ export interface FakeStore extends PluginStore {
 
 export function fakeStore({
   connected = true,
+  existing = false,
   relay = true,
   hostApis = true,
+  table = TABLE,
 }: {
+  /** The table the app is shown on; another one is a view on someone's table. */
+  table?: string;
   connected?: boolean;
+  /**
+   * The person has a GitHub connection this app is not delegated yet:
+   * `proxy.connect` resolves `connected` (the host's "Use existing
+   * connection", no reload) instead of never settling.
+   */
+  existing?: boolean;
   relay?: boolean;
   /** The host calls of atomic-server pin 007869464 (getMany, openExternal, …). */
   hostApis?: boolean;
 } = {}): FakeStore {
+  // As `createApp` lays it out at the pin.
   const resources = new Map<string, Record<string, JSONValue>>([
-    [APP, { [NAME]: 'New app' }],
+    [
+      APP,
+      {
+        [NAME]: 'New app',
+        [IS_A]: [APP_CLASS],
+        [DEFAULT_ONTOLOGY]: ONTOLOGY,
+        [RENDERS]: [ROW_CLASS],
+      },
+    ],
+    [APP_CLASS, { [SHORTNAME]: 'app', [RECOMMENDS]: [RENDERS, ROW_EXTRAS] }],
+    [RENDERS, { [SHORTNAME]: 'renders' }],
+    [ROW_EXTRAS, { [SHORTNAME]: 'row-extras' }],
     [ONTOLOGY, { [PARENT]: APP, [PROPERTIES]: [] }],
     [ROW_CLASS, { [PARENT]: ONTOLOGY, [NAME]: 'Item', [RECOMMENDS]: [NAME] }],
-    [TABLE, { [PARENT]: APP, [NAME]: 'Items' }],
+    [TABLE, { [PARENT]: APP, [NAME]: 'Items', [CLASSTYPE]: ROW_CLASS }],
   ]);
   /** What a lagging read still returns, and for how many more reads. */
   const stale = new Map<
@@ -188,7 +223,16 @@ export function fakeStore({
     async connections({ platform }) {
       return connected ? [{ connectionId: 'c1', platform }] : [];
     },
-    connect: () => new Promise(() => {}),
+    connect: ({ platform }) => {
+      if (!existing) return new Promise(() => {});
+      connected = true;
+
+      return Promise.resolve({
+        status: 'connected' as const,
+        connectionId: 'c1',
+        platform,
+      });
+    },
     ...(hostApis
       ? {
           async disconnect({ platform }: { platform: string }) {
@@ -226,7 +270,14 @@ export function fakeStore({
       if (lag) lag.props = { ...lag.props, ...structuredClone(props) };
     },
     getApp: async () => APP,
-    getData: async () => ({ table: TABLE, rowClass: ROW_CLASS }),
+    getData: async () => {
+      const classtype = resources.get(table)?.[CLASSTYPE];
+
+      return {
+        table,
+        ...(typeof classtype === 'string' ? { rowClass: classtype } : {}),
+      };
+    },
     async getResource(subject) {
       count('getResource');
       const lag = stale.get(subject);

@@ -27,6 +27,8 @@ it('declares and prepares scoped issue/comment actions with validated arguments'
     ['update_issue', { number: 5, title: 'Title', body: '', state: 'closed' }],
     ['add_doing_label', { number: 5 }],
     ['remove_doing_label', { number: 5 }],
+    ['add_blocked_label', { number: 5 }],
+    ['remove_blocked_label', { number: 5 }],
   ]) {
     const intent = trackerAction('owner/repo', action, args);
     expect(
@@ -100,6 +102,14 @@ function github() {
           value = issues.get(args.number);
           value.labels = value.labels.filter(l => l !== 'atomic:doing');
           break;
+        case 'add_blocked_label':
+          value = issues.get(args.number);
+          value.labels.push('atomic:blocked');
+          break;
+        case 'remove_blocked_label':
+          value = issues.get(args.number);
+          value.labels = value.labels.filter(l => l !== 'atomic:blocked');
+          break;
         case 'create_comment':
           value = {
             id: comments.size + 1,
@@ -142,6 +152,21 @@ it('creates closed/doing issues and reopens while preserving unrelated labels', 
   await port.update('issue', 1, { ...value, status: 'Doing' }, 'doing');
   expect(issues.get(1).labels).toEqual(['bug', 'atomic:doing']);
   await port.update('issue', 1, value, 'close');
+  await port.update('issue', 1, { ...value, status: 'Todo' }, 'reopen');
+  expect(issues.get(1).state).toBe('open');
+  expect(issues.get(1).labels).toEqual(['bug']);
+});
+
+it('moves an issue between Doing and Blocked with one workflow label each (#177 Q8)', async () => {
+  const { port, issues } = github();
+  const value = { title: 'First', body: '', status: 'Blocked' };
+  await port.update('issue', 1, value, 'block');
+  expect(issues.get(1).labels).toEqual(['bug', 'atomic:blocked']);
+  expect((await port.get('issue', 1)).value.status).toBe('Blocked');
+  await port.update('issue', 1, { ...value, status: 'Doing' }, 'unblock');
+  expect(issues.get(1).labels).toEqual(['bug', 'atomic:doing']);
+  await port.update('issue', 1, { ...value, status: 'Done' }, 'close');
+  expect(issues.get(1).labels).toEqual(['bug', 'atomic:doing']);
   await port.update('issue', 1, { ...value, status: 'Todo' }, 'reopen');
   expect(issues.get(1).state).toBe('open');
   expect(issues.get(1).labels).toEqual(['bug']);

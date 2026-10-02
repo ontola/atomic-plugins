@@ -7,7 +7,7 @@
  * pins (localthought/openapi-directory@85a61052,
  * APIs/moneybird.com/v2-readonly/openapi.yaml: `administration_response` and
  * `contact`, including that document's own examples) and the overlays in
- * overlays/moneybird.com/api/v2/ (page/per_page pagination on contacts.json;
+ * overlays/APIs/moneybird.com/v2-readonly/ (page/per_page pagination on contacts.json;
  * `include_archived` in all-records-selection.json). Every name, address,
  * e-mail address, IBAN and identifier is invented; none belongs to a real
  * administration.

@@ -1,0 +1,13 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+info:
+  title: Discord API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.paths['/users/@me/guilds'].get
+    update:
+      description: >-
+        The initial read-only integration requests the maximum 200 guilds in
+        one page. Discord also supports `before` and `after` cursors, but the
+        current Syncables consumer cannot derive a cursor from a plain array
+        response, so automatic cursor traversal is deliberately not declared.

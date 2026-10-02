@@ -28,9 +28,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// browser/lib/node_modules/fast-json-stable-stringify/index.js
+// ../../../../atomic-server-pin/browser/node_modules/.pnpm/fast-json-stable-stringify@2.1.0/node_modules/fast-json-stable-stringify/index.js
 var require_fast_json_stable_stringify = __commonJS({
-  "browser/lib/node_modules/fast-json-stable-stringify/index.js"(exports, module) {
+  "../../../../atomic-server-pin/browser/node_modules/.pnpm/fast-json-stable-stringify@2.1.0/node_modules/fast-json-stable-stringify/index.js"(exports, module) {
     "use strict";
     module.exports = function(data, opts) {
       if (!opts) opts = {};
@@ -85,21 +85,27 @@ var require_fast_json_stable_stringify = __commonJS({
 });
 
 // integrations/issue-tracker/devonian/github-issues/lens/index.ts
+var STATUSES = ["Todo", "Doing", "Blocked", "Done"];
+var STATUS_LABELS = {
+  Doing: "atomic:doing",
+  Blocked: "atomic:blocked"
+};
+var WORKFLOW_LABELS = Object.values(STATUS_LABELS);
+var labelName = (label) => (typeof label === "string" ? label : label.name).toLowerCase();
 function project(issue) {
   if (!Number.isSafeInteger(issue.number) || issue.number <= 0 || typeof issue.title !== "string" || !(issue.body === null || typeof issue.body === "string") || !["open", "closed"].includes(issue.state) || !Array.isArray(issue.labels))
     throw new Error("GitHub returned an invalid issue");
+  const names = issue.labels.map(labelName);
   return {
     title: issue.title,
     body: issue.body ?? "",
-    status: issue.state === "closed" ? "Done" : issue.labels.some(
-      (l) => (typeof l === "string" ? l : l.name).toLowerCase() === "atomic:doing"
-    ) ? "Doing" : "Todo"
+    status: issue.state === "closed" ? "Done" : names.includes(STATUS_LABELS.Blocked) ? "Blocked" : names.includes(STATUS_LABELS.Doing) ? "Doing" : "Todo"
   };
 }
 function validate(value) {
-  if (typeof value.title !== "string" || !value.title.trim() || typeof value.body !== "string" || !["Todo", "Doing", "Done"].includes(value.status))
+  if (typeof value.title !== "string" || !value.title.trim() || typeof value.body !== "string" || !STATUSES.includes(value.status))
     throw new Error(
-      "Cards require a title, Markdown body and exactly one Todo/Doing/Done status"
+      "Cards require a title, Markdown body and exactly one Todo/Doing/Blocked/Done status"
     );
 }
 function issuePatch(desired, previous) {
@@ -111,7 +117,7 @@ function issuePatch(desired, previous) {
   return patch;
 }
 
-// browser/lib/src/subject.ts
+// ../../../../atomic-server-pin/browser/lib/src/subject.ts
 var ATOMIC_PREFIX = "atomic:";
 var DID_AD_PREFIX = "did:ad:";
 function isLegacyAtomicLink(raw) {
@@ -136,7 +142,7 @@ function canonicalIdentifier(raw) {
   return canonicalizeScheme(raw.split(/[?#]/)[0]);
 }
 
-// browser/lib/src/import-records.ts
+// ../../../../atomic-server-pin/browser/lib/src/import-records.ts
 var IMPORT_LOCAL_ID = "https://atomicdata.dev/properties/localId";
 var PARENT = "https://atomicdata.dev/properties/parent";
 var pure = (subject) => typeof subject === "string" ? canonicalIdentifier(subject) : subject;
@@ -152,7 +158,7 @@ function claimImportIdentity(host, parent2, sourceId, subject) {
   return { [IMPORT_LOCAL_ID]: sourceId };
 }
 
-// browser/lib/src/plugin-reconcile.ts
+// ../../../../atomic-server-pin/browser/lib/src/plugin-reconcile.ts
 var import_fast_json_stable_stringify = __toESM(require_fast_json_stable_stringify(), 1);
 var equal = (a, b) => (0, import_fast_json_stable_stringify.default)(a) === (0, import_fast_json_stable_stringify.default)(b);
 function reconcileRecord(base, local, remote) {
@@ -474,7 +480,7 @@ async function run(input) {
           {
             title: desired.title,
             body: desired.body,
-            labels: desired.status === "Doing" ? ["atomic:doing"] : []
+            labels: desired.status === "Doing" ? ["atomic:doing"] : desired.status === "Blocked" ? ["atomic:blocked"] : []
           }
         );
       const remote = project(issue(change.number));
@@ -503,28 +509,32 @@ async function run(input) {
           patch
         );
       cursor = next;
-    } else if (cursor.stage === "labels") {
+    } else if (cursor.stage === "labels" || cursor.stage === "labels-blocked") {
+      const blocked = cursor.stage === "labels-blocked";
+      const status = blocked ? "Blocked" : "Doing";
+      const label = blocked ? "atomic:blocked" : "atomic:doing";
+      const op = blocked ? "blocked" : "doing";
       const current = issue(cursor.number);
-      const doing = current.labels.some(
-        (l) => (typeof l === "string" ? l : l.name).toLowerCase() === "atomic:doing"
+      const has = current.labels.some(
+        (l) => (typeof l === "string" ? l : l.name).toLowerCase() === label
       );
-      const next = { ...cursor, stage: "local" };
-      if (desired.status === "Doing" && !doing)
+      const next = { ...cursor, stage: blocked ? "local" : "labels-blocked" };
+      if (desired.status === status && !has)
         return external(
-          "doing-add",
+          `${op}-add`,
           "POST",
           `${root}/${cursor.number}/labels`,
           "label",
           next,
           {
-            labels: ["atomic:doing"]
+            labels: [label]
           }
         );
-      if (desired.status !== "Doing" && doing)
+      if (desired.status !== status && has)
         return external(
-          "doing-remove",
+          `${op}-remove`,
           "DELETE",
-          `${root}/${cursor.number}/labels/atomic%3Adoing`,
+          `${root}/${cursor.number}/labels/${encodeURIComponent(label)}`,
           "label",
           next
         );

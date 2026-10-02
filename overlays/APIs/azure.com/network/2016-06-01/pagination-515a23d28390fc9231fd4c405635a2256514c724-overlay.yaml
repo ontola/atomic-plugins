@@ -1,0 +1,24 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/515a23d28390fc9231fd4c405635a2256514c724/APIs/azure.com/network/2016-06-01/swagger.yaml
+info:
+  title: Azure Network API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextLink:
+          type: nextLink
+          description: >-
+            Azure Network list operations use nextLink-style pagination
+            (x-ms-pageable). Responses include a `nextLink` field with the
+            full URL for the next page of results when more data is available.
+          autoDetect:
+            matchQueryParams: false
+            matchBodyFields: false
+            matchResponseFields: true
+            requireAll: false
+          response:
+            bodyFields:
+              nextLink:
+                role: nextLink

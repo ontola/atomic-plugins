@@ -1,22 +1,22 @@
 # Notion catalog document
 
 `notion.json` is what a LocalThought proxy serves for `notion`: the
-`overlays/catalog.json` `notion` entry composed the way integration-proxy
+`overlays/catalog/2026-10-02.json` `notion` entry composed the way integration-proxy
 composes it. That means the OpenAPI subset pinned at
 `localthought/openapi-directory@0c8e229`
 (`APIs/notion.com/2026-03-11/openapi.yaml`), plus these overlays in order:
 
-| Overlay (`overlays/notion.com/2026-03-11/`) | What it adds                                                                                                                                                                                                                                                             |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `auth-overlay.yaml`                         | OAuth authorization code, `owner=user`, Basic client auth, JSON token and refresh operations. It was already listed.                                                                                                                                                     |
-| `pagination-overlay.yaml`                   | `bodyCursor`: `start_cursor`/`page_size` in the POST body of `/search` and `/data_sources/{id}/query`. `queryCursor`: the same fields as query parameters on `GET /views`. Both are applied with explicit `x-pagination`; auto-detection is off.                         |
-| `crud-causality-overlay.yaml`               | Read-only `crudResources`: `data_source`, listed with `POST /search` filtered to data sources, and `page`, listed per data source with `POST /data_sources/{data_source_id}/query`. It also adds typed `NotionDataSource`/`NotionPage` schemas for the top-level fields. |
+| Overlay (`overlays/APIs/notion.com/2026-03-11/`)                       | What it adds                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `auth-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml`           | OAuth authorization code, `owner=user`, Basic client auth, JSON token and refresh operations. It was already listed.                                                                                                                                                     |
+| `pagination-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml`     | `bodyCursor`: `start_cursor`/`page_size` in the POST body of `/search` and `/data_sources/{id}/query`. `queryCursor`: the same fields as query parameters on `GET /views`. Both are applied with explicit `x-pagination`; auto-detection is off.                         |
+| `crud-causality-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml` | Read-only `crudResources`: `data_source`, listed with `POST /search` filtered to data sources, and `page`, listed per data source with `POST /data_sources/{data_source_id}/query`. It also adds typed `NotionDataSource`/`NotionPage` schemas for the top-level fields. |
 
 Two consumers use `notion.json` as JSON, so neither needs a YAML parser: the
 drive plugin (`../app/`), which bundles it, and the mock proxy's notion
 fixture (`../fixtures/notion/`), which serves it. `notion.provenance.json`
 records each source URL and its SHA-256. `../catalog.test.ts` fails when
-`overlays/catalog.json`'s notion entry, or any overlay file, stops matching
+`overlays/catalog/2026-10-02.json`'s notion entry, or any overlay file, stops matching
 that record. Regenerate both files then:
 
 ```sh
@@ -50,7 +50,7 @@ reflector's `resources.ts` reads neither key.
   new overlays for `notion`. They declare nothing writable.
 - Authored from Notion's reference documentation. Nothing here was recorded
   against a live workspace or run through a real proxy deployment.
-- `overlays/notion.com/1.0.0/pagination-overlay.yaml`, migrated from
+- `overlays/APIs/notion.com/1.0.0/pagination-bdea260b91b4c49605ff3aa287e916031b80ca29-overlay.yaml`, migrated from
   `localthought/overlays`, is not in `catalog.json` and is left untouched. It
   puts `start_cursor` in the query string, which is wrong for the two POST
   lists. It also uses a `hasMore` role that syncables' validator rejects.

@@ -1,0 +1,27 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f8ed884165408f581103a5c0d3bbeb20dfdfa3d1/APIs/amazonaws.com/ecs/2014-11-13/openapi.yaml
+info:
+  title: AWS ECS API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            ECS list operations (e.g. ListClusters, ListServices, ListTasks,
+            ListContainerInstances) use nextToken-based pagination in the
+            JSON request body. `maxResults` limits the number of results
+            per request, and `nextToken` from the previous response continues
+            pagination.
+          request:
+            bodyFields:
+              nextToken:
+                role: pageToken
+              maxResults:
+                role: pageSize
+          response:
+            bodyFields:
+              nextToken:
+                role: nextPageToken

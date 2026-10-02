@@ -17,6 +17,7 @@ import {
 import type { Settings } from './config.js';
 import { fakeStore, PARENT, TABLE } from './fakeStore.js';
 import { fixtureProxy } from './fixtureProxy.js';
+import { SHARED, WORK_PROJECT } from './fields.js';
 import { ObservationLog } from './observationLog.js';
 import { NAME } from './ontology.js';
 import { ensureSchema, type CompleteSchema } from './schema.js';
@@ -65,6 +66,21 @@ async function setup(options: { forceProjects?: boolean } = {}) {
     return store.getResource(subject);
   };
 
+  /** The Projects table's row of Clockify project `id`. */
+  const projectRow = (id: string) =>
+    [...store.resources.entries()].find(
+      ([, r]) =>
+        r[PARENT] === schema.tables.projects && r[schema.link.projectId] === id,
+    )![0];
+  /** A project row someone added by hand: a name, no Clockify id. */
+  const namedRow = async (name: string) =>
+    (
+      await store.newResource({
+        parent: schema.tables.projects,
+        isA: [WORK_PROJECT],
+        propVals: { [NAME]: name },
+      })
+    ).subject;
   const entry = (id: string) =>
     proxy.fixture.state.entries.find((e: { id: string }) => e.id === id);
   const sleeps: number[] = [];
@@ -111,7 +127,20 @@ async function setup(options: { forceProjects?: boolean } = {}) {
       { now: NOW, projects: PROJECTS },
     );
 
-  return { proxy, store, schema, sync, row, entry, send, writes, plan, sleeps };
+  return {
+    proxy,
+    store,
+    schema,
+    sync,
+    row,
+    entry,
+    send,
+    writes,
+    plan,
+    sleeps,
+    projectRow,
+    namedRow,
+  };
 }
 
 const edit = async (
@@ -227,7 +256,8 @@ describe('sending (review first)', () => {
     const start = Number((await t.row('entry-2')).get(t.schema.row.start));
     await edit(await t.row('entry-2'), {
       [NAME]: 'Weekly sync (notes)',
-      [t.schema.row.projectId]: PROJECT_2.id,
+      // Another project: a link to its row in the Projects table (#177 Q11).
+      [SHARED.project]: t.projectRow(PROJECT_2.id),
       // Seconds are snapped off a changed start (#97 answer 7).
       [t.schema.row.start]: start - 10 * MINUTE + 25_000,
     });
@@ -276,7 +306,7 @@ describe('sending (review first)', () => {
       project: PROJECT_2.name,
     });
     expect(row.get(t.schema.sync.outbox)).toBe('');
-    expect(row.get(t.schema.row.projectName)).toBe(PROJECT_2.name);
+    expect(row.get(SHARED.project)).toBe(t.projectRow(PROJECT_2.id));
     // The log saw it: the views follow without another sync.
     expect(log.mirror.records[`timeEntry/entry-2`].fields.description).toBe(
       'Weekly sync (notes)',
@@ -474,13 +504,13 @@ describe('sending (review first)', () => {
 });
 
 describe('what may be sent', () => {
-  it('resolves a project name typed into the table, and refuses an unknown or archived one', async () => {
+  it('resolves a link to a project row without a Clockify id by its name, and refuses an unknown or archived one', async () => {
     const t = await setup();
     await edit(await t.row('entry-2'), {
-      [t.schema.row.projectName]: PROJECT_2.name,
+      [SHARED.project]: await t.namedRow(PROJECT_2.name),
     });
     await edit(await t.row('entry-1'), {
-      [t.schema.row.projectName]: ARCHIVED_PROJECT.name,
+      [SHARED.project]: await t.namedRow(ARCHIVED_PROJECT.name),
     });
 
     const { review } = await t.sync();
@@ -496,7 +526,7 @@ describe('what may be sent', () => {
 
   it('refuses no project where the workspace requires one', async () => {
     const t = await setup({ forceProjects: true });
-    await edit(await t.row('entry-2'), { [t.schema.row.projectId]: '' });
+    await (await t.row('entry-2')).remove(SHARED.project).save();
 
     const { review } = await t.sync();
 

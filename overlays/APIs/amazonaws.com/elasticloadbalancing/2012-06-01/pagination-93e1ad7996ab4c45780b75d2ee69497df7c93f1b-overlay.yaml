@@ -1,0 +1,24 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/93e1ad7996ab4c45780b75d2ee69497df7c93f1b/APIs/amazonaws.com/elasticloadbalancing/2012-06-01/openapi.yaml
+info:
+  title: AWS Elastic Load Balancing API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        marker:
+          type: pageToken
+          description: >-
+            ELB list operations (e.g. DescribeLoadBalancers,
+            DescribeInstanceHealth) use Marker-based pagination. Pass the
+            `Marker` value from the previous response to retrieve the next
+            page of results.
+          request:
+            queryParameters:
+              Marker:
+                role: pageToken
+          response:
+            bodyFields:
+              NextMarker:
+                role: nextPageToken

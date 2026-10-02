@@ -34,6 +34,8 @@ struct PlatformConfig {
 
 #[derive(Deserialize)]
 struct Overlay {
+    #[serde(default)]
+    extends: Option<String>,
     actions: Vec<Action>,
 }
 
@@ -72,15 +74,15 @@ impl Catalog {
         Self::load_with_mirror(path, client, None).await
     }
 
-    /// Loads this checkout's `overlays/catalog.json`, reading every source
+    /// Loads this checkout's `overlays/catalog/2026-10-02.json`, reading every source
     /// under [`crate::config::OVERLAYS_PAGES_BASE`] from the checked-in
     /// `overlays/` folder instead of GitHub Pages, which only publishes it
     /// once merged to `main`. Other sources (the pinned
-    /// `localthought/openapi-directory` OADs) are still downloaded.
+    /// `ontola/openapi-directory` OADs) are still downloaded.
     #[cfg(test)]
     pub(crate) async fn load_checked_in(client: &reqwest::Client) -> Result<Self, String> {
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
-        let catalog = overlays.join("catalog.json");
+        let catalog = overlays.join("catalog/2026-10-02.json");
         Self::load_with_mirror(&catalog.to_string_lossy(), client, Some(&overlays)).await
     }
 
@@ -109,9 +111,7 @@ impl Catalog {
                         .map_err(|err| {
                             format!("cannot parse overlay for {}: {err}", platform.name)
                         })?;
-                for action in overlay.actions {
-                    merge_at_target(&mut document, &action.target, action.update)?;
-                }
+                apply_overlay(&mut document, overlay, &platform.openapi, &overlay_url)?;
             }
             if let Some(selection) = platform.selection {
                 selections.insert(platform.name.clone(), Value::Object(selection));
@@ -490,6 +490,31 @@ fn valid_platform_name(name: &str) -> Result<(), String> {
     }
 }
 
+fn apply_overlay(
+    document: &mut Value,
+    overlay: Overlay,
+    openapi: &str,
+    overlay_url: &str,
+) -> Result<(), String> {
+    if let Some(extends) = overlay.extends {
+        // Overlay 1.0 permits relative URI references, resolved against the
+        // overlay's own URL. Compare with the catalog's original OAD even
+        // after earlier overlays have modified the document.
+        let target = url::Url::parse(overlay_url)
+            .and_then(|base| base.join(&extends))
+            .map_err(|err| format!("invalid extends in {overlay_url}: {err}"))?;
+        if target.as_str() != openapi {
+            return Err(format!(
+                "overlay {overlay_url} extends {target}, but catalog OAD is {openapi}"
+            ));
+        }
+    }
+    for action in overlay.actions {
+        merge_at_target(document, &action.target, action.update)?;
+    }
+    Ok(())
+}
+
 fn merge_at_target(document: &mut Value, target: &str, update: Value) -> Result<(), String> {
     let keys = parse_target(target)?;
     let mut current = document;
@@ -740,18 +765,18 @@ mod tests {
     }
     use super::*;
 
-    /// The default catalog is `overlays/catalog.json` as GitHub Pages
+    /// The default catalog is `overlays/catalog/2026-10-02.json` as GitHub Pages
     /// publishes it, and every overlay it lists is a file in `overlays/`.
     #[test]
     fn default_catalog_is_the_published_checked_in_catalog() {
         use crate::config::{DEFAULT_CATALOG_PATH, OVERLAYS_PAGES_BASE};
         assert_eq!(
             DEFAULT_CATALOG_PATH,
-            format!("{OVERLAYS_PAGES_BASE}catalog.json")
+            format!("{OVERLAYS_PAGES_BASE}catalog/2026-10-02.json")
         );
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
         let config = parse_catalog_config(
-            &fs::read_to_string(overlays.join("catalog.json")).unwrap(),
+            &fs::read_to_string(overlays.join("catalog/2026-10-02.json")).unwrap(),
             "catalog.json",
         )
         .unwrap();
@@ -784,15 +809,16 @@ mod tests {
     #[tokio::test]
     async fn default_catalog_pets_is_a_credential_free_read_of_one_collection() {
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
-        let catalog: Value =
-            serde_json::from_str(&fs::read_to_string(overlays.join("catalog.json")).unwrap())
-                .unwrap();
+        let catalog: Value = serde_json::from_str(
+            &fs::read_to_string(overlays.join("catalog/2026-10-02.json")).unwrap(),
+        )
+        .unwrap();
         let pets = catalog["platforms"]
             .as_array()
             .unwrap()
             .iter()
             .find(|platform| platform["name"] == "pets")
-            .expect("overlays/catalog.json lists pets")
+            .expect("overlays/catalog/2026-10-02.json lists pets")
             .clone();
         let only_pets = tempfile_path("pets-catalog.json");
         fs::write(
@@ -834,7 +860,7 @@ mod tests {
             "/pets".to_owned(),
             format!("{base}/pets/1"),
             format!("{base}/owners"),
-            "/atomic-plugins/overlays/catalog.json".to_owned(),
+            "/atomic-plugins/overlays/catalog/2026-10-02.json".to_owned(),
             "/atomic-plugins/apps/pets/0.1.2/ui.js".to_owned(),
         ] {
             assert!(catalog.allows("pets", "GET", &path).is_none(), "{path}");
@@ -867,6 +893,15 @@ mod tests {
             .await
             .unwrap();
         for name in catalog.names() {
+            if name == "discord" {
+                // The dated catalog selects the full OAD. Its bot-token and
+                // OAuth mix remains declared until the auth follow-up lands.
+                assert!(catalog
+                    .security_scheme(&name)
+                    .unwrap_err()
+                    .contains("mixed-kind catalogs are not supported"));
+                continue;
+            }
             let scheme = catalog
                 .security_scheme(&name)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1526,6 +1561,46 @@ mod tests {
                 assert_eq!(&body[..], b"OAuth request could not be completed");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn catalog_load_checks_extends_before_applying_overlays() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let root = std::env::temp_dir().join(format!("overlay-extends-{}", rand::random::<u64>()));
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let openapi = format!("{OVERLAYS_PAGES_BASE}base.yaml");
+        let overlay_url = format!("{OVERLAYS_PAGES_BASE}sub/overlay.yaml");
+        fs::write(
+            root.join("base.yaml"),
+            "openapi: 3.0.0\ninfo: {title: base, version: 1.0.0}\npaths: {}\n",
+        )
+        .unwrap();
+        let config = root.join("catalog.json");
+        fs::write(&config, serde_json::json!({"platforms": [{"name": "fixture", "openapi": openapi, "overlays": [overlay_url]}]}).to_string()).unwrap();
+        let client = reqwest::Client::new();
+        for extends in [None, Some(openapi.as_str()), Some("../base.yaml")] {
+            let mut overlay = serde_json::json!({"overlay": "1.0.0", "actions": [{"target": "$", "update": {"info": {"title": "overlaid"}}}]});
+            if let Some(extends) = extends {
+                overlay["extends"] = serde_json::json!(extends);
+            }
+            fs::write(root.join("sub/overlay.yaml"), overlay.to_string()).unwrap();
+            let loaded = Catalog::load_with_mirror(config.to_str().unwrap(), &client, Some(&root))
+                .await
+                .unwrap();
+            let document: Value = serde_yaml::from_str(loaded.get("fixture").unwrap()).unwrap();
+            assert_eq!(document["info"]["title"], "overlaid");
+        }
+        // Different OAD revisions must be refused before action resolution.
+        for extends in ["../other.yaml", "https://example.com/revision-b/base.yaml"] {
+            fs::write(root.join("sub/overlay.yaml"), serde_json::json!({"extends": extends, "actions": [{"target": "$.missing", "update": {}}]}).to_string()).unwrap();
+            let error = Catalog::load_with_mirror(config.to_str().unwrap(), &client, Some(&root))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains("but catalog OAD is"), "{error}");
+            assert!(error.contains(&overlay_url));
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

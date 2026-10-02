@@ -16,35 +16,111 @@ any file `overlays/<path>` is served at:
 https://ontola.github.io/atomic-plugins/overlays/<path>
 ```
 
-`catalog.json` lists each platform's overlays by those URLs, and the
+`catalog/2026-10-02.json` lists each platform's overlays by those URLs, and the
 integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog.json`. Before this
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit
-on `raw.githubusercontent.com`; the Pages URLs are not pinned, so a merge
-to `main` changes what the proxy composes at its next start. The OAD
-(`openapi`) URLs are still pinned to an `openapi-directory` commit
-(`localthought/`, or `ontola/` for Google Calendar).
+on `raw.githubusercontent.com`. Pages URLs are not Git-commit URLs, but
+CI preserves published dated catalogs and OAD-revision overlay files
+byte-for-byte on later merges. The OAD
+(`openapi`) URLs and every overlay's standard `extends` field pin the same
+`ontola/openapi-directory` document at the full commit SHA that last changed
+that file, rather than a later unrelated repository commit.
 
-Overlays are applied in the order `catalog.json` lists them, and an action
+The unversioned `catalog.json` was removed after localthought.io switched to
+this dated catalog on 2026-10-02 (Heroku release v85, wrapper commit
+`1f89c7efb25f6fd0f7394997e69ed738fd1a4aad`, proxy 0.2.4). Its live Discord
+document changed from two paths to 153, confirming the catalog switch.
+Historical overlay revisions remain published, including Discord's two-read
+subset and Clockify's older revision; existing revision URLs stay valid.
+
+Dated catalogs and their selected revision files are immutable once on
+`main`; publish a new dated catalog and update the proxy's default or its
+`CATALOG_PATH` to opt in. New overlays do not change an existing catalog.
+The 2026-10-02 catalog selects the full Discord OAD and its existing two-read
+CRUD metadata. The proxy currently refuses the OAD's mixed OAuth/bot-token
+security schemes, so Discord connection support awaits a separate auth
+[follow-up #258](https://github.com/ontola/atomic-plugins/issues/258); successful composition does not certify that connection flow.
+
+## Directory layout and OAD revisions
+
+Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
+
+```
+openapi-directory/APIs/<provider>/<service-if-any>/<version>/openapi.yaml
+overlays/APIs/<provider>/<service-if-any>/<version>/<kind>-<oad-commit>-overlay.yaml
+```
+
+Use `swagger.yaml` in `extends` where that is the OAD's actual filename.
+`<oad-commit>` is the full 40-character SHA of the OAD's last change.
+For example, Calendar's auth and pagination overlays for one OAD are:
+
+```
+APIs/googleapis.com/calendar/v3/auth-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml
+APIs/googleapis.com/calendar/v3/app-pagination-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml
+```
+
+Several overlay kinds can target one OAD revision, and several OAD revisions
+can coexist in that same folder. A new OAD revision gets new filenames;
+retain the files for old revisions. Published revision files are immutable;
+CI compares them with `origin/main`. To revise an overlay for an unchanged
+OAD, give its kind a new version, e.g. `auth-v2-<oad-commit>-overlay.yaml`.
+Adding a file never changes the catalog's existing selections: publish a new dated catalog explicitly when opting a platform into a new revision. `extends` identifies the original OAD
+even when the overlay depends on earlier overlays in the catalog's ordered
+composition. Calendar's `app-pagination` and `app-crud-causality` variants
+preserve the drive app's scope alongside the broader `pagination` and
+`crud-causality` overlays for that same document.
+
+The 390 initial current-revision pins use the directory's `main` snapshot
+`b285200684e2b0460faf8464c8822b4d2516e3c7` (2026-10-02).
+The old provider paths were moved, so direct consumers must use the new
+URLs; this repository's catalog and file references are updated together.
+The Pets demo, docs, scripts and tests are outside `APIs/`: the demo is a
+complete local OAD with no overlays, and the others are authoring resources.
+
+Validate paths, filenames and catalog selections from the repository root:
+
+```sh
+python3 overlays/scripts/validate_oad_pins.py --published origin/main
+python3 overlays/tests/test_oad_pins.py
+```
+
+Validate the commits against a full-history OAD checkout as well:
+
+```sh
+git -C /path/to/openapi-directory fetch --unshallow origin main # only if shallow
+python3 overlays/scripts/validate_oad_pins.py --directory /path/to/openapi-directory
+```
+
+Add `--fetch-missing` to fetch historical pins absent from current upstream
+`main` (historical Discord and Clockify revisions remain published).
+
+The history check accepts old revisions but rejects a pin at a commit that
+did not change the OAD. For an audit requiring every overlay to target the
+latest OAD at a particular ref, add `--latest-ref origin/main`. That audit
+will intentionally fail once historical and current revisions coexist.
+These checks establish target provenance, not live-provider compatibility.
+
+Overlays are applied in the order `catalog/2026-10-02.json` lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
-`crud-causality-overlay.yaml` is listed first because it defines the
+`crud-causality-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml` is listed first because it defines the
 projects/users paths its auth and pagination overlays target, and the
 two setup reads the timesheets app makes (`GET /v1/user`, `GET
 /v1/workspaces`); those stay in the read overlays. Its
-`time-entry-write-overlay.yaml` is listed last and carries its own
+`time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml` is listed last and carries its own
 `security`, so removing that one line returns Clockify to read-only; it adds
 create (`POST`), full-replacement update (`PUT`) and delete on time entries
 for the timesheets app's two-way sync (ontola/atomic-plugins#123). Its
 request shapes follow Clockify's published reference and are not verified
 against a live account.
 
-GitHub Issues' `repositories-read-overlay.yaml` comes right after its
+GitHub Issues' `repositories-read-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml` comes right after its
 pagination overlay, whose `nextLink` scheme it names, and carries its own
 `security`: it adds `GET /user/repos`, the issue-tracker drive app's
 repository picker (ontola/atomic-plugins#147), as a plain read, not a
 `crudResources` collection. The same app's two label writes, adding one
 label to an issue (`POST .../issues/{issue_number}/labels`) and removing one
-(`DELETE .../labels/{name}`), are in `crud-causality-overlay.yaml` as partial
+(`DELETE .../labels/{name}`), are in `crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml` as partial
 updates of `issue`; there is no endpoint that replaces or lists an issue's
 labels. All three use the `repo` scope the GitHub OAuth app already asks
 for, which covers issue labels and private repositories, so the requested
@@ -69,18 +145,62 @@ place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): every catalog overlay URL, and
+- `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
+  filenames and `extends` commits pass the full-history check; every catalog overlay URL, and
   every OAD URL under the Pages base, maps to a file in this folder, and the
   tests below pass (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
   Pages serves it.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
-  compose this `catalog.json` with the proxy's runtime loader, reading
+  compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder.
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
-  served `catalog.json`, every overlay and Pages-published OAD it lists, and
+  served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
+
+## Reviewed standalone pagination variants
+
+These replacements use explicit operation selections and locate the returned
+item arrays through per-operation `response.envelope.itemsField` overrides.
+They add new `pagination-v2` filenames for the same pinned OADs; old files and
+dated catalog selections are unchanged. Select a v2 file instead of its v1
+variant when composing that provider's document.
+
+| Variant | Declared coverage | Sources |
+| --- | --- | --- |
+| [Slack v2](APIs/slack.com/1.7.0/pagination-v2-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml) | Four cursor reads: conversations list/members and users conversations/list. `channels` or `members` envelopes. | [Pagination](https://docs.slack.dev/apis/web-api/pagination/), [users.conversations](https://docs.slack.dev/reference/methods/users.conversations/) |
+| [DigitalOcean v2](APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 39 collections declaring a next link and item array in the pinned OAD. Includes droplets, projects, and repository listings. | [Links and pagination](https://docs.digitalocean.com/reference/api/reference/public-apis/) |
+
+Slack's overlay declares `response_metadata.next_cursor` as the continuation
+field and documents that a short page can still have another cursor. It does
+not impose a shared numeric limit on all methods. The pinned `users.list`
+OAD references `objs_response_metadata`, which puts its object fields under
+`items`; the overlay repairs only that operation's metadata reference using a
+new object schema following Slack's pagination documentation. History/replies,
+classic paging and other undeclared response shapes are outside this variant.
+
+DigitalOcean's overlay follows the complete `links.pages.next` URL, preserving
+its query parameters, including repository `page_token` values. It does not
+infer a next page from `page`/`per_page` alone: the pinned individual volume
+action read has those parameters but no collection envelope or next link.
+Garbage-collection listings likewise have no declared next link in this OAD
+and remain outside this variant. The 39 selected operations have their item
+arrays and continuation fields checked against the pinned response schemas.
+
+These are documentation and composition checks as of 2026-10-02, not live
+provider certification. The metadata follows the
+[pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
+Run the schema and scope regressions without provider credentials:
+
+```sh
+python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
+```
+
+Omit `--directory` to download the two pinned OADs. CI uses the same full-history
+checkout as the pin validator. Every declared query field must exist, every
+continuation field must be declared, and each envelope must locate an array;
+the tests also preserve all request parameters, operations and security.
 
 ## Authenticated principal overlays
 
@@ -112,7 +232,7 @@ not enable tenant login; the trusted catalog must select the operation.
 
 Google's overlay is applied after its auth overlay because it adds `openid`,
 `email`, and `profile` to both `googleOnline` and `googleOffline`. GitHub's
-overlay is also applied after `auth-overlay.yaml`, which declares `githubOAuth`.
+overlay is also applied after `auth-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml`, which declares `githubOAuth`.
 The overlays only describe the provider endpoints and response metadata; the
 runtime supplies its normal User-Agent header and bearer token.
 

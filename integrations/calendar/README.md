@@ -357,7 +357,7 @@ Declared, not live-verified (see _Verification_):
 The operations the app uses, declared in [`app/operations.ts`](app/operations.ts)
 and confirmed against the composed `google-calendar`
 catalog document. The overlays in
-[`../../overlays/googleapis.com/google-calendar/v3/`](../../overlays/googleapis.com/google-calendar/v3/)
+[`../../overlays/APIs/googleapis.com/calendar/v3/`](../../overlays/APIs/googleapis.com/calendar/v3/)
 are byte-identical to the ones GitHub Pages publishes, and the proxy fetches
 those at runtime. The checked-in composition is
 `integration-proxy/tests/identity-catalog/google-calendar-composed.yaml`.

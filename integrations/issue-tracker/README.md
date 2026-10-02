@@ -19,13 +19,16 @@ This folder also holds the plugin's other issue sources:
 | ----------------------------------------- | ----------- |
 | Issue title                               | Card title  |
 | Markdown body (`null` becomes empty text) | Description |
-| Open, without `atomic:doing`              | Todo        |
+| Open, without a workflow label            | Todo        |
 | Open, with `atomic:doing`                 | Doing       |
+| Open, with `atomic:blocked`               | Blocked     |
 | Closed                                    | Done        |
 
 Dragging a card to Done closes its issue; moving it back reopens it. Other labels
-are preserved: the adapter adds/removes only `atomic:doing`, never replaces the
-whole label set. Create that label in the test repository before using Doing.
+are preserved: the adapter adds/removes only `atomic:doing` and
+`atomic:blocked` (#177 Q8), never replaces the whole label set. An open issue
+with both is Blocked. Closing keeps the labels as they are. Create both
+labels in the test repository before using Doing or Blocked.
 Pull requests are excluded. Comments, assignees, milestones, GitHub Projects and
 issue deletion are outside this first scope. A missing issue/card is a conflict,
 not permission to delete the other side.
@@ -79,11 +82,11 @@ states end to end, is still to be built.
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, about 134 KB) whose
-`view({ root, store })` runs in the host's null-origin frame. It hosts the
-Devonian bridge from `devonian/github-issues/` for **one repository per app
-install**, two-way for issue title, body (Markdown), Todo/Doing/Done status
-and comments.
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 154,931 bytes for
+0.2.0) whose `view({ root, store })` runs in the host's null-origin frame. It
+hosts the Devonian bridge from `devonian/github-issues/` for **one repository
+per app install**, two-way for issue title, body (Markdown),
+Todo/Doing/Blocked/Done status and comments.
 
 **Flow.** The first screen offers GitHub Issues (Jira and Todoist are shown
 as not available). "Connect" asks the host for a connection
@@ -98,26 +101,90 @@ now" (or `G` `S`), after each edit made in the app, and after a transient
 failure (4, 8, … up to 60 minutes, while the view is open).
 
 **The view** follows `design/DESIGN.md` and `design/mockups.html` (#89):
-a board (Todo / Doing / Done, Done collapsed to the 20 most recently
+a board (Todo / Doing / Blocked / Done, Done collapsed to the 20 most recently
 updated) at 720 px and wider, a list below that, and an explicit
 Board/List choice (`B`) that wins at every width; search and a label filter
 shared by both; an issue panel (docked at 1000 px and wider, a drawer from
 600 px, a full-screen sheet below) with the title, status, read-only labels,
 the description (Write / Preview, a safe Markdown preview) and comments;
 "New issue" (`N`); the sync pill and connection bar; one banner per problem;
-and `?` for the keyboard shortcuts. Cards move by drag, by `1`/`2`/`3` on a
+and `?` for the keyboard shortcuts. Cards move by drag, by `1`/`2`/`3`/`4` on a
 focused card or by their "Move to…" menu. The shared chrome (the `--pl-*`
 aliases of the host's `--t-*` theme variables, pill, banner, empty state,
 buttons) is in `app/ui/`, separate from the issue views, so it can move to a
 shared package later. Layout and filters persist on the app's sync resource.
 
 **What it writes, and where.** Everything goes into the app's own subtree
-(the only place a drive app may write): the Status select (Todo / Doing /
-Done tags), GitHub issue number and GitHub source columns under the app's
-ontology; one row per issue in the app's table, the body in Atomic's own
-`description`; one Message per comment (`about` its row) in a "GitHub
-comments" folder under the app; and one sync resource holding the bound
-repository and the sync state as JSON text.
+(the only place a drive app may write without a row grant). Since 0.2.0 the
+rows are of the shared class `issue-v1` (#177 item 6, `ontology-kit/`), at
+its published GitHub Pages subject:
+
+- one row per issue in the app's table, of class `issue-v1`: the title in
+  Atomic's `name`, the body in task/v1 `body`, the status as one of the
+  task/v1 tags `todo`, `doing`, `blocked`, `done` in task/v1 `status`. The
+  app reads these by subject through `ontology-kit/resolver.mjs`, never by
+  shortname;
+- on each row, three provider extras under the app's own ontology: GitHub
+  issue number, GitHub source (JSON: url, author, labels, assignees,
+  timestamps) and GitHub sync baseline (JSON: the title, body and status the
+  app last agreed with GitHub). They are declared as the App's `row-extras`
+  (atomic-server #1849). A comment's Message carries its own baseline;
+- one Message per comment (`about` its row) in a "GitHub comments" folder
+  under the app;
+- one sync resource holding the bound repository and the sync state as JSON
+  text: the Bridge's snapshot without the per-record baselines, the
+  transport's write journal, rows waiting to be published and the view
+  preferences.
+
+**The shared class.** On first open the app adds `issue-v1` to its App's
+`renders` (so the host's "+ Add view" offers it on any table of that class)
+and sets its own table's `classtype` to `issue-v1`, through the frame store
+(#177 spike S2; a catalog Install cannot do this yet, #177 H2). The table is
+then an ordinary `issue-v1` table that other views of the class can read.
+Opened as a view on an Issue table it did not make, the app shows a notice
+and writes nothing: syncing an existing table ("Sync this table to GitHub",
+#177 item 14) is not built.
+
+**Baselines on the rows (#177 decision 7).** The Bridge still keeps a
+baseline per record in memory. At each checkpoint, a baseline that differs
+from what its row holds is written onto the row, and the sync state is saved
+without it. A row the Bridge itself writes (an import, or bringing in a
+GitHub change) carries its baseline in that same write, so the first import
+needs no extra writes; a change sent to GitHub costs one extra row write.
+Reading a row puts its baseline back into the record. Not moved: the
+Bridge's identity map and its copy of each record's values (the snapshot's
+`graph`) stay in the sync state, so the state still grows with the issues'
+text. If a row's baseline is missing or unreadable, the next pass treats
+both sides as unknown; when they agree it writes the baseline back.
+Not guarded: a write the Bridge makes to a row whose verify read then shows
+a concurrent edit leaves the row's baseline at the written value, so that
+edit is sent as a change instead of reported as a conflict.
+
+**Local-only rows (#177 Q6, this plugin's choice).** A row with no GitHub
+issue behind it is local only: the pass leaves it alone and the card is
+marked "Local". "Publish to GitHub" in its issue panel asks for it to be
+created; the next pass holds that create for review like any other write.
+A card made with this app's own "New issue" form is published at once,
+still only after review; a row added anywhere else (the table, another
+view, another device) waits for "Publish to GitHub". Safer than 0.1.x,
+which proposed a create for every row without a number.
+
+**A status outside the four.** A row whose status is not exactly one of the
+four task/v1 tags (another tag, or several) is shown as it is ("Status
+here: …, not synced with GitHub") instead of failing the pass. For the sync
+it keeps the status it last agreed with GitHub, so nothing is sent for it;
+if GitHub's status changes, GitHub's value replaces it.
+
+**From 0.1.x.** An update from 0.1.x over an existing install (the host's
+Update on the Integrations page keeps rows and schema) rewrites the table's
+rows in place once, before the first pass: the app's own Status tags become
+the task/v1 tags with the same shortname, `description` becomes task/v1
+`body`, `isA` becomes `issue-v1`. The sync state is kept, and the
+baselines it held move onto the rows at the first pass, so an edit made under
+0.1.x and not sent yet is still found and offered for review (unit-tested
+with the fake host only). The old Status property and class stay in the
+app's ontology, unused. #177 Q10 says test installs are reinstalled and
+re-synced; this pass exists so that unsent edits are not lost.
 
 **First import (#206).** An issue or comment that is on GitHub, never
 synced and not in the table is created from the list page GitHub returned
@@ -338,8 +405,19 @@ persistence, alerts, the conflict review). `app/build.test.ts` checks the
 bundle and typechecks `app/`. The e2e (`e2e/issue-tracker.spec.ts`) covers
 connect, picking the repository, import, reload with an unchanged refresh,
 a reviewed update (closing #1), a title conflict settled for GitHub's side
-in the review panel, a card moved with the `3` key and a comment, each
-sent after review.
+in the review panel, a card moved with the `4` key and a comment, each
+sent after review; then (0.2.0) that the table and its rows are `issue-v1`
+and the App renders it, a row added in the table outside the app staying
+local until "Publish to GitHub", its reviewed create, and moving it to
+Blocked, which adds `atomic:blocked` on GitHub; then Disconnect GitHub and
+connecting again through the host's "Use existing connection" with no
+reload, after which the app syncs by itself (the unit tests also cover the
+repository-picker case). The e2e reads `issue-v1` from its published GitHub
+Pages subject, so it needs network access to `ontola.github.io`; its
+`beforeAll` checks Pages serves the class first
+(`node ontology-kit/served.mjs classes/issue-v1`). The 0.1.x in-place
+rewrite, a status shown as it is and the "other table" notice are unit-tested
+only (`app/controller.test.ts`).
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and

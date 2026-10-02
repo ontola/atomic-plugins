@@ -1,11 +1,15 @@
 // @wc-ignore-file
+import { SHARED, TIME_ENTRY, WORK_PERSON, WORK_PROJECT } from './fields.js';
+import { Links } from './links.js';
 import {
   atomic,
+  LINK_FIELDS,
   LOG_FIELDS,
   ROW_FIELDS,
   SETTING_FIELDS,
   SYNC_FIELDS,
   type Field,
+  type LinkKey,
   type LogKey,
   type RowKey,
   type SettingKey,
@@ -13,23 +17,42 @@ import {
 } from './ontology.js';
 import type { JSONValue, PluginResource, PluginStore } from './store.js';
 
+/**
+ * A row's fields: the shared `time-entry-v1` ones (fixed subjects, `fields.ts`)
+ * and the app's own `entryId` extra (a Property of its ontology, once made).
+ */
+export type RowFields = typeof SHARED & Partial<Record<RowKey, string>>;
+
 /** The app's table, its row class, and the Property subject of every field. */
 export interface Schema {
+  app: string;
   table: string;
   rowClass: string;
+  /** The app's own ontology, where its own Properties are. */
   ontology: string;
-  row: Partial<Record<RowKey, string>>;
+  /** Whether the table is the app's own (under the App), not one it is a
+   * view of through the host's "+ Add view". */
+  own: boolean;
+  row: RowFields;
+  /** Extras on the Projects and People tables' rows. */
+  link: Partial<Record<LinkKey, string>>;
   settings: Partial<Record<SettingKey, string>>;
   log: Partial<Record<LogKey, string>>;
   /** Per-row sync bookkeeping (#123 M3): not table columns. */
   sync: Partial<Record<SyncKey, string>>;
+  /** The app's own Projects and People tables, once made. */
+  tables: { projects?: string; people?: string };
 }
 
 export type CompleteSchema = Schema & {
-  row: Record<RowKey, string>;
+  row: typeof SHARED & Record<RowKey, string>;
+  link: Record<LinkKey, string>;
   settings: Record<SettingKey, string>;
   log: Record<LogKey, string>;
   sync: Record<SyncKey, string>;
+  tables: { projects: string; people: string };
+  /** Reads and makes the project and person rows entries link to. */
+  links: Links;
 };
 
 const list = (value: JSONValue): string[] =>
@@ -37,80 +60,145 @@ const list = (value: JSONValue): string[] =>
     ? value.filter((v): v is string => typeof v === 'string')
     : [];
 
-async function locate(store: PluginStore) {
+/** The table names the app gives its Projects and People tables. */
+export const TABLE_NAMES = { projects: 'Projects', people: 'People' } as const;
+
+export interface Layout {
+  app: string;
+  table: string;
+  rowClass: string;
+  ontology: string;
+  own: boolean;
+}
+
+/**
+ * Where the app's data is: the table the host hands it, and the app's own
+ * ontology (the App's `default-ontology`, as `createApp` sets it; failing
+ * that, the parent of a row class of the app's own, which is the same
+ * ontology for an install `createApp` made).
+ */
+export async function layout(store: PluginStore): Promise<Layout> {
   const data = await store.getData();
   if (!data?.table || !data.rowClass)
     throw new Error('This app has no table with a row class to import into.');
-  const klass = await store.getResource(data.rowClass);
-  const ontologySubject = klass.get(atomic.parent);
-  if (typeof ontologySubject !== 'string')
-    throw new Error('The row class has no parent ontology to add fields to.');
-  const ontology = await store.getResource(ontologySubject);
-  const byShortname = new Map<string, PluginResource>();
+  const app = await store.getApp();
+  let ontology = (await store.getResource(app)).get(atomic.defaultOntology);
 
-  for (const subject of list(ontology.get(atomic.properties))) {
+  if (typeof ontology !== 'string' && data.rowClass !== TIME_ENTRY)
+    ontology = (await store.getResource(data.rowClass)).get(atomic.parent);
+  if (typeof ontology !== 'string')
+    throw new Error('This app has no ontology of its own to add fields to.');
+  const table = await store.getResource(data.table);
+
+  return {
+    app,
+    table: data.table,
+    rowClass: data.rowClass,
+    ontology,
+    own: table.get(atomic.parent) === app,
+  };
+}
+
+/** The app's Properties, by shortname. */
+async function byShortname(
+  store: PluginStore,
+  ontology: string,
+): Promise<Map<string, PluginResource>> {
+  const resource = await store.getResource(ontology);
+  const found = new Map<string, PluginResource>();
+
+  for (const subject of list(resource.get(atomic.properties))) {
     const property = await store.getResource(subject);
     const shortname = property.get(atomic.shortname);
-    if (typeof shortname === 'string') byShortname.set(shortname, property);
+    if (typeof shortname === 'string') found.set(shortname, property);
   }
 
-  return { data, klass, ontology, byShortname };
+  return found;
 }
 
 function bind<K extends string>(
   fields: Record<K, Field>,
-  byShortname: Map<string, PluginResource>,
+  found: Map<string, PluginResource>,
 ): Partial<Record<K, string>> {
   const out: Partial<Record<K, string>> = {};
 
   for (const key of Object.keys(fields) as K[]) {
-    const found = byShortname.get(fields[key].shortname);
-    if (found && found.get(atomic.datatype) === fields[key].datatype)
-      out[key] = found.subject;
+    const property = found.get(fields[key].shortname);
+    if (property && property.get(atomic.datatype) === fields[key].datatype)
+      out[key] = property.subject;
   }
 
   return out;
 }
 
+/** The app's own table of `klass` (a child of the App), if there is one. */
+async function ownTable(
+  store: PluginStore,
+  app: string,
+  klass: string,
+): Promise<string | undefined> {
+  for (const subject of await store.query({
+    property: atomic.classtype,
+    value: klass,
+  })) {
+    const table = await store.getResource(subject).catch(() => undefined);
+    if (table?.get(atomic.parent) === app) return subject;
+  }
+
+  return undefined;
+}
+
 /** Read-only: what exists already. A field with another datatype is not bound. */
 export async function findSchema(store: PluginStore): Promise<Schema> {
-  const { data, ontology, byShortname } = await locate(store);
+  const where = await layout(store);
+  const found = await byShortname(store, where.ontology);
+  const projects = await ownTable(store, where.app, WORK_PROJECT);
+  const people = await ownTable(store, where.app, WORK_PERSON);
 
   return {
-    table: data.table,
-    rowClass: data.rowClass!,
-    ontology: ontology.subject,
-    row: bind(ROW_FIELDS, byShortname),
-    settings: bind(SETTING_FIELDS, byShortname),
-    log: bind(LOG_FIELDS, byShortname),
-    sync: bind(SYNC_FIELDS, byShortname),
+    ...where,
+    row: { ...SHARED, ...bind(ROW_FIELDS, found) },
+    link: bind(LINK_FIELDS, found),
+    settings: bind(SETTING_FIELDS, found),
+    log: bind(LOG_FIELDS, found),
+    sync: bind(SYNC_FIELDS, found),
+    tables: {
+      ...(projects ? { projects } : {}),
+      ...(people ? { people } : {}),
+    },
   };
 }
 
 /**
- * Finds or creates one Property per field under the row class's ontology (the
- * app's own subtree, where the host lets an app write), lists new ones in the
- * ontology's `properties`, and adds the row fields to the class's
- * `recommends` so the table shows them as columns. Idempotent: a second run
- * writes nothing. A same-named property with another datatype is an error
- * rather than silently reused or duplicated.
+ * Finds or creates one Property per own field under the app's ontology (the
+ * app's own subtree, where the host lets an app write) and lists new ones in
+ * the ontology's `properties`. Idempotent: a second run writes nothing. A
+ * same-named property with another datatype is an error rather than
+ * silently reused or duplicated. The row fields themselves are the shared
+ * `time-entry-v1` ones: nothing is added to any class.
  */
-export async function ensureSchema(
+export async function ensureProperties(
   store: PluginStore,
-): Promise<CompleteSchema> {
-  const { data, klass, ontology, byShortname } = await locate(store);
+  where: Pick<Layout, 'ontology'>,
+): Promise<
+  Pick<CompleteSchema, 'settings' | 'log' | 'sync' | 'link'> & {
+    row: Record<RowKey, string>;
+  }
+> {
+  const ontology = await store.getResource(where.ontology);
+  const found = await byShortname(store, where.ontology);
   const added: string[] = [];
 
   const ensure = async (field: Field): Promise<string> => {
-    const found = byShortname.get(field.shortname);
+    const existing = found.get(field.shortname);
 
-    if (found) {
-      if (found.get(atomic.datatype) !== field.datatype)
+    if (existing) {
+      if (existing.get(atomic.datatype) !== field.datatype)
         throw new Error(
           `The field "${field.name}" already exists with another datatype.`,
         );
 
-      return found.subject;
+      return existing.subject;
     }
 
     const created = await store.newResource({
@@ -124,23 +212,24 @@ export async function ensureSchema(
       },
     });
     added.push(created.subject);
-    byShortname.set(field.shortname, created);
+    found.set(field.shortname, created);
 
     return created.subject;
   };
 
-  const row = {} as Record<RowKey, string>;
-  for (const key of Object.keys(ROW_FIELDS) as RowKey[])
-    row[key] = await ensure(ROW_FIELDS[key]);
-  const settings = {} as Record<SettingKey, string>;
-  for (const key of Object.keys(SETTING_FIELDS) as SettingKey[])
-    settings[key] = await ensure(SETTING_FIELDS[key]);
-  const log = {} as Record<LogKey, string>;
-  for (const key of Object.keys(LOG_FIELDS) as LogKey[])
-    log[key] = await ensure(LOG_FIELDS[key]);
-  const sync = {} as Record<SyncKey, string>;
-  for (const key of Object.keys(SYNC_FIELDS) as SyncKey[])
-    sync[key] = await ensure(SYNC_FIELDS[key]);
+  const all = async <K extends string>(fields: Record<K, Field>) => {
+    const out = {} as Record<K, string>;
+    for (const key of Object.keys(fields) as K[])
+      out[key] = await ensure(fields[key]);
+
+    return out;
+  };
+
+  const row = await all(ROW_FIELDS);
+  const link = await all(LINK_FIELDS);
+  const settings = await all(SETTING_FIELDS);
+  const log = await all(LOG_FIELDS);
+  const sync = await all(SYNC_FIELDS);
 
   if (added.length) {
     ontology.set(atomic.properties, [
@@ -150,22 +239,59 @@ export async function ensureSchema(
     await ontology.save();
   }
 
-  const recommends = list(klass.get(atomic.recommends));
-  const wanted = [atomic.name, ...Object.values(row)];
-  const missing = wanted.filter(s => !recommends.includes(s));
+  return { row, link, settings, log, sync };
+}
 
-  if (missing.length) {
-    klass.set(atomic.recommends, [...recommends, ...missing]);
-    await klass.save();
-  }
+/**
+ * The app's Projects and People tables (#177 Q11: entries link to
+ * `work-project-v1` and `work-person-v1` rows): two tables under the App,
+ * made on first use, found again by class among the App's children.
+ */
+export async function ensureTables(
+  store: PluginStore,
+  app: string,
+): Promise<{ projects: string; people: string }> {
+  const ensure = async (klass: string, name: string) =>
+    (await ownTable(store, app, klass)) ??
+    (
+      await store.newResource({
+        parent: app,
+        isA: [atomic.tableClass],
+        propVals: {
+          [atomic.name]: name,
+          [atomic.classtype]: klass,
+          [atomic.description]: `Filled by the Clockify timesheets app from what it last read in Clockify; time entries link to these rows. Names follow Clockify: a name changed here is set back on the next sync.`,
+        },
+      })
+    ).subject;
 
   return {
-    table: data.table,
-    rowClass: data.rowClass!,
-    ontology: ontology.subject,
-    row,
-    settings,
-    log,
-    sync,
+    projects: await ensure(WORK_PROJECT, TABLE_NAMES.projects),
+    people: await ensure(WORK_PERSON, TABLE_NAMES.people),
+  };
+}
+
+/**
+ * Everything a sync or a send needs: the app's own Properties and its
+ * Projects and People tables, made where missing. Only for the app's own
+ * table; as a view of another table the app syncs nothing.
+ */
+export async function ensureSchema(
+  store: PluginStore,
+): Promise<CompleteSchema> {
+  const where = await layout(store);
+  if (!where.own)
+    throw new Error(
+      'This table is not the app’s own: the app syncs only its own table.',
+    );
+  const properties = await ensureProperties(store, where);
+  const tables = await ensureTables(store, where.app);
+
+  return {
+    ...where,
+    ...properties,
+    row: { ...SHARED, ...properties.row },
+    tables,
+    links: new Links(store, tables, properties.link),
   };
 }
