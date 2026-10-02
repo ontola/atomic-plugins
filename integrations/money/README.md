@@ -328,3 +328,10 @@ host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It first
 passed on 2026-09-24 against atomic-server `2f403624e`, and again on
 2026-10-01 against the pin `a12b74a6783b`, after the connect page's button
 changed with the proxy's 0.2 protocol.
+
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+moneybird --i-understand-this-writes-to <administration id>` runs the Moneybird
+app's controller against one disposable administration (the driver seeds and
+cleans up; the app stays read-only) and checks the `/api/v2` base path (#274)
+against the real API; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).

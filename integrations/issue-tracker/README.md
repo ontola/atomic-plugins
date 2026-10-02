@@ -145,14 +145,23 @@ node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
 **Not verified:** anything against a live Todoist account or the real
 integration proxy (#46).
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+todoist --i-understand-this-writes-to <project id>` runs this app's
+controller against one disposable Todoist project (the driver seeds and
+cleans up; the app stays read-only) and records what `GET /tasks/{id}`
+answers for a completed task; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
+
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 154,931 bytes for
-0.2.0) whose `view({ root, store })` runs in the host's null-origin frame. It
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 160,628 bytes for
+0.3.0) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
-per app install**, two-way for issue title, body (Markdown),
-Todo/Doing/Blocked/Done status and comments.
+per table**: the app's own table, and each other Issue table it was asked
+to sync (since 0.3.0, see [Syncing a table the app didn't
+make](#syncing-a-table-the-app-didnt-make)), two-way for issue title, body
+(Markdown), Todo/Doing/Blocked/Done status and comments.
 
 **Flow.** The first screen offers GitHub Issues (Jira and Todoist are shown
 as not available). "Connect" asks the host for a connection
@@ -194,7 +203,10 @@ its published GitHub Pages subject:
   issue number, GitHub source (JSON: url, author, labels, assignees,
   timestamps) and GitHub sync baseline (JSON: the title, body and status the
   app last agreed with GitHub). They are declared as the App's `row-extras`
-  (atomic-server #1849). A comment's Message carries its own baseline;
+  (atomic-server #1849), and so is Atomic's `localId` (since 0.3.0), which
+  the Bridge sets on each row it imports so that a create a reload
+  interrupted is found again instead of made twice. A comment's Message
+  carries its own baseline;
 - one Message per comment (`about` its row) in a "GitHub comments" folder
   under the app;
 - one sync resource holding the bound repository and the sync state as JSON
@@ -203,13 +215,13 @@ its published GitHub Pages subject:
   preferences.
 
 **The shared class.** On first open the app adds `issue-v1` to its App's
-`renders` (so the host's "+ Add view" offers it on any table of that class)
-and sets its own table's `classtype` to `issue-v1`, through the frame store
-(#177 spike S2; a catalog Install cannot do this yet, #177 H2). The table is
-then an ordinary `issue-v1` table that other views of the class can read.
-Opened as a view on an Issue table it did not make, the app shows a notice
-and writes nothing: syncing an existing table ("Sync this table to GitHub",
-#177 item 14) is not built.
+`renders` (so the host's "+ Add view" offers it on any table of that class),
+lists its row extras in `row-extras`, and sets its own table's `classtype`
+to `issue-v1`, through the frame store (#177 spike S2; a catalog Install
+cannot do this yet, #177 H2). Since 0.3.0 that happens on the first open
+itself, before a repository is chosen; 0.2.0 did it only once one was. The
+table is then an ordinary `issue-v1` table that other views of the class can
+read.
 
 **Baselines on the rows (#177 decision 7).** The Bridge still keeps a
 baseline per record in memory. At each checkpoint, a baseline that differs
@@ -412,6 +424,55 @@ folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
 syncables would only add size.
 
+### Syncing a table the app didn't make
+
+Since 0.3.0 (#177 §6.2 item 14), on the pattern calendar 0.3.0 set for
+Google Calendar (#272). Opened as a view on an Issue table it did not make,
+the app shows that the table isn't synced and offers **Sync this table to
+GitHub**. Nothing is written before that is pressed. Pressing it:
+
+1. makes sure the App declares its row extras (number, source, baseline and
+   `localId`), then compares `store.rowAccess()`'s `extras` with them. When
+   there is no grant, or it doesn't cover them (for example "Allow editing"
+   chosen in Add view before the app ever declared its extras), it calls
+   `store.requestRowAccess()`, and the host shows its own "Allow editing" /
+   "Not now" bar. "Not now" leaves the table unsynced and says why;
+2. makes a **binding** under the App: a resource of the app's sync class
+   with `synced-table` (a new app Property, an `atomicURL`, the table's
+   subject) and `localId` `github-issues:sync <table>`, so AtomicServer keeps
+   one per table. The app finds it with `store.query` on `synced-table` and
+   accepts only one whose parent is the App;
+3. goes on as on the app's own table: connect (if needed), choose the
+   repository, import. The repository, the sync state and a "GitHub
+   comments" folder for that table's comments are kept on and under the
+   binding. "Not now" on those two screens removes a binding that has no
+   repository yet.
+
+From then on it is the same sync as on the app's own table: compare on
+open and on "Sync now", every change bound for GitHub held for review, the
+same conflict rules, the baselines and issue numbers on the rows. Rows that
+were in the table before stay local until "Publish to GitHub" on each
+(#177 Q6). What differs from the app's own table:
+
+- the table itself is never written: no rename after the repository, no
+  `classtype` change. A row grant never covers the table;
+- rows are never deleted: a grant doesn't cover `destroy`, so for an issue
+  gone from GitHub only "Keep here only" is offered, and the banner says to
+  delete the row in the table;
+- the grant is checked on every open, before every pass and before every
+  edit made in the app. Once it lapses (the view removed, the person who
+  gave it loses write access, the app's key changes, or someone revokes it
+  in the tab's menu), the app says syncing is paused and offers "Allow
+  editing again"; it sends nothing to GitHub and writes nothing meanwhile.
+  A row write the host refuses mid-pass for that reason shows the same
+  pause;
+- the binding keeps its repository for good, like the app's own sync
+  resource: the table can't switch repositories.
+
+Not verified: what an uninstall does with a binding; two tabs syncing the
+same table (not guarded, as on the app's own table). Edits made in the
+table while the app is closed are found only on its next open (#177 H6).
+
 ## Mock data for user testing
 
 The mock proxy's github-issues fixture has a second, opt-in scenario for
@@ -483,12 +544,22 @@ local until "Publish to GitHub", its reviewed create, and moving it to
 Blocked, which adds `atomic:blocked` on GitHub; then Disconnect GitHub and
 connecting again through the host's "Use existing connection" with no
 reload, after which the app syncs by itself (the unit tests also cover the
-repository-picker case). The e2e reads `issue-v1` from its published GitHub
+repository-picker case). A second e2e test (0.3.0) makes an `issue-v1`
+table by hand with one row, adds GitHub issues to it as a Read-only view,
+presses "Sync this table to GitHub", allows editing in the host's bar,
+connects, imports a repository of its own (seeded through the mock's
+`createIssue` driver), checks the rows, the untouched table and the binding
+under the App, and sends a status edit made in the table after review. The
+e2e reads `issue-v1` from its published GitHub
 Pages subject, so it needs network access to `ontola.github.io`; its
 `beforeAll` checks Pages serves the class first
 (`node ontology-kit/served.mjs classes/issue-v1`). The 0.1.x in-place
-rewrite, a status shown as it is and the "other table" notice are unit-tested
-only (`app/controller.test.ts`).
+rewrite and a status shown as it is are unit-tested only
+(`app/controller.test.ts`), and so are, for another table
+(`app/syncTable.test.ts`, against a fake host that enforces the pinned
+row-grant scope): "Not now" in the host's bar, a grant from before the
+extras were declared, Publish to GitHub, reopening, a revoked grant and
+"Allow editing again", "Not now" before a repository, and no row deletion.
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and

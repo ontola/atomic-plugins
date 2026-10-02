@@ -190,6 +190,11 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   };
 
   const onState = (state: ViewState) => {
+    // A table the app didn't make: its name, for the setup screens.
+    const table = controller.foreign();
+    if (table === undefined) delete ui.table;
+    else ui.table = table;
+
     if (state.kind === 'ready') {
       // The saved layout and filters, once, when the app first shows its
       // board: on open, or after connecting with no reload.
@@ -440,6 +445,15 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     publish(subject) {
       live.say('Publishing to GitHub after your review');
       void controller.publish(subject);
+    },
+
+    syncTable() {
+      live.say('Asking you to allow this app to edit this table');
+      void controller.syncTable();
+    },
+
+    notNow() {
+      void controller.notNow();
     },
   };
 

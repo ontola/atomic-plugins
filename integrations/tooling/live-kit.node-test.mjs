@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   BudgetError,
   CONFIRM_FLAG,
@@ -20,6 +20,7 @@ import {
   createProvider,
   createRecorder,
   createRedactor,
+  describeCandidate,
   looksDisposable,
   liveSettings,
   parseArgs,
@@ -29,7 +30,7 @@ import {
   requireDisposableName,
   writeEvidence,
 } from './live-kit.mjs';
-import { APPS, USAGE, main, redactingWriter } from './live-check.mjs';
+import { APPS, USAGE, configOf, main, redactingWriter } from './live-check.mjs';
 
 const TOKEN = 'ya29.A0-fake-credential-for-offline-tests-0123456789';
 
@@ -270,6 +271,79 @@ test('the provider client adds the credential itself, enforces scope and budget,
   );
 });
 
+test('a POST that the scenario calls a read costs no write budget, is marked, and cannot widen the scope', async () => {
+  const redact = createRedactor({ TOKEN });
+  const { fetcher, seen } = fakeFetch(() => ({ body: { results: [] } }));
+  const budget = createBudget({ maxMutations: 1 });
+  const provider = createProvider({
+    baseUrl: 'https://api.example.test',
+    authHeaders: () => ({ authorization: `Bearer ${TOKEN}` }),
+    allow: ({ pathname }) => {
+      if (!pathname.startsWith('/v1/'))
+        throw new GuardError(`out of scope ${pathname}`);
+    },
+    isRead: ({ method, pathname }) =>
+      method === 'POST' && pathname === '/v1/search',
+    budget,
+    redact,
+    fetcher,
+  });
+
+  for (let i = 0; i < 5; i++)
+    await provider.request({
+      who: 'app',
+      method: 'POST',
+      path: '/v1/search',
+      body: JSON.stringify({ query: '' }),
+    });
+  assert.equal(budget.mutations, 0);
+  assert.ok(provider.requests.every(r => r.read === true));
+
+  await provider.request({
+    who: 'app',
+    method: 'POST',
+    path: '/v1/pages',
+    body: JSON.stringify({}),
+  });
+  assert.equal(budget.mutations, 1);
+  assert.equal(provider.requests.at(-1).read, undefined);
+  await assert.rejects(
+    provider.request({ who: 'app', method: 'POST', path: '/v1/pages' }),
+    BudgetError,
+  );
+  // A request the scenario refuses is refused, whatever isRead says.
+  await assert.rejects(
+    provider.request({ who: 'app', method: 'POST', path: '/other' }),
+    /out of scope/,
+  );
+  assert.equal(seen.length, 6);
+});
+
+test('describeCandidate reads the version from the given package file, for an app outside integrations/<app>/app', () => {
+  const root = mkdtempSync(join(tmpdir(), 'live-candidate-'));
+
+  try {
+    mkdirSync(join(root, 'integrations/money/moneybird'), { recursive: true });
+    mkdirSync(join(root, 'apps/moneybird/1.2.3'), { recursive: true });
+    writeFileSync(
+      join(root, 'integrations/money/moneybird/package.json'),
+      JSON.stringify({ version: '1.2.3' }),
+    );
+    writeFileSync(join(root, 'apps/moneybird/1.2.3/ui.js'), 'export {};');
+    const candidate = describeCandidate('moneybird', {
+      root,
+      packageFile: 'integrations/money/moneybird/package.json',
+      folder: 'integrations/money/moneybird',
+    });
+    assert.equal(candidate.appVersion, '1.2.3');
+    assert.equal(candidate.bundlePath, 'apps/moneybird/1.2.3/ui.js');
+    assert.match(candidate.bundleSha256, /^[0-9a-f]{64}$/);
+    assert.throws(() => describeCandidate('moneybird', { root }), /ENOENT/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a network error is recorded and re-thrown without the credential', async () => {
   const redact = createRedactor({ TOKEN });
   const provider = createProvider({
@@ -419,11 +493,8 @@ function cliWorld({ withLayout = true } = {}) {
     writeFileSync(join(root, 'browser/node_modules/.bin/vitest'), '');
 
     for (const app of Object.values(APPS)) {
-      mkdirSync(join(root, 'integrations', app.dir), { recursive: true });
-      writeFileSync(
-        join(root, 'integrations', app.dir, 'vitest.live.config.ts'),
-        '',
-      );
+      mkdirSync(dirname(join(root, configOf(app))), { recursive: true });
+      writeFileSync(join(root, configOf(app)), '');
     }
   }
 
@@ -592,5 +663,25 @@ test('every app in the registry has a scenario config, a credential variable and
   for (const [name, app] of Object.entries(APPS)) {
     assert.ok(app.dir && app.secret && app.target && app.provider, name);
     assert.match(app.secret, /^[A-Z_]+$/);
+    assert.match(configOf(app), /^integrations\/[\w/.-]+\.config\.ts$/);
   }
+
+  assert.deepEqual(Object.keys(APPS).sort(), [
+    'calendar',
+    'issue-tracker',
+    'moneybird',
+    'notion',
+    'timesheets',
+    'todoist',
+  ]);
+  assert.equal(
+    new Set(Object.values(APPS).map(configOf)).size,
+    Object.keys(APPS).length,
+    'one config per app',
+  );
+  assert.equal(
+    new Set(Object.values(APPS).map(a => a.secret)).size,
+    Object.keys(APPS).length,
+    'one credential variable per app',
+  );
 });

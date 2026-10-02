@@ -4,7 +4,8 @@ Everything Notion-specific lives in this folder. atomic-server keeps no
 Notion code (branch `claude/remove-notion-code`). There are two paths:
 
 - **Drive plugin on syncables and Devonian** (`app/`, two-way after
-  review since 0.2.0). This is the direction for #8 and #68: an iframe
+  review since 0.2.0; a sync-status view, not a browsing view, since 0.3.0,
+  per #177 Q9). This is the direction for #8 and #68: an iframe
   plugin that reads Notion through
   `syncables/browser` over the host's integration-proxy relay, and maps it to
   Atomic rows through a Devonian lens (`devonian/notion/`). It is the one
@@ -32,17 +33,26 @@ It is one ES module whose `view({ root, store })` reads through
 proxy. No credential ever reaches the frame.
 
 - `app/main.ts`, `controller.ts`: "Connect Notion" asks the host to connect
-  (`store.proxy.connect`). Once a connection exists, the app shows the rows
-  already in the drive at once (`rows.ts`) and syncs in the background when
-  the last sync is unknown or older than 15 minutes, and on "Sync now". The
-  controller's states (importing, syncing, no databases, reconnect needed,
-  rate limited, failed) are classified by HTTP status (`errors.ts`). The last
-  sync record (counts, per-database schema with option names and colours,
-  grouped warnings) is a JSON string property, `notion-sync-record`, on the
-  data table resource (`record.ts`).
-- `app/view/`, `app/ui/`: the #89 design (`design/DESIGN.md`,
-  `design/mockups.html`): table, board and list views, database chips, side
-  peek, sync details, banners and empty states. `app/ui/` is the shared
+  (`store.proxy.connect`). Once a connection exists, the app reads the rows
+  already in the drive (`rows.ts`, to compare them with their baselines) and
+  syncs in the background when the last sync is unknown or older than 15
+  minutes, and on "Sync now". The controller's states (importing, syncing,
+  no databases, reconnect needed, rate limited, failed) are classified by
+  HTTP status (`errors.ts`). The last sync record (counts, per-database
+  schema with option names and colours, grouped warnings) is a JSON string
+  property, `notion-sync-record`, on the data table resource (`record.ts`).
+- `app/view/`, `app/ui/`: a small **sync-status view** (#177 Q9, since
+  0.3.0): header with the status pill and "Sync now"; a connection bar with
+  the database count, "Sync details" and a menu (Choose pages in Notion,
+  Open data table, Disconnect Notion…); the state's banner; the "N changes
+  not sent to Notion yet" strip with its Review sheet (`view/review.ts`);
+  and one card (`view/parts.ts`, `renderStatus`) listing the databases the
+  table syncs with and their row counts, the last sync (when, duration,
+  created/updated/unchanged), the row total and an "Open table" button.
+  People browse and edit the rows with the host's own table and views; the
+  app renders no rows. The #89 browsing views of 0.1.0–0.2.0 (table, board,
+  list, database chips, side peek, search, sort; `design/DESIGN.md`,
+  `design/mockups.html`) were removed in 0.3.0. `app/ui/` is the shared
   plugin shell (`pl-*` tokens mapped from the host's `--t-*` theme), kept
   free of Notion specifics so it can move to a shared kit.
 - `app/transport.ts`: syncables' `Transport` over `store.proxy.request`. It
@@ -65,9 +75,9 @@ proxy. No credential ever reaches the frame.
 - `app/changes.ts`, `app/send.ts`, `app/view/review.ts`: two-way edits
   after review (#8, #177 Q4–Q7), described in
   [Edits and sending them to Notion](#edits-and-sending-them-to-notion).
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 133,028 bytes for 0.2.0,
-  including the catalog document, syncables' read path and devonian's Atomic
-  Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 107,509 bytes for
+  0.3.0 (133,028 for 0.2.0, with the browsing views), including the catalog
+  document, syncables' read path and devonian's Atomic Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
 - Dependencies: `syncables@0.18.0` and `devonian@0.6.1` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
@@ -100,9 +110,11 @@ What it does not do, and what is not verified:
   below). A value the lens cannot read losslessly (formatted text) leaves the
   row's value as it was, is listed in the warnings, and is never sent.
 - Select, status and multi-select columns hold Notion option ids, which stay
-  stable across renames, rather than option names. The app shows names and
-  colours from the sync record's schema, so a rename shows after one sync
-  without rewriting rows.
+  stable across renames, rather than option names. The host's table shows
+  those ids; the app's Review sheet shows names and colours from the sync
+  record's schema, so a rename shows there after one sync without rewriting
+  rows. Showing names in the table would need a host feature (a value
+  dictionary per column), which the pin does not have.
 - All shared data sources go into one table, with their columns merged. A
   "Data source" column says where each row came from.
 - The e2e shows the pinned host lets the app add Properties under its
@@ -114,15 +126,13 @@ What it does not do, and what is not verified:
   Without it, the app says so and fetches nothing.
 - The e2e runs against the mock proxy (see below). Nothing here has run against live Notion
   or a real proxy.
-- Links ("Open in Notion", URL values) open through `store.openExternal`,
-  which asks the person first; "Open data table" uses `store.openResource`;
+- "Open table" and the menu's "Open data table" use `store.openResource`;
   "Disconnect Notion…" uses `store.proxy.disconnect` (rows are kept); rows
   load with `store.getMany` in batches of 100; the host's `colorScheme` sets
   the app's `color-scheme`. All since atomic-server 007869464, and each is
-  feature-detected: on an older host the app falls back (copyable URL, no
-  menu entry, one `getResource` per row).
-- View choices (database, view, sort) are kept in memory only: the frame is
-  null-origin, where `localStorage` throws.
+  feature-detected: on an older host the app falls back (no Open table
+  button or menu entry, one `getResource` per row). The app opens no links
+  itself since 0.3.0: a row's "Notion URL" column is in the host's table.
 
 ## Edits and sending them to Notion
 
@@ -181,26 +191,36 @@ open, sync merges, send, conflict both ways, archived page, formatted text,
 refused option, lost answer, discard; `app/view.test.ts`'s S15/S16 block)
 and the e2e (below). Not live-verified.
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+notion --i-understand-this-writes-to <data source id>` runs this app's
+controller, including a reviewed edit sent as a `PATCH`, against one
+disposable data source and writes evidence; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
+
 ## E2E
 
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:
 an install from the catalog's Drive apps section (the committed
 `apps/notion/<version>/ui.js`, served by the lane's dev-server), then Connect, the
-host's consent bar and the mock proxy's consent page, then the 3 rows in the
-app's own table and their column types. It then walks the #89 states against
-the fixture's scenarios (`setScenario`, `renameOption` drivers): two
-databases, side peek, board, sync details, a renamed option, rate limited,
-failed, nothing shared and revoked access, saving a screenshot of each as a
-test artefact. It runs against the shared mock proxy's
-`notion` fixture (`fixtures/notion/`), so the lane has
-`platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It needs an
-`.atomic-server-ref` with frame capabilities (ontola/atomic-server#1697; the
-pin `11264e83e` has it). Since 0.2.0 it also edits a row's Points from the
-host page (a user's commit), reloads, finds the edit under "Review changes"
-with no Sync, sends it and checks the fixture's page (`getPage` driver);
-then makes a conflict with the `editPage` driver and resolves it with "Use
-Notion's". The fixture applies `PATCH /v1/pages/{id}` as Notion documents it
-(400 for unknown options, archived pages, wrong type keys).
+host's consent bar and the mock proxy's consent page, then the status card
+(the database, "3 rows in this table", no table in the frame), the 3 rows in
+the host's table and their column types. It then walks the app's states
+against the fixture's scenarios (`setScenario`, `renameOption` drivers): a
+second database on the card with its own count, sync details, a renamed
+option (seen in the Review sheet after a Status edit made in the host, then
+discarded), rate limited, failed, nothing shared and revoked access, "Open
+table", and Disconnect, saving a screenshot of each as a test artefact. It
+runs against the shared mock proxy's `notion` fixture (`fixtures/notion/`),
+so the lane has `platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It
+needs an `.atomic-server-ref` with frame capabilities
+(ontola/atomic-server#1697; the pin `11264e83e` has it). Since 0.2.0 it also
+edits a row's Points from the host page (a user's commit, the way the
+calendar and issue-tracker specs edit rows outside their apps), reloads,
+finds the edit under "Review changes" with no Sync, sends it and checks the
+fixture's page (`getPage` driver); then makes a conflict with the `editPage`
+driver and resolves it with "Use Notion's". The fixture applies
+`PATCH /v1/pages/{id}` as Notion documents it (400 for unknown options,
+archived pages, wrong type keys).
 
 ## Lens (`devonian/notion/`)
 

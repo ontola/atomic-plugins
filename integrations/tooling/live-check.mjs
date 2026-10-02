@@ -30,7 +30,11 @@ import {
   readSecret,
 } from './live-kit.mjs';
 
-/** Each app: where its scenario lives, its credential, and what its target is called. */
+/**
+ * Each app: where its scenario lives (`dir`, or `config` when the plugin
+ * folder holds more than one app), its credential, and what its target is
+ * called.
+ */
 export const APPS = {
   calendar: {
     dir: 'calendar',
@@ -55,7 +59,37 @@ export const APPS = {
       'GitHub fine-grained token for the one sandbox repository (Issues: read and write)',
     target: 'repository (owner/name)',
   },
+  notion: {
+    dir: 'notion',
+    provider: 'Notion',
+    secret: 'NOTION_TOKEN',
+    secretLabel:
+      'Notion internal integration secret, shared with the one test data source only',
+    target: 'data source id',
+  },
+  moneybird: {
+    dir: 'money',
+    config: 'integrations/money/vitest.live.config.ts',
+    provider: 'Moneybird',
+    secret: 'MONEYBIRD_API_TOKEN',
+    secretLabel:
+      "Moneybird personal API token of the test administration's account (contacts: read and write)",
+    target: 'administration id',
+  },
+  todoist: {
+    dir: 'issue-tracker',
+    config: 'integrations/issue-tracker/vitest.live.todoist.config.ts',
+    provider: 'Todoist',
+    secret: 'TODOIST_API_TOKEN',
+    secretLabel:
+      'Todoist API token of a dedicated test account (data:read_write)',
+    target: 'project id',
+  },
 };
+
+/** The Vitest config that holds an app's live scenario, relative to the repo root. */
+export const configOf = app =>
+  app.config ?? `integrations/${app.dir}/vitest.live.config.ts`;
 
 export const USAGE = `Usage: node integrations/tooling/live-check.mjs <app> ${CONFIRM_FLAG} <id> [options]
 
@@ -147,7 +181,7 @@ export async function main(argv, deps = {}) {
     const redact = createRedactor({ [app.secret]: secret }, { keep: [target] });
 
     const vitest = join(root, 'browser/node_modules/.bin/vitest');
-    const config = `integrations/${app.dir}/vitest.live.config.ts`;
+    const config = configOf(app);
     if (!existsSync(vitest) || !existsSync(join(root, config)))
       throw new GuardError(
         'The browser/ layout is missing. Run: node integrations/tooling/link-atomic-server.mjs',

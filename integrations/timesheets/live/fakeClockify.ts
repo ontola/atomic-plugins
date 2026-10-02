@@ -7,7 +7,8 @@
  */
 import { WORKSPACE, clockifyFixture } from '../fixtures/clockify/scenario.mjs';
 
-export const API_KEY = 'ZmFrZS1jbG9ja2lmeS1rZXktZm9yLW9mZmxpbmUtdGVzdHM0OA';
+// Plainly fake and low-entropy, so secret scanners (GitGuardian) don't flag it.
+export const API_KEY = 'fake-clockify-key-for-offline-tests';
 export { WORKSPACE };
 
 export function fakeClockify({
