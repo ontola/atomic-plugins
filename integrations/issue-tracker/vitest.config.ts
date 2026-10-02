@@ -16,6 +16,7 @@ export default {
       // bundles the npm package (app/package.json) instead. Listed before
       // `devonian`, which would otherwise match it as a prefix.
       'devonian/atomic': at('../../devonian/src/atomic/index.ts'),
+      'devonian/lenses': at('../../devonian/src/lenses/index.ts'),
       devonian: at('../../devonian/src/main.ts'),
       // devonian's @tomic/lib peer, and the host modules the lens was written
       // against (its consumer used to supply them), resolve to the symlinked

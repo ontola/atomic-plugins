@@ -50,6 +50,13 @@ Mappings are ordinary Atomic Data resources using the definitions in [../vocab](
 
 ## Connector lenses
 
+`AtomicLens` below orchestrates connector I/O and identities. The new,
+unreleased [value lens algebra](value-lenses.md) instead maps supplied values
+without I/O. A host can use its `get`/`put` transformations inside an Atomic
+lens's `read`/`write` callbacks; the host still translates full values into
+Atomic patches and explicitly schedules publishing. It adds no automatic
+subscription, identity resolution or durable synchronization protocol.
+
 `AtomicLens<External>` accepts a store, identity map, scope, connector, and two transformations:
 
 - `read(external, subject)` returns a patch of managed native properties. It can return `related` resource patches and `identities` bindings for entity extraction; the complete projection and primary mapping are applied together.

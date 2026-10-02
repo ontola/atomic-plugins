@@ -15,6 +15,17 @@ New integrations can use `AtomicStore`, `AtomicIdentityMap`, and `AtomicLens` wi
 
 See the [Atomic Data guide](docs/atomic-data.md) for the API, supported JSON-AD profile, persistence, connector contracts, and limitations. The [Atomic Extract Entity example](examples/AtomicExtractEntity.ts) maps flattened orders to linked Order and Customer resources. The original row API remains available; existing applications are not automatically migrated. Signed Atomic Commits and live Atomic Server transport are follow-up work.
 
+## Value lens algebra (unreleased)
+
+The new `devonian/lenses` entry (also exported from the root) composes pure,
+synchronous field and custom mappings. Explicit source ownership, unchanged-value
+preservation and executable round-trip checks let a provider expose an editable
+view while retaining fields and representations the view cannot express. GitHub
+and Clockify prototypes live in their integration folders and have deterministic
+contract tests; current production apps do not import them. npm 0.8.0 does not yet
+contain this entry. See [Value lenses](docs/value-lenses.md) for the API, examples,
+supported domains and adoption boundary.
+
 ## Reflection engine (`devonian/reflect`)
 
 `devonian/reflect` is a generic, bidirectional reflection engine for two [`syncables`](https://github.com/localthought/syncables)-backed systems of record: it copies new records each way, keeps open/closed state in agreement, and reflects comments — all via a hidden origin marker embedded in the record body, so a copy is never mistaken for an original and never bounced back onward (echo suppression), and never duplicated across restarts (an `IdMap` plus a destination marker scan).
@@ -39,6 +50,7 @@ browser without Node built-ins or polyfills:
 | `devonian` | Everything below except `devonian/reflect`, plus the row API (`DevonianTable`, `DevonianLens`, `DevonianClient`, `DevonianIndex`), `effect` schemas and `reconcileRecord` |
 | `devonian/atomic` | Only the native Atomic Data API (`AtomicStore`, `AtomicIdentityMap`, `AtomicLens`, resource helpers). Runtime dependency: the optional `@tomic/lib` peer |
 | `devonian/background` | `BackgroundSync` and its service-worker helpers |
+| `devonian/lenses` (unreleased) | Dependency-free synchronous field, custom and composed value lenses, with contract checks |
 | `devonian/reflect` | The reflection engine; `FileIdMap`/`FileKvStore` only outside the `browser` condition (see above) |
 
 `DevonianClient` and `DevonianTable` extend `DevonianEventEmitter`, a small
