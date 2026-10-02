@@ -18,14 +18,17 @@ export { generateFromSchema } from './fake-data/generate.js';
 export { createMockServer } from './mock-server/server.js';
 export type { MockServer } from './mock-server/server.js';
 
-export { createApiClient } from './client/client.js';
+export { createApiClient } from './client/node.js';
+export type { ApiClientOptions } from './client/node.js';
+export { credentialsFromEnv } from './client/credentials.js';
 export type {
   ApiClient,
-  ApiClientOptions,
   PaginateOptions,
   PollingHandle,
   PollOptions,
   SyncResult,
+  PendingWriteInfo,
+  PendingWriteType,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
@@ -60,7 +63,21 @@ export type {
   Transport,
   TransportRequest,
   TransportResponse,
+  HttpMethod,
 } from './read/transport.js';
+export {
+  apiKeyAuth,
+  bearerAuth,
+  authenticatedTransport,
+} from './client/auth.js';
+export type { Authenticate, Credentials } from './client/auth.js';
+export { readCollections } from './read/collections.js';
+export type {
+  CollectionReadOptions,
+  CollectionReadResult,
+  CollectionSnapshot,
+} from './read/collections.js';
+export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';

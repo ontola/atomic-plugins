@@ -1,12 +1,12 @@
 /**
- * `syncables/browser`: the read path, safe to bundle for a browser (or an
+ * `syncables/browser`: the reader and local replica, safe to bundle for a browser (or an
  * iframe plugin). Nothing reachable from this module imports a Node
  * built-in or `js-yaml` — `__tests__/unit/browser/bundle.test.ts` bundles it
  * with esbuild `platform: 'browser'` and fails on any such import — and
- * nothing here calls `fetch`: every request goes through the injected
- * `Transport`.
+ * the reader uses an injected Transport; the client also accepts one,
+ * or adapts supplied/global fetch for direct HTTP.
  *
- * Not included: the mock server, `createApiClient`, and the file-path
+ * Not included: the mock server, environment credential loading, and the file-path
  * loaders (`loadOpenApiDocument`, `loadOverlay`). Pass documents and
  * overlays as parsed objects.
  */
@@ -40,7 +40,34 @@ export type {
   Transport,
   TransportRequest,
   TransportResponse,
+  HttpMethod,
 } from './read/transport.js';
+export { createApiClient } from './client/client.js';
+export type {
+  ApiClient,
+  ApiClientOptions,
+  PendingWriteInfo,
+  PendingWriteType,
+  PaginateOptions as ClientPaginateOptions,
+  PollingHandle,
+  PollOptions,
+  SyncResult,
+} from './client/client.js';
+export { InMemoryStorageAdapter } from './client/storage.js';
+export type { StorageAdapter } from './client/storage.js';
+export {
+  apiKeyAuth,
+  bearerAuth,
+  authenticatedTransport,
+} from './client/auth.js';
+export type { Authenticate, Credentials } from './client/auth.js';
+export { readCollections } from './read/collections.js';
+export type {
+  CollectionReadOptions,
+  CollectionReadResult,
+  CollectionSnapshot,
+} from './read/collections.js';
+export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
 
 export { applyOverlay } from './openapi/apply-overlay.js';
 export type {

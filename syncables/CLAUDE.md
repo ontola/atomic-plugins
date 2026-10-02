@@ -59,31 +59,17 @@ Data flows through four stages, each its own directory under `src/`:
    Everything downstream assumes refs are already resolved; `types.ts` holds
    the minimal OpenAPI type surface actually used (not a full spec typing).
 
-2. **`resources/discover.ts`** — turns `document.paths` into a list of
-   `ResourceRoute`s by pairing each collection path (`/pets`) with its direct
-   item-path child (`/pets/{petId}`). This pairing is the core concept the
-   rest of the codebase builds on: a "resource" only exists where that
-   pairing holds. Paths without a matching item path (health checks, one-off
-   actions) are not resources and are handled separately as raw
-   request/response passthroughs.
+2. **Resource discovery** — `read/model.ts` reads `components.crudResources`
+   for both the one-off reader and local replica: named collections, identity
+   fields, parent bindings and GET/POST list configuration. `read/collections.ts`
+   owns traversal and returns raw per-context collections with explicit
+   completion/error status. `read/read.ts` adds ontology/type projection.
 
-   Path parameters belonging to the *collection* itself (as opposed to the
-   item id) aren't substituted anywhere downstream: `client.ts`'s
-   `collectionUrl`/`itemUrl` only fill in `itemParam`, so a nested resource
-   like GitHub's `/repos/{owner}/{repo}/issues` would be requested with
-   `{owner}`/`{repo}` still literally in the URL; the mock server's
-   `ResourceStore` also keys collections by the raw path template, so every
-   `{owner}`/`{repo}` combination would collide into one shared collection.
-   The current model only really supports resources at a fixed,
-   parameter-free collection path.
-
-   A sibling spec, the [OpenAPI CRUD Causality Extension](../openapi-extensions/spec/crud-causality/README.md)
-   (`components.crudResources`, `x-crud`), formalizes a superset of this —
-   multiple collections per resource, server-added fields, and (via
-   `identity.bindings`) exactly the collection-path-parameter carryover
-   described above — and names this project as its intended reference
-   implementation. It isn't implemented here yet; `discoverResources`'s
-   pairing is a narrower, ad hoc stand-in for it.
+   For compatibility, the client opts into `resources/discover.ts` path-pair
+   discovery when CRUD metadata is absent. The mock server still uses that
+   legacy model. Legacy nested paths require `constants`; metadata-driven
+   parent collections supply bindings automatically. This implements a
+   subset of CRUD Causality, not all its request/patch/mint semantics.
 
 3. **`mock-server/`** — `server.ts` is the request handler; it uses
    `routing/router.ts` (`findRoute`) to match an incoming path against the
@@ -96,53 +82,46 @@ Data flows through four stages, each its own directory under `src/`:
    response verbatim. Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
 
-4. **`client/`** — `client.ts`'s `createApiClient` also runs `discoverResources`
-   against the same document to know what resources/routes exist, then talks
-   to a live server over `fetch`. Nothing in this package reads an OpenAPI
-   document's `security`/`securitySchemes` (not even present in `types.ts`'s
-   type surface) — there's no built-in notion of auth. `ApiClientOptions.fetch`
-   is the only extension point, so authenticating (a bearer token, an API
-   key from an env var, etc.) means passing a `fetch` wrapper that adds the
-   right header to every request. Reads are served from local storage
-   (`StorageAdapter`, `storage.ts`; `InMemoryStorageAdapter` is the default —
-   pass a custom adapter to persist elsewhere). `sync()` and the standalone
-   `paginate()` method both walk every page of a paginated GET operation
-   before returning (see below).
+4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
+   by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
+   the same `walkPages` as the reader, including POST-body cursors, next-link
+   checks and budgets. Failed/incomplete collections do not replace or prune
+   stored records. GET validators reuse raw cached response bodies.
 
-   `create`/`update`/`remove` are local-first: each writes to `storage`
-   immediately and returns without waiting on the network, then applies
-   itself against the server in the background via a per-record write
-   queue (keyed by `${resource}:${id}`, one write in flight at a time so
-   writes to the same record land in server order), retrying failures with
-   exponential backoff (`ApiClientOptions.retry`; unlimited attempts by
-   default). `create` generates a local id up front (`crypto.randomUUID()`,
-   or whatever `data.id` already is) so the record exists locally before
-   any request is sent; if the server assigns a different id, the record —
-   and anything still queued behind that create — is moved onto it once
-   the write settles (the mock server instead honors a client-supplied id
-   when present, which is common enough in real APIs that this rarely
-   triggers). `pendingWrites()` reports writes not yet confirmed by the
-   server, including the last error and attempt count for ones currently
-   failing. `update()` always sends a `PUT` (full replace) — there's no
-   `PATCH`/partial-update path on the client, even though the mock server's
-   `handleItemRequest` accepts both.
+   All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
+   over supplied/global fetch. `auth.ts` holds credentials and an injected
+   `authenticate(request, credentials)` adapter, plus API-key/bearer helpers.
+   `node.ts`, exported by the main entry, adds environment fallback through
+   `credentials.ts`: explicit fields override `SYNCABLES_*` values, with an
+   optional prefix or disable switch. OAuth token acquisition, consent and
+   persistence belong to the auth adapter. No environment loader is reachable
+   from the browser entry.
 
-   `sync()` is meant to be called repeatedly (`startPolling({ intervalMs })`
-   does this on an interval, skipping a tick if the previous sync is still
-   in flight) without re-doing work each time: for a non-paginated
-   collection it conditionally re-fetches, keyed by exact request URL,
-   sending `If-None-Match`/`If-Modified-Since` from the prior response's
-   `ETag`/`Last-Modified` and treating a `304` as "nothing to do" (reusing
-   the item list from the previous sync rather than re-parsing a body).
-   Even on a fresh `200`, or for a paginated collection (which can't be
-   conditionally short-circuited the same way, since pagination has to be
-   walked in full to know the current item set), it only touches storage
-   for items that actually changed — per-item change detection prefers a
-   handful of common "this changed" fields (`updatedAt`, `version`, `_rev`,
-   etc.) over deep-comparing the whole object, so it also works against
-   servers with no conditional-request support at all. `sync()`'s return
-   value and each `onSync` callback report which collection paths actually
-   changed.
+   `storage.ts` holds the record-only `StorageAdapter`. Confirmed remote state
+   and unresolved mutations are held separately in memory; refresh and older
+   acknowledgements replay remaining intent to derive the visible record.
+   Metadata collection names and bound context identify storage namespaces;
+   identical IDs in sibling parents stay separate. Legacy names remain paths.
+   Writes are serialized per scoped record and retry with exponential backoff
+   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   updates select declared PUT, otherwise PATCH, and currently send JSON
+   records rather than JSON Patch. Read-only operations fail before local edits.
+
+   `read/responses.ts` supplies an optional awaited `storeResponse` hook,
+   available on client reads, `readCollections`, `readPlatform` and standalone
+   pagination. It retains the original body text before interpretation and
+   relevant data headers, excluding auth/cookie headers. Capture is outside
+   the auth adapter so request URLs/bodies have not yet received credentials.
+   It captures data-read responses only, including 304/errors/429 attempts.
+   Hosts choose archival storage and retention; automatic replay is absent.
+
+   Do not mistake a persistent record adapter or raw archive for a durable
+   outbox. Queues, confirmed-state bookkeeping and mappings remain in memory;
+   retry classification, uncertain-create recovery, durable outboxes and
+   same-field conflict resolution remain #260 work. A lost successful POST
+   response can still duplicate a create on retry. A fully paginated list is
+   not necessarily a consistent snapshot; the existing absence/pruning rule
+   still depends on provider behavior.
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
@@ -207,13 +186,13 @@ qualifies, but falls back to today's single-request behavior otherwise.
 ### Browser read path (`src/read/`, `src/browser.ts`)
 
 `package.json` exports a second entry, `syncables/browser` (`src/browser.ts`).
-It holds the read path only, for browser and iframe plugins. `read/model.ts`
+It holds the reader and local-first core for browser and iframe plugins. `read/model.ts`
 discovers collections from `components.crudResources`, a read-only port of
 reflector's `discoverResourceModel`. `read/pages.ts` walks the pages of one
 operation with the `pagination/` modules above, including request-body
 cursors for POST lists. `read/ontology.ts` derives terms typed with Atomic
-Data datatypes. `read/read.ts` combines these into `readPlatform` and
-`paginate`. All requests go through an injected `Transport`
+Data datatypes. `read/collections.ts` owns shared raw traversal; `read/read.ts` adds
+`readPlatform` and `paginate`. All requests go through an injected `Transport`
 (`read/transport.ts`).
 
 Nothing reachable from `src/browser.ts` may import a Node built-in or
@@ -222,11 +201,14 @@ and `openapi/overlay.ts` only adds the file-reading `loadOverlay` on top of
 it. `__tests__/unit/browser/bundle.test.ts` enforces the rule by bundling the
 entry with esbuild `platform: 'browser'`. Keep `fs`/`http`/`node:crypto` in
 `openapi/load.ts`, `openapi/overlay.ts` and `mock-server/`. `index.ts`
-re-exports the read path too, with `paginate` renamed `paginateOperation`.
+re-exports the shared APIs with the Node constructor/environment adapter, with `paginate` renamed `paginateOperation`.
 
 Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 `unit/client/client.test.ts`, `unit/mock-server/server.test.ts`,
 `unit/pagination/*.test.ts`), plus:
+- `unit/client/unified.test.ts` covers custom transports, scoped metadata
+  collections, POST paging, response capture, auth configuration and local
+  intent across refresh/acknowledgement races.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

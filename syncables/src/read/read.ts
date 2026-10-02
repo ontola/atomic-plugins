@@ -5,17 +5,13 @@ import {
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import type { OpenApiDocument } from '../openapi/types.js';
 import {
-  applySelection,
   asText,
   describeModel,
   discoverReadModel,
   listOperation,
-  rootParameters,
   upstreamOf,
   type PlatformDescription,
   type QuerySelection,
-  type ReadCollection,
-  type ReadModel,
 } from './model.js';
 import {
   DATATYPES,
@@ -31,6 +27,8 @@ import {
   type ReadLimits,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
+import { readCollections } from './collections.js';
+import { captureReadResponses, type StoreReadResponse } from './responses.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -74,6 +72,8 @@ export interface ReadOptions {
   /** Values for `describePlatform(document).parameters`. */
   constants: Record<string, string>;
   transport: Transport;
+  /** Optional storage hook for original data-read responses. */
+  storeResponse?: StoreReadResponse;
   selection?: QuerySelection;
   limits?: Partial<ReadLimits>;
   /** Waits out a 429's `Retry-After`; defaults to `setTimeout`. */
@@ -107,65 +107,6 @@ export interface ReadResult {
   errors: string[];
 }
 
-interface Origin {
-  value: Record<string, unknown>;
-  path: Record<string, string>;
-}
-
-class ProbeDone extends Error {}
-
-/** Every combination of provider values, one parent record per provider collection. */
-function invocations(
-  collection: ReadCollection,
-  model: ReadModel,
-  constants: Record<string, string>,
-  origins: Map<string, Origin[]>,
-): Record<string, string>[] {
-  const groups = new Map<string, { param: string; field: string }[]>();
-  for (const param of collection.contextParams) {
-    if (param in constants) {
-      continue;
-    }
-    const provider = model.providers.get(param);
-    if (!provider) {
-      continue;
-    }
-    groups.set(provider.collection, [
-      ...(groups.get(provider.collection) ?? []),
-      { param, field: provider.field },
-    ]);
-  }
-
-  let combos: Record<string, string>[] = [{ ...constants }];
-  for (const [source, params] of groups) {
-    const next: Record<string, string>[] = [];
-    for (const combo of combos) {
-      for (const parent of origins.get(source) ?? []) {
-        const values = { ...parent.path, ...combo };
-        for (const { param, field } of params) {
-          values[param] = asText(parent.value[field]);
-        }
-        if (params.every(({ param }) => values[param])) {
-          next.push(values);
-        }
-      }
-    }
-    combos = next;
-  }
-
-  const seen = new Set<string>();
-  return combos.filter((combo) => {
-    const key = JSON.stringify(
-      collection.contextParams.map((p) => combo[p] ?? ''),
-    );
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 const TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
 
@@ -196,16 +137,6 @@ export async function readPlatform(
   options: ReadOptions,
 ): Promise<ReadResult> {
   const doc = resolved(document);
-  const budget = new Budget(options.transport, options.limits, options.sleep);
-  const model = discoverReadModel(doc);
-  applySelection(doc, model, options.selection);
-  const upstream = upstreamOf(doc);
-  const constants = options.constants;
-  for (const param of rootParameters(model)) {
-    if (!constants[param]) {
-      throw new Error(`Enter a value for ${param}`);
-    }
-  }
   const ontology: Ontology = options.probe
     ? { description: '', terms: [] }
     : deriveOntology(doc);
@@ -215,153 +146,45 @@ export async function readPlatform(
       .map((t) => [t.shortname, t.datatype]),
   );
   const records: ReadRecord[] = [];
-  const identities = new Set<string>();
-  const errors: string[] = [];
-  const origins = new Map<string, Origin[]>();
-
-  const walk = async (
-    collection: ReadCollection,
-    path: Record<string, string>,
-  ): Promise<Origin[]> => {
-    const operation = listOperation(doc, collection.url, collection.method);
-    if (!operation) {
-      throw new Error(
-        `${collection.url} declares no ${collection.method} operation`,
+  const result = await readCollections(doc, {
+    ...options,
+    onRecord(value, collection, path): void {
+      const values: Record<string, unknown> = {};
+      for (const [field, raw] of Object.entries(value)) {
+        const shortname = ontologyShortname(field);
+        const datatype = properties.get(shortname);
+        if (!datatype) continue;
+        const typed = typedValue(raw, datatype);
+        if (typed !== undefined) values[shortname] = typed;
+      }
+      const name = [value['title'], value['summary'], value['name']].find(
+        (v): v is string => typeof v === 'string' && v !== '',
       );
-    }
-    const namespace = collection.contextParams
-      .map((p) => path[p] ?? '')
-      .join('/');
-    const out: Origin[] = [];
-
-    for await (const page of walkPages({
-      document: doc,
-      operation,
-      budget,
-      upstream,
-      path: bindPath(collection.url, path),
-      method: collection.method,
-      query: collection.listQuery,
-      body: collection.listBody,
-    })) {
-      if (options.probe) {
-        throw new ProbeDone();
-      }
-      for (const value of page.items) {
-        const id = asText(value[collection.idField]);
-        const key = JSON.stringify([collection.resource, namespace, id]);
-        if (!id || identities.has(key)) {
-          throw new Error(
-            'Missing or repeated record identity; pagination may not be forwarded by the proxy',
-          );
-        }
-        if (records.length >= budget.limits.maxRecords) {
-          throw new BudgetExhausted(
-            `Read exceeds ${budget.limits.maxRecords} records; narrow its scope`,
-          );
-        }
-        identities.add(key);
-        const values: Record<string, unknown> = {};
-        for (const [field, raw] of Object.entries(value)) {
-          const shortname = ontologyShortname(field);
-          const datatype = properties.get(shortname);
-          if (!datatype) {
-            continue;
-          }
-          const typed = typedValue(raw, datatype);
-          if (typed !== undefined) {
-            values[shortname] = typed;
-          }
-        }
-        const name = [value['title'], value['summary'], value['name']].find(
-          (v): v is string => typeof v === 'string' && v !== '',
-        );
-        records.push({
-          resource: ontologyShortname(collection.resource),
-          namespace,
-          id,
-          name: name ?? id,
-          values,
-        });
-        out.push({ value, path });
-      }
-    }
-    return out;
+      const id = asText(value[collection.idField]);
+      records.push({
+        resource: ontologyShortname(collection.resource),
+        namespace: collection.contextParams.map((p) => path[p] ?? '').join('/'),
+        id,
+        name: name ?? id,
+        values,
+      });
+    },
+  });
+  if (!records.length && result.errors.length) {
+    throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
+  }
+  return {
+    platform: options.platform,
+    ontology,
+    records,
+    errors: result.errors,
   };
-
-  let pending = [...model.collections];
-  while (pending.length) {
-    const waiting: ReadCollection[] = [];
-    let progressed = false;
-
-    for (const collection of pending) {
-      const sources = collection.contextParams
-        .filter((p) => !(p in constants))
-        .map((p) => model.providers.get(p)?.collection);
-
-      if (sources.some((s) => s === undefined || s === collection.name)) {
-        errors.push(`${collection.name}: its context has no provider`);
-        progressed = true;
-        continue;
-      }
-      if (!sources.every((source) => origins.has(source as string))) {
-        waiting.push(collection);
-        continue;
-      }
-
-      progressed = true;
-      const read: Origin[] = [];
-      for (const path of invocations(collection, model, constants, origins)) {
-        try {
-          read.push(...(await walk(collection, path)));
-        } catch (error) {
-          if (error instanceof ProbeDone) {
-            return {
-              platform: options.platform,
-              ontology,
-              records: [],
-              errors: [],
-            };
-          }
-          if (options.probe) {
-            throw error;
-          }
-          errors.push(`${collection.name}: ${(error as Error).message}`);
-          if (error instanceof BudgetExhausted) {
-            pending = [];
-            break;
-          }
-        }
-      }
-      origins.set(collection.name, read);
-      if (!pending.length) {
-        break;
-      }
-    }
-
-    if (!pending.length) {
-      break;
-    }
-    if (!progressed) {
-      for (const c of waiting) {
-        errors.push(`${c.name}: its parent collection could not be read`);
-      }
-      break;
-    }
-    pending = waiting;
-  }
-
-  if (options.probe) {
-    throw new Error('No collection available to check');
-  }
-  if (!records.length && errors.length) {
-    throw new Error(`Read incomplete: ${errors.join('; ')}`);
-  }
-  return { platform: options.platform, ontology, records, errors };
 }
 
 export interface PaginateOptions {
   transport: Transport;
+  /** Optional storage hook for original data-read responses. */
+  storeResponse?: StoreReadResponse;
   /** A path template from `document.paths`, e.g. `/v1/search`. */
   path: string;
   /** Default `GET`. */
@@ -393,7 +216,11 @@ export async function paginate(
   if (!operation) {
     throw new Error(`${options.path} declares no ${method} operation`);
   }
-  const budget = new Budget(options.transport, options.limits, options.sleep);
+  const budget = new Budget(
+    captureReadResponses(options.transport, options.storeResponse),
+    options.limits,
+    options.sleep,
+  );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({
     document: doc,
