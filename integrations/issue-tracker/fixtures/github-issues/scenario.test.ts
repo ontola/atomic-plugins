@@ -92,7 +92,7 @@ describe('github-issues fixture drivers', () => {
     });
   });
 
-  it('reset forgets a repository\'s edits, so the seeded one reseeds', () => {
+  it("reset forgets a repository's edits, so the seeded one reseeds", () => {
     const tracker = githubTracker();
     const repository = 'atomic-fixture/tracker';
     const before = tracker.snapshot(repository);
