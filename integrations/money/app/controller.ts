@@ -21,19 +21,26 @@ import {
   type Filters,
   type Period,
 } from './ledger.js';
+import { adopt } from './adopt.js';
+import { localToday } from './format.js';
+import type { OwnSchema } from './own.js';
 import {
   atomic,
   canAnnotate,
-  isBankTable,
+  classFields,
   readMany,
   readRows,
   readStatement,
+  resolver,
   type StoredStatement,
   resolveFields,
   type Fields,
   type Txn,
 } from './rows.js';
 import type { ImporterRun, PluginStore } from './store.js';
+import { writeImport, type WriteProgress } from './write.js';
+
+export { localToday };
 
 export type ViewState =
   | { kind: 'loading'; loaded: number; total?: number }
@@ -62,6 +69,8 @@ export type ImportSheet =
       preview: Preview;
       tab: 'new' | 'already' | 'blocked';
       applying?: boolean;
+      /** Rows written so far, when the app writes them itself. */
+      progress?: WriteProgress;
       /** Why applying failed, when it did. */
       failure?: string;
     }
@@ -75,13 +84,29 @@ export interface ChosenFile {
 }
 
 /**
- * Applies a checked statement through the importer, with the host's own
- * review (`store.importer.run`, atomic-server#1774). An older host has none,
- * and the preview then says where to import instead; tests pass a fake.
+ * Applies a checked statement. On the importer's table: through the importer,
+ * with the host's own review (`store.importer.run`, atomic-server#1774); an
+ * older host has none, and the preview then says where to import instead. On
+ * a table of the shared class: the app's own writes (`write.ts`). Tests pass
+ * a fake.
  */
 export interface ImportPort {
-  apply(text: string, file: FileInfo): Promise<ImporterRun>;
+  apply(
+    text: string,
+    file: FileInfo,
+    preview: Preview,
+    onProgress?: (progress: WriteProgress) => void,
+  ): Promise<ImporterRun>;
 }
+
+/**
+ * Whose table the app shows: the Bank statements importer's (its drive-local
+ * class, imports through the importer), the app's own table of the shared
+ * class (an install from the catalog; the app imports and edits it itself),
+ * or another table of the shared class the app is a view of (imports and
+ * edits after "Allow editing").
+ */
+export type Source = 'importer' | 'own' | 'shared';
 
 /** The host's importer, when it has one, as an ImportPort. */
 export function hostImporter(store: PluginStore): ImportPort | undefined {
@@ -151,10 +176,12 @@ export interface State {
   rowAccess: 'granted' | 'none' | 'denied' | 'unavailable' | 'unknown';
   /** Why the person or host refused editing, when they did. */
   rowAccessReason?: string;
+  /** Whose table this is; `undefined` until loaded. */
+  source?: Source;
 }
 
 export const NOT_A_BANK_TABLE =
-  'This app shows a Bank transactions table. Open it from the app tab of the table the Bank statements importer created.';
+  'This app shows a Bank transactions table: the one the Bank statements importer created, or a table of the shared Bank transaction class (bank-transaction-v1), such as the one this app got when it was installed. Open it from the app tab of such a table.';
 
 export interface Controller {
   state(): State;
@@ -192,16 +219,6 @@ export interface Options {
   tick?: () => Promise<void>;
 }
 
-export function localToday(): string {
-  const now = new Date();
-
-  return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('-');
-}
-
 export function createController(
   store: PluginStore,
   render: (state: State) => void,
@@ -223,14 +240,19 @@ export function createController(
     canApply: false,
     rowAccess: 'unknown',
   };
-  const port = importer ?? hostImporter(store);
+  /** Set by `load()`, once it knows whose table this is. */
+  let port: ImportPort | undefined = importer;
   state.canApply = Boolean(port);
   let statementsTable: string | undefined;
   let statementFields: Fields = {};
+  /** `money-table` on the app's own statement rows (`own.ts`). */
+  let tableField: string | undefined;
+  let own: OwnSchema | undefined;
   let unsubscribeStatements: (() => void) | undefined;
   /** Bumped on every new check or close, so a stale check stops. */
   let run = 0;
   let pendingText: string | undefined;
+  let pendingPreview: Preview | undefined;
   let table: string | undefined;
   let unsubscribe: (() => void) | undefined;
   let refreshing: Promise<void> | undefined;
@@ -271,7 +293,15 @@ export function createController(
     });
   };
 
+  /**
+   * True while the app writes rows itself: each write notifies the table, and
+   * one refresh after the last of them reports the batch as "Imported N".
+   */
+  let writing = false;
+
   const queueRefresh = () => {
+    if (writing) return;
+
     if (refreshing) {
       again = true;
 
@@ -298,11 +328,55 @@ export function createController(
       property: atomic.parent,
       value: statementsTable,
     });
-    const statements = await readMany(store, subjects, r =>
-      readStatement(r, statementFields),
-    );
+    const statements = (
+      await readMany(store, subjects, r =>
+        readStatement(r, statementFields, tableField),
+      )
+    )
+      // The app's own statements table serves every table it imports into.
+      .filter(s => !tableField || s.table === table);
     update({ statements });
   };
+
+  /**
+   * The app's own import into a table of the shared class (`write.ts`). On
+   * a table that is not the app's own, the person's "Allow editing" first.
+   */
+  const writePort = (fields: Fields, schema: OwnSchema): ImportPort => ({
+    apply: async (_text, _file, preview, onProgress) => {
+      if (state.source === 'shared' && state.rowAccess !== 'granted') {
+        const granted = await askForAccess().catch(() => false);
+        if (!granted)
+          return {
+            status: 'blocked',
+            errors: [
+              `You didn't allow Money to edit this table, so nothing was imported.${state.rowAccessReason ? ` (${state.rowAccessReason})` : ''}`,
+            ],
+          };
+      }
+
+      writing = true;
+
+      try {
+        return await writeImport(
+          store,
+          {
+            table: table!,
+            fields,
+            own: schema,
+            stored: new Set(
+              (state.statements ?? []).map(s => s.sourceId).filter(Boolean),
+            ),
+          },
+          preview,
+          onProgress,
+          { today },
+        );
+      } finally {
+        writing = false;
+      }
+    },
+  });
 
   const askForAccess = async (): Promise<boolean> => {
     if (!store.requestRowAccess) return false;
@@ -336,18 +410,42 @@ export function createController(
       update({ view: { kind: 'loading', loaded: 0 } });
 
       try {
-        const data = await store.getData();
+        // Offered on bank-transaction-v1 tables and the importer's, and its
+        // own table one of the former (adopt.ts). Best effort: a refusal
+        // leaves the app as installed.
+        const found = await store.getData();
+        const adopted = await adopt(store, found).catch(() => undefined);
+        const data = adopted?.data ?? found;
         if (!data?.rowClass) return fail(NOT_A_BANK_TABLE);
-        const fields = await resolveFields(store, data.rowClass);
-        if (!isBankTable(fields)) return fail(NOT_A_BANK_TABLE);
+        own = adopted?.own;
+        const fields = await resolveFields(store, data.rowClass, own?.extras);
+        if (!fields) return fail(NOT_A_BANK_TABLE);
         table = data.table;
-        const owner = store.openResource
-          ? await store
-              .getResource(table)
-              .then(r => r.get(atomic.parent))
-              .catch(() => undefined)
-          : undefined;
-        if (typeof owner === 'string') update({ importer: owner });
+        const source: Source = resolver.accepts(data.rowClass)
+          ? adopted?.ownTable
+            ? 'own'
+            : 'shared'
+          : 'importer';
+        update({ source });
+
+        if (source === 'importer') {
+          port = importer ?? hostImporter(store);
+          const owner = store.openResource
+            ? await store
+                .getResource(table)
+                .then(r => r.get(atomic.parent))
+                .catch(() => undefined)
+            : undefined;
+          if (typeof owner === 'string') update({ importer: owner });
+        } else
+          port =
+            importer ??
+            (own &&
+            (source === 'own' || (store.rowAccess && store.requestRowAccess))
+              ? writePort(fields, own)
+              : undefined);
+
+        update({ canApply: Boolean(port) });
         const subjects = await store.query({
           property: atomic.parent,
           value: table,
@@ -358,9 +456,17 @@ export function createController(
         });
         const statements = data.tables?.statements;
 
-        if (statements) {
+        if (source === 'importer' && statements) {
           statementsTable = statements.table;
-          statementFields = await resolveFields(store, statements.rowClass);
+          tableField = undefined;
+          statementFields = await classFields(store, statements.rowClass);
+        } else if (source !== 'importer' && own) {
+          statementsTable = own.statementsTable;
+          tableField = own.tableField;
+          statementFields = own.statementFields;
+        }
+
+        if (statementsTable) {
           await loadStatements().catch(() => undefined);
           unsubscribeStatements?.();
           unsubscribeStatements = store.subscribe(statementsTable, () => {
@@ -368,7 +474,9 @@ export function createController(
           });
         }
 
-        if (store.rowAccess) {
+        // The app's own table needs no grant: it is inside its own subtree.
+        if (source === 'own') update({ rowAccess: 'granted' });
+        else if (store.rowAccess) {
           const access = await store.rowAccess().catch(() => undefined);
           if (access) update({ rowAccess: access.status });
         }
@@ -557,6 +665,7 @@ export function createController(
       const checked = compare(parsed.format, parsed.statements, state.rows);
       if (!checked.ok) return stop(checked.problem);
       pendingText = text;
+      pendingPreview = checked.preview;
       update({
         importing: {
           step: 'preview',
@@ -572,16 +681,34 @@ export function createController(
     },
     async applyImport() {
       const sheet = state.importing;
-      if (sheet?.step !== 'preview' || !port || !pendingText) return;
+      if (sheet?.step !== 'preview' || !port || !pendingText || !pendingPreview)
+        return;
       const mine = run;
-      update({ importing: { ...sheet, applying: true, failure: undefined } });
+      update({
+        importing: {
+          ...sheet,
+          applying: true,
+          progress: undefined,
+          failure: undefined,
+        },
+      });
 
       try {
-        const outcome = await port.apply(pendingText, sheet.file);
+        const outcome = await port.apply(
+          pendingText,
+          sheet.file,
+          pendingPreview,
+          progress => {
+            const current = state.importing;
+            if (mine === run && current?.step === 'preview')
+              update({ importing: { ...current, progress } });
+          },
+        );
         if (mine !== run) return;
 
         if (outcome.status === 'applied' || outcome.status === 'nothing') {
           pendingText = undefined;
+          pendingPreview = undefined;
           // The new rows, and "Imported N", arrive through the table
           // subscription (`created` also counts the statement rows). Read
           // again now and shortly after as well: a subscription can miss
@@ -602,6 +729,7 @@ export function createController(
             importing: {
               ...sheet,
               applying: false,
+              progress: undefined,
               failure:
                 ('errors' in outcome ? outcome.errors?.join('\n') : '') ||
                 'The importer blocked this file.',
@@ -613,14 +741,20 @@ export function createController(
             importing: {
               ...sheet,
               applying: false,
+              progress: undefined,
               failure: error instanceof Error ? error.message : String(error),
             },
           });
+        // Rows the app wrote before the failure are there; show them, so the
+        // next check of the same file proposes only the rest.
+        queueRefresh();
+        void loadStatements().catch(() => undefined);
       }
     },
     closeImport() {
       run++;
       pendingText = undefined;
+      pendingPreview = undefined;
       if (state.importing) update({ importing: undefined });
     },
     async openImporter() {

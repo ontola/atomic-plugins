@@ -8,6 +8,7 @@ import {
   amountLabel,
   formatAmount,
   groupByDay,
+  isAmount,
   isOut,
   totals,
   type Money,
@@ -126,11 +127,11 @@ export function amountNode(
     'span',
     {
       class: 'm-amt',
-      'data-dir': isOut(amount) ? 'out' : 'in',
+      'data-dir': !isAmount(amount) ? 'invalid' : isOut(amount) ? 'out' : 'in',
       'aria-label': amountLabel(amount, currency, locale ?? 'en'),
     },
     formatAmount(amount, currency, locale, { symbol, sign }),
-    suffix ? h('small', {}, currency) : undefined,
+    suffix && isAmount(amount) ? h('small', {}, currency) : undefined,
   );
 }
 

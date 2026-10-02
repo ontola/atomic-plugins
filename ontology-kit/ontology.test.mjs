@@ -442,3 +442,37 @@ test('this repository: the four shared classes reuse the host terms #177 names',
     properties['bank-value-date'].subject,
   ]);
 });
+
+test('served.mjs: a class with its own properties, checked against the committed bytes', async () => {
+  const { classTermPaths, servedProblems, termPaths } =
+    await import('./served.mjs');
+  const paths = classTermPaths('bank-transaction-v1');
+  assert.equal(paths[0], 'classes/bank-transaction-v1');
+  assert.ok(paths.includes('properties/bank-amount'));
+  // Atomic's own `name` is reused, not served here.
+  assert.equal(paths.length, 10);
+  for (const path of paths) assert.ok(termPaths().includes(path), path);
+
+  const ontologyBase = readBase();
+
+  const asCommitted = async url => {
+    const path = url.split('?')[0].slice(ontologyBase.length + 1);
+
+    return new Response(readFileSync(join(root, 'ontology', path)));
+  };
+
+  assert.deepEqual(await servedProblems(paths, { fetch: asCommitted }), []);
+
+  const lagging = async url =>
+    url.includes('bank-amount')
+      ? new Response('Not Found', { status: 404 })
+      : asCommitted(url);
+  assert.deepEqual(await servedProblems(paths, { fetch: lagging }), [
+    `${ontologyBase}/properties/bank-amount: HTTP 404`,
+  ]);
+  const changed = async url =>
+    url.includes('money-note') ? new Response('{}') : asCommitted(url);
+  assert.deepEqual(await servedProblems(paths, { fetch: changed }), [
+    `${ontologyBase}/properties/money-note: served bytes differ from ontology/properties/money-note`,
+  ]);
+});

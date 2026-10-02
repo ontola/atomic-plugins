@@ -3,9 +3,9 @@
 The row classes several drive apps sync into, so that a plugin's view works on
 any table of that class, including tables the plugin never synced and rows made
 by hand. Design and decisions: [#177](https://github.com/ontola/atomic-plugins/issues/177)
-("option 4"). Every class and property here is **declared, not verified**: no
-plugin writes or reads them yet, and nothing has run against the published
-GitHub Pages URLs.
+("option 4"). A class here is **declared, not verified** until a plugin's e2e
+has written and read it against the published GitHub Pages URLs; see each
+plugin's README for which have (money 0.4.0 for `bank-transaction-v1`).
 
 Two top-level folders, split so that everything under the vocabulary's URL
 space is an immutable term and nothing else:
@@ -190,16 +190,56 @@ The resolver is strict (#177 decision 1):
   Whether the lensed side is materialized or computed, and with which grant a
   lens writes back, is #177 Q14 and not decided.
 
+## Plugin e2e tests and the published subjects
+
+A plugin's e2e uses the real published subjects, and the pinned atomic-server
+and the browser fetch them from GitHub Pages themselves, as in production.
+Nothing rewrites a bundle, and the dev-server's `/ontology/` copy is not used
+by plugin e2e tests. The timesheets, issue-tracker, Todoist and money lanes
+run this way.
+
+- **Why not rewrite subjects in the dev-server, as it does for
+  `app-module`?** A bundle with rewritten subjects is not the published
+  bundle: its integrity hash changes, so the dev-server would have to
+  recompute the catalog's `app-module-integrity`, and CI's hosting-surface
+  check (byte-identical `apps/*/*/ui.js` and `plugin.js`) would need an
+  exception. The test would then no longer install exactly the bytes users
+  get.
+- **What the real URLs cost:** network access to `https://ontola.github.io`
+  from the machine that runs the lane (CI runners and the build VPS have it;
+  a Claude Code cloud session is not verified), and a term is usable in an
+  e2e only once it is on `main` and Pages serves it. So a new class version
+  lands in its own pull request first (`build`, `check`,
+  `ontology-published.yml`), and the plugin slice that uses it follows.
+  Published terms never change, so a test can never see a different version
+  of a term than the one it bundles.
+- **Fail early:** in `beforeAll`, check that Pages serves the terms the test
+  uses with the committed bytes, and fail with a message that says what to
+  do (`served.mjs`):
+
+  ```ts
+  test.beforeAll(async () => {
+    const served = await import('../../../ontology-kit/served.mjs' as string);
+    const problems = await served.servedProblems(
+      served.classTermPaths('bank-transaction-v1'),
+    );
+    if (problems.length) throw new Error(served.notServedMessage(problems));
+  });
+  ```
+
+  The same check from a shell: `node ontology-kit/served.mjs
+classes/bank-transaction-v1`, or with no argument for every term file.
+
 ## Not verified
 
-- Any of these terms at the real `https://ontola.github.io/atomic-plugins/ontology/…`
-  URLs: they exist only once this is on `main`, and `ontology-published.yml`
-  then checks Pages serves them.
 - A cold browser, or a term the server first uses, while Pages is down: spike
   S1 found both fail (#177 H1).
-- `createApp({ rowClass })` and money's `ensureSchema` with these subjects
-  (#177 S4).
-- Any lens against a live drive (#177 S5).
-- How a plugin's e2e uses its bundled github.io subjects while the dev-server
-  serves the terms on its own origin: the dev-server rewrites only the term
-  files, not bundles.
+- `createApp({ rowClass })` with these subjects (#177 S4, first half): no
+  plugin passes a row class; the catalog install path can't (#177 H2). A
+  sandbox importer's `destination` cannot name one either: the pinned
+  manifest validators refuse `subject` there (money 0.4.0 therefore keeps
+  its importer's drive-local class and has its drive app write
+  `bank-transaction-v1` rows itself).
+- Any Devonian lens against a live drive (#177 S5). Money's lens from its
+  importer's class to `bank-transaction-v1` is plain code in
+  `integrations/money/app/rows.ts`, exercised by its e2e.
