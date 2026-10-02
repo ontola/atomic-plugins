@@ -341,6 +341,7 @@ export function notionProjection(
     description: `Notion property "${field.name}" (${field.type}, id ${field.id}).`,
     requires: [],
     recommends: [],
+    notionType: field.type,
   }));
   if (
     fetched.ontology.terms.some(t =>

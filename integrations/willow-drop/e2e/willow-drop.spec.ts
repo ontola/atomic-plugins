@@ -18,6 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   before,
   createFromCatalog,
+  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
@@ -141,6 +142,19 @@ test.describe('willow-drop integration', () => {
 });
 
 async function publishBundle(page: Page) {
+  // `createFromCatalog` reloads the SPA at /app/new and then fills the
+  // template search with Playwright's default 10 s action timeout, which a
+  // slow runner can miss while the page is still on the boot splash (run
+  // 36891774224). Load the page and wait for the search box with room to
+  // spare, so the helper's own reload finds a warm app (as remotestorage's
+  // helpers do).
+  await waitForSynced(page);
+  await page.goto(new URL('/app/new', page.url()).href);
+  await expect(
+    page.getByRole('searchbox', {
+      name: 'Search templates and resource types',
+    }),
+  ).toBeVisible({ timeout: 60_000 });
   await createFromCatalog(page, 'Plugin');
   await expect(
     page

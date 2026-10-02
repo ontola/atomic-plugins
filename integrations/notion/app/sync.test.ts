@@ -13,6 +13,7 @@ import {
   ROW_CLASS,
   TABLE,
 } from './fakeStore.js';
+import { dataBrowser, OPTION_COLOURS } from './options.js';
 import { atomic, NOTION_DOCUMENT, syncNotion } from './sync.js';
 import { syncablesTransport } from './transport.js';
 
@@ -118,13 +119,77 @@ describe('syncNotion', () => {
     expect(store.resources.get(ONTOLOGY)![atomic.properties]).toEqual([
       ...byShortname.values(),
     ]);
-    // The baseline is bookkeeping on the row, never a column.
+    // The baseline (on rows) and the option id (on Tags) are bookkeeping,
+    // never columns.
     expect(store.resources.get(ROW_CLASS)![atomic.recommends]).toEqual(
       [...byShortname]
-        .filter(([shortname]) => shortname !== 'notion-sync-baseline')
+        .filter(
+          ([shortname]) =>
+            shortname !== 'notion-sync-baseline' &&
+            shortname !== 'notion-option-id',
+        )
         .map(([, subject]) => subject),
     );
     expect(byShortname.has('notion-sync-baseline')).toBe(true);
+    expect(byShortname.has('notion-option-id')).toBe(true);
+
+    // Select, status and multi-select columns are the host's own select
+    // columns: one Tag per Notion option, under the column's Property, and
+    // the cell holds the Tag (options.ts).
+    const status = column('%3AUPp');
+    const tags = column('Tg%5Cq');
+    expect(store.resources.get(status)).toMatchObject({
+      [IS_A]: [atomic.propertyClass, dataBrowser.selectProperty],
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/resourceArray',
+      [dataBrowser.classtype]: dataBrowser.tag,
+      [dataBrowser.max]: 1,
+    });
+    expect(store.resources.get(tags)).not.toHaveProperty(dataBrowser.max);
+    const allowsOnly = store.resources.get(status)![
+      dataBrowser.allowsOnly
+    ] as string[];
+    const optionId = byShortname.get('notion-option-id')!;
+    expect(
+      allowsOnly.map(s => {
+        const tag = store.resources.get(s)!;
+
+        return [
+          tag[PARENT],
+          tag[IS_A],
+          tag[atomic.shortname],
+          tag[atomic.name],
+          tag[dataBrowser.color],
+          tag[optionId],
+        ];
+      }),
+    ).toEqual([
+      [
+        status,
+        [dataBrowser.tag],
+        'not-started',
+        'Not started',
+        OPTION_COLOURS.default,
+        'b1f5a3c2-0001-4000-8000-000000000001',
+      ],
+      [
+        status,
+        [dataBrowser.tag],
+        'in-progress',
+        'In progress',
+        OPTION_COLOURS.blue,
+        'b1f5a3c2-0001-4000-8000-000000000002',
+      ],
+      [
+        status,
+        [dataBrowser.tag],
+        'done',
+        'Done',
+        OPTION_COLOURS.green,
+        'b1f5a3c2-0001-4000-8000-000000000003',
+      ],
+    ]);
+    const tagOf = (id: string) =>
+      [...store.resources].find(([, p]) => p[optionId] === id)![0];
 
     const rows = [...store.resources.values()].filter(p => p[PARENT] === TABLE);
     expect(rows.map(r => r[atomic.name])).toEqual([
@@ -138,18 +203,31 @@ describe('syncNotion', () => {
       [byShortname.get('notion-data-source')!]: 'Roadmap',
       [column('n%3D1')]: 3,
       [column('BJXS')]: false,
+      [status]: [tagOf('b1f5a3c2-0001-4000-8000-000000000002')],
+      // Multi-select Tags in the lens's order (sorted option ids).
+      [tags]: [
+        tagOf('c2e6b4d3-0002-4000-8000-000000000001'),
+        tagOf('c2e6b4d3-0002-4000-8000-000000000002'),
+      ],
     });
     expect(rows[1]![column('n%3D1')]).toBe(0);
+    expect(rows[1]![tags]).toEqual([]);
     expect(rows[2]).not.toHaveProperty(column('Nt0s'));
     expect(rows[2]).not.toHaveProperty(column('n%3D1'));
     expect(typeof rows[0]![byShortname.get('notion-last-edited')!]).toBe(
       'number',
     );
-    // Nothing is written outside the app's own subtree.
+    // Nothing is written outside the app's own subtree: the ontology, the
+    // class, the table and its rows, and the Tags under the column Properties.
+    const own = new Set([
+      ONTOLOGY,
+      ROW_CLASS,
+      TABLE,
+      APP,
+      ...byShortname.values(),
+    ]);
     for (const { subject } of store.writes)
-      expect([ONTOLOGY, ROW_CLASS, TABLE, APP]).toContain(
-        store.resources.get(subject)![PARENT] ?? subject,
-      );
+      expect(own).toContain(store.resources.get(subject)![PARENT] ?? subject);
   });
 
   it('is idempotent: a second import changes nothing', async () => {
@@ -319,16 +397,28 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
     expect(new Set(statuses).size).toBe(2);
   });
 
-  it('picks up a renamed option from the schema with no row writes', async () => {
+  it('picks up a renamed option from the schema: the Tag is renamed, no row is written', async () => {
     const proxy = fixtureProxy();
     const store = fakeStore({ proxy });
     const transport = syncablesTransport(proxy, 'conn-1', upstream);
     await syncNotion(store, transport);
     const writes = store.writes.length;
-    proxy.api.renameOption('b1f5a3c2-0001-4000-8000-000000000003', 'Shipped');
+    const done = 'b1f5a3c2-0001-4000-8000-000000000003';
+    const tag = [...store.resources].find(
+      ([, p]) =>
+        p[atomic.name] === 'Done' && p[IS_A]?.toString() === dataBrowser.tag,
+    )!;
+    proxy.api.renameOption(done, 'Shipped');
     const again = await syncNotion(store, transport);
     expect(again).toMatchObject({ created: 0, updated: 0, unchanged: 3 });
-    expect(store.writes.length).toBe(writes);
+    // One write: the Tag. The rows keep the same Tag, so nothing else moves.
+    expect(store.writes.slice(writes)).toEqual([
+      { op: 'save', subject: tag[0] },
+    ]);
+    expect(store.resources.get(tag[0])).toMatchObject({
+      [atomic.name]: 'Shipped',
+      [atomic.shortname]: 'shipped',
+    });
     const status = again.perDataSource[0]!.properties.find(
       p => p.name === 'Status',
     )!;

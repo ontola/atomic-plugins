@@ -11,6 +11,7 @@ import {
   type PluginResource,
   type PluginStore,
 } from './store.js';
+import { lensValueFor } from './options.js';
 import { atomic } from './sync.js';
 import type { Schema } from './record.js';
 
@@ -26,7 +27,11 @@ export interface Row {
   url?: string;
   /** Notion's last_edited_time, ms since epoch. */
   lastEdited?: number;
-  /** Every value by column shortname, fixed columns included. */
+  /**
+   * Every value by column shortname, fixed columns included. A select
+   * column's value is its option id (or ids), not the Tag subjects the host
+   * cell holds (`options.ts`).
+   */
   values: Record<string, JSONValue>;
 }
 
@@ -42,7 +47,7 @@ export async function loadRows(
     value: schema.table,
   });
   const bySubject = new Map(
-    [...schema.columns.values()].map(c => [c.subject, c.shortname]),
+    [...schema.columns.values()].map(c => [c.subject, c]),
   );
   const rows: Row[] = [];
 
@@ -66,8 +71,10 @@ export async function loadRows(
       const values: Record<string, JSONValue> = {};
 
       for (const [property, value] of Object.entries(resource.props)) {
-        const shortname = bySubject.get(property);
-        if (shortname) values[shortname] = value;
+        const column = bySubject.get(property);
+        if (!column) continue;
+        const read = lensValueFor(column, value, schema.options);
+        if (read !== undefined) values[column.shortname] = read;
       }
 
       const text = (key: string) =>

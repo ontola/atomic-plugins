@@ -32,5 +32,5 @@ What success looks like, never to be said:
 
 Known limits (only new detail about them is a finding):
 
-- The app has no browsing view of its own (atomic-plugins#177, Q9): no table, board, side peek or "Open in Notion" inside the app. Status and tag columns hold option ids in the table; names show only in "Review changes".
+- The app has no browsing view of its own (atomic-plugins#177, Q9): no table, board, side peek or "Open in Notion" inside the app. Status and tag columns show the option names as coloured tags in the table (since 0.4.0).
 - The sample workspace doesn't change by itself, so "Sync now" brings nothing new unless an edit was sent.
