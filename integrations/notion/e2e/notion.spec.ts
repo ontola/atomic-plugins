@@ -11,9 +11,11 @@
  * own key (atomic-server#1697, in the pin). This spec
  * replaces the old one, which drove the `[data-integration=notion]` card that
  * atomic-server 4bab16ee6 removed (#68). Since 0.2.0 the spec covers
- * two-way edits again (#8): an edit made in the host's table is found when
- * the app opens, reviewed and sent as a page PATCH, and a field changed on
- * both sides waits for "Keep mine" or "Use Notion's".
+ * two-way edits (#8): an edit made in the host's table is found when the
+ * app opens, reviewed and sent as a page PATCH, and a field changed on both
+ * sides waits for "Keep mine" or "Use Notion's". Since 0.3.0 the app is a
+ * sync-status view (#177 Q9): the rows are read and edited in the host's
+ * table (`setRowField`, a user's commit), never through the app.
  *
  * The app is installed from the catalog, as in the pets spec: the
  * Integrations page's Drive apps section, with the lane's dev-server serving
@@ -28,7 +30,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -64,17 +66,19 @@ test.describe('notion drive plugin', () => {
       .click();
     await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
 
-    // Back on the app, which finds its connection and imports on open
-    // (#89: the rows show in the app, and warnings are in Sync details).
+    // Back on the app, which finds its connection and imports on open. The
+    // app is a sync-status view (#177 Q9): it names the databases and counts
+    // the rows; the rows themselves are in the host's table, below.
     await expect(app.getByRole('status')).toContainText('Synced', {
       timeout: 60_000,
     });
     const appUrl = page.url();
-    const imported = app.getByRole('table');
-    for (const title of ['Launch plan', 'Write changelog', 'Retrospective'])
-      await expect(
-        imported.getByRole('cell', { name: title, exact: true }),
-      ).toBeVisible();
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card.getByRole('list', { name: 'Databases' })).toContainText(
+      'Roadmap',
+    );
+    await expect(card).toContainText('3 rows in this table');
+    await expect(app.getByRole('table')).toHaveCount(0);
     await app.getByRole('button', { name: 'Sync details' }).click();
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
@@ -135,7 +139,7 @@ test.describe('notion drive plugin', () => {
       'Last edited in Notion': 'https://atomicdata.dev/datatypes/timestamp',
     });
 
-    // Back to the app for each state of #89's design, against the fixture's
+    // Back to the app for each of its states, against the fixture's
     // scenarios. One connection serves them all.
     await page.goto(appUrl);
     await statesTour(page, testInfo);
@@ -159,10 +163,13 @@ const DONE_OPTION = 'b1f5a3c2-0001-4000-8000-000000000003';
 const LAUNCH_PAGE = '1a2b3c4d-0000-4000-8000-000000000001';
 /** The column of the fixture's "Points" (property id `n%3D1`, hex-encoded). */
 const POINTS = 'notion-6e25334431';
+/** The column of the fixture's "Status" (property id `%3AUPp`, hex-encoded). */
+const STATUS = 'notion-253341555070';
 
 /**
  * Sets one column (by shortname) of the row named `title` from the host
- * page: a commit by the user, as an edit in the host's table is.
+ * page: a commit by the user, as an edit in the host's table is. This is
+ * how rows are edited since 0.3.0; the app has no cells of its own.
  */
 async function setRowField(
   page: Page,
@@ -213,77 +220,46 @@ async function setRowField(
 }
 
 /**
- * DESIGN.md §6 states S6–S13 in the real frame: text and roles, not pixels.
+ * The app's states in the real frame: text and roles, not pixels.
  * Screenshots go to the test's output folder as artefacts.
  */
 async function statesTour(page: Page, testInfo: TestInfo) {
   const app = page.frameLocator(APP_FRAME);
   const status = app.getByRole('status');
   const banner = app.locator('.pl-banner');
+  const card = app.getByRole('region', { name: 'Sync status' });
+  const databases = card.getByRole('list', { name: 'Databases' });
+  const strip = app.locator('.nt-changes');
+  const review = app.getByRole('region', {
+    name: 'Changes to send to Notion',
+  });
   const shot = (name: string) =>
     page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
 
+  /** Presses "Sync now" and waits for the sync to end, in whatever state. */
   const syncNow = async () => {
     await expect(app.getByRole('button', { name: 'Sync now' })).toBeEnabled({
       timeout: 60_000,
     });
     await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(status).not.toContainText('Syncing', { timeout: 60_000 });
   };
 
   try {
-    // S6, N6: a second database; its "Status" has another property id.
+    // S6, N6: a second database, whose "Status" has another property id,
+    // shows on the card after a sync, with its own row count.
     await driver('setScenario', ['two-sources']);
     await expect(status).toContainText('Synced', { timeout: 60_000 });
     await syncNow();
-    const chips = app.getByRole('group', { name: 'Databases' });
     await expect(
-      chips.getByRole('button', { name: /Reading list/ }),
-    ).toBeVisible({
-      timeout: 60_000,
-    });
-    await chips.getByRole('button', { name: /Roadmap/ }).click();
-    const table = app.getByRole('table');
-    await expect(table.getByRole('columnheader')).toHaveText([
-      'Name',
-      'Status',
-      'Done',
-      'Points',
-      'Tags',
-      'Notes',
-      'Last edited in Notion',
-    ]);
-    // N7: option names, not ids.
-    await expect(table.getByRole('row', { name: /Launch plan/ })).toContainText(
-      'In progress',
-    );
-    await shot('s6-table');
-
-    // S7: side peek, Esc closes.
-    await table.getByRole('cell', { name: 'Launch plan', exact: true }).click();
-    const peek = app.getByRole('complementary', { name: 'Row details' });
-    await expect(peek).toContainText('Launch plan');
-    await expect(peek).toContainText('Review changes');
-    await shot('s7-peek');
-    // "Open in Notion" goes through store.openExternal: the host names the
-    // destination and asks first. Cancel, so the test opens no tab.
-    await peek.getByRole('button', { name: 'Open in Notion' }).click();
-    const linkBar = page.getByRole('group', { name: 'Open a link' });
-    await expect(linkBar).toContainText('www.notion.so');
-    await shot('s7-open-link');
-    await linkBar.getByRole('button', { name: 'Cancel' }).click();
-    await expect(linkBar).toBeHidden();
-    await expect(app.locator('.pl-copy')).toHaveCount(0);
-    // Focus went to the host's bar; Esc from inside the peek closes it.
-    await peek.getByRole('button', { name: 'Open in Notion' }).press('Escape');
-    await expect(peek).toBeHidden();
-
-    // S8: board by status.
-    await app.getByRole('button', { name: 'Board', exact: true }).click();
+      databases.getByRole('listitem').filter({ hasText: 'Reading list' }),
+    ).toContainText('2 rows', { timeout: 60_000 });
     await expect(
-      app.getByRole('list', { name: 'Grouped by Status' }),
-    ).toContainText('In progress');
-    await shot('s8-board');
-    await app.getByRole('button', { name: 'Table', exact: true }).click();
+      databases.getByRole('listitem').filter({ hasText: 'Roadmap' }),
+    ).toContainText('3 rows');
+    await expect(card).toContainText('5 rows in this table');
+    await expect(app.locator('.pl-connbar')).toContainText('2 databases');
+    await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
     await app.getByRole('button', { name: 'Sync details' }).click();
@@ -292,28 +268,42 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(details).toContainText('Recommended by people');
     await shot('s10-details');
     await page.keyboard.press('Escape');
+    await expect(details).toBeHidden();
 
-    // N7: a rename in Notion shows after one sync, rows untouched.
+    // N7: a rename in Notion shows after one sync, rows untouched. The app
+    // shows option names only in the review, so set the row's Status in the
+    // host's table and read it back there: before → after by name, with the
+    // renamed option. Then discard, which puts Notion's value back.
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
-    await expect(
-      table.getByRole('row', { name: /Write changelog/ }),
-    ).toContainText('Shipped', { timeout: 60_000 });
+    await setRowField(page, 'Launch plan', STATUS, DONE_OPTION);
+    await page.reload();
+    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+      timeout: 60_000,
+    });
+    await strip.getByRole('button', { name: 'Review changes' }).click();
+    await expect(review).toContainText('Status');
+    await expect(review.locator('.nt-r-before')).toHaveText('In progress');
+    await expect(review.locator('.nt-r-after')).toHaveText('Shipped');
+    await shot('n7-renamed-option');
+    await review.getByRole('button', { name: 'Discard' }).click();
+    await expect(review).toContainText('Nothing left to send', {
+      timeout: 30_000,
+    });
+    await review.getByRole('button', { name: 'Close' }).click();
+    await expect(strip).toHaveCount(0);
+    await expect(card).toBeVisible();
 
     // S15 (#8): compare on open. An edit made in the host's table (a user's
     // commit, as a table edit is) is found when the app opens again, with no
     // request to Notion, and sent only after review.
     await setRowField(page, 'Launch plan', POINTS, 5);
     await page.reload();
-    const strip = app.locator('.nt-changes');
     await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
       timeout: 60_000,
     });
     await shot('s15-pending');
     await strip.getByRole('button', { name: 'Review changes' }).click();
-    const review = app.getByRole('region', {
-      name: 'Changes to send to Notion',
-    });
     await expect(review).toContainText('Launch plan');
     await expect(review.locator('.nt-r-before')).toHaveText('3');
     await expect(review.locator('.nt-r-after')).toHaveText('5');
@@ -372,15 +362,13 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(status).toHaveText('Sync failed');
     await shot('s13-failed');
 
-    // S5 over kept rows: nothing shared any more.
+    // S5 over kept rows: nothing shared any more; the card still counts them.
     await driver('setScenario', ['empty']);
     await banner.getByRole('button', { name: 'Try again' }).click();
     await expect(banner).toContainText('no longer shares any databases', {
       timeout: 60_000,
     });
-    await expect(
-      table.getByRole('cell', { name: 'Launch plan', exact: true }),
-    ).toBeVisible();
+    await expect(card).toContainText('5 rows in this table');
 
     // S11: Notion revoked access; rows are kept.
     await driver('setScenario', ['unauthorized']);
@@ -393,11 +381,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     ).toBeVisible();
     await shot('s11-reauth');
 
-    // "Open data table" (store.openResource) shows the table in the host.
+    // "Open table" (store.openResource) shows the table in the host, where
+    // the rows are browsed and edited.
     await driver('setScenario', ['default']);
     const appUrl = page.url();
-    await app.getByRole('button', { name: 'More' }).click();
-    await app.getByRole('menuitem', { name: 'Open data table' }).click();
+    await card.getByRole('button', { name: 'Open table' }).click();
     await expect(page).not.toHaveURL(appUrl);
     await expect(
       page.getByRole('main').getByText('Launch plan', { exact: true }).first(),
@@ -418,9 +406,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
       timeout: 30_000,
     });
     await expect(status).toHaveText('Not connected');
-    await expect(
-      table.getByRole('cell', { name: 'Launch plan', exact: true }),
-    ).toBeVisible();
+    await expect(card).toContainText('5 rows in this table');
     await shot('disconnected');
   } finally {
     await driver('setScenario', ['default']);

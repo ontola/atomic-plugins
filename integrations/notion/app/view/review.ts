@@ -4,17 +4,18 @@
  * review that lists them (before → after per field), resolves conflicts
  * and sends. Nothing reaches Notion until the person presses Send
  * (#177 Q4–Q7: review every send while testing). The changes come from the
- * controller (`changes.ts`), wherever the edit was made.
+ * controller (`changes.ts`), wherever the edit was made: since the browsing
+ * views went (#177 Q9), that is the host's own table and views.
  */
 import type { FieldChange, RowChange } from '../changes.js';
 import { sendable } from '../changes.js';
 import type { ConnectedState } from '../controller.js';
 import type { SendOutcome } from '../send.js';
 import type { JSONValue } from '../store.js';
+import type { NotionOption } from '../sync.js';
 import { h, icon, type Child } from '../ui/dom.js';
 import { plural } from '../ui/format.js';
 import { button } from '../ui/shell.js';
-import { optionPill } from './cells.js';
 
 export interface ReviewActions {
   open(): void;
@@ -33,10 +34,47 @@ const OUTCOME: Record<SendOutcome['status'], string> = {
   unknown: 'Unknown whether Notion applied it; sending stopped',
 };
 
+/** Notion's ten option colours; anything else renders as `default`. */
+export const NOTION_COLOURS = new Set([
+  'default',
+  'gray',
+  'brown',
+  'orange',
+  'yellow',
+  'green',
+  'blue',
+  'purple',
+  'pink',
+  'red',
+]);
+
+/** A select, status or multi-select option as a pill in Notion's colour. */
+export function optionPill(
+  doc: Document,
+  option: NotionOption | undefined,
+  id: string,
+  status: boolean,
+): HTMLElement {
+  const colour =
+    option && NOTION_COLOURS.has(option.color) ? option.color : 'default';
+
+  return h(
+    doc,
+    'span',
+    {
+      class: `nt-tag${status ? ' nt-status' : ''} c-${colour}`,
+      title: option
+        ? undefined
+        : `Option ${id} is not in the last sync’s schema`,
+    },
+    option?.name || (option ? 'Untitled option' : 'Unknown option'),
+  );
+}
+
 const fieldCount = (changes: readonly RowChange[]) =>
   changes.reduce((n, c) => n + c.fields.length, 0);
 
-/** The one-line strip above the rows, when there is something to review. */
+/** The one-line strip above the status card, when there is something to review. */
 export function renderChangesBar(
   doc: Document,
   state: ConnectedState,
