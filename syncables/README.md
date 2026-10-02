@@ -69,6 +69,10 @@ background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
 when PUT is absent. Both currently send JSON records, not JSON Patch documents.
+An update's response is merged over the record it updated, so a provider
+that answers with only some fields does not shrink the confirmed record. The
+trade-off: a field that the provider removed in that response, rather than
+omitted, stays in the local copy until the next refresh.
 
 Writes retry with exponential backoff, unlimited by default; set
 `retry.maxAttempts` to bound attempts. Unsettled writes are kept in a durable
@@ -296,9 +300,13 @@ loss. The limits of that claim:
 - The guarantee is only as strong as the adapter's `put`: it must store the
   whole record or nothing, and keep what it acknowledged.
 - The whole outbox is serialized and stored at each step (about three stores
-  per write, more on retries and id remaps), so the cost of a step grows with
-  the number of unsettled writes. This was not measured; it is meant for
-  hundreds of unsettled writes, not a bulk import.
+  per write, more on retries and id remaps). Its size is one copy of each
+  written record's confirmed state (or last known copy) plus, per unsettled
+  write, its own changes and bookkeeping: measured on 2026-10-02 with a
+  10 KB record, 1 queued update gave a 10.3 KB outbox and 20 gave 12.3 KB
+  (about 107 bytes per extra small update). Bytes written per step therefore
+  grow with the number of unsettled writes and records. Throughput was not
+  measured; it is meant for hundreds of unsettled writes, not a bulk import.
 - Only one client may use a storage at a time. Two clients on one outbox (two
   tabs, say) overwrite each other's record and may both send a write; there is
   no lock.

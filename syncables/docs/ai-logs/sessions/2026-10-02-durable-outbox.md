@@ -148,3 +148,21 @@ before it for a record the read lacks), when a write response confirms the
 record, and when a write fails on a missing record (overwriting). Retried
 copies get a new queue order, and the invariant check runs after the retry
 and after a later failure.
+
+## Turn 7
+
+**Human (via the oversight session, relaying a sixth review of PR #312):**
+Storing the last known record on every unsettled update made the outbox grow
+by a record per update; store it once per record, and not at all when the
+confirmed copy is stored, with a size regression test. Merge partial update
+responses over the previous copy. Move a misplaced JSDoc and re-wrap
+CLAUDE.md.
+
+**Assistant:** The last known record is no longer stored per write: a record
+entry carries it once, only without a confirmed copy, and restore spreads it
+to the record's updates (per-write copies from older outboxes are still read;
+the format stays version 1). With a 10 KB record, 1 queued update now gives
+a 10.3 KB outbox and 20 give 12.3 KB (the previous commit grew by about
+193 KB). Update responses are merged over the copy they updated; the README
+names the trade-off. Tests cover the size, the record-level copy across a
+restart, the older per-write format and the merge.

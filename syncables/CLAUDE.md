@@ -134,38 +134,38 @@ Data flows through four stages, each its own directory under `src/`:
 
    `outbox.ts` holds the durable outbox format: one versioned record
    (`syncables:outbox`/`outbox`, `outboxNamespace`; off without a supplied
-   `storage`) in the same adapter with
-   every unsettled write (queues, failed writes, states, conflict bases,
-   idempotency keys, the confirmed record per written record, pending id-remap
-   rebuilds). It is stored whole, serialized, before the visible record on
-   `create`/`update`/`remove`, before each send (an in-flight mark) and after
-   each outcome. A write whose own first store has not succeeded is left out of
-   other calls' stores. `restore()` runs at construction (`ready()`; retried
-   after a storage error, not after a version refusal); a write found in flight
-   counts as an attempt (`retry.maxAttempts` applies), and a create without a
-   key the client can still send becomes `uncertain`. Restored updates wait
+   `storage`) in the same adapter with every unsettled write (queues, failed
+   writes, states, conflict bases, idempotency keys, the confirmed record per
+   written record, pending id-remap rebuilds). It is stored whole,
+   serialized, before the visible record on `create`/`update`/`remove`,
+   before each send (an in-flight mark) and after each outcome. A write whose
+   own first store has not succeeded is left out of other calls' stores.
+   `restore()` runs at construction (`ready()`; retried after a storage
+   error, not after a version refusal); a write found in flight counts as an
+   attempt (`retry.maxAttempts` applies), and a create without a key the
+   client can still send becomes `uncertain`. Restored updates wait
    (`awaitingRefresh`) for a complete `sync()` of their scope before sending,
-   unless a create precedes them; a settle on the same record during the read
-   (`recordRevisions`) skips the release, three non-releasing syncs fail it,
-   and `resolveWrite` retries or discards it (the miss count is stored). A
-   released restored PUT update at the head of its record's queue, whose
-   record the refresh lacks, fails (`lastKnown` keeps the last confirmed
-   record; updates of the record, retries and `update()` seeding use any
-   write's `lastKnown`, never the visible record; `setLastKnown` keeps it the
-   newest confirmed copy on every refresh and settled response) rather than
-   sending a
-   partial PUT. Only head writes fail or count misses: a failed write must
-   never be newer than a queued one of the same record (`seq`, stored, lets
-   the tests check this). In-memory updates are unchanged by
-   that (#260's open remote-delete item). Writes not yet durable are skipped
-   by `rebuild`. Unknown versions are refused, not
-   overwritten. The README's
-   "Durable outbox and restarts" has the stop-between-steps table; keep it in
-   step with the code. Not stored: `lastSyncedItems`, the conditional cache and
-   confirmed records without writes. Finer transient/permanent failure
-   classification remains #260 work. A fully paginated list is
-   not necessarily a consistent snapshot; the existing absence/pruning rule
-   still depends on provider behavior.
+   unless a create precedes them; a settle on the same record during the
+   read (`recordRevisions`) skips the release, three non-releasing syncs
+   fail it, and `resolveWrite` retries or discards it (the miss count is
+   stored). A released restored PUT update at the head of its record's
+   queue, whose record the refresh lacks, fails rather than sending a
+   partial PUT. `lastKnown` keeps the newest confirmed copy (`setLastKnown`
+   on every refresh and settled response; update responses are merged over
+   it); updates, retries and `update()` seeding use it, never the visible
+   record. It is stored once per record entry, and only when `confirmed` is
+   absent, so the outbox grows by the changes per write, not by the record
+   (older per-write copies are still read). Only head writes fail or count
+   misses: a failed write must never be newer than a queued one of the same
+   record (`seq`, stored, lets the tests check this). In-memory updates do
+   not fail on a missing record (#260's open remote-delete item). Writes not
+   yet durable are skipped by `rebuild`. Unknown versions are refused, not
+   overwritten. The README's "Durable outbox and restarts" has the
+   stop-between-steps table; keep it in step with the code. Not stored:
+   `lastSyncedItems`, the conditional cache and confirmed records without
+   writes. Finer transient/permanent failure classification remains #260
+   work. A fully paginated list is not necessarily a consistent snapshot;
+   the existing absence/pruning rule still depends on provider behavior.
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value

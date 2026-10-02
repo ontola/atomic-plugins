@@ -33,7 +33,10 @@ export interface StoredWrite {
    * the request may have been in flight.
    */
   sending?: true;
-  /** For an update whose record a refresh no longer had: the last confirmed record. */
+  /**
+   * Read for outboxes written before `StoredRecordWrites.lastKnown`; no
+   * longer written.
+   */
   lastKnown?: Record<string, unknown>;
   /** Syncs that ran without releasing a restored update waiting for one. */
   refreshMisses?: number;
@@ -48,6 +51,11 @@ export interface StoredRecordWrites {
   id: string;
   /** The confirmed remote record the pending writes are replayed on. */
   confirmed?: Record<string, unknown>;
+  /**
+   * Without `confirmed`: the last confirmed copy, kept when a refresh no
+   * longer returned the record. Stored once here, not per write.
+   */
+  lastKnown?: Record<string, unknown>;
   failed: StoredWrite[];
   queue: StoredWrite[];
 }
@@ -122,6 +130,8 @@ export function isStoredRecordWrites(
 ): value is StoredRecordWrites {
   return (
     isTarget(value) &&
+    ((value as Record<string, unknown>)['lastKnown'] === undefined ||
+      isRecord((value as Record<string, unknown>)['lastKnown'])) &&
     Array.isArray((value as Record<string, unknown>)['failed']) &&
     Array.isArray((value as Record<string, unknown>)['queue']) &&
     [

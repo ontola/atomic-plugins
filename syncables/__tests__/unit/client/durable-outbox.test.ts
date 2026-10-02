@@ -1298,3 +1298,127 @@ describe('durable outbox: fifth review on #312', () => {
     expectFailedOlder(storage);
   });
 });
+
+describe('durable outbox: sixth review on #312', () => {
+  it('grows the outbox by the changes per queued update, not by the record', async () => {
+    const big = { id: '1', name: 'Rex', notes: 'x'.repeat(10_000) };
+    async function outboxSize(updates: number): Promise<number> {
+      const storage = new CrashableStorage();
+      const p = provider([big], (r) =>
+        r.method === 'GET' ? undefined : 'hang-before',
+      );
+      const a = restart(storage, p.transport);
+      await a.sync();
+      for (let i = 0; i < updates; i++)
+        await a.update('/pets', '1', { name: `Rex ${i}` });
+      await vi.waitFor(() => expect(p.requests).toHaveLength(1));
+      // A refresh with a remote change while they wait records the newest
+      // confirmed copy on the waiting updates.
+      p.pets.set('1', { ...big, age: '4' });
+      await a.sync();
+      await settle();
+      return JSON.stringify(storage.data.get(OUTBOX)?.get('outbox')).length;
+    }
+    const one = await outboxSize(1);
+    const twenty = await outboxSize(20);
+    // 19 more small updates: a few hundred bytes each at most, not 10 KB.
+    expect(twenty - one).toBeLessThan(19 * 400);
+    expect(one).toBeLessThan(2 * 10_000 + 2_000);
+  });
+
+  it('stores the last known record once per record and restores it', async () => {
+    const crashed = await restoredUpdate();
+    const second = provider([], (r) =>
+      r.method === 'GET' ? response([]) : 'hang-before',
+    );
+    const b = restart(crashed, second.transport);
+    await b.ready();
+    await b.sync();
+    expect(b.pendingWrites()).toMatchObject([{ state: 'failed' }]);
+    await settle();
+    const stored = crashed.data.get(OUTBOX)?.get('outbox') as {
+      records: { lastKnown?: Pet; failed: Record<string, unknown>[] }[];
+    };
+    expect(stored.records[0]?.lastKnown).toEqual({
+      id: '1',
+      name: 'Rex',
+      tag: 'dog',
+    });
+    expect(stored.records[0]?.failed[0]).not.toHaveProperty('lastKnown');
+
+    const third = provider();
+    const c = restart(crashed.crash(), third.transport);
+    await c.ready();
+    await c.resolveWrite('/pets', '1', { action: 'retry' });
+    await vi.waitFor(() => expect(third.requests).toHaveLength(1));
+    expect(JSON.parse(third.requests[0]?.body ?? '{}')).toEqual({
+      id: '1',
+      name: 'Rex II',
+      tag: 'dog',
+    });
+  });
+
+  it('still reads a last known record stored per write', async () => {
+    const storage = new CrashableStorage();
+    await storage.put(OUTBOX, 'outbox', {
+      version: 1,
+      records: [
+        {
+          resource: '/pets',
+          context: {},
+          id: '1',
+          failed: [
+            {
+              type: 'update',
+              changes: { name: 'Rex II' },
+              attempts: 1,
+              state: 'failed',
+              lastKnown: { id: '1', name: 'Rex', tag: 'dog' },
+            },
+          ],
+          queue: [],
+        },
+      ],
+      rebuild: [],
+    });
+    const second = provider();
+    const b = restart(storage, second.transport);
+    await b.ready();
+    await b.resolveWrite('/pets', '1', { action: 'retry' });
+    await vi.waitFor(() => expect(second.requests).toHaveLength(1));
+    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+      id: '1',
+      name: 'Rex II',
+      tag: 'dog',
+    });
+  });
+
+  it('merges a partial update response over the record it updated', async () => {
+    const sent: TransportRequest[] = [];
+    const client = createApiClient(document(), {
+      transport: async (r) => {
+        if (r.method === 'GET')
+          return response([{ id: '1', name: 'Rex', tag: 'dog' }]);
+        sent.push(r);
+        const body = JSON.parse(r.body ?? '{}') as Pet;
+        // The provider answers with the changed field and the id only.
+        return response({ id: '1', name: body['name'] });
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(await client.get('/pets', '1')).toEqual({
+      id: '1',
+      name: 'Rex II',
+      tag: 'dog',
+    });
+    await client.update('/pets', '1', { name: 'Rex III' });
+    await idle(client);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+      id: '1',
+      name: 'Rex III',
+      tag: 'dog',
+    });
+  });
+});

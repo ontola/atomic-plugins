@@ -566,10 +566,6 @@ export function createApiClient(
   let nextSeq = 0;
 
   /**
-   * The last confirmed record any write of this record kept when a refresh
-   * no longer had it: the base for updates once `confirmed` lacks the record.
-   */
-  /**
    * Records the newest confirmed copy of a record on all its unsettled
    * updates, so the fallback base never reverts a newer confirmed record.
    * All of a record's updates that carry `lastKnown` hold the same copy.
@@ -582,6 +578,10 @@ export function createApiClient(
       if (write.type === 'update') write.lastKnown = record;
   }
 
+  /**
+   * The last confirmed record any write of this record kept when a refresh
+   * no longer had it: the base for updates once `confirmed` lacks the record.
+   */
   function lastKnownFor(
     scope: string,
     id: string,
@@ -611,7 +611,6 @@ export function createApiClient(
         ? { confirmedId: write.confirmedId }
         : {}),
       ...(write.sending ? { sending: true as const } : {}),
-      ...(write.lastKnown ? { lastKnown: write.lastKnown } : {}),
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
     };
@@ -636,11 +635,17 @@ export function createApiClient(
       const first = failed[0] ?? queue[0];
       if (!first) continue;
       const confirmedRecord = confirmed.get(first.scope)?.get(first.id);
+      // One copy per record, and none when `confirmed` already holds it:
+      // per write, it would grow the outbox by a record per update.
+      const lastKnown = confirmedRecord
+        ? undefined
+        : lastKnownFor(first.scope, first.id);
       records.push({
         resource: first.route.collection.name,
         context: first.context,
         id: first.id,
         ...(confirmedRecord ? { confirmed: confirmedRecord } : {}),
+        ...(lastKnown ? { lastKnown } : {}),
         failed: failed.map(storeWrite),
         queue: queue.map(storeWrite),
       });
@@ -820,6 +825,10 @@ export function createApiClient(
       }
       if (failed.length) gaveUpWrites.set(key, failed);
       if (queue.length) writeQueues.set(key, queue);
+      // Stored once per record (older outboxes kept it per write, still read).
+      const known =
+        entry.lastKnown ?? entry.confirmed ?? lastKnownFor(scope, entry.id);
+      if (known) setLastKnown(key, known);
       touchedKeys.set(key, { scope, id: entry.id });
     }
     // The outbox is stored before the visible record, so a stop in between
@@ -1043,7 +1052,18 @@ export function createApiClient(
         if (write.type === 'create' && !isRecord(result)) {
           throw new UnusableResponseError('Create response has no record');
         }
-        const record = isRecord(result) ? result : data;
+        // An update's response may hold only some fields: merge it over the
+        // copy it updated rather than letting it replace the record.
+        const record = isRecord(result)
+          ? write.type === 'update'
+            ? {
+                ...(remote(write.scope).get(write.id) ??
+                  write.lastKnown ??
+                  lastKnownFor(write.scope, write.id)),
+                ...result,
+              }
+            : result
+          : data;
         if (!record) throw new Error('Write returned no record');
         if (write.type === 'create') {
           const id = record[idField];
