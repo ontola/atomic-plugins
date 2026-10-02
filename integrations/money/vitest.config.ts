@@ -14,6 +14,8 @@ export default {
       'app/*.test.ts',
       'app/ui/*.test.ts',
       'moneybird/*.test.ts',
+      // The Moneybird live check's offline tests (the in-memory fake); never the live run.
+      'live/*.test.ts',
     ],
   },
 };

@@ -29,6 +29,7 @@ import {
   loadIntents,
   openIntents,
   recordIntent,
+  settledUnder,
   targetLabel,
   toSupersede,
   type IntentConflict,
@@ -930,10 +931,8 @@ export function createController(
         );
         // Range edits not sent yet over this range are replaced (#123 S22),
         // unless one reaches outside it.
-        const { replace, outside } = toSupersede(
-          openIntents(intents, new Set(review.map(c => c.subject))),
-          { from, to },
-        );
+        const open = openIntents(intents, new Set(review.map(c => c.subject)));
+        const { replace, outside } = toSupersede(open, { from, to });
         if (outside.length)
           throw new Error(
             `A range edit not sent yet (${outside.map(i => spanText(i, input!.timeZone ?? timeZone)).join('; ')}) reaches outside this range. Send or discard it first, or edit a range that covers all of it.`,
@@ -979,7 +978,11 @@ export function createController(
           to,
           target: request.target,
           rows,
-          supersedes: replace.map(i => i.id),
+          // And the settled ones it edits over, so they stay closed (#279).
+          supersedes: [
+            ...replace,
+            ...settledUnder(intents, open, { from, to }, rows),
+          ].map(i => i.id),
         };
         const subject = await recordIntent(store, schema, intent);
         written.add(subject);

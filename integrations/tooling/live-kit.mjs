@@ -330,11 +330,18 @@ const RESPONSE_HEADERS = ['link', 'retry-after', 'etag', 'content-type'];
  *
  * `who` is `'app'` for what the app's own code asks (through the relay
  * stand-in), `'driver'` for the kit's setup, check and cleanup calls.
+ *
+ * `isRead({ method, pathname })` is for a provider whose reads are POSTs
+ * (Notion's search and data source query). A request it accepts is counted
+ * as a read, not a write, by the budget, and is marked `read: true` in
+ * `requests`. It runs after `allow`, so it can only ever relax the budget for
+ * a request the scenario already allowed; it never widens the scope.
  */
 export function createProvider({
   baseUrl,
   authHeaders,
   allow,
+  isRead,
   budget,
   redact,
   fetcher = globalThis.fetch,
@@ -368,7 +375,8 @@ export function createProvider({
       pathname: url.pathname,
       query: Object.fromEntries(url.searchParams),
     });
-    budget.spend(verb);
+    const read = isRead?.({ method: verb, pathname: url.pathname }) === true;
+    budget.spend(read ? 'GET' : verb);
 
     const record = {
       n: requests.length + 1,
@@ -376,6 +384,7 @@ export function createProvider({
       method: verb,
       path: redact(url.pathname + url.search),
       ifMatch: Boolean(ifMatch),
+      ...(read ? { read: true } : {}),
       ...(body === undefined
         ? {}
         : { bodyKeys: Object.keys(JSON.parse(body)).sort() }),
@@ -503,18 +512,21 @@ function tryGit(args) {
 }
 
 /** What the evidence says about the code that ran: version, commit and the candidate bundle's hash. */
-export function describeCandidate(app, { appId = app, root = REPO_ROOT } = {}) {
-  const pkg = JSON.parse(
-    readFileSync(join(root, 'integrations', app, 'app/package.json'), 'utf8'),
-  );
+export function describeCandidate(
+  app,
+  {
+    appId = app,
+    root = REPO_ROOT,
+    // Where the app's version is recorded and which folder its source is in,
+    // for an app whose folder is not `integrations/<app>/app` (apps.mjs's
+    // `versionFile` and `appFolder`).
+    packageFile = `integrations/${app}/app/package.json`,
+    folder = `integrations/${app}`,
+  } = {},
+) {
+  const pkg = JSON.parse(readFileSync(join(root, packageFile), 'utf8'));
   const bundle = join(root, 'apps', appId, pkg.version, 'ui.js');
-  const dirty = tryGit([
-    'status',
-    '--porcelain',
-    '--',
-    `integrations/${app}`,
-    'ontology-kit',
-  ]);
+  const dirty = tryGit(['status', '--porcelain', '--', folder, 'ontology-kit']);
 
   return {
     app: appId,

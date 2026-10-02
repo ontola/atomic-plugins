@@ -38,6 +38,12 @@
  *                      the next `count` matching requests answer `status`.
  *   snapshot()         every task row, active or not.
  *
+ * For the live-check kit's offline tests (issue-tracker/live/todoist/
+ * fakeTodoist.ts), not the mock proxy: `todoistFixture({ blank: true })`
+ * starts with no tasks, `createTask(fields)` and `updateTask(id, fields)` do
+ * what `POST /tasks` and `POST /tasks/{id}` would. None is in `drivers`, so
+ * none is reachable over the mock proxy, and the HTTP surface stays GET only.
+ *
  * Lives in the issue-tracker plugin folder, whose lane names todoist.
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -81,8 +87,10 @@ export function source() {
   };
 }
 
-export function todoistFixture() {
+export function todoistFixture({ blank = false } = {}) {
   const { synthetic: isSynthetic, pageSize, projects, tasks } = source();
+  if (blank) tasks.length = 0;
+  let made = 0;
   const byId = new Map(tasks.map(t => [t.id, t]));
   /** Ids the `removeTask` driver made unreachable (404 by id). */
   const gone = new Set();
@@ -186,6 +194,53 @@ export function todoistFixture() {
           : rows,
         url.searchParams.get('cursor'),
       );
+    },
+
+    createTask({
+      content,
+      project_id,
+      description = '',
+      priority = 1,
+      due_date,
+    }) {
+      const id = `live-task-${++made}`;
+      const row = {
+        id,
+        user_id: 'synthetic-user-1',
+        project_id,
+        section_id: null,
+        parent_id: null,
+        labels: [],
+        checked: false,
+        is_deleted: false,
+        added_at: '2026-10-01T08:00:00.000000Z',
+        completed_at: null,
+        updated_at: '2026-10-01T08:00:00.000000Z',
+        due: due_date
+          ? {
+              date: due_date,
+              string: due_date,
+              lang: 'en',
+              is_recurring: false,
+              timezone: null,
+            }
+          : null,
+        priority,
+        child_order: made,
+        content,
+        description,
+        url: `https://app.todoist.com/app/task/${id}`,
+      };
+      tasks.push(row);
+      byId.set(id, row);
+
+      return structuredClone(row);
+    },
+    updateTask(id, fields) {
+      const row = must(id);
+      Object.assign(row, fields, { updated_at: '2026-10-01T09:00:00.000000Z' });
+
+      return structuredClone(row);
     },
 
     // Drivers.

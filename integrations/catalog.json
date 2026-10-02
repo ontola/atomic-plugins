@@ -239,11 +239,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited. Coordination between two open copies is advisory (the drive has no compare-and-swap), so two copies starting to send in the same moment can still both send, at worst creating a duplicate that the app then offers to remove; it has been tested with simulated devices only, not with two real browsers. The same field edited directly on two devices keeps the later edit. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it): a row whose entry is deleted in Clockify is kept, unsynced, for you to delete, and the table's existing rows are not uploaded. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.6.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.6.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.6.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-P2W2xJX5B/OpvBbrTIh1wv8fttb+VCXz8foXC+HvnlvmjBlpq+bSKrMFeUOPVdhf"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.6.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-F/VetA6wL+b/3ajHp/7h2EOl99ceOitJu5ZV6Pm6bbI+uw+8cx1mUVYnw+iT4m5S"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",
@@ -407,7 +407,7 @@
     "https://atomicdata.dev/properties/name": "Fediverse",
     "https://atomicdata.dev/properties/description": "One ActivityPub actor for your drive: others can find it, follow it, receive your posts and reply.",
     "https://atomicdata.dev/integrations/properties/capabilities": "WebFinger and NodeInfo discovery; public posts under a folder you choose as an outbox; follows accepted automatically and kept as resources; posts you publish delivered to followers, signed by a key the server holds; replies to your posts stored as Messages.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified against real fediverse servers: tested only with a local ActivityPub peer. Needs an atomic-server with auth: atomic routes, the signer's inbox in request.caller and WebFinger rels (branch claude/plugin-fediverse-host, in pin candidate16) and plugin routes at read-write. Delivers only to HTTPS shared inboxes at /inbox, to at most 100 inboxes per post; no Update or Delete of posts, no media, no account migration.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified beyond one opt-in round trip (follow, Accept, a post, a reply, unfollow) with each of Mastodon 4.7.3 and Akkoma 3.20.1 on loopback with test certificates (Akkoma names the actor without a non-default port: the host routes WebFinger only for acct: resources); GoToSocial cannot follow it yet (per-actor inboxes, signed key fetches). Needs an atomic-server with auth: atomic routes, the signer's inbox in request.caller and WebFinger rels (branch claude/plugin-fediverse-host, in pin candidate16) and plugin routes at read-write. Delivers only to HTTPS shared inboxes at /inbox, to at most 100 inboxes per post; no Update or Delete of posts, no media, no account migration.",
     "https://atomicdata.dev/integrations/properties/requires": [
       "persistent-host",
       "plugin-routes:read-write",
