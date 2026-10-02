@@ -103,7 +103,10 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       typeof value['confirmedId'] === 'string') &&
     (value['refreshMisses'] === undefined ||
       typeof value['refreshMisses'] === 'number') &&
-    (value['seq'] === undefined || typeof value['seq'] === 'number')
+    (value['seq'] === undefined || typeof value['seq'] === 'number') &&
+    // A per-write lastKnown came from unreleased commits of #312; such an entry
+    // has no usable base, so it is kept as unrestorable rather than sent.
+    value['lastKnown'] === undefined
   );
 }
 
