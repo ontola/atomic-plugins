@@ -31,7 +31,12 @@ import type { Timesheet } from '../model/types.js';
 import type { ColorScheme } from '../store.js';
 import { dayList, projectSummary, weekGrid } from '../model/views.js';
 import { button, header, pill, type PillState } from './components.js';
-import { renderConflicts, renderUnknown, unknownIn } from './coverage.js';
+import {
+  renderConflicts,
+  renderIncomplete,
+  renderUnknown,
+  unknownIn,
+} from './coverage.js';
 import { entryDetail, sheet as modal, type Overlay } from './detail.js';
 import { renderChanges } from './edit.js';
 import { rangeEditor } from './rangeEdit.js';
@@ -652,6 +657,16 @@ export function mountShell(
       ui.view !== 'projects'
         ? renderUnknown(h, sheet, span, unknownIn(sheet, span))
         : null;
+    const incomplete =
+      ui.view !== 'projects'
+        ? renderIncomplete(
+            h,
+            sheet,
+            controller.canOpen().resource
+              ? id => void controller.openRow(id)
+              : undefined,
+          )
+        : null;
     const dayProps = {
       timeZone: sheet.timeZone,
       today,
@@ -670,6 +685,7 @@ export function mountShell(
         week.start === currentWeek(sheet).start
           ? runningNote(h, sheet.running)
           : null,
+        incomplete,
         outside,
         unknown,
       );
@@ -719,6 +735,7 @@ export function mountShell(
         );
     } else if (ui.view === 'entries')
       content.push(
+        incomplete,
         outside,
         unknown,
         ...dayCards(h, dayList(sheet.entries, week, sheet.timeZone), dayProps),

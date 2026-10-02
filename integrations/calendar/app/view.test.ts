@@ -305,6 +305,56 @@ describe('Calendar views: edit, review, send', () => {
     expect(store.calls).toEqual([]);
   });
 
+  it('shows a row missing a required event-v1 field as incomplete, not skipped, with a way to the row (#177)', async () => {
+    const store = fakeStore({ view: 'other' });
+    store.resources.set('did:ad:hand-1', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Planning day',
+      [SHARED.day]: '2026-09-24',
+    });
+    store.resources.set('did:ad:hand-2', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Retro',
+    });
+    store.resources.set('did:ad:hand-3', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [SHARED.day]: '2026-09-24',
+    });
+    const root = await mount(store, 1120);
+    const list = one(root, 'region', 'Incomplete rows');
+    expect(list.textContent).toContain('2 rows are incomplete');
+    expect(list.textContent).toContain('RetroIncomplete: missing Daynot drawn');
+    expect(list.textContent).toContain('(untitled)Incomplete: missing Name');
+    // A row without a Day is drawn on no day; one without a Name is.
+    expect(byRole(root, 'button', /^Retro, /)).toEqual([]);
+    const untitled = one(
+      root,
+      'button',
+      /^\(untitled\), All day, .*, incomplete: missing name$/,
+    );
+    expect(one(root, 'button', /^Planning day, All day, /)).toBeTruthy();
+    // Open row hands the row to the host.
+    await click(byRole(list, 'button', 'Open row')[0]);
+    expect(store.opened.resources).toEqual(['did:ad:hand-2']);
+    await click(untitled);
+    const drawer = one(root, 'dialog');
+    expect(drawer.textContent).toContain('Incomplete: missing Name.');
+    await click(one(drawer, 'button', 'Open row'));
+    expect(store.opened.resources).toEqual(['did:ad:hand-2', 'did:ad:hand-3']);
+    expect(store.calls).toEqual([]);
+    // The first open writes under the App only; the table and its rows stay.
+    expect(
+      store.writes.filter(
+        w =>
+          w.subject === OTHER_TABLE ||
+          store.resources.get(w.subject)?.[PARENT] === OTHER_TABLE,
+      ),
+    ).toEqual([]);
+  });
+
   it('on an event-v1 table that isn’t its own: Sync this table, choose, import; no Remove local copy (#177 item 14)', async () => {
     const store = fakeStore({ view: 'other' });
     const root = await mount(store, 1120);

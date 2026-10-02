@@ -87,8 +87,8 @@ verified behaviour.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 25,926
-bytes for 0.1.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 26,857
+bytes for 0.1.1; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
 connected account's **active tasks** into its own table, nothing more; the
@@ -125,7 +125,20 @@ its own `todoist-last-seen`.
 **Local edits.** Todoist owns the imported columns: a local change to one
 of them is overwritten at the next pass (#97's policy question; this plugin's
 choice, the same as Moneybird's), and nothing is sent to Todoist. A row
-made in the table by hand, with no Todoist task behind it, is left alone.
+made in the table by hand, with no Todoist task behind it, is left alone;
+since 0.1.1 the view lists it too, with presence `local`.
+
+**An incomplete row (0.1.1).** `issue-v1` requires Name. A row without one
+is read through the resolver's `missing` and listed as "(no name)" with
+"Incomplete: missing Name" and, where the host has `store.openResource`, an
+"Open row" button to fill the column in the table (ontology-kit's rule for
+every shared-class view: shown as incomplete, not skipped). Nothing is ever
+sent to Todoist, so there is nothing to hold back; an imported row whose
+Name was cleared in the table gets Todoist's `content` back at the next
+pass, a hand-made one is completed in the table. Unit
+(`todoist-app/sync.test.ts`) and the e2e's step 5 (a row with an empty
+Name; the server refuses a commit without the property, see the GitHub
+issues app's note on incomplete rows).
 
 **Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
 and the fixture: provisioning, import, a refresh that writes no row, and
@@ -155,8 +168,8 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 160,628 bytes for
-0.3.0) whose `view({ root, store })` runs in the host's null-origin frame. It
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 162,541 bytes for
+0.3.1) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
 per table**: the app's own table, and each other Issue table it was asked
 to sync (since 0.3.0, see [Syncing a table the app didn't
@@ -252,6 +265,22 @@ four task/v1 tags (another tag, or several) is shown as it is ("Status
 here: …, not synced with GitHub") instead of failing the pass. For the sync
 it keeps the status it last agreed with GitHub, so nothing is sent for it;
 if GitHub's status changes, GitHub's value replaces it.
+
+**An incomplete row (0.3.1).** `issue-v1` requires Name. A row without one
+(or with a blank one) is read through the resolver's `missing` and shown as
+"(no title)" with the tag "Incomplete: missing Name" on its card and list
+row, with the same note in its panel and an "Open row" button
+(`store.openResource`) to fill the column in the table; typing a title in the
+panel completes it too. This is ontology-kit's rule for every shared-class
+view: an incomplete row is shown, not skipped. Nothing of it is sent: a row
+bound to a GitHub issue shows the Bridge what both sides last agreed on (so
+no local change exists, and GitHub's own changes still come in and fill the
+Name), a row not bound stays out of the Bridge, "Publish to GitHub" is
+disabled for it, and a publish asked for earlier waits until it is complete.
+The review panel lists such rows under "Not synced until complete". Before
+0.3.1 a bound nameless row failed the whole pass ("Invalid Atomic issue").
+Unit (`app/sync.test.ts`, `app/views.test.ts`) and the hand-made table e2e
+(a row with an empty Name). At the pin the server refuses a commit that lacks a required property of the row's class (`lib/src/resources.rs` `check_required_props`, presence only), so on this host a required field can be absent only as an empty string (`name` is a string; the resolver counts `''` as missing), through a lens, or on a host that did not check; a required date or timestamp cannot be empty there.
 
 **From 0.1.x.** An update from 0.1.x over an existing install (the host's
 Update on the Integrations page keeps rows and schema) rewrites the table's

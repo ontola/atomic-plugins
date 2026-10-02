@@ -230,6 +230,26 @@ describe('first open of 0.5.0 (#177 §5)', () => {
       [IS_A]: [TIME_ENTRY],
       [SHARED.start]: START + 2 * HOUR,
     });
+    // Rows missing the class's required Start (#177; ontology-kit's rule:
+    // shown as incomplete, never skipped): one named, one not; and one
+    // whose Start is not a timestamp.
+    store.resources.set('did:ad:drive/team-hours/3', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Forgot the start',
+      [SHARED.end]: START + 3 * HOUR,
+    });
+    store.resources.set('did:ad:drive/team-hours/4', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [SHARED.billable]: true,
+    });
+    store.resources.set('did:ad:drive/team-hours/5', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Typed a date',
+      [SHARED.start]: '2026-09-23',
+    });
     const before = structuredClone(store.resources.get(OTHER_TABLE));
     const controller = createController(
       store,
@@ -262,6 +282,23 @@ describe('first open of 0.5.0 (#177 §5)', () => {
       },
     ]);
     expect(sheet.running).toBe(1);
+    expect(sheet.incomplete).toEqual([
+      {
+        id: 'did:ad:drive/team-hours/3',
+        description: 'Forgot the start',
+        note: 'Incomplete: missing Start',
+      },
+      {
+        id: 'did:ad:drive/team-hours/4',
+        description: '',
+        note: 'Incomplete: missing Start',
+      },
+      {
+        id: 'did:ad:drive/team-hours/5',
+        description: 'Typed a date',
+        note: 'Incomplete: Start is not a time',
+      },
+    ]);
     expect(controller.editBlockers('did:ad:drive/team-hours/1')).not.toEqual(
       [],
     );

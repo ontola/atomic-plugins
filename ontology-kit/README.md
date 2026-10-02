@@ -181,7 +181,14 @@ The resolver is strict (#177 decision 1):
   matching, and no column guessing.
 - `read(row, rowClass)` returns the class's fields present in the row, by exact
   property subject, and `missing`/`complete` for its required ones, so the view
-  shows an incomplete row instead of skipping it.
+  shows an incomplete row instead of skipping it; `incompleteNote(missing,
+labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
+  means neither undefined, null nor the empty string. At the pin the server
+  refuses a commit that lacks a required property of the row's class
+  (`lib/src/resources.rs` `check_required_props`, presence only), so on that
+  host `missing` is non-empty only for an empty string (calendar, issue-tracker
+  and the Todoist app show such a row), a lensed row, or a class the server
+  could not check; a required date or timestamp cannot be empty there.
 - `write(patch, rowClass, row)` refuses a property that isn't a field of the
   shared class, and returns the patch to save.
 - **Lens hooks:** `lenses: [{ from, to, read(row), write?(patch, row) }]` maps

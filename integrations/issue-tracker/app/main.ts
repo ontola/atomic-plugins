@@ -455,6 +455,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     notNow() {
       void controller.notNow();
     },
+
+    ...(store.openResource
+      ? {
+          openRow(subject: string) {
+            void store.openResource!(subject).catch(() => undefined);
+          },
+        }
+      : {}),
   };
 
   // ---------------------------------------------------------- keyboard

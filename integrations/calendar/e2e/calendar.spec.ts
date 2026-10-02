@@ -42,7 +42,7 @@ import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -538,6 +538,20 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
           propVals: { [name]: 'Planning day', [day]: today },
         });
         await row.save();
+        // A row missing the class's required Name (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped): the server refuses a
+        // commit without the property (lib/src/resources.rs
+        // check_required_props; "Property … atomic-calendar-day missing. Is
+        // required in class … event-v1", seen in this lane on 2026-10-02),
+        // and the page then keeps the refused row in its local outbox, so
+        // the spec does not try one. The incomplete row this host can hold
+        // has an empty Name.
+        const retro = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: '', [day]: today },
+        });
+        await retro.save();
 
         return made.subject;
       },
@@ -581,6 +595,20 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
     await expect(
       app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
     ).toHaveCount(0);
+    // The row with an empty Name is listed as incomplete, with a way to the
+    // row, and drawn as "(untitled)" with the tag; the rest is unaffected.
+    const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
+    await expect(incomplete).toContainText('1 row is incomplete');
+    await expect(incomplete).toContainText('(untitled)');
+    await expect(incomplete).toContainText('Incomplete: missing Name');
+    await expect(
+      incomplete.getByRole('button', { name: 'Open row' }),
+    ).toBeVisible();
+    await expect(
+      app.getByRole('button', {
+        name: /^\(untitled\), All day, .*incomplete: missing name$/,
+      }),
+    ).toBeVisible();
   });
 
   test('syncs a hand-made event-v1 table to Google Calendar after Allow editing, and sends a reviewed row edit (#177 item 14)', async ({

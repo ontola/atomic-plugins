@@ -14,7 +14,64 @@ import {
   renderUnknownSpans,
   type ConflictActions,
 } from '../timeline/render.js';
+import { button } from './components.js';
 import type { H } from './dom.js';
+
+/**
+ * Called by the Week and Entries views above the grid or day list: the
+ * table's rows missing a required `time-entry-v1` field (#177;
+ * ontology-kit's rule: shown as incomplete, never skipped), each with its
+ * note and, when the host can show a row, an "Open row" button. Nothing
+ * when `sheet.incomplete` is empty or absent.
+ */
+export function renderIncomplete(
+  h: H,
+  sheet: Timesheet,
+  onOpen?: (id: string) => void,
+): HTMLElement | null {
+  const rows = sheet.incomplete ?? [];
+  if (!rows.length) return null;
+  const n = rows.length;
+
+  return h(
+    'div',
+    {
+      class: 'unknown incomplete',
+      role: 'note',
+      'aria-label': 'Incomplete rows',
+    },
+    h(
+      'p',
+      { style: 'margin:0 0 4px' },
+      h('strong', null, `${n} ${n === 1 ? 'row is' : 'rows are'} incomplete`),
+      `: not counted as ${n === 1 ? 'an entry' : 'entries'}, and not sent to Clockify. Fill the column in the table.`,
+    ),
+    h(
+      'ul',
+      { style: 'margin:0;padding:0;list-style:none' },
+      rows.map(row =>
+        h(
+          'li',
+          {
+            'data-incomplete': row.id,
+            style:
+              'display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:28px',
+          },
+          h('span', null, row.description || '(no description)'),
+          h('strong', null, row.note),
+          onOpen
+            ? button(h, 'Open row', {
+                variant: 'sec',
+                key: `open-row:${row.id}`,
+                label: `Open row ${row.description || '(no description)'}`,
+                onClick: () => onOpen(row.id),
+              })
+            : null,
+        ),
+      ),
+    ),
+  );
+}
 
 /**
  * Called by the Week and Entries views for the displayed week (`span`,

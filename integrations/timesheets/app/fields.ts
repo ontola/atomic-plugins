@@ -11,7 +11,10 @@
  * part of these classes: they are Properties of the app's own ontology
  * (`ontology.ts`), kept on the rows as provider extras.
  */
-import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
 import { classes, properties } from '../../../ontology-kit/terms.mjs';
 
 /** The shared class every row of the app's table is, from 0.5.0. */
@@ -51,6 +54,23 @@ export const LEGACY_SHORTNAMES = {
 } as const;
 
 export const fields = createResolver({ classes: [classes['time-entry-v1']] });
+
+/** The class's required field as the host table heads its column. */
+const COLUMN_NAMES: Readonly<Record<string, string>> = {
+  [SHARED.start]: 'Start',
+};
+
+/**
+ * "Incomplete: missing Start" for a row without the class's required
+ * `work-start`, or undefined. Such a row is listed as incomplete, never
+ * skipped and never sent (ontology-kit/README.md); the person fixes it in
+ * the host table.
+ */
+export function incompleteOf(
+  props: Readonly<Record<string, unknown>>,
+): string | undefined {
+  return incompleteNote(fields.read(props, TIME_ENTRY).missing, COLUMN_NAMES);
+}
 
 /** The row's shared `time-entry-v1` fields, by subject. */
 export function sharedValues(

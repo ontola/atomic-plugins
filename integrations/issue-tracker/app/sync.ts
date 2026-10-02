@@ -29,7 +29,10 @@ import {
   AtomicStore,
 } from 'devonian/atomic';
 import { Datatype } from '@tomic/lib';
-import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
 import { classes } from '../../../ontology-kit/terms.mjs';
 // Plain JS modules of the lens; see devonian/github-issues/README.md.
 import { Bridge } from '../devonian/github-issues/bridge.mjs';
@@ -126,6 +129,12 @@ export interface IssueRow {
    * is then the last one GitHub agreed with.
    */
   statusAsIs?: string[];
+  /**
+   * "Incomplete: missing Name": the row lacks a required `issue-v1` field
+   * (#177; ontology-kit's rule: shown as incomplete, never skipped). Nothing
+   * of it is sent to GitHub until it is complete.
+   */
+  incomplete?: string;
 }
 
 /** One field of a conflict: last synced value and both sides' current ones. */
@@ -199,6 +208,8 @@ export interface PassError extends Error {
 const ISSUE_V1 = classes['issue-v1'];
 const resolver = createResolver({ classes: [ISSUE_V1] });
 const ISSUE_FIELDS = [...ISSUE_V1.requires, ...ISSUE_V1.recommends];
+/** The class's required field as the host table heads its column. */
+const COLUMN_NAMES: Readonly<Record<string, string>> = { [NAME]: 'Name' };
 const STATUS_BY_TAG = new Map<string, Status>(
   STATUSES.map(status => [TASK_TAGS[status], status]),
 );
@@ -279,6 +290,34 @@ class FrameAtomicPort extends AtomicPort {
   readonly baselines = new Map<string, string | undefined>();
   /** Rows whose status is shown as it is: their task/v1 status values. */
   readonly asIs = new Map<string, string[]>();
+  /**
+   * Rows missing a required `issue-v1` field, with the note the view shows
+   * ("Incomplete: missing Name"). Such a row is never sent: one bound to a
+   * GitHub issue shows the Bridge what both sides last agreed on, so it has
+   * no local change; one not bound stays out of the Bridge, even when asked
+   * to publish, until it is complete (`issueRows`).
+   */
+  readonly incomplete = new Map<string, string>();
+
+  /** The row's shared fields and, when a required one is absent, the note. */
+  private readIssue(r: FrameResource) {
+    const reading = resolver.read(
+      Object.fromEntries(ISSUE_FIELDS.map(p => [p, r.get(p)])),
+      this.connection.rowClass,
+    );
+    const title = reading.values[NAME];
+    // A whitespace-only name is as absent as none (GitHub refuses it).
+    const blank = typeof title !== 'string' || !title.trim();
+    const missing =
+      blank && !reading.missing.includes(NAME)
+        ? [...reading.missing, NAME]
+        : reading.missing;
+    const note = incompleteNote(missing, COLUMN_NAMES);
+    if (note) this.incomplete.set(r.subject, note);
+    else this.incomplete.delete(r.subject);
+
+    return { values: reading.values, note };
+  }
 
   async subjects(property: string, value: string): Promise<string[]> {
     const subjects: string[] = await super.subjects(property, value);
@@ -331,10 +370,7 @@ class FrameAtomicPort extends AtomicPort {
       r.get(PARENT) !== c.table
     )
       throw new Error('Resource is not a row of this issue tracker');
-    const { values } = resolver.read(
-      Object.fromEntries(ISSUE_FIELDS.map(p => [p, r.get(p)])),
-      c.rowClass,
-    );
+    const { values, note } = this.readIssue(r);
     const tags = Array.isArray(values[TASK_STATUS])
       ? (values[TASK_STATUS] as unknown[]).filter(
           (t): t is string => typeof t === 'string',
@@ -356,14 +392,32 @@ class FrameAtomicPort extends AtomicPort {
 
     const title = values[NAME];
     const body = values[TASK_BODY] ?? '';
-    if (typeof title !== 'string' || !title.trim() || typeof body !== 'string')
-      throw new Error('Invalid Atomic issue');
+    if (typeof body !== 'string') throw new Error('Invalid Atomic issue');
     const remoteId = r.get(c.number);
     if (
       remoteId !== undefined &&
       (!Number.isSafeInteger(remoteId) || (remoteId as number) <= 0)
     )
       throw new Error('Invalid GitHub issue number');
+    let value = { title: typeof title === 'string' ? title : '', body, status };
+
+    if (note && remoteId !== undefined) {
+      // Incomplete and bound: the Bridge sees what GitHub last agreed with,
+      // so nothing is sent for it; GitHub's own changes still come in, and
+      // they fill the missing field.
+      const agreed = baseline as Partial<typeof value> | undefined;
+      if (
+        typeof agreed?.title === 'string' &&
+        typeof agreed.body === 'string' &&
+        isStatus(agreed.status)
+      )
+        value = {
+          title: agreed.title,
+          body: agreed.body,
+          status: agreed.status,
+        };
+    }
+
     let metadata = r.get(this.config.provenance);
     if (typeof metadata === 'string') metadata = JSON.parse(metadata);
     this.onBaseline(entity, r.subject, baseline);
@@ -371,7 +425,7 @@ class FrameAtomicPort extends AtomicPort {
     return {
       id: r.subject,
       remoteId,
-      value: { title, body, status },
+      value,
       ...(metadata ? { metadata } : {}),
     };
   }
@@ -385,7 +439,11 @@ class FrameAtomicPort extends AtomicPort {
     );
   }
 
-  /** Issue rows of this table's class, read; `all` keeps local-only ones too. */
+  /**
+   * Issue rows of this table's class, read; `all` keeps local-only ones
+   * too, and incomplete rows not bound to a GitHub issue, which the Bridge
+   * never sees (a publish asked for one waits until it is complete).
+   */
   private async issueRows(all: boolean) {
     const out: { id: string; r: FrameResource; localOnly: boolean }[] = [];
 
@@ -396,6 +454,12 @@ class FrameAtomicPort extends AtomicPort {
         continue;
       const localOnly = this.localOnly(id, r);
       if (localOnly && !all) continue;
+      if (
+        !all &&
+        r.get(this.connection.number) === undefined &&
+        this.readIssue(r).note
+      )
+        continue;
       out.push({ id, r, localOnly });
     }
 
@@ -411,9 +475,10 @@ class FrameAtomicPort extends AtomicPort {
   }
 
   /**
-   * Every issue row of the table for the board, local-only ones included.
-   * Never fails on one row: a row the Bridge would refuse (no title) is
-   * shown with what it has.
+   * Every issue row of the table for the board, local-only and incomplete
+   * ones included. Never fails on one row: a row the Bridge would refuse is
+   * shown with what it has, and an incomplete row with its own (absent)
+   * title rather than the agreed one `row` shows the Bridge.
    */
   async listAll(): Promise<ListedRow[]> {
     const out: ListedRow[] = [];
@@ -423,6 +488,8 @@ class FrameAtomicPort extends AtomicPort {
 
       try {
         row = this.row('issue', r) as ImportedRow;
+        if (this.incomplete.has(r.subject))
+          row = { ...row, value: { ...row.value, title: '' } };
       } catch {
         const title = r.get(NAME);
         const body = r.get(TASK_BODY);
@@ -836,10 +903,12 @@ async function tableRows(
 
   for (const row of await local.listAll()) {
     const asIs = local.asIs.get(row.id);
+    const incomplete = local.incomplete.get(row.id);
     out.push({
       ...issueRow(row, comments.get(row.id) ?? []),
       ...(row.localOnly ? { localOnly: true } : {}),
       ...(asIs ? { statusAsIs: await Promise.all(asIs.map(nameOf)) } : {}),
+      ...(incomplete ? { incomplete } : {}),
     });
   }
 

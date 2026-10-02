@@ -9,7 +9,10 @@
  * (`atomic-calendar-day`, `-all-day`, `-end-day`), so the host table's own
  * Calendar view places and spans the rows as before (#172).
  */
-import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
 import { classes, properties } from '../../../ontology-kit/terms.mjs';
 
 /** The shared class every row of the app's table is, from 0.2.0. */
@@ -44,6 +47,24 @@ export const LEGACY_SHORTNAMES: Record<SharedKey, string> = {
 };
 
 export const fields = createResolver({ classes: [classes['event-v1']] });
+
+/** The required fields as the host table heads their columns. */
+const COLUMN_NAMES: Readonly<Record<string, string>> = {
+  'https://atomicdata.dev/properties/name': 'Name',
+  [SHARED.day]: 'Day',
+};
+
+/**
+ * "Incomplete: missing Name and Day" for a row without one of the class's
+ * required fields (`name`, `atomic-calendar-day`), or undefined. Such a row
+ * is shown, marked, and never sent (ontology-kit/README.md); the person
+ * fixes it in the host table.
+ */
+export function incompleteOf(
+  props: Readonly<Record<string, unknown>>,
+): string | undefined {
+  return incompleteNote(fields.read(props, EVENT).missing, COLUMN_NAMES);
+}
 
 /** The row's shared fields, by subject; empty strings count as absent. */
 export function sharedValues(
