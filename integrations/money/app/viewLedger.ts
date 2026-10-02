@@ -45,6 +45,8 @@ export interface LedgerActions extends DetailActions {
   showMore(): void;
   select(subject: string | undefined): void;
   chooseFile(): void;
+  /** Shows the row in the host, where its missing columns can be filled. */
+  openRow(subject: string): void;
 }
 
 export interface Ctx {
@@ -517,6 +519,73 @@ function noResults(ctx: Ctx, actions: LedgerActions): HTMLElement {
   });
 }
 
+/**
+ * The table's rows missing a required field (`state.incomplete`; #177,
+ * ontology-kit's rule: shown as incomplete, never skipped), above the ledger
+ * on the Transactions tab and outside its filters: each with what it does
+ * have, its note ("Incomplete: missing Amount") and, when the host can show
+ * a row, "Open row". None of them is in a balance, a total, the account
+ * list or an import check. Nothing when there are none.
+ */
+export function incompleteRows(
+  ctx: Ctx,
+  actions: LedgerActions,
+): HTMLElement | undefined {
+  const { state, locale } = ctx;
+  const rows = state.incomplete;
+  if (!rows.length) return undefined;
+  const n = rows.length;
+
+  return h(
+    'section',
+    {
+      class: 'm-incomplete',
+      role: 'region',
+      'aria-label': 'Incomplete rows',
+    },
+    h(
+      'p',
+      {},
+      h('strong', {}, `${n} ${n === 1 ? 'row is' : 'rows are'} incomplete`),
+      `: not in any balance or total, and not compared with imports. Fill the ${n === 1 ? 'column' : 'columns'} in the table.`,
+    ),
+    h(
+      'ul',
+      {},
+      rows.map(row => {
+        const { title } = titleOf(row);
+        const has = [
+          row.bookingDate ? shortDate(row.bookingDate, locale) : '',
+          row.account ? shortAccount(row.account) : '',
+          row.amount && row.currency
+            ? formatAmount(row.amount, row.currency, locale)
+            : row.amount || row.currency,
+        ].filter(Boolean);
+
+        return h(
+          'li',
+          { 'data-incomplete': row.subject },
+          h('span', { class: 'm-t' }, title),
+          has.length
+            ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
+            : undefined,
+          h('strong', {}, row.incomplete),
+          state.canOpenRows
+            ? button('Open row', {
+                key: `open-row:${row.subject}`,
+                ariaLabel: `Open row ${title}`,
+                onClick: () => actions.openRow(row.subject),
+              })
+            : undefined,
+        );
+      }),
+    ),
+    state.openFailure
+      ? h('p', { class: 'pl-muted m-small' }, state.openFailure)
+      : undefined,
+  );
+}
+
 function table(ctx: Ctx, derived: Derived, actions: LedgerActions) {
   const { state, locale } = ctx;
   const notes = canAnnotate(state.fields);
@@ -683,6 +752,12 @@ export function transactions(ctx: Ctx, actions: LedgerActions): HTMLElement[] {
 }
 
 function ledger(ctx: Ctx, actions: LedgerActions): HTMLElement[] {
+  const incomplete = incompleteRows(ctx, actions);
+  // Only incomplete rows: list them, then the first run's invitation.
+  if (!ctx.state.rows.length)
+    return [incomplete, firstRun(ctx, actions)].filter(
+      (node): node is HTMLElement => node !== undefined,
+    );
   const derived = derive(ctx.state, ctx.today);
   const more = derived.filtered.length - derived.visible.length;
   // The strip sums what the filters let through; with nothing through it
@@ -690,6 +765,7 @@ function ledger(ctx: Ctx, actions: LedgerActions): HTMLElement[] {
   const body: HTMLElement[] = derived.filtered.length
     ? [stripView(ctx, derived, actions), filters(ctx, derived, actions)]
     : [filters(ctx, derived, actions)];
+  if (incomplete) body.unshift(incomplete);
 
   if (!derived.filtered.length) body.push(noResults(ctx, actions));
   else {

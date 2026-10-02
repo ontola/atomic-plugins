@@ -62,6 +62,9 @@ export function status(ctx: Ctx): { state: PillState; text: string } {
           state: 'synced',
           text: `Imported ${count(state.arrived.count, locale)} · just now`,
         };
+      // Only incomplete rows: nothing has a date to be the latest entry.
+      if (!state.rows.length)
+        return { state: 'idle', text: 'No transactions yet' };
 
       return {
         state: 'idle',
