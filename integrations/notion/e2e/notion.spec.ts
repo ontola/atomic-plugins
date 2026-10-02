@@ -332,9 +332,13 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await syncNow();
     const statusAppUrl = page.url();
     await card.getByRole('button', { name: 'Open table' }).click();
-    await expect(
-      page.getByRole('main').getByText('Shipped', { exact: true }).first(),
-    ).toBeVisible({ timeout: 30_000 });
+    const shipped = page
+      .getByRole('main')
+      .getByText('Shipped', { exact: true })
+      .first();
+    await expect(shipped).toBeVisible({ timeout: 30_000 });
+    // The chip is in a column to the right of the first screen.
+    await shipped.scrollIntoViewIfNeeded();
     await shot('n7-table-renamed');
     await page.goto(statusAppUrl);
     await setRowField(page, 'Launch plan', STATUS, DONE_OPTION, true);
