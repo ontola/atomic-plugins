@@ -870,30 +870,6 @@ mod tests {
             .is_ok());
     }
 
-    #[tokio::test]
-    #[ignore = "downloads pinned OADs from the deprecated compatibility catalog"]
-    async fn deprecated_catalog_retains_connectable_security_profiles() {
-        let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
-        let catalog = Catalog::load_with_mirror(
-            overlays.join("catalog.json").to_str().unwrap(),
-            &crate::build_http_client(),
-            Some(&overlays),
-        )
-        .await
-        .unwrap();
-        for name in catalog.names() {
-            catalog
-                .security_scheme(&name)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-        }
-        assert!(catalog
-            .allows("discord", "GET", "/api/v10/users/@me")
-            .is_some());
-        assert!(catalog
-            .allows("discord", "POST", "/api/v10/channels/123/messages")
-            .is_none());
-    }
-
     fn tempfile_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "integration-proxy-test-{}-{}",

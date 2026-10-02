@@ -193,7 +193,8 @@ served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
 `integration-proxy`'s default `CATALOG_PATH` is that folder's
 `catalog/2026-10-02.json`. Dated catalogs and OAD-revision overlay filenames
 are immutable; a new overlay does not change an existing catalog selection.
-The unversioned catalog is temporarily deprecated pending the live switch. See
+The unversioned catalog was removed after the verified localthought.io switch
+on 2026-10-02. See
 [`overlays/README.md`](overlays/README.md) for the publication model and its
 checks. Provider paths mirror `openapi-directory` as
 `overlays/APIs/<provider>/<service-if-any>/<version>/`.
