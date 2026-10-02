@@ -174,8 +174,9 @@ since this repo is not the source of its published releases.
 A host is meant to read a package's `version` (directly, or via
 `catalog.json`) at install time to record which release an installation is
 pinned to, and later compare it against this repo's current `version` to
-offer an update. No host does this at the current pin
-([#94](https://github.com/ontola/atomic-plugins/issues/94)). Bump
+offer an update. For a sandbox plugin's `plugin.js` no host does this at the
+current pin. For a drive app the host does, from the `app-module` fields (see
+[Publishing a drive app](#publishing-a-drive-app); #94, closed). Bump
 `package.json` `version` (and the matching catalog entry) whenever an
 integration's shipped `plugin.js` changes.
 
@@ -227,8 +228,8 @@ enclosing plugin's `package.json` is not read for it.
 | `app-module-integrity`                | `sha384-…` (Subresource Integrity) of those bytes.                                                                                                      |
 | `app-row-name`, `app-row-name-plural` | Optional names for the app's table rows.                                                                                                                |
 
-The host (atomic-server#1689, in the current `.atomic-server-ref` pin, not
-yet merged upstream) lists these entries under **Drive apps** on the
+The host (atomic-server#1689, merged to `develop` in batch #1699 on
+2026-09-24, and in the current `.atomic-server-ref` pin) lists these entries under **Drive apps** on the
 Integrations page, with the same `enabled`/`experimental`/`requires-api-plugins`
 gates as other entries. **Install** downloads `app-module`, refuses it unless
 its bytes match `app-module-integrity`, and creates an ordinary app from it:
@@ -354,7 +355,8 @@ below is **planned**, with the atomic-server issue that would build it.
   runtime exists. At the pin, a file importer can be created as a draft
   from a published release and run from its plugin page's Import tab
   (atomic-server#1653), as `money/` is; publishing the bundle to a server
-  is still manual ([#94](https://github.com/ontola/atomic-plugins/issues/94)).
+  is still manual: the catalog's install path (#94, closed) covers drive apps
+  with `app-module`, not sandbox bundles.
   [READINESS.md](READINESS.md) has the per-plugin state.
 - **C. Sandbox route.** The same sandbox as B, invoked fresh for each
   inbound HTTP request from anyone. Planned and gated:

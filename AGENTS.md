@@ -69,9 +69,14 @@ in [`integrations/READINESS.md`](integrations/READINESS.md).
    paging, and optionally a lens from the npm `devonian` package for the
    mapping. `pets/app/` (syncables), `notion/app/` (syncables plus a
    Devonian `AtomicLens`) and `timesheets/app/` (its own Clockify client)
-   are this shape. No host UI installs a drive app from the catalog yet
-   ([#94](https://github.com/ontola/atomic-plugins/issues/94)); their E2Es
-   install test-side.
+   are this shape. At the pin, Integrations → Drive apps installs a drive app
+   from a catalog entry that has `app-module` (atomic-server#1689;
+   [#94](https://github.com/ontola/atomic-plugins/issues/94), closed), and the
+   lane e2es install through that UI with the lane's dev-server standing in
+   for GitHub Pages. Only the `pets` entry is `enabled: true`, so the
+   published catalog offers Pets alone; the other app entries are
+   `enabled: false` and are not listed. The design of that UI is tracked in
+   [#89](https://github.com/ontola/atomic-plugins/issues/89).
 2. **Server-executed sandbox plugins** — a bundled `plugin.js` with a
    `manifest` and a `run(ctx)`, executed server-side in a QuickJS/WASM
    sandbox against scoped `ctx.query`/`ctx.read`/`ctx.http`/`ctx.config`.
