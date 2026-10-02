@@ -13,6 +13,7 @@ import unittest
 from urllib.parse import unquote
 
 import yaml
+from jsonschema import Draft4Validator
 from openapi_spec_validator import validate
 
 from generate_identity_catalog_fixtures import ROOT, apply, fetch, merge
@@ -24,6 +25,8 @@ DIRECTORY = None
 VARIANTS = {
     "slack": "APIs/slack.com/1.7.0/pagination-v2-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml",
     "digitalocean": "APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
+    "notion": "APIs/notion.com/2026-03-11/pagination-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
+    "spotify": "APIs/spotify.com/1.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
 }
 
 
@@ -87,11 +90,16 @@ class PaginationCollectionTests(unittest.TestCase):
             for path, method, item, operation, application in applications(document):
                 with self.subTest(provider=name, path=path, method=method):
                     scheme = merge(copy.deepcopy(schemes[application["scheme"]]), application.get("overrides", {}))
-                    self.assertEqual(method, "get")
+                    self.assertIn(method, ("get", "post"))
                     self.assertFalse(scheme["autoDetect"])
                     parameters = [resolve(document, p) for p in item.get("parameters", []) + operation.get("parameters", [])]
                     query = {p["name"] for p in parameters if p["in"] == "query"}
-                    self.assertLessEqual(set(scheme["request"]["queryParameters"]), query)
+                    request = scheme["request"]
+                    self.assertLessEqual(set(request.get("queryParameters", {})), query)
+                    if request.get("bodyFields"):
+                        body = resolve(document, operation["requestBody"])
+                        body_schema = body["content"]["application/json"]["schema"]
+                        self.assertLessEqual(set(request["bodyFields"]), set(properties(document, body_schema)))
                     response = resolve(document, operation["responses"]["200"])
                     schema = response["content"]["application/json"]["schema"]
                     for field, metadata in scheme["response"]["bodyFields"].items():
@@ -100,7 +108,7 @@ class PaginationCollectionTests(unittest.TestCase):
                     envelope = scheme["response"]["envelope"]["itemsField"]
                     self.assertEqual(field_schema(document, schema, envelope)["type"], "array")
 
-    def test_api_contract_only_changes_in_documented_metadata_repair(self):
+    def test_api_contract_only_changes_in_documented_schema_enrichments(self):
         for name, (original, document) in self.documents.items():
             with self.subTest(provider=name):
                 standard = copy.deepcopy(document)
@@ -117,6 +125,14 @@ class PaginationCollectionTests(unittest.TestCase):
                     response["content"]["application/json"]["schema"]["properties"]["response_metadata"] = copy.deepcopy(
                         source["content"]["application/json"]["schema"]["properties"]["response_metadata"]
                     )
+                if name == "notion":
+                    standard["components"]["schemas"].pop("NotionCursorListBody")
+                    standard["components"]["requestBodies"].pop("NotionCursorListRequest")
+                    for path in ("/search", "/data_sources/{data_source_id}/query"):
+                        standard["paths"][path]["post"]["requestBody"] = copy.deepcopy(original["paths"][path]["post"]["requestBody"])
+                if name == "spotify":
+                    standard["components"]["schemas"].pop("SpotifyPagingCategories")
+                    standard["components"]["responses"]["PagedCategories"] = copy.deepcopy(original["components"]["responses"]["PagedCategories"])
                 for _, _, _, operation, _ in list(applications(standard)):
                     operation.pop("x-pagination", None)
                 self.assertEqual(standard, original)
@@ -156,6 +172,74 @@ class PaginationCollectionTests(unittest.TestCase):
         # request parameters alone must not turn it into a paged collection.
         for path in ("/v2/volumes/{volume_id}/actions/{action_id}", "/v2/registry/{registry_name}/garbage-collections"):
             self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+
+    def test_notion_body_and_query_cursors_have_distinct_locations(self):
+        document = self.documents["notion"][1]
+        selected = {(path, method): application["scheme"]
+                    for path, method, _, _, application in applications(document)}
+        self.assertEqual(selected, {
+            ("/search", "post"): "bodyCursorPages",
+            ("/data_sources/{data_source_id}/query", "post"): "bodyCursorPages",
+            ("/views", "get"): "queryCursorPages",
+        })
+        schemes = document["components"]["paginationSchemes"]
+        for name, location in (("bodyCursorPages", "bodyFields"), ("queryCursorPages", "queryParameters")):
+            self.assertEqual(set(schemes[name]["request"]), {location})
+            self.assertEqual(set(schemes[name]["request"][location]), {"start_cursor", "page_size"})
+            self.assertEqual(schemes[name]["response"]["envelope"]["itemsField"], "results")
+        self.assertNotIn("x-pagination", document["paths"]["/pages"]["post"])
+        self.assertNotIn("x-pagination", document["paths"]["/pages/{page_id}"]["get"])
+
+    def test_notion_body_schema_accepts_filters_and_checks_pagination_types(self):
+        document = self.documents["notion"][1]
+        for path in ("/search", "/data_sources/{data_source_id}/query"):
+            with self.subTest(path=path):
+                body = resolve(document, document["paths"][path]["post"]["requestBody"])
+                self.assertFalse(body["required"])
+                validator = Draft4Validator({
+                    "$ref": body["content"]["application/json"]["schema"]["$ref"],
+                    "components": document["components"],
+                })
+                for payload in ({}, {"page_size": 1}, {"page_size": 100}, {
+                    "start_cursor": "opaque-next/==", "page_size": 10,
+                    "filter": {"property": "Sample", "checkbox": {"equals": True}},
+                    "sorts": [{"property": "Sample", "direction": "ascending"}],
+                }):
+                    self.assertTrue(validator.is_valid(payload), payload)
+                for payload in ({"page_size": 0}, {"page_size": 101}, {"page_size": "10"}, {"start_cursor": 123}):
+                    self.assertFalse(validator.is_valid(payload), payload)
+
+    def test_spotify_nested_envelopes_and_returned_urls(self):
+        document = self.documents["spotify"][1]
+        schemes = document["components"]["paginationSchemes"]
+        selected = {path: schemes[application["scheme"]]
+                    for path, method, _, _, application in applications(document)
+                    if method == "get"}
+        self.assertEqual(len(selected), 19)
+        for path, prefix in {
+            "/me/playlists": "", "/browse/categories": "categories.",
+            "/browse/featured-playlists": "playlists.", "/browse/new-releases": "albums.",
+            "/me/following": "artists.", "/me/player/recently-played": "",
+        }.items():
+            with self.subTest(path=path):
+                scheme = selected[path]
+                self.assertEqual(scheme["type"], "nextLink")
+                self.assertEqual(scheme["response"]["envelope"]["itemsField"], prefix + "items")
+                self.assertEqual(scheme["response"]["bodyFields"], {prefix + "next": {"role": "nextLink"}})
+                self.assertEqual(set(scheme["request"]["queryParameters"]), {"limit"})
+        # Multiple independent search collections need a consumer selection;
+        # recommendations use limit but do not supply a continuation URL.
+        for path in ("/search", "/recommendations"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+    def test_spotify_categories_repair_is_local_to_its_response(self):
+        original, document = self.documents["spotify"]
+        self.assertEqual(document["components"]["schemas"]["PagingObject"], original["components"]["schemas"]["PagingObject"])
+        response = resolve(document, document["paths"]["/browse/categories"]["get"]["responses"]["200"])
+        schema = response["content"]["application/json"]["schema"]
+        items = field_schema(document, schema, "categories.items")
+        self.assertEqual(items["items"]["$ref"], "#/components/schemas/CategoryObject")
 
 
 if __name__ == "__main__":
