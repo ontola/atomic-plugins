@@ -181,6 +181,12 @@ open, sync merges, send, conflict both ways, archived page, formatted text,
 refused option, lost answer, discard; `app/view.test.ts`'s S15/S16 block)
 and the e2e (below). Not live-verified.
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+notion --i-understand-this-writes-to <data source id>` runs this app's
+controller, including a reviewed edit sent as a `PATCH`, against one
+disposable data source and writes evidence; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
+
 ## E2E
 
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:

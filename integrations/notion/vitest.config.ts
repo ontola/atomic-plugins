@@ -21,6 +21,8 @@ export default {
       'app/*.test.ts',
       'host/*.test.ts',
       'devonian/**/*.test.ts',
+      // The live check's offline tests (the mock Notion); never the live run.
+      'live/*.test.ts',
     ],
   },
 };

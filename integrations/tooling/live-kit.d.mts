@@ -66,6 +66,8 @@ export interface RequestRecord {
   method: string;
   path: string;
   ifMatch: boolean;
+  /** Set when the scenario's `isRead` called this POST a read. */
+  read?: true;
   bodyKeys?: string[];
   at: string;
   status?: number | 'network-error';
@@ -85,6 +87,8 @@ export function createProvider(options: {
     pathname: string;
     query: Record<string, string>;
   }) => void;
+  /** For a provider whose reads are POSTs: counted as reads by the budget. */
+  isRead?: (request: { method: string; pathname: string }) => boolean;
   budget: Budget;
   redact: Redactor;
   fetcher?: (
@@ -129,7 +133,14 @@ export interface Candidate {
 }
 export function describeCandidate(
   app: string,
-  options?: { appId?: string; root?: string },
+  options?: {
+    appId?: string;
+    root?: string;
+    /** Repository-relative; default `integrations/<app>/app/package.json`. */
+    packageFile?: string;
+    /** Repository-relative; default `integrations/<app>`. */
+    folder?: string;
+  },
 ): Candidate;
 export interface StepContext {
   check(name: string, ok: unknown, detail?: unknown): boolean;
