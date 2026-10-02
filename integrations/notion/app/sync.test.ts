@@ -14,7 +14,12 @@ import {
   TABLE,
 } from './fakeStore.js';
 import { dataBrowser, OPTION_COLOURS } from './options.js';
-import { atomic, NOTION_DOCUMENT, syncNotion } from './sync.js';
+import {
+  atomic,
+  isStrayRawColumn,
+  NOTION_DOCUMENT,
+  syncNotion,
+} from './sync.js';
 import { syncablesTransport } from './transport.js';
 
 const upstream = new URL('https://api.notion.com/v1');
@@ -235,6 +240,125 @@ describe('syncNotion', () => {
     const writes = store.writes.length;
     const again = await syncNotion(store, transport);
     expect(again).toMatchObject({ created: 0, updated: 0, unchanged: 3 });
+    expect(store.writes.length).toBe(writes);
+  });
+
+  it('makes no column of the platform’s Page fields (#303)', async () => {
+    const { store } = await run();
+    const shortnames = [...store.resources.values()]
+      .filter(
+        p =>
+          p[PARENT] === ONTOLOGY &&
+          (p[IS_A] as string[] | undefined)?.includes(atomic.propertyClass),
+      )
+      .map(p => String(p[atomic.shortname]));
+    expect(shortnames).toHaveLength(12);
+    for (const shortname of shortnames) expect(shortname).toMatch(/^notion-/);
+    for (const subject of store.resources.get(ROW_CLASS)![
+      atomic.recommends
+    ] as string[])
+      expect(store.resources.get(subject)![atomic.name]).not.toMatch(
+        /\/property\//,
+      );
+  });
+
+  it('retires the stray Page-field columns of a 0.4.0 install, and nothing else (#303)', async () => {
+    // A table 0.4.0 synced: the ten auto-named Page-field Properties sit on
+    // the ontology and the class, next to a column a person added whose
+    // shortname is also `title`, with a value in one row.
+    const proxy = fixtureProxy();
+    const store = fakeStore({ proxy });
+    const transport = syncablesTransport(proxy, 'conn-1', upstream);
+    const column = async (shortname: string, name: string) =>
+      (
+        await store.newResource({
+          parent: ONTOLOGY,
+          isA: [atomic.propertyClass],
+          propVals: {
+            [atomic.shortname]: shortname,
+            [atomic.name]: name,
+            [atomic.datatype]: 'https://atomicdata.dev/datatypes/string',
+            [atomic.description]: `\`${shortname}\` of \`page\`.`,
+          },
+        })
+      ).subject;
+    const stray = [];
+    for (const field of [
+      'object',
+      'id',
+      'created-time',
+      'last-edited-time',
+      'title',
+      'properties',
+      'parent',
+      'url',
+      'archived',
+      'in-trash',
+    ])
+      stray.push(
+        await column(
+          field,
+          `notion-api-integration-proxy-slice/property/${field}`,
+        ),
+      );
+    const mine = await column('title', 'Title');
+    const ontology = await store.getResource(ONTOLOGY);
+    await ontology.set(atomic.properties, [...stray, mine]).save();
+    const klass = await store.getResource(ROW_CLASS);
+    await klass.set(atomic.recommends, [...stray, mine]).save();
+    const row = await store.newResource({
+      parent: TABLE,
+      isA: [ROW_CLASS],
+      propVals: { [atomic.name]: 'Hand-added', [mine]: 'kept' },
+    });
+
+    const result = await syncNotion(store, transport);
+    expect(result).toMatchObject({ created: 3, updated: 0, unchanged: 0 });
+
+    // Gone from the class, the ontology and the store; nothing else was.
+    const recommends = store.resources.get(ROW_CLASS)![
+      atomic.recommends
+    ] as string[];
+    const properties = store.resources.get(ONTOLOGY)![
+      atomic.properties
+    ] as string[];
+
+    for (const subject of stray) {
+      expect(recommends).not.toContain(subject);
+      expect(properties).not.toContain(subject);
+      expect(store.resources.has(subject)).toBe(false);
+    }
+
+    expect(recommends[0]).toBe(mine);
+    expect(properties[0]).toBe(mine);
+    expect(recommends).toHaveLength(1 + 10);
+    expect(properties).toHaveLength(1 + 12);
+    expect(store.resources.get(mine)).toMatchObject({
+      [atomic.shortname]: 'title',
+      [atomic.name]: 'Title',
+    });
+    expect(store.resources.get(row.subject)).toEqual({
+      [PARENT]: TABLE,
+      [IS_A]: [ROW_CLASS],
+      [atomic.name]: 'Hand-added',
+      [mine]: 'kept',
+    });
+    for (const [shortname, kept] of [
+      ['title', 'Title'],
+      ['url', 'Links'],
+      ['notion-7469746c65', 'notion-api-integration-proxy-slice/property/x'],
+    ] as const)
+      expect(
+        isStrayRawColumn(
+          await store.newResource({
+            propVals: { [atomic.shortname]: shortname, [atomic.name]: kept },
+          }),
+        ),
+      ).toBe(false);
+
+    // The upgrade is done once: a second sync writes nothing.
+    const writes = store.writes.length;
+    await syncNotion(store, transport);
     expect(store.writes.length).toBe(writes);
   });
 
