@@ -38,18 +38,14 @@
  * For todoist.ts coverage, include a task with `due.date`, one with
  * `due.datetime`, one with no due date, and several priorities.
  *
- * After recording, register the fixture in the shared registry,
- * integrations/localthought/fixtures/index.mjs, which imports each plugin's
- * fixture by relative path, sorted by that path:
- *   import todoist from '../../issue-tracker/fixtures/todoist/scenario.mjs';
- * (right after the github-issues import), and add `todoist,` to `fixtures`.
- * Whether atomic-server's dagger e2e resolves these cross-folder imports is
- * tracked in ontola/atomic-server#1639.
- * integrations/localthought/mock-proxy.test.mjs uses todoist as its example
- * of a platform with no fixture (`platforms: 'pets,todoist,pets'`) and lists
- * every served platform, so change it in the same commit. Then run
- * integrations/issue-tracker/todoist-fixture.test.ts (its header has the
- * command) and `node --test integrations/localthought/mock-proxy.test.mjs`.
+ * The fixture (scenario.mjs) is already registered in
+ * integrations/localthought/fixtures/index.mjs. Until api/ exists it serves
+ * the SYNTHETIC rows of synthetic.mjs; once this script has written api/, it
+ * replays the recording instead, and synthetic.mjs can be deleted. After
+ * recording, run integrations/issue-tracker/todoist-fixture.test.ts (its
+ * header has the command): the recorded-only tests stop skipping, and the
+ * app's unit tests and the lane's e2e (todoist.spec.ts) then run against the
+ * recorded rows, so their expected names and counts need updating to match.
  */
 import { spawnSync } from 'node:child_process';
 import {
