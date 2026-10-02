@@ -307,8 +307,8 @@ export function createController(
     const known = new Set(state.rows.map(row => row.subject));
     const wereIncomplete = new Set(state.incomplete.map(row => row.subject));
     const fresh = subjects.filter(s => !known.has(s));
-    const read = await readRows(store, fresh, state.fields, rowClass);
-    const added = split(read);
+    const freshRows = await readRows(store, fresh, state.fields, rowClass);
+    const added = split(freshRows);
     const present = new Set(subjects);
     const wasEmpty = state.rows.length === 0;
     const rows = [
@@ -316,7 +316,9 @@ export function createController(
       ...added.rows,
     ];
     const incomplete = added.incomplete;
-    const arrived = read.filter(row => !wereIncomplete.has(row.subject)).length;
+    const arrived = freshRows.filter(
+      row => !wereIncomplete.has(row.subject),
+    ).length;
     update({
       rows,
       incomplete,
