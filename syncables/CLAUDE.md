@@ -145,7 +145,12 @@ Data flows through four stages, each its own directory under `src/`:
    counts as an attempt (`retry.maxAttempts` applies), and a create without a
    key the client can still send becomes `uncertain`. Restored updates wait
    (`awaitingRefresh`) for a complete `sync()` of their scope before sending,
-   unless a create precedes them. Unknown versions are refused, not
+   unless a create precedes them; a settle on the same record during the read
+   (`recordRevisions`) skips the release, three non-releasing syncs fail it,
+   and `resolveWrite` retries or discards it. A complete refresh lacking the
+   record of a pending update fails that update (`lastKnown` keeps the last
+   confirmed record for a retry) rather than sending a partial PUT. Writes not
+   yet durable are skipped by `rebuild`. Unknown versions are refused, not
    overwritten. The README's
    "Durable outbox and restarts" has the stop-between-steps table; keep it in
    step with the code. Not stored: `lastSyncedItems`, the conditional cache and

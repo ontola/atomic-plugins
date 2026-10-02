@@ -33,6 +33,8 @@ export interface StoredWrite {
    * the request may have been in flight.
    */
   sending?: true;
+  /** For an update whose record a refresh no longer had: the last confirmed record. */
+  lastKnown?: Record<string, unknown>;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -91,7 +93,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['idempotencyKey'] === undefined ||
       typeof value['idempotencyKey'] === 'string') &&
     (value['confirmedId'] === undefined ||
-      typeof value['confirmedId'] === 'string')
+      typeof value['confirmedId'] === 'string') &&
+    (value['lastKnown'] === undefined || isRecord(value['lastKnown']))
   );
 }
 

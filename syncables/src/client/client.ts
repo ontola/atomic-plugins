@@ -164,7 +164,9 @@ export interface WriteConflict {
 }
 
 /**
- * How to settle an `uncertain` or `failed` write:
+ * How to settle an `uncertain` or `failed` write, or a restored update that is
+ * waiting for a refresh (`awaitingRefresh`; `retry` sends it now, `discard`
+ * drops it and leaves the writes queued behind it):
  * - `retry`: send it again (an uncertain create may then duplicate the record
  *   on a provider without idempotency support; that is the caller's decision).
  *   Failed updates and deletes are queued again behind any newer writes for
@@ -204,9 +206,11 @@ export interface PendingWriteInfo {
   lastError?: string;
   state: PendingWriteState;
   /**
-   * Set on an update restored from the durable outbox: it is not sent until
-   * a `sync()` has read its collection completely, so the record it sends is
-   * built on current remote state and checked for conflicts first.
+   * Set on a `pending` update restored from the durable outbox: it is not sent
+   * until a `sync()` has read its record's collection completely, so the
+   * record it sends is built on current remote state and checked for
+   * conflicts first. Never set on other states: after three syncs that did not
+   * release it, the update becomes `failed` without this flag.
    */
   awaitingRefresh?: true;
   /** For updates: fields that also changed remotely since the edit was made. */
@@ -284,9 +288,10 @@ export interface ApiClient {
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
-   * Settles the `uncertain` or `failed` write for record `id` (see
-   * `WriteResolution`). Throws if that record has no such write; a write that
-   * is `pending` cannot be resolved this way.
+   * Settles the `uncertain` or `failed` write for record `id`, or its restored
+   * updates waiting for a refresh (see `WriteResolution`). Throws if that
+   * record has none of these; any other `pending` write cannot be resolved
+   * this way.
    */
   resolveWrite(
     resource: string,
@@ -380,6 +385,10 @@ interface QueuedWrite {
   durable?: boolean;
   /** A restored update: not sent before a refresh of its collection. */
   awaitingRefresh?: boolean;
+  /** Syncs that ran without releasing an `awaitingRefresh` write. */
+  refreshMisses?: number;
+  /** The last confirmed record, kept when a refresh no longer had it. */
+  lastKnown?: Record<string, unknown>;
 }
 
 type WriteOutcome =
@@ -520,6 +529,8 @@ export function createApiClient(
   const gaveUpWrites = new Map<string, QueuedWrite[]>();
   const draining = new Set<string>();
   const revisions = new Map<string, number>();
+  /** Like `revisions`, per record: settles during a read, by record key. */
+  const recordRevisions = new Map<string, number>();
   let syncing: Promise<SyncResult> | undefined;
   const retry = {
     baseDelayMs: options.retry?.baseDelayMs ?? 200,
@@ -568,6 +579,7 @@ export function createApiClient(
         ? { confirmedId: write.confirmedId }
         : {}),
       ...(write.sending ? { sending: true as const } : {}),
+      ...(write.lastKnown ? { lastKnown: write.lastKnown } : {}),
     };
   }
 
@@ -697,6 +709,7 @@ export function createApiClient(
       ...(stored.confirmedId !== undefined
         ? { confirmedId: stored.confirmedId }
         : {}),
+      ...(stored.lastKnown ? { lastKnown: stored.lastKnown } : {}),
     };
     if (stored.sending) {
       // The process stopped between storing "about to send" and storing the
@@ -762,7 +775,7 @@ export function createApiClient(
       // collection instead of replaying on a confirmed record from before
       // the stop. Behind a create, the create's response is fresh enough.
       let afterCreate = false;
-      for (const write of [...failed, ...queue]) {
+      for (const write of queue) {
         if (write.type === 'create') afterCreate = true;
         if (write.type === 'update' && !afterCreate)
           write.awaitingRefresh = true;
@@ -853,10 +866,12 @@ export function createApiClient(
       ...(writeQueues.get(key) ?? []),
     ];
     for (const write of pending) {
+      // Not visible before its own first store succeeded (it may never).
+      if (write.durable === false) continue;
       if (write.type === 'create') value = write.data;
       else if (write.type === 'update')
         value = {
-          ...value,
+          ...(value ?? write.lastKnown),
           ...write.changes,
           [write.route.collection.idField]: id,
         };
@@ -911,6 +926,10 @@ export function createApiClient(
 
   function settled(write: QueuedWrite, resolvedId: string): WriteOutcome {
     revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
+    for (const id of new Set([write.id, resolvedId])) {
+      const key = keyFor(write.scope, id);
+      recordRevisions.set(key, (recordRevisions.get(key) ?? 0) + 1);
+    }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
     // compared (and checked for conflicts) even if it equals the last one.
@@ -957,7 +976,7 @@ export function createApiClient(
           write.type === 'create'
             ? write.data
             : {
-                ...remote(write.scope).get(write.id),
+                ...(remote(write.scope).get(write.id) ?? write.lastKnown),
                 ...write.changes,
                 [idField]: write.id,
               };
@@ -1289,22 +1308,148 @@ export function createApiClient(
     return response;
   };
 
+  /** Every unsettled write, failed ones first, then queues in order. */
+  function allWrites(): QueuedWrite[] {
+    return [...gaveUpWrites.values(), ...writeQueues.values()].flat();
+  }
+
   /**
-   * Restored updates of `scope` may go out now: a complete read of it has
-   * replaced the confirmed records from before the restart, and checked
-   * them for conflicts.
+   * Turns a queued update into a failed one, kept with the record's failed
+   * writes; writes queued behind it go ahead, as after any failed update.
    */
-  function releaseRefreshed(scope: string): void {
-    for (const writes of [...gaveUpWrites.values(), ...writeQueues.values()])
-      for (const write of writes)
-        if (write.scope === scope) delete write.awaitingRefresh;
+  function failWrite(
+    write: QueuedWrite,
+    message: string,
+    lastKnown?: Record<string, unknown>,
+  ): void {
+    const key = keyFor(write.scope, write.id);
+    const queue = writeQueues.get(key);
+    const at = queue?.indexOf(write) ?? -1;
+    if (queue && at >= 0) {
+      queue.splice(at, 1);
+      if (!queue.length) writeQueues.delete(key);
+    }
+    write.state = 'failed';
+    write.lastError = message;
+    delete write.awaitingRefresh;
+    delete write.refreshMisses;
+    if (lastKnown && !write.lastKnown) write.lastKnown = lastKnown;
+    gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), write]);
+  }
+
+  function missingMessage(write: QueuedWrite): string {
+    return `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely); not sent, to avoid a partial update`;
+  }
+
+  /**
+   * After a complete read of `scope`: a pending update whose record the read
+   * did not return would send only its own fields as the whole record.
+   * It fails instead, keeping the last confirmed record for a retry. Updates
+   * behind a create of the same record, and updates in flight, are left.
+   */
+  function failMissingUpdates(
+    scope: string,
+    records: Map<string, Record<string, unknown>>,
+    previous: Map<string, Record<string, unknown>>,
+  ): void {
+    for (const failed of gaveUpWrites.values())
+      for (const write of failed)
+        if (
+          write.scope === scope &&
+          write.type === 'update' &&
+          !records.has(write.id) &&
+          !write.lastKnown &&
+          previous.has(write.id)
+        )
+          write.lastKnown = previous.get(write.id) as Record<string, unknown>;
+    for (const queue of [...writeQueues.values()]) {
+      let afterCreate = false;
+      for (const write of [...queue]) {
+        if (write.type === 'create') afterCreate = true;
+        if (
+          write.scope !== scope ||
+          write.type !== 'update' ||
+          afterCreate ||
+          write.state !== 'pending' ||
+          write.sending ||
+          write.durable === false ||
+          records.has(write.id)
+        )
+          continue;
+        failWrite(write, missingMessage(write), previous.get(write.id));
+      }
+    }
+  }
+
+  /**
+   * Releases the restored updates of `scope` whose records this complete
+   * read saw fresh (`isFresh`: no write to the record settled during it).
+   * With `apply`, the read was not applied to the whole collection, so the
+   * fresh records are taken over (and checked for conflicts) here.
+   */
+  async function releaseRefreshed(
+    scope: string,
+    records: Map<string, Record<string, unknown>>,
+    isFresh: (id: string) => boolean,
+    apply: boolean,
+    released: Set<QueuedWrite>,
+  ): Promise<void> {
+    const fresh = new Map<string, Record<string, unknown>>();
+    const touchedIds = new Set<string>();
+    for (const write of allWrites()) {
+      if (write.scope !== scope || !write.awaitingRefresh) continue;
+      if (!isFresh(write.id)) continue;
+      released.add(write);
+      touchedIds.add(write.id);
+      const record = records.get(write.id);
+      if (!record) {
+        failWrite(write, missingMessage(write), remote(scope).get(write.id));
+        continue;
+      }
+      if (apply) fresh.set(write.id, record);
+      delete write.awaitingRefresh;
+      delete write.refreshMisses;
+    }
+    if (!touchedIds.size) return;
+    if (fresh.size) {
+      for (const [id, record] of fresh) remote(scope).set(id, record);
+      detectConflicts(scope, fresh);
+    }
+    await persistLater();
+    for (const id of touchedIds) await rebuild(scope, id);
     for (const [key, queue] of writeQueues)
       if (queue[0]?.scope === scope && !draining.has(key)) void drainQueue(key);
+  }
+
+  /**
+   * A restored update that `limit` syncs in a row did not release (its
+   * collection never read completely, or a write to it kept settling)
+   * fails, so it is listed and can be retried or discarded.
+   */
+  const REFRESH_MISS_LIMIT = 3;
+  async function countRefreshMisses(released: Set<QueuedWrite>): Promise<void> {
+    let changed = false;
+    for (const write of allWrites()) {
+      if (!write.awaitingRefresh || released.has(write)) continue;
+      write.refreshMisses = (write.refreshMisses ?? 0) + 1;
+      if (write.refreshMisses < REFRESH_MISS_LIMIT) continue;
+      failWrite(
+        write,
+        `Waiting for a complete refresh of ${write.route.collection.name}: ${REFRESH_MISS_LIMIT} syncs did not read this record completely`,
+      );
+      changed = true;
+    }
+    if (!changed) return;
+    await persistLater();
+    for (const [key, queue] of writeQueues)
+      if (queue.length && !draining.has(key)) void drainQueue(key);
   }
 
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
     const started = new Map(revisions);
+    const startedRecords = new Map(recordRevisions);
+    const released = new Set<QueuedWrite>();
     const result = await readCollections(doc, {
       transport: conditionalTransport,
       constants: options.constants ?? {},
@@ -1326,9 +1471,25 @@ export function createApiClient(
         route.collection.idField,
       );
       const persisted = differs ? await storage.list(scope) : [];
+      const records = new Map(
+        snapshot.items.map((item) => [
+          String(item[route.collection.idField]),
+          item,
+        ]),
+      );
       // A write acknowledged after this read began is newer than this snapshot.
       if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
         if (differs) changed.add(route.collection.name);
+        // Records no write settled on during the read are still fresh.
+        await releaseRefreshed(
+          scope,
+          records,
+          (id) =>
+            (startedRecords.get(keyFor(scope, id)) ?? 0) ===
+            (recordRevisions.get(keyFor(scope, id)) ?? 0),
+          true,
+          released,
+        );
         continue;
       }
       if (differs) {
@@ -1337,21 +1498,15 @@ export function createApiClient(
           ...remote(scope).keys(),
           ...persisted.map((item) => String(item[route.collection.idField])),
         ]);
-        const records = new Map(
-          snapshot.items.map((item) => [
-            String(item[route.collection.idField]),
-            item,
-          ]),
-        );
+        const previous = new Map(remote(scope));
         confirmed.set(scope, records);
         detectConflicts(scope, records);
+        failMissingUpdates(scope, records, previous);
         for (const id of records.keys()) before.add(id);
-        for (const queue of writeQueues.values())
-          for (const write of queue)
-            if (write.scope === scope) before.add(write.id);
-        for (const failed of gaveUpWrites.values())
-          for (const write of failed)
-            if (write.scope === scope) before.add(write.id);
+        // Writes not yet stored stay out of the visible records.
+        for (const write of allWrites())
+          if (write.scope === scope && write.durable !== false)
+            before.add(write.id);
         for (const id of before) await rebuild(scope, id);
         changed.add(route.collection.name);
         // A write that settled during the rebuild invalidated this snapshot.
@@ -1360,8 +1515,9 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
-      releaseRefreshed(scope);
+      await releaseRefreshed(scope, remote(scope), () => true, false, released);
     }
+    await countRefreshMisses(released);
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
     return { changed: [...changed] };
@@ -1513,7 +1669,9 @@ export function createApiClient(
             : {}),
           ...(write.lastError ? { lastError: write.lastError } : {}),
           state: write.state,
-          ...(write.awaitingRefresh ? { awaitingRefresh: true } : {}),
+          ...(write.awaitingRefresh && write.state === 'pending'
+            ? { awaitingRefresh: true }
+            : {}),
           ...(write.conflicts?.size
             ? {
                 conflicts: [...write.conflicts.values()].map((c) => ({
@@ -1548,9 +1706,26 @@ export function createApiClient(
         if (!draining.has(key)) void drainQueue(key);
         return;
       }
+      const waiting = queue?.filter((w) => w.awaitingRefresh) ?? [];
+      if (queue && waiting.length && !failed) {
+        // A restored update waiting for a refresh: send it now, or drop it.
+        if (resolution.action === 'confirm')
+          throw new Error('Only an uncertain create can be confirmed');
+        for (const write of waiting) {
+          delete write.awaitingRefresh;
+          delete write.refreshMisses;
+          if (resolution.action === 'discard')
+            queue.splice(queue.indexOf(write), 1);
+        }
+        if (!queue.length) writeQueues.delete(key);
+        await persistLater();
+        await rebuild(scope, id);
+        if (queue.length && !draining.has(key)) void drainQueue(key);
+        return;
+      }
       if (!failed)
         throw new Error(
-          `Record ${id} of ${resource} has no uncertain or failed write`,
+          `Record ${id} of ${resource} has no uncertain, failed or waiting write`,
         );
       if (resolution.action === 'confirm')
         throw new Error('Only an uncertain create can be confirmed');
@@ -1573,6 +1748,8 @@ export function createApiClient(
             `The failed writes for record ${id} of ${resource} are superseded by queued writes; discard them or wait for those to settle`,
           );
         const pending = queue ?? [];
+        // Retrying sends now: updates waiting for a refresh stop waiting.
+        for (const write of pending) delete write.awaitingRefresh;
         pending.push(...retried);
         writeQueues.set(key, pending);
         if (!draining.has(key)) void drainQueue(key);

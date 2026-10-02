@@ -125,9 +125,19 @@ client.pendingWrites('/pets')[0]?.conflicts; // [{ field, base, remote, local, .
 
 The conflict is listed until its write settles or is discarded, and is
 dropped if a later refresh shows the remote value equal to the local one. To
-keep the remote value instead, call `update` again with it. Not covered: a
-remote deletion under a pending update (the edit stays visible and is sent),
+keep the remote value instead, call `update` again with it. Not covered:
 conflicts that arrive only in a write's own response, and deletes.
+
+A complete refresh that no longer returns a record with a pending update (the
+record was deleted remotely, or the collection read filters it out) makes that
+update `failed`, with `lastError` "not in the refreshed collection", instead of
+sending only the update's own fields as the whole record (a PUT that would
+erase the other fields). The edit stays visible on the last confirmed record.
+`resolveWrite` `retry` sends it on that last confirmed record; when the client
+never had one, it sends the update's fields as they are, which a PUT applies
+as the whole record. Updates queued behind a create of the same record, and an
+update already in flight, are not affected. Telling a remote delete from a
+filter, and deletion evidence in general, remain open in #260.
 
 ### Uncertain creates
 
@@ -200,20 +210,31 @@ client.pendingWrites(); // pending, uncertain and failed writes from before the 
 
 Pending writes then resume in their stored order per record (the backoff
 delay is not stored; the first resend is immediate), with one exception:
-a restored update waits for a `sync()` that reads its collection completely. Updates send the whole
-record, and the confirmed record stored before the stop may be old: sending
-it would overwrite remote changes to fields the update never touched. After
-the refresh the update is replayed on the current remote record and checked
-for conflicts (`onConflict`) like any pending update. While it waits, its
-`pendingWrites()` entry is `pending` with `awaitingRefresh: true`, and writes
-queued behind it wait too. A refresh during which another write to the
-collection settles does not count; the next one does. Updates queued behind a
-restored create do not wait: they replay on the create's response. Restored
-creates and deletes do not wait.
+a restored update waits for a `sync()` that reads its collection completely.
+Updates send the whole record, and the confirmed record stored before the stop
+may be old: sending it would overwrite remote changes to fields the update
+never touched. After the refresh the update is replayed on the current remote
+record and checked for conflicts (`onConflict`) like any pending update; if
+the refresh does not return the record, the update fails (see "Refresh during
+a pending update"). While it waits, its `pendingWrites()` entry is `pending`
+with `awaitingRefresh: true` (only pending entries carry it), and writes
+queued behind it wait too. A refresh during which a write to the same record
+settles does not release it; writes to other records of the collection do not
+matter. Updates queued behind a restored create do not wait: they replay on
+the create's response. Restored creates and deletes do not wait.
+
+A waiting update can be settled with `resolveWrite`: `retry` sends it now, on
+the confirmed record stored before the stop, and `discard` drops it (writes
+queued behind it stay). After three `sync()` calls that ran without releasing
+it (the collection failed or was incomplete, or a write to the record kept
+settling), it becomes `failed` with `lastError` "Waiting for a complete
+refresh of <collection>", so a collection that never reads completely cannot
+hold it back unseen. Writes queued behind it then go ahead.
 
 Uncertain and failed writes stay listed, visible locally and resolvable with
-`resolveWrite`, and are not resent. A restored failed update that is retried
-also waits for a refresh. `pendingWrites()` lists restored writes only after
+`resolveWrite`, and are not resent. Retrying a restored failed update sends it
+at once, as does retrying any failed write of a record whose queued updates are
+waiting. `pendingWrites()` lists restored writes only after
 `ready()` resolves. If reading the outbox fails (a storage error), `ready()`
 and the methods that wait for it reject, and the next call tries the restore
 again.
@@ -249,8 +270,8 @@ loss. The limits of that claim:
 - A `create`, `update` or `remove` call that had not resolved may or may not be
   in the outbox. Check `pendingWrites()` after `ready()` before repeating it.
   If storing the outbox fails, the call rejects, the write is not queued, and
-  no other call's store includes it: a write reaches storage only through its
-  own first store.
+  no other call's store includes it: a write reaches storage, as outbox or as
+  visible record, only once its own first store has succeeded.
 - After the write is queued, a failed outbox store (after an outcome, in
   `sync`, or in `resolveWrite`) does not fail the operation: the stored record
   stays at the previous state until the next successful store, which writes

@@ -78,3 +78,24 @@ is marked stored inside that store; restored updates carry `awaitingRefresh`
 a create precedes them; unknown and malformed entries are kept and retried;
 `retry.maxAttempts` turns a restored in-flight write `failed` (or `uncertain`
 for a create without a usable key). README and CLAUDE.md updated.
+
+## Turn 3
+
+**Human (via the oversight session, relaying a second verified review of PR
+#312):** Fix, with a regression test each: (1) a restored update could wait
+forever when its collection never reads completely; let `resolveWrite` retry
+(send now) or discard it, and fail it after three syncs that do not release
+it; (2) a pending update whose record is missing from a complete refresh sent
+a partial PUT; fail it instead, retrying on the last confirmed record; (3) a
+create whose store failed could still become visible through a concurrent
+sync; (4) expose `awaitingRefresh` only on pending entries; (5) release
+per record instead of skipping a whole collection when any write settles
+during the read.
+
+**Assistant:** All six new tests failed on the previous commit. Added
+per-record settle counters, a release step that takes over fresh records and
+checks them for conflicts, a miss counter that fails a waiting update after
+three syncs, `resolveWrite` support for waiting updates, a `lastKnown` record
+(also stored in the outbox) for updates whose record a refresh lacks, and
+skipping of not-yet-stored writes in visible rebuilds. README, JSDoc and
+CLAUDE.md updated.

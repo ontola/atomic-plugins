@@ -466,7 +466,7 @@ describe('resolveWrite on failed and pending writes', () => {
       client.resolveWrite('/pets', String(created['id']), {
         action: 'discard',
       }),
-    ).rejects.toThrow('has no uncertain or failed write');
+    ).rejects.toThrow('has no uncertain, failed or waiting write');
   });
 });
 
