@@ -5,7 +5,7 @@
  * every case skips unless SCREENSHOTS_DIR is set. Run it through the driver,
  * which starts the servers and passes the environment:
  *
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion notion-table timesheets]
  *
  * Invented data only:
  * - Pets: the catalog install of `pets` (the lane dev-server's catalog,
@@ -138,6 +138,48 @@ test.describe('README screenshots', () => {
       timeout: 60_000,
     });
     await shoot(page, 'issue-tracker');
+  });
+
+  test('timesheets', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(
+      page,
+      'timesheets',
+      'Clockify timesheets (sample data)',
+    );
+    await app
+      .getByText('Connected as Alex Sample')
+      .waitFor({ timeout: 30_000 });
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(app.getByText('Webshop phase 2').first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await shoot(page, 'timesheets');
+  });
+
+  test('notion', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(page, 'notion', 'Notion (sample data)');
+    // Syncs by itself on first open; the view names the databases.
+    await expect(app.getByText('Roadmap').first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await shoot(page, 'notion');
+  });
+
+  test('notion-table', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(page, 'notion', 'Notion (sample data)');
+    await expect(app.getByText('Roadmap').first()).toBeVisible({
+      timeout: 30_000,
+    });
+    const sidebar = page.getByRole('navigation').last();
+    await sidebar
+      .getByRole('button', { name: 'Expand folder' })
+      .first()
+      .click()
+      .catch(() => undefined);
+    await page.pause();
   });
 
   test('money', async ({ page }) => {
