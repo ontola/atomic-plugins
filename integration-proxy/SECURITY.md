@@ -96,6 +96,17 @@ example a base OAD whose auth overlay is missing) is refused as before. If
 the catalog later gives the platform a scheme, existing connections answer
 `401 credential_refresh_failed` until the person connects again.
 
+A document that declares several kinds of security scheme (a bot token and
+OAuth, say) is refused unless its trusted catalog entry selects an
+authentication profile (`selection.authenticationProfile`; README,
+"Authentication profiles"). The profile's one scheme is the only one the
+connection holds, its OAuth scopes come only from the operations it covers,
+and every other operation of the document is refused before anything is
+sent upstream, so a person's OAuth token never reaches an operation that
+accepts only a bot token. A request cannot choose or change the profile. An
+OAuth connection whose platform no longer resolves to OAuth answers
+`401 credential_refresh_failed`.
+
 ## Admission
 
 An `AccessPolicy` is asked about the connection owner at redeem and on every
