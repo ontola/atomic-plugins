@@ -37,6 +37,7 @@ export const datatypes = {
   timestamp: `${A}/datatypes/timestamp`,
   boolean: `${A}/datatypes/boolean`,
   integer: `${A}/datatypes/integer`,
+  atomicURL: `${A}/datatypes/atomicURL`,
 } as const;
 
 export interface Field {
@@ -89,7 +90,9 @@ export const LINK_FIELDS = {
 
 /**
  * What the App resource stores about its Clockify setup: public ids and the
- * look-back window. There is deliberately no field for a connection id, code,
+ * look-back window. For a table the app is a view of (#177 item 14) the same
+ * fields sit on a sync binding under the App instead, which names the table
+ * with `syncedTable`. There is deliberately no field for a connection id, code,
  * token or capability. The host page holds the connection and hands the app
  * only `{ platform, connectionId }` through `store.proxy.connections()` (#21).
  */
@@ -111,6 +114,12 @@ export const SETTING_FIELDS = {
     'Look-back (days)',
     datatypes.integer,
     'How many days back each import reads: 7 or 30.',
+  ),
+  syncedTable: field(
+    'clockify-synced-table',
+    'Synced table',
+    datatypes.atomicURL,
+    'The time entry table, not the app’s own, that this sync binding keeps in step with Clockify (#177 item 14). On a binding under the app, next to its own workspace, account, look-back and observation log.',
   ),
 } as const;
 

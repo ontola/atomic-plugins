@@ -733,13 +733,62 @@ export async function requestDelete(
   if (setBookkeeping(row, schema, { delete: wanted })) await row.save();
 }
 
+/** What a send says when a row of a table the app is a view of stays. */
+export const ROW_KEPT =
+  'The row stays in the table as a row of its own, no longer synced: the app may edit that table’s rows but not delete them. Delete it there.';
+
+/**
+ * Takes a row out of the sync once its entry is gone from Clockify, or a
+ * new row is discarded before it was sent. On the app's own table the row
+ * is destroyed. On a table the app is a view of (#177 item 14) the row
+ * grant never deletes a row, so only the app's own extras are removed: the
+ * row stays as one of the person's, local only, with its values. Returns
+ * whether it was destroyed.
+ */
+export async function retireRow(
+  row: PluginResource,
+  schema: CompleteSchema,
+): Promise<boolean> {
+  if (schema.own) {
+    await row.destroy();
+
+    return true;
+  }
+
+  let changed = false;
+
+  for (const property of [schema.row.entryId, ...Object.values(schema.sync)])
+    if (row.get(property) !== undefined) {
+      row.remove(property);
+      changed = true;
+    }
+
+  if (changed) await row.save();
+
+  return false;
+}
+
+/** `message`, with `ROW_KEPT` after it when the row was kept. */
+const kept = (destroyed: boolean, message?: string) =>
+  destroyed
+    ? message
+      ? { message }
+      : {}
+    : { message: message ? `${message} ${ROW_KEPT}` : ROW_KEPT };
+
 /** Puts the row back to its baseline and drops a requested deletion; a
- * new row not yet created in Clockify is removed. */
+ * new row not yet created in Clockify is removed (on a
+ * table the app is a view of: kept as a row of its own, `retireRow`). */
 export async function discardChange(
   row: PluginResource,
   schema: CompleteSchema,
 ): Promise<void> {
-  if (await readCreateState(row, schema)) return row.destroy();
+  if (await readCreateState(row, schema)) {
+    await retireRow(row, schema);
+
+    return;
+  }
+
   const state = await readRowState(row, schema);
   if (!state?.baseline) return;
   const changed = await setRowValues(row, schema, state.baseline);
@@ -1245,13 +1294,14 @@ async function sendOne(
   const fresh = await readEntry(context, change.entryId);
 
   if (!fresh) {
-    await row.destroy();
+    const destroyed = await retireRow(row, schema);
 
     return {
       status: change.kind === 'delete' ? 'sent' : 'gone',
-      ...(change.kind === 'delete'
-        ? { message: 'Already deleted in Clockify.' }
-        : {}),
+      ...kept(
+        destroyed,
+        change.kind === 'delete' ? 'Already deleted in Clockify.' : undefined,
+      ),
     };
   }
 
@@ -1392,21 +1442,22 @@ async function sendOne(
       };
     }
 
-    await row.destroy();
-
-    return { status: 'sent' };
+    return { status: 'sent', ...kept(await retireRow(row, schema)) };
   }
 
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
         ? { message: 'Clockify no longer lists it as a completed entry.' }
@@ -1584,13 +1635,16 @@ async function sendCreate(
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
         ? { message: 'Clockify does not list it as a completed entry.' }

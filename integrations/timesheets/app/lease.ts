@@ -65,8 +65,8 @@ async function headOf(
   store: PluginStore,
   schema: CompleteSchema,
 ): Promise<string | undefined> {
-  const app = await store.getResource(await store.getApp());
-  const head = app.get(schema.log.log);
+  const home = await store.getResource(schema.home);
+  const head = home.get(schema.log.log);
 
   return typeof head === 'string' && head ? head : undefined;
 }

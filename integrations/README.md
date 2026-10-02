@@ -343,8 +343,11 @@ a drive app whose rows are a shared class (`event-v1`, `issue-v1`,
 `time-entry-v1`, ...) is offered by the host's "+ Add view" on any table of
 that class. On such a table it can offer "Sync this table to <provider>".
 Calendar 0.3.0 does this for Google Calendar
-([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make));
-issue-tracker and timesheets can follow the same pattern. What the pinned
+([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make)),
+and timesheets 0.6.0 for Clockify, with that table's observation log under
+its binding
+([`timesheets/README.md`](timesheets/README.md#syncing-a-table-the-app-didnt-make));
+issue-tracker can follow the same pattern. What the pinned
 host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
 `server/src/handlers/app_write.rs` and the page's `AppPage/hostStore.ts`,
 and checked by the calendar e2e:

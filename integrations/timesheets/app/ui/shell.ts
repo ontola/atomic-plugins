@@ -45,6 +45,7 @@ import {
   loadingPanel,
   noRelay,
   notSynced,
+  syncingTable,
   outsideWindow,
   problemBanner,
   setupError,
@@ -168,7 +169,11 @@ export function mountShell(
       case 'loading':
         return ['idle', 'Loading…'];
       case 'local':
-        return ['idle', 'Not synced'];
+        if (state.asking) return ['syncing', 'Waiting for you…'];
+
+        return state.paused
+          ? ['paused', 'Sync paused']
+          : ['idle', 'Not synced'];
       case 'no-proxy':
         return ['paused', 'Offline'];
       case 'not-connected':
@@ -567,7 +572,13 @@ export function mountShell(
       ),
     );
     if (state.kind === 'no-proxy') content.push(noRelay(h));
-    if (state.kind === 'local') content.push(notSynced(h, state.tableName));
+    if (state.kind === 'local')
+      content.push(
+        notSynced(h, {
+          ...state,
+          onSync: () => void controller.syncTable(),
+        }),
+      );
 
     if (failed)
       content.push(
@@ -906,12 +917,20 @@ export function mountShell(
 
     const parts: Child[] = [headerRow(state, sheet)];
     let overlay: Overlay | undefined;
+    const synced = controller.syncedTable();
+    const bound =
+      synced &&
+      syncingTable(h, {
+        ...synced,
+        onNotNow: () => void controller.notNow(),
+      });
 
     switch (state.kind) {
       case 'loading':
         parts.push(loadingPanel(h, 'Loading…'));
         break;
       case 'not-connected':
+        if (bound) parts.push(bound);
         parts.push(firstRun(h, () => void controller.connect()));
         break;
       case 'connecting':
@@ -970,6 +989,7 @@ export function mountShell(
           break;
         }
 
+        if (bound) parts.push(bound);
         const user = state.options?.user;
         if (user)
           parts.push(
