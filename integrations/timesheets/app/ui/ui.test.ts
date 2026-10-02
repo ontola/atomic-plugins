@@ -426,6 +426,37 @@ describe('view() against the fake store and the Clockify mock', () => {
     return { root, store, proxy };
   }
 
+  it('on a table that is not its own, offers Sync this table, then sets up and syncs into it (#177 item 14)', async () => {
+    const proxy = fixtureProxy(NOW);
+    const store = fakeStore({ proxy: proxy.request, view: 'other' });
+    const dom = new JSDOM('<!doctype html><body><div id="root"></div></body>');
+    const root = dom.window.document.getElementById('root')!;
+    await view({ root, store });
+
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Not synced with Clockify.',
+    );
+    expect(text(root.querySelector('.hdr'))).toContain('Not synced');
+    buttons(root, 'Sync this table to Clockify')[0].click();
+
+    // The fake host grants at once; the binding is made and set-up starts.
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Choose the workspace');
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Syncing “Team hours” with Clockify.',
+    );
+    expect(buttons(root, 'Not now')).toHaveLength(1);
+    expect(store.asked).toBe(1);
+    buttons(root, 'Last 7 days')[0].click();
+    buttons(root, 'Import entries')[0].click();
+
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('2 created, 0 updated, 0 unchanged, last 7 days.');
+    expect(buttons(root, 'Not now')).toHaveLength(0);
+  });
+
   it('asks for a workspace first, then imports and shows the entries', async () => {
     const { root } = await mount(false);
     expect(text(root.querySelector('[role="status"]'))).toContain(

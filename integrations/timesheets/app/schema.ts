@@ -33,6 +33,13 @@ export interface Schema {
   /** Whether the table is the app's own (under the App), not one it is a
    * view of through the host's "+ Add view". */
   own: boolean;
+  /**
+   * Where the settings and the observation log's pointer are kept: the App
+   * for its own table; for a table it is a view of, that table's sync
+   * binding under the App (`binding.ts`, #177 item 14), undefined until
+   * "Sync this table to Clockify" made one.
+   */
+  home?: string;
   row: RowFields;
   /** Extras on the Projects and People tables' rows. */
   link: Partial<Record<LinkKey, string>>;
@@ -45,6 +52,7 @@ export interface Schema {
 }
 
 export type CompleteSchema = Schema & {
+  home: string;
   row: typeof SHARED & Record<RowKey, string>;
   link: Record<LinkKey, string>;
   settings: Record<SettingKey, string>;
@@ -148,18 +156,46 @@ async function ownTable(
   return undefined;
 }
 
+/**
+ * The sync binding for a table the app is a view of (#177 item 14): a child
+ * of the App whose `clockify-synced-table` names the table. Only the App's
+ * own children count, since anyone can make a resource that names a table.
+ * The App itself for its own table.
+ */
+export async function homeOf(
+  store: PluginStore,
+  where: Pick<Layout, 'app' | 'table' | 'own'>,
+  syncedTable: string | undefined,
+): Promise<string | undefined> {
+  if (where.own) return where.app;
+  if (!syncedTable) return undefined;
+
+  for (const subject of await store.query({
+    property: syncedTable,
+    value: where.table,
+  })) {
+    const binding = await store.getResource(subject).catch(() => undefined);
+    if (binding?.get(atomic.parent) === where.app) return subject;
+  }
+
+  return undefined;
+}
+
 /** Read-only: what exists already. A field with another datatype is not bound. */
 export async function findSchema(store: PluginStore): Promise<Schema> {
   const where = await layout(store);
   const found = await byShortname(store, where.ontology);
   const projects = await ownTable(store, where.app, WORK_PROJECT);
   const people = await ownTable(store, where.app, WORK_PERSON);
+  const settings = bind(SETTING_FIELDS, found);
+  const home = await homeOf(store, where, settings.syncedTable);
 
   return {
     ...where,
+    ...(home ? { home } : {}),
     row: { ...SHARED, ...bind(ROW_FIELDS, found) },
     link: bind(LINK_FIELDS, found),
-    settings: bind(SETTING_FIELDS, found),
+    settings,
     log: bind(LOG_FIELDS, found),
     sync: bind(SYNC_FIELDS, found),
     tables: {
@@ -273,22 +309,25 @@ export async function ensureTables(
 
 /**
  * Everything a sync or a send needs: the app's own Properties and its
- * Projects and People tables, made where missing. Only for the app's own
- * table; as a view of another table the app syncs nothing.
+ * Projects and People tables, made where missing (in the app's own
+ * subtree). On a table the app is a view of, only once "Sync this table to
+ * Clockify" made its binding; before that the app syncs nothing there.
  */
 export async function ensureSchema(
   store: PluginStore,
 ): Promise<CompleteSchema> {
   const where = await layout(store);
-  if (!where.own)
-    throw new Error(
-      'This table is not the app’s own: the app syncs only its own table.',
-    );
   const properties = await ensureProperties(store, where);
+  const home = await homeOf(store, where, properties.settings.syncedTable);
+  if (!home)
+    throw new Error(
+      'This table isn’t synced with Clockify. Use “Sync this table to Clockify” first.',
+    );
   const tables = await ensureTables(store, where.app);
 
   return {
     ...where,
+    home,
     ...properties,
     row: { ...SHARED, ...properties.row },
     tables,

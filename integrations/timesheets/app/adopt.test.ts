@@ -239,9 +239,11 @@ describe('first open of 0.5.0 (#177 §5)', () => {
 
     await controller.load();
 
+    // No proxy and no row grant in this store: no "Sync this table".
     expect(controller.state()).toEqual({
       kind: 'local',
       tableName: 'Team hours',
+      canSync: false,
     });
     expect(store.resources.get(OTHER_TABLE)).toEqual(before);
     // The app's own table is left as it is; the App renders the class.
