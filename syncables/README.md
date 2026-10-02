@@ -210,15 +210,20 @@ never touched. After the refresh the update is replayed on the current remote
 record and checked for conflicts (`onConflict`) like any pending update.
 
 If that refresh does not return the record (deleted remotely, or filtered out
-of the read), a restored update that would be sent as a PUT, and is the first
-unsettled write of its record, becomes `failed` with `lastError` "not in the
+of the read), a restored update that would be sent as a PUT, and is at the
+head of its record's queue, becomes `failed` with `lastError` "not in the
 refreshed collection" instead of sending only its own fields as the whole
-record. The edit stays visible on the last confirmed record, and a later
-`update` of the record is built on that record, not on the failed edit.
-`resolveWrite` `retry` sends it on that record; when the client never had
-one, it sends the update's fields as they are, which a PUT applies as the
-whole record. A PATCH update is sent (it carries only its changes), and so is
-a restored update queued behind other unsettled writes of the record.
+record. Failing the head keeps the order (failed writes are always older than
+queued ones), and the next restored update of the record, now the head, fails
+the same way, so several offline edits of a vanished record all fail and none
+is sent. The edit stays visible on the last confirmed record, and a later
+`update` of the record is built on that record, not on the failed edits.
+`resolveWrite` `retry` sends them on that record, which any of the record's
+writes may have kept, including for an older failed write; when the client
+never had one, it sends the update's fields as they are, which a PUT applies
+as the whole record. A PATCH update is sent (it carries only its changes). A
+restored update queued behind a write that is not an update (a delete, say)
+is released and sent once that write settles.
 
 While it waits, its `pendingWrites()` entry is `pending`
 with `awaitingRefresh: true` (only pending entries carry it), and writes
@@ -230,10 +235,13 @@ the create's response. Restored creates and deletes do not wait.
 A waiting update can be settled with `resolveWrite`: `retry` sends it now, on
 the confirmed record stored before the stop, and `discard` drops it (writes
 queued behind it stay). After three `sync()` calls that ran without releasing
-it (the collection failed or was incomplete, or a write to the record kept
-settling), it becomes `failed` with `lastError` "Waiting for a complete
-refresh of <collection>", so a collection that never reads completely cannot
-hold it back unseen. Writes queued behind it then go ahead.
+it while it was at the head of its record's queue (the collection failed or
+was incomplete, or a write to the record kept settling), it becomes `failed`
+with `lastError` "Waiting for a complete refresh of <collection>", so a
+collection that never reads completely cannot hold it back unseen. Writes
+queued behind it then go ahead. A waiting update behind other queued writes
+does not count misses until it is the head, since failing it there would make
+a failed write newer than queued ones. `retry` resets the count.
 
 Uncertain and failed writes stay listed, visible locally and resolvable with
 `resolveWrite`, and are not resent. Retrying a restored failed update sends it

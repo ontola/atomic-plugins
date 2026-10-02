@@ -389,6 +389,8 @@ interface QueuedWrite {
   refreshMisses?: number;
   /** The last confirmed record, kept when a refresh no longer had it. */
   lastKnown?: Record<string, unknown>;
+  /** Queue order across the client and its restarts (absent in older outboxes). */
+  seq?: number;
 }
 
 type WriteOutcome =
@@ -560,6 +562,23 @@ export function createApiClient(
   >();
   /** Stored entries this client cannot restore; written back unchanged. */
   let unrestorable: unknown[] = [];
+  /** Order in which writes were queued; stored, so it survives a restart. */
+  let nextSeq = 0;
+
+  /**
+   * The last confirmed record any write of this record kept when a refresh
+   * no longer had it: the base for updates once `confirmed` lacks the record.
+   */
+  function lastKnownFor(
+    scope: string,
+    id: string,
+  ): Record<string, unknown> | undefined {
+    const key = keyFor(scope, id);
+    return [
+      ...(gaveUpWrites.get(key) ?? []),
+      ...(writeQueues.get(key) ?? []),
+    ].find((w) => w.lastKnown)?.lastKnown;
+  }
   let outboxChain: Promise<void> = Promise.resolve();
 
   function storeWrite(write: QueuedWrite): StoredWrite {
@@ -581,6 +600,7 @@ export function createApiClient(
       ...(write.sending ? { sending: true as const } : {}),
       ...(write.lastKnown ? { lastKnown: write.lastKnown } : {}),
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
+      ...(write.seq !== undefined ? { seq: write.seq } : {}),
     };
   }
 
@@ -712,7 +732,10 @@ export function createApiClient(
         : {}),
       ...(stored.lastKnown ? { lastKnown: stored.lastKnown } : {}),
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
+      ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
     };
+    if (stored.seq !== undefined && stored.seq >= nextSeq)
+      nextSeq = stored.seq + 1;
     if (stored.sending) {
       // The process stopped between storing "about to send" and storing the
       // outcome: the request may or may not have reached the server.
@@ -873,7 +896,7 @@ export function createApiClient(
       if (write.type === 'create') value = write.data;
       else if (write.type === 'update')
         value = {
-          ...(value ?? write.lastKnown),
+          ...(value ?? write.lastKnown ?? lastKnownFor(scope, id)),
           ...write.changes,
           [write.route.collection.idField]: id,
         };
@@ -978,7 +1001,9 @@ export function createApiClient(
           write.type === 'create'
             ? write.data
             : {
-                ...(remote(write.scope).get(write.id) ?? write.lastKnown),
+                ...(remote(write.scope).get(write.id) ??
+                  write.lastKnown ??
+                  lastKnownFor(write.scope, write.id)),
                 ...write.changes,
                 [idField]: write.id,
               };
@@ -1199,6 +1224,7 @@ export function createApiClient(
       attempts: 0,
       state: 'pending',
       durable: false,
+      seq: nextSeq++,
     };
     const key = keyFor(write.scope, write.id);
     const queue = writeQueues.get(key) ?? [];
@@ -1375,8 +1401,7 @@ export function createApiClient(
       if (
         !record &&
         write.route.updateMethod === 'PUT' &&
-        writeQueues.get(key)?.[0] === write &&
-        !gaveUpWrites.get(key)?.length
+        writeQueues.get(key)?.[0] === write
       ) {
         failWrite(write, missingMessage(write), previous.get(write.id));
         continue;
@@ -1406,6 +1431,10 @@ export function createApiClient(
     let changed = false;
     for (const write of allWrites()) {
       if (!write.awaitingRefresh || released.has(write)) continue;
+      // Only the head: failing a write behind unsettled ones would make a
+      // failed write newer than queued ones, which a settle then drops.
+      if (writeQueues.get(keyFor(write.scope, write.id))?.[0] !== write)
+        continue;
       write.refreshMisses = (write.refreshMisses ?? 0) + 1;
       changed = true;
       if (write.refreshMisses < REFRESH_MISS_LIMIT) continue;
@@ -1602,7 +1631,7 @@ export function createApiClient(
       // The visible record carries failed changes; seeding from it would send
       // them implicitly. With failed writes, seed from their last known record.
       const seed = failed
-        ? failed.find((w) => w.lastKnown)?.lastKnown
+        ? lastKnownFor(scope, id)
         : writeQueues.has(key)
           ? undefined
           : existing;
@@ -1736,7 +1765,10 @@ export function createApiClient(
           );
         const pending = queue ?? [];
         // Retrying sends now: updates waiting for a refresh stop waiting.
-        for (const write of pending) delete write.awaitingRefresh;
+        for (const write of pending) {
+          delete write.awaitingRefresh;
+          delete write.refreshMisses;
+        }
         pending.push(...retried);
         writeQueues.set(key, pending);
         if (!draining.has(key)) void drainQueue(key);

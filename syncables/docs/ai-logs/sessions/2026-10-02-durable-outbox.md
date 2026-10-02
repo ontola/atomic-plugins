@@ -116,3 +116,20 @@ server. Removed the in-memory failure, moved the check into the release step
 with the head/PUT conditions, changed `update()` seeding, and stored
 `refreshMisses` in the outbox. README and CLAUDE.md updated; the in-memory
 remote-delete case is named as still open in #260.
+
+## Turn 5
+
+**Human (via the oversight session, relaying a fourth review of PR #312):**
+A second restored update behind a failed one was still sent as a partial PUT,
+and a retried failed update without its own last known record dropped
+fields; a waiting update behind a pending delete could fail out of the middle
+of its queue and be dropped silently when the delete settled; a retry kept
+the stored miss count. Fix each with a test, plus a test of the invariant that
+no failed write is newer than a queued write of the same record.
+
+**Assistant:** All four new tests failed on the previous commit. The
+missing-record failure now applies to the head of the queue regardless of
+failed writes; updates and retries fall back to any last known record of the
+same record; misses are counted only at the head; retry clears the count.
+Writes carry a stored queue order (`seq`), which the tests use to check the
+invariant after each step (a mutation removing the head check is caught).

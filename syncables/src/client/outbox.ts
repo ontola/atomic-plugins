@@ -37,6 +37,8 @@ export interface StoredWrite {
   lastKnown?: Record<string, unknown>;
   /** Syncs that ran without releasing a restored update waiting for one. */
   refreshMisses?: number;
+  /** The order in which the write was queued. */
+  seq?: number;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -98,7 +100,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       typeof value['confirmedId'] === 'string') &&
     (value['lastKnown'] === undefined || isRecord(value['lastKnown'])) &&
     (value['refreshMisses'] === undefined ||
-      typeof value['refreshMisses'] === 'number')
+      typeof value['refreshMisses'] === 'number') &&
+    (value['seq'] === undefined || typeof value['seq'] === 'number')
   );
 }
 

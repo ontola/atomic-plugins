@@ -1036,3 +1036,186 @@ describe('durable outbox: third review on #312', () => {
     });
   });
 });
+
+/**
+ * The ordering invariant: per record, every failed write is older (queued
+ * earlier) than every queued one, as stored. A failed write newer than a
+ * queued one is dropped silently when that queued write settles.
+ */
+function expectFailedOlder(storage: CrashableStorage): void {
+  const outbox = storage.data.get(OUTBOX)?.get('outbox') as
+    | {
+        records: {
+          id: string;
+          failed: { seq?: number }[];
+          queue: { seq?: number }[];
+        }[];
+      }
+    | undefined;
+  for (const record of outbox?.records ?? []) {
+    const failed = record.failed.map((w) => w.seq ?? -1);
+    const queued = record.queue.map((w) => w.seq ?? Infinity);
+    if (failed.length && queued.length)
+      expect(Math.max(...failed), `record ${record.id}`).toBeLessThan(
+        Math.min(...queued),
+      );
+  }
+}
+
+describe('durable outbox: fourth review on #312', () => {
+  const rex = { id: '1', name: 'Rex', tag: 'dog', age: '3' };
+
+  it('fails every restored update of a record the refresh lacks, and retries on its last known record', async () => {
+    // S1: two offline updates, the first in flight at the stop.
+    const storage = new CrashableStorage();
+    const first = provider([rex], (r) =>
+      r.method === 'GET' ? undefined : 'hang-before',
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await a.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+
+    const crashed = storage.crash();
+    const second = provider([]);
+    const b = restart(crashed, second.transport);
+    await b.ready();
+    await b.sync();
+    expectFailedOlder(crashed);
+    expect(b.pendingWrites().map((w) => w.state)).toEqual(['failed', 'failed']);
+    await settle();
+    expect(second.requests).toEqual([]);
+
+    second.pets.set('1', rex);
+    await b.resolveWrite('/pets', '1', { action: 'retry' });
+    await idle(b);
+    expectFailedOlder(crashed);
+    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+      ...rex,
+      name: 'Rex II',
+    });
+    expect(second.pets.get('1')).toEqual({
+      ...rex,
+      name: 'Rex II',
+      tag: 'wolf',
+    });
+  });
+
+  it('retries a failed update on the last known record another write kept', async () => {
+    // S2: a 400-failed update in front of a waiting one.
+    const storage = new CrashableStorage();
+    let puts = 0;
+    const first = provider([rex], (r) => {
+      if (r.method === 'GET') return undefined;
+      puts += 1;
+      return puts === 1 ? response({ error: 'invented' }, 400) : 'hang-before';
+    });
+    const a = restart(storage, first.transport, { retry: { maxAttempts: 1 } });
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(a.pendingWrites()[0]?.state).toBe('failed'));
+    await a.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(puts).toBe(2));
+    await settle();
+
+    const crashed = storage.crash();
+    const second = provider([]);
+    const b = restart(crashed, second.transport);
+    await b.ready();
+    await b.sync();
+    expectFailedOlder(crashed);
+    expect(b.pendingWrites().map((w) => w.state)).toEqual(['failed', 'failed']);
+    await settle();
+    expect(second.requests).toEqual([]);
+
+    second.pets.set('1', rex);
+    await b.resolveWrite('/pets', '1', { action: 'retry' });
+    await idle(b);
+    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+      ...rex,
+      name: 'Rex II',
+    });
+  });
+
+  it('counts refresh misses only for a waiting update at the head of its queue', async () => {
+    // S3: a delete, then an update of the same record, both restored.
+    const storage = new CrashableStorage();
+    const first = provider([rex], (r) =>
+      r.method === 'GET' ? undefined : 'hang-before',
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.remove('/pets', '1');
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+
+    const crashed = storage.crash();
+    let deletes = false;
+    const second = provider([rex], (r) => {
+      if (r.method === 'GET') return response({ error: 'invented' }, 500);
+      if (r.method === 'DELETE' && !deletes) return response({}, 503);
+      return undefined;
+    });
+    const b = restart(crashed, second.transport, {
+      retry: { baseDelayMs: 5, maxDelayMs: 20 },
+    });
+    await b.ready();
+    for (let i = 0; i < 4; i++) {
+      await expect(b.sync()).rejects.toThrow(/Read incomplete/);
+      expectFailedOlder(crashed);
+    }
+    expect(b.pendingWrites()).toMatchObject([
+      { type: 'delete', state: 'pending' },
+      { type: 'update', state: 'pending', awaitingRefresh: true },
+    ]);
+    deletes = true;
+    await vi.waitFor(() =>
+      expect(b.pendingWrites().map((w) => w.type)).toEqual(['update']),
+    );
+    expectFailedOlder(crashed);
+    expect(b.pendingWrites()[0]).toMatchObject({ awaitingRefresh: true });
+  });
+
+  it('resets the miss count when a retry of the record stops the wait', async () => {
+    const storage = new CrashableStorage();
+    let puts = 0;
+    const first = provider([rex], (r) => {
+      if (r.method === 'GET') return undefined;
+      puts += 1;
+      return puts === 1 ? response({ error: 'invented' }, 400) : 'hang-before';
+    });
+    const a = restart(storage, first.transport, { retry: { maxAttempts: 1 } });
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(a.pendingWrites()[0]?.state).toBe('failed'));
+    await a.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(puts).toBe(2));
+    await settle();
+
+    const failingGets = (): ReturnType<typeof provider> =>
+      provider([rex], (r) =>
+        r.method === 'GET'
+          ? response({ error: 'invented' }, 500)
+          : 'hang-before',
+      );
+    const crashed = storage.crash();
+    const b = restart(crashed, failingGets().transport);
+    await b.ready();
+    for (let i = 0; i < 2; i++)
+      await expect(b.sync()).rejects.toThrow(/Read incomplete/);
+    await b.resolveWrite('/pets', '1', { action: 'retry' });
+    await settle();
+    expectFailedOlder(crashed);
+
+    const c = restart(crashed.crash(), failingGets().transport);
+    await c.ready();
+    await expect(c.sync()).rejects.toThrow(/Read incomplete/);
+    expect(
+      c.pendingWrites().find((w) => w.type === 'update' && w.awaitingRefresh),
+    ).toMatchObject({ state: 'pending' });
+    expect(c.pendingWrites().every((w) => w.state === 'pending')).toBe(true);
+  });
+});
