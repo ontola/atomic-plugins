@@ -24,6 +24,7 @@ import {
   DESCRIPTION,
   IS_A,
   ISSUE_V1,
+  LOCAL_ID,
   NAME,
   PARENT,
   PROPERTIES,
@@ -542,6 +543,8 @@ group(
         property(store, 'github-issue-number'),
         property(store, 'github-source'),
         property(store, 'github-sync-baseline'),
+        // The Bridge's create-recovery key on imported rows (since 0.3.0).
+        LOCAL_ID,
       ]);
       expect(store.resources.get(TABLE)![CLASSTYPE]).toBe(ISSUE_V1);
       // Idempotent: a second open writes neither again.
@@ -672,14 +675,14 @@ group(
       ]);
     });
 
-    it('only shows a notice on an Issue table it did not make', async () => {
+    it('writes nothing on an Issue table it did not make before it is asked to sync it', async () => {
       const store = fakeStore({ table: 'did:ad:someone-elses-table' });
       store.resources.set('did:ad:someone-elses-table', {
         [PARENT]: 'did:ad:drive',
         [CLASSTYPE]: ISSUE_V1,
       });
       const state = await createController(store).start();
-      expect(state.kind).toBe('other-table');
+      expect(state).toEqual({ kind: 'other-table', canSync: true });
       expect(store.writes).toEqual([]);
     });
   },
