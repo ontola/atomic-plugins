@@ -75,6 +75,8 @@ export interface Preview {
   format: StatementFormat;
   statements: Statement[];
   fresh: FileRow[];
+  /** The entries behind `fresh`, in file order: what an import writes. */
+  entries: Entry[];
   already: FileRow[];
   /** Transactions without a bank reference: identified by position. */
   withoutReference: number;
@@ -160,6 +162,7 @@ export function compare(
   const bySource = new Map(existing.map(row => [row.sourceId, row]));
   const byFingerprint = new Map(existing.map(row => [row.fingerprint, row]));
   const fresh: FileRow[] = [];
+  const freshEntries: Entry[] = [];
   const already: FileRow[] = [];
   const changed: Changed[] = [];
   let withoutReference = 0;
@@ -199,6 +202,7 @@ export function compare(
       };
 
     fresh.push(row);
+    freshEntries.push(entry);
   }
 
   if (changed.length)
@@ -221,6 +225,7 @@ export function compare(
       format,
       statements,
       fresh: fresh.sort(newestFirst),
+      entries: freshEntries,
       already: already.sort(newestFirst),
       withoutReference,
     },
