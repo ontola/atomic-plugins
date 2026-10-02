@@ -79,7 +79,7 @@ On an atomic-plugins branch, once the candidate is green:
    `ghcr.io/ontola/atomic-server-e2e:<sha>-plugin-routes` once main has
    published it.
 
-The user-testing server doesn't follow the pin. `usertest/server.sh`
-defaults to candidate15 (`59ddfe788…`), and its comment calling that "main's
-.atomic-server-ref" is out of date since the candidate16 pin. Moving the
-server is a separate step; see [usertest-server.md](usertest-server.md).
+The user-testing server doesn't follow the pin by itself. Without a SHA,
+`usertest/server.sh` runs the `.atomic-server-ref` that `deploy.sh` copied
+next to it, so a deploy followed by a server restart moves it to the pin.
+That restart is a separate step; see [usertest-server.md](usertest-server.md).
