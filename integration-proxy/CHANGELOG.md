@@ -3,6 +3,28 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+Not yet published to crates.io or deployed.
+
+- Security: the single-use record of a signed request now names its signer.
+  The `used_challenges` key was `atomic-request-v2:{sha256(message)}`, over
+  the signed message alone, so two agents that signed the same method, URL,
+  body and millisecond collided (the second got `401 replayed`), and anyone
+  who could predict another agent's request URL and millisecond could spend
+  that key first with their own valid signature and so refuse the other
+  agent's request. The key is now
+  `atomic-request-v2-agent:{sha256(agent + "\n" + message)}`, where `agent`
+  is the canonical id derived from the public key, so every spelling of one
+  agent (`did:ad:agent:`, either base64 alphabet) still spends one key and
+  the same agent sending the same signed request twice is still refused.
+  No migration: rows in the old format expire ten minutes after they were
+  written. Until then, during a rolling deploy or right after a restart, a
+  request is also refused while its old-format key is still recorded, so a
+  request accepted by the previous release just before the deploy cannot be
+  accepted again just after it. This release never writes old-format keys;
+  the check can be removed in a later release.
+
 ## 0.2.4 (2026-10-02)
 
 - Default catalog: `overlays/catalog/2026-10-02.json`, selecting immutable

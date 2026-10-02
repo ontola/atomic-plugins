@@ -606,6 +606,18 @@ test('every refusal on a proxied request has the real proxy’s code', async () 
     const once = owner.headers('GET', url);
     assert.equal((await fetch(url, { headers: once })).status, 200);
     await expectError(await fetch(url, { headers: once }), 401, 'replayed');
+    // The replay key names the agent, like the real proxy's: another agent's
+    // valid signature over the same method, URL, millisecond and body neither
+    // collides with the owner's request nor spends it in advance.
+    const at = Date.now();
+    const first = await fetch(url, {
+      headers: stranger.headers('GET', url, '', at),
+    });
+    assert.equal(first.status, 403);
+    assert.notEqual((await errorOf(first))[1], 'replayed');
+    const same = owner.headers('GET', url, '', at);
+    assert.equal((await fetch(url, { headers: same })).status, 200);
+    await expectError(await fetch(url, { headers: same }), 401, 'replayed');
 
     const capabilityCases = [
       [{}, frame, 200],
