@@ -11,7 +11,10 @@ This folder also holds the plugin's other issue sources:
   bridge (moved from the `devonian` package; see its README).
 - `todoist.ts`: the read-only LocalThought projection of Todoist tasks onto
   an issue list (moved from `integrations/localthought/`), with
-  `todoist.test.ts` and the recorded-fixture check `todoist-fixture.test.ts`.
+  `todoist.test.ts` and the fixture check `todoist-fixture.test.ts`.
+- `todoist-app/`: the **Todoist drive app**, the host for `todoist.ts`
+  (#99's host journey). See [Todoist drive app](#todoist-drive-app-todoist-app)
+  below.
 
 ## Mapping
 
@@ -71,13 +74,76 @@ check) is:
 `GET /tasks/{id}` with `checked: true`, rather than a 404, is not verified:
 there is no recorded fixture yet (#46) and no credentials here. If it
 answers 404, completed tasks will show as `unavailable`, which is still
-not a false "completed". The cases above are covered by synthetic fixture
-tests in `todoist.test.ts`. **No host calls `reconcileTodoistTasks` yet.**
-Nothing in atomic-server at the pin (`a12b74a`; searched again 2026-10-02, and at `bae5cdbe3` before) imports `todoist.ts` at
-all, neither the projection nor this check (searched `browser/` and
-`server/src`), so the `devonian-todoist` catalog entry describes a flow no
-host runs today. The host journey that runs the check, and exercises these
-states end to end, is still to be built.
+not a false "completed". The cases above are covered by synthetic tests in
+`todoist.test.ts`, and the host that runs them is the Todoist drive app
+below: `todoist-app/sync.ts` calls `absentTodoistTasks`, looks the absent
+tasks up through the host's proxy client, and calls
+`reconcileTodoistTasks`. `fixtures/todoist/` serves SYNTHETIC rows
+(`synthetic.mjs`, hand-written from Todoist's API documentation) until #46
+records `api/`; its drivers model `completeTask` as "gone from `/tasks`,
+`checked: true` by id", which is this fixture's assumption, not Todoist's
+verified behaviour.
+
+## Todoist drive app (`todoist-app/`)
+
+An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 25,926
+bytes for 0.1.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+folder and publishes it as `apps/todoist/<version>/ui.js`) whose
+`view({ root, store })` runs in the host's null-origin frame. It imports the
+connected account's **active tasks** into its own table, nothing more; the
+catalog entry `todoist` (`enabled: false`) installs it.
+
+**Flow.** "Connect Todoist" asks the host for a connection
+(`store.proxy.connect`, the host's consent bar, platform `todoist`). With a
+connection, every open of the view and every "Sync now" runs one pass
+(`sync.ts`): `GET /api/v1/projects` and `GET /api/v1/tasks` through
+`store.proxy.request`, paged by `cursor` at `limit=200`, at most 50 pages
+(past that the read is reported partial); then `GET /api/v1/tasks/{id}` for
+each previously imported task that a complete read no longer lists; then
+`reconcileTodoistTasks` from `../todoist.ts`, whose table above says what
+each row becomes. All reads happen before any write, so a failed read
+leaves the table as it was. The view lists the table's tasks with their
+status, presence, due day, priority, project and last-seen.
+
+**Rows** are of the shared class `issue-v1` (#177), like the GitHub issues
+app's: on first open the app adds the class to its App's `renders`, its
+extras to `row-extras`, and sets its table's `classtype` (`drive.ts`;
+shown on another Issue table it says so and imports nothing). Shared fields
+go through `ontology-kit`'s strict resolver: `name` (the task's `content`),
+task/v1 `status` (`done` only when Todoist returned `checked: true`, else
+`todo`), `body` (the task's `description`) and `due-date` (the due day).
+The provider extras, created once under the app's own ontology:
+`todoist-task-id` (the row's identity), `todoist-presence`,
+`todoist-last-seen`, `todoist-priority`, `todoist-project` and
+`todoist-source` (the task as Todoist last sent it, JSON text). A pass that
+finds nothing changed writes no row: `last-seen` is kept off active rows
+(an active task's last sighting is the App's `todoist-last-sync`, one write
+per complete read), and only a task no longer in the active list carries
+its own `todoist-last-seen`.
+
+**Local edits.** Todoist owns the imported columns: a local change to one
+of them is overwritten at the next pass (#97's policy question; this plugin's
+choice, the same as Moneybird's), and nothing is sent to Todoist. A row
+made in the table by hand, with no Todoist task behind it, is left alone.
+
+**Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
+and the fixture: provisioning, import, a refresh that writes no row, and
+every #99 case), `todoist-app/build.test.ts` (the bundle, its size limit and
+a typecheck), `todoist-fixture.test.ts` (the fixture against `todoist.ts`),
+and the lane's `e2e/todoist.spec.ts`: install from the catalog, connect,
+import five tasks as `issue-v1` rows, a reload that leaves every row's
+properties byte-for-byte the same, a task completed in Todoist that turns
+up `completed` and done, and one made unreachable that turns up
+`unavailable` and still open. Run them with:
+
+```sh
+browser/node_modules/.bin/vitest run --config integrations/issue-tracker/vitest.config.ts todoist
+node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
+```
+
+**Not verified:** anything against a live Todoist account or the real
+integration proxy (#46).
 
 ## Drive app (`app/`)
 
