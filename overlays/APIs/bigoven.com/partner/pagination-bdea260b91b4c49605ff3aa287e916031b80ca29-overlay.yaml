@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/bdea260b91b4c49605ff3aa287e916031b80ca29/APIs/bigoven.com/partner/openapi.yaml
+info:
+  title: BigOven API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            BigOven uses 1-based page-number pagination across recipe search,
+            reviews, notes, and collection endpoints. `pg` selects the page
+            (starting from 1) and `rpp` controls the results per page.
+          request:
+            queryParameters:
+              pg:
+                role: page
+              rpp:
+                role: pageSize

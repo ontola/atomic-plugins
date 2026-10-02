@@ -1,7 +1,7 @@
 {
   "catalog": {
-    "path": "catalog.json",
-    "sha256": "b34e9d2c0939f9d51ed91c8c53af4911b84a2e74d31aa51ebd85cf8a27cd8af4"
+    "path": "catalog/2026-10-02.json",
+    "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
   },
   "platforms": {
     "google-calendar": [
@@ -10,50 +10,50 @@
         "sha256": "3138de999c74d8b90500fe2a5cc143436366b85aa72e8e0594bfb81d87a93b1c"
       },
       {
-        "url": "https://ontola.github.io/atomic-plugins/overlays/googleapis.com/google-calendar/v3/auth-overlay.yaml",
-        "sha256": "261323939077a46e13cc3cbd1473b5af03c69116e9ac5e03f07e1392e57d4813"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/auth-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+        "sha256": "9a09fbde6879339796a342c4eafc6d40e85bcdc3e414ac3ec6459e0927101028"
       },
       {
-        "url": "https://ontola.github.io/atomic-plugins/overlays/googleapis.com/google-calendar/v3/pagination-overlay.yaml",
-        "sha256": "38fc738ac451a545084750d984b7ee5cd29db45b7fa8b48c346347ea8342cd84"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/app-pagination-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+        "sha256": "3a62283074362def2f524117700bba6a5beba0f3607b716a5dad9d11c9aa74a7"
       },
       {
-        "url": "https://ontola.github.io/atomic-plugins/overlays/googleapis.com/google-calendar/v3/crud-causality-overlay.yaml",
-        "sha256": "10580148e35d19f9d25380d5d670c910ddb75af57ade1198f7130da77928fed5"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/app-crud-causality-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+        "sha256": "e15ef72202275efa4a17104b1ef044ede445dbcde7cfe8ef10dfbea3a5ffda0b"
       },
       {
-        "url": "https://ontola.github.io/atomic-plugins/overlays/googleapis.com/google-calendar/v3/identity-overlay.yaml",
-        "sha256": "9acf145f2a0611202ae199c29976eebe22813e67977354bd057e0446b89cc6f1"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/identity-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+        "sha256": "769c48df0dc877b1432cb220d53ecafce78809a27195f86bcc2c9a700bcffb34"
       }
     ],
     "github-issues": [
       {
-        "url": "https://raw.githubusercontent.com/localthought/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml",
+        "url": "https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml",
         "sha256": "9a5dcc9b4b31a3f2152790cc0d9251441c7862cb6dde5ca93bf0f92f7878a283"
       },
       {
-        "url": "https://raw.githubusercontent.com/localthought/overlays/11019717575be9e6f6ce47bf63782cf68a6ce043/github.com/github-issues/1.1.4/auth-overlay.yaml",
-        "sha256": "578032531a036f7b21c1115e5b19deb7c7903c11d2b57e76c186ea54b2b014e1"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/auth-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "9db3ede1f096dd49a7a8818416561d49b48d727f4c586556d6fe4ab6293fa1dc"
       },
       {
-        "url": "https://raw.githubusercontent.com/localthought/overlays/d603d5453e9dc5ec26a1d7a6b9cfaeec934d5f4a/github.com/github-issues/1.1.4/pagination-overlay.yaml",
-        "sha256": "f812b8445cb26ba7de308a249edd75cd0c56f69ccff4ba9a8f49c096362276b9"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/pagination-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "4e210474a60ac067f70405a2cd44161bdb1526ae841ca4ebaf0fc32529fb962d"
       },
       {
-        "url": "https://raw.githubusercontent.com/localthought/overlays/d603d5453e9dc5ec26a1d7a6b9cfaeec934d5f4a/github.com/github-issues/1.1.4/crud-causality-overlay.yaml",
-        "sha256": "19caadc82ccc184e7f8e45fd82b62279828c68ac8faaeb5f82cdd7165e441e47"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/repositories-read-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "9e03475eb375fd4c5ffdc11bde87ce784c925cd7970a56f5a17722ec2820fe6c"
       },
       {
-        "url": "https://raw.githubusercontent.com/localthought/overlays/11019717575be9e6f6ce47bf63782cf68a6ce043/github.com/github-issues/1.1.4/canonical-paths-overlay.yaml",
-        "sha256": "5449eb6462eb00c4dd912b4fbf31081fc821cb3a99a45547056369fd77681f1f"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "a90339634ff1930b396ffb172740f98ccdb45897f14108a528f5581a29455275"
       },
       {
-        "url": "https://raw.githubusercontent.com/localthought/overlays/ee929c625d3c63dea87bcccae932a98a33138a8f/github.com/github-issues/1.1.4/identity-overlay.yaml",
-        "sha256": "8df50990a4d3d98aeec83a134e0f5f0fc8abf5fc87de4ee32d95e5a616bc5e77"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/canonical-paths-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "33e83532756443194e736cf65072fb1e2644bd1061535d13e7c232419181fdbc"
       },
       {
-        "path": "github.com/github-issues/1.1.4/identity-overlay.yaml",
-        "sha256": "8df50990a4d3d98aeec83a134e0f5f0fc8abf5fc87de4ee32d95e5a616bc5e77"
+        "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/identity-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "sha256": "54cb21f0b342fd1030e48771cbe997883292610e927bba5857fefd7bcb40f56d"
       }
     ]
   }

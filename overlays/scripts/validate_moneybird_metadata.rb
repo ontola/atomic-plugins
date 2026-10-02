@@ -5,10 +5,16 @@ require 'json'
 require 'yaml'
 
 source_dir = ARGV.fetch(0)
-metadata_dir = File.expand_path('../moneybird.com/api/v2', __dir__)
+metadata_dir = File.expand_path('../APIs/moneybird.com/v2-readonly', __dir__)
 document = YAML.load_file(File.join(source_dir, 'openapi.yaml'))
 inventory = JSON.parse(File.read(File.join(source_dir, 'collections.json'))).fetch('collections')
-overlays = Dir[File.join(metadata_dir, '*-overlay.yaml')].to_h { |path| [File.basename(path), YAML.load_file(path)] }
+catalog = JSON.parse(File.read(File.expand_path('../catalog/2026-10-02.json', __dir__)))
+platform = catalog.fetch('platforms').find { |entry| entry.fetch('name') == 'moneybird' }
+sha = platform.fetch('openapi').split('/')[5]
+overlays = Dir[File.join(metadata_dir, "*-#{sha}-overlay.yaml")].to_h do |path|
+  name = File.basename(path).sub("-#{sha}-overlay.yaml", '-overlay.yaml')
+  [name, YAML.load_file(path)]
+end
 
 errors = []
 operations = document.fetch('paths').values.map { |item| item['get'] }.compact
@@ -75,20 +81,20 @@ expected_paginated = inventory.count { |entry| entry.dig('pagination', 'page') }
 errors << "expected #{expected_paginated} pagination applications, found #{pagination_actions.length}" unless pagination_actions.length == expected_paginated
 
 selection = JSON.parse(File.read(File.join(metadata_dir, 'all-records-selection.json')))
-errors << 'consumer selection profile leaked into CRUD metadata' if File.read(File.join(metadata_dir, 'crud-causality-overlay.yaml')).include?('x-list-query')
+errors << 'consumer selection profile leaked into CRUD metadata' if File.read(File.join(metadata_dir, "crud-causality-#{sha}-overlay.yaml")).include?('x-list-query')
 errors << 'expected six explicit consumer selections' unless selection.fetch('query_overrides').length == 6
 
-catalog = JSON.parse(File.read(File.expand_path('../catalog.json', __dir__)))
+catalog = JSON.parse(File.read(File.expand_path('../catalog/2026-10-02.json', __dir__)))
 platforms = catalog.fetch('platforms')
-errors << 'catalog must preserve all six platforms' unless platforms.length == 6
+expected_platforms = %w[github-issues google-calendar moneybird todoist spotify discord]
+errors << 'catalog is missing an original platform' unless (expected_platforms - platforms.map { |entry| entry['name'] }).empty?
 errors << 'catalog platform names must remain unique' unless platforms.map { |platform| platform['name'] }.uniq.length == platforms.length
 moneybird = platforms.find { |platform| platform['name'] == 'moneybird' }
 errors << 'catalog is missing Moneybird' unless moneybird
 if moneybird
-  oad_pin = '85a6105220036a98ef0d7cd6f228d4aae0036508'
-  pages_base = 'https://ontola.github.io/atomic-plugins/overlays/moneybird.com/api/v2/'
-  errors << 'catalog has the wrong Moneybird OAD pin' unless moneybird['openapi'].include?(oad_pin)
-  errors << 'catalog has the wrong Moneybird auth overlay' unless moneybird.fetch('overlays').first == "#{pages_base}auth-overlay.yaml"
+  pages_base = 'https://ontola.github.io/atomic-plugins/overlays/APIs/moneybird.com/v2-readonly/'
+  errors << 'catalog has the wrong Moneybird OAD pin' unless moneybird['openapi'].end_with?("/#{sha}/APIs/moneybird.com/v2-readonly/openapi.yaml")
+  errors << 'catalog has the wrong Moneybird auth overlay' unless moneybird.fetch('overlays').first == "#{pages_base}auth-#{sha}-overlay.yaml"
   errors << 'catalog has a Moneybird overlay not published from overlays/' unless moneybird.fetch('overlays').all? { |url| url.start_with?(pages_base) }
   errors << 'consumer selection must not be composed as an overlay' if moneybird.fetch('overlays').any? { |url| url.include?('selection') }
   errors << 'catalog selection differs from reviewed consumer config' unless moneybird['selection'] == selection
@@ -98,6 +104,7 @@ errors << 'contact schema identity namespace changed' unless contact&.dig('schem
 
 forbidden = /x-import-policy|listQueryBindings|singleton:/
 overlays.each do |name, overlay|
+  errors << "#{name}: wrong OAD pin" unless overlay['extends'] == platform.fetch('openapi')
   errors << "#{name}: contains forbidden draft metadata" if YAML.dump(overlay).match?(forbidden)
 end
 

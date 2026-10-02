@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/billbee.io/v1/openapi.yaml
+info:
+  title: Billbee API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            Billbee uses 1-based page-number pagination. `page` selects the
+            page (starting from 1) and `pageSize` controls the number of
+            results returned (range 1-250, default 50).
+          request:
+            queryParameters:
+              page:
+                role: page
+              pageSize:
+                role: pageSize

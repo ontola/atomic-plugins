@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/bdea260b91b4c49605ff3aa287e916031b80ca29/APIs/wordnik.com/4.0/openapi.yaml
+info:
+  title: Wordnik API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        offset:
+          type: pageNumber
+          description: >-
+            Wordnik list endpoints use offset-based pagination with `skip`
+            (number of results to skip, default 0) and `limit` (maximum
+            results to return). Responses include `totalResults` for the
+            total match count.
+          request:
+            queryParameters:
+              skip:
+                role: offset
+              limit:
+                role: pageSize
+          response:
+            bodyFields:
+              totalResults:
+                role: totalCount

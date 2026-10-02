@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b5c913357acaa994f3f0c9be7bfa455a0d0f1810/APIs/amazonaws.com/route53/2013-04-01/openapi.yaml
+info:
+  title: AWS Route 53 API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        marker:
+          type: pageToken
+          description: >-
+            Route 53 list operations use marker-based pagination with query
+            parameters. Pass the `marker` (or `nextmarker` from the previous
+            response) to retrieve the next batch. `maxitems` limits the
+            results per request.
+          request:
+            queryParameters:
+              marker:
+                role: pageToken
+              maxitems:
+                role: pageSize
+          response:
+            bodyFields:
+              NextMarker:
+                role: nextPageToken

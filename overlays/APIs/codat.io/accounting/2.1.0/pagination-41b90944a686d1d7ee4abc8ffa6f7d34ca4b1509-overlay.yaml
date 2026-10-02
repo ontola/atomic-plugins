@@ -1,0 +1,30 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/41b90944a686d1d7ee4abc8ffa6f7d34ca4b1509/APIs/codat.io/accounting/2.1.0/openapi.yaml
+info:
+  title: Codat Accounting API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            Codat uses page-number pagination across all list endpoints.
+            `page` specifies the 1-based page number and `pageSize` controls
+            the number of results per page. The response includes `pageNumber`,
+            `pageSize`, and `totalResults` for navigation context.
+          request:
+            queryParameters:
+              page:
+                role: page
+              pageSize:
+                role: pageSize
+          response:
+            bodyFields:
+              pageNumber:
+                role: currentPage
+              pageSize:
+                role: pageSize
+              totalResults:
+                role: totalCount

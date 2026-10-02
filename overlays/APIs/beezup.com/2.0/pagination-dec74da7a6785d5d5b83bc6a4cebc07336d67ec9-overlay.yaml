@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/beezup.com/2.0/openapi.yaml
+info:
+  title: BeezUP API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            BeezUP uses 1-based page-number pagination. `pageNumber` selects
+            the page (starting from 1) and `pageSize` controls the number of
+            results returned (range 10-100, default 10).
+          request:
+            queryParameters:
+              pageNumber:
+                role: page
+              pageSize:
+                role: pageSize

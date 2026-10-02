@@ -1,0 +1,17 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/c9773b0cd8be7ba4fe1f8a83488cb4cfca72feec/APIs/googleapis.com/doubleclicksearch/v2/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        offset:
+          type: pageNumber
+          request:
+            queryParameters:
+              startRow:
+                role: offset
+              rowCount:
+                role: pageSize

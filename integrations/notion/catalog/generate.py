@@ -1,6 +1,6 @@
 """Snapshot the Notion catalog document the integration proxy composes.
 
-Composes overlays/catalog.json's `notion` entry (the pinned OAD plus its
+Composes overlays/catalog/2026-10-02.json's `notion` entry (the pinned OAD plus its
 overlays, in order), fetching sources with overlays/tests' `fetch` (Pages
 URLs are read from this checkout), and writes:
 
@@ -34,8 +34,7 @@ from generate_identity_catalog_fixtures import fetch, platform_config  # noqa: E
 
 def merge(destination, update):
     """integration-proxy's `merge`: objects merge key by key, anything else
-    replaces. (overlays/tests' `merge` cannot take a list update, which
-    Notion's auth overlay makes at `$.security`.)"""
+    replaces, including the list update Notion makes at `$.security`."""
     if not isinstance(destination, dict) or not isinstance(update, dict):
         return copy.deepcopy(update)
     for key, value in update.items():

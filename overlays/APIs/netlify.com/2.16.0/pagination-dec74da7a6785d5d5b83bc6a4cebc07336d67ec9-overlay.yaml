@@ -1,0 +1,27 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/netlify.com/2.16.0/swagger.yaml
+info:
+  title: Netlify API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >
+            Netlify uses page-number pagination across its list endpoints.
+            Pass `page` (1-based) and `per_page` to control the result window.
+            These parameters appear consistently on endpoints such as audit
+            logs, form submissions, site builds, and deploys.
+          request:
+            queryParameters:
+              page:
+                role: page
+                description: >
+                  The page of results to return. 1-based index; omit or pass
+                  1 to start from the beginning.
+              per_page:
+                role: pageSize
+                description: >
+                  The number of results to return per page.

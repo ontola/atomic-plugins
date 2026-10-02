@@ -195,7 +195,7 @@ export function githubTracker({ scenario } = {}) {
   };
 
   // GitHub's GET /user/repos, the issue-tracker drive app's repository
-  // picker (overlays/github.com/github-issues/1.1.4/
+  // picker (overlays/APIs/github.com/github-issues/1.1.4/
   // repositories-read-overlay.yaml). Kept outside `request` above so it stays
   // a separate hunk from the issue routes.
   const issueRequest = api.request;

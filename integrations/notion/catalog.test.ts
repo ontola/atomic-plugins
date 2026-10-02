@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /**
- * The Notion catalog document (catalog/notion.json: overlays/catalog.json's
+ * The Notion catalog document (catalog/notion.json: overlays/catalog/2026-10-02.json's
  * notion entry as the proxy composes it) and the authored mock-proxy fixture
  * that serves it. The lens test at the end feeds the fixture's pages through
  * `notionProjection` in the shape syncables/browser's `readPlatform` hands it:
@@ -90,12 +90,12 @@ describe('Notion catalog document', () => {
       expect(doc.components.schemas).toHaveProperty(name);
   });
 
-  it('is a snapshot of the current overlays/catalog.json notion entry', () => {
+  it('is a snapshot of the current overlays/catalog/2026-10-02.json notion entry', () => {
     // Hashes, not a re-composition: nothing here can parse YAML. A changed
     // overlay or catalog entry fails this; rerun catalog/generate.py.
     const root = new URL('../../', import.meta.url);
     const catalog = JSON.parse(
-      readFileSync(new URL('overlays/catalog.json', root), 'utf8'),
+      readFileSync(new URL('overlays/catalog/2026-10-02.json', root), 'utf8'),
     ) as { platforms: { name: string; openapi: string; overlays: string[] }[] };
     const entry = catalog.platforms.find(p => p.name === 'notion')!;
     const { sources } = provenance as {

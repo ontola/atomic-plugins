@@ -51,7 +51,7 @@ follows `integrations/timesheets/app/`: plain DOM, no framework, and no
 stylesheet.
 
 - **Provider.** The `pets` platform in the proxy's default catalog
-  (`overlays/catalog.json`, atomic-plugins#174) is a static, read-only JSON
+  (`overlays/catalog/2026-10-02.json`, atomic-plugins#174) is a static, read-only JSON
   API that GitHub Pages publishes from this repository:
   `GET https://ontola.github.io/atomic-plugins/overlays/pets-demo/1.0.0/api/pets`
   answers the five pets in `fixtures/pets/scenario.mjs`, in one page (no

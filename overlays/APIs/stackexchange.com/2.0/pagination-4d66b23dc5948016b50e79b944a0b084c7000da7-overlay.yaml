@@ -1,0 +1,34 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/stackexchange.com/2.0/openapi.yaml
+info:
+  title: Stack Exchange API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >
+            The Stack Exchange API uses page-number pagination. Pass `page`
+            to select a page of results and `pagesize` to control how many
+            items are returned per page. Responses include a `has_more`
+            boolean field indicating whether additional pages exist beyond
+            the current result set.
+          request:
+            queryParameters:
+              page:
+                role: page
+                description: >
+                  The page of results to retrieve. 1-based integer.
+              pagesize:
+                role: pageSize
+                description: >
+                  The number of items to return per page.
+          response:
+            bodyFields:
+              has_more:
+                role: hasMore
+                description: >
+                  `true` if more pages of results exist beyond the current
+                  page. Fetch the next page by incrementing `page`.

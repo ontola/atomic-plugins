@@ -392,7 +392,7 @@ const security = [{ clockifyApiKey: [] }];
 
 /**
  * The catalog document with the time-entry write overlay applied
- * (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`,
+ * (`overlays/APIs/clockify.me/1.0.0-readonly/time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml`,
  * #123 M0): POST on the workspace's time entries, PUT and DELETE on one
  * entry. Hand-kept in step with that overlay, like the read-only part above
  * is with the base document. `clockifyReadOnlyDocument` is the document

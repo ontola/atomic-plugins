@@ -213,7 +213,7 @@ into the view root.
     `server/src/plugins/assets/view-client.js`, also at candidate14
     `1432e244a`), and the proxy catalog's Clockify entry lists the
     time-entry write overlay
-    (`overlays/clockify.me/1.0.0-readonly/time-entry-write-overlay.yaml`).
+    (`overlays/APIs/clockify.me/1.0.0-readonly/time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml`).
 - **Range edits and conflict resolution** (#123 M4, §3.2–§3.4; 0.3.0).
   Mock-tested only:
   - _What:_ "Edit a time range…" marks `[from, to)` (profile time zone,

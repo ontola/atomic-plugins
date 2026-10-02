@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/67177b738064d6c1b5e2b25e21a483067211e35d/APIs/amazonaws.com/redshift/2012-12-01/openapi.yaml
+info:
+  title: AWS Redshift API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        marker:
+          type: pageToken
+          description: >-
+            Redshift Describe operations use Marker-based pagination via query
+            parameters. `Marker` (from the previous response) sets the
+            starting position for the next page. `MaxRecords` limits records
+            per request (default varies by operation).
+          request:
+            queryParameters:
+              Marker:
+                role: pageToken
+              MaxRecords:
+                role: pageSize
+          response:
+            bodyFields:
+              Marker:
+                role: nextPageToken
