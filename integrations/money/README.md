@@ -7,7 +7,7 @@ This needs an atomic-server with the generic file entry point
 on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
 the pin when this was first verified, includes it; see [Verified](#verified)
 for the pins it was last run against, the current pin `a12b74a` included
-(0.4.0, 2026-10-02).
+(0.4.1, 2026-10-02).
 
 The importer below is one of two ways in. Since 0.4.0 the Money app
 (`app/`) also imports statements by itself, into a table of the shared
@@ -326,6 +326,23 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.1 (`plugin.js` sha256
+`b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.1/ui.js`, 111,239 bytes) the four tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-02 against the
+pin `a12b74a` (the build VPS's source build of it), in 4.1 minutes. What the
+run adds over 0.4.0: after the camt.053 import, a `bank-transaction-v1` row
+is committed by hand to the app's own table with an empty Amount (the only
+incomplete row this host can hold, see "Incomplete rows" under
+[Money app](#money-app-app)), and the app lists it through the table
+subscription as "1 row is incomplete" with "Incomplete: missing Amount", the
+Transactions count stays 4, the ledger does not show it, and "Open row"
+leaves the app for that row's page. Not verified: an incomplete row on the
+importer's table (the importer never writes one) or on a hand-made
+shared-class table (unit tests only), and a row completed in the host while
+the app stays open (unit test only).
 
 At 0.4.0 (`plugin.js` sha256
 `693f8535adb8920e92e3358349e635ebce45c4b60e48a38687609ae3015fc7b7`, which is
