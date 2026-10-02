@@ -212,22 +212,24 @@ test.describe('Todoist drive app', () => {
     ]);
     expect(snapshot.unreachable).toEqual(['synthetic-task-3']);
 
-    // 5. A row made in the table without the class's required Name (#177;
-    // ontology-kit's rule): listed as incomplete, with a way to the row,
-    // never written by a pass; the task rows are unaffected.
+    // 5. A row made in the table with an empty Name, the class's required
+    // field (#177; ontology-kit's rule; the server refuses a commit without
+    // the property, lib/src/resources.rs check_required_props): listed as
+    // incomplete, with a way to the row, never written by a pass; the task
+    // rows are unaffected.
     const nameless = await page.evaluate(
-      async ({ table, klass, task }) => {
+      async ({ table, klass, task, name }) => {
         const store = window.store!;
         const row = await store.newResource({
           parent: table,
           isA: [klass],
-          propVals: { [`${task}/status`]: [`${task}/todo`] },
+          propVals: { [name]: '', [`${task}/status`]: [`${task}/todo`] },
         });
         await row.save();
 
         return row.subject;
       },
-      { table: shared.table, klass: issueV1, task: TASK },
+      { table: shared.table, klass: issueV1, task: TASK, name: NAME },
     );
     await app.getByRole('button', { name: 'Sync now' }).click();
     await expect(synced).toContainText('5 tasks (0 added, 0 updated', {
@@ -242,9 +244,7 @@ test.describe('Todoist drive app', () => {
       local.getByRole('button', { name: 'Open row (no name)' }),
     ).toBeVisible();
     await expect(rows).toHaveCount(5);
-    expect(
-      Object.keys((await propsOf(page, [nameless]))[nameless]),
-    ).not.toContain(NAME);
+    expect((await propsOf(page, [nameless]))[nameless][NAME]).toBe('');
 
     // The typed table outside the app shows the tasks.
     await page.goto(

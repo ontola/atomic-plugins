@@ -136,7 +136,9 @@ every shared-class view: shown as incomplete, not skipped). Nothing is ever
 sent to Todoist, so there is nothing to hold back; an imported row whose
 Name was cleared in the table gets Todoist's `content` back at the next
 pass, a hand-made one is completed in the table. Unit
-(`todoist-app/sync.test.ts`) and the e2e's step 5.
+(`todoist-app/sync.test.ts`) and the e2e's step 5 (a row with an empty
+Name; the server refuses a commit without the property, see the GitHub
+issues app's note on incomplete rows).
 
 **Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
 and the fixture: provisioning, import, a refresh that writes no row, and
@@ -277,7 +279,8 @@ Name), a row not bound stays out of the Bridge, "Publish to GitHub" is
 disabled for it, and a publish asked for earlier waits until it is complete.
 The review panel lists such rows under "Not synced until complete". Before
 0.3.1 a bound nameless row failed the whole pass ("Invalid Atomic issue").
-Unit (`app/sync.test.ts`, `app/views.test.ts`) and the hand-made table e2e.
+Unit (`app/sync.test.ts`, `app/views.test.ts`) and the hand-made table e2e
+(a row with an empty Name). At the pin the server refuses a commit that lacks a required property of the row's class (`lib/src/resources.rs` `check_required_props`, presence only), so on this host a required field can be absent only as an empty string (`name` is a string; the resolver counts `''` as missing), through a lens, or on a host that did not check; a required date or timestamp cannot be empty there.
 
 **From 0.1.x.** An update from 0.1.x over an existing install (the host's
 Update on the Integrations page keeps rows and schema) rewrites the table's

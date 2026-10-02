@@ -138,7 +138,8 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
   nothing of it is sent, Google's edits to it are not applied, it is never
   "Not sent yet", and the review sheet lists it under "Not sent" with the
   reason. Unit (`app/view.test.ts`, `app/sync.test.ts`) and the hand-made
-  table e2e below.
+  table e2e below, which holds a row with an empty Name and checks the host
+  refuses one without a Day. At the pin the server refuses a commit that lacks a required property of the row's class (`lib/src/resources.rs` `check_required_props`, presence only), so on this host a required field can be absent only as an empty string (`name` is a string; the resolver counts `''` as missing), through a lens, or on a host that did not check; a required date or timestamp cannot be empty there.
 - **Gate.** The catalog entry stays `enabled: false` while the ontology base
   is on github.io (`ontology.mjs check`; card copy "Waits for the stable
   ontology domain."). Test-side installs (the e2e, the user-testing

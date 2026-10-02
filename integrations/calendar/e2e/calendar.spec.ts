@@ -517,7 +517,7 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
 
     // A table the person made, of the shared class, with one row that has
     // only a Day (as the host Calendar view's "+" makes one).
-    const table = await page.evaluate(
+    const made = await page.evaluate(
       async ({ klass, day, name, classtype }) => {
         const store = window.store!;
         const now = new Date();
@@ -538,16 +538,31 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
           propVals: { [name]: 'Planning day', [day]: today },
         });
         await row.save();
-        // A row missing the class's required Day (#177; ontology-kit's
-        // rule: shown as incomplete, never skipped).
+        // A row missing the class's required Name (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped): the server refuses a
+        // commit without the property (lib/src/resources.rs
+        // check_required_props), so the only incomplete row this host can
+        // hold has an empty Name. A row without a Day is refused outright.
         const retro = await store.newResource({
           parent: made.subject,
           isA: [klass],
-          propVals: { [name]: 'Retro' },
+          propVals: { [name]: '', [day]: today },
         });
         await retro.save();
+        let refused = '';
 
-        return made.subject;
+        try {
+          const noDay = await store.newResource({
+            parent: made.subject,
+            isA: [klass],
+            propVals: { [name]: 'No day' },
+          });
+          await noDay.save();
+        } catch (error) {
+          refused = error instanceof Error ? error.message : String(error);
+        }
+
+        return { table: made.subject, refused };
       },
       {
         klass: EVENT,
@@ -557,6 +572,8 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
       },
     );
 
+    expect(made.refused).toMatch(/missing\. Is required in class/);
+    const table = made.table;
     await page.goto(
       `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
     );
@@ -589,16 +606,20 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
     await expect(
       app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
     ).toHaveCount(0);
-    // The row without a Day is listed as incomplete, with a way to the row,
-    // and drawn on no day; the rest of the table is unaffected.
+    // The row with an empty Name is listed as incomplete, with a way to the
+    // row, and drawn as "(untitled)" with the tag; the rest is unaffected.
     const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
     await expect(incomplete).toContainText('1 row is incomplete');
-    await expect(incomplete).toContainText('Retro');
-    await expect(incomplete).toContainText('Incomplete: missing Day');
+    await expect(incomplete).toContainText('(untitled)');
+    await expect(incomplete).toContainText('Incomplete: missing Name');
     await expect(
       incomplete.getByRole('button', { name: 'Open row' }),
     ).toBeVisible();
-    await expect(app.getByRole('button', { name: /^Retro, / })).toHaveCount(0);
+    await expect(
+      app.getByRole('button', {
+        name: /^\(untitled\), All day, .*incomplete: missing name$/,
+      }),
+    ).toBeVisible();
   });
 
   test('syncs a hand-made event-v1 table to Google Calendar after Allow editing, and sends a reviewed row edit (#177 item 14)', async ({

@@ -469,11 +469,14 @@ test.describe('GitHub issues drive app', () => {
         });
         await row.save();
         // A row missing the class's required Name (#177; ontology-kit's
-        // rule: shown as incomplete, never skipped, never synced).
+        // rule: shown as incomplete, never skipped, never synced). The
+        // server refuses a commit without the property (lib/src/resources.rs
+        // check_required_props), so the incomplete row this host can hold
+        // has an empty Name.
         const nameless = await store.newResource({
           parent: made.subject,
           isA: [klass],
-          propVals: { [`${task}/status`]: [`${task}/doing`] },
+          propVals: { [name]: '', [`${task}/status`]: [`${task}/doing`] },
         });
         await nameless.save();
 
@@ -565,7 +568,7 @@ test.describe('GitHub issues drive app', () => {
 
     // The incomplete row stayed as it was: not sent, still marked.
     const nameless = rows.find(
-      r => r[NAME] === undefined && r['github-issue-number'] === undefined,
+      r => r[NAME] === '' && r['github-issue-number'] === undefined,
     )!;
     expect(nameless).not.toHaveProperty('github-sync-baseline');
     await expect(app.getByText('Incomplete: missing Name')).toBeVisible();

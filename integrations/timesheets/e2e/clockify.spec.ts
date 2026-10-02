@@ -841,7 +841,7 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
 
     // A table the person made, of the shared class, with one entry that
     // links to a project row of their own.
-    const table = await page.evaluate(
+    const made = await page.evaluate(
       async ({ entry, project, work, name, classtype }) => {
         const store = window.store!;
         const today = new Date();
@@ -877,18 +877,27 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
         });
         await row.save();
         // A row missing the class's required Start (#177; ontology-kit's
-        // rule: shown as incomplete, never skipped).
-        const partial = await store.newResource({
-          parent: made.subject,
-          isA: [entry],
-          propVals: {
-            [name]: 'Forgot the start',
-            [work.end]: today.getTime() + 7_200_000,
-          },
-        });
-        await partial.save();
+        // rule: shown as incomplete, never skipped) cannot be committed on
+        // this host: the server refuses it (lib/src/resources.rs
+        // check_required_props), and a timestamp cannot be empty. The
+        // app's handling of such a row is unit-tested only.
+        let refused = '';
 
-        return made.subject;
+        try {
+          const partial = await store.newResource({
+            parent: made.subject,
+            isA: [entry],
+            propVals: {
+              [name]: 'Forgot the start',
+              [work.end]: today.getTime() + 7_200_000,
+            },
+          });
+          await partial.save();
+        } catch (error) {
+          refused = error instanceof Error ? error.message : String(error);
+        }
+
+        return { table: made.subject, refused };
       },
       {
         entry: TIME_ENTRY,
@@ -898,6 +907,9 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
         classtype: CLASSTYPE,
       },
     );
+
+    expect(made.refused).toMatch(/missing\. Is required in class/);
+    const table = made.table;
 
     // The table and its entries, as committed (Add view adds a View under
     // the table, which is the host's, not the app's).
@@ -913,7 +925,7 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     };
 
     const untouched = await entries();
-    expect(untouched.rows).toHaveLength(2);
+    expect(untouched.rows).toHaveLength(1);
 
     await page.goto(
       `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
@@ -939,19 +951,9 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     ).toHaveCount(0);
     await expect(app.getByRole('button', { name: 'Sync now' })).toHaveCount(0);
     await app.getByRole('tab', { name: 'Entries' }).click();
-    // The row without a Start is listed as incomplete, with a way to the
-    // row, not as an entry; the complete row is an entry as usual.
-    const incomplete = app.getByRole('note', { name: 'Incomplete rows' });
-    await expect(incomplete).toContainText('1 row is incomplete');
-    await expect(incomplete).toContainText('Forgot the start');
-    await expect(incomplete).toContainText('Incomplete: missing Start');
+    // No incomplete row can exist here (above), so none is listed.
     await expect(
-      incomplete.getByRole('button', { name: 'Open row Forgot the start' }),
-    ).toBeVisible();
-    await expect(
-      app.getByRole('button', { name: /Forgot the start/ }).filter({
-        hasNot: incomplete,
-      }),
+      app.getByRole('note', { name: 'Incomplete rows' }),
     ).toHaveCount(0);
     await app.getByRole('button', { name: /Pairing on the parser/ }).click();
     const detail = app.getByRole('dialog', { name: 'Pairing on the parser' });

@@ -177,8 +177,13 @@ into the view root.
     rows the app does not own; a synced row whose Start is cleared in the
     table gets Clockify's values back at the next sync (Clockify owns bound
     rows' values, `writeBack.ts` `syncRow`), and `listChanges` lists nothing
-    for it meanwhile. Unit (`app/adopt.test.ts`, `app/ui/ui.test.ts`) and
-    the hand-made table e2e.
+    for it meanwhile. Unit (`app/adopt.test.ts`, `app/ui/ui.test.ts`) only:
+    at the pin the server refuses a commit that lacks a required property
+    of the row's class (`lib/src/resources.rs` `check_required_props`), and
+    a timestamp cannot be empty, so no `time-entry-v1` row on this host can
+    lack a Start; the hand-made table e2e checks that refusal. The view's
+    handling is for a lens, another host, or a class the server could not
+    check.
   - _Not verified:_ the published terms are fetched from GitHub Pages by
     the server and the browser (the e2e needs ontola.github.io); a cold
     browser or server during a Pages outage fails as #177 spike S1 found
