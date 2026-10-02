@@ -36,6 +36,14 @@ async function withFixture(fn) {
       'beta-bundle',
     );
     writeFileSync(join(base, 'integrations/beta/catalog.json'), 'not root');
+    // A dependency's own plugin.js (@atproto/crypto ships two) is no bundle.
+    mkdirSync(join(base, 'integrations/beta/e2e/node_modules/dep/dist'), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(base, 'integrations/beta/e2e/node_modules/dep/dist/plugin.js'),
+      'not hosted',
+    );
 
     return await fn(base);
   } finally {

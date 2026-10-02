@@ -290,6 +290,21 @@ export function verifyCapability(parsed, owner, audience, nowSecs) {
 /** PKCS#8 DER prefix of a raw 32-byte Ed25519 seed. */
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+/**
+ * The proxy spends each signed request once, keyed by a hash of method, URL,
+ * timestamp (ms) and body, not of the signer. Two identical requests signed in
+ * the same millisecond, by one signer or by two (owner and app both GET the
+ * same URL), would be one request and the second would answer 401 `replayed`.
+ * So the default timestamp never repeats, across every signer in the process.
+ */
+let lastTimestamp = 0;
+
+function nextTimestamp() {
+  lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
+
+  return lastTimestamp;
+}
+
 /** An agent that signs like @tomic/lib does, from a 32-byte seed. */
 export function testSigner(seed) {
   const privateKey = createPrivateKey({
@@ -305,8 +320,8 @@ export function testSigner(seed) {
     agent,
     publicKey,
     sign,
-    /** v2 headers for one request; `timestamp` defaults to now. */
-    headers(method, url, body = '', timestamp = Date.now()) {
+    /** v2 headers for one request; `timestamp` defaults to now, never repeating. */
+    headers(method, url, body = '', timestamp = nextTimestamp()) {
       return {
         [AGENT_HEADER]: agent,
         [PUBLIC_KEY_HEADER]: publicKey,

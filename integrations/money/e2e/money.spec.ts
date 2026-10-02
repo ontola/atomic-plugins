@@ -11,10 +11,22 @@
  * a person does: find "Bank statements" among the community plugins, create
  * a draft, set it up, import, reload, import again.
  *
- * A second test adds the Money drive app (`app/`) as a view of the same
- * table, imports through it with the host's review (atomic-server#1774),
- * reads the statements table (#1768) and saves a category after the
- * person allows editing in the host's bar (#1788).
+ * A second test installs the Money drive app (`app/`) from the catalog, as a
+ * person does, and imports into the table that install gave it: on first
+ * open the app made it a table of the shared `bank-transaction-v1` class
+ * (ontola/atomic-plugins#177 item 8) and writes the rows itself, at the
+ * published property subjects, with no importer involved. The pinned server
+ * and the browser fetch those terms from GitHub Pages themselves, as in
+ * production; `beforeAll` first checks Pages serves them with the committed
+ * bytes (`ontology-kit/served.mjs`), so an unpublished term fails here with
+ * a message, not deep in a write. This needs network access to
+ * https://ontola.github.io.
+ *
+ * A third test adds that same app as a view of the importer's table (the
+ * app's first open listed the importer's class in its `renders`, so Add view
+ * offers it), imports through it with the host's review
+ * (atomic-server#1774), reads the statements table (#1768) and saves a
+ * category after the person allows editing in the host's bar (#1788).
  *
  * Needs an atomic-server with manifest `accepts`/`destination` and the
  * PluginPage Import tab (atomic-server#1691, for #1653; in the pinned
@@ -30,6 +42,12 @@ import {
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
+/** The catalog's version of the Money app (integrations/catalog.json). */
+const VERSION = '0.4.0';
+const APP_FRAME = 'iframe[title="App"]';
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+const IS_A = 'https://atomicdata.dev/properties/isA';
+
 const read = (name: string) =>
   readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
 const bundle = read('plugin.js');
@@ -37,6 +55,19 @@ const mt940 = read('fixtures/synthetic.mt940');
 const camt = read('fixtures/synthetic.camt053.xml');
 
 test.describe('money integration', () => {
+  test.beforeAll(async () => {
+    const served = (await import(
+      '../../../ontology-kit/served.mjs' as string
+    )) as {
+      classTermPaths(name: string): string[];
+      servedProblems(paths: string[]): Promise<string[]>;
+      notServedMessage(problems: string[]): string;
+    };
+    const problems = await served.servedProblems(
+      served.classTermPaths('bank-transaction-v1'),
+    );
+    if (problems.length) throw new Error(served.notServedMessage(problems));
+  });
   test.beforeEach(before);
   test.beforeEach(async ({ page }) => {
     await enableIntegrationDiscovery(page);
@@ -217,7 +248,148 @@ test.describe('money integration', () => {
     await expect(dialog.getByText('"Café lunch"').first()).toBeVisible();
   });
 
-  test('Money app: a view of the Bank transactions table: import, statements, row editing, in-app check', async ({
+  test('Money app installed from the catalog: imports into its own bank-transaction-v1 table, no importer', async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const terms = (await import(
+      '../../../ontology-kit/terms.mjs' as string
+    )) as {
+      classes: Record<string, { subject: string }>;
+      properties: Record<string, { subject: string }>;
+    };
+    const shared = terms.classes['bank-transaction-v1'].subject;
+
+    // The person installs Money from the catalog. It opens on a table of its
+    // own, which its first open turns into a Bank transactions table of the
+    // shared class, listing that class in what it renders.
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('heading', { name: 'Bring in your bank transactions' }),
+    ).toBeVisible({ timeout: 60_000 });
+    const installed = new URL(page.url()).searchParams.get('subject')!;
+    const own = await tableOf(page);
+    await expect
+      .poll(() => classtypeOf(page, own), { timeout: 30_000 })
+      .toBe(shared);
+    await expect
+      .poll(() => rendersOf(page, installed, shared), { timeout: 30_000 })
+      .toBe(true);
+
+    // Import from inside the app: check, preview, then the app's own writes
+    // (no importer, so no host review). Nothing is written before Import.
+    const input = app.locator('input[type="file"]');
+    const sheet = app.getByRole('dialog', { name: 'Import statement' });
+    await input.setInputFiles({
+      name: 'statement.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(await rowsOf(page, own)).toEqual([]);
+    await sheet.getByRole('button', { name: 'Import 2 transactions' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(app.getByRole('status').first()).toContainText('Imported 2', {
+      timeout: 60_000,
+    });
+    const lunch = app.getByRole('button', { name: /Fixture lunch/ });
+    await expect(lunch).toBeVisible();
+    await expect(
+      app.getByText('−€12.34', { exact: true }).first(),
+    ).toBeVisible();
+
+    // As committed: shared rows, at the published subjects, exact strings.
+    const rows = await rowsOf(page, own);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row[IS_A]).toEqual([shared]);
+    const stored = rows.find(
+      r => r[terms.properties['bank-description'].subject] === 'Fixture lunch',
+    )!;
+    expect(stored).toMatchObject({
+      [terms.properties['bank-amount'].subject]: '-12.34',
+      [terms.properties['bank-currency'].subject]: 'EUR',
+      [terms.properties['bank-account'].subject]: 'NL00BUNQ0000000000',
+      [terms.properties['bank-value-date'].subject]: '2026-09-02',
+      [terms.properties['bank-reference'].subject]: 'TEST-1',
+    });
+
+    // The statement the app stored: the strip and the Imports tab.
+    await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
+      /€107\.66\s*on /,
+      { timeout: 30_000 },
+    );
+    await app.getByRole('tab', { name: /^Imports/ }).click();
+    await expect(app.getByRole('table')).toContainText(/€100\.00 →\s*€107\.66/);
+    await app.getByRole('tab', { name: /^Transactions/ }).click();
+
+    // Its own rows: a category saves at once, with no "Allow editing".
+    await lunch.click();
+    const details = app.getByLabel('Transaction details');
+    await expect(details).toContainText('NL00 BUNQ 0000 0000 00 · EUR');
+    await expect(details).not.toContainText('allow it to edit them');
+    await details.getByLabel('Category').fill('Meals');
+    await details.getByLabel('Category').press('Tab');
+    await expect(details).toContainText('Saved', { timeout: 30_000 });
+    await expect(
+      page.getByRole('group', { name: 'Let this app edit rows' }),
+    ).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    // Stored on the row itself: after a reload the ledger shows it.
+    await page.reload();
+    await expect(
+      app.getByRole('button', { name: /Fixture lunch/ }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(app.getByRole('table')).toContainText('Meals');
+
+    // The same file again: nothing new. A changed booking blocks the file.
+    await input.setInputFiles({
+      name: 'statement.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940),
+    });
+    await expect(sheet).toContainText(
+      'Nothing new in this file. All 2 transactions were imported before.',
+      { timeout: 30_000 },
+    );
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    await input.setInputFiles({
+      name: 'changed.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940.replace('Fixture lunch', 'Fixture dinner')),
+    });
+    await expect(sheet).toContainText(
+      'This file changes a transaction you already have',
+      { timeout: 30_000 },
+    );
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    expect(await rowsOf(page, own)).toHaveLength(2);
+
+    // camt.053 of the same period: identities are per format, so two more
+    // rows and a second statement.
+    await input.setInputFiles({
+      name: 'statement.xml',
+      mimeType: 'application/xml',
+      buffer: Buffer.from(camt),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 2 transactions' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(app.getByRole('tab', { name: /^Transactions/ })).toContainText(
+      '4',
+      { timeout: 60_000 },
+    );
+    await app.getByRole('tab', { name: /^Imports/ }).click();
+    await expect(app.getByRole('table').locator('tbody tr')).toHaveCount(2);
+    expect(await rowsOf(page, own)).toHaveLength(4);
+  });
+
+  test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
     page,
   }) => {
     test.setTimeout(300_000);
@@ -254,41 +426,37 @@ test.describe('money integration', () => {
       main.getByRole('heading', { name: 'Bank transactions' }),
     ).toBeVisible({ timeout: 30_000 });
     const table = new URL(page.url()).searchParams.get('subject')!;
-    const rowClass = await page.evaluate(
-      async subject =>
-        (await window.store!.getResource(subject)).get(
-          'https://atomicdata.dev/properties/classtype',
-        ) as string,
-      table,
-    );
+    const rowClass = (await classtypeOf(page, table)) as string;
 
-    // A new App running the Money bundle, told it renders bank transactions
-    // (test-side: no catalog entry installs it yet).
-    await createFromCatalog(page, 'App');
-    await expect(main.locator('iframe[title="App"]')).toBeVisible({
-      timeout: 45_000,
-    });
-    const moneyApp = (
-      (await import('../app/build.mjs' as string)) as {
-        build(): Promise<{ text: string }>;
-      }
-    ).build;
-    await installApp(page, (await moneyApp()).text, rowClass);
+    // The person installs Money from the catalog. Its first open finds the
+    // importer's class in this drive and lists it in what the app renders,
+    // so the importer's table offers it under Add view below.
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('heading', { name: 'Bring in your bank transactions' }),
+    ).toBeVisible({ timeout: 60_000 });
+    const installed = new URL(page.url()).searchParams.get('subject')!;
+    await expect
+      .poll(() => rendersOf(page, installed, rowClass), { timeout: 30_000 })
+      .toBe(true);
 
     // The person adds it as a view, read-only for now (#1788).
     await page.goto(showUrl(page, table));
     await main.getByRole('button', { name: 'Add view' }).click();
-    // Add view lists the drive's apps only after reading each App's classes,
-    // which took longer than the default 10 s click timeout in CI (the item
-    // was in the menu's final snapshot), so wait for it longer.
+    // Add view lists drive apps once it has read the drive's plugin schema
+    // and each App's classes, the github.io terms included (#177 S1, H1):
+    // about 9 s measured on 2026-10-01, so not the default 10 s. A lane
+    // store kept from earlier runs holds more "Bank statements" installs,
+    // all the same bundle.
     await page
-      .getByRole('menuitem', { name: 'New app' })
+      .getByRole('menuitem', { name: 'Bank statements' })
+      .first()
       .click({ timeout: 60_000 });
     await page
       .locator('dialog[open]')
       .getByRole('button', { name: 'Read-only' })
       .click();
-    const app = page.frameLocator('iframe[title="App"]');
     await expect(
       app.getByRole('heading', { name: 'Bring in your bank transactions' }),
     ).toBeVisible({ timeout: 45_000 });
@@ -384,66 +552,109 @@ test.describe('money integration', () => {
 });
 
 /**
- * Loads `source` into the App on screen and lets it render `rowClass`, as an
- * install from the catalog would. The entry point and `renders` are found by
- * value: their property subjects are minted per drive.
+ * Installs the Money app the way a person does: Integrations page,
+ * experimental plugins shown, Drive apps, Install. The host downloads the
+ * catalog's `app-module` (the lane's dev-server serves the committed
+ * `apps/money/<version>/ui.js` in place of GitHub Pages) and refuses it
+ * unless its bytes match `app-module-integrity`, then opens the new app.
  */
-async function installApp(page: Page, source: string, rowClass: string) {
-  await page.evaluate(
+async function installFromCatalog(page: Page) {
+  await page.goto(new URL('/app/integrations', page.url()).href);
+  const experimental = page.getByRole('checkbox', {
+    name: 'Show experimental plugins',
+  });
+  await experimental.check();
+  // Disabled while the setting is still saving to the private drive.
+  await expect(experimental).toBeEnabled({ timeout: 30_000 });
+  const entry = page
+    .getByRole('region', { name: 'Drive apps' })
+    .locator('[data-catalog-app="money"]');
+  await expect(entry).toContainText(`Version ${VERSION}`);
+  await entry.getByRole('button', { name: 'Install Bank statements' }).click();
+  await expect(page.getByRole('main').locator(APP_FRAME)).toBeVisible({
+    timeout: 45_000,
+  });
+}
+
+/** The table of the App on screen: its child that is a Table. */
+async function tableOf(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const store = window.store!;
+    const subject = new URL(location.href).searchParams.get('subject')!;
+    const app = await store.getResource(subject);
+    const candidates = Object.values(app.getPropVals()).filter(
+      (v): v is string => typeof v === 'string' && v.includes(':'),
+    );
+
+    for (const candidate of candidates) {
+      const child = await store.getResource(candidate).catch(() => undefined);
+      if (!child) continue;
+      const classes = child.get('https://atomicdata.dev/properties/isA');
+
+      if (
+        Array.isArray(classes) &&
+        classes.includes('https://atomicdata.dev/classes/Table')
+      )
+        return candidate;
+    }
+
+    throw new Error('the app has no table');
+  });
+}
+
+/** The table's row class, read fresh from the server. */
+async function classtypeOf(page: Page, table: string): Promise<unknown> {
+  return page.evaluate(
+    async args =>
+      (
+        await window.store!.fetchResourceFromServer(args.table, {
+          noWebSocket: true,
+        })
+      ).get(args.classtype),
+    { table, classtype: CLASSTYPE },
+  );
+}
+
+/** Whether the App's `renders` (found by value) lists `klass`. */
+async function rendersOf(
+  page: Page,
+  app: string,
+  klass: string,
+): Promise<boolean> {
+  return page.evaluate(
     async args => {
       const store = window.store!;
-      const subject = new URL(location.href).searchParams.get('subject')!;
-      const app = await store.getResource(subject);
-      let loaded = false;
+      await store.reloadResource(args.app);
 
-      // `renders`: the drive-local property, named so by its shortname, that
-      // the App's own class lists. A fresh App may not hold it yet, so it is
-      // not found by value (as integrations/tooling/e2e/screenshots.spec.ts).
-      let renders: string | undefined;
-
-      for (const klass of (app.get('https://atomicdata.dev/properties/isA') ??
-        []) as string[]) {
-        const schema = await store.getResource(klass);
-
-        for (const key of ['recommends', 'requires']) {
-          for (const property of (schema.get(
-            `https://atomicdata.dev/properties/${key}`,
-          ) ?? []) as string[]) {
-            const p = await store.getResource(property);
-            if (
-              p.get('https://atomicdata.dev/properties/shortname') === 'renders'
-            )
-              renders = property;
-          }
-        }
-      }
-
-      if (!renders)
-        throw new Error('could not find the app’s renders property');
-      const current = (app.get(renders) ?? []) as string[];
-      await app.set(renders, [...current, args.rowClass]);
-
-      for (const [, value] of Object.entries(app.getPropVals())) {
-        if (typeof value !== 'string' || !value.includes(':')) continue;
-        const child = await store.getResource(value).catch(() => undefined);
-        const sourceProp =
-          child &&
-          Object.entries(child.getPropVals()).find(
-            ([, v]) =>
-              typeof v === 'string' && v.includes('export async function view'),
-          )?.[0];
-        if (!child || !sourceProp) continue;
-        await child.set(sourceProp, args.source);
-        await child.save();
-        loaded = true;
-      }
-
-      await app.set('https://atomicdata.dev/properties/name', 'New app');
-      await app.save();
-      if (!loaded) throw new Error('could not find the app’s entry point');
+      return Object.values(
+        (await store.getResource(args.app)).getPropVals(),
+      ).some(v => Array.isArray(v) && v.includes(args.klass));
     },
-    { source, rowClass },
+    { app, klass },
   );
+}
+
+/** The rows of `table` as the server has them: every property and value. */
+async function rowsOf(
+  page: Page,
+  table: string,
+): Promise<Record<string, unknown>[]> {
+  return page.evaluate(async subject => {
+    const store = window.store!;
+    const collection = await (
+      await store.getResource(subject)
+    ).getChildrenCollection(500);
+    const rows: Record<string, unknown>[] = [];
+
+    for (const member of await collection.getAllMembers()) {
+      const row = await store.fetchResourceFromServer(member, {
+        noWebSocket: true,
+      });
+      rows.push(Object.fromEntries(Object.entries(row.getPropVals())));
+    }
+
+    return rows;
+  }, table);
 }
 
 async function publishBundle(page: Page): Promise<string> {

@@ -8,6 +8,7 @@ export const MONEY_CSS = `
 .pl-app { margin: 0; }
 .m-amt { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
 .m-amt[data-dir='in'] { color: var(--pl-pos); }
+.m-amt[data-dir='invalid'] { color: var(--pl-muted); font-weight: 500; font-style: italic; }
 .m-amt small { font-weight: 500; color: var(--pl-muted); margin-left: 3px; font-size: 11.5px; }
 
 /* Account switcher: a native select dressed as the design's switcher */

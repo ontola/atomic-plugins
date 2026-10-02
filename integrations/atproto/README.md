@@ -1,7 +1,10 @@
 # AT Protocol handle and did:web document
 
 Status: **handle responder and did:web document implemented and exercised on
-a real feature-enabled host; no live Bluesky interoperability evidence**.
+a real feature-enabled host; resolved by Bluesky's reference identity code
+and accepted by the reference PDS on the loopback (2026-10-02, see
+[Interoperability evidence](#interoperability-evidence)); no live Bluesky
+network evidence**.
 This dependency-free QuickJS module lets a drive's hostname be an
 [AT Protocol handle](https://atproto.com/specs/handle), for a `did:plc`
 identity or for a `did:web` identity rooted in that same hostname. It is not
@@ -173,13 +176,120 @@ commits an active Installation with a `did:web` config, resolves
 `/.well-known/atproto-did` and `/.well-known/did.json` on the handle host
 over HTTP with a `Host` header, checks `alsoKnownAs` names the handle,
 checks the other host name (strictly `404` where `requestHost` is reported),
-and reconfigures to `did:plc` to check `did.json` disappears. It uses
-invented names only and makes no network calls outside the machine.
+and reconfigures to `did:plc` to check `did.json` disappears. Along the way
+it resolves the same identity with Bluesky's reference code over TLS
+(below). It uses invented names only and makes no network calls outside the
+machine.
 
-Not yet verified: TLS on port 443, an independent resolver (for example
-`@atproto/identity`), a real PDS accepting the `did:web` identity, and the
-Bluesky AppView showing the handle. Record the resolver version, test
-hostname, DID and bidirectional result before claiming live verification.
+## Interoperability evidence
+
+The e2e checks the plugin's answers with Bluesky's own code as well as its
+own assertions. Results on 2026-10-02, atomic-server pin `a12b74a` with
+`plugin-routes` (which reports `requestHost`), Node 22.23.3:
+
+| Package (pinned in `e2e/package.json`) | Version | Used for                                                                                         |
+| -------------------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
+| `@atproto/identity`                    | 0.5.15  | `HandleResolver` (HTTPS method), `DidResolver` (did:web), `ensureAtpDocument`, `verifySignature` |
+| `@atproto/did`                         | 0.5.6   | the strict `didDocumentValidator`, `extractAtprotoData`, `isAtprotoDidWeb`                       |
+| `@atproto/crypto`                      | 0.5.6   | fresh secp256k1 and P-256 key pairs, `parseDidKey`                                               |
+| `@atproto/syntax`                      | 0.7.6   | `ensureValidHandle`, `ensureValidDid`                                                            |
+| `@atproto-labs/fetch-node`             | 0.4.0   | `safeFetchWrap`, the resolvers' default fetch                                                    |
+| `undici`                               | 7.30.0  | the loopback connector                                                                           |
+| `ghcr.io/bluesky-social/pds` (opt-in)  | 0.5.36  | `@atproto/pds`, image digest `sha256:95d6179b…` (`e2e/pds.ts`)                                   |
+
+**Reference resolver (every e2e run).** `e2e/reference.ts` builds the
+resolvers' fetch the way `@atproto/identity`'s `createDefaultFetch` does
+(`safeFetchWrap`: no IP hosts, no custom ports, no plain http, explicit
+redirect mode, the forbidden-domain list, 512 kB and 10 s limits), with
+private addresses allowed, because the host is 127.0.0.1. Its connector
+sends each `https://<name>:443` connection to a TLS terminator on an
+ephemeral loopback port, with the original name as SNI, and the terminator
+forwards to atomic-server with that name in `Host`. The certificate is a
+`*.e2e.atomicdata.dev` wildcard from a throwaway `openssl` CA that only
+this client trusts. What passed, for a secp256k1 key and, after a key
+rotation, a P-256 key:
+
+- handle to DID through `/.well-known/atproto-did`;
+- did:web to document through `/.well-known/did.json`: the package's own
+  schema and `id` check, then `@atproto/did`'s stricter validator;
+- `ensureAtpDocument`: the handle, the `#atproto_pds` endpoint, and the
+  `#atproto` Multikey as the same `did:key` the key pair reports
+  (`ES256K`, `ES256`);
+- bidirectional: the handle in `alsoKnownAs` resolves back to the same DID;
+- `verifySignature` with the resolved key accepts a signature by the
+  private key, and after rotation rejects one by the old key;
+- the second host name never verifies: on this host it resolves to nothing
+  and `did:web:<other>` is not found. On a host without `requestHost` the
+  spec expects it to resolve to the handle's DID, whose document names the
+  handle and not it, and `did:web:<other>` to fail the `id` check (not run
+  at this pin);
+- after reconfiguring to `did:plc`, the handle resolves to the PLC DID and
+  `did:web:<handle>` is not found.
+
+**Reference PDS (opt-in, needs Docker).**
+`ATPROTO_PDS_E2E=1 node integrations/tooling/run-lane.mjs atproto --tier e2e`
+also starts `ghcr.io/bluesky-social/pds` (`e2e/pds.ts`) with its XRPC port
+on 127.0.0.1 only, the test names mapped to 127.0.0.1 inside its container,
+no working DNS resolver, and a TLS terminator in its network namespace that
+reaches atomic-server through a bind-mounted Unix socket. Its one
+relaxation is `PDS_DISABLE_SSRF_PROTECTION=true`, without which it refuses
+to fetch from a loopback address. It then goes through an account
+migration onto the plugin's identity, and every step passed:
+`com.atproto.identity.resolveHandle` returns the did:web (and refuses the
+second host name); `com.atproto.server.createAccount` with that DID and a
+service-auth token signed by its `#atproto` key succeeds, so the PDS
+resolved the document, verified the token against the published key and
+checked the handle resolves back to the DID; `checkAccountStatus` reports
+`validDid: false` until the drive owner publishes
+`getRecommendedDidCredentials`' endpoint and `did:key` through the plugin
+exactly as "Configure and deploy" says, then `validDid: true`; and
+`activateAccount` succeeds. The PDS fetched only the handle's
+`/.well-known/atproto-did` and `/.well-known/did.json` (plus the second
+name's `atproto-did`).
+
+**DID ports.** AT Protocol allows a `%3A`-encoded port in did:web for
+`localhost` only. `@atproto/syntax` accepts `did:web:<host>%3A8443`, but
+`@atproto/did` rejects it outside localhost and the resolvers' default
+fetch refuses it before connecting ("Custom https: ports not allowed"), as
+it refuses `did:web:localhost%3A<port>`, which resolves over plain http.
+The plugin accepts no port in a did:web or handle, so it agrees with the
+reference code here.
+
+**Not covered by the reference checks:**
+
+- DNS TXT (`_atproto.<handle>`): the plugin does not publish TXT records,
+  and on the invented names the method would query public DNS. The spec's
+  resolver has that method turned off, and the PDS container has no working
+  resolver;
+- port 443 on a real host and a publicly trusted certificate (see
+  "Public HTTPS" below);
+- the redirect-hop checks of `safeFetchWrap` (the spec's connector replaces
+  its dispatcher; the plugin never redirects) and the private-address check
+  (the host is the loopback);
+- a relay crawling the PDS, the Bluesky AppView showing the handle, and the
+  `did:plc` reverse direction.
+
+**Reference behaviour the plugin does not enforce:** the resolvers' default
+fetch refuses `example.com`, `example.org`, `example.net` and
+`googleusercontent.com` and their subdomains, so a handle or did:web there
+never resolves. The plugin accepts them (the examples above use
+`example.com`); nobody can deploy on those names anyway. The fetch also
+refuses custom ports, which matters for clients that fetch the PDS through
+it: the plugin accepts a `pds` with a port, but a production PDS is on 443.
+
+### Public HTTPS
+
+Resolvers fetch only `https://<handle>/...` on port 443 with a publicly
+trusted certificate. At pin `a12b74a`, atomic-server's ACME support
+(`server/src/https.rs`) requests a certificate for its own `--domain` (and
+its wildcard, with DNS-01), not for host names bound with `/bind-drive`.
+So a handle that is not under the server's domain needs a TLS-terminating
+proxy in front of atomic-server with a certificate for that name (read from
+the source, not tried on a public host).
+
+Not yet verified: TLS on port 443 of a real host, a relay or the Bluesky
+AppView, and a live handle. Record the resolver version, test hostname, DID
+and bidirectional result before claiming live verification.
 
 ## Beyond the handle: what a PDS would take
 
