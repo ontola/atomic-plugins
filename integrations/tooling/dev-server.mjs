@@ -338,7 +338,8 @@ if (
     console.error(`dev-server: ${e.message}`);
     process.exit(1);
   });
-  server.listen(port, () => {
+  // Loopback unless DEV_SERVER_HOST says otherwise (serve.mjs sets it).
+  server.listen(port, process.env.DEV_SERVER_HOST || '127.0.0.1', () => {
     const assets = [...hostedAssets().keys()];
     console.log(
       `dev-server: hosting ${assets.length} integration asset(s) ` +

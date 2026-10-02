@@ -22,7 +22,9 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
+  bindAddress,
   bringUp,
+  devServerHost,
   dockerRunArgs,
   IMAGE_STORE,
   imagePinProblem,
@@ -200,7 +202,26 @@ test('bringUp pulls a missing image, runs it, waits for it, and stops it', async
       run[run.indexOf('--publish') + 1],
       `127.0.0.1:${live.atomicServer}:${live.atomicServer}`,
     );
+    // The image keeps its own 0.0.0.0 (Dockerfile ENV); the host default
+    // must not reach the container.
+    assert.ok(!run.some(a => String(a).startsWith('ATOMIC_IP=')));
   });
+});
+
+test('bindAddress defaults to loopback and an explicit ATOMIC_IP wins', () => {
+  assert.equal(bindAddress({}), '127.0.0.1');
+  assert.equal(bindAddress({ ATOMIC_IP: '' }), '127.0.0.1');
+  assert.equal(bindAddress({ ATOMIC_IP: '0.0.0.0' }), '0.0.0.0');
+  assert.equal(bindAddress({ ATOMIC_IP: '::' }), '::');
+});
+
+test('devServerHost is loopback, all interfaces for the image, and an explicit value wins', () => {
+  assert.equal(devServerHost({}), '127.0.0.1');
+  assert.equal(devServerHost({ ATOMIC_SERVER_IMAGE: pinnedImage }), '0.0.0.0');
+  assert.equal(
+    devServerHost({ ATOMIC_SERVER_IMAGE: pinnedImage, DEV_SERVER_HOST: '::1' }),
+    '::1',
+  );
 });
 
 test('bringUp does not pull an image that is already present', async () => {
@@ -257,6 +278,7 @@ const { writeFileSync } = require('node:fs');
 const http = require('node:http');
 writeFileSync(process.env.FAKE_SERVER_LOG, JSON.stringify({
   args: process.argv.slice(2),
+  bind: process.env.ATOMIC_IP,
   env: Object.fromEntries(Object.entries(process.env).filter(([k]) => /^ATOMIC_(PLUGIN|ROUTES)/.test(k))),
 }));
 const server = http.createServer((_, res) => res.end('fake plugin-routes server')).listen(Number(process.env.ATOMIC_PORT), '127.0.0.1');
@@ -279,6 +301,7 @@ test('a plugin-routes lane runs the feature binary with its level, never the ima
     ATOMIC_PLUGIN_ROUTES: 'read-write',
     ATOMIC_PLUGIN_SIDECARS: 'pds=http://127.0.0.1:1',
   });
+  delete process.env.ATOMIC_IP;
 
   try {
     const live = {
@@ -305,6 +328,8 @@ test('a plugin-routes lane runs the feature binary with its level, never the ima
     const started = JSON.parse(readFileSync(log, 'utf8'));
     assert.deepEqual(started.args, pluginRoutesArgs('read-only', live));
     assert.deepEqual(started.env, {});
+    // Not set by the caller: the server is told to bind loopback, not `::`.
+    assert.equal(started.bind, '127.0.0.1');
     for (const key of PLUGIN_ROUTES_ENV) assert.ok(!(key in started.env));
   } finally {
     process.env = saved;
