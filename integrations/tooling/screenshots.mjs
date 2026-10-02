@@ -3,7 +3,7 @@
  * Takes the README's drive app screenshots (#49) into docs/screenshots/:
  *
  *   node integrations/tooling/link-atomic-server.mjs   # once, as in AGENTS.md
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]
  *
  * Starts atomic-server, the dev-server and the mock proxy (`pets` fixture) the
  * way run-lane.mjs does, on a fresh store, plus a static server for the
@@ -32,8 +32,20 @@ import { bringUp, mockProxyOrigin, serverCheckout } from './serve.mjs';
 
 process.env.RUST_LOG ??= 'warn';
 
-const SHOTS = ['pets', 'calendar', 'issue-tracker', 'money'];
-const wanted = process.argv.slice(2).length ? process.argv.slice(2) : SHOTS;
+const SHOTS = [
+  'pets',
+  'calendar',
+  'issue-tracker',
+  'money',
+  'notion',
+  'timesheets',
+  'notion-table',
+];
+/** Only taken when named: the README does not need them to be current. */
+const OPTIONAL = ['notion-table'];
+const wanted = process.argv.slice(2).length
+  ? process.argv.slice(2)
+  : SHOTS.filter(id => !OPTIONAL.includes(id));
 for (const id of wanted)
   if (!SHOTS.includes(id))
     throw new Error(`no screenshot ${id}; known: ${SHOTS.join(', ')}`);
