@@ -446,6 +446,7 @@ describe('a range edit after a sent one (#279)', () => {
     reconnect();
     await a.sync();
     await b.sync();
+
     for (const device of [a, b]) {
       const [conflict] = local(device);
       expect(conflict).toMatchObject({ from: at(9), to: at(10) });
@@ -456,6 +457,7 @@ describe('a range edit after a sent one (#279)', () => {
       for (const change of device.changes().review)
         expect(change.blockers).toContain(HELD_BY_CONFLICT);
     }
+
     await a.send();
     expect(t.writes()).toHaveLength(3);
   });
