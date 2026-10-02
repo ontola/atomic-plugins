@@ -71,6 +71,31 @@ the pull fails and `server-build.mjs` builds from source. The binary is linked
 against glibc 2.36, which this Ubuntu 24.04 host satisfies. Name every
 container you start with a `worker-` prefix and remove only those.
 
+## Docker on the shared host
+
+- Name every container `worker-<topic>-…`. Remove only containers with that
+  prefix, plus the anonymous volumes they created (`docker inspect` lists
+  them). On 2026-10-02 a worker removed a dangling volume that wasn't its own
+  (#227): it was unattached, so nothing running lost data, but it could have
+  been another session's.
+- Never `docker system prune`, `docker volume prune` or `docker image prune`,
+  and don't remove an image you didn't pull for your own run.
+- Hands off `usertest-moderator`, `usertest-collector` and `atomic-plugins`
+  ([Shared server](#shared-server-hands-off)).
+- Publish ports on `127.0.0.1` only.
+- **This VPS's firewall drops traffic from Docker bridge networks to the
+  host.** A peer on the default bridge can't reach atomic-server on the host,
+  so peer harnesses use `--network host`, with every listener on 127.0.0.1 in
+  the 199xx range: Mastodon, Akkoma and Nextcloud
+  (`integrations/fediverse/e2e/mastodon.mjs` and `akkoma.mjs`,
+  `integrations/open-cloud-mesh/e2e/nextcloud.mjs`), and the remoteStorage
+  API suite container. The Bluesky PDS harness (`integrations/atproto/e2e/pds.ts`)
+  instead puts its TLS terminator in the PDS container's network namespace
+  and relays to atomic-server over a Unix socket.
+- Stop a harness's containers when the run ends. `FEDIVERSE_MASTODON_KEEP=1`
+  and `FEDIVERSE_AKKOMA_KEEP=1` leave the stack up on purpose; stop it
+  yourself afterwards.
+
 ## Heavy runs
 
 One machine, 15 GB RAM: any e2e tier and any cargo build runs one at a time,
@@ -82,7 +107,11 @@ flock /home/claude/.cache/atomic-plugins/heavy.lock \
   node integrations/tooling/run-lane.mjs calendar --tier e2e
 ```
 
-`flock` waits until the holder exits. Unit, typecheck and node tiers, lint and
+`flock` waits until the holder exits. With three or four workers the lock is
+the throughput bottleneck, and a worker waiting an hour for it is normal
+(2026-10-02), not a hang: don't kill it or start a second build. When
+choosing what to run in parallel, mix e2e-heavy tasks with unit-only or
+documentation-only ones instead of starting four e2e-heavy workers. Unit, typecheck and node tiers, lint and
 `oxfmt` don't need it. Lane ports (19xxx) are fine to use; see below for the
 ports that are not.
 
@@ -91,8 +120,8 @@ ports that are not.
 The token on this host lacks the `workflow` scope, so a push that adds or
 changes a file under `.github/workflows/` is refused. Don't edit those files.
 When CI needs a change (a new test file in `ci.yml`'s list, say), put the
-patch in the PR description or on #227 and make the code work without it;
-Michiel or a session with the scope applies it. See also
+patch, or the staged workflow file, in the PR body (or on #227) and make the
+code work without it; Michiel or a session with the scope applies it. See also
 [ci-and-merging.md](ci-and-merging.md).
 
 ## Shared server, hands off
