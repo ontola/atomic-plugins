@@ -7,9 +7,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SEEDED_REPOSITORY } from '../fixtures/github-issues/scenario.mjs';
 import { createController } from './controller.js';
-import { fakeStore, type FakeStore } from './fakeStore.js';
+import { fakeStore, TABLE, type FakeStore } from './fakeStore.js';
 import { view } from './main.js';
-import { ISSUE_V1 } from './tracker.js';
+import { ISSUE_V1, NAME } from './tracker.js';
 
 const wait = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
@@ -290,6 +290,41 @@ describe('issue detail', () => {
     await settle(root);
     expect(cardOf(root, '#2').textContent).toContain('Export as CSV and JSON');
     expect(root.textContent).toContain('1 change waiting to send');
+  });
+
+  it('shows a row missing its Name as incomplete, with Open row and no Publish (#177)', async () => {
+    const store = fakeStore();
+    const c = createController(store);
+    await c.load();
+    await c.choose(SEEDED_REPOSITORY);
+    const [bound] = [...store.resources.entries()].find(
+      ([, p]) => p[NAME] === 'Export the board as CSV',
+    )!;
+    store.edit(bound, { [NAME]: '' });
+    const local = await store.newResource({
+      parent: TABLE,
+      isA: [ISSUE_V1],
+      propVals: {},
+    });
+    const { root } = await mount({ store, bind: false });
+
+    const card = cardOf(root, '#2');
+    expect(card.textContent).toContain('(no title)');
+    expect(card.textContent).toContain('Incomplete: missing Name');
+    const hand = cardOf(root, 'Local');
+    expect(hand.textContent).toContain('Incomplete: missing Name');
+    expect(root.textContent).not.toContain('waiting to send');
+
+    hand.click();
+    expect(q(root, '[data-key=incomplete-note]').textContent).toContain(
+      'Incomplete: missing Name. It is not sent to GitHub until it is complete.',
+    );
+    expect(q<HTMLButtonElement>(root, '[data-key=publish]').disabled).toBe(
+      true,
+    );
+    q<HTMLButtonElement>(root, '[data-key=open-row]').click();
+    expect(store.openedRows).toEqual([local.subject]);
+    expect(openIssues(store)).toEqual(['open', 'open']);
   });
 
   it('changes status from the segmented control', async () => {

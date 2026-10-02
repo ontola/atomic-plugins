@@ -226,6 +226,51 @@ group('GitHub issues drive app', () => {
     });
   });
 
+  it('shows a row missing its Name as incomplete and sends nothing for it, without failing the pass (#177)', async () => {
+    const { store, controller } = await bound();
+    const number = property(store, 'github-issue-number');
+    const [issue] = rows(store).find(([, p]) => p[number] === 1)!;
+    // The Name column cleared in the host table, with a status edit.
+    store.edit(issue, { [NAME]: '', [TASK_STATUS]: [TASK_TAGS.Done] });
+    // A row made in the table without a name, asked to publish.
+    const local = await store.newResource({
+      parent: TABLE,
+      isA: [ISSUE_V1],
+      propVals: { [TASK_STATUS]: [TASK_TAGS.Todo] },
+    });
+    const state = ready(await controller.publish(local.subject));
+    expect(state.problem).toBeUndefined();
+    expect(state.last!.result.held).toEqual([]);
+    const byRow = new Map(state.last!.result.rows.map(r => [r.subject, r]));
+    expect(byRow.size).toBe(3);
+    expect(byRow.get(issue)).toMatchObject({
+      number: 1,
+      title: '',
+      status: 'Todo',
+      incomplete: 'Incomplete: missing Name',
+    });
+    expect(byRow.get(local.subject)).toMatchObject({
+      title: '',
+      incomplete: 'Incomplete: missing Name',
+    });
+    expect(byRow.get(local.subject)!.number).toBeUndefined();
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+    expect(store.calls.every(c => (c.method ?? 'GET') === 'GET')).toBe(true);
+
+    // Completed in the table: the edits are held for review as usual, and
+    // the publish asked for earlier goes ahead.
+    store.edit(issue, { [NAME]: 'Keep the selected calendar after refresh' });
+    store.edit(local.subject, { [NAME]: 'Named now' });
+    const held = ready(await controller.sync());
+    expect(held.last!.result.rows.some(r => r.incomplete)).toBe(false);
+    expect(held.last!.result.held.map(describeHeld).sort()).toEqual([
+      'Create issue “Named now” (Todo)',
+      'Update #1: status Todo → Done (close it)',
+    ]);
+  });
+
   it('settles into unchanged passes when the host never shows the app’s own saves', async () => {
     const store = fakeStore();
     store.lagReads = 1_000_000;

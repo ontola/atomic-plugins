@@ -81,6 +81,8 @@ export interface FakeStore extends PluginStore {
   readonly counts: Record<string, number>;
   /** URLs passed to openExternal. */
   readonly opened: string[];
+  /** Subjects passed to openResource. */
+  readonly openedRows: string[];
   readonly disconnected: string[];
   /** The person switching the host between light and dark. */
   setScheme(scheme: ColorScheme): void;
@@ -351,6 +353,7 @@ export function fakeStore({
   const counts: Record<string, number> = {};
   const count = (name: string) => (counts[name] = (counts[name] ?? 0) + 1);
   const opened: string[] = [];
+  const openedRows: string[] = [];
 
   const fake: FakeStore = {
     resources,
@@ -462,6 +465,7 @@ export function fakeStore({
     },
     counts,
     opened,
+    openedRows,
     disconnected: [],
     setScheme(value) {
       scheme = value;
@@ -492,6 +496,9 @@ export function fakeStore({
             return { status: 'opened' as const };
           },
           async openResource(subject: string) {
+            count('openResource');
+            openedRows.push(subject);
+
             return { status: 'opened' as const, subject };
           },
           getTheme: () => ({ colorScheme: scheme }),

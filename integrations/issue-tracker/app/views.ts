@@ -143,7 +143,18 @@ export interface Actions {
   syncTable(): void;
   /** Back to not synced, before a repository was chosen there. */
   notNow(): void;
+  /** Shows a row in the host (`store.openResource`), to complete it there. */
+  openRow?(subject: string): void;
 }
+
+/** A row's title as the board shows it; an incomplete one has none. */
+const titleOf = (row: IssueRow) => row.title || '(no title)';
+
+/** The warning tag of a row missing a required field (#177). */
+const incompleteTag = (row: IssueRow) =>
+  row.incomplete
+    ? h('span', { class: 'incomplete-tag' }, row.incomplete)
+    : null;
 
 const GLYPH: Record<Status, Glyph> = {
   Todo: 'todo',
@@ -886,7 +897,8 @@ function card(
   marks: Map<string, Marker>,
   actions: Actions,
 ): HTMLElement {
-  const movable = canMove(state) && !state.busy;
+  // An incomplete row is not moved here: nothing of it is synced (#177).
+  const movable = canMove(state) && !state.busy && !row.incomplete;
   const menuId = `move:${row.subject}`;
   const open = ui.menu === menuId;
   const selected =
@@ -930,7 +942,8 @@ function card(
           : null,
         marker(marks.get(row.subject)),
       ),
-      h('span', { class: 'card-title' }, row.title),
+      h('span', { class: 'card-title' }, titleOf(row)),
+      incompleteTag(row),
       row.labels.length || row.comments.length
         ? h('span', { class: 'card-foot' }, chipsFor(row, 3), commentCount(row))
         : null,
@@ -1153,7 +1166,8 @@ function list(state: Ready, ui: Ui, actions: Actions): HTMLElement {
                         short(row.updatedAt, ui.now),
                       ),
                     ),
-                    h('span', { class: 'row-title' }, row.title),
+                    h('span', { class: 'row-title' }, titleOf(row)),
+                    incompleteTag(row),
                     row.labels.length || row.comments.length
                       ? h(
                           'span',
@@ -1163,7 +1177,9 @@ function list(state: Ready, ui: Ui, actions: Actions): HTMLElement {
                         )
                       : null,
                   ),
-                  open ? moveMenu(row, actions, movable) : null,
+                  open
+                    ? moveMenu(row, actions, movable && !row.incomplete)
+                    : null,
                 );
               }),
             )
@@ -1582,7 +1598,7 @@ function issueDetail(
       statusControl(
         row.status,
         s => s !== row.status && actions.move(row.subject, s, 'menu'),
-        !movable || !!state.busy,
+        !movable || !!state.busy || !!row.incomplete,
       ),
       h('span', { class: 'd-k' }, 'Labels'),
       h(
@@ -1605,6 +1621,24 @@ function issueDetail(
     row.statusAsIs
       ? h('p', { class: 'ro-note' }, icon('info', 14), `${asIsText(row)}.`)
       : null,
+    row.incomplete
+      ? h(
+          'div',
+          { class: 'ro-note', 'data-key': 'incomplete-note' },
+          icon('warn', 14),
+          h(
+            'span',
+            null,
+            `${row.incomplete}. ${bound ? 'Nothing of it is sent to GitHub, and GitHub’s changes to it are not applied, until it is complete.' : 'It is not sent to GitHub until it is complete.'} Give it a title here, or fill the Name column in the table.`,
+          ),
+          actions.openRow
+            ? button('Open row', () => actions.openRow!(row.subject), {
+                sm: true,
+                'data-key': 'open-row',
+              })
+            : null,
+        )
+      : null,
     row.localOnly
       ? h(
           'div',
@@ -1618,7 +1652,7 @@ function issueDetail(
           button('Publish to GitHub', () => actions.publish(row.subject), {
             sm: true,
             kind: 'primary',
-            disabled: !!state.busy,
+            disabled: !!state.busy || !!row.incomplete,
             'data-key': 'publish',
           }),
         )
@@ -1782,6 +1816,7 @@ function reviewDetail(
 ): HTMLElement[] {
   const held = state.last?.result.held ?? [];
   const n = held.length;
+  const incomplete = (state.last?.result.rows ?? []).filter(r => r.incomplete);
 
   return [
     detailBar('Waiting to send', mode, actions),
@@ -1805,6 +1840,15 @@ function reviewDetail(
             'ol',
             { class: 'review' },
             held.map(x => h('li', null, describeHeld(x))),
+          )
+        : null,
+      incomplete.length
+        ? h(
+            'p',
+            { class: 'fine', 'data-key': 'review-incomplete' },
+            `Not synced until complete: ${incomplete
+              .map(r => `${refOf(r)} ${titleOf(r)} (${r.incomplete})`)
+              .join('; ')}.`,
           )
         : null,
     ),

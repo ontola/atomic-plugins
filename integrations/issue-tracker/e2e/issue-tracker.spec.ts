@@ -54,7 +54,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const REPOSITORY = 'atomic-fixture/tracker';
 /** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
 const TEAM_REPOSITORY = 'atomic-fixture/team-board';
@@ -468,6 +468,14 @@ test.describe('GitHub issues drive app', () => {
           },
         });
         await row.save();
+        // A row missing the class's required Name (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped, never synced).
+        const nameless = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [`${task}/status`]: [`${task}/doing`] },
+        });
+        await nameless.save();
 
         return made.subject;
       },
@@ -491,6 +499,9 @@ test.describe('GitHub issues drive app', () => {
     await expect(
       app.getByText('Team issues isn’t synced with GitHub.'),
     ).toBeVisible({ timeout: 45_000 });
+    // The nameless row is on the board, marked, with the rest of the table.
+    await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
+    await expect(app.getByText('Plan the offsite')).toBeVisible();
     await app
       .getByRole('button', { name: 'Sync this table to GitHub' })
       .click();
@@ -537,17 +548,27 @@ test.describe('GitHub issues drive app', () => {
         (r[IS_A] as unknown[] | undefined)?.includes(issueV1),
       );
     const rows = await issueRows();
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(rows.map(r => r['github-issue-number']).sort()).toEqual([
       1,
       2,
       undefined,
+      undefined,
     ]);
 
-    for (const row of rows.filter(r => r[NAME] !== 'Plan the offsite')) {
+    for (const row of rows.filter(
+      r => r['github-issue-number'] !== undefined,
+    )) {
       expect(row[IS_A]).toEqual([issueV1]);
       expect(row['github-sync-baseline']).toEqual(expect.any(String));
     }
+
+    // The incomplete row stayed as it was: not sent, still marked.
+    const nameless = rows.find(
+      r => r[NAME] === undefined && r['github-issue-number'] === undefined,
+    )!;
+    expect(nameless).not.toHaveProperty('github-sync-baseline');
+    await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
 
     expect(rows.find(r => r[NAME] === 'Plan the offsite')).not.toHaveProperty(
       'github-issue-number',
