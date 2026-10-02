@@ -582,7 +582,13 @@ describe('createApiClient local-first writes', () => {
     const created = await client.create('/pets', { name: 'Milo', tag: 'cat' });
     expect(await client.get('/pets', created['id'] as string)).toEqual(created);
     expect(client.pendingWrites('/pets')).toEqual([
-      { resource: '/pets', id: created['id'], type: 'create', attempts: 0 },
+      {
+        resource: '/pets',
+        id: created['id'],
+        type: 'create',
+        attempts: 0,
+        state: 'pending',
+      },
     ]);
 
     const id = created['id'] as string;

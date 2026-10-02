@@ -73,10 +73,9 @@ when PUT is absent. Both currently send JSON records, not JSON Patch documents.
 Writes retry with exponential backoff, unlimited by default; set
 `retry.maxAttempts` to bound attempts. The queue, acknowledgements and identity
 remapping are in memory. Persisting records alone does not preserve pending
-writes across restart. Failure classification, uncertain-create recovery,
-durable outboxes and same-field conflict resolution remain work in
-[#260](https://github.com/ontola/atomic-plugins/issues/260). A lost successful
-POST response may still lead to a duplicate on retry.
+writes across restart. A durable outbox, restart recovery and finer
+transient/permanent failure classification remain work in
+[#260](https://github.com/ontola/atomic-plugins/issues/260).
 
 ```ts
 const pet = await client.create('/pets', { name: 'Milo', tag: 'cat' });
@@ -85,6 +84,84 @@ const pet = await client.create('/pets', { name: 'Milo', tag: 'cat' });
 
 client.pendingWrites('/pets'); // writes not yet confirmed by the server
 ```
+
+Each entry of `pendingWrites()` has a `state`:
+
+| `state` | Meaning | What the client does |
+| --- | --- | --- |
+| `pending` | Queued, in flight or waiting for a retry | Retries automatically |
+| `uncertain` | A create may or may not have reached the server | Nothing, until `resolveWrite` |
+| `failed` | Retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` or a new write to the record |
+
+### Refresh during a pending update
+
+A refresh (`sync()`) never hides a pending local edit: the visible record is
+the newest confirmed remote record with the pending changes replayed on top.
+When a refresh shows that a field with a pending update also changed remotely
+(its remote value differs both from the value the client had confirmed when
+the edit was made and from the local value), the client records a conflict.
+The local value stays visible, the queued write still sends it (local wins on
+acknowledgement), and the conflict is observable in two ways:
+
+```ts
+const client = createApiClient(doc, {
+  onConflict: ({ resource, id, field, base, remote, local }) => {
+    // called once per newly observed remote value
+  },
+});
+client.pendingWrites('/pets')[0]?.conflicts; // [{ field, base, remote, local, ... }]
+```
+
+The conflict is listed until its write settles or is discarded, and is
+dropped if a later refresh shows the remote value equal to the local one. To
+keep the remote value instead, call `update` again with it. Not covered: a
+remote deletion under a pending update (the edit stays visible and is sent),
+conflicts that arrive only in a write's own response, and deletes.
+
+### Uncertain creates
+
+POST is not idempotent in general, so the client does not resend a create
+whose outcome it cannot know. A create becomes `uncertain`, and is not retried
+automatically, when:
+
+- the transport throws, so no response arrived (the request may have been
+  processed; this includes errors raised by an `authenticate` adapter);
+- the server answered 2xx but the body is not JSON or has no record identity;
+- the server answered a 5xx other than 503, which can follow a committed create
+  (a gateway error or timeout, for example).
+
+A 503 or 429 conventionally means the request was not processed, and other 4xx
+responses mean it was refused; those keep the automatic backoff retry. Updates
+(PUT, or PATCH with the full record) and deletes are resent as before. This
+classification is a convention, not a guarantee: a provider that commits a
+create and then answers 503 can still get a duplicate.
+
+Writes to the same record queue behind an uncertain create. The local record
+stays visible. Settle it with `resolveWrite`:
+
+```ts
+await client.sync(); // look for the record on the server
+const local = client.pendingWrites('/pets').find((w) => w.state === 'uncertain');
+// The app decides what "the same record" means, for example by field values:
+if (local)
+  await client.resolveWrite('/pets', local.id, { action: 'confirm', id: 'server-id' });
+// or: { action: 'retry' }   send the POST again (may duplicate)
+// or: { action: 'discard' } drop it and the writes queued behind it
+```
+
+`confirm` moves the local record and its queued follow-up writes to the server
+id without sending anything. `retry` and `discard` also apply to a `failed`
+write; a failed write that is retried is queued behind any newer writes to the
+record.
+
+When the create operation (or its path item) declares an `Idempotency-Key`
+header parameter, the client sends a fresh key with each create and reuses it
+on every retry, and an uncertain create is retried automatically instead. Set
+`idempotencyKeyHeader: 'X-Some-Header'` to use another header for every create
+when the provider documents one elsewhere, or `false` to never send one. Whether
+the provider actually deduplicates on that key is the provider's contract; it is
+not verified here. A 2xx response with an unusable body stays `uncertain`
+even with a key.
 
 ## One engine in Node and browsers
 
@@ -271,7 +348,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   environment credentials with supplied auth adapters; optional original
   read-response storage; scoped nested collections and POST lists; pending
   intent preserved during refresh and older acknowledgements; incomplete
-  collections no longer prune the local replica.
+  collections no longer prune the local replica. `pendingWrites()` entries
+  gain `state` and `conflicts`; same-field refresh conflicts are reported
+  (`onConflict`); ambiguous creates become `uncertain` instead of being
+  resent, with `resolveWrite` to retry, discard or confirm them, and
+  `Idempotency-Key` retries (`idempotencyKeyHeader`).
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with

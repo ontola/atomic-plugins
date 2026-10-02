@@ -1,5 +1,5 @@
 import { discoverResources } from '../resources/discover.js';
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, ParameterObject } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
@@ -67,6 +67,22 @@ export interface ApiClientOptions {
    * global `id` the payload also carries).
    */
   identityField?: string;
+  /**
+   * Request header that carries an idempotency key on creates. By default the
+   * client uses a header parameter named `Idempotency-Key` (any case) that
+   * the create operation (or its path item) declares. A string forces that
+   * header name for every create; `false` disables idempotency keys. With a
+   * key, a create whose outcome is uncertain is retried automatically with the
+   * same key; without one it becomes `uncertain` and waits for `resolveWrite`.
+   */
+  idempotencyKeyHeader?: string | false;
+  /**
+   * Called when a refresh shows that a field with a pending local update
+   * also changed remotely. The pending local value stays visible and is the
+   * one the queued write sends; the conflict is also listed on
+   * `pendingWrites()` until that write settles or is discarded.
+   */
+  onConflict?: (conflict: WriteConflict) => void;
 }
 
 export interface PaginateOptions {
@@ -99,6 +115,47 @@ export interface PollingHandle {
 
 export type PendingWriteType = 'create' | 'update' | 'delete';
 
+/**
+ * - `pending`: queued, in flight, or waiting for an automatic retry.
+ * - `uncertain`: a create may or may not have been applied by the server (the
+ *   response was lost, unusable, or a 5xx other than 503) and no idempotency
+ *   key makes a resend safe. It is not retried automatically; later writes to
+ *   the same record wait behind it until `resolveWrite` is called.
+ * - `failed`: automatic retries stopped at `retry.maxAttempts`.
+ */
+export type PendingWriteState = 'pending' | 'uncertain' | 'failed';
+
+/** A field that changed remotely while a local update to it was pending. */
+export interface WriteConflict {
+  resource: string;
+  id: string;
+  context?: Record<string, string>;
+  field: string;
+  /** The confirmed remote value when the local update was made (or last compared). */
+  base: unknown;
+  /** The value the latest refresh returned. */
+  remote: unknown;
+  /** The pending local value, which stays visible. */
+  local: unknown;
+}
+
+/**
+ * How to settle an `uncertain` or `failed` write:
+ * - `retry`: send it again (an uncertain create may then duplicate the record
+ *   on a provider without idempotency support; that is the caller's decision).
+ *   A `failed` write is queued again behind any writes for the record.
+ * - `discard`: drop it locally; the visible record falls back to confirmed
+ *   remote state. Discarding an uncertain create also drops the writes queued
+ *   behind it for that record.
+ * - `confirm` (uncertain creates only): the create did reach the server as
+ *   record `id`, for instance as found by a refresh. The local record and any
+ *   queued follow-up writes move to that id; nothing is resent.
+ */
+export type WriteResolution =
+  | { action: 'retry' }
+  | { action: 'discard' }
+  | { action: 'confirm'; id: string };
+
 export interface PendingWriteInfo {
   resource: string;
   /** The id the write is filed under locally. For an unsettled `create`, this is the client-generated id, not (yet) whatever the server assigns. */
@@ -116,6 +173,9 @@ export interface PendingWriteInfo {
   attempts: number;
   /** The most recent failure, if at least one attempt has failed. */
   lastError?: string;
+  state: PendingWriteState;
+  /** For updates: fields that also changed remotely since the edit was made. */
+  conflicts?: WriteConflict[];
 }
 
 export interface ApiClient {
@@ -176,6 +236,17 @@ export interface ApiClient {
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
+   * Settles the `uncertain` or `failed` write for record `id` (see
+   * `WriteResolution`). Throws if that record has no such write; a write that
+   * is `pending` cannot be resolved this way.
+   */
+  resolveWrite(
+    resource: string,
+    id: string,
+    resolution: WriteResolution,
+    context?: Record<string, string>,
+  ): Promise<void>;
+  /**
    * Fetches every item from a GET or POST list operation at `path`, walking every
    * page per its resolved pagination scheme (explicit `x-pagination` or
    * auto-detected from `components.paginationSchemes`). `path` need not be
@@ -235,6 +306,7 @@ interface ClientRoute {
   createPath?: string;
   updateMethod?: 'PUT' | 'PATCH';
   deletePath?: string;
+  idempotencyHeader?: string;
 }
 
 interface QueuedWrite {
@@ -247,12 +319,65 @@ interface QueuedWrite {
   changes?: Record<string, unknown>;
   attempts: number;
   lastError?: string;
+  state: PendingWriteState;
+  /** Confirmed remote values of the changed fields, for conflict detection. */
+  base?: Record<string, unknown>;
+  conflicts?: Map<string, WriteConflict>;
+  idempotencyKey?: string;
+  /** Set by `resolveWrite` confirm: settle without sending. */
+  confirmedId?: string;
 }
 
 type WriteOutcome =
   | { status: 'succeeded'; resolvedId: string }
   | { status: 'retry'; delayMs: number }
+  | { status: 'uncertain' }
   | { status: 'gaveUp' };
+
+/** The server answered with a non-2xx status. */
+class HttpStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+/** The server answered 2xx, so it applied the write, but the body is unusable. */
+class UnusableResponseError extends Error {}
+
+/**
+ * Whether a failed create may have been applied server-side. No response at
+ * all (the transport threw), an unusable 2xx body, and 5xx responses other
+ * than 503 count as uncertain: a gateway error or timeout can follow a
+ * committed create. 503 and 429 conventionally mean the request was not
+ * processed, and other 4xx responses mean it was refused, so those keep the
+ * ordinary retry path.
+ */
+function mayHaveApplied(error: unknown): boolean {
+  if (error instanceof HttpStatusError)
+    return error.status >= 500 && error.status !== 503;
+  return true;
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function declaredIdempotencyHeader(
+  document: OpenApiDocument,
+  path: string,
+): string | undefined {
+  const item = document.paths[path];
+  const parameters = [
+    ...((item?.['parameters'] as ParameterObject[] | undefined) ?? []),
+    ...(item?.post?.parameters ?? []),
+  ];
+  return parameters.find(
+    (p) => p.in === 'header' && /^idempotency-key$/i.test(p.name),
+  )?.name;
+}
 
 function clientRoutes(
   document: OpenApiDocument,
@@ -290,6 +415,9 @@ function clientRoutes(
           route.deletePath = path;
       }
     }
+    const header =
+      route.createPath && declaredIdempotencyHeader(document, route.createPath);
+    if (header) route.idempotencyHeader = header;
     return route;
   });
 }
@@ -316,6 +444,11 @@ export function createApiClient(
       ? {}
       : { identityField: options.identityField };
   const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
+  for (const route of routes) {
+    if (options.idempotencyKeyHeader === false) delete route.idempotencyHeader;
+    else if (options.idempotencyKeyHeader && route.createPath)
+      route.idempotencyHeader = options.idempotencyKeyHeader;
+  }
   const byResource = new Map(routes.map((r) => [r.collection.name, r]));
   if (byResource.size !== routes.length)
     throw new Error('Collection names must be unique across resources');
@@ -412,16 +545,37 @@ export function createApiClient(
   async function requestJson(request: TransportRequest): Promise<unknown> {
     const response = await transport(request);
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(
+      throw new HttpStatusError(
         `Request to ${request.url.pathname} failed with status ${response.status}`,
+        response.status,
       );
     }
-    return response.body ? JSON.parse(response.body) : undefined;
+    try {
+      return response.body ? JSON.parse(response.body) : undefined;
+    } catch {
+      throw new UnusableResponseError(
+        `Response from ${request.url.pathname} is not JSON`,
+      );
+    }
+  }
+
+  function settled(write: QueuedWrite, resolvedId: string): WriteOutcome {
+    revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
+    conditionalCache.clear();
+    return { status: 'succeeded', resolvedId };
   }
 
   async function attemptWrite(write: QueuedWrite): Promise<WriteOutcome> {
     const route = write.route;
     const idField = route.collection.idField;
+    if (write.confirmedId !== undefined) {
+      const resolvedId = write.confirmedId;
+      const records = remote(write.scope);
+      if (!records.has(resolvedId))
+        records.set(resolvedId, { ...write.data, [idField]: resolvedId });
+      if (resolvedId !== write.id) records.delete(write.id);
+      return settled(write, resolvedId);
+    }
     try {
       let resolvedId = write.id;
       if (write.type === 'delete') {
@@ -455,29 +609,42 @@ export function createApiClient(
             write.type === 'create'
               ? 'POST'
               : (route.updateMethod as 'PUT' | 'PATCH'),
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            ...(write.idempotencyKey && route.idempotencyHeader
+              ? { [route.idempotencyHeader]: write.idempotencyKey }
+              : {}),
+          },
           body: JSON.stringify(data),
         });
         if (write.type === 'create' && !isRecord(result)) {
-          throw new Error('Create response has no record');
+          throw new UnusableResponseError('Create response has no record');
         }
         const record = isRecord(result) ? result : data;
         if (!record) throw new Error('Write returned no record');
         if (write.type === 'create') {
           const id = record[idField];
           if (id === undefined || id === null || id === '')
-            throw new Error('Create response has no record identity');
+            throw new UnusableResponseError(
+              'Create response has no record identity',
+            );
           resolvedId = String(id);
           if (resolvedId !== write.id) remote(write.scope).delete(write.id);
         }
         remote(write.scope).set(resolvedId, record);
       }
-      revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
-      conditionalCache.clear();
-      return { status: 'succeeded', resolvedId };
+      return settled(write, resolvedId);
     } catch (error) {
       write.attempts += 1;
       write.lastError = error instanceof Error ? error.message : String(error);
+      // An idempotency key makes a resend safe, except after a 2xx: the
+      // create happened, and a replay would return the same unusable body.
+      if (
+        write.type === 'create' &&
+        mayHaveApplied(error) &&
+        (!write.idempotencyKey || error instanceof UnusableResponseError)
+      )
+        return { status: 'uncertain' };
       if (
         retry.maxAttempts !== undefined &&
         write.attempts >= retry.maxAttempts
@@ -501,8 +668,13 @@ export function createApiClient(
       for (;;) {
         const queue = writeQueues.get(key);
         const write = queue?.[0];
-        if (!write) return;
+        // An uncertain create blocks its record until resolveWrite.
+        if (!write || write.state === 'uncertain') return;
         const outcome = await attemptWrite(write);
+        if (outcome.status === 'uncertain') {
+          write.state = 'uncertain';
+          return;
+        }
         if (outcome.status === 'retry') {
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, outcome.delayMs);
@@ -511,7 +683,10 @@ export function createApiClient(
           continue;
         }
         queue.shift();
-        if (outcome.status === 'gaveUp') gaveUpWrites.set(key, write);
+        if (outcome.status === 'gaveUp') {
+          write.state = 'failed';
+          gaveUpWrites.set(key, write);
+        }
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
           const oldId = write.id;
           const rest = queue
@@ -540,13 +715,52 @@ export function createApiClient(
     }
   }
 
-  function enqueue(write: Omit<QueuedWrite, 'attempts'>): void {
+  function enqueue(write: Omit<QueuedWrite, 'attempts' | 'state'>): void {
     const key = keyFor(write.scope, write.id);
     gaveUpWrites.delete(key);
     const queue = writeQueues.get(key) ?? [];
-    queue.push({ ...write, attempts: 0 });
+    queue.push({ ...write, attempts: 0, state: 'pending' });
     writeQueues.set(key, queue);
     if (!draining.has(key)) void drainQueue(key);
+  }
+
+  function detectConflicts(
+    scope: string,
+    records: Map<string, Record<string, unknown>>,
+  ): void {
+    const writes = [...writeQueues.values()]
+      .flat()
+      .concat([...gaveUpWrites.values()]);
+    for (const write of writes) {
+      if (write.scope !== scope || write.type !== 'update' || !write.base)
+        continue;
+      const next = records.get(write.id);
+      // A remote deletion under a pending update is not reported here.
+      if (!next) continue;
+      for (const [field, local] of Object.entries(write.changes ?? {})) {
+        const base = write.base[field];
+        if (sameValue(next[field], base)) continue;
+        write.base[field] = next[field];
+        write.conflicts ??= new Map();
+        if (sameValue(next[field], local)) {
+          write.conflicts.delete(field);
+          continue;
+        }
+        const conflict: WriteConflict = {
+          resource: write.route.collection.name,
+          id: write.id,
+          ...(Object.keys(write.context).length
+            ? { context: { ...write.context } }
+            : {}),
+          field,
+          base,
+          remote: next[field],
+          local,
+        };
+        write.conflicts.set(field, conflict);
+        options.onConflict?.(conflict);
+      }
+    }
   }
 
   const conditionalTransport: Transport = async (request) => {
@@ -619,6 +833,7 @@ export function createApiClient(
           ]),
         );
         confirmed.set(scope, records);
+        detectConflicts(scope, records);
         for (const id of records.keys()) before.add(id);
         for (const queue of writeQueues.values())
           for (const write of queue)
@@ -693,7 +908,17 @@ export function createApiClient(
           : String(data[route.collection.idField]);
       const record = { ...data, [route.collection.idField]: id };
       await storage.put(scope, id, record);
-      enqueue({ route, scope, context, id, type: 'create', data: record });
+      enqueue({
+        route,
+        scope,
+        context,
+        id,
+        type: 'create',
+        data: record,
+        ...(route.idempotencyHeader
+          ? { idempotencyKey: crypto.randomUUID() }
+          : {}),
+      });
       return record;
     },
     async update(
@@ -719,8 +944,23 @@ export function createApiClient(
       )
         remote(scope).set(id, existing);
       const record = { ...existing, ...data, [route.collection.idField]: id };
+      const confirmedRecord = remote(scope).get(id);
       await storage.put(scope, id, record);
-      enqueue({ route, scope, context, id, type: 'update', changes: data });
+      enqueue({
+        route,
+        scope,
+        context,
+        id,
+        type: 'update',
+        changes: data,
+        ...(confirmedRecord
+          ? {
+              base: Object.fromEntries(
+                Object.keys(data).map((f) => [f, confirmedRecord[f]]),
+              ),
+            }
+          : {}),
+      });
       return record;
     },
     async remove(resource, id, supplied): Promise<void> {
@@ -754,7 +994,48 @@ export function createApiClient(
             ? { context: { ...write.context } }
             : {}),
           ...(write.lastError ? { lastError: write.lastError } : {}),
+          state: write.state,
+          ...(write.conflicts?.size
+            ? {
+                conflicts: [...write.conflicts.values()].map((c) => ({
+                  ...c,
+                })),
+              }
+            : {}),
         }));
+    },
+    async resolveWrite(resource, id, resolution, supplied): Promise<void> {
+      const route = resolveRoute(resource);
+      const scope = scopeFor(route, contextFor(route, supplied));
+      const key = keyFor(scope, id);
+      const failed = gaveUpWrites.get(key);
+      const queue = writeQueues.get(key);
+      const head = queue?.[0];
+      if (failed) {
+        if (resolution.action === 'confirm')
+          throw new Error('Only an uncertain create can be confirmed');
+        gaveUpWrites.delete(key);
+        if (resolution.action === 'retry') {
+          const pending = writeQueues.get(key) ?? [];
+          pending.push({ ...failed, attempts: 0, state: 'pending' });
+          writeQueues.set(key, pending);
+          if (!draining.has(key)) void drainQueue(key);
+        }
+        await rebuild(scope, id);
+        return;
+      }
+      if (!queue || head?.state !== 'uncertain')
+        throw new Error(
+          `Record ${id} of ${resource} has no uncertain or failed write`,
+        );
+      if (resolution.action === 'discard') {
+        writeQueues.delete(key);
+        await rebuild(scope, id);
+        return;
+      }
+      if (resolution.action === 'confirm') head.confirmedId = resolution.id;
+      head.state = 'pending';
+      if (!draining.has(key)) void drainQueue(key);
     },
     async paginate(path, pagination = {}): Promise<Record<string, unknown>[]> {
       const matched = findRoute(Object.keys(doc.paths), path);

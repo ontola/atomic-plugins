@@ -115,11 +115,20 @@ Data flows through four stages, each its own directory under `src/`:
    It captures data-read responses only, including 304/errors/429 attempts.
    Hosts choose archival storage and retention; automatic replay is absent.
 
+   Pending updates record the confirmed values of the fields they change;
+   a refresh that shows another remote value for such a field records a
+   `WriteConflict` (on `pendingWrites()` and `onConflict`) while the local
+   value stays visible and is still sent. A create with no response, an
+   unusable 2xx body or a 5xx other than 503 becomes `uncertain` and is not
+   resent until `resolveWrite` (retry, discard, or confirm with the server
+   id), unless an `Idempotency-Key` header (declared on the create operation
+   or `idempotencyKeyHeader`) lets it retry with the same key. 429/503/4xx
+   keep the backoff retry. See the README's "Uncertain creates".
+
    Do not mistake a persistent record adapter or raw archive for a durable
    outbox. Queues, confirmed-state bookkeeping and mappings remain in memory;
-   retry classification, uncertain-create recovery, durable outboxes and
-   same-field conflict resolution remain #260 work. A lost successful POST
-   response can still duplicate a create on retry. A fully paginated list is
+   durable outboxes, restart recovery and finer transient/permanent failure
+   classification remain #260 work. A fully paginated list is
    not necessarily a consistent snapshot; the existing absence/pruning rule
    still depends on provider behavior.
 
@@ -209,6 +218,9 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 - `unit/client/unified.test.ts` covers custom transports, scoped metadata
   collections, POST paging, response capture, auth configuration and local
   intent across refresh/acknowledgement races.
+- `unit/client/pending-writes.test.ts` covers #260 gaps 1 and 2: same-field
+  conflicts during refresh, uncertain creates (lost responses, unusable 2xx,
+  5xx), their `resolveWrite` resolutions and idempotency-key retries.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination
