@@ -1,6 +1,11 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.1.0
+**Historical spec version:** 0.1.0
+
+The current specification is maintained in this repository at
+[`openapi-extensions/spec/pagination-schemes/README.md`](../../openapi-extensions/spec/pagination-schemes/README.md).
+This file preserves the earlier proposal; use the current specification when
+authoring or validating overlays.
 
 ---
 

@@ -158,6 +158,49 @@ Checks:
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
+## Reviewed standalone pagination variants
+
+These replacements use explicit operation selections and locate the returned
+item arrays through per-operation `response.envelope.itemsField` overrides.
+They add new `pagination-v2` filenames for the same pinned OADs; old files and
+dated catalog selections are unchanged. Select a v2 file instead of its v1
+variant when composing that provider's document.
+
+| Variant | Declared coverage | Sources |
+| --- | --- | --- |
+| [Slack v2](APIs/slack.com/1.7.0/pagination-v2-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml) | Four cursor reads: conversations list/members and users conversations/list. `channels` or `members` envelopes. | [Pagination](https://docs.slack.dev/apis/web-api/pagination/), [users.conversations](https://docs.slack.dev/reference/methods/users.conversations/) |
+| [DigitalOcean v2](APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 39 collections declaring a next link and item array in the pinned OAD. Includes droplets, projects, and repository listings. | [Links and pagination](https://docs.digitalocean.com/reference/api/reference/public-apis/) |
+
+Slack's overlay declares `response_metadata.next_cursor` as the continuation
+field and documents that a short page can still have another cursor. It does
+not impose a shared numeric limit on all methods. The pinned `users.list`
+OAD references `objs_response_metadata`, which puts its object fields under
+`items`; the overlay repairs only that operation's metadata reference using a
+new object schema following Slack's pagination documentation. History/replies,
+classic paging and other undeclared response shapes are outside this variant.
+
+DigitalOcean's overlay follows the complete `links.pages.next` URL, preserving
+its query parameters, including repository `page_token` values. It does not
+infer a next page from `page`/`per_page` alone: the pinned individual volume
+action read has those parameters but no collection envelope or next link.
+Garbage-collection listings likewise have no declared next link in this OAD
+and remain outside this variant. The 39 selected operations have their item
+arrays and continuation fields checked against the pinned response schemas.
+
+These are documentation and composition checks as of 2026-10-02, not live
+provider certification. The metadata follows the
+[pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
+Run the schema and scope regressions without provider credentials:
+
+```sh
+python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
+```
+
+Omit `--directory` to download the two pinned OADs. CI uses the same full-history
+checkout as the pin validator. Every declared query field must exist, every
+continuation field must be declared, and each envelope must locate an array;
+the tests also preserve all request parameters, operations and security.
+
 ## Authenticated principal overlays
 
 The Google Calendar and GitHub Issues identity overlays add a current-principal
