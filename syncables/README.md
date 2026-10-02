@@ -1,9 +1,9 @@
 # syncables
 
-This code is open source and was produced by Michiel de Jong, using Claude as a tool.
-Michiel de Jong has signed off on all the code in this repo line-by-line (except for
-the lockfiles, which were produced by npm and pnpm), and Michiel de Jong is the
-publishing author in terms of copyright.
+This code is open source and is authored and maintained by Michiel de Jong,
+using Claude Code and Codex as tools. Michiel directs development and authorizes
+merges; the session logs record when he delegates review and merge decisions.
+Lockfiles are produced by npm and pnpm.
 This work was [funded by NLNet](https://nlnet.nl/project/TUBS/).
 
 Reads an OpenAPI document and gives you:
@@ -36,14 +36,16 @@ await client.sync(); // pulls every discovered resource collection into local st
 const pets = await client.list('/pets');
 ```
 
-A "resource" is any pair of an OpenAPI collection path and its matching
-item path, e.g. `/pets` and `/pets/{petId}`. Paths without that pairing
-(health checks, one-off actions, etc.) are served from their documented
-examples/schemas but aren't treated as syncable resources.
+When `components.crudResources` is present, the client and reader use its
+collection names, identity bindings and nested collection graph. Without
+that metadata, the client retains legacy discovery by paired collection
+and item paths, e.g. `/pets` and `/pets/{petId}`; the mock server still uses
+that legacy model. The browser reader requires CRUD metadata. This is a
+subset of CRUD Causality, not a complete implementation of its write semantics.
 
 ## Keeping in sync
 
-`sync()` is safe to call on a timer: it conditionally re-fetches using
+`sync()` can be called on a timer: it conditionally re-fetches using
 `ETag`/`Last-Modified` (or a fallback comparison against the previous sync
 when a server doesn't support conditional requests) and only touches local
 storage for items that actually changed.
@@ -63,7 +65,18 @@ handle.stop();
 
 `create`/`update`/`remove` are local-first: they update local storage
 immediately and return, then apply themselves against the server in the
-background, retrying on failure until they succeed.
+background. Confirmed provider state is separate from pending local intent;
+refreshes and older write responses replay remaining mutations rather than
+replacing newer local edits. Updates use the item's declared PUT, or PATCH
+when PUT is absent. Both currently send JSON records, not JSON Patch documents.
+
+Writes retry with exponential backoff, unlimited by default; set
+`retry.maxAttempts` to bound attempts. The queue, acknowledgements and identity
+remapping are in memory. Persisting records alone does not preserve pending
+writes across restart. Failure classification, uncertain-create recovery,
+durable outboxes and same-field conflict resolution remain work in
+[#260](https://github.com/ontola/atomic-plugins/issues/260). A lost successful
+POST response may still lead to a duplicate on retry.
 
 ```ts
 const pet = await client.create('/pets', { name: 'Milo', tag: 'cat' });
@@ -73,15 +86,132 @@ const pet = await client.create('/pets', { name: 'Milo', tag: 'cat' });
 client.pendingWrites('/pets'); // writes not yet confirmed by the server
 ```
 
+## One engine in Node and browsers
+
+The Node `syncables` and browser `syncables/browser` entries both export
+`createApiClient`, `readCollections`, `readPlatform` and the same transport
+contract. `readCollections` assembles unmodified provider records per bound
+collection and marks each result `complete` or incomplete with an error.
+`readPlatform` uses it and adds ontology/datatype interpretation. The local
+replica uses it to refresh storage. `paginate` (Node: `paginateOperation`)
+and `client.paginate` share the same page walker.
+
+| Capability | Node entry | Browser entry |
+| --- | --- | --- |
+| One-off raw/typed collection reads | Yes | Yes |
+| Local-first client, CRUD and polling | Yes | Yes |
+| Custom transport or direct fetch for the client | Yes | Yes |
+| Constructor credentials and auth adapters | Yes | Yes |
+| Environment credential fallback | Yes | No |
+| Optional raw read-response storage hook | Yes | Yes |
+| Mock HTTP server and file/YAML loaders | Yes | No |
+
+An explicit `baseUrl` overrides the document's server. Paths are appended to
+its base path, matching the browser reader (for example, base `/v3` plus
+`/calendars`). Legacy callers using an origin-only base keep the same URLs.
+
+```ts
+import { createApiClient } from 'syncables/browser'; // also exported by 'syncables'
+
+const client = createApiClient(document, {
+  transport: hostTransport, // proxy, direct HTTP, or a deterministic test transport
+  storage: recordStorage,  // optional; default is in memory
+  constants: { workspaceId: 'example-workspace' }, // required root bindings, if any
+});
+await client.sync();
+const events = await client.list('events', { calendarId: 'example-calendar' });
+await client.update('events', 'example-event', { summary: 'Changed' }, {
+  calendarId: 'example-calendar',
+});
+```
+
+Collection names identify metadata-driven resources; a unique collection URL
+is also accepted. Legacy resources retain their path names. Per-call context
+binds nested collections; `constants` supplies defaults. The storage resource
+key for a nested collection is `JSON.stringify([collectionName, contextValues])`,
+where values follow the collection's path-variable order. Equal IDs under
+different parents stay separate. Collection names must be globally unique.
+CRUD metadata is authoritative when supplied. Creates use a declared POST
+on a GET collection or an explicit POST `x-crud` create operation; a POST
+list is never automatically treated as a create. Unsupported writes are
+refused before changing local storage.
+
+Client reads now use the same default request/record/time limits and bounded
+429 handling as the reader, replacing the old silent 50-page stop. A failed,
+malformed or budget-limited collection does not replace or prune its local
+copy; other complete collections may still refresh before `sync()` rejects.
+`readCollections` and `readPlatform` retain partial results for one-off imports.
+Full-list absence still follows the existing client deletion rule; reaching
+the last page does not prove the provider offered a consistent snapshot.
+
+## Transports and direct authentication
+
+`transport` handles every client GET/POST/PUT/PATCH/DELETE. Without it, the
+client adapts `options.fetch` or global `fetch`; supplying both `transport`
+and `fetch` is an error. Integration-proxy is optional. A transport that
+already authenticates needs no credential options.
+
+```ts
+import { apiKeyAuth, createApiClient } from 'syncables';
+
+const client = createApiClient(document, {
+  credentials: { apiKey: 'application-key' },
+  authenticate: apiKeyAuth('X-API-Key'), // or apiKeyAuth('key', 'query')
+});
+```
+
+The Node constructor falls back to `SYNCABLES_API_KEY`,
+`SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
+`SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
+`credentialPrefix: 'SECOND_'` selects a different prefix;
+`credentialPrefix: false` disables fallback. `credentialsFromEnv(explicit,
+prefix)` is also exported by the Node entry. The browser entry never reads
+environment variables.
+
+`bearerAuth` adds a supplied `accessToken`. For OAuth, supply
+`authenticate(request, credentials)`: it receives the constructor/environment
+`clientId` and `clientSecret` and returns an authenticated request, possibly
+after obtaining/refreshing a user token. OAuth consent, grant selection and
+token persistence are the adapter's responsibility; loading application
+credentials alone does not log a user in. Credentials without an authentication
+adapter are rejected. Keep confidential client credentials in server-side
+configuration. Authentication happens after the data-read capture boundary.
+
+## Optional raw read-response storage
+
+```ts
+const client = createApiClient(document, {
+  transport,
+  storeResponse: async (response) => responseArchive.append(response),
+});
+```
+
+`storeResponse` also works on `readCollections`, `readPlatform`, and standalone
+`paginate`. It is awaited before parsing a response and receives the original
+response body text, pre-authentication URL/method/list request body, status,
+receive time and these response headers when present: Content-Type, ETag,
+Last-Modified, Link and Retry-After. It captures each read response, including
+429 attempts, errors and actual 304 responses; the client's cached body is
+used only for collection assembly. It does not capture write or OAuth-token
+responses. No request headers, cookies or authorization response headers are
+saved. A supplied transport must return provider responses in this contract;
+Syncables cannot recover information the transport already transformed.
+
+The caller supplies storage and retention (latest responses or history).
+The body remains the text returned by the transport, before JSON parsing,
+field filtering or date conversion; it is not original HTTP wire bytes. A
+capture failure fails that collection read. Raw archives do not persist the
+mutation queue or provide an automatic replay/resume mechanism.
+
 ## Reading in a browser: `syncables/browser`
 
-`syncables/browser` is the read path on its own, for code that runs in a
-browser or a sandboxed iframe. It imports no Node built-ins and no
-`js-yaml`, and it never calls `fetch` itself: every request goes through a
-`Transport` function you pass in, e.g. a plugin host's `request()` into an
-integration proxy. A test bundles it with esbuild `platform: 'browser'`
+`syncables/browser` provides the shared reader and local replica for code
+that runs in a browser or a sandboxed iframe. It imports no Node built-ins and no
+`js-yaml`. The one-off reader takes a `Transport` function, e.g. a plugin
+host's `request()` into an integration proxy; the client accepts that same
+transport or direct fetch. A test bundles it with esbuild `platform: 'browser'`
 and fails on any Node built-in import. It does not include the mock
-server, `createApiClient`, or the file-path loaders, so pass documents and
+server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
 
 ```ts
@@ -136,6 +266,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Shared browser/Node local-first client, resource traversal
+  and pagination; injected read/write transports; constructor and Node
+  environment credentials with supplied auth adapters; optional original
+  read-response storage; scoped nested collections and POST lists; pending
+  intent preserved during refresh and older acknowledgements; incomplete
+  collections no longer prune the local replica.
+
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with
   `buildBody` and body-field `offset`/`page` roles in `nextCursor`.
@@ -161,21 +298,25 @@ of the project's NLnet grant, which is split into two parts:
 
 ## Generative AI use
 
-syncables is developed collaboratively with **Claude Code** (Anthropic), an
-agentic coding assistant: a human directs the design and reviews, edits, and
-tests the changes it proposes before they're committed.
+syncables is developed with **Claude Code** (Anthropic) and **Codex** (OpenAI).
+The maintainer directs design and decides how changes are reviewed, tested and
+merged. Explicitly delegated agent review and merge decisions are recorded in
+the corresponding session log.
 
-As an NLnet-funded project, this follows
+As an NLnet-funded project, it records AI-assisted work with reference to
 [NLnet's Generative AI policy](https://nlnet.nl/foundation/policies/generativeAI/):
 
 - Commits produced with AI assistance carry a `Claude-Session: <url>`
-  trailer identifying the session that produced them.
+  trailer identifying the session that produced them. The legacy trailer name
+  is retained for compatibility; Codex commits also carry `Codex-Session`,
+  and the log names the actual tool/model. Codex session links may be local
+  `codex://threads/` links rather than public transcripts.
 - [`docs/ai-logs/`](docs/ai-logs) holds prompt/output disclosure logs for
   sessions going forward, redacted for secrets and personal information, per
   the policy's terms for a project that was already ongoing before the
   policy took effect (no retroactive backfill of every past session; known
   historical session links are indexed as pending in
   [`docs/ai-logs/pending-historical-sessions.md`](docs/ai-logs/pending-historical-sessions.md)).
-- AI-drafted content is reviewed and edited by a human before being
-  committed; it is not represented as unassisted human work.
+- AI-drafted content is identified as assisted work; the disclosure log
+  records the maintainer's review or delegation and the validation performed.
 

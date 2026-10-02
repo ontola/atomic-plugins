@@ -14,6 +14,7 @@ the code on `main` that day. Anything not checked is marked "not verified".
 | [pins.md](pins.md) | `.atomic-server-ref`, candidates, `claude/atomic-plugins-pin`, the pin-PR recipe |
 | [ci-and-merging.md](ci-and-merging.md) | the `CI` gate, reading check runs by head SHA, rule 12, stacked PRs, flaky tests, `build-sidecars` |
 | [catalog-and-pages.md](catalog-and-pages.md) | Pages is production, `enabled: false`, app versions, the byte-for-byte checks |
+| [build-vps.md](build-vps.md) | the build VPS `claude-build`: how to tell you are on it, paths, Docker, the heavy-run lock, the shared server, briefing a worker |
 | [usertest-droplet.md](usertest-droplet.md) | running the user-testing droplet: scripts, workflow, what needs Michiel's OK |
 | [proxy-release.md](proxy-release.md) | releasing `atomic-integration-proxy` and deploying localthought.io |
 

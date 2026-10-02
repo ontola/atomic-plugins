@@ -1,21 +1,34 @@
-import {
-  discoverResources,
-  type ResourceRoute,
-} from '../resources/discover.js';
-import type {
-  OpenApiDocument,
-  OperationObject,
-  SchemaObject,
-} from '../openapi/types.js';
+import { discoverResources } from '../resources/discover.js';
+import type { OpenApiDocument } from '../openapi/types.js';
+import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import { readCollections } from '../read/collections.js';
 import {
-  buildQuery,
-  nextCursor,
-  type PageCursor,
-} from '../pagination/request-builder.js';
-import { parsePaginationState } from '../pagination/response-parser.js';
-import { locateItemsField } from '../pagination/items.js';
+  discoverReadModel,
+  isRecord,
+  upstreamOf,
+  type QuerySelection,
+  type ReadCollection,
+} from '../read/model.js';
+import { bindPath, type ReadLimits } from '../read/pages.js';
+import { paginate as paginateOperation } from '../read/read.js';
+import {
+  fetchTransport,
+  type ListMethod,
+  type Transport,
+  type TransportRequest,
+  type TransportResponse,
+} from '../read/transport.js';
+import {
+  captureReadResponses,
+  type StoreReadResponse,
+} from '../read/responses.js';
+import {
+  authenticatedTransport,
+  type Authenticate,
+  type Credentials,
+} from './auth.js';
 import { InMemoryStorageAdapter, type StorageAdapter } from './storage.js';
 
 export interface RetryOptions {
@@ -28,7 +41,19 @@ export interface RetryOptions {
 }
 
 export interface ApiClientOptions {
-  baseUrl: string;
+  /** Defaults to document.servers[0].url. */
+  baseUrl?: string;
+  /** All reads and writes use this transport. Mutually exclusive with fetch. */
+  transport?: Transport;
+  credentials?: Credentials;
+  authenticate?: Authenticate;
+  /** Root path bindings; per-call context overrides these. */
+  constants?: Record<string, string>;
+  selection?: QuerySelection;
+  limits?: Partial<ReadLimits>;
+  sleep?: (ms: number) => Promise<void>;
+  /** Optional, awaited storage of original collection-read responses. */
+  storeResponse?: StoreReadResponse;
   storage?: StorageAdapter;
   fetch?: typeof fetch;
   retry?: RetryOptions;
@@ -36,7 +61,8 @@ export interface ApiClientOptions {
    * Record property that holds a resource's identity — the value used as the
    * local storage key, read back from a create response to reconcile the
    * server-assigned id, and substituted into the item URL's path variable.
-   * Defaults to `id`. Set this when the API addresses a resource by a
+   * For legacy path-pair discovery, defaults to `id`. CRUD metadata supplies
+   * each collection's identity field instead. Set this when a legacy API addresses a resource by a
    * different field (e.g. GitHub issues are keyed by `number`, not the
    * global `id` the payload also carries).
    */
@@ -46,10 +72,14 @@ export interface ApiClientOptions {
 export interface PaginateOptions {
   /** Page size to request. Falls back to the server's own default when omitted. */
   pageSize?: number;
+  method?: ListMethod;
+  pathParams?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: Record<string, unknown>;
 }
 
 export interface SyncResult {
-  /** Collection paths whose local copy was actually added to, updated, or pruned by this sync. */
+  /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
 }
 
@@ -74,6 +104,8 @@ export interface PendingWriteInfo {
   /** The id the write is filed under locally. For an unsettled `create`, this is the client-generated id, not (yet) whatever the server assigns. */
   id: string;
   type: PendingWriteType;
+  /** Bound collection context, present for nested collections. */
+  context?: Record<string, string>;
   /**
    * How many attempts to reach the server have failed so far. If
    * `ApiClientOptions.retry.maxAttempts` is set and reached, this stops
@@ -94,10 +126,14 @@ export interface ApiClient {
    * sync is still running. Returns a handle whose `stop()` cancels it.
    */
   startPolling(options: PollOptions): PollingHandle;
-  list(resource: string): Promise<Record<string, unknown>[]>;
+  list(
+    resource: string,
+    context?: Record<string, string>,
+  ): Promise<Record<string, unknown>[]>;
   get(
     resource: string,
     id: string,
+    context?: Record<string, string>,
   ): Promise<Record<string, unknown> | undefined>;
   /**
    * Writes `data` to local storage immediately, under a client-generated id
@@ -110,23 +146,29 @@ export interface ApiClient {
   create(
     resource: string,
     data: Record<string, unknown>,
+    context?: Record<string, string>,
   ): Promise<Record<string, unknown>>;
   /**
    * Merges `data` into the local copy of `id` immediately and returns
-   * without waiting on the network; the corresponding `PUT` is sent (and
+   * without waiting on the network; the declared `PUT` or `PATCH` is sent (and
    * retried on failure) in the background.
    */
   update(
     resource: string,
     id: string,
     data: Record<string, unknown>,
+    context?: Record<string, string>,
   ): Promise<Record<string, unknown>>;
   /**
    * Removes `id` from local storage immediately and returns without
    * waiting on the network; the corresponding `DELETE` is sent (and
    * retried on failure) in the background.
    */
-  remove(resource: string, id: string): Promise<void>;
+  remove(
+    resource: string,
+    id: string,
+    context?: Record<string, string>,
+  ): Promise<void>;
   /**
    * Writes not yet confirmed by the server, across every resource (or just
    * `resource`, if given) — local storage already reflects them, but the
@@ -134,11 +176,11 @@ export interface ApiClient {
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
-   * Fetches every item from a GET list operation at `path`, walking every
+   * Fetches every item from a GET or POST list operation at `path`, walking every
    * page per its resolved pagination scheme (explicit `x-pagination` or
    * auto-detected from `components.paginationSchemes`). `path` need not be
-   * a discovered resource — any GET operation in the document works, e.g.
-   * a search/listing endpoint with no paired item route.
+   * a discovered resource — any GET or POST operation in the document works,
+   * e.g. a search/listing endpoint with no paired item route. Defaults to GET.
    */
   paginate(
     path: string,
@@ -146,14 +188,6 @@ export interface ApiClient {
   ): Promise<Record<string, unknown>[]>;
 }
 
-const MAX_PAGES = 50;
-
-/**
- * Fields commonly used by real APIs to signal that a record changed,
- * checked in this order. When an item has none of these, its fingerprint
- * falls back to a full serialization, which still lets `hasChanges` detect
- * per-item edits without any server cooperation.
- */
 const CHANGE_INDICATOR_FIELDS = [
   'updatedAt',
   'updated_at',
@@ -196,30 +230,21 @@ function hasChanges(
   });
 }
 
-function extractItemsFromEnvelope(
-  body: Record<string, unknown>,
-  responseSchema: SchemaObject | undefined,
-): Record<string, unknown>[] {
-  const field = locateItemsField(responseSchema, undefined);
-  const items = field ? body[field] : undefined;
-  return Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (typeof timer.unref === 'function') {
-      timer.unref();
-    }
-  });
+interface ClientRoute {
+  collection: ReadCollection;
+  createPath?: string;
+  updateMethod?: 'PUT' | 'PATCH';
+  deletePath?: string;
 }
 
 interface QueuedWrite {
-  resource: string;
+  route: ClientRoute;
+  scope: string;
+  context: Record<string, string>;
   id: string;
   type: PendingWriteType;
-  /** The full record to send; unused for `delete`. */
   data?: Record<string, unknown>;
+  changes?: Record<string, unknown>;
   attempts: number;
   lastError?: string;
 }
@@ -229,476 +254,413 @@ type WriteOutcome =
   | { status: 'retry'; delayMs: number }
   | { status: 'gaveUp' };
 
-/**
- * Builds a client that talks to an API described by `document` and keeps
- * a local copy of each resource collection in `storage` (in-memory by
- * default). Reads serve from the local copy. Writes (`create`/`update`/
- * `remove`) are local-first: they update `storage` immediately and return,
- * then apply themselves against the server in the background, retrying on
- * failure — see `pendingWrites()` and each method's own docs.
- */
+function clientRoutes(
+  document: OpenApiDocument,
+  collections: ReadCollection[],
+): ClientRoute[] {
+  const legacy = document.components?.['crudResources'] === undefined;
+  const paired = new Map(
+    discoverResources(document.paths).map((r) => [r.collectionPath, r]),
+  );
+  return collections.map((collection) => {
+    const route: ClientRoute = { collection };
+    const item = collection.itemUrl
+      ? document.paths[collection.itemUrl]
+      : undefined;
+    if (
+      legacy ||
+      (collection.method === 'GET' && document.paths[collection.url]?.post)
+    ) {
+      route.createPath = collection.url;
+    }
+    if (item?.put) route.updateMethod = 'PUT';
+    else if (item?.patch) route.updateMethod = 'PATCH';
+    else if (legacy)
+      route.updateMethod = paired.get(collection.url)?.updateMethod ?? 'PUT';
+    if (collection.itemUrl && (legacy || item?.delete))
+      route.deletePath = collection.itemUrl;
+    for (const [path, entry] of Object.entries(document.paths)) {
+      for (const method of ['post', 'put', 'patch', 'delete'] as const) {
+        const crud = entry[method]?.['x-crud'];
+        if (!isRecord(crud) || crud['resource'] !== collection.resource)
+          continue;
+        if (method === 'post' && crud['action'] === 'create')
+          route.createPath = path;
+        if (method === 'delete' && crud['action'] === 'delete')
+          route.deletePath = path;
+      }
+    }
+    return route;
+  });
+}
+
+/** A browser-safe local replica. Transport/auth/storage are supplied at its boundaries. */
 export function createApiClient(
   document: OpenApiDocument,
-  options: ApiClientOptions,
+  options: ApiClientOptions = {},
 ): ApiClient {
+  if (options.transport && options.fetch)
+    throw new Error('Choose transport or fetch, not both');
+  const doc = resolveRefs(document);
+  if (options.baseUrl) doc['servers'] = [{ url: options.baseUrl }];
+  const upstream = upstreamOf(doc);
   const storage = options.storage ?? new InMemoryStorageAdapter();
-  const fetchImpl = options.fetch ?? fetch;
-  const idField = options.identityField ?? 'id';
-  const routes = discoverResources(document.paths);
-  const byResource = new Map(
-    routes.map((route) => [route.collectionPath, route]),
+  const transport = authenticatedTransport(
+    options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch),
+    options.credentials,
+    options.authenticate,
   );
-  // Keyed by exact request URL: the ETag/Last-Modified last seen for it, so
-  // the next sync can ask the server "has this changed?" via If-None-Match /
-  // If-Modified-Since instead of re-fetching the full body.
-  const conditionalCache = new Map<
-    string,
-    { etag?: string; lastModified?: string }
-  >();
-  // Keyed by collection path: the item list stored there as of the last
-  // sync, used both to fall back on for a 304 response and to diff against
-  // a fresh 200 response (see `hasChanges`).
+  const readTransport = captureReadResponses(transport, options.storeResponse);
+  const legacy =
+    options.identityField === undefined
+      ? {}
+      : { identityField: options.identityField };
+  const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
+  const byResource = new Map(routes.map((r) => [r.collection.name, r]));
+  if (byResource.size !== routes.length)
+    throw new Error('Collection names must be unique across resources');
+  const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
-
-  const retryOptions = {
+  const conditionalCache = new Map<string, TransportResponse>();
+  const writeQueues = new Map<string, QueuedWrite[]>();
+  const gaveUpWrites = new Map<string, QueuedWrite>();
+  const draining = new Set<string>();
+  const revisions = new Map<string, number>();
+  let syncing: Promise<SyncResult> | undefined;
+  const retry = {
     baseDelayMs: options.retry?.baseDelayMs ?? 200,
-    maxDelayMs: options.retry?.maxDelayMs ?? 30_000,
+    maxDelayMs: options.retry?.maxDelayMs ?? 30000,
     maxAttempts: options.retry?.maxAttempts,
   };
 
-  // Keyed by `${resource}:${id}`: writes still to be applied server-side
-  // for that record, oldest first. `drainQueue` processes each key's queue
-  // one write at a time (retrying in place before moving on) so writes to
-  // the same record land in the order they were made.
-  const writeQueues = new Map<string, QueuedWrite[]>();
-  const draining = new Set<string>();
-  // Writes that stopped retrying because `retryOptions.maxAttempts` was
-  // reached (by default retries never give up, so this stays empty).
-  // Kept only so `pendingWrites()` can still surface the failure; enqueuing
-  // a new write for the same record clears it.
-  const gaveUpWrites = new Map<string, QueuedWrite>();
-
-  function queueKey(resource: string, id: string): string {
-    return `${resource}:${id}`;
+  function resolveRoute(resource: string): ClientRoute {
+    const named = byResource.get(resource);
+    if (named) return named;
+    const matches = routes.filter((r) => r.collection.url === resource);
+    if (matches.length === 1 && matches[0]) return matches[0];
+    throw new Error(
+      `Unknown resource "${resource}". Known resources: ${[...byResource.keys()].join(', ')}`,
+    );
   }
 
-  function enqueueWrite(write: Omit<QueuedWrite, 'attempts'>): void {
-    const k = queueKey(write.resource, write.id);
-    gaveUpWrites.delete(k);
-    const queue = writeQueues.get(k) ?? [];
-    queue.push({ ...write, attempts: 0 });
-    writeQueues.set(k, queue);
-    if (!draining.has(k)) {
-      void drainQueue(k);
+  function contextFor(
+    route: ClientRoute,
+    context: Record<string, string> = {},
+  ): Record<string, string> {
+    const all = { ...options.constants, ...context };
+    // Validates missing values before a local write is accepted.
+    bindPath(route.collection.url, all);
+    return Object.fromEntries(
+      route.collection.contextParams.map((p) => [p, all[p] as string]),
+    );
+  }
+
+  function scopeFor(
+    route: ClientRoute,
+    context: Record<string, string>,
+  ): string {
+    return route.collection.contextParams.length
+      ? JSON.stringify([
+          route.collection.name,
+          route.collection.contextParams.map((p) => context[p]),
+        ])
+      : route.collection.name;
+  }
+
+  function keyFor(scope: string, id: string): string {
+    return JSON.stringify([scope, id]);
+  }
+
+  function remote(scope: string): Map<string, Record<string, unknown>> {
+    let records = confirmed.get(scope);
+    if (!records) {
+      records = new Map();
+      confirmed.set(scope, records);
     }
+    return records;
+  }
+
+  async function rebuild(scope: string, id: string): Promise<void> {
+    let value = remote(scope).get(id);
+    const key = keyFor(scope, id);
+    const abandoned = gaveUpWrites.get(key);
+    const pending = [
+      ...(abandoned ? [abandoned] : []),
+      ...(writeQueues.get(key) ?? []),
+    ];
+    for (const write of pending) {
+      if (write.type === 'create') value = write.data;
+      else if (write.type === 'update')
+        value = {
+          ...value,
+          ...write.changes,
+          [write.route.collection.idField]: id,
+        };
+      else value = undefined;
+    }
+    if (value) await storage.put(scope, id, value);
+    else await storage.delete(scope, id);
+  }
+
+  function target(path: string, context: Record<string, string>): URL {
+    const url = new URL(upstream);
+    url.pathname =
+      upstream.pathname.replace(/\/$/, '') + bindPath(path, context);
+    return url;
+  }
+
+  async function requestJson(request: TransportRequest): Promise<unknown> {
+    const response = await transport(request);
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(
+        `Request to ${request.url.pathname} failed with status ${response.status}`,
+      );
+    }
+    return response.body ? JSON.parse(response.body) : undefined;
   }
 
   async function attemptWrite(write: QueuedWrite): Promise<WriteOutcome> {
+    const route = write.route;
+    const idField = route.collection.idField;
     try {
-      if (write.type === 'create') {
-        const route = resolveRoute(write.resource);
-        const created = (await requestJson(collectionUrl(route), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(write.data),
-        })) as Record<string, unknown>;
-        const resolvedId = String(created[idField]);
-        if (resolvedId !== write.id) {
-          await storage.delete(write.resource, write.id);
+      let resolvedId = write.id;
+      if (write.type === 'delete') {
+        await requestJson({
+          url: target(route.deletePath as string, {
+            ...write.context,
+            [route.collection.itemParam ?? 'id']: write.id,
+          }),
+          method: 'DELETE',
+          headers: {},
+        });
+        remote(write.scope).delete(write.id);
+      } else {
+        const data =
+          write.type === 'create'
+            ? write.data
+            : {
+                ...remote(write.scope).get(write.id),
+                ...write.changes,
+                [idField]: write.id,
+              };
+        const result = await requestJson({
+          url:
+            write.type === 'create'
+              ? target(route.createPath as string, write.context)
+              : target(route.collection.itemUrl as string, {
+                  ...write.context,
+                  [route.collection.itemParam ?? 'id']: write.id,
+                }),
+          method:
+            write.type === 'create'
+              ? 'POST'
+              : (route.updateMethod as 'PUT' | 'PATCH'),
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        if (write.type === 'create' && !isRecord(result)) {
+          throw new Error('Create response has no record');
         }
-        await storage.put(write.resource, resolvedId, created);
-        return { status: 'succeeded', resolvedId };
+        const record = isRecord(result) ? result : data;
+        if (!record) throw new Error('Write returned no record');
+        if (write.type === 'create') {
+          const id = record[idField];
+          if (id === undefined || id === null || id === '')
+            throw new Error('Create response has no record identity');
+          resolvedId = String(id);
+          if (resolvedId !== write.id) remote(write.scope).delete(write.id);
+        }
+        remote(write.scope).set(resolvedId, record);
       }
-
-      if (write.type === 'update') {
-        const route = resolveRoute(write.resource);
-        const updated = (await requestJson(itemUrl(route, write.id), {
-          method: route.updateMethod,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(write.data),
-        })) as Record<string, unknown>;
-        await storage.put(write.resource, write.id, updated);
-        return { status: 'succeeded', resolvedId: write.id };
-      }
-
-      // A delete may be applying on behalf of a create that already
-      // reconciled onto a server-assigned id (see `drainQueue`), so make
-      // sure local storage doesn't still hold that record either.
-      await storage.delete(write.resource, write.id);
-      const route = resolveRoute(write.resource);
-      await requestJson(itemUrl(route, write.id), { method: 'DELETE' });
-      return { status: 'succeeded', resolvedId: write.id };
+      revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
+      conditionalCache.clear();
+      return { status: 'succeeded', resolvedId };
     } catch (error) {
       write.attempts += 1;
       write.lastError = error instanceof Error ? error.message : String(error);
       if (
-        retryOptions.maxAttempts !== undefined &&
-        write.attempts >= retryOptions.maxAttempts
-      ) {
+        retry.maxAttempts !== undefined &&
+        write.attempts >= retry.maxAttempts
+      )
         return { status: 'gaveUp' };
-      }
-      const delayMs = Math.min(
-        retryOptions.baseDelayMs * 2 ** (write.attempts - 1),
-        retryOptions.maxDelayMs,
-      );
-      return { status: 'retry', delayMs };
+      return {
+        status: 'retry',
+        delayMs: Math.min(
+          retry.baseDelayMs * 2 ** (write.attempts - 1),
+          retry.maxDelayMs,
+        ),
+      };
     }
   }
 
-  /**
-   * Applies queued writes for one record in order, retrying each in place
-   * (per `attemptWrite`'s backoff) before moving to the next. When a
-   * `create` at the head of the queue settles under a server-assigned id
-   * different from its local one, whatever is queued behind it is moved
-   * onto that id's queue instead — those writes were made against the
-   * record the create introduced, so they have to follow it.
-   */
   async function drainQueue(initialKey: string): Promise<void> {
-    let k = initialKey;
-    draining.add(k);
+    let key = initialKey;
+    let ownsQueue = true;
+    draining.add(key);
     try {
       for (;;) {
-        const queue = writeQueues.get(k);
+        const queue = writeQueues.get(key);
         const write = queue?.[0];
-        if (!write) {
-          writeQueues.delete(k);
-          return;
-        }
-
+        if (!write) return;
         const outcome = await attemptWrite(write);
         if (outcome.status === 'retry') {
-          await delay(outcome.delayMs);
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, outcome.delayMs);
+            if (typeof timer.unref === 'function') timer.unref();
+          });
           continue;
         }
-
         queue.shift();
-        if (outcome.status === 'gaveUp') {
-          gaveUpWrites.set(k, write);
-        }
+        if (outcome.status === 'gaveUp') gaveUpWrites.set(key, write);
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
-          const rest = queue.splice(0);
-          writeQueues.delete(k);
-          draining.delete(k);
-          k = queueKey(write.resource, outcome.resolvedId);
-          draining.add(k);
-          const existing = writeQueues.get(k) ?? [];
-          writeQueues.set(k, [
-            ...existing,
-            ...rest.map((item) => ({ ...item, id: outcome.resolvedId })),
-          ]);
-          continue;
-        }
-
-        if (queue.length === 0) {
-          writeQueues.delete(k);
+          const oldId = write.id;
+          const rest = queue
+            .splice(0)
+            .map((pending) => ({ ...pending, id: outcome.resolvedId }));
+          writeQueues.delete(key);
+          draining.delete(key);
+          key = keyFor(write.scope, outcome.resolvedId);
+          // Keep the array owned by an in-flight worker: replacing it would
+          // leave that worker acknowledging a different queue and resend its head.
+          const existing = writeQueues.get(key) ?? [];
+          existing.push(...rest);
+          writeQueues.set(key, existing);
+          ownsQueue = !draining.has(key);
+          if (ownsQueue) draining.add(key);
+          await rebuild(write.scope, oldId);
+          await rebuild(write.scope, outcome.resolvedId);
+          if (!ownsQueue) return;
+        } else {
+          await rebuild(write.scope, write.id);
+          if (!queue.length) writeQueues.delete(key);
         }
       }
     } finally {
-      draining.delete(k);
+      if (ownsQueue) draining.delete(key);
     }
   }
 
-  function resolveRoute(resource: string): ResourceRoute {
-    const route = byResource.get(resource);
-    if (!route) {
-      throw new Error(
-        `Unknown resource "${resource}". Known resources: ${[...byResource.keys()].join(', ')}`,
-      );
-    }
-    return route;
+  function enqueue(write: Omit<QueuedWrite, 'attempts'>): void {
+    const key = keyFor(write.scope, write.id);
+    gaveUpWrites.delete(key);
+    const queue = writeQueues.get(key) ?? [];
+    queue.push({ ...write, attempts: 0 });
+    writeQueues.set(key, queue);
+    if (!draining.has(key)) void drainQueue(key);
   }
 
-  function collectionUrl(route: ResourceRoute): string {
-    return new URL(route.collectionPath, options.baseUrl).toString();
-  }
-
-  function itemUrl(route: ResourceRoute, id: string): string {
-    const path = route.itemPath.replace(
-      `{${route.itemParam}}`,
-      encodeURIComponent(id),
+  const conditionalTransport: Transport = async (request) => {
+    const path = request.url.pathname.slice(
+      upstream.pathname.replace(/\/$/, '').length,
     );
-    return new URL(path, options.baseUrl).toString();
-  }
-
-  async function requestJson(
-    url: string,
-    init?: RequestInit,
-  ): Promise<unknown> {
-    const response = await fetchImpl(url, init);
-    if (response.status === 204) {
-      return undefined;
-    }
-    if (!response.ok) {
-      throw new Error(
-        `Request to ${url} failed with status ${response.status}`,
-      );
-    }
-    const text = await response.text();
-    return text ? JSON.parse(text) : undefined;
-  }
-
-  async function requestJsonWithHeaders(url: string): Promise<{
-    body: Record<string, unknown>;
-    headers: Record<string, string>;
-  }> {
-    const response = await fetchImpl(url);
-    if (!response.ok) {
-      throw new Error(
-        `Request to ${url} failed with status ${response.status}`,
-      );
-    }
-    const text = await response.text();
-    const parsed = text ? JSON.parse(text) : {};
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      headers[key] = value;
-    });
-    return {
-      body: parsed && typeof parsed === 'object' ? parsed : {},
-      headers,
+    const matched = findRoute(Object.keys(doc.paths), path);
+    const operation = matched ? doc.paths[matched.template]?.get : undefined;
+    const cacheable =
+      request.method === 'GET' &&
+      !resolveEffectiveScheme(doc, operation ?? { responses: {} });
+    const key = request.url.href;
+    const cached = cacheable ? conditionalCache.get(key) : undefined;
+    const headers = { ...request.headers };
+    if (cached?.headers['etag'])
+      headers['if-none-match'] = cached.headers['etag'];
+    if (cached?.headers['last-modified'])
+      headers['if-modified-since'] = cached.headers['last-modified'];
+    const raw = await readTransport({ ...request, headers });
+    const response = {
+      ...raw,
+      headers: Object.fromEntries(
+        Object.entries(raw.headers).map(([k, v]) => [k.toLowerCase(), v]),
+      ),
     };
-  }
+    if (response.status === 304 && cached) return cached;
+    if (cacheable && response.status === 200)
+      conditionalCache.set(key, response);
+    return response;
+  };
 
-  /**
-   * Fetches a resource's collection, conditionally: sends If-None-Match /
-   * If-Modified-Since from a prior response (if any), and on a 304 returns
-   * the item list last stored for it instead of re-parsing a body. Only
-   * used for the non-paginated case, since it's the one `sync()` can
-   * meaningfully short-circuit — pagination has already been walked and
-   * assembled by the time a scheme applies.
-   */
-  async function fetchCollectionSnapshot(
-    route: ResourceRoute,
-    operation: OperationObject | undefined,
-  ): Promise<{ items: Record<string, unknown>[]; notModified: boolean }> {
-    const url = collectionUrl(route);
-    const responseSchema =
-      operation?.responses['200']?.content?.['application/json']?.schema;
-    const cached = conditionalCache.get(url);
-    const headers: Record<string, string> = {};
-    if (cached?.etag) {
-      headers['If-None-Match'] = cached.etag;
-    }
-    if (cached?.lastModified) {
-      headers['If-Modified-Since'] = cached.lastModified;
-    }
-
-    const response = await fetchImpl(
-      url,
-      Object.keys(headers).length > 0 ? { headers } : undefined,
-    );
-
-    if (response.status === 304) {
-      return {
-        items: lastSyncedItems.get(route.collectionPath) ?? [],
-        notModified: true,
-      };
-    }
-    if (!response.ok) {
-      throw new Error(
-        `Request to ${url} failed with status ${response.status}`,
-      );
-    }
-
-    const etag = response.headers.get('etag');
-    const lastModified = response.headers.get('last-modified');
-    if (etag || lastModified) {
-      conditionalCache.set(url, {
-        ...(etag ? { etag } : {}),
-        ...(lastModified ? { lastModified } : {}),
-      });
-    } else {
-      conditionalCache.delete(url);
-    }
-
-    const text = await response.text();
-    const body: unknown = text ? JSON.parse(text) : {};
-    const items = Array.isArray(body)
-      ? (body as Record<string, unknown>[])
-      : extractItemsFromEnvelope(
-          body as Record<string, unknown>,
-          responseSchema,
-        );
-
-    return { items, notModified: false };
-  }
-
-  function findGetOperation(
-    path: string,
-  ): { operation: OperationObject; template: string } | undefined {
-    const match = findRoute(Object.keys(document.paths), path);
-    if (!match) {
-      return undefined;
-    }
-    const operation = document.paths[match.template]?.get;
-    return operation ? { operation, template: match.template } : undefined;
-  }
-
-  /**
-   * Fetches every item from a GET operation, following its resolved
-   * pagination scheme across pages. When no scheme applies, falls back to
-   * a single request, still attempting to locate the items in an
-   * enveloped (non-array) response body.
-   */
-  async function fetchAllItems(
-    path: string,
-    operation: OperationObject,
-    pageSize: number | undefined,
-  ): Promise<Record<string, unknown>[]> {
-    const responseSchema =
-      operation.responses['200']?.content?.['application/json']?.schema;
-    const effective = resolveEffectiveScheme(document, operation);
-
-    if (!effective) {
-      const { body } = await requestJsonWithHeaders(
-        new URL(path, options.baseUrl).toString(),
-      );
-      if (Array.isArray(body)) {
-        return body as Record<string, unknown>[];
-      }
-      const field = locateItemsField(responseSchema, undefined);
-      const items = field ? body[field] : undefined;
-      return Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
-    }
-
-    const { scheme } = effective;
-    const itemsField = locateItemsField(responseSchema, scheme);
-    const items: Record<string, unknown>[] = [];
-    let cursor: PageCursor = {};
-    let nextUrl: string | undefined;
-
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      let url = nextUrl;
-      if (!url) {
-        const target = new URL(path, options.baseUrl);
-        const query = buildQuery(scheme, cursor, pageSize);
-        for (const [key, value] of Object.entries(query)) {
-          target.searchParams.set(key, value);
-        }
-        url = target.toString();
-      }
-
-      const { body, headers } = await requestJsonWithHeaders(url);
-      // A top-level array body is itself the page of items (mirrors the
-      // non-paginated path); otherwise the items live under `itemsField`.
-      const pageItems = Array.isArray(body)
-        ? (body as Record<string, unknown>[])
-        : itemsField
-          ? body[itemsField]
-          : undefined;
-      if (Array.isArray(pageItems)) {
-        items.push(...(pageItems as Record<string, unknown>[]));
-      }
-
-      const state = parsePaginationState(scheme, body, headers, items.length);
-      if (!state.hasNextPage) {
-        break;
-      }
-
-      if (scheme.type === 'nextLink') {
-        if (!state.nextLink) {
-          break;
-        }
-        nextUrl = state.nextLink;
-      } else {
-        const next = nextCursor(
-          scheme,
-          cursor,
-          state,
-          Array.isArray(pageItems) ? pageItems.length : 0,
-        );
-        if (!next) {
-          break;
-        }
-        cursor = next;
-        nextUrl = undefined;
-      }
-    }
-
-    return items;
-  }
-
-  /**
-   * Syncs every discovered resource. For a non-paginated collection, this
-   * conditionally re-fetches (see `fetchCollectionSnapshot`) and, even on a
-   * fresh 200, only touches storage for items that actually changed
-   * (`hasChanges`) — so calling this repeatedly (e.g. from `startPolling`)
-   * doesn't rewrite unchanged local state. Paginated collections are always
-   * walked in full (pagination state can't be conditionally short-circuited
-   * the same way), but still only diff-write into storage.
-   */
   async function performSync(): Promise<SyncResult> {
-    const changed: string[] = [];
-    for (const route of byResource.values()) {
-      const operation = document.paths[route.collectionPath]?.get;
-      const isPaginated = operation
-        ? Boolean(resolveEffectiveScheme(document, operation))
-        : false;
-
-      const { items, notModified } = isPaginated
-        ? {
-            items: await fetchAllItems(
-              route.collectionPath,
-              operation as OperationObject,
-              undefined,
-            ),
-            notModified: false,
-          }
-        : await fetchCollectionSnapshot(route, operation);
-
-      if (notModified) {
+    const started = new Map(revisions);
+    const result = await readCollections(doc, {
+      transport: conditionalTransport,
+      constants: options.constants ?? {},
+      legacy,
+      ...(options.selection ? { selection: options.selection } : {}),
+      ...(options.limits ? { limits: options.limits } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
+    });
+    const changed = new Set<string>();
+    for (const snapshot of result.collections) {
+      if (!snapshot.complete) continue;
+      const route = byResource.get(snapshot.collection.name) as ClientRoute;
+      const context = contextFor(route, snapshot.pathParams);
+      const scope = scopeFor(route, context);
+      const previous = lastSyncedItems.get(scope);
+      const differs = hasChanges(
+        previous,
+        snapshot.items,
+        route.collection.idField,
+      );
+      const persisted = differs ? await storage.list(scope) : [];
+      // A write acknowledged after this read began is newer than this snapshot.
+      if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
+        if (differs) changed.add(route.collection.name);
         continue;
       }
-
-      const previous = lastSyncedItems.get(route.collectionPath);
-      if (hasChanges(previous, items, idField)) {
-        changed.push(route.collectionPath);
-        for (const item of items) {
-          await storage.put(route.collectionPath, String(item[idField]), item);
-        }
-        if (previous) {
-          const nextIds = new Set(items.map((item) => String(item[idField])));
-          for (const staleItem of previous) {
-            const staleId = String(staleItem[idField]);
-            if (!nextIds.has(staleId)) {
-              await storage.delete(route.collectionPath, staleId);
-            }
-          }
-        }
+      if (differs) {
+        // A reused adapter can contain records from before this client instance.
+        const before = new Set([
+          ...remote(scope).keys(),
+          ...persisted.map((item) => String(item[route.collection.idField])),
+        ]);
+        const records = new Map(
+          snapshot.items.map((item) => [
+            String(item[route.collection.idField]),
+            item,
+          ]),
+        );
+        confirmed.set(scope, records);
+        for (const id of records.keys()) before.add(id);
+        for (const queue of writeQueues.values())
+          for (const write of queue)
+            if (write.scope === scope) before.add(write.id);
+        for (const write of gaveUpWrites.values())
+          if (write.scope === scope) before.add(write.id);
+        for (const id of before) await rebuild(scope, id);
+        changed.add(route.collection.name);
+        lastSyncedItems.set(scope, snapshot.items);
       }
-      lastSyncedItems.set(route.collectionPath, items);
     }
-    return { changed };
+    if (result.errors.length)
+      throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
+    return { changed: [...changed] };
+  }
+
+  function sync(): Promise<SyncResult> {
+    syncing ??= performSync().finally(() => {
+      syncing = undefined;
+    });
+    return syncing;
   }
 
   return {
     resources: [...byResource.keys()],
-
-    sync: performSync,
-
+    sync,
     startPolling(pollOptions): PollingHandle {
       let stopped = false;
-      let syncInFlight = false;
-
+      let running = false;
       const tick = (): void => {
-        if (stopped || syncInFlight) {
-          return;
-        }
-        syncInFlight = true;
-        performSync()
-          .then((result) => pollOptions.onSync?.(result))
+        if (stopped || running) return;
+        running = true;
+        sync()
+          .then((r) => pollOptions.onSync?.(r))
           .catch((error: unknown) => pollOptions.onError?.(error))
           .finally(() => {
-            syncInFlight = false;
+            running = false;
           });
       };
-
       tick();
       const timer = setInterval(tick, pollOptions.intervalMs);
-      if (typeof timer.unref === 'function') {
-        timer.unref();
-      }
-
+      if (typeof timer.unref === 'function') timer.unref();
       return {
         stop(): void {
           stopped = true;
@@ -706,89 +668,116 @@ export function createApiClient(
         },
       };
     },
-
-    async list(resource): Promise<Record<string, unknown>[]> {
-      return storage.list(resolveRoute(resource).collectionPath);
-    },
-
-    async get(resource, id): Promise<Record<string, unknown> | undefined> {
-      return storage.get(resolveRoute(resource).collectionPath, id);
-    },
-
-    async create(resource, data): Promise<Record<string, unknown>> {
+    async list(resource, context): Promise<Record<string, unknown>[]> {
       const route = resolveRoute(resource);
+      return storage.list(scopeFor(route, contextFor(route, context)));
+    },
+    async get(
+      resource,
+      id,
+      context,
+    ): Promise<Record<string, unknown> | undefined> {
+      const route = resolveRoute(resource);
+      return storage.get(scopeFor(route, contextFor(route, context)), id);
+    },
+    async create(resource, data, supplied): Promise<Record<string, unknown>> {
+      const route = resolveRoute(resource);
+      if (!route.createPath)
+        throw new Error(`Resource ${resource} declares no create operation`);
+      const context = contextFor(route, supplied);
+      const scope = scopeFor(route, context);
+      target(route.createPath, context);
       const id =
-        typeof data[idField] === 'string'
-          ? (data[idField] as string)
-          : crypto.randomUUID();
-      const record = { ...data, [idField]: id };
-      await storage.put(route.collectionPath, id, record);
-      enqueueWrite({
-        resource: route.collectionPath,
-        id,
-        type: 'create',
-        data: record,
-      });
+        data[route.collection.idField] === undefined
+          ? crypto.randomUUID()
+          : String(data[route.collection.idField]);
+      const record = { ...data, [route.collection.idField]: id };
+      await storage.put(scope, id, record);
+      enqueue({ route, scope, context, id, type: 'create', data: record });
       return record;
     },
-
-    async update(resource, id, data): Promise<Record<string, unknown>> {
+    async update(
+      resource,
+      id,
+      data,
+      supplied,
+    ): Promise<Record<string, unknown>> {
       const route = resolveRoute(resource);
-      const existing = await storage.get(route.collectionPath, id);
-      const record = { ...existing, ...data, [idField]: id };
-      await storage.put(route.collectionPath, id, record);
-      enqueueWrite({
-        resource: route.collectionPath,
-        id,
-        type: 'update',
-        data: record,
+      if (!route.updateMethod || !route.collection.itemUrl)
+        throw new Error(`Resource ${resource} declares no update operation`);
+      const context = contextFor(route, supplied);
+      const scope = scopeFor(route, context);
+      target(route.collection.itemUrl, {
+        ...context,
+        [route.collection.itemParam ?? 'id']: id,
       });
+      const existing = await storage.get(scope, id);
+      if (
+        !remote(scope).has(id) &&
+        existing &&
+        !writeQueues.has(keyFor(scope, id))
+      )
+        remote(scope).set(id, existing);
+      const record = { ...existing, ...data, [route.collection.idField]: id };
+      await storage.put(scope, id, record);
+      enqueue({ route, scope, context, id, type: 'update', changes: data });
       return record;
     },
-
-    async remove(resource, id): Promise<void> {
+    async remove(resource, id, supplied): Promise<void> {
       const route = resolveRoute(resource);
-      await storage.delete(route.collectionPath, id);
-      enqueueWrite({ resource: route.collectionPath, id, type: 'delete' });
+      if (!route.deletePath)
+        throw new Error(`Resource ${resource} declares no delete operation`);
+      const context = contextFor(route, supplied);
+      const scope = scopeFor(route, context);
+      target(route.deletePath, {
+        ...context,
+        [route.collection.itemParam ?? 'id']: id,
+      });
+      await storage.delete(scope, id);
+      enqueue({ route, scope, context, id, type: 'delete' });
     },
-
     pendingWrites(resource): PendingWriteInfo[] {
-      const collectionPath = resource
-        ? resolveRoute(resource).collectionPath
+      const name = resource
+        ? resolveRoute(resource).collection.name
         : undefined;
-      const info: PendingWriteInfo[] = [];
-      const collect = (write: QueuedWrite): void => {
-        if (collectionPath && write.resource !== collectionPath) {
-          return;
-        }
-        info.push({
-          resource: write.resource,
+      const writes = [...writeQueues.values()]
+        .flat()
+        .concat([...gaveUpWrites.values()]);
+      return writes
+        .filter((w) => !name || w.route.collection.name === name)
+        .map((write) => ({
+          resource: write.route.collection.name,
           id: write.id,
           type: write.type,
           attempts: write.attempts,
+          ...(Object.keys(write.context).length
+            ? { context: { ...write.context } }
+            : {}),
           ...(write.lastError ? { lastError: write.lastError } : {}),
-        });
-      };
-      for (const queue of writeQueues.values()) {
-        for (const write of queue) {
-          collect(write);
-        }
-      }
-      for (const write of gaveUpWrites.values()) {
-        collect(write);
-      }
-      return info;
+        }));
     },
-
-    async paginate(
-      path,
-      paginateOptions = {},
-    ): Promise<Record<string, unknown>[]> {
-      const found = findGetOperation(path);
-      if (!found) {
-        throw new Error(`No GET operation found for path "${path}"`);
+    async paginate(path, pagination = {}): Promise<Record<string, unknown>[]> {
+      const matched = findRoute(Object.keys(doc.paths), path);
+      const template = doc.paths[path] ? path : matched?.template;
+      const method = pagination.method ?? 'GET';
+      if (
+        !template ||
+        !doc.paths[template]?.[method === 'GET' ? 'get' : 'post']
+      ) {
+        throw new Error(`No ${method} operation found for path "${path}"`);
       }
-      return fetchAllItems(path, found.operation, paginateOptions.pageSize);
+      return paginateOperation(doc, {
+        ...pagination,
+        path: template,
+        transport: readTransport,
+        pathParams: {
+          ...options.constants,
+          ...(doc.paths[path] ? {} : matched?.params),
+          ...pagination.pathParams,
+        },
+        ...(options.limits ? { limits: options.limits } : {}),
+        ...(options.sleep ? { sleep: options.sleep } : {}),
+      });
     },
   };
 }

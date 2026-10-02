@@ -1,5 +1,6 @@
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
+import { discoverResources } from '../resources/discover.js';
 
 /**
  * The collection model the read path walks, built from the OpenAPI CRUD
@@ -25,6 +26,10 @@ export interface ReadCollection {
   method: ListMethod;
   /** Fixed JSON body fields for a POST list, from `x-list-body`. */
   listBody: Record<string, unknown>;
+  /** Item URL from the declared identity; absent for a list-only resource. */
+  itemUrl?: string;
+  /** Path variable bound to this item's own identity. */
+  itemParam?: string;
 }
 
 /** Enumerate `collection` and read `field` off each item to fill a path variable. */
@@ -79,7 +84,27 @@ function listMethodOf(collection: Record<string, unknown>): ListMethod {
   return method;
 }
 
-export function discoverReadModel(document: OpenApiDocument): ReadModel {
+export function discoverReadModel(
+  document: OpenApiDocument,
+  legacy?: { identityField?: string },
+): ReadModel {
+  if (legacy && document.components?.['crudResources'] === undefined) {
+    return {
+      collections: discoverResources(document.paths).map((route) => ({
+        name: route.collectionPath,
+        resource: route.collectionPath,
+        url: route.collectionPath,
+        idField: legacy.identityField ?? 'id',
+        contextParams: pathVariables(route.collectionPath),
+        method: 'GET',
+        listQuery: {},
+        listBody: {},
+        itemUrl: route.itemPath,
+        itemParam: route.itemParam,
+      })),
+      providers: new Map(),
+    };
+  }
   const collections: ReadCollection[] = [];
   const firstCollection = new Map<string, string>();
   const bindings: { param: string; resource: string; field: string }[] = [];
@@ -102,6 +127,7 @@ export function discoverReadModel(document: OpenApiDocument): ReadModel {
           c['urlTemplate'].includes(`{${param}}`),
       );
     let idField = 'id';
+    let itemParam: string | undefined;
 
     const identityBindings = isRecord(identity['bindings'])
       ? identity['bindings']
@@ -116,6 +142,7 @@ export function discoverReadModel(document: OpenApiDocument): ReadModel {
       // parent-scoping context variable, is this resource's own id.
       if (itemUrl.includes(`{${param}}`) && !collectionUrlHas(param)) {
         idField = field;
+        itemParam = param;
       }
     }
 
@@ -143,6 +170,8 @@ export function discoverReadModel(document: OpenApiDocument): ReadModel {
         listBody: isRecord(col['x-list-body'])
           ? structuredClone(col['x-list-body'])
           : {},
+        ...(itemUrl ? { itemUrl } : {}),
+        ...(itemParam ? { itemParam } : {}),
       });
     }
   }

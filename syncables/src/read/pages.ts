@@ -251,7 +251,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
     const response = await budget.send(request);
     if (response.status < 200 || response.status >= 300) {
       throw new Error(
-        `${request.method} ${url.pathname} responded ${response.status}`,
+        `${request.method} ${url.pathname} responded ${response.status} (failed with status ${response.status})`,
       );
     }
     let body: unknown;

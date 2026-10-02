@@ -107,7 +107,7 @@ stylesheet.
 still has `store.proxy`, but its rotating connection codes are refused by
 the 0.2 proxy.
 
-**Install.** The `pets` catalog entry is a drive app entry (#94):
+**Install.** The `pets` catalog entry is a drive app entry (#94, closed):
 `app-module` is
 `https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js`, the
 committed `apps/pets/0.1.2/ui.js` (`app/build.mjs`'s output) as GitHub Pages

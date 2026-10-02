@@ -171,6 +171,8 @@ variant when composing that provider's document.
 | --- | --- | --- |
 | [Slack v2](APIs/slack.com/1.7.0/pagination-v2-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml) | Four cursor reads: conversations list/members and users conversations/list. `channels` or `members` envelopes. | [Pagination](https://docs.slack.dev/apis/web-api/pagination/), [users.conversations](https://docs.slack.dev/reference/methods/users.conversations/) |
 | [DigitalOcean v2](APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 39 collections declaring a next link and item array in the pinned OAD. Includes droplets, projects, and repository listings. | [Links and pagination](https://docs.digitalocean.com/reference/api/reference/public-apis/) |
+| [Notion v2](APIs/notion.com/2026-03-11/pagination-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Three list operations: POST search/data-source query and GET views. `results` envelopes, with distinct body and query cursor fields. | [Pagination](https://developers.notion.com/reference/intro#pagination), [Search](https://developers.notion.com/reference/post-search) |
+| [Spotify v2](APIs/spotify.com/1.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 19 single-collection reads, including nested albums/artists/categories/playlists and top-level items. | [API calls](https://developer.spotify.com/documentation/web-api/concepts/api-calls), [Categories](https://developer.spotify.com/documentation/web-api/reference/get-categories), [Followed artists](https://developer.spotify.com/documentation/web-api/reference/get-followed), [Recently played](https://developer.spotify.com/documentation/web-api/reference/get-recently-played) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -188,6 +190,24 @@ Garbage-collection listings likewise have no declared next link in this OAD
 and remain outside this variant. The 39 selected operations have their item
 arrays and continuation fields checked against the pinned response schemas.
 
+Notion's variant locates every list under `results`. Its two POST operations
+use a new optional request-body schema declaring `start_cursor` and an integer
+`page_size` from 1 to 100. The existing generic JSON object is retained through
+`allOf`, so filters, sorts and other body members remain permitted. GET views
+keeps its existing query parameters. Page creation and individual reads are
+outside the pagination selection.
+
+Spotify's variant follows returned `next` URLs for both offset and cursor
+collections. Separate schemes locate `items`, `albums.items`, `artists.items`,
+`categories.items` and `playlists.items`, with matching continuation fields.
+Nested schemes do not inherit nonexistent root `next` fields. The pinned
+`PagedCategories` response lacks an item array; a local specialization adds
+the documented `CategoryObject` array without changing the shared
+`PagingObject` schema. Search is excluded because its response can contain
+seven independently paged collections; recommendations have no next link.
+The variant targets the pinned 2022-11-15 OAD, and current Spotify access modes
+and deprecated endpoints still need separate live evidence.
+
 These are documentation and composition checks as of 2026-10-02, not live
 provider certification. The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
@@ -197,10 +217,12 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the two pinned OADs. CI uses the same full-history
-checkout as the pin validator. Every declared query field must exist, every
+Omit `--directory` to download the four pinned OADs. CI uses the same full-history
+checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
-the tests also preserve all request parameters, operations and security.
+the tests also preserve unrelated request parameters, operations and security.
+Notion body-schema cases check optional first-page requests, preserved extra
+fields, page-size bounds, and opaque cursor types.
 
 ## Authenticated principal overlays
 

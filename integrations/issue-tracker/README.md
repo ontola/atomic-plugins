@@ -332,7 +332,7 @@ replace them.
   is paused or failed the board still shows the table's rows.
 
 **Host behaviour it relies on or works around** (atomic-server `bae5cdbe3`,
-read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
+not re-read at the current pin `a12b74a`; read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 `app/frameStore.ts` has the detail):
 
 - No credential reaches the app's code: the bridge's `proxyTransport` runs
