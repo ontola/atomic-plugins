@@ -1,6 +1,6 @@
 #!/bin/sh
-# (Re)starts the voice moderator (server.mjs) on the droplet, as root:
-# `sh run.sh`. It reads the API key from /etc/anthropic.env and the invite
+# (Re)starts the voice moderator (server.mjs) on the user-testing server, as
+# root: `sh run.sh`. It reads the API key from /etc/anthropic.env and the invite
 # code from /etc/usertest-moderator.env (USERTEST_CODE=..., created on first
 # run). Sessions are kept in /var/lib/usertest-sessions/<id>/.
 # /etc/usertest-salt.env comes from ../collector/run.sh (run that first). With

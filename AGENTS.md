@@ -306,7 +306,7 @@ the rules; rule 12 lets a session merge its own atomic-plugins PR once the
 `CI` gate is green). The operational know-how those sessions need is in
 [`docs/agents/`](docs/agents/README.md): the working model and worker checks,
 pins and the pin-PR recipe, CI and merging, the catalog and Pages, the
-user-testing droplet, and releasing the integration proxy. Where the roles
+user-testing server, and releasing the integration proxy. Where the roles
 below and #227 disagree, #227 is newer.
 
 ### Roles

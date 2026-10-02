@@ -31,7 +31,7 @@
  * UTC day. A wrong or missing code gets 403 (and nothing else does), which
  * the page reports as a code problem; `GET /check` lets it test the code
  * when it loads. ANTHROPIC_API_KEY comes from the environment (/etc/anthropic.env
- * on the droplet, passed by run.sh) and never leaves this process.
+ * on the server, passed by run.sh) and never leaves this process.
  *
  * A turn only sees its own tester's log lines: the collector tags each line
  * with a salted hash of the sender's address, and a session remembers the

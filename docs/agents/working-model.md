@@ -30,9 +30,9 @@ authoritative):
 - **Invented data only** in fixtures, seeds, screenshots and recordings.
 - **Mic, camera and screen permission pages are tested headlessly** with fake
   media (see `usertest/e2e/run.mjs`), never opened in Michiel's browser.
-- **Outward actions beyond PRs and issue comments** (droplet or
+- **Outward actions beyond PRs and issue comments** (user-testing server or
   localthought.io deploys, publishing packages, posting outside these repos)
-  need Michiel's OK; see [usertest-droplet.md](usertest-droplet.md) and
+  need Michiel's OK; see [usertest-server.md](usertest-server.md) and
   [proxy-release.md](proxy-release.md) for what is standing.
 - **Push work in progress** to your own `claude/*` branch at least hourly.
 - **Rule 12:** an atomic-plugins PR with a green `CI` gate may be merged by
@@ -77,7 +77,7 @@ The `node --test` globs matched exactly the files CI lists by name on
 2026-09-30; a new test file runs in CI only once it is added to that list in
 `ci.yml`. oxlint
 must report 0 errors. `usertest/` changes: `node usertest/e2e/run.mjs` (not
-in CI; see [usertest-droplet.md](usertest-droplet.md)).
+in CI; see [usertest-server.md](usertest-server.md)).
 
 The rules each worker got, beyond the checks: fetch `origin/main` first; plan
 before code; keep a plugin inside its folder (shared code only in
