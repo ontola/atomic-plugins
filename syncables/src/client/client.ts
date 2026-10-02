@@ -176,11 +176,11 @@ export interface ApiClient {
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
-   * Fetches every item from a GET list operation at `path`, walking every
+   * Fetches every item from a GET or POST list operation at `path`, walking every
    * page per its resolved pagination scheme (explicit `x-pagination` or
    * auto-detected from `components.paginationSchemes`). `path` need not be
-   * a discovered resource — any GET operation in the document works, e.g.
-   * a search/listing endpoint with no paired item route.
+   * a discovered resource — any GET or POST operation in the document works,
+   * e.g. a search/listing endpoint with no paired item route. Defaults to GET.
    */
   paginate(
     path: string,
@@ -600,13 +600,18 @@ export function createApiClient(
         snapshot.items,
         route.collection.idField,
       );
+      const persisted = differs ? await storage.list(scope) : [];
       // A write acknowledged after this read began is newer than this snapshot.
       if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
         if (differs) changed.add(route.collection.name);
         continue;
       }
       if (differs) {
-        const before = new Set(remote(scope).keys());
+        // A reused adapter can contain records from before this client instance.
+        const before = new Set([
+          ...remote(scope).keys(),
+          ...persisted.map((item) => String(item[route.collection.idField])),
+        ]);
         const records = new Map(
           snapshot.items.map((item) => [
             String(item[route.collection.idField]),

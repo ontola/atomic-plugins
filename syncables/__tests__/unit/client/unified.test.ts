@@ -3,6 +3,7 @@ import {
   apiKeyAuth,
   bearerAuth,
   createApiClient,
+  InMemoryStorageAdapter,
   prepareDocument,
   readCollections,
   readPlatform,
@@ -57,6 +58,32 @@ afterEach(() => {
 });
 
 describe('shared transport and collection reads', () => {
+  it('prunes reused storage only after a complete collection read', async () => {
+    const storage = new InMemoryStorageAdapter();
+    await storage.put('/pets', 'removed', { id: 'removed' });
+    await storage.put('/pets', 'kept', { id: 'kept', name: 'old' });
+    let complete = false;
+    const client = createApiClient(document(), {
+      storage,
+      transport: async () =>
+        complete
+          ? response([{ id: 'kept', name: 'fresh' }])
+          : response({}, {}, 500),
+    });
+    await expect(client.sync()).rejects.toThrow('Read incomplete');
+    expect(await client.get('/pets', 'removed')).toEqual({ id: 'removed' });
+    complete = true;
+    await client.sync();
+    expect(await client.list('/pets')).toEqual([{ id: 'kept', name: 'fresh' }]);
+
+    const restarted = createApiClient(document(), {
+      storage,
+      transport: async () => response([]),
+    });
+    await restarted.sync();
+    expect(await restarted.list('/pets')).toEqual([]);
+  });
+
   it('honours shared read budgets without replacing an existing collection', async () => {
     const doc = document();
     doc.components!.paginationSchemes = {
