@@ -174,6 +174,54 @@ test.describe('README screenshots', () => {
     await shoot(page, 'notion');
   });
 
+  // Optional: not in the driver's default set (see SHOTS there).
+  test('notion-table', async ({ page }) => {
+    test.setTimeout(240_000);
+    const app = await installSample(page, 'notion', 'Notion (sample data)');
+    await waitForNotionSync(app);
+    await app.getByRole('button', { name: 'Open table' }).click();
+    const main = page.getByRole('main');
+    await expect(main.getByText('Launch plan').first()).toBeVisible({
+      timeout: 30_000,
+    });
+    // The lens also leaves its raw Page fields as columns, auto-named and
+    // empty, between the readable ones; scroll past them to the options.
+    // The lens also leaves its raw Page fields as columns, auto-named and
+    // empty, and the host's columns are 300 px wide: hide all but the
+    // readable name and the option columns.
+    const menu = page
+      .getByRole('menu')
+      .filter({ hasText: 'Toggle properties' });
+    const keep = ['Name', 'Status', 'Tags', 'Format'];
+    for (let round = 0; round < 40; round++) {
+      const headers = (await main.getByRole('columnheader').allInnerTexts())
+        .map(h => h.trim())
+        .filter(h => h !== '#');
+      // The first "Status" is Roadmap's; the second is the Reading list's.
+      const extra = headers.findIndex(
+        (h, i) => !keep.includes(h) || headers.indexOf(h) !== i,
+      );
+      if (extra < 0) break;
+      const name = headers[extra]!;
+      if (!(await menu.isVisible()))
+        await main.getByTitle('Toggle properties').click();
+      await expect(menu).toBeVisible();
+      await menu
+        .getByRole('menuitem', { name, exact: true })
+        .nth(headers.indexOf(name) === extra ? 0 : 1)
+        .click();
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+    }
+    // Close the sidebar, so the fourth column fits, and drop the focus ring.
+    await page
+      .getByRole('button', { name: /sidebar|menu/i })
+      .first()
+      .click();
+    await page.getByRole('heading', { name: 'Pages' }).click();
+    await shoot(page, 'notion-table');
+  });
+
   test('money', async ({ page }) => {
     test.setTimeout(300_000);
     const main = page.getByRole('main');
