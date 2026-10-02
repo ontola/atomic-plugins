@@ -102,10 +102,12 @@ const ICONS = {
   filter: stroke('M4 5h16l-6 7.5V19l-4-2v-4.5z', 1.4),
   server:
     '<rect x="4" y="4" width="16" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7.5 7.25h.01M7.5 16.75h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-  // Status glyphs (14px box): ring, half ring, filled check.
+  // Status glyphs (14px box): ring, half ring, barred ring, filled check.
   todo: '<circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/>',
   doing:
     '<circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 3.2 A3.8 3.8 0 0 1 7 10.8 Z" fill="currentColor"/>',
+  blocked:
+    '<circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.4 7h5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   done: '<circle cx="7" cy="7" r="6.25" fill="currentColor"/><path d="M4.3 7.2 6.2 9 9.8 5.2" fill="none" stroke="var(--pl-surface)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
 } as const;
 
@@ -117,6 +119,7 @@ const BOX: Partial<Record<IconName, number>> = {
   server: 24,
   todo: 14,
   doing: 14,
+  blocked: 14,
   done: 14,
 };
 

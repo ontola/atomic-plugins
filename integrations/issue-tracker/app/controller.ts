@@ -29,8 +29,11 @@ import {
   MESSAGE,
   NAME,
   PARENT,
+  STATUSES,
   boundRepository,
+  migrateRows,
   provision,
+  showsOwnTable,
   type Tracker,
 } from './tracker.js';
 import { listRepositories, PLATFORM, type Repository } from './transport.js';
@@ -87,6 +90,12 @@ export type RepositoryListing =
 export type ViewState =
   | { kind: 'loading' }
   | { kind: 'no-proxy' }
+  /**
+   * Shown on an Issue table the app did not make (it is offered there
+   * because it renders `issue-v1`). Syncing such a table with GitHub is
+   * not built yet (#177 H4, item 14).
+   */
+  | { kind: 'other-table' }
   | { kind: 'not-connected' }
   | { kind: 'connecting' }
   | {
@@ -155,8 +164,16 @@ export interface Controller {
   edit(subject: string, patch: Partial<IssueInput>): Promise<ViewState>;
   /** Adds a comment Message about the row, then syncs (held for review). */
   comment(subject: string, body: string): Promise<ViewState>;
-  /** Adds a row to the table; resolves with its subject once written. */
+  /**
+   * Adds a row to the table and asks to publish it, so the next pass holds
+   * its create for review; resolves with its subject once written.
+   */
   create(input: IssueInput): Promise<{ state: ViewState; subject?: string }>;
+  /**
+   * "Publish to GitHub" for a local-only row (#177 Q6): the next pass holds
+   * its create for review, like any write. Nothing is sent before that.
+   */
+  publish(subject: string): Promise<ViewState>;
   /**
    * For an issue GitHub no longer has (the paused `missing` problem): keep
    * it in the table only, or remove it from the board. Neither sends
@@ -195,7 +212,7 @@ const PAUSED: [RegExp, PausedReason][] = [
   [/^Recovered Atomic create was edited/, 'other'],
   [/^Conflict during saved operation/, 'other'],
   [/^Concurrent edit after write/, 'other'],
-  [/^Choose exactly one Todo\/Doing\/Done status/, 'other'],
+  [/^Choose exactly one Todo\/Doing\/Blocked\/Done status/, 'other'],
   [/^Invalid Atomic issue/, 'other'],
   [/^Atomic write (rejected|not acknowledged)/, 'rejected'],
   [/may only write its own data/, 'rejected'],
@@ -247,7 +264,7 @@ interface Session {
 const PROGRESS_MS = 250;
 
 const statusOf = (value: unknown): Status | undefined =>
-  value === 'Todo' || value === 'Doing' || value === 'Done' ? value : undefined;
+  STATUSES.includes(value as Status) ? (value as Status) : undefined;
 
 export function createController(
   store: PluginStore,
@@ -299,6 +316,31 @@ export function createController(
       overlay: new Map(),
     };
     prefs = { ...state.state.view };
+
+    // A table made by 0.1.x: its rows become issue-v1 rows in place, once,
+    // through the same frame store the passes use (#177 §5). The sync
+    // state is kept, so edits not yet sent are still found.
+    if (provisioned.legacy && state.state.migrated !== 'issue-v1') {
+      const frame = tableStore(session);
+      const { table, app } = provisioned.tracker;
+      await migrateRows(
+        {
+          list: async () =>
+            (
+              await frame.queryLocalDb({
+                drive: app,
+                property: PARENT,
+                value: table,
+              })
+            ).subjects,
+          get: subject => frame.getResource(subject),
+        },
+        table,
+        provisioned.legacy,
+      );
+      state.state.migrated = 'issue-v1';
+      await state.flush();
+    }
 
     return session;
   };
@@ -529,6 +571,7 @@ export function createController(
     state: () => current,
 
     async load() {
+      if (!(await showsOwnTable(store))) return set({ kind: 'other-table' });
       const proxy = store.proxy;
       if (!proxy || typeof proxy.connections !== 'function')
         return set({ kind: 'no-proxy' });
@@ -721,7 +764,8 @@ export function createController(
       const ok = await write(ready, async s => {
         const row = await tableStore(s).getResource(subject);
         if (patch.title !== undefined) row.set(NAME, patch.title);
-        if (patch.body !== undefined) row.set(DESCRIPTION, patch.body);
+        if (patch.body !== undefined)
+          row.set(s.tracker.properties.body, patch.body);
         const status = statusOf(patch.status);
         if (status)
           row.set(s.tracker.properties.status, [s.tracker.tags[status]]);
@@ -762,16 +806,34 @@ export function createController(
           isA: [s.tracker.rowClass],
           propVals: {
             [NAME]: input.title,
-            [DESCRIPTION]: input.body,
+            [s.tracker.properties.body]: input.body,
             [s.tracker.properties.status]: [s.tracker.tags[input.status]],
           },
         });
         subject = row.subject;
+        // Made with this app's New issue form: meant for GitHub, so it is
+        // proposed at once (still held for review). A row made anywhere
+        // else stays local until "Publish to GitHub".
+        s.state.state.publish = [...(s.state.state.publish ?? []), subject];
+        await s.state.flush();
       });
       if (!ok) return { state: current };
       optimistic(subject, row => ({ ...row, ...input }));
 
       return { state: await this.sync(), subject };
+    },
+
+    async publish(subject) {
+      if (current.kind !== 'ready') return current;
+      const ready = current;
+      const ok = await write(ready, async s => {
+        const list = s.state.state.publish ?? [];
+        if (list.includes(subject)) return;
+        s.state.state.publish = [...list, subject];
+        await s.state.flush();
+      });
+
+      return ok ? this.sync() : current;
     },
 
     keepHereOnly() {
@@ -868,6 +930,8 @@ export function describe(state: ViewState): string {
       return 'Loading…';
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot sync. Nothing was fetched.';
+    case 'other-table':
+      return 'This is an Issue table this app did not make. Syncing it with GitHub is not built yet; open the app itself to sync its own table.';
     case 'not-connected':
       return 'Not connected. Connect a GitHub account to sync one repository’s issues and comments with this table.';
     case 'connecting':
@@ -936,6 +1000,12 @@ function describeChange(held: Held): string {
 
   if (held.remoteId === undefined)
     return `Create issue “${held.after.title}” (${held.after.status})`;
+  const label = (status?: Status) =>
+    status === 'Doing'
+      ? 'atomic:doing'
+      : status === 'Blocked'
+        ? 'atomic:blocked'
+        : undefined;
   const changes: string[] = [];
   const before = held.before;
   if (before?.title !== held.after.title)
@@ -943,14 +1013,18 @@ function describeChange(held: Held): string {
   if (before?.body !== held.after.body) changes.push('description');
 
   if (before?.status !== held.after.status) {
+    const add = label(held.after.status);
+    const drop = label(before?.status);
     const verb =
       held.after.status === 'Done'
         ? 'close it'
         : before?.status === 'Done'
-          ? 'reopen it'
-          : held.after.status === 'Doing'
-            ? 'add the atomic:doing label'
-            : 'remove the atomic:doing label';
+          ? `reopen it${add ? ` with the ${add} label` : ''}`
+          : add && drop
+            ? `${drop} label → ${add}`
+            : add
+              ? `add the ${add} label`
+              : `remove the ${drop ?? 'atomic:doing'} label`;
     changes.push(
       `status ${before?.status ?? '?'} → ${held.after.status} (${verb})`,
     );

@@ -17,9 +17,21 @@
  *    pauses sync; the conflict review keeps GitHub's title.
  * 5. Moving a card on the board with the keyboard, reviewed and sent.
  * 6. A comment added in the issue panel, reviewed and sent.
- * 7. Disconnect in the app, then connect again through the host's "Use
+ * 7. Since 0.2.0 (#177 item 6): the app made itself a view of the shared
+ *    class `issue-v1` (its table's class, its App's `renders`). A row added
+ *    to the table outside the app stays local until "Publish to GitHub",
+ *    whose create is reviewed and sent; moving it to Blocked adds the
+ *    `atomic:blocked` label (#177 Q8).
+ * 8. Disconnect in the app, then connect again through the host's "Use
  *    existing connection", with no reload: the app syncs again by itself
  *    (#196 user test; it used to stop at an unsynced board).
+ *
+ * The rows are of the shared class at its published GitHub Pages subject,
+ * which the pinned server and the browser fetch from Pages themselves, as
+ * in production (ontology-kit/README.md, "Plugin e2e tests and the
+ * published subjects"). `beforeAll` first checks Pages serves `issue-v1`
+ * with the committed bytes (`ontology-kit/served.mjs`), so this needs
+ * network access to https://ontola.github.io.
  *
  * GitHub-side reads and edits go through the mock's test drivers for the
  * github-issues fixture (`POST /fixture/github-issues/<driver>`), standing
@@ -36,11 +48,28 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.3';
+const VERSION = '0.2.0';
 const REPOSITORY = 'atomic-fixture/tracker';
 const NAME = 'https://atomicdata.dev/properties/name';
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+const PARENT = 'https://atomicdata.dev/properties/parent';
+const IS_A = 'https://atomicdata.dev/properties/isA';
+const TASK = 'https://atomicdata.dev/task/v1';
 
 test.describe('GitHub issues drive app', () => {
+  test.beforeAll(async () => {
+    const served = (await import(
+      '../../../ontology-kit/served.mjs' as string
+    )) as {
+      classTermPaths(name: string): string[];
+      servedProblems(paths: string[]): Promise<string[]>;
+      notServedMessage(problems: string[]): string;
+    };
+    const problems = await served.servedProblems(
+      served.classTermPaths('issue-v1'),
+    );
+    if (problems.length) throw new Error(served.notServedMessage(problems));
+  });
   test.beforeEach(before);
 
   test('imports, refreshes, sends reviewed updates, moves a card, comments and recovers from a conflict', async ({
@@ -167,7 +196,7 @@ test.describe('GitHub issues drive app', () => {
 
     // 5. Move a card in the app: #2 to Done with the keyboard, then send.
     await card(app, '#2').focus();
-    await page.keyboard.press('3');
+    await page.keyboard.press('4');
     await expect(column(app, 'Done')).toContainText('Export as CSV');
     await app
       .getByRole('button', { name: 'Review and send' })
@@ -209,6 +238,117 @@ test.describe('GitHub issues drive app', () => {
       comments.filter(c => c.issue_url.endsWith('/issues/1')).map(c => c.body),
     ).toEqual(['I can reproduce this in Firefox.', 'Fixed in the app.']);
 
+    // 7. The shared class (#177 item 6). The app's own table is an issue-v1
+    // table, and the App renders issue-v1, so Add view offers it on others.
+    const issueV1 = (
+      (await import('../../../ontology-kit/terms.mjs' as string)) as {
+        classes: Record<string, { subject: string }>;
+      }
+    ).classes['issue-v1'].subject;
+    const appSubject = new URL(page.url()).searchParams.get('subject')!;
+    const shared = await page.evaluate(
+      async args => {
+        const store = window.store!;
+        const row = await store.getResource(args.row);
+        const table = await store.getResource(row.get(args.parent) as string);
+        await store.reloadResource?.(args.app);
+        const appResource = await store.getResource(args.app);
+
+        return {
+          rowIsA: row.get(args.isA),
+          classtype: table.get(args.classtype),
+          table: table.subject,
+          renders: Object.values(appResource.getPropVals()).some(
+            v => Array.isArray(v) && v.includes(args.issueV1),
+          ),
+        };
+      },
+      {
+        row: first,
+        app: appSubject,
+        parent: PARENT,
+        isA: IS_A,
+        classtype: CLASSTYPE,
+        issueV1,
+      },
+    );
+    expect(shared).toMatchObject({
+      rowIsA: [issueV1],
+      classtype: issueV1,
+      renders: true,
+    });
+
+    // A row added in the table, outside the app: local only, nothing held.
+    await page.evaluate(
+      async args => {
+        const store = window.store!;
+        const row = await store.newResource({
+          parent: args.table,
+          isA: [args.issueV1],
+          propVals: {
+            [args.name]: 'Written in the table',
+            [`${args.task}/status`]: [`${args.task}/todo`],
+          },
+        });
+        await row.save();
+      },
+      { table: shared.table, issueV1, name: NAME, task: TASK },
+    );
+    await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(card(app, 'Local')).toContainText('Written in the table', {
+      timeout: 30_000,
+    });
+    await expect(bar).toHaveAttribute('title', /0 sent to GitHub/);
+    expect(
+      (await fixture('snapshot', [REPOSITORY])) as { issues: unknown[] },
+    ).toMatchObject({ issues: { length: 2 } });
+
+    // Publish to GitHub: the create is held for review, then sent.
+    await card(app, 'Local').click();
+    await detail.getByRole('button', { name: 'Publish to GitHub' }).click();
+    await page.keyboard.press('Escape');
+    await app
+      .getByRole('button', { name: 'Review and send' })
+      .click({ timeout: 30_000 });
+    await expect(review).toContainText(
+      'Create issue “Written in the table” (Todo)',
+    );
+    await app.getByRole('button', { name: 'Send 1 change to GitHub' }).click();
+    await expect(bar).toHaveAttribute('title', /1 sent to GitHub/, {
+      timeout: 30_000,
+    });
+    expect((await github('GET', '/issues/3')).title).toBe(
+      'Written in the table',
+    );
+    // The row gets its number from GitHub's answer on the next pass.
+    await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(card(app, '#3')).toContainText('Written in the table', {
+      timeout: 30_000,
+    });
+
+    // Blocked is the atomic:blocked label (#177 Q8).
+    await card(app, '#3').focus();
+    await page.keyboard.press('3');
+    await expect(column(app, 'Blocked')).toContainText('Written in the table');
+    await app
+      .getByRole('button', { name: 'Review and send' })
+      .click({ timeout: 30_000 });
+    await expect(review).toContainText(
+      'Update #3: status Todo → Blocked (add the atomic:blocked label)',
+    );
+    await app.getByRole('button', { name: 'Send 1 change to GitHub' }).click();
+    await expect(bar).toHaveAttribute('title', /1 sent to GitHub/, {
+      timeout: 30_000,
+    });
+    const third = (await github('GET', '/issues/3')) as {
+      state: string;
+      labels: (string | { name: string })[];
+    };
+    expect(third.state).toBe('open');
+    expect(
+      third.labels.map(l => (typeof l === 'string' ? l : l.name)),
+    ).toContain('atomic:blocked');
+
     // The connection lives at the proxy, owned by the signed-in user and
     // delegated to this app; the page keeps nothing credential-like.
     const connections = await proxyConnections('github-issues');
@@ -221,7 +361,7 @@ test.describe('GitHub issues drive app', () => {
       ]),
     );
 
-    // 7. Disconnect this app, then connect again through the existing
+    // 8. Disconnect this app, then connect again through the existing
     // connection. The consent bar resolves with no reload, so the app must
     // start its sync itself, as it does when the view opens.
     const appUrl = page.url();
@@ -238,7 +378,7 @@ test.describe('GitHub issues drive app', () => {
     await expect(consent).toBeHidden();
     await expect(bar).toHaveAttribute(
       'title',
-      /2 issues and 2 comments in sync with atomic-fixture\/tracker/,
+      /3 issues and 2 comments in sync with atomic-fixture\/tracker/,
       { timeout: 60_000 },
     );
     // Nothing new to send. "Updated here" is left open: the comment sent
@@ -285,34 +425,15 @@ async function setName(page: Page, subject: string, name: string) {
   );
 }
 
-/** A person changing a row's Status select to the tag with this shortname. */
+/** A person changing a row's task/v1 Status to the tag with this shortname. */
 async function setStatus(page: Page, subject: string, shortname: string) {
   await page.evaluate(
-    async ({ target, wanted }) => {
-      const A = 'https://atomicdata.dev/properties';
-      const store = window.store!;
-      const row = await store.getResource(target);
-      const klass = await store.getResource(
-        (row.get(`${A}/isA`) as string[])[0],
-      );
-
-      for (const property of klass.get(`${A}/recommends`) as string[]) {
-        const p = await store.getResource(property);
-        if (p.get(`${A}/shortname`) !== 'issue-status') continue;
-
-        for (const tag of p.get(`${A}/allowsOnly`) as string[]) {
-          const t = await store.getResource(tag);
-          if (t.get(`${A}/shortname`) !== wanted) continue;
-          await row.set(property, [tag]);
-          await row.save();
-
-          return;
-        }
-      }
-
-      throw new Error(`No ${wanted} status`);
+    async ({ target, wanted, task }) => {
+      const row = await window.store!.getResource(target);
+      await row.set(`${task}/status`, [`${task}/${wanted}`]);
+      await row.save();
     },
-    { target: subject, wanted: shortname },
+    { target: subject, wanted: shortname, task: TASK },
   );
 }
 

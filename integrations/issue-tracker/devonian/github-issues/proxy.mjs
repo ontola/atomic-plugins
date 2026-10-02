@@ -151,6 +151,14 @@ export function fixtureTransport(state, save) {
         issue.labels = issue.labels.filter(l => l !== 'atomic:doing');
         value = issue;
         break;
+      case 'add_blocked_label':
+        issue.labels = [...new Set([...issue.labels, 'atomic:blocked'])];
+        value = issue;
+        break;
+      case 'remove_blocked_label':
+        issue.labels = issue.labels.filter(l => l !== 'atomic:blocked');
+        value = issue;
+        break;
       case 'list_comments':
         value = state.comments
           .filter(c => c.issue_url.endsWith(`/${args.number}`))

@@ -46,6 +46,8 @@ export interface FrameResource {
   readonly error: undefined;
   get(property: string): JSONValue;
   set(property: string, value: JSONValue): FrameResource;
+  /** Removes `property` on the next `save`, as `set` changes one. */
+  remove(property: string): FrameResource;
   save(): Promise<undefined>;
   getLoroDoc(): void;
 }
@@ -141,9 +143,10 @@ export function frameStore(
 
     for (const [property, { stale, after }] of saved) {
       const now = resource.get(property);
-      if (!same(now, after) && stale.some(value => same(value, now)))
-        resource.set(property, after);
-      else saved.delete(property);
+      if (!same(now, after) && stale.some(value => same(value, now))) {
+        if (after === undefined) resource.remove(property);
+        else resource.set(property, after);
+      } else saved.delete(property);
     }
 
     if (!saved.size) overlay.delete(subject);
@@ -161,6 +164,14 @@ export function frameStore(
         if (!pending.has(property)) pending.set(property, inner.get(property));
         unsent.set(resource, pending);
         inner.set(property, value);
+
+        return resource;
+      },
+      remove(property) {
+        const pending = unsent.get(resource) ?? new Map<string, JSONValue>();
+        if (!pending.has(property)) pending.set(property, inner.get(property));
+        unsent.set(resource, pending);
+        inner.remove(property);
 
         return resource;
       },

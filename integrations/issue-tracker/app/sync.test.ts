@@ -15,11 +15,15 @@ import {
   ABOUT,
   DESCRIPTION,
   IS_A,
+  ISSUE_V1,
   MESSAGE,
   NAME,
   PARENT,
   PROPERTIES,
   SHORTNAME,
+  TASK_BODY,
+  TASK_STATUS,
+  TASK_TAGS,
 } from './tracker.js';
 import { relayDispatch } from './transport.js';
 
@@ -82,35 +86,52 @@ group('GitHub issues drive app', () => {
       /2 issues and 1 comment in sync with atomic-fixture\/tracker/,
     );
 
-    const status = property(store, 'issue-status');
     const number = property(store, 'github-issue-number');
-    const tags = Object.fromEntries(
-      [...store.resources.entries()]
-        .filter(([, p]) => p[PARENT] === status)
-        .map(([subject, p]) => [p[SHORTNAME], subject]),
-    );
     const imported = rows(store)
       .map(([, p]) => ({
+        isA: p[IS_A],
         title: p[NAME],
-        body: p[DESCRIPTION],
+        body: p[TASK_BODY],
         number: p[number],
-        status: p[status],
+        status: p[TASK_STATUS],
       }))
       .sort((a, b) => Number(a.number) - Number(b.number));
     expect(imported).toEqual([
       {
+        isA: [ISSUE_V1],
         title: 'Keep the selected calendar after refresh',
         body: 'Refreshing the page resets the selection to **All calendars**.',
         number: 1,
-        status: [tags.todo],
+        status: [TASK_TAGS.Todo],
       },
       {
+        isA: [ISSUE_V1],
         title: 'Export the board as CSV',
         body: '',
         number: 2,
-        status: [tags.doing],
+        status: [TASK_TAGS.Doing],
       },
     ]);
+    // The baseline is on each row, not in the sync state (#177 decision 7).
+    const baseline = property(store, 'github-sync-baseline');
+    for (const [, p] of rows(store))
+      expect(JSON.parse(String(p[baseline]))).toEqual({
+        title: p[NAME],
+        body: p[TASK_BODY],
+        status: p[number] === 1 ? 'Todo' : 'Doing',
+      });
+    const syncState = JSON.parse(
+      String(
+        [...store.resources.values()].find(
+          p => p[property(store, 'github-sync-state')],
+        )![property(store, 'github-sync-state')],
+      ),
+    );
+    expect(
+      Object.values(
+        syncState.snapshot.records as Record<string, { baseline?: unknown }>,
+      ).filter(r => r.baseline !== undefined),
+    ).toEqual([]);
 
     const [issue] = rows(store).find(([, p]) => p[number] === 1)!;
     const messages = [...store.resources.values()].filter(p =>
@@ -171,13 +192,9 @@ group('GitHub issues drive app', () => {
 
   it('holds a local change for review and sends exactly that once approved', async () => {
     const { store, controller } = await bound();
-    const status = property(store, 'issue-status');
     const number = property(store, 'github-issue-number');
-    const done = [...store.resources.entries()].find(
-      ([, p]) => p[PARENT] === status && p[SHORTNAME] === 'done',
-    )![0];
     const [issue] = rows(store).find(([, p]) => p[number] === 1)!;
-    store.edit(issue, { [status]: [done] });
+    store.edit(issue, { [TASK_STATUS]: [TASK_TAGS.Done] });
 
     const held = ready(await controller.sync());
     expect(held.last?.result.held).toHaveLength(1);
@@ -224,7 +241,7 @@ group('GitHub issues drive app', () => {
     });
     const imported = ready(await controller.sync());
     expect(imported.problem).toBeUndefined();
-    expect(store.resources.get(issue)?.[DESCRIPTION]).toBe('Edited on GitHub');
+    expect(store.resources.get(issue)?.[TASK_BODY]).toBe('Edited on GitHub');
     const last = ready(await controller.sync());
     expect(last.problem).toBeUndefined();
     expect(last.last?.result).toMatchObject({
@@ -346,16 +363,21 @@ group('GitHub issues drive app', () => {
   /** A new row's create, approved and sent, whose answer is lost. */
   async function lostCreate(lands: boolean) {
     const { store, controller } = await bound();
-    const status = property(store, 'issue-status');
-    const doing = [...store.resources.entries()].find(
-      ([, p]) => p[PARENT] === status && p[SHORTNAME] === 'doing',
-    )![0];
     const { subject } = await store.newResource({
       parent: TABLE,
-      isA: ['did:ad:class-item'],
-      propVals: { [NAME]: 'Written here first', [status]: [doing] },
+      isA: [ISSUE_V1],
+      propVals: {
+        [NAME]: 'Written here first',
+        [TASK_STATUS]: [TASK_TAGS.Doing],
+      },
     });
-    const proposed = ready(await controller.sync());
+    // Local only until a person publishes it (#177 Q6).
+    const quiet = ready(await controller.sync());
+    expect(quiet.last?.result.held).toEqual([]);
+    expect(
+      quiet.last?.result.rows.find(r => r.subject === subject),
+    ).toMatchObject({ localOnly: true, title: 'Written here first' });
+    const proposed = ready(await controller.publish(subject));
     expect(proposed.last?.result.held.map(describeHeld)).toEqual([
       'Create issue “Written here first” (Doing)',
     ]);
@@ -596,5 +618,32 @@ group('frame store adapter', () => {
       PROPERTIES
     ] as string[];
     expect(listed.length).toBe(5);
+  });
+});
+
+group('baselines on the rows (#177 decision 7)', () => {
+  it('writes a missing row baseline back once both sides agree, and nothing on an unchanged pass', async () => {
+    const { store } = await bound();
+    const baseline = property(store, 'github-sync-baseline');
+
+    for (const [subject] of rows(store)) {
+      const { [baseline]: _gone, ...rest } = store.resources.get(subject)!;
+      store.resources.set(subject, rest);
+    }
+
+    const reopened = createController(store);
+    const healed = ready(await reopened.start());
+    expect(healed.problem).toBeUndefined();
+    expect(healed.last?.result.held).toEqual([]);
+    for (const [, p] of rows(store))
+      expect(JSON.parse(String(p[baseline]))).toMatchObject({ title: p[NAME] });
+
+    const writes = store.writes.length;
+    const again = ready(await reopened.sync());
+    expect(again.last?.result).toMatchObject({ addedHere: 0, updatedHere: 0 });
+    const rowSubjects = rows(store).map(([s]) => s);
+    expect(
+      store.writes.slice(writes).filter(w => rowSubjects.includes(w.subject)),
+    ).toEqual([]);
   });
 });

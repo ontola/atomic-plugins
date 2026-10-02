@@ -478,6 +478,9 @@ kbd {
 .g-doing {
   color: var(--pl-warn);
 }
+.g-blocked {
+  color: var(--pl-neg);
+}
 .g-done {
   color: var(--pl-accent);
 }

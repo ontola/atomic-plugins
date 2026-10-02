@@ -15,7 +15,7 @@ const issue = (number: number): Issue => ({
 });
 describe('GitHub package', () => {
   it('uses a strict repository-scoped manifest', () => {
-    expect(validateManifest(manifest('owner/repo')).operations).toHaveLength(6);
+    expect(validateManifest(manifest('owner/repo')).operations).toHaveLength(8);
     expect(() => manifest('../escape')).toThrow();
     expect(() => manifest('owner/repo?token=x')).toThrow();
   });

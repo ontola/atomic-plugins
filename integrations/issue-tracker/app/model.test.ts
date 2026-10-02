@@ -69,7 +69,7 @@ describe('board columns', () => {
   ])(
     'collapses Done at %i issues to %i shown and %i more',
     (n, shown, more) => {
-      const col = columns(done(n), { search: '' })[2];
+      const col = columns(done(n), { search: '' })[3];
       expect(col).toMatchObject({ status: 'Done', total: n, hidden: more });
       expect(col.rows).toHaveLength(shown);
       expect(DONE_LIMIT).toBe(20);
@@ -77,7 +77,7 @@ describe('board columns', () => {
   );
 
   it('shows every Done issue when expanded, most recent first', () => {
-    const col = columns(done(25), { search: '' }, true)[2];
+    const col = columns(done(25), { search: '' }, true)[3];
     expect(col.rows).toHaveLength(25);
     expect(col.rows[0].updatedAt! >= col.rows[1].updatedAt!).toBe(true);
   });

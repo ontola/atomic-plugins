@@ -130,16 +130,25 @@ export interface Actions {
   removeFromBoard(): void;
   landed(subject: string, id: number): void;
   sendAgain(subject: string): void;
+  /** "Publish to GitHub" for a local-only row (#177 Q6). */
+  publish(subject: string): void;
 }
 
 const GLYPH: Record<Status, Glyph> = {
   Todo: 'todo',
   Doing: 'doing',
+  Blocked: 'blocked',
   Done: 'done',
 };
 
 export const refOf = (row: IssueRow) =>
-  row.number !== undefined ? `#${row.number}` : 'New';
+  row.number !== undefined ? `#${row.number}` : row.localOnly ? 'Local' : 'New';
+
+/** "Status here: In review (not synced)" for a status shown as it is. */
+const asIsText = (row: IssueRow) =>
+  row.statusAsIs
+    ? `Status here: ${row.statusAsIs.join(', ') || 'none'} (not synced with GitHub)`
+    : undefined;
 
 const repoUrl = (repository: string) => `https://github.com/${repository}`;
 
@@ -683,7 +692,16 @@ function chooseRepository(
           h(
             'li',
             null,
-            'Title, description and comment edits are sent to GitHub, and new cards become new issues, each only after you review and send it.',
+            'Moving a card to ',
+            h('b', null, 'Blocked'),
+            ' adds the ',
+            h('code', null, 'atomic:blocked'),
+            ' label the same way.',
+          ),
+          h(
+            'li',
+            null,
+            'Title, description and comment edits are sent to GitHub after you review and send them. A card made in this app becomes a new issue the same way; a row added to the table elsewhere stays here until you choose Publish to GitHub on it.',
           ),
           h(
             'li',
@@ -772,8 +790,8 @@ function moveMenu(
     STATUSES.map(status => ({
       label: status,
       glyph: GLYPH[status],
-      checked: row.status === status,
-      disabled: !movable || row.status === status,
+      checked: row.status === status && !row.statusAsIs,
+      disabled: !movable || (row.status === status && !row.statusAsIs),
       run: () => actions.move(row.subject, status, 'menu'),
     })),
     actions,
@@ -826,6 +844,9 @@ function card(
         { class: 'card-top' },
         h('span', { class: 'ref' }, refOf(row)),
         h('span', { class: 'sr' }, `Status: ${row.status}.`),
+        row.statusAsIs
+          ? h('span', { class: 'muted small', title: asIsText(row) }, '≠')
+          : null,
         marker(marks.get(row.subject)),
       ),
       h('span', { class: 'card-title' }, row.title),
@@ -958,7 +979,7 @@ function board(state: Ready, ui: Ui, actions: Actions): HTMLElement {
 
 // ---------------------------------------------------------------- list
 
-const LIST_ORDER: Status[] = ['Doing', 'Todo', 'Done'];
+const LIST_ORDER: Status[] = ['Doing', 'Blocked', 'Todo', 'Done'];
 
 function list(state: Ready, ui: Ui, actions: Actions): HTMLElement {
   const rows = state.last?.result.rows ?? [];
@@ -1500,6 +1521,27 @@ function issueDetail(
         ? h('span', { class: 'small' }, row.assignees.join(', '))
         : null,
     ),
+    row.statusAsIs
+      ? h('p', { class: 'ro-note' }, icon('info', 14), `${asIsText(row)}.`)
+      : null,
+    row.localOnly
+      ? h(
+          'div',
+          { class: 'ro-note' },
+          icon('info', 14),
+          h(
+            'span',
+            null,
+            `Only in this table. It becomes an issue in ${state.repository} once you publish it and then review and send it.`,
+          ),
+          button('Publish to GitHub', () => actions.publish(row.subject), {
+            sm: true,
+            kind: 'primary',
+            disabled: !!state.busy,
+            'data-key': 'publish',
+          }),
+        )
+      : null,
     mark
       ? h(
           'p',
@@ -1549,7 +1591,9 @@ function issueDetail(
       { class: 'mono' },
       bound
         ? `${state.repository}#${row.number}`
-        : `${state.repository} · not on GitHub yet`,
+        : row.localOnly
+          ? 'Only in this table'
+          : `${state.repository} · not on GitHub yet`,
     ),
     state.last?.at ? ` · synced ${ago(state.last.at, ui.now)}` : '',
     row.url
@@ -1927,6 +1971,17 @@ export function page(
   const top = appHeader(state, ui, actions);
 
   if (state.kind === 'no-proxy') return [top, noProxy()];
+  if (state.kind === 'other-table')
+    return [
+      top,
+      empty(
+        'inbox',
+        'This Issue table was not made by this app.',
+        'Syncing an existing table with GitHub is not built yet. Open the GitHub issues app itself to see and sync its own table. Nothing was changed here.',
+        undefined,
+        true,
+      ),
+    ];
   if (state.kind === 'loading')
     return [
       top,
