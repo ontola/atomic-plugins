@@ -305,6 +305,7 @@ test('connect: consent without login, signed redeem makes the owner, delegation,
       'moneybird',
       'notion',
       'pets',
+      'todoist',
     ]);
 
     // The retired flow's parameters, a foreign return address, an unknown
@@ -736,7 +737,7 @@ test('MOCK_PROXY_PLATFORMS restricts the catalog, consent and catalog documents'
   const warn = console.warn;
   const warnings = [];
   console.warn = message => warnings.push(message);
-  const server = mockProxy({ platforms: 'pets,todoist,pets' });
+  const server = mockProxy({ platforms: 'pets,nonesuch,pets' });
   console.warn = warn;
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -744,7 +745,7 @@ test('MOCK_PROXY_PLATFORMS restricts the catalog, consent and catalog documents'
   try {
     assert.deepEqual(await (await fetch(`${base}/catalog`)).json(), ['pets']);
     assert.deepEqual(warnings, [
-      'mock-proxy: no fixture for todoist; not served',
+      'mock-proxy: no fixture for nonesuch; not served',
     ]);
     assert.equal((await fetch(`${base}/catalog/pets.yaml`)).status, 200);
     assert.equal((await fetch(`${base}/catalog/clockify.yaml`)).status, 404);
@@ -770,6 +771,7 @@ test('an empty platform list serves every fixture', async () => {
       'moneybird',
       'notion',
       'pets',
+      'todoist',
     ])
       assert.equal((await fetch(`${base}/catalog/${id}.yaml`)).status, 200);
     assert.ok(server.github.createIssue);

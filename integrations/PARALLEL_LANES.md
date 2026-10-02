@@ -463,7 +463,7 @@ Rules that keep parallel worktrees from fighting:
   deleted in atomic-server `4bab16ee6` (in the pin), together with the UI
   they drove (#44). `integrations/timesheets/e2e/clockify.spec.ts` (#96)
   drives the timesheets drive app through `store.proxy` instead, with a
-  test-side install until #94. See
+  test-side install (at the pin the host installs from the catalog; #94, closed). See
   [`HANDOFF-e2e-split.md`](HANDOFF-e2e-split.md).
 - `integrations/money/` has one tier, `e2e` (#95): `money.spec.ts` drives
   the Bank statements importer through atomic-server's generic file entry

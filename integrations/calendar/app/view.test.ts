@@ -305,6 +305,33 @@ describe('Calendar views: edit, review, send', () => {
     expect(store.calls).toEqual([]);
   });
 
+  it('on an event-v1 table that isn’t its own: Sync this table, choose, import; no Remove local copy (#177 item 14)', async () => {
+    const store = fakeStore({ view: 'other' });
+    const root = await mount(store, 1120);
+    expect(root.textContent).toContain('Rows already here stay here only.');
+    await click(one(root, 'button', 'Sync this table to Google Calendar'), 10);
+    expect(store.asked).toBe(1);
+    expect(
+      one(root, 'heading', 'Which calendar should Team events sync with?'),
+    ).toBeTruthy();
+    expect(one(root, 'button', 'Not now')).toBeTruthy();
+    await click(one(root, 'button', 'Import this calendar'), 10);
+    expect(one(root, 'button', 'Sync now')).toBeTruthy();
+    expect(
+      [...store.resources.values()].filter(p => p[PARENT] === OTHER_TABLE),
+    ).toHaveLength(3);
+    // The table keeps the name it was given.
+    expect(store.resources.get(OTHER_TABLE)![NAME]).toBe('Team events');
+    // A Google event gone: keep it, or delete the row in the table.
+    store.google.cancel('timed');
+    await click(one(root, 'button', 'Sync now'), 10);
+    await click(one(root, 'button', /^1 conflict/), 6);
+    const sheet = one(root, 'dialog');
+    expect(byRole(sheet, 'button', 'Remove local copy')).toEqual([]);
+    expect(sheet.textContent).toContain('delete the row in the table');
+    expect(byRole(sheet, 'button', 'Keep as local event')).toHaveLength(1);
+  });
+
   it('a read-only calendar never offers Edit', async () => {
     const store = fakeStore();
     const root = await mount(store, 1120);

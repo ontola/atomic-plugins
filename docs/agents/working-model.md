@@ -16,6 +16,10 @@ authoritative):
   Michiel: …" on #227; don't number questions yourself.
 - **Never merge into atomic-server `develop`.** Only the trekmeester (Joep's
   agent) does, in batches.
+- **atomic-server freeze (Michiel, 2026-10-01).** No new atomic-server PRs and
+  no new pin candidates; only shepherd the open ones. A host need becomes an
+  **issue for Joep** on atomic-server (for example atomic-server#1952), drafted
+  in the worker's report. Atomic-plugins stays on the current pin.
 - **Pin bumps** (`.atomic-server-ref` → a candidate) are pre-approved. See
   [pins.md](pins.md).
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo
@@ -45,7 +49,9 @@ authoritative):
 Since 2026-09-30 ([#227 comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5911922325)):
 
 - **Light work** (CI triage, reviews, small fixes, rule-12 merges, pin bumps):
-  the coordinator, through its own sub-agents.
+  the coordinator, through its own sub-agents. Since 2026-10-02 the
+  coordinator runs on the build VPS `claude-build`, not in the cloud
+  (Q-064; see [build-vps.md](build-vps.md)); its workers share that machine.
 - **Heavy or long work** (anything that builds atomic-server or runs its e2e,
   multi-hour features): a **temporary session** started by the coordinator
   with a brief. It posts a pickup on #227, does its one piece of work, pushes,

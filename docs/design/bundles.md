@@ -74,7 +74,7 @@ copy or code without host evidence, as in [READINESS.md](../integrations/READINE
 | Bundle       | Row class(es)                      | Views                                                                 | Reflectors                                               | Importers                                | Lenses (planned)                             | Folder today                                      | Catalog entries today                    |
 | ------------ | ---------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- | ------------------------------------------------- | ---------------------------------------- |
 | **Calendar** | `event-v1`                         | `calendar/app/`; built-in Calendar                                    | Google Calendar (`calendar/devonian/google-calendar/`)   | –                                        | –                                            | `calendar/`                                       | `devonian-google-calendar`               |
-| **Issues**   | `issue-v1`                         | `issue-tracker/app/`; built-in Issues                                 | GitHub (`issue-tracker/devonian/github-issues/`), Todoist (read) | –                                 | Issue Tracker template → `issue-v1`          | `issue-tracker/`                                  | `devonian-todoist` (GitHub has none)     |
+| **Issues**   | `issue-v1`                         | `issue-tracker/app/`; built-in Issues                                 | GitHub (`issue-tracker/devonian/github-issues/`), Todoist (read) | –                                 | Issue Tracker template → `issue-v1`          | `issue-tracker/`                                  | `todoist` (GitHub has none)              |
 | **Time**     | `time-entry-v1` (+ `work-project-v1`, `work-person-v1`) | `timesheets/app/`; built-in Timer                | Clockify (`timesheets/devonian/clockify/`), read          | –                                        | Time tracker template → `time-entry-v1`      | `timesheets/`                                     | `timesheets`                             |
 | **Money**    | `bank-transaction-v1`              | `money/app/`                                                          | Moneybird (declared only)                                | MT940 and camt.053 (`money/plugin.ts`)   | –                                            | `money/`                                          | `money`, `moneybird`                     |
 | **Tables**   | Per data source (no shared class)  | Built-in table view                                                   | Notion (`notion/app/`, `notion/plugin.ts`)               | –                                        | –                                            | `notion/`                                         | `notion`                                 |
@@ -97,7 +97,7 @@ Notes:
   endpoints (placements C, D, E), not table sync or views. Q1 asks whether
   they get a part kind of their own (`route`) or stay outside this model.
 - A bundle may list a reflector with no host entry point yet, as today's
-  catalog lists `devonian-todoist`. The bundle's card must then say which
+  catalog listed `devonian-todoist` until the Todoist drive app hosted it. The bundle's card must then say which
   parts work, per the "declared, not verified" rule.
 
 ## 3. Catalog shape

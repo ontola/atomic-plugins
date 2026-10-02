@@ -183,6 +183,7 @@ test('an app-only folder records its version in app/package.json', () =>
 test('an app resolves to integrations/<id>/app/ unless APP_FOLDERS maps it', () => {
   assert.equal(appFolder('gamma'), 'integrations/gamma/app');
   assert.equal(appFolder('moneybird'), 'integrations/money/moneybird');
+  assert.equal(appFolder('todoist'), 'integrations/issue-tracker/todoist-app');
   // Only own keys map: no prototype property is taken for a folder.
   assert.equal(appFolder('constructor'), 'integrations/constructor/app');
   assert.ok(Object.isFrozen(APP_FOLDERS));

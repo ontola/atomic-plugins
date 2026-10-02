@@ -4,14 +4,17 @@
 
 This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
-on a plugin's page; merged as atomic-server#1691). The pinned
-`.atomic-server-ref`, `bc39dac4b`, includes it; see [Verified](#verified).
+on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
+the pin when this was first verified, includes it; see [Verified](#verified)
+for the pins it was last run against. The current pin is `a12b74a`; this
+package's E2E has not been re-run there (declared, not verified).
 
 1. **Publish** (once per server, by whoever maintains it): create a Plugin,
    replace its source with this folder's `plugin.js`, name it "Bank
    statements", and choose Code → Publish to integration store. There is no
-   generic path from this repo's catalog to a server's store yet
-   (atomic-plugins#94), so this step is manual.
+   generic path from this repo's catalog to a server's store for sandbox
+   bundles (the catalog install of atomic-plugins#94, closed, covers drive
+   apps only), so this step is manual.
 2. **Find it**: Integrations → Show experimental plugins → Community
    plugins → Bank statements → Open → Create draft.
 3. **Set up**: on the draft's Import tab, choose Set up. This creates the
@@ -190,7 +193,7 @@ Catalog: the `money` entry in `integrations/catalog.json` carries the app
 (`app-module` `apps/money/<version>/ui.js`, the same version as this
 package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
 with `enabled: false`, so the Integrations page does not offer it. Not yet
-a working install path, and not tested: at pin `2567fc30b` a catalog
+a working install path, and not tested since pin `2567fc30b` (the current pin is `a12b74a`, not re-checked): a catalog
 Install creates the app with a row class and table of its own
 (`createApp`), the importer's table offers under Add view only apps whose
 `renders` lists its row class (`useDriveApps.ts` `appsForClass`), and

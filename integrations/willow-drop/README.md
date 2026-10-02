@@ -17,8 +17,9 @@ listed [below](#verified-and-declared).
 ## Setup
 
 As for [Bank statements](../money/README.md#setup): publish this folder's
-`plugin.js` to a server by hand (there is no catalog-to-store path yet,
-[#94](https://github.com/ontola/atomic-plugins/issues/94)), then on the
+`plugin.js` to a server by hand (there is no catalog-to-store path for sandbox bundles; the catalog install of
+[#94](https://github.com/ontola/atomic-plugins/issues/94), closed, covers
+drive apps only), then on the
 Integrations page find "Willow drop" among the community plugins, create a
 draft, choose **Set up** on its Import tab (this creates the Willow entry
 properties, the Willow entry class and a "Willow entries" table), and import a
