@@ -173,6 +173,26 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
   a list of buttons below), 200 rows at a time. Amounts are formatted from
   their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
+- **Incomplete rows** (0.4.1; #177, ontology-kit's rule: show an incomplete
+  row, never skip it). A row of the table's class that lacks one of the four
+  required fields (account, currency, amount, value date; absent or the
+  empty string) is listed in an "Incomplete rows" region above the ledger
+  on the Transactions tab, outside its filters, with what it does have, the
+  note ("Incomplete: missing Amount", the columns as the class names them)
+  and, on a host with `openResource`, "Open row" to the row's page, where
+  the column is filled. It is in no balance, total, account list, statement
+  or import check: the controller keeps such rows in `state.incomplete`,
+  apart from `state.rows`, which is all the ledger sums and `check.ts`
+  compares, so an incomplete row with an import's source id is neither
+  "already imported" nor a changed booking; the import writes a new row. A
+  row completed in the host moves into the ledger on the table's next
+  change notification; with only incomplete rows the region sits above the
+  first-run invitation. Children of the table that are not of its class (a
+  View, say) are not rows and are not listed. At the pin the server refuses
+  a commit missing a required property and an empty string is not a date,
+  so on this host such a row has an empty account, currency or amount, or
+  comes from a lens or another writer. A row with all four fields but an
+  amount that is not one stays in the ledger as "Not a valid amount".
 - **Detail**: the bank's fields read-only with the verbatim narrative;
   category and note (`money-category`, `money-note`) saved on change. The
   host lets an app edit the rows of the table it views only after the
@@ -286,9 +306,11 @@ the calendar, timesheets and issue-tracker apps do at the pin.
      been opened once, see above). Import statement asks for "Allow
      editing" first; so does saving a category or note.
 
-  Rows you add there need account, currency, amount and value date to show
-  in the ledger (a row without them is not shown; the #177 rule "show it as
-  incomplete" is not built yet). This path has unit tests only; no E2E.
+  Rows you add there need account, currency, amount and value date to be in
+  the ledger; since 0.4.1 a row without one of them is listed as incomplete
+  above it, with "Open row", instead of being skipped (see "Incomplete
+  rows" under [Money app](#money-app-app)). This path has unit tests only;
+  no E2E (the E2E's incomplete row is on the app's own table).
 
 - **Needs GitHub Pages.** The server fetches each shared term once, on first
   use, and keeps it; the browser fetches it through its local-database
