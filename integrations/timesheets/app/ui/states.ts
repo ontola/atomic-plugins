@@ -424,15 +424,76 @@ export const noRelay = (h: H) =>
 
 /**
  * The app as the view of another `time-entry-v1` table (#177): its rows,
- * read only, nothing synced.
+ * read only, not synced; with "Sync this table to Clockify" (item 14) when
+ * the host can ask for "Allow editing", or "Allow editing again" when a
+ * synced table's grant lapsed.
  */
-export const notSynced = (h: H, tableName: string) =>
-  banner(h, {
+export function notSynced(
+  h: H,
+  p: {
+    tableName: string;
+    canSync: boolean;
+    asking?: boolean;
+    paused?: boolean;
+    reason?: string;
+    onSync: () => void;
+  },
+) {
+  const text = p.paused
+    ? `This app may no longer edit the rows of “${p.tableName}”, so syncing it is paused. Its time entries are shown here, read only.`
+    : p.canSync
+      ? `“${p.tableName}” isn’t this app’s own table. Its time entries are shown here, read only. Sync it to add your Clockify entries as rows and send edits made to them after you review them; rows already here stay here only, and no row is ever deleted.`
+      : `“${p.tableName}” isn’t this app’s own table. Its time entries are shown here, read only.`;
+
+  return banner(h, {
+    tone: p.paused ? 'warn' : 'info',
+    icon: 'info',
+    lead: p.paused ? 'Sync paused.' : 'Not synced with Clockify.',
+    text: p.reason ? `${text} ${p.reason}` : text,
+    ...(p.canSync
+      ? {
+          action: button(
+            h,
+            p.asking
+              ? 'Waiting for you…'
+              : p.paused
+                ? 'Allow editing again'
+                : 'Sync this table to Clockify',
+            {
+              key: 'sync-table',
+              disabled: !!p.asking,
+              onClick: p.onSync,
+            },
+          ),
+        }
+      : {}),
+  });
+}
+
+/**
+ * Over the connect and set-up steps of a table that isn't the app's own:
+ * which table is being synced, and "Not now" while nothing was chosen yet.
+ */
+export function syncingTable(
+  h: H,
+  p: { name: string; canUndo: boolean; onNotNow: () => void },
+) {
+  return banner(h, {
     tone: 'info',
     icon: 'info',
-    lead: 'Not synced with Clockify.',
-    text: `“${tableName}” isn’t this app’s own table, and the app syncs only its own. Its time entries are shown here, read only.`,
+    lead: `Syncing “${p.name}” with Clockify.`,
+    text: 'Clockify’s entries are added to it as rows, with their Clockify ids. Nothing is sent to Clockify before you review it.',
+    ...(p.canUndo
+      ? {
+          action: button(h, 'Not now', {
+            variant: 'sec',
+            key: 'not-now',
+            onClick: p.onNotNow,
+          }),
+        }
+      : {}),
   });
+}
 
 /** L: the week starts before the import window. */
 export function outsideWindow(

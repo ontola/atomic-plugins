@@ -581,6 +581,10 @@ node --test integrations/localthought/mock-proxy.test.mjs
   (`POST /fixture/google-calendar/received`) and checking that each is one
   of the three declared operations, with its query and `If-Match`, and that
   all three were used.
+- **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+calendar --i-understand-this-writes-to <calendar id>` runs this app's
+  controller against one disposable Google calendar and writes evidence; see
+  [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
 - **Live: not verified.** No run against a real Google account exists for
   this path. Evidence from the retired LocalThought/Devonian flow does not
   count for it. To verify, with authorized credentials and a disposable

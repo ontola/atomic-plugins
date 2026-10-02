@@ -345,9 +345,11 @@ that class. On such a table it can offer "Sync this table to <provider>".
 Calendar 0.3.0 does this for Google Calendar
 ([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make)),
 and issue-tracker 0.3.0 for GitHub
-([`issue-tracker/README.md`](issue-tracker/README.md#syncing-a-table-the-app-didnt-make));
-timesheets can follow the same pattern. What the pinned host (`a12b74a`)
-allows, read from `server/src/plugins/app_row_grant.rs`,
+([`issue-tracker/README.md`](issue-tracker/README.md#syncing-a-table-the-app-didnt-make)),
+and timesheets 0.6.0 for Clockify, with that table's observation log under
+its binding
+([`timesheets/README.md`](timesheets/README.md#syncing-a-table-the-app-didnt-make)).
+What the pinned host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
 `server/src/handlers/app_write.rs` and the page's `AppPage/hostStore.ts`,
 and checked by the calendar and issue-tracker e2es:
 

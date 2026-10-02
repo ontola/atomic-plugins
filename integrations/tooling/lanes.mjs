@@ -10,8 +10,39 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+/**
+ * Which of some paths git ignores, so tests that walk the working tree can
+ * skip output a local run leaves behind (`playwright-report/`,
+ * `integrations/tooling/test-results/`) without a hand-kept list of names.
+ *
+ * Uses `git check-ignore`, which honours .gitignore, .git/info/exclude and
+ * the user's global excludes. A tracked file is never reported as ignored,
+ * even if a pattern matches it. Outside a git work tree (a source tarball)
+ * nothing is reported as ignored, so the caller scans everything, which is
+ * the safe direction for a guard test.
+ *
+ * @param {string[]} paths  relative to `cwd`, or absolute
+ * @param {string} cwd      a directory inside the work tree
+ * @returns {Set<string>}   the subset of `paths` git ignores
+ */
+export function gitIgnored(paths, cwd) {
+  if (paths.length === 0) return new Set();
+
+  const result = spawnSync('git', ['check-ignore', '--stdin', '-z'], {
+    cwd,
+    input: paths.join('\0') + '\0',
+    encoding: 'utf8',
+  });
+
+  // 0: some ignored, 1: none ignored, anything else (128): not a work tree.
+  if (result.error || result.status !== 0) return new Set();
+
+  return new Set(result.stdout.split('\0').filter(Boolean));
+}
 
 /** Directories under integrations/ that are not a plugin lane. */
 export const NON_LANE_DIRECTORIES = ['tooling'];
@@ -312,10 +343,16 @@ export const activeLanes = lanes => lanes.filter(l => l.tiers.length > 0);
 export function unlanedDirectories(lanes, base = root) {
   const ids = new Set(lanes.map(l => l.id));
 
-  return readdirSync(resolve(base, 'integrations'), { withFileTypes: true })
+  const dir = resolve(base, 'integrations');
+  const candidates = readdirSync(dir, { withFileTypes: true })
     .filter(d => d.isDirectory() && !NON_LANE_DIRECTORIES.includes(d.name))
     .map(d => d.name)
     .filter(name => !ids.has(name));
+  // A local e2e run leaves gitignored output (`playwright-report/`) here. That
+  // is not a plugin, and CI's checkout never has it.
+  const ignored = gitIgnored(candidates, dir);
+
+  return candidates.filter(name => !ignored.has(name));
 }
 
 /** Lanes naming a directory that no longer exists. */
