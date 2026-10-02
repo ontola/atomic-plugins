@@ -88,6 +88,8 @@ test.describe('GitHub issues drive app', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    // The mock proxy outlives an attempt: a retry starts from the seed again.
+    await fixture('reset', [REPOSITORY]);
     const writes = appWrites(page);
     await installFromCatalog(page);
 
@@ -418,7 +420,9 @@ test.describe('GitHub issues drive app', () => {
         classes: Record<string, { subject: string }>;
       }
     ).classes['issue-v1'].subject;
-    // A repository of its own, so the other test's edits can't race this one.
+    // A repository of its own, so the other test's edits can't race this one,
+    // emptied first because a retry runs after an earlier attempt filled it.
+    await fixture('reset', [TEAM_REPOSITORY]);
     for (const title of ['Book the venue', 'Write the agenda'])
       await fixture('createIssue', [TEAM_REPOSITORY, { title, body: '' }]);
 
