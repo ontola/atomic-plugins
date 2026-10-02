@@ -194,9 +194,10 @@ standalone `localthought/overlays` repo, full commit history included via
 `git subtree`. GitHub Pages publishes this repository's `main` from its root
 (the root `.nojekyll` keeps files byte-for-byte), so `overlays/<path>` is
 served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
-`catalog/2026-10-02.json` references its overlays by those URLs, and
-`integration-proxy`'s default `CATALOG_PATH` is that folder's
-`catalog/2026-10-02.json`. Dated catalogs and OAD-revision overlay filenames
+the dated catalogs under `catalog/` reference their overlays by those URLs,
+and `integration-proxy`'s default `CATALOG_PATH` is one of them
+(`catalog/2026-10-02-auth-profiles.json` since #258; 0.2.4 and
+localthought.io use `catalog/2026-10-02.json`). Dated catalogs and OAD-revision overlay filenames
 are immutable; a new overlay does not change an existing catalog selection.
 The unversioned catalog was removed after the verified localthought.io switch
 on 2026-10-02. See
@@ -226,7 +227,8 @@ commit history included via `git subtree` (#115). These are the extensions
 the rest of this repo implements: `overlays/` declares them for real
 providers, `syncables/` reads Pagination Schemes and CRUD Causality, and
 `integration-proxy/` reads `x-oauth-authentication-details` (the OAuth
-Authentication Scheme Details draft) and `x-api-key-details` (API Key
+Authentication Scheme Details draft), `x-authentication-profiles`
+(Authentication Profiles, #258) and `x-api-key-details` (API Key
 Details, #121). The Authenticated Principal operations
 in `overlays/` were for the tenant-identity login #54 removed; the proxy no
 longer reads them. A new extension, or a change to
