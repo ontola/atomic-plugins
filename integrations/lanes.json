@@ -18,6 +18,7 @@
       "index": 16,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": [
         "integrations/open-cloud-mesh/plugin.test.mjs",
         "integrations/open-cloud-mesh/peer.test.mjs"
@@ -47,6 +48,7 @@
       "index": 10,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "pluginRoutes": "read-write",
       "nodeTests": ["integrations/remotestorage/plugin.test.mjs"],
       "e2e": [
@@ -79,6 +81,7 @@
       "index": 11,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": [
         "integrations/solid/plugin.test.mjs",
         "integrations/solid/turtle.test.mjs"
@@ -101,6 +104,7 @@
       "index": 12,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": ["integrations/atproto/plugin.test.mjs"],
       "pluginRoutes": "read-only",
       "note": "Node: QuickJS handle-to-DID and did:web document route checks and a reproducible bundle. e2e: publishes plugin.mjs to atomic-server built with the plugin-routes feature at --plugin-routes read-only, binds two invented host names to the test drive, installs with a did:web identity and resolves /.well-known/atproto-did and /.well-known/did.json on the handle host over HTTP with a Host header (no TLS, DNS or network). Where the host reports hostFeatures.pluginRoutes.requestHost (atomic-server claude/plugin-atproto-host), the other host name must answer 404; otherwise the spec records that every host name of the drive answers. The same e2e resolves the identity with Bluesky's reference code (@atproto/identity, @atproto/did, @atproto/crypto, @atproto/syntax, pinned in integrations/atproto/e2e/package.json) over TLS from a throwaway test CA on the loopback: handle, did:web document, bidirectional check, secp256k1 and P-256 keys verifying signatures. ATPROTO_PDS_E2E=1 adds the reference PDS in Docker (ghcr.io/bluesky-social/pds, XRPC on 127.0.0.1 only), which takes the identity through an account migration. No DNS TXT, public TLS or live Bluesky verification.",
@@ -123,6 +127,7 @@
       "index": 13,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": ["integrations/fediverse/plugin.test.mjs"],
       "pluginRoutes": "read-write",
       "serverEnv": {
@@ -160,7 +165,8 @@
       "paths": [
         "integrations/willow-drop/william3.ts",
         "integrations/willow-drop/plugin.js",
-        "integrations/willow-drop/fixtures/expected.json"
+        "integrations/willow-drop/fixtures/expected.json",
+        "integrations/tooling/e2e/route-install.ts"
       ],
       "note": "Willow25 Entry codecs, unsigned signing-candidate job, and the drop route: `GET /_routes/<slug>/willow.drop` answers selected public resources as a Willow drop whose entries the host signs with the installation's Ed25519 subspace key (communal namespace, no delegations). The node tier decodes our drops with the willow-drop importer bundle, which verifies every signature and WILLIAM3 digest. The e2e tier runs at --plugin-routes read-write and needs atomic-server's Willow key bindings, ctx.willow and bodyBase64 (branch claude/plugin-willow-host, in pin candidate17 7dbd054a, where it passes); it fails on a host without them. No WGPS, owned namespaces, delegations or live peer.",
       "e2e": ["integrations/willow/e2e/willow.spec.ts"]
@@ -198,6 +204,7 @@
       "index": 7,
       "platforms": [],
       "tiers": ["typecheck", "unit", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "note": "Willow drop importer (#139), a sandbox job like money: no provider, so no mock proxy (platforms is empty). typecheck and unit are lane tiers rather than certify.mjs's, because certification requires named atomic-server sandbox tests that do not exist for this package; the unit tier also checks that the committed plugin.js is a fresh esbuild bundle. The e2e publishes the bundle and imports fixture drops through the host's generic file entry point (atomic-server#1653, in the pin), so the QuickJS sandbox runs the Ed25519 and WILLIAM3 code and a binary file crosses the text-only hand-over. The fixtures come from willow25 (fixtures/generate/), which CI does not run.",
       "e2e": ["integrations/willow-drop/e2e/willow-drop.spec.ts"]
     },

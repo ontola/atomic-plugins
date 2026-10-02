@@ -301,6 +301,24 @@ export const SHARED_PACKAGES = [
   'ontology-kit',
 ];
 
+/**
+ * The e2e steps the plugin-routes lanes share (open a Plugin draft, wait for
+ * an install to reach the server) live in one tooling file that their specs
+ * import. A lane that imports it must list it in `paths`, so a change to it
+ * reruns those lanes; this is the only file under integrations/tooling/ a
+ * plugin lane may name.
+ */
+export const ROUTE_INSTALL_HELPER = 'integrations/tooling/e2e/route-install.ts';
+const ROUTE_INSTALL_LANES = [
+  'remotestorage',
+  'open-cloud-mesh',
+  'fediverse',
+  'solid',
+  'willow',
+  'atproto',
+  'willow-drop',
+];
+
 // Reviewed exact build dependencies: reuse the existing WILLIAM3 primitive without
 // duplicating cryptographic source or granting arbitrary sibling-folder globs.
 // Willow's tests also decode its drops with the willow-drop importer's
@@ -312,7 +330,14 @@ export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
     'integrations/willow-drop/william3.ts',
     'integrations/willow-drop/plugin.js',
     'integrations/willow-drop/fixtures/expected.json',
+    ROUTE_INSTALL_HELPER,
   ],
+  ...Object.fromEntries(
+    ROUTE_INSTALL_LANES.filter(id => id !== 'willow').map(id => [
+      id,
+      [ROUTE_INSTALL_HELPER],
+    ]),
+  ),
 });
 
 /**

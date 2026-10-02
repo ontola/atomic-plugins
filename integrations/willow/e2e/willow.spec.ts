@@ -26,11 +26,13 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
-  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 // Playwright loads this spec as CommonJS (no package.json above it).
@@ -116,12 +118,7 @@ test.describe('willow export route', () => {
     const reviewUrl = page.url();
     await install.click();
     await leftReview(page, reviewUrl);
-    // The install navigates once the Installation and the folder's write grant
-    // are saved locally, before the server has them; a route write in that
-    // window is refused as `500 route-write-failed` (the remoteStorage lane's
-    // race, #248; open-cloud-mesh on PR #280, run 37033430608). Wait for the
-    // outbox to drain before any route request.
-    await waitForSynced(page, 60_000);
+    await waitForOutboxDrained(page);
     const installation = subjectOf(page.url());
     const slug = routeSlug(installation);
 
@@ -242,12 +239,8 @@ test.describe('willow export route', () => {
 
 /** A Plugin draft whose source is the bundle, as plugin-routes.spec.ts makes one. */
 async function createDraft(page: Page) {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  // No warm-up here, as before this was shared.
+  await openNewPluginDraft(page, { warm: false });
 
   return page.evaluate(
     async ({ code, title }) => {
