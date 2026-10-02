@@ -107,7 +107,8 @@ the newest confirmed remote record with the pending changes replayed on top.
 When a refresh shows that a field with a pending update also changed remotely
 (its remote value differs from the value the client had confirmed when the
 edit was made, or when an earlier write to that field settled, and from every
-value this client has queued for that field), the client records a conflict.
+value this client has queued, or holds as failed, for that field), the client
+records a conflict.
 A refresh that shows an earlier queued edit applied, before or after its
 response arrives, is not a conflict.
 The local value stays visible, the queued write still sends it (local wins on
@@ -166,8 +167,9 @@ id without sending anything. `retry` and `discard` also apply to `failed`
 writes. A failed create behaves like an uncertain one. Failed updates and
 deletes of the record are retried or discarded together. A retried one is
 queued behind any newer writes to the record, without the fields those set, so
-an older edit cannot overwrite a newer one. If nothing is left (or a failed
-delete has newer writes queued), `retry` throws and changes nothing.
+an older edit cannot overwrite a newer one. `retry` drops the failed writes
+that newer queued writes make obsolete (a failed delete, once any newer write
+is queued); if none are left, it throws and changes nothing.
 
 When the create operation (or its path item) declares an `Idempotency-Key`
 header parameter, the client sends a fresh key with each create and reuses it

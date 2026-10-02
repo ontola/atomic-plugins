@@ -961,7 +961,9 @@ export function createApiClient(
             if (write.scope === scope) before.add(write.id);
         for (const id of before) await rebuild(scope, id);
         changed.add(route.collection.name);
-        lastSyncedItems.set(scope, snapshot.items);
+        // A write that settled during the rebuild invalidated this snapshot.
+        if ((started.get(scope) ?? 0) === (revisions.get(scope) ?? 0))
+          lastSyncedItems.set(scope, snapshot.items);
       }
     }
     if (result.errors.length)
