@@ -16,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   127,611 bytes for 0.3.0) from GitHub Pages and refuses it unless it
+   129,608 bytes for 0.3.1) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -125,6 +125,20 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
   and no write to the table or its rows. From 0.3.0 it offers "Sync this
   table to Google Calendar"; see
   [Syncing a table the app didn't make](#syncing-a-table-the-app-didnt-make).
+- **Incomplete rows** (0.3.1; ontology-kit's rule for every shared-class
+  view: a row missing a required field is shown as incomplete, not skipped).
+  `event-v1` requires Name and Day. A row without one is read through the
+  resolver's `missing`, kept in the views, and listed in an "Incomplete rows"
+  section above the Agenda and Week with "Incomplete: missing Day" (or Name,
+  or both) and an "Open row" button (`store.openResource`) to fix it in the
+  table; the drawer says the same. A row without a Day is drawn on no day,
+  as the host's Calendar view draws it nowhere (the section is where it
+  appears); one without a Name is drawn as "(untitled)" with the tag. A
+  synced row that is incomplete is held back whole, like an invalid edit:
+  nothing of it is sent, Google's edits to it are not applied, it is never
+  "Not sent yet", and the review sheet lists it under "Not sent" with the
+  reason. Unit (`app/view.test.ts`, `app/sync.test.ts`) and the hand-made
+  table e2e below.
 - **Gate.** The catalog entry stays `enabled: false` while the ontology base
   is on github.io (`ontology.mjs check`; card copy "Waits for the stable
   ontology domain."). Test-side installs (the e2e, the user-testing

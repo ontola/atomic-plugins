@@ -59,7 +59,7 @@ import {
   nextCalendarDate,
 } from '../../../browser/lib/src/calendar-date.js';
 import type { CalEvent } from './events.js';
-import { EVENT, fields, SHARED, sharedValues } from './fields.js';
+import { EVENT, fields, incompleteOf, SHARED, sharedValues } from './fields.js';
 import { addDays, daysBetween } from './time.js';
 import { relay, UncertainWriteError, type Relayed } from './relay.js';
 import type {
@@ -730,7 +730,10 @@ function host(
 
       for (const row of rows.bound.values()) {
         const { reason: hostReason, ...card } = cardOf(row, props);
-        const reason = hostReason ?? invalid(card.value);
+        // A row missing a required shared field (#177; ontology-kit's rule)
+        // is held back whole, before any other reason.
+        const reason =
+          incompleteOf(row.props) ?? hostReason ?? invalid(card.value);
 
         if (reason) {
           // Held back, not dropped: the baseline stands in for it, so the
@@ -1178,6 +1181,7 @@ export async function readEvents(
     const shared = sharedValues(row.props);
     const baseline = baselineOf(row, props);
     const link = row.get(props['google-link']);
+    const incomplete = incompleteOf(row.props);
 
     out.push({
       ...card.value,
@@ -1185,7 +1189,10 @@ export async function readEvents(
       ...(card.id ? { id: card.id } : {}),
       ...(baseline ? { baseline } : {}),
       ...(typeof link === 'string' && /^https:\/\//.test(link) ? { link } : {}),
+      ...(incomplete ? { incomplete } : {}),
+      // An incomplete row is held back, not pending: nothing of it is sent.
       pending:
+        !incomplete &&
         !!card.id &&
         !!baseline &&
         (!!card.reason ||

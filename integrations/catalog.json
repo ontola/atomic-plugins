@@ -155,11 +155,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Calendar through the host's consent bar and choose a calendar. It syncs when opened and on Sync now; Send sends the reviewed edits. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One calendar per table, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it) and the table's existing rows are not uploaded. Waits for the stable ontology domain. Mock-tested only: not yet verified against a live Google account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google calendar events agenda week month schedule drive app two-way review",
-    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-C5a6N2Xr1pA7hQJMn636j3I8E1ULjZO1988Uc0LDkKYmvDWDjKX1bPfYiUirMF8E"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-DicXUkYKMTSUxmWugzR/g7LjQwPiOxj4yyYUJJ9sNZCw8FJqqrzG5JRiQ9gfAdCD"
   },
   {
     "https://atomicdata.dev/properties/localId": "todoist",

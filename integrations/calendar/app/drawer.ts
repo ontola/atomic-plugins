@@ -77,6 +77,7 @@ export function detail(
     onReview,
     onConflicts,
     onOpenLink,
+    onOpenRow,
   }: {
     narrow: boolean;
     onClose: () => void;
@@ -85,6 +86,8 @@ export function detail(
     onConflicts: () => void;
     /** Present when the event has a Google link and the host can open it. */
     onOpenLink?: () => void;
+    /** Present when the host can show the row itself (to complete it). */
+    onOpenRow?: () => void;
   },
 ): HTMLElement {
   const { doc } = ctx;
@@ -139,6 +142,31 @@ export function detail(
             },
             'Review changes',
           ),
+        )
+      : null,
+    event.incomplete
+      ? h(
+          doc,
+          'div',
+          { class: 'conflict-note', 'data-key': 'drawer-incomplete' },
+          h(
+            doc,
+            'span',
+            {},
+            `${event.incomplete}. ${event.id ? 'Nothing of it is sent to Google until it is complete; fill the column in the table.' : 'Fill the column in the table.'}`,
+          ),
+          onOpenRow
+            ? h(
+                doc,
+                'button',
+                {
+                  class: 'btn btn-sm',
+                  'data-key': 'drawer-open-row',
+                  onclick: onOpenRow,
+                },
+                'Open row',
+              )
+            : null,
         )
       : null,
     event.conflict

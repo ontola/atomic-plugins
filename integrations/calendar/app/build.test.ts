@@ -18,13 +18,12 @@ describe('calendar drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 127,611 bytes (about 125 KiB) with minified JS and CSS
-    // (2026-10-02, 0.3.0: 0.2.0 plus "Sync this table to Google Calendar"
-    // on another event-v1 table: the row grant, the binding under the App
-    // and the setup copy for it). The limit is that plus about 10%, rounded
-    // up to 138 KiB, so a real growth fails here instead of passing
-    // silently.
-    expect(bytes).toBeLessThan(138 * 1024);
+    // Measured 129,608 bytes (about 127 KiB) with minified JS and CSS
+    // (2026-10-02, 0.3.1: 0.3.0 plus the incomplete-row list, drawer note
+    // and hold-back for rows missing a required event-v1 field; 0.3.0 was
+    // 127,611 bytes). The limit is that plus about 10%, rounded up to
+    // 140 KiB, so a real growth fails here instead of passing silently.
+    expect(bytes).toBeLessThan(140 * 1024);
   });
 
   it('carries no credential handling or network access of its own', () => {

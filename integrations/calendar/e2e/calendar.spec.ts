@@ -42,7 +42,7 @@ import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -538,6 +538,14 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
           propVals: { [name]: 'Planning day', [day]: today },
         });
         await row.save();
+        // A row missing the class's required Day (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped).
+        const retro = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: 'Retro' },
+        });
+        await retro.save();
 
         return made.subject;
       },
@@ -581,6 +589,16 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
     await expect(
       app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
     ).toHaveCount(0);
+    // The row without a Day is listed as incomplete, with a way to the row,
+    // and drawn on no day; the rest of the table is unaffected.
+    const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
+    await expect(incomplete).toContainText('1 row is incomplete');
+    await expect(incomplete).toContainText('Retro');
+    await expect(incomplete).toContainText('Incomplete: missing Day');
+    await expect(
+      incomplete.getByRole('button', { name: 'Open row' }),
+    ).toBeVisible();
+    await expect(app.getByRole('button', { name: /^Retro, / })).toHaveCount(0);
   });
 
   test('syncs a hand-made event-v1 table to Google Calendar after Allow editing, and sends a reviewed row edit (#177 item 14)', async ({
