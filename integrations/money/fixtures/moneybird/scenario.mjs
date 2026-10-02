@@ -5,8 +5,8 @@
  * integrations/localthought/fixtures/index.mjs.
  *
  * Served, read-only like the real proxy's Moneybird catalog entry:
- *   GET /proxy/moneybird/administrations.json
- *   GET /proxy/moneybird/<administration_id>/contacts.json
+ *   GET /proxy/moneybird/api/v2/administrations.json
+ *   GET /proxy/moneybird/api/v2/<administration_id>/contacts.json
  *       [?page=<n>][&per_page=<k>][&include_archived=true]
  * Any other method is 403; any other path, or an unknown administration, 404.
  *
@@ -42,7 +42,13 @@ export function moneybirdFixture({ outage = true } = {}) {
   return {
     reads,
     request(method, url) {
-      const path = url.pathname.replace(/^\/proxy\/moneybird/, '');
+      // The real proxy matches the path with the document's server base
+      // path (`/api/v2`) included; without it the operation is not in the
+      // catalog.
+      const prefix = `/proxy/moneybird${new URL(UPSTREAM).pathname}`;
+      if (!url.pathname.startsWith(`${prefix}/`))
+        return { status: 404, body: { error: 'not in the catalog' } };
+      const path = url.pathname.slice(prefix.length);
       if (method !== 'GET') return { status: 403, body: {} };
       if (path === '/administrations.json')
         return { status: 200, body: structuredClone(administrations) };

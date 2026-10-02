@@ -14,7 +14,7 @@ describe('moneybird drive-app bundle', async () => {
       `data:text/javascript;base64,${Buffer.from(text).toString('base64')}`
     );
     expect(Object.keys(mod)).toEqual(['view']);
-    // Measured 9,866 bytes minified on 2026-10-01, at the a12b74a6783b
+    // Measured 9,918 bytes minified on 2026-10-02, at the a12b74a6783b
     // pin; the limit is that plus about 10%, rounded up.
     expect(bytes).toBeLessThan(11_000);
   });
