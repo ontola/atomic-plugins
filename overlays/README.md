@@ -107,13 +107,33 @@ python3 overlays/scripts/validate_oad_pins.py --directory /path/to/openapi-direc
 ```
 
 Add `--fetch-missing` to fetch historical pins absent from current upstream
-`main` (historical Discord and Clockify revisions remain published).
+`main` (historical Discord and Clockify revisions remain published). A
+blobless clone (`git clone --filter=blob:none --no-checkout`, as CI makes)
+is enough: the script fetches the pinned documents' blobs in batches.
 
 The history check accepts old revisions but rejects a pin at a commit that
 did not change the OAD. For an audit requiring every overlay to target the
 latest OAD at a particular ref, add `--latest-ref origin/main`. That audit
 will intentionally fail once historical and current revisions coexist.
 These checks establish target provenance, not live-provider compatibility.
+
+With `--directory`, the script also reads every pinned OAD and applies each
+overlay the way the proxy's loader does (its `parse_target` grammar, a deep
+merge of objects, every action an `update`): an action whose target does not
+exist is an error, so the mismatch of
+[#264](https://github.com/ontola/atomic-plugins/issues/264) cannot come
+back. Overlays a dated catalog selects are applied in that catalog's order, so
+a path an earlier overlay adds counts. Overlays no catalog selects are
+composed per pin with their sibling overlays in whichever order resolves,
+because a historical catalog's order is not recorded here (Clockify's
+`dc7b2bdb` auth and pagination overlays target paths its `crud-causality`
+sibling adds). A revision that a higher `-vN-` file of the same kind and pin
+supersedes is not checked on its own, since it usually exists because the
+old one does not compose; a catalog that still selects it is told. Three
+pinned OADs do not parse with libyaml (bunq.com 1.0: a mis-indented block
+scalar; codat.io accounting 2.1.0: a tab; sendgrid.com 1.0.0: a control
+character). The script warns and cannot check their overlays; whether the
+proxy's serde_yaml, also libyaml-based, accepts them is not verified.
 
 Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
@@ -160,7 +180,9 @@ place.
 Checks:
 
 - `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
-  filenames and `extends` commits pass the full-history check; every catalog overlay URL, and
+  filenames and `extends` commits pass the full-history check, and every
+  action target exists in its pinned OAD or in the catalog composition up to
+  it; every catalog overlay URL, and
   every OAD URL under the Pages base, maps to a file in this folder, and the
   tests below pass (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
@@ -168,7 +190,9 @@ Checks:
   Pages serves it.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
-  overlays from this folder.
+  overlays from this folder. Its
+  `swagger2_overlay_revisions_compose_without_components` test composes every
+  Swagger 2.0 overlay here on its own, downloading the 21 pinned documents.
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
@@ -237,6 +261,47 @@ continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
+
+## Swagger 2.0 documents
+
+The 2026-10-02 collection audit behind
+[#264](https://github.com/ontola/atomic-plugins/issues/264) found 21
+overlays, for 18 providers, pinned to a `swagger.yaml` whose first action
+targets `$.components`. A Swagger 2.0 document has `definitions`,
+`parameters`, `responses` and `securityDefinitions` but no `components`, so
+the proxy's strict `merge_at_target` refused the whole composition
+(`overlay target "$.components" does not exist`). `openapi-directory`'s
+`main` holds only `swagger.yaml` in those 18 folders, so there is no
+OpenAPI 3 document to re-pin to. Each of the 21 has a new
+`<kind>-v2-<oad-commit>-overlay.yaml` revision for the same pin that targets
+`$` and adds the map as a root vendor extension instead: `x-paginationSchemes`
+for the 18 pagination overlays, `x-crudResources` for the adafruit.com,
+cenit.io and getsandbox.com CRUD overlays. Swagger 2.0 allows `x-` members on
+its root object, while `definitions` may hold only Schema Objects, so neither
+map can go there. The operation-level actions (`x-pagination` and `x-crud`
+on `$.paths[...]`) are unchanged, and their paths exist in the pinned
+documents. The old files stay published and unchanged, and nothing selects
+them: a `-v2-` revision supersedes its `-v1` for the validator above.
+
+The same check found four overlays pinned to OpenAPI 3 documents that have
+no `components` member at all (bikewise.org v2, braze.com 1.0.0,
+hetzner.cloud 1.0.0 and notion.com 1.0.0, the latter a historical pin).
+Their `-v2-` revisions target `$` and add `components.paginationSchemes`
+from the root, which is ordinary OpenAPI 3.
+
+What this establishes: the 25 revisions compose with the proxy's loader,
+checked against the pinned documents by the validator and, for the 21
+Swagger 2.0 ones, by integration-proxy's
+`swagger2_overlay_revisions_compose_without_components` test. What it does
+not: no dated catalog selects any of these 22 providers, so no catalog
+changed, and no runtime here reads a Swagger 2.0 document yet. The proxy
+resolves requests through `servers`, which Swagger 2.0 lacks (`host`,
+`basePath`, `schemes`), and syncables and reflector read
+`components.paginationSchemes` and `components.crudResources`, not the root
+vendor extensions. Selecting one of these providers needs that support
+first; the placement is a documented convention (noted in
+`openapi-extensions/spec/pagination-schemes/` and `crud-causality/`), not a
+verified capability.
 
 ## Authenticated principal overlays
 

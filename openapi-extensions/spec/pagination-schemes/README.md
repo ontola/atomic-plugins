@@ -263,6 +263,8 @@ actions:
                 role: nextPageToken
 ```
 
+**Swagger 2.0 documents (provisional).** A Swagger (OpenAPI 2.0) document has no `components` object, and its `definitions` may hold only Schema Objects. An overlay for such a document places the same map on the root object as the vendor extension `x-paginationSchemes`; `scheme` references in `x-pagination` then resolve against it. This keeps the document valid Swagger 2.0 and lets the overlay compose, but tooling support for reading the root member is declared, not verified, and the `components.paginationSchemes` form above stays the normative one.
+
 ---
 
 ## 8. Examples

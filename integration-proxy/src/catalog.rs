@@ -922,6 +922,87 @@ mod tests {
             .is_ok());
     }
 
+    /// Swagger 2.0 OADs have no `components`. The 2026-10-02 audit behind
+    /// ontola/atomic-plugins#264 found 21 overlays pinned to a `swagger.yaml`
+    /// that target `$.components`, which `merge_at_target` refuses; their
+    /// `-v2-` revisions add root `x-paginationSchemes`/`x-crudResources`
+    /// instead (overlays/README.md, "Swagger 2.0 documents"). Composes every
+    /// Swagger 2.0 overlay under `overlays/APIs` on its own against its
+    /// pinned OAD: a current revision loads, a superseded one fails on
+    /// exactly that target. No dated catalog selects these providers.
+    #[tokio::test]
+    #[ignore = "downloads the pinned Swagger 2.0 OADs the overlays extend"]
+    async fn swagger2_overlay_revisions_compose_without_components() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
+        let mut files = Vec::new();
+        collect_overlays(&overlays.join("APIs"), &mut files);
+        files.sort();
+        let client = crate::build_http_client();
+        let (mut current, mut superseded) = (0, 0);
+        for path in files {
+            let overlay: Value = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let Some(extends) = overlay["extends"].as_str() else {
+                continue;
+            };
+            if !extends.ends_with("/swagger.yaml") {
+                continue;
+            }
+            let relative = path.strip_prefix(&overlays).unwrap().to_str().unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            // `<kind>-<sha>-overlay.yaml` is superseded by `<kind>-v2-<sha>-overlay.yaml`;
+            // the pin validator enforces the 40-hex-digit sha in the name.
+            let (kind, rest) = name.split_at(name.len() - "-".len() - 40 - "-overlay.yaml".len());
+            let is_superseded =
+                !kind.ends_with("-v2") && path.with_file_name(format!("{kind}-v2{rest}")).is_file();
+            let catalog = tempfile_path("swagger.json");
+            fs::write(
+                &catalog,
+                serde_json::json!({"platforms": [{
+                    "name": "swagger",
+                    "openapi": extends,
+                    "overlays": [format!("{OVERLAYS_PAGES_BASE}{relative}")],
+                }]})
+                .to_string(),
+            )
+            .unwrap();
+            let result =
+                Catalog::load_with_mirror(&catalog.to_string_lossy(), &client, Some(&overlays))
+                    .await;
+            if is_superseded {
+                let error = result
+                    .err()
+                    .unwrap_or_else(|| panic!("{relative}: a superseded revision should not load"));
+                assert!(
+                    error.contains("overlay target \"$.components\" does not exist"),
+                    "{relative}: {error}"
+                );
+                superseded += 1;
+            } else {
+                if let Err(error) = result {
+                    panic!("{relative}: {error}");
+                }
+                current += 1;
+            }
+        }
+        assert_eq!(
+            superseded, 21,
+            "the audit's 21 superseded Swagger 2.0 overlays"
+        );
+        assert!(current >= 21, "{current} current Swagger 2.0 overlays");
+    }
+
+    fn collect_overlays(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect_overlays(&path, out);
+            } else if path.to_string_lossy().ends_with("-overlay.yaml") {
+                out.push(path);
+            }
+        }
+    }
+
     fn tempfile_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "integration-proxy-test-{}-{}",
