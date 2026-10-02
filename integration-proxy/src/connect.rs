@@ -1366,6 +1366,68 @@ mod tests {
         ));
     }
 
+    /// atomic-plugins#258: an API-key authentication profile of a document
+    /// that also declares OAuth keeps its help link and key check; without a
+    /// profile selection the mixed document is not offered at all.
+    #[tokio::test]
+    async fn an_api_key_profile_of_a_mixed_document_keeps_its_help_link_and_key_check() {
+        let mut document = key_check_document("header");
+        document["components"]["securitySchemes"]["userOAuth"] = serde_json::json!({
+            "type": "oauth2", "flows": {"authorizationCode": {
+                "authorizationUrl": "https://auth.service.example/authorize",
+                "tokenUrl": "https://auth.service.example/token",
+                "scopes": {"profile": "Profile"}
+            }}
+        });
+        document["paths"]["/v1/me"] =
+            serde_json::json!({"get": {"security": [{"userOAuth": ["profile"]}]}});
+        document["components"]["x-authentication-profiles"] = serde_json::json!({
+            "key": {"securityScheme": "serviceKey"},
+            "user": {"securityScheme": "userOAuth"}
+        });
+        let page = |selection: serde_json::Value| {
+            let mut s = state(None);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document.clone(),
+                selection,
+            );
+            let uri = connect_uri(&api_key_request());
+            async move { get_body(s, &uri).await }
+        };
+
+        let (status, html) = page(serde_json::json!({"authenticationProfile": "key"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("A personal key, made under Preferences, Advanced."));
+        assert!(html.contains(
+            r#"<a href="https://service.example/help/api-keys" target="_blank" rel="noopener noreferrer">Where to find your Clockify API key</a>"#
+        ));
+        let catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            document.clone(),
+            serde_json::json!({"authenticationProfile": "key"}),
+        );
+        let crate::providers::SecurityScheme::ApiKey(scheme) =
+            catalog.security_scheme("clockify").unwrap()
+        else {
+            panic!("the key profile must resolve to an apiKey scheme");
+        };
+        let check = scheme.key_check.unwrap();
+        assert_eq!(
+            check.url.as_str(),
+            "https://api.service.example/api/v1/user"
+        );
+        assert_eq!(check.label_pointer.as_deref(), Some("/email"));
+
+        for selection in [
+            serde_json::json!({}),
+            serde_json::json!({"apiKeySecurityScheme": "serviceKey"}),
+        ] {
+            let (_, html) = page(selection).await;
+            assert!(html.contains("This platform is not available for connection"));
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn postgres_a_rejected_key_is_asked_again_and_an_accepted_one_keeps_its_label() {

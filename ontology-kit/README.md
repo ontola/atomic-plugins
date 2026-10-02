@@ -31,6 +31,15 @@ specifies:
 | `work-project-v1`, `work-person-v1` | `name`                                                            | –                                                                                                 | –                                                                                                                      |
 | `bank-transaction-v1`               | `bank-account`, `bank-currency`, `bank-amount`, `bank-value-date` | `name`, `bank-booking-date`, `bank-description`, `bank-reference`, `money-category`, `money-note` | money 0.2.0's shortnames, unchanged                                                                                    |
 
+Which app uses which class today: Google Calendar (`calendar` 0.3.1) writes
+`event-v1`; GitHub issues (`issue-tracker` 0.3.1) and Todoist (`todoist` 0.1.1)
+write `issue-v1`; Clockify (`timesheets` 0.6.2) writes `time-entry-v1`, linked
+to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
+writes `bank-transaction-v1`. Calendar, issue-tracker and timesheets also
+offer themselves as a view of a hand-made table of their class, and (from
+0.3.0, 0.3.0 and 0.6.0) can sync one. Each plugin's README is the authority
+for what it has checked.
+
 `name` is `https://atomicdata.dev/properties/name`. Provider data (ids, ETags,
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is
 never part of a shared class: each sync part defines it in its own ontology.
