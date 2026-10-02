@@ -26,12 +26,12 @@ to `main` changes what the proxy composes at its next start. The OAD
 `ontola/openapi-directory` document at the full commit SHA that last changed
 that file, rather than a later unrelated repository commit.
 
-The unversioned `catalog.json` is a deprecated compatibility bridge; its
-`_comment` carries the notice without invalidating JSON. It retains the
-prior OAD revisions (including Discord's two-read subset and Clockify's
-older revision), with their overlays under canonical revision filenames.
-Keep it until the authorized localthought.io deployment is confirmed to use
-the dated catalog, then remove it. Old overlay revision files stay published.
+The unversioned `catalog.json` was removed after localthought.io switched to
+this dated catalog on 2026-10-02 (Heroku release v85, wrapper commit
+`1f89c7efb25f6fd0f7394997e69ed738fd1a4aad`, proxy 0.2.4). Its live Discord
+document changed from two paths to 153, confirming the catalog switch.
+Historical overlay revisions remain published, including Discord's two-read
+subset and Clockify's older revision; existing revision URLs stay valid.
 
 Dated catalogs and their selected revision files are immutable once on
 `main`; publish a new dated catalog and update the proxy's default or its
@@ -92,7 +92,7 @@ python3 overlays/scripts/validate_oad_pins.py --directory /path/to/openapi-direc
 ```
 
 Add `--fetch-missing` to fetch historical pins absent from current upstream
-`main` (the compatibility catalog selects two of these).
+`main` (historical Discord and Clockify revisions remain published).
 
 The history check accepts old revisions but rejects a pin at a commit that
 did not change the OAD. For an audit requiring every overlay to target the
@@ -155,7 +155,7 @@ Checks:
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder.
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
-  served dated catalogs, the deprecated compatibility catalog, every overlay and Pages-published OAD it lists, and
+  served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
 ## Authenticated principal overlays
