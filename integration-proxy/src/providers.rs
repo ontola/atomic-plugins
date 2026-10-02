@@ -214,18 +214,7 @@ fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCh
     {
         return Err("key check: operation must take no parameters or body".into());
     }
-    let requires_scheme = operation
-        .get("security")
-        .or_else(|| document.get("security"))
-        .and_then(Value::as_array)
-        .is_some_and(|requirements| {
-            requirements.iter().any(|requirement| {
-                requirement
-                    .as_object()
-                    .is_some_and(|members| members.len() == 1 && members.contains_key(scheme_name))
-            })
-        });
-    if !requires_scheme {
+    if !covers(document, operation, scheme_name) {
         return Err("key check: operation must require this API key scheme".into());
     }
     let server = document
@@ -288,6 +277,117 @@ impl SecurityScheme {
     }
 }
 
+impl SecurityScheme {
+    /// Resolves the authentication profile the trusted catalog selection
+    /// names (`x-authentication-profiles`,
+    /// openapi-extensions/spec/authentication-profiles). Unlike
+    /// [`SecurityScheme::from_document`], the document may declare several
+    /// kinds of scheme: the profile's one scheme is used, and only for the
+    /// operations it covers ([`covers`]). An unresolvable profile is an
+    /// error, never a fallback to another scheme.
+    pub fn for_profile(document: &Value, profile: &str) -> Result<Self, String> {
+        let scheme_name = profile_scheme(document, profile)?;
+        let scheme = document
+            .pointer("/components/securitySchemes")
+            .and_then(|schemes| schemes.get(scheme_name))
+            .ok_or("authentication profile names an undeclared security scheme")?;
+        if covered_operations(document, scheme_name) == 0 {
+            return Err("authentication profile covers no operation".into());
+        }
+        match scheme.get("type").and_then(Value::as_str) {
+            Some("oauth2") => {
+                Provider::resolve(document, Some(scheme_name), Coverage::Profile).map(Self::OAuth)
+            }
+            Some("apiKey") => {
+                ApiKeyScheme::from_document(document, Some(scheme_name)).map(Self::ApiKey)
+            }
+            _ => Err("authentication profile's security scheme kind is not supported".into()),
+        }
+    }
+}
+
+/// The security scheme of `document`'s authentication profile `profile`
+/// (openapi-extensions/spec/authentication-profiles, section 4.2). Checks the
+/// declaration's shape; the scheme's existence and kind are the caller's.
+pub fn profile_scheme<'a>(document: &'a Value, profile: &str) -> Result<&'a str, String> {
+    let profiles = document
+        .pointer("/components/x-authentication-profiles")
+        .ok_or("document declares no authentication profiles")?
+        .as_object()
+        .ok_or("x-authentication-profiles must be an object")?;
+    let declared = profiles
+        .get(profile)
+        .ok_or("selected authentication profile is not declared")?
+        .as_object()
+        .ok_or("an authentication profile must be an object")?;
+    if declared
+        .keys()
+        .any(|key| key != "securityScheme" && key != "description")
+    {
+        return Err("authentication profile has an unknown member".into());
+    }
+    if declared
+        .get("description")
+        .is_some_and(|description| !description.is_string())
+    {
+        return Err("authentication profile description must be a string".into());
+    }
+    declared
+        .get("securityScheme")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "authentication profile securityScheme must be a string".into())
+}
+
+/// Whether `scheme_name` alone authenticates `operation`: its effective
+/// security (its own `security`, else the document's) has a requirement
+/// whose only member is that scheme. An anonymous alternative (`{}`) next
+/// to it does not matter; a requirement that combines it with another
+/// scheme does not count.
+pub fn covers(document: &Value, operation: &Value, scheme_name: &str) -> bool {
+    operation
+        .get("security")
+        .or_else(|| document.get("security"))
+        .and_then(Value::as_array)
+        .is_some_and(|requirements| {
+            requirements.iter().any(|requirement| {
+                requirement
+                    .as_object()
+                    .is_some_and(|members| members.len() == 1 && members.contains_key(scheme_name))
+            })
+        })
+}
+
+const OPERATION_METHODS: [&str; 8] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace",
+];
+
+fn covered_operations(document: &Value, scheme_name: &str) -> usize {
+    document
+        .get("paths")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|paths| paths.values())
+        .flat_map(|item| {
+            OPERATION_METHODS
+                .iter()
+                .filter_map(move |method| item.get(*method))
+        })
+        .filter(|operation| covers(document, operation, scheme_name))
+        .count()
+}
+
+/// Which operations an OAuth scheme's scopes are derived from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Coverage {
+    /// Every operation must accept the scheme (or anonymous access); any
+    /// other requirement makes the document unsupported.
+    Every,
+    /// Only the operations the scheme covers count; the selected
+    /// authentication profile refuses the others per request.
+    Profile,
+}
+
 /// Whether `document` opts out of security explicitly, as OpenAPI spells
 /// it: a top-level `security` that is an empty array. Anything else that
 /// mentions security (a declared scheme, or an operation with a non-empty
@@ -318,6 +418,14 @@ fn declares_no_security(document: &Value) -> bool {
 impl Provider {
     /// Read API capabilities from the composed document, never from platform names.
     pub fn from_document(document: &Value, selected_scheme: Option<&str>) -> Result<Self, String> {
+        Self::resolve(document, selected_scheme, Coverage::Every)
+    }
+
+    fn resolve(
+        document: &Value,
+        selected_scheme: Option<&str>,
+        coverage: Coverage,
+    ) -> Result<Self, String> {
         let schemes = document
             .pointer("/components/securitySchemes")
             .and_then(Value::as_object)
@@ -376,21 +484,25 @@ impl Provider {
             let requirements = requirements
                 .as_array()
                 .ok_or("invalid security requirements")?;
-            if requirements.is_empty()
+            // Alternatives are OR; choose a supported single-scheme alternative.
+            let requirement = requirements.iter().find(|r| {
+                r.as_object()
+                    .is_some_and(|r| r.len() == 1 && r.contains_key(scheme_name))
+            });
+            let anonymous = requirements.is_empty()
                 || requirements
                     .iter()
-                    .any(|r| r.as_object().is_some_and(|r| r.is_empty()))
-            {
-                return Ok(());
-            }
-            // Alternatives are OR; choose a supported single-scheme alternative.
-            let requirement = requirements
-                .iter()
-                .find(|r| {
-                    r.as_object()
-                        .is_some_and(|r| r.len() == 1 && r.contains_key(scheme_name))
-                })
-                .ok_or("operation requires an unsupported authentication combination")?;
+                    .any(|r| r.as_object().is_some_and(|r| r.is_empty()));
+            let requirement = match (coverage, requirement) {
+                // A profile asks for the scopes of every operation it sends
+                // the token to, anonymous alternative or not, and of no
+                // other: uncovered operations are refused per request.
+                (Coverage::Profile, Some(requirement)) => requirement,
+                (Coverage::Profile, None) => return Ok(()),
+                (Coverage::Every, _) if anonymous => return Ok(()),
+                (Coverage::Every, requirement) => requirement
+                    .ok_or("operation requires an unsupported authentication combination")?,
+            };
             for scope in requirement[scheme_name]
                 .as_array()
                 .ok_or("invalid scope requirements")?
@@ -412,9 +524,7 @@ impl Provider {
                 .iter()
                 .filter_map(|(n, p)| p.as_object().map(|p| (n, p)))
             {
-                for method in [
-                    "get", "put", "post", "delete", "options", "head", "patch", "trace",
-                ] {
+                for method in OPERATION_METHODS {
                     if let Some(operation) = path.get(method) {
                         let pointer = format!(
                             "#/paths/{}/{}",
@@ -1689,6 +1799,189 @@ mod tests {
         let neither = serde_json::json!({"components":{"securitySchemes":{"basic":{
             "type":"http","scheme":"basic"}}}});
         assert!(SecurityScheme::from_document(&neither, None, None).is_err());
+    }
+
+    fn mixed() -> Value {
+        crate::test_support::mixed_profiles_document("https://api.example/v1")
+    }
+
+    #[test]
+    fn a_mixed_kind_document_without_a_profile_selection_is_refused() {
+        // Declaring profiles enables nothing: without a selection the
+        // document resolves exactly as before, and two kinds are refused,
+        // whichever scheme selections are given.
+        for (oauth, api_key) in [
+            (None, None),
+            (Some("userOAuth"), None),
+            (None, Some("botToken")),
+            (Some("userOAuth"), Some("botToken")),
+        ] {
+            assert!(
+                SecurityScheme::from_document(&mixed(), oauth, api_key)
+                    .unwrap_err()
+                    .contains("mixed-kind"),
+                "{oauth:?} {api_key:?}"
+            );
+        }
+        // Nor does a strict OAuth resolution skip the bot-only operations.
+        assert!(Provider::from_document(&mixed(), Some("userOAuth")).is_err());
+    }
+
+    #[test]
+    fn a_user_profile_asks_only_for_the_scopes_of_the_operations_it_covers() {
+        let SecurityScheme::OAuth(provider) =
+            SecurityScheme::for_profile(&mixed(), "user").unwrap()
+        else {
+            panic!("user profile must resolve to OAuth");
+        };
+        // Not `unused` (only in the combined requirement) and nothing of the
+        // implicit scheme.
+        assert_eq!(provider.scopes, ["guilds", "identify"]);
+        assert_eq!(provider.authorization_url, "https://auth.example/authorize");
+        assert_eq!(provider.token_url, "https://auth.example/token");
+        let document = mixed();
+        let covered = |path: &str, method: &str| {
+            covers(&document, &document["paths"][path][method], "userOAuth")
+        };
+        assert!(covered("/users/@me", "get"));
+        assert!(covered("/users/@me/guilds", "get"));
+        for (path, method) in [
+            ("/channels/{id}/messages", "get"),
+            ("/channels/{id}/messages", "post"),
+            ("/public", "get"),
+            ("/combined", "get"),
+            ("/implicit", "get"),
+        ] {
+            assert!(!covered(path, method), "{method} {path}");
+        }
+        // An anonymous alternative next to the scheme still counts as covered,
+        // and its scopes are asked for.
+        let mut anonymous = mixed();
+        anonymous["paths"]["/public"]["get"]["security"] =
+            serde_json::json!([{}, {"userOAuth": ["unused"]}]);
+        let SecurityScheme::OAuth(provider) =
+            SecurityScheme::for_profile(&anonymous, "user").unwrap()
+        else {
+            panic!("user profile must resolve to OAuth");
+        };
+        assert_eq!(provider.scopes, ["guilds", "identify", "unused"]);
+    }
+
+    #[test]
+    fn a_bot_profile_resolves_to_its_api_key_scheme() {
+        let SecurityScheme::ApiKey(scheme) = SecurityScheme::for_profile(&mixed(), "bot").unwrap()
+        else {
+            panic!("bot profile must resolve to an apiKey scheme");
+        };
+        assert_eq!(scheme.name, "Authorization");
+        assert_eq!(scheme.location, ApiKeyLocation::Header);
+        let document = mixed();
+        let covered = |path: &str, method: &str| {
+            covers(&document, &document["paths"][path][method], "botToken")
+        };
+        assert!(covered("/users/@me", "get"));
+        assert!(covered("/channels/{id}/messages", "get"));
+        assert!(covered("/channels/{id}/messages", "post"));
+        assert!(!covered("/users/@me/guilds", "get"));
+        assert!(!covered("/combined", "get"));
+        assert!(!covered("/public", "get"));
+    }
+
+    #[test]
+    fn an_unresolvable_profile_is_refused_never_replaced() {
+        let refused = |change: &dyn Fn(&mut Value), profile: &str| {
+            let mut document = mixed();
+            change(&mut document);
+            SecurityScheme::for_profile(&document, profile).unwrap_err()
+        };
+        type Change = Box<dyn Fn(&mut Value)>;
+        let profiles = "/components/x-authentication-profiles";
+        let cases: Vec<(&str, Change, &str)> = vec![
+            ("unknown profile", Box::new(|_| {}), "nobody"),
+            (
+                "no profiles declared",
+                Box::new(|d| {
+                    d["components"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("x-authentication-profiles");
+                }),
+                "user",
+            ),
+            (
+                "profiles not an object",
+                Box::new(|d| d["components"]["x-authentication-profiles"] = serde_json::json!([])),
+                "user",
+            ),
+            (
+                "unknown member",
+                Box::new(move |d| {
+                    d.pointer_mut(profiles).unwrap()["user"]["scopes"] = serde_json::json!(["x"])
+                }),
+                "user",
+            ),
+            (
+                "non-string description",
+                Box::new(move |d| {
+                    d.pointer_mut(profiles).unwrap()["user"]["description"] = serde_json::json!(1)
+                }),
+                "user",
+            ),
+            (
+                "missing scheme",
+                Box::new(move |d| d.pointer_mut(profiles).unwrap()["user"] = serde_json::json!({})),
+                "user",
+            ),
+            (
+                "undeclared scheme",
+                Box::new(move |d| {
+                    d.pointer_mut(profiles).unwrap()["user"]["securityScheme"] =
+                        serde_json::json!("missing")
+                }),
+                "user",
+            ),
+            (
+                "implicit-only OAuth scheme",
+                Box::new(move |d| {
+                    d.pointer_mut(profiles).unwrap()["user"]["securityScheme"] =
+                        serde_json::json!("implicitOAuth")
+                }),
+                "user",
+            ),
+            (
+                "unsupported scheme kind",
+                Box::new(move |d| {
+                    d["components"]["securitySchemes"]["basic"] =
+                        serde_json::json!({"type": "http", "scheme": "basic"});
+                    d["paths"]["/public"]["get"]["security"] = serde_json::json!([{"basic": []}]);
+                    d.pointer_mut(profiles).unwrap()["user"]["securityScheme"] =
+                        serde_json::json!("basic")
+                }),
+                "user",
+            ),
+            (
+                "covers no operation",
+                Box::new(|d| {
+                    d["paths"]["/users/@me"]["get"]["security"] =
+                        serde_json::json!([{"botToken": []}]);
+                    d["paths"]["/users/@me/guilds"]["get"]["security"] =
+                        serde_json::json!([{"botToken": []}]);
+                }),
+                "user",
+            ),
+            (
+                "undeclared scope",
+                Box::new(|d| {
+                    d["paths"]["/users/@me/guilds"]["get"]["security"] =
+                        serde_json::json!([{"userOAuth": ["admin"]}]);
+                }),
+                "user",
+            ),
+        ];
+        for (name, change, profile) in cases {
+            let error = refused(&*change, profile);
+            assert!(!error.is_empty(), "{name}");
+        }
     }
 
     fn no_security_document() -> Value {

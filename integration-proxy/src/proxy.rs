@@ -388,6 +388,16 @@ async fn forward_inner(
     target.set_query(query.as_deref());
     let injection = match &credential {
         StoredCredential::OAuth { access_token, .. } => {
+            // Only while the platform still resolves to OAuth: if its
+            // selection has since moved to an apiKey profile, the token must
+            // not go to that profile's operations, and the person has to
+            // connect again.
+            if !matches!(
+                state.catalog.security_scheme(platform),
+                Ok(crate::providers::SecurityScheme::OAuth(_))
+            ) {
+                return Err(ApiError::CredentialRefreshFailed);
+            }
             CredentialInjection::Bearer(access_token.clone())
         }
         StoredCredential::ApiKey { key, .. } => {
@@ -881,6 +891,126 @@ mod tests {
         // A signed POST covers its body.
         let post = signed_request(&f.state, &f.owner, "POST", &f.path(), b"{}".to_vec());
         assert_eq!(f.send(post).await.status(), StatusCode::OK);
+    }
+
+    /// atomic-plugins#258: on a platform whose document declares a bot token
+    /// and OAuth together, the catalog's profile selection decides which
+    /// credential a connection holds and which operations it reaches. A
+    /// user's OAuth token goes only to operations the user profile covers,
+    /// and to none once the selection no longer resolves to OAuth.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_profile_connection_sends_its_credential_only_where_the_profile_allows() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let echo = |headers: HeaderMap| async move {
+            Json(json!({
+                "authorization": headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()),
+            }))
+        };
+        let app = axum::Router::new()
+            .route("/v1/users/@me", axum::routing::any(echo))
+            .route("/v1/users/@me/guilds", axum::routing::any(echo))
+            .route("/v1/channels/1/messages", axum::routing::any(echo))
+            .route("/v1/public", axum::routing::any(echo));
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let catalog = |selection| {
+            crate::catalog::Catalog::from_test_document(
+                "mixed",
+                crate::test_support::mixed_profiles_document(&format!("http://{address}/v1")),
+                selection,
+            )
+        };
+        let security = security().await;
+        let mut s = state(Some(security.clone()));
+        s.catalog = catalog(json!({"authenticationProfile": "user"}));
+        let owner = Agent::new(41);
+        let connect = |credential: StoredCredential| {
+            let security = security.clone();
+            let owner = owner.id();
+            async move {
+                security
+                    .create_connection("mixed", &owner, &serde_json::to_vec(&credential).unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+        let user = connect(StoredCredential::OAuth {
+            provider: "mixed".into(),
+            access_token: "user-token".into(),
+            refresh_token: None,
+            expires_at: None,
+        })
+        .await;
+        let bot = connect(StoredCredential::ApiKey {
+            provider: "mixed".into(),
+            key: "Bot bot-token".into(),
+        })
+        .await;
+        let get = |s: &AppState, id: &str, path: &str| {
+            let request = signed_request(
+                s,
+                &owner,
+                "GET",
+                &format!("/proxy/{id}/mixed{path}"),
+                vec![],
+            );
+            let router = crate::router(s.clone());
+            async move { router.oneshot(request).await.unwrap() }
+        };
+
+        // The user profile: its OAuth token on the two operations it covers.
+        for path in ["/v1/users/@me", "/v1/users/@me/guilds"] {
+            let response = get(&s, &user, path).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                body_json(response).await["authorization"],
+                "Bearer user-token"
+            );
+        }
+        // Bot-only and anonymous-only operations are not in its catalog.
+        for path in ["/v1/channels/1/messages", "/v1/public"] {
+            assert_eq!(
+                get(&s, &user, path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+
+        // The bot profile: the key as declared, never the user's token.
+        let mut bot_state = s.clone();
+        bot_state.catalog = catalog(json!({"authenticationProfile": "bot"}));
+        let response = get(&bot_state, &bot, "/v1/channels/1/messages").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["authorization"], "Bot bot-token");
+        assert_eq!(
+            get(&bot_state, &bot, "/v1/users/@me/guilds").await.status(),
+            StatusCode::NOT_FOUND
+        );
+        // An OAuth connection made under the user profile sends nothing once
+        // the selection is the bot profile, even on an operation both
+        // profiles cover.
+        expect_error(
+            get(&bot_state, &user, "/v1/users/@me").await,
+            StatusCode::UNAUTHORIZED,
+            "credential_refresh_failed",
+        )
+        .await;
+        // And without a profile selection the mixed document sends nothing.
+        let mut unselected = s.clone();
+        unselected.catalog = catalog(json!({"oauthSecurityScheme": "userOAuth"}));
+        expect_error(
+            get(&unselected, &user, "/v1/users/@me").await,
+            StatusCode::UNAUTHORIZED,
+            "credential_refresh_failed",
+        )
+        .await;
+        expect_error(
+            get(&unselected, &bot, "/v1/users/@me").await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+        )
+        .await;
     }
 
     /// A platform whose document requires no security, served under an API
