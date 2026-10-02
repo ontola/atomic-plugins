@@ -20,8 +20,9 @@ https://ontola.github.io/atomic-plugins/overlays/<path>
 integration proxy's default `CATALOG_PATH` is
 `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit
-on `raw.githubusercontent.com`; the Pages URLs are not pinned, so a merge
-to `main` changes what the proxy composes at its next start. The OAD
+on `raw.githubusercontent.com`. Pages URLs are not Git-commit URLs, but
+CI preserves published dated catalogs and OAD-revision overlay files
+byte-for-byte on later merges. The OAD
 (`openapi`) URLs and every overlay's standard `extends` field pin the same
 `ontola/openapi-directory` document at the full commit SHA that last changed
 that file, rather than a later unrelated repository commit.
