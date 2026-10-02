@@ -19,7 +19,7 @@ The tester already agreed to the recording before this started; don't ask again.
 
 After the thank-you, end your final message with the exact token [END] on its own. Never write [END] earlier.
 
-If the tester insists on their own export instead: let them, use "your statement" in tasks 2 to 5, replace task 3 with "Import the same file once more, as if by mistake", and keep the rest.
+If the tester insists on their own export instead: let them, use "your statement" in tasks 2 to 5, replace task 3 with "Import the same file once more, as if by mistake" (the app should say there is nothing new), and keep the rest.
 
 ## For the moderator only
 
@@ -34,15 +34,17 @@ The sample statements:
 
 What success looks like, never to be said:
 
-- Task 2: they install Bank statements from Integrations, run Set up, then import from inside Money through the host's review. Transactions appear, with statements and closing balances.
-- Task 3: the review shows 15 new and 10 already imported, and nothing is imported twice. Watch whether they trust that.
+- Task 2: they install "Bank statements" from Integrations, under Drive apps (experimental plugins shown), open the app and import the file with "Import statement". No Set up and no host review step: the app reads the file in the browser, shows each statement's balances and what is new, and "Import" writes one row per new transaction into the app's own table, with progress in the button. Transactions appear, with statements under Imports and closing balances. Where they look for the import button is the first finding. If they end up under Community plugins on the old importer ("Create draft", then Set up and its Import tab), that is the other path, not the one this session tests: steer them back to Drive apps.
+- Task 3: the app's check shows 15 new and 10 already imported before it writes anything, and nothing is imported twice. Watch whether they trust that, and whether they notice the check at all.
 - Task 4: search, then the detail panel with the bank's original description. Amounts are shown exactly, never rounded.
 - Task 5: money in, out and net per account and currency. Totals are never added across currencies.
-- Task 6: the "Allow editing" bar comes first, then the category and note save. Note whether the bar makes sense to them.
-- Task 7: a clear refusal, and nothing written.
+- Task 6: on the app's own table the category and note save at once, with no "Allow editing" bar (the bar only appears on a table the app did not make, or on the old importer's table). If a bar does appear, note what they made of it; it is not the expected path here.
+- Task 7: the app's own error message says the file is not a bank statement, and nothing is written. Whether the message tells them what to do next is the question.
 
 Known limits (only new detail about them is a finding):
 
+- No account is involved, but the app needs GitHub Pages, where Atomic fetches the shared "Bank transaction" terms on first use. A tester who sees an empty or column-less table right after the first import is a finding, not a fault of the tester.
+- A transaction row missing its account, currency, amount or value date (only possible if the tester edits the table by hand) is not shown in the ledger in money 0.4.0. From 0.4.1 it is listed above the ledger under "Incomplete rows" with "Open row", and counted in no total. Not a task: mention it only if the tester happens to blank a cell, and check which version the droplet serves before calling it a finding.
 - Only MT940 and camt.053 are read: no CSV, PDF or OFX.
 - Size limits: MT940 up to 512 KB, camt.053 up to 5 MB, at most 500 transactions per file.
 - The same period imported in both formats gives separate rows, because identities are per format.

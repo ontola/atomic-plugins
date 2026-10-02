@@ -25,10 +25,13 @@ What success looks like, never to be said:
 - Task 2: they install the GitHub issues app from Integrations, connect GitHub on the consent page, choose the repository and read what the app will do on GitHub. Then a board appears with Todo, Doing and Done.
 - Tasks 3–6: the change appears on the board at once, but it is held as "Waiting to send" until they open "Review and send". The main question of this session is whether they find and understand that step. If they go to GitHub and see nothing, that is the moment to ask what they expected.
 - Task 3: moves the issue to Doing, which adds an `atomic:doing` label on GitHub.
+- Task 6: an issue made with the app's own "New issue" form is published to GitHub after the same review. An issue added anywhere else (the table, another view) stays "Local" until "Publish to GitHub" in its panel; if the tester added one that way, whether they understand why it did not reach GitHub is a finding.
 - Task 7: the label filter or the search.
 
 Known limits (only new detail about them is a finding):
 
+- From 0.3.1 an issue row without a title shows as "(no title)" with "Incomplete: missing Name" and "Open row", and nothing of it is sent. A tester only meets this after editing the table by hand.
+- "Sync this table to GitHub" (0.3.0) is for an Issue table the app did not make. It needs a table made by pasting the class address into New Table, so it is not a task for this session. Only if the tester already has such a table, or asks: the host asks "Allow editing", the app then asks which repository, and the rows already there stay local until "Publish to GitHub". The app can't delete rows there. Not verified against live GitHub.
 - Labels and assignees are read-only in the app.
 - Jira and Todoist appear in the source picker, disabled.
 - Nothing syncs while the app is closed.
