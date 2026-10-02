@@ -37,6 +37,12 @@
  * `editPage(id, properties)` changes a page as someone editing it in Notion
  * would (the same `properties` a PATCH body carries), `getPage(id)` reads
  * one whatever the scenario, and `archivePage(id)` moves it to the trash.
+ *
+ * For the live-check kit's offline tests (notion/live/fakeNotion.ts), not
+ * the mock proxy: `notionFixture({ blank: true })` starts with no pages, and
+ * `createPage(properties)` adds one to the first data source the way a
+ * `POST /v1/pages` would (the HTTP route stays a 403 here). Neither is in
+ * `drivers`, so neither is reachable over the mock proxy.
  */
 import { readFileSync } from 'node:fs';
 
@@ -404,7 +410,7 @@ function patchPage(target, schemaOf, properties) {
   return { status: 200, body: target };
 }
 
-export function notionFixture({ scenario = 'default' } = {}) {
+export function notionFixture({ scenario = 'default', blank = false } = {}) {
   const requests = [];
   // Per instance, so a rename in one test or lane never leaks into another.
   const data = structuredClone({
@@ -414,6 +420,8 @@ export function notionFixture({ scenario = 'default' } = {}) {
     ],
   });
   let current = scenario;
+  let created = 0;
+  if (blank) for (const entry of data.sources) entry.pages = [];
 
   // Any page, whatever the scenario shares, with the data source it is in.
   const locate = id => {
@@ -475,6 +483,24 @@ export function notionFixture({ scenario = 'default' } = {}) {
       if (result.status !== 200) throw new Error(result.body.message);
 
       return { last_edited_time: found.page.last_edited_time };
+    },
+    createPage(properties) {
+      const id = `9f000000-0000-4000-8000-${String(++created).padStart(12, '0')}`;
+      const entry = data.sources[0];
+      const made = page(id, {
+        name: 'Untitled',
+        status: null,
+        done: false,
+        points: null,
+        tags: [],
+        notes: [],
+      });
+      const result = patchPage(made, entry.source.properties, properties);
+      if (result.status !== 200) return result;
+      made.created_time = made.last_edited_time = new Date().toISOString();
+      entry.pages.push(made);
+
+      return { status: 200, body: structuredClone(made) };
     },
     getPage(id) {
       const found = locate(id);

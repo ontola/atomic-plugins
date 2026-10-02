@@ -145,6 +145,13 @@ node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
 **Not verified:** anything against a live Todoist account or the real
 integration proxy (#46).
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+todoist --i-understand-this-writes-to <project id>` runs this app's
+controller against one disposable Todoist project (the driver seeds and
+cleans up; the app stays read-only) and records what `GET /tasks/{id}`
+answers for a completed task; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
+
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
