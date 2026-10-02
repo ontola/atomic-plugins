@@ -11,7 +11,7 @@
  * skipped (#177; ontology-kit's rule). The project is the linked project
  * row's name; the person, the linked person row's.
  */
-import { incompleteOf, SHARED, sharedValues } from '../fields.js';
+import { incompleteOf, SHARED, sharedValues, TIME_ENTRY } from '../fields.js';
 import { atomic, NAME } from '../ontology.js';
 import type { PluginStore } from '../store.js';
 import { weekStartOf } from './time.js';
@@ -48,6 +48,10 @@ export async function timesheetFromRows(
   })) {
     const row = await store.getResource(subject).catch(() => undefined);
     if (!row) continue;
+    // A table also holds its Views and other children; only rows of the
+    // class are entries (before 0.6.2 such a child counted as running).
+    const isA = row.get(atomic.isA);
+    if (!Array.isArray(isA) || !isA.includes(TIME_ENTRY)) continue;
     const values = sharedValues(row.props);
     const start = values[SHARED.start];
     const end = values[SHARED.end];

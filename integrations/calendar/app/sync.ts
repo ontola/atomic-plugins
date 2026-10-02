@@ -667,6 +667,18 @@ async function otherColumns(
   ].filter(subject => !own.has(subject));
 }
 
+/**
+ * Whether a child of the table is one of its rows: `isA` the table's row
+ * class. A table also holds its Views (one per app added through "+ Add
+ * view") and other children, which are not events; before 0.3.1 those were
+ * read as rows and, having no Day, drawn nowhere.
+ */
+function isRow(row: PluginResource, where: Layout): boolean {
+  const isA = row.get(IS_A);
+
+  return Array.isArray(isA) && isA.includes(where.rowClass);
+}
+
 async function readRows(
   store: PluginStore,
   where: Layout,
@@ -687,6 +699,7 @@ async function readRows(
     value: where.table,
   })) {
     const row = await store.getResource(subject);
+    if (!isRow(row, where)) continue;
     const card = cardOf(row, props);
 
     if (!card.id) {
@@ -1177,6 +1190,7 @@ export async function readEvents(
     value: where.table,
   })) {
     const row = await store.getResource(subject);
+    if (!isRow(row, where)) continue;
     const card = cardOf(row, props);
     const shared = sharedValues(row.props);
     const baseline = baselineOf(row, props);

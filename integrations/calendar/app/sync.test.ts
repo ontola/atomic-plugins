@@ -12,7 +12,7 @@ import {
   ROW_EXTRAS_PROPERTY,
   TABLE,
 } from './fakeStore.js';
-import { EVENT } from './fields.js';
+import { EVENT, SHARED } from './fields.js';
 import { listCalendars } from './relay.js';
 import {
   ALL_DAY,
@@ -467,10 +467,11 @@ suite('Calendar drive app: supported path', () => {
 
   it('rows made here and invalid local edits are reported, not sent', async () => {
     const { store, controller } = await imported();
+    // A row made in the host table gets the table's class, event-v1.
     await store.newResource({
       parent: TABLE,
-      isA: [ROW_CLASS],
-      propVals: { [NAME]: 'Made here' },
+      isA: [EVENT],
+      propVals: { [NAME]: 'Made here', [SHARED.day]: '2026-09-24' },
     });
     editRow(store, 'timed', { [NAME]: '  ' });
     store.google.editRemote('timed', { location: 'Room 7' });

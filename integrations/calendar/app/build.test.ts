@@ -18,7 +18,7 @@ describe('calendar drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 129,608 bytes (about 127 KiB) with minified JS and CSS
+    // Measured 129,735 bytes (about 127 KiB) with minified JS and CSS
     // (2026-10-02, 0.3.1: 0.3.0 plus the incomplete-row list, drawer note
     // and hold-back for rows missing a required event-v1 field; 0.3.0 was
     // 127,611 bytes). The limit is that plus about 10%, rounded up to

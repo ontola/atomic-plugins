@@ -159,7 +159,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-DicXUkYKMTSUxmWugzR/g7LjQwPiOxj4yyYUJJ9sNZCw8FJqqrzG5JRiQ9gfAdCD"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-Dpav1FxAR55QleDltgiGDau5GWwgsWR4lE1DBuw1NpGUfzva7KFBrVPXTSZFGDG0"
   },
   {
     "https://atomicdata.dev/properties/localId": "todoist",
@@ -243,7 +243,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.6.2/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-sKkOAZuYp873+HrRNWBMC+ESExqymLv1S78eTFOAeFVpD8R2EMH86ENK5/c5zBBe"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-C84PMvRmsEbMZ2BVsXS/LXckqYXqGLA2lHEdtjwo4LXoTsNbNA+AfhXLifkLk4Zq"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",

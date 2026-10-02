@@ -16,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   129,608 bytes for 0.3.1) from GitHub Pages and refuses it unless it
+   129,735 bytes for 0.3.1) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
