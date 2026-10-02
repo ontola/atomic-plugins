@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -387,6 +387,64 @@ test.describe('money integration', () => {
     await app.getByRole('tab', { name: /^Imports/ }).click();
     await expect(app.getByRole('table').locator('tbody tr')).toHaveCount(2);
     expect(await rowsOf(page, own)).toHaveLength(4);
+
+    // A row missing a required field (#177; ontology-kit's rule: shown as
+    // incomplete, never skipped). The server refuses a commit that lacks a
+    // required property of the row's class (lib/src/resources.rs
+    // check_required_props; seen in the calendar lane on 2026-10-02), and
+    // an empty string is not a date, so the incomplete row this host can
+    // hold has an empty Amount (a string): typed by hand in the table.
+    const p = terms.properties;
+    const stub = await page.evaluate(
+      async ({ table, klass, props }) => {
+        const store = window.store!;
+        const made = await store.newResource({
+          parent: table,
+          isA: [klass],
+          propVals: props,
+        });
+        await made.save();
+
+        return made.subject;
+      },
+      {
+        table: own,
+        klass: shared,
+        props: {
+          [p['bank-account'].subject]: 'NL00BUNQ0000000000',
+          [p['bank-currency'].subject]: 'EUR',
+          [p['bank-amount'].subject]: '',
+          [p['bank-value-date'].subject]: '2026-09-04',
+          [p['bank-booking-date'].subject]: '2026-09-04',
+          [p['bank-description'].subject]: 'Typed by hand',
+        },
+      },
+    );
+    await app.getByRole('tab', { name: /^Transactions/ }).click();
+    // Listed above the ledger through the table subscription, with its note
+    // and a way to the row; not a fifth transaction, so the count stands.
+    const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
+    await expect(incomplete).toContainText('1 row is incomplete', {
+      timeout: 30_000,
+    });
+    await expect(incomplete).toContainText('Typed by hand');
+    await expect(incomplete).toContainText('Incomplete: missing Amount');
+    await expect(app.getByRole('tab', { name: /^Transactions/ })).toContainText(
+      '4',
+    );
+    await expect(
+      app.locator('table.m-ledger').getByText('Typed by hand'),
+    ).toHaveCount(0);
+    expect(await rowsOf(page, own)).toHaveLength(5);
+    // "Open row" leaves the app for the row's page in the host.
+    await incomplete
+      .getByRole('button', { name: 'Open row Typed by hand' })
+      .click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('subject'), {
+        timeout: 30_000,
+      })
+      .toBe(stub);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({

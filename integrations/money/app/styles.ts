@@ -198,6 +198,20 @@ export const MONEY_CSS = `
 .m-acctcell { color: var(--pl-muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .m-more { padding: 14px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 
+/* Incomplete rows (#177 rule), above the ledger */
+.m-incomplete {
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--pl-warn);
+  background: var(--pl-warn-soft);
+  border-radius: var(--pl-radius);
+  font-size: 13.5px;
+}
+.m-incomplete p { margin: 0 0 6px; }
+.m-incomplete ul { list-style: none; margin: 0; padding: 0; }
+.m-incomplete li { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; min-height: 30px; }
+.m-incomplete li .m-t { font-weight: 600; }
+
 /* Ledger list (<560px) */
 .m-list, .m-list ul { list-style: none; margin: 0; padding: 0; }
 .m-list h3 { margin: 0; }

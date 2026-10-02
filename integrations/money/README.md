@@ -7,7 +7,7 @@ This needs an atomic-server with the generic file entry point
 on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
 the pin when this was first verified, includes it; see [Verified](#verified)
 for the pins it was last run against, the current pin `a12b74a` included
-(0.4.0, 2026-10-02).
+(0.4.1, 2026-10-02).
 
 The importer below is one of two ways in. Since 0.4.0 the Money app
 (`app/`) also imports statements by itself, into a table of the shared
@@ -173,6 +173,26 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
   a list of buttons below), 200 rows at a time. Amounts are formatted from
   their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
+- **Incomplete rows** (0.4.1; #177, ontology-kit's rule: show an incomplete
+  row, never skip it). A row of the table's class that lacks one of the four
+  required fields (account, currency, amount, value date; absent or the
+  empty string) is listed in an "Incomplete rows" region above the ledger
+  on the Transactions tab, outside its filters, with what it does have, the
+  note ("Incomplete: missing Amount", the columns as the class names them)
+  and, on a host with `openResource`, "Open row" to the row's page, where
+  the column is filled. It is in no balance, total, account list, statement
+  or import check: the controller keeps such rows in `state.incomplete`,
+  apart from `state.rows`, which is all the ledger sums and `check.ts`
+  compares, so an incomplete row with an import's source id is neither
+  "already imported" nor a changed booking; the import writes a new row. A
+  row completed in the host moves into the ledger on the table's next
+  change notification; with only incomplete rows the region sits above the
+  first-run invitation. Children of the table that are not of its class (a
+  View, say) are not rows and are not listed. At the pin the server refuses
+  a commit missing a required property and an empty string is not a date,
+  so on this host such a row has an empty account, currency or amount, or
+  comes from a lens or another writer. A row with all four fields but an
+  amount that is not one stays in the ledger as "Not a valid amount".
 - **Detail**: the bank's fields read-only with the verbatim narrative;
   category and note (`money-category`, `money-note`) saved on change. The
   host lets an app edit the rows of the table it views only after the
@@ -286,9 +306,11 @@ the calendar, timesheets and issue-tracker apps do at the pin.
      been opened once, see above). Import statement asks for "Allow
      editing" first; so does saving a category or note.
 
-  Rows you add there need account, currency, amount and value date to show
-  in the ledger (a row without them is not shown; the #177 rule "show it as
-  incomplete" is not built yet). This path has unit tests only; no E2E.
+  Rows you add there need account, currency, amount and value date to be in
+  the ledger; since 0.4.1 a row without one of them is listed as incomplete
+  above it, with "Open row", instead of being skipped (see "Incomplete
+  rows" under [Money app](#money-app-app)). This path has unit tests only;
+  no E2E (the E2E's incomplete row is on the app's own table).
 
 - **Needs GitHub Pages.** The server fetches each shared term once, on first
   use, and keeps it; the browser fetches it through its local-database
@@ -304,6 +326,23 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.1 (`plugin.js` sha256
+`b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.1/ui.js`, 111,239 bytes) the four tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-02 against the
+pin `a12b74a` (the build VPS's source build of it), in 4.1 minutes. What the
+run adds over 0.4.0: after the camt.053 import, a `bank-transaction-v1` row
+is committed by hand to the app's own table with an empty Amount (the only
+incomplete row this host can hold, see "Incomplete rows" under
+[Money app](#money-app-app)), and the app lists it through the table
+subscription as "1 row is incomplete" with "Incomplete: missing Amount", the
+Transactions count stays 4, the ledger does not show it, and "Open row"
+leaves the app for that row's page. Not verified: an incomplete row on the
+importer's table (the importer never writes one) or on a hand-made
+shared-class table (unit tests only), and a row completed in the host while
+the app stays open (unit test only).
 
 At 0.4.0 (`plugin.js` sha256
 `693f8535adb8920e92e3358349e635ebce45c4b60e48a38687609ae3015fc7b7`, which is
