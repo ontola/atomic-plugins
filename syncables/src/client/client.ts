@@ -569,6 +569,19 @@ export function createApiClient(
    * The last confirmed record any write of this record kept when a refresh
    * no longer had it: the base for updates once `confirmed` lacks the record.
    */
+  /**
+   * Records the newest confirmed copy of a record on all its unsettled
+   * updates, so the fallback base never reverts a newer confirmed record.
+   * All of a record's updates that carry `lastKnown` hold the same copy.
+   */
+  function setLastKnown(key: string, record: Record<string, unknown>): void {
+    for (const write of [
+      ...(gaveUpWrites.get(key) ?? []),
+      ...(writeQueues.get(key) ?? []),
+    ])
+      if (write.type === 'update') write.lastKnown = record;
+  }
+
   function lastKnownFor(
     scope: string,
     id: string,
@@ -1042,6 +1055,7 @@ export function createApiClient(
           if (resolvedId !== write.id) remote(write.scope).delete(write.id);
         }
         remote(write.scope).set(resolvedId, record);
+        setLastKnown(keyFor(write.scope, resolvedId), record);
       }
       return settled(write, resolvedId);
     } catch (error) {
@@ -1361,8 +1375,9 @@ export function createApiClient(
     write.lastError = message;
     delete write.awaitingRefresh;
     delete write.refreshMisses;
-    if (lastKnown && !write.lastKnown) write.lastKnown = lastKnown;
+    if (lastKnown) write.lastKnown = lastKnown;
     gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), write]);
+    if (lastKnown) setLastKnown(key, lastKnown);
   }
 
   function missingMessage(write: QueuedWrite): string {
@@ -1412,7 +1427,10 @@ export function createApiClient(
     }
     if (!touchedIds.size) return;
     if (fresh.size) {
-      for (const [id, record] of fresh) remote(scope).set(id, record);
+      for (const [id, record] of fresh) {
+        remote(scope).set(id, record);
+        setLastKnown(keyFor(scope, id), record);
+      }
       detectConflicts(scope, fresh);
     }
     await persistLater();
@@ -1506,6 +1524,13 @@ export function createApiClient(
         ]);
         confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
+        // The newest confirmed copy of each written record: from this read,
+        // or, for a record the read lacks, from just before it.
+        for (const write of allWrites()) {
+          if (write.scope !== scope) continue;
+          const newest = records.get(write.id) ?? confirmedBefore.get(write.id);
+          if (newest) setLastKnown(keyFor(scope, write.id), newest);
+        }
         detectConflicts(scope, records);
         for (const id of records.keys()) before.add(id);
         // Writes not yet stored stay out of the visible records.
@@ -1757,7 +1782,16 @@ export function createApiClient(
               delete changes[field];
           return write.type === 'update' && !Object.keys(changes).length
             ? []
-            : [{ ...write, changes, attempts: 0, state: 'pending' }];
+            : [
+                {
+                  ...write,
+                  changes,
+                  attempts: 0,
+                  state: 'pending',
+                  // Queued behind newer writes now, so newer in order too.
+                  seq: nextSeq++,
+                },
+              ];
         });
         if (!retried.length)
           throw new Error(

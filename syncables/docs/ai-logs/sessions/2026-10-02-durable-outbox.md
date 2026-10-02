@@ -133,3 +133,18 @@ failed writes; updates and retries fall back to any last known record of the
 same record; misses are counted only at the head; retry clears the count.
 Writes carry a stored queue order (`seq`), which the tests use to check the
 invariant after each step (a mutation removing the head check is caught).
+
+## Turn 6
+
+**Human (via the oversight session, relaying a fifth review of PR #312):**
+The last known record was never refreshed, so a record that reappeared with
+newer values and vanished again had a retry or a new update revert those
+values; and a retried write kept its old queue order. Fix both with tests.
+
+**Assistant:** Both new tests failed on the previous commit. The last known
+record is now set on all of a record's unsettled updates whenever a refresh
+replaces the collection (from the new read, or from the confirmed copy just
+before it for a record the read lacks), when a write response confirms the
+record, and when a write fails on a missing record (overwriting). Retried
+copies get a new queue order, and the invariant check runs after the retry
+and after a later failure.

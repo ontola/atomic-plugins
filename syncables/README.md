@@ -127,7 +127,8 @@ The conflict is listed until its write settles or is discarded, and is
 dropped if a later refresh shows the remote value equal to the local one. To
 keep the remote value instead, call `update` again with it. Not covered: a
 remote deletion under a pending update (the edit stays visible and is sent; a
-PUT then carries only what the client still knows of the record), conflicts
+PUT then carries the last confirmed copy of the record with the edit on top),
+conflicts
 that arrive only in a write's own response, and deletes. The remote-deletion
 case remains open in [#260](https://github.com/ontola/atomic-plugins/issues/260);
 only restored updates handle it, as below.
@@ -218,6 +219,9 @@ queued ones), and the next restored update of the record, now the head, fails
 the same way, so several offline edits of a vanished record all fail and none
 is sent. The edit stays visible on the last confirmed record, and a later
 `update` of the record is built on that record, not on the failed edits.
+"Last confirmed record" is the newest copy a refresh or a write response
+confirmed: a record that reappears with other values and then vanishes again
+leaves those newer values as the base, never an older copy.
 `resolveWrite` `retry` sends them on that record, which any of the record's
 writes may have kept, including for an older failed write; when the client
 never had one, it sends the update's fields as they are, which a PUT applies

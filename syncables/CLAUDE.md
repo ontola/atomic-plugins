@@ -151,7 +151,9 @@ Data flows through four stages, each its own directory under `src/`:
    released restored PUT update at the head of its record's queue, whose
    record the refresh lacks, fails (`lastKnown` keeps the last confirmed
    record; updates of the record, retries and `update()` seeding use any
-   write's `lastKnown`, never the visible record) rather than sending a
+   write's `lastKnown`, never the visible record; `setLastKnown` keeps it the
+   newest confirmed copy on every refresh and settled response) rather than
+   sending a
    partial PUT. Only head writes fail or count misses: a failed write must
    never be newer than a queued one of the same record (`seq`, stored, lets
    the tests check this). In-memory updates are unchanged by

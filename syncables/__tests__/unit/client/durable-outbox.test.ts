@@ -1219,3 +1219,82 @@ describe('durable outbox: fourth review on #312', () => {
     expect(c.pendingWrites().every((w) => w.state === 'pending')).toBe(true);
   });
 });
+
+describe('durable outbox: fifth review on #312', () => {
+  it('keeps the last known record current when a record reappears and vanishes again', async () => {
+    const crashed = await restoredUpdate();
+    for (const resolve of ['retry', 'update'] as const) {
+      let listed: Pet[] = [];
+      const second = provider([], (r) =>
+        r.method === 'GET' ? response(listed) : 'hang-before',
+      );
+      const b = restart(crashed.crash(), second.transport);
+      await b.ready();
+      await b.sync();
+      expect(b.pendingWrites()).toMatchObject([{ state: 'failed' }]);
+      // Someone else changes the tag; the record is listed, then filtered out.
+      listed = [{ id: '1', name: 'Rex', tag: 'wolf' }];
+      await b.sync();
+      listed = [];
+      await b.sync();
+      if (resolve === 'retry') {
+        await b.resolveWrite('/pets', '1', { action: 'retry' });
+        await vi.waitFor(() => expect(second.requests).toHaveLength(1));
+        expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+          id: '1',
+          name: 'Rex II',
+          tag: 'wolf',
+        });
+      } else {
+        await b.update('/pets', '1', { age: '4' });
+        await vi.waitFor(() => expect(second.requests).toHaveLength(1));
+        expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+          id: '1',
+          name: 'Rex',
+          tag: 'wolf',
+          age: '4',
+        });
+      }
+    }
+  });
+
+  it('queues a retried write as the newest, keeping failed writes older', async () => {
+    const storage = new CrashableStorage();
+    let puts = 0;
+    let failSecond!: () => void;
+    const second = new Promise<void>((resolve) => (failSecond = resolve));
+    const transport = provider([{ id: '1', name: 'Rex', tag: 'dog' }], (r) => {
+      if (r.method === 'GET') return undefined;
+      puts += 1;
+      if (puts === 1) return response({ error: 'invented' }, 400);
+      return 'hang-before';
+    }).transport;
+    const a = restart(
+      storage,
+      async (r) => {
+        if (r.method !== 'GET' && puts === 1) {
+          // The second PUT: answered 400 once the test says so.
+          puts += 1;
+          await second;
+          return response({ error: 'invented' }, 400);
+        }
+        return transport(r);
+      },
+      { retry: { maxAttempts: 1 } },
+    );
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(a.pendingWrites()[0]?.state).toBe('failed'));
+    await a.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(puts).toBe(2));
+    await a.resolveWrite('/pets', '1', { action: 'retry' });
+    await settle();
+    expectFailedOlder(storage);
+    failSecond();
+    await vi.waitFor(() =>
+      expect(a.pendingWrites().map((w) => w.state)).toContain('failed'),
+    );
+    await settle();
+    expectFailedOlder(storage);
+  });
+});
