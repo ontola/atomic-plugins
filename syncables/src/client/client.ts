@@ -121,7 +121,12 @@ export type PendingWriteType = 'create' | 'update' | 'delete';
  *   response was lost, unusable, or a 5xx other than 503) and no idempotency
  *   key makes a resend safe. It is not retried automatically; later writes to
  *   the same record wait behind it until `resolveWrite` is called.
- * - `failed`: automatic retries stopped at `retry.maxAttempts`.
+ * - `failed`: automatic retries stopped at `retry.maxAttempts`. A failed
+ *   create holds back later writes to the record, like an uncertain one. A
+ *   failed update or delete does not: later writes go ahead, and once one of
+ *   them settles it replaces the fields it set in the failed update (a failed
+ *   delete, or an update with no fields left, is dropped). Otherwise a failed
+ *   write stays, and stays visible locally, until `resolveWrite`.
  */
 export type PendingWriteState = 'pending' | 'uncertain' | 'failed';
 
@@ -143,10 +148,16 @@ export interface WriteConflict {
  * How to settle an `uncertain` or `failed` write:
  * - `retry`: send it again (an uncertain create may then duplicate the record
  *   on a provider without idempotency support; that is the caller's decision).
- *   A `failed` write is queued again behind any writes for the record.
- * - `discard`: drop it locally; the visible record falls back to confirmed
- *   remote state. Discarding an uncertain create also drops the writes queued
- *   behind it for that record.
+ *   Failed updates and deletes are queued again behind any newer writes for
+ *   the record, minus the fields those newer writes set; a failed delete is
+ *   not retried while newer writes are queued. When nothing is left, `retry`
+ *   throws and changes nothing. Retrying a failed create resends it: without a
+ *   key only unambiguous failures lead to `failed`, and with a key the same
+ *   key is sent again.
+ * - `discard`: drop it locally (all failed updates and deletes of the record);
+ *   the visible record falls back to confirmed remote state plus newer pending
+ *   writes. Discarding an uncertain or failed create also drops the writes
+ *   queued behind it for that record.
  * - `confirm` (uncertain creates only): the create did reach the server as
  *   record `id`, for instance as found by a refresh. The local record and any
  *   queued follow-up writes move to that id; nothing is resent.
@@ -166,9 +177,8 @@ export interface PendingWriteInfo {
   /**
    * How many attempts to reach the server have failed so far. If
    * `ApiClientOptions.retry.maxAttempts` is set and reached, this stops
-   * growing and the write stops auto-retrying — it stays listed here
-   * (with `lastError` set) until `create`/`update`/`remove` is called
-   * again for the same record.
+   * growing and the write stops auto-retrying: it stays listed here with
+   * `state: 'failed'` and `lastError` set (see `PendingWriteState`).
    */
   attempts: number;
   /** The most recent failure, if at least one attempt has failed. */
@@ -347,15 +357,19 @@ class HttpStatusError extends Error {
 /** The server answered 2xx, so it applied the write, but the body is unusable. */
 class UnusableResponseError extends Error {}
 
+/** The request never reached the transport (for example, `authenticate` threw). */
+class NotSentError extends Error {}
+
 /**
  * Whether a failed create may have been applied server-side. No response at
- * all (the transport threw), an unusable 2xx body, and 5xx responses other
- * than 503 count as uncertain: a gateway error or timeout can follow a
- * committed create. 503 and 429 conventionally mean the request was not
- * processed, and other 4xx responses mean it was refused, so those keep the
- * ordinary retry path.
+ * all (the transport threw while sending), an unusable 2xx body, and 5xx
+ * responses other than 503 count as uncertain: a gateway error or timeout can
+ * follow a committed create. 503 and 429 conventionally mean the request was
+ * not processed, other 4xx responses mean it was refused, and an error before
+ * sending means nothing went out, so those keep the ordinary retry path.
  */
 function mayHaveApplied(error: unknown): boolean {
+  if (error instanceof NotSentError) return false;
   if (error instanceof HttpStatusError)
     return error.status >= 500 && error.status !== 503;
   return true;
@@ -433,8 +447,10 @@ export function createApiClient(
   if (options.baseUrl) doc['servers'] = [{ url: options.baseUrl }];
   const upstream = upstreamOf(doc);
   const storage = options.storage ?? new InMemoryStorageAdapter();
+  const baseTransport =
+    options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch);
   const transport = authenticatedTransport(
-    options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch),
+    baseTransport,
     options.credentials,
     options.authenticate,
   );
@@ -456,7 +472,8 @@ export function createApiClient(
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
   const writeQueues = new Map<string, QueuedWrite[]>();
-  const gaveUpWrites = new Map<string, QueuedWrite>();
+  /** Failed updates and deletes per record, oldest first. Failed creates stay parked in their queue. */
+  const gaveUpWrites = new Map<string, QueuedWrite[]>();
   const draining = new Set<string>();
   const revisions = new Map<string, number>();
   let syncing: Promise<SyncResult> | undefined;
@@ -516,9 +533,8 @@ export function createApiClient(
   async function rebuild(scope: string, id: string): Promise<void> {
     let value = remote(scope).get(id);
     const key = keyFor(scope, id);
-    const abandoned = gaveUpWrites.get(key);
     const pending = [
-      ...(abandoned ? [abandoned] : []),
+      ...(gaveUpWrites.get(key) ?? []),
       ...(writeQueues.get(key) ?? []),
     ];
     for (const write of pending) {
@@ -543,7 +559,26 @@ export function createApiClient(
   }
 
   async function requestJson(request: TransportRequest): Promise<unknown> {
-    const response = await transport(request);
+    // Tells an error raised before the request left (an authenticate adapter
+    // failing, say) apart from one raised while it was being sent.
+    let sent = false;
+    const send = authenticatedTransport(
+      (r) => {
+        sent = true;
+        return baseTransport(r);
+      },
+      options.credentials,
+      options.authenticate,
+    );
+    let response: TransportResponse;
+    try {
+      response = await send(request);
+    } catch (error) {
+      if (sent) throw error;
+      throw new NotSentError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     if (response.status < 200 || response.status >= 300) {
       throw new HttpStatusError(
         `Request to ${request.url.pathname} failed with status ${response.status}`,
@@ -562,6 +597,9 @@ export function createApiClient(
   function settled(write: QueuedWrite, resolvedId: string): WriteOutcome {
     revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
     conditionalCache.clear();
+    // Confirmed state moved on without a read: the next snapshot must be
+    // compared (and checked for conflicts) even if it equals the last one.
+    lastSyncedItems.delete(write.scope);
     return { status: 'succeeded', resolvedId };
   }
 
@@ -668,11 +706,15 @@ export function createApiClient(
       for (;;) {
         const queue = writeQueues.get(key);
         const write = queue?.[0];
-        // An uncertain create blocks its record until resolveWrite.
-        if (!write || write.state === 'uncertain') return;
+        // An uncertain or failed create blocks its record until resolveWrite.
+        if (!write || write.state !== 'pending') return;
         const outcome = await attemptWrite(write);
         if (outcome.status === 'uncertain') {
           write.state = 'uncertain';
+          return;
+        }
+        if (outcome.status === 'gaveUp' && write.type === 'create') {
+          write.state = 'failed';
           return;
         }
         if (outcome.status === 'retry') {
@@ -685,7 +727,10 @@ export function createApiClient(
         queue.shift();
         if (outcome.status === 'gaveUp') {
           write.state = 'failed';
-          gaveUpWrites.set(key, write);
+          gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), write]);
+        } else {
+          supersede(key, write);
+          rebase(queue, write, outcome.resolvedId);
         }
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
           const oldId = write.id;
@@ -715,9 +760,61 @@ export function createApiClient(
     }
   }
 
+  /** Fields a write sets; `undefined` means the whole record (create, delete). */
+  function touched(write: QueuedWrite): string[] | undefined {
+    return write.type === 'update'
+      ? Object.keys(write.changes ?? {})
+      : undefined;
+  }
+
+  /**
+   * A write that settled after a failed one replaces what it sets: the failed
+   * writes lose those fields, and are dropped when nothing is left (always,
+   * for a failed delete, or after a settled create or delete).
+   */
+  function supersede(key: string, settled: QueuedWrite): void {
+    const failed = gaveUpWrites.get(key);
+    if (!failed) return;
+    const fields = touched(settled);
+    const left = failed.filter((write) => {
+      if (write.type !== 'update' || !fields) return false;
+      const changes = { ...write.changes };
+      for (const field of fields) delete changes[field];
+      write.changes = changes;
+      return Object.keys(changes).length > 0;
+    });
+    if (left.length) gaveUpWrites.set(key, left);
+    else gaveUpWrites.delete(key);
+  }
+
+  /**
+   * After a write settles, later queued updates compare against the newly
+   * confirmed values of the fields it set, so a refresh that returns our own
+   * write is not reported as a remote change.
+   */
+  function rebase(
+    queue: QueuedWrite[],
+    settled: QueuedWrite,
+    resolvedId: string,
+  ): void {
+    const record = remote(settled.scope).get(resolvedId);
+    if (!record) return;
+    const fields = touched(settled);
+    for (const later of queue) {
+      if (later.type !== 'update') continue;
+      const changed = Object.keys(later.changes ?? {});
+      if (!later.base) {
+        later.base = Object.fromEntries(changed.map((f) => [f, record[f]]));
+        continue;
+      }
+      for (const field of changed)
+        if (!fields || fields.includes(field))
+          later.base[field] = record[field];
+    }
+  }
+
   function enqueue(write: Omit<QueuedWrite, 'attempts' | 'state'>): void {
     const key = keyFor(write.scope, write.id);
-    gaveUpWrites.delete(key);
     const queue = writeQueues.get(key) ?? [];
     queue.push({ ...write, attempts: 0, state: 'pending' });
     writeQueues.set(key, queue);
@@ -728,38 +825,59 @@ export function createApiClient(
     scope: string,
     records: Map<string, Record<string, unknown>>,
   ): void {
-    const writes = [...writeQueues.values()]
-      .flat()
-      .concat([...gaveUpWrites.values()]);
-    for (const write of writes) {
-      if (write.scope !== scope || write.type !== 'update' || !write.base)
-        continue;
-      const next = records.get(write.id);
-      // A remote deletion under a pending update is not reported here.
-      if (!next) continue;
-      for (const [field, local] of Object.entries(write.changes ?? {})) {
-        const base = write.base[field];
-        if (sameValue(next[field], base)) continue;
-        write.base[field] = next[field];
-        write.conflicts ??= new Map();
-        if (sameValue(next[field], local)) {
-          write.conflicts.delete(field);
-          continue;
-        }
-        const conflict: WriteConflict = {
-          resource: write.route.collection.name,
-          id: write.id,
-          ...(Object.keys(write.context).length
-            ? { context: { ...write.context } }
-            : {}),
-          field,
-          base,
-          remote: next[field],
-          local,
-        };
-        write.conflicts.set(field, conflict);
-        options.onConflict?.(conflict);
+    const keys = new Set([...gaveUpWrites.keys(), ...writeQueues.keys()]);
+    for (const key of keys) {
+      // Oldest first: failed writes, then the queue in sending order.
+      const writes = [
+        ...(gaveUpWrites.get(key) ?? []),
+        ...(writeQueues.get(key) ?? []),
+      ];
+      // Values this client already sent or queued, per field, so a refresh
+      // showing an earlier write applied (before its response arrived) is
+      // not mistaken for a remote change.
+      const ours = new Map<string, unknown[]>();
+      for (const write of writes) {
+        if (write.scope !== scope || write.type !== 'update') continue;
+        checkConflicts(write, records.get(write.id), ours);
+        for (const [field, value] of Object.entries(write.changes ?? {}))
+          ours.set(field, [...(ours.get(field) ?? []), value]);
       }
+    }
+  }
+
+  function checkConflicts(
+    write: QueuedWrite,
+    next: Record<string, unknown> | undefined,
+    ours: Map<string, unknown[]>,
+  ): void {
+    // A remote deletion under a pending update is not reported here.
+    if (!write.base || !next) return;
+    for (const [field, local] of Object.entries(write.changes ?? {})) {
+      const base = write.base[field];
+      const value = next[field];
+      if (sameValue(value, base)) continue;
+      write.base[field] = value;
+      write.conflicts ??= new Map();
+      if (
+        sameValue(value, local) ||
+        ours.get(field)?.some((own) => sameValue(own, value))
+      ) {
+        write.conflicts.delete(field);
+        continue;
+      }
+      const conflict: WriteConflict = {
+        resource: write.route.collection.name,
+        id: write.id,
+        ...(Object.keys(write.context).length
+          ? { context: { ...write.context } }
+          : {}),
+        field,
+        base,
+        remote: value,
+        local,
+      };
+      write.conflicts.set(field, conflict);
+      options.onConflict?.(conflict);
     }
   }
 
@@ -838,8 +956,9 @@ export function createApiClient(
         for (const queue of writeQueues.values())
           for (const write of queue)
             if (write.scope === scope) before.add(write.id);
-        for (const write of gaveUpWrites.values())
-          if (write.scope === scope) before.add(write.id);
+        for (const failed of gaveUpWrites.values())
+          for (const write of failed)
+            if (write.scope === scope) before.add(write.id);
         for (const id of before) await rebuild(scope, id);
         changed.add(route.collection.name);
         lastSyncedItems.set(scope, snapshot.items);
@@ -980,9 +1099,7 @@ export function createApiClient(
       const name = resource
         ? resolveRoute(resource).collection.name
         : undefined;
-      const writes = [...writeQueues.values()]
-        .flat()
-        .concat([...gaveUpWrites.values()]);
+      const writes = [...gaveUpWrites.values(), ...writeQueues.values()].flat();
       return writes
         .filter((w) => !name || w.route.collection.name === name)
         .map((write) => ({
@@ -1011,31 +1128,52 @@ export function createApiClient(
       const failed = gaveUpWrites.get(key);
       const queue = writeQueues.get(key);
       const head = queue?.[0];
-      if (failed) {
-        if (resolution.action === 'confirm')
+      // A parked create (uncertain or failed) holds back everything behind it.
+      if (queue && head && head.state !== 'pending') {
+        if (resolution.action === 'confirm' && head.state !== 'uncertain')
           throw new Error('Only an uncertain create can be confirmed');
-        gaveUpWrites.delete(key);
-        if (resolution.action === 'retry') {
-          const pending = writeQueues.get(key) ?? [];
-          pending.push({ ...failed, attempts: 0, state: 'pending' });
-          writeQueues.set(key, pending);
-          if (!draining.has(key)) void drainQueue(key);
+        if (resolution.action === 'discard') {
+          writeQueues.delete(key);
+          await rebuild(scope, id);
+          return;
         }
-        await rebuild(scope, id);
+        if (resolution.action === 'confirm') head.confirmedId = resolution.id;
+        if (head.state === 'failed') head.attempts = 0;
+        head.state = 'pending';
+        if (!draining.has(key)) void drainQueue(key);
         return;
       }
-      if (!queue || head?.state !== 'uncertain')
+      if (!failed)
         throw new Error(
           `Record ${id} of ${resource} has no uncertain or failed write`,
         );
-      if (resolution.action === 'discard') {
-        writeQueues.delete(key);
-        await rebuild(scope, id);
-        return;
+      if (resolution.action === 'confirm')
+        throw new Error('Only an uncertain create can be confirmed');
+      if (resolution.action === 'retry') {
+        // Newer queued writes are sent first; a retried older write must not
+        // overwrite what they set.
+        const newer = queue ?? [];
+        const retried = failed.flatMap((write): QueuedWrite[] => {
+          if (newer.length && write.type === 'delete') return [];
+          const changes = { ...write.changes };
+          for (const later of newer)
+            for (const field of touched(later) ?? Object.keys(changes))
+              delete changes[field];
+          return write.type === 'update' && !Object.keys(changes).length
+            ? []
+            : [{ ...write, changes, attempts: 0, state: 'pending' }];
+        });
+        if (!retried.length)
+          throw new Error(
+            `The failed writes for record ${id} of ${resource} are superseded by queued writes; discard them or wait for those to settle`,
+          );
+        const pending = queue ?? [];
+        pending.push(...retried);
+        writeQueues.set(key, pending);
+        if (!draining.has(key)) void drainQueue(key);
       }
-      if (resolution.action === 'confirm') head.confirmedId = resolution.id;
-      head.state = 'pending';
-      if (!draining.has(key)) void drainQueue(key);
+      gaveUpWrites.delete(key);
+      await rebuild(scope, id);
     },
     async paginate(path, pagination = {}): Promise<Record<string, unknown>[]> {
       const matched = findRoute(Object.keys(doc.paths), path);

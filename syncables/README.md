@@ -91,15 +91,25 @@ Each entry of `pendingWrites()` has a `state`:
 | --- | --- | --- |
 | `pending` | Queued, in flight or waiting for a retry | Retries automatically |
 | `uncertain` | A create may or may not have reached the server | Nothing, until `resolveWrite` |
-| `failed` | Retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` or a new write to the record |
+| `failed` | Retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` (see below) |
+
+A new `create`/`update`/`remove` does not drop a failed write. A failed create
+holds back later writes to the record, like an uncertain one. A failed update
+or delete does not; later writes go ahead, and once one of them settles, it
+replaces the fields it set in the failed update. A failed update with no
+fields left, and a failed delete followed by any settled write, are dropped.
+Whatever is left stays listed, and visible locally, until `resolveWrite`.
 
 ### Refresh during a pending update
 
 A refresh (`sync()`) never hides a pending local edit: the visible record is
 the newest confirmed remote record with the pending changes replayed on top.
 When a refresh shows that a field with a pending update also changed remotely
-(its remote value differs both from the value the client had confirmed when
-the edit was made and from the local value), the client records a conflict.
+(its remote value differs from the value the client had confirmed when the
+edit was made, or when an earlier write to that field settled, and from every
+value this client has queued for that field), the client records a conflict.
+A refresh that shows an earlier queued edit applied, before or after its
+response arrives, is not a conflict.
 The local value stays visible, the queued write still sends it (local wins on
 acknowledgement), and the conflict is observable in two ways:
 
@@ -125,7 +135,9 @@ whose outcome it cannot know. A create becomes `uncertain`, and is not retried
 automatically, when:
 
 - the transport throws, so no response arrived (the request may have been
-  processed; this includes errors raised by an `authenticate` adapter);
+  processed). An `authenticate` adapter that throws before the request is
+  handed to the transport does not count: nothing was sent, so the create
+  keeps the ordinary retry;
 - the server answered 2xx but the body is not JSON or has no record identity;
 - the server answered a 5xx other than 503, which can follow a committed create
   (a gateway error or timeout, for example).
@@ -150,9 +162,12 @@ if (local)
 ```
 
 `confirm` moves the local record and its queued follow-up writes to the server
-id without sending anything. `retry` and `discard` also apply to a `failed`
-write; a failed write that is retried is queued behind any newer writes to the
-record.
+id without sending anything. `retry` and `discard` also apply to `failed`
+writes. A failed create behaves like an uncertain one. Failed updates and
+deletes of the record are retried or discarded together. A retried one is
+queued behind any newer writes to the record, without the fields those set, so
+an older edit cannot overwrite a newer one. If nothing is left (or a failed
+delete has newer writes queued), `retry` throws and changes nothing.
 
 When the create operation (or its path item) declares an `Idempotency-Key`
 header parameter, the client sends a fresh key with each create and reuses it

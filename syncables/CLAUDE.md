@@ -122,8 +122,14 @@ Data flows through four stages, each its own directory under `src/`:
    unusable 2xx body or a 5xx other than 503 becomes `uncertain` and is not
    resent until `resolveWrite` (retry, discard, or confirm with the server
    id), unless an `Idempotency-Key` header (declared on the create operation
-   or `idempotencyKeyHeader`) lets it retry with the same key. 429/503/4xx
-   keep the backoff retry. See the README's "Uncertain creates".
+   or `idempotencyKeyHeader`) lets it retry with the same key. 429/503/4xx,
+   and errors raised before the request reaches the transport (an
+   `authenticate` adapter throwing), keep the backoff retry. A failed create
+   (`retry.maxAttempts`) is parked like an uncertain one; failed updates and
+   deletes are kept per record (`gaveUpWrites`), lose the fields a later
+   settled write sets, and are not dropped by new writes. Settled writes
+   rebase later queued updates' conflict bases and invalidate
+   `lastSyncedItems`. See the README's "Uncertain creates".
 
    Do not mistake a persistent record adapter or raw archive for a durable
    outbox. Queues, confirmed-state bookkeeping and mappings remain in memory;

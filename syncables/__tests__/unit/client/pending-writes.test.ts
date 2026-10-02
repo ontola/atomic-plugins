@@ -469,3 +469,230 @@ describe('resolveWrite on failed and pending writes', () => {
     ).rejects.toThrow('has no uncertain or failed write');
   });
 });
+
+describe('review follow-ups on PR #309', () => {
+  const bodyOf = (r: { body?: string }): Record<string, unknown> =>
+    JSON.parse(r.body ?? '{}');
+
+  it('does not report our own settled earlier edit as a remote conflict', async () => {
+    const first = deferred<TransportResponse>();
+    const second = deferred<TransportResponse>();
+    let records = [{ id: '1', name: 'old' }];
+    const conflicts: WriteConflict[] = [];
+    let puts = 0;
+    const client = createApiClient(document(), {
+      onConflict: (c) => conflicts.push(c),
+      transport: async (r) => {
+        if (r.method === 'GET') return response(records);
+        return ++puts === 1 ? first.promise : second.promise;
+      },
+    });
+    await client.sync();
+    // Both edits are queued while the first is in flight.
+    await client.update('/pets', '1', { name: 'a' });
+    await client.update('/pets', '1', { name: 'b' });
+    first.resolve(response({ id: '1', name: 'a' }));
+    await vi.waitFor(() => expect(puts).toBe(2));
+    records = [{ id: '1', name: 'a' }];
+    await client.sync();
+    expect(conflicts).toEqual([]);
+    expect(await client.get('/pets', '1')).toEqual({ id: '1', name: 'b' });
+    // A genuinely different remote value is still reported.
+    records = [{ id: '1', name: 'z' }];
+    await client.sync();
+    expect(conflicts).toMatchObject([
+      { field: 'name', base: 'a', remote: 'z', local: 'b' },
+    ]);
+    second.resolve(response({ id: '1', name: 'b' }));
+    await idle(client);
+  });
+
+  it('does not report an earlier in-flight edit seen applied before its response', async () => {
+    const first = deferred<TransportResponse>();
+    let records = [{ id: '1', name: 'old' }];
+    const conflicts: WriteConflict[] = [];
+    let puts = 0;
+    const client = createApiClient(document(), {
+      onConflict: (c) => conflicts.push(c),
+      transport: async (r) => {
+        if (r.method === 'GET') return response(records);
+        return ++puts === 1 ? first.promise : response(bodyOf(r));
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'a' });
+    await client.update('/pets', '1', { name: 'b' });
+    // The provider applied the first PUT; its response has not arrived.
+    records = [{ id: '1', name: 'a' }];
+    await client.sync();
+    expect(conflicts).toEqual([]);
+    expect(client.pendingWrites().every((w) => !w.conflicts)).toBe(true);
+    first.resolve(response({ id: '1', name: 'a' }));
+    await idle(client);
+    expect(await client.get('/pets', '1')).toEqual({ id: '1', name: 'b' });
+  });
+
+  it('checks conflicts on a snapshot equal to the last one after a write settled', async () => {
+    const second = deferred<TransportResponse>();
+    const records = [{ id: '1', name: 'old' }];
+    const conflicts: WriteConflict[] = [];
+    let puts = 0;
+    const client = createApiClient(document(), {
+      onConflict: (c) => conflicts.push(c),
+      transport: async (r) => {
+        if (r.method === 'GET') return response(records);
+        return ++puts === 1 ? response(bodyOf(r)) : second.promise;
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'a' });
+    await idle(client);
+    await client.update('/pets', '1', { name: 'b' });
+    // Someone set the name back to 'old': the same list as the last read.
+    await client.sync();
+    expect(conflicts).toMatchObject([
+      { field: 'name', base: 'a', remote: 'old', local: 'b' },
+    ]);
+    expect(await client.get('/pets', '1')).toEqual({ id: '1', name: 'b' });
+    second.resolve(response({ id: '1', name: 'b' }));
+    await idle(client);
+  });
+
+  it('a later settled edit supersedes the same field of a failed update', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const client = createApiClient(document(), {
+      retry: { maxAttempts: 1 },
+      transport: async (r) => {
+        if (r.method === 'GET') return response([{ id: '1', name: 'old' }]);
+        const body = bodyOf(r);
+        sent.push(body);
+        return body['tag'] === 'rejected' ? response({}, 422) : response(body);
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'a', tag: 'rejected' });
+    await client.update('/pets', '1', { name: 'b' });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await settle();
+    // The failed write keeps only the field nothing newer set.
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed' },
+    ]);
+    expect(await client.get('/pets', '1')).toEqual({
+      id: '1',
+      name: 'b',
+      tag: 'rejected',
+    });
+    await client.resolveWrite('/pets', '1', { action: 'retry' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    // The retry no longer carries the stale name.
+    expect(sent[2]).toEqual({ id: '1', name: 'b', tag: 'rejected' });
+    await client.resolveWrite('/pets', '1', { action: 'discard' });
+    expect(await client.get('/pets', '1')).toEqual({ id: '1', name: 'b' });
+
+    // A failed update whose only field is set later settles away entirely.
+    await client.update('/pets', '1', { tag: 'rejected' });
+    await client.update('/pets', '1', { tag: 'fine' });
+    await idle(client);
+    expect(await client.get('/pets', '1')).toEqual({
+      id: '1',
+      name: 'b',
+      tag: 'fine',
+    });
+  });
+
+  it('refuses to retry a failed update that queued writes supersede', async () => {
+    const gate = deferred<TransportResponse>();
+    let puts = 0;
+    const client = createApiClient(document(), {
+      retry: { maxAttempts: 1 },
+      transport: async (r) => {
+        if (r.method === 'GET') return response([{ id: '1', name: 'old' }]);
+        return ++puts === 1 ? response({}, 422) : gate.promise;
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'a' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    await client.update('/pets', '1', { name: 'b' });
+    // A new write does not silently drop the failed one.
+    expect(client.pendingWrites().map((w) => w.state)).toEqual([
+      'failed',
+      'pending',
+    ]);
+    await expect(
+      client.resolveWrite('/pets', '1', { action: 'retry' }),
+    ).rejects.toThrow('superseded by queued writes');
+    expect(puts).toBe(2);
+    gate.resolve(response({ id: '1', name: 'b' }));
+    await idle(client);
+    expect(await client.get('/pets', '1')).toEqual({ id: '1', name: 'b' });
+  });
+
+  it('a failed create holds back the writes behind it until resolved', async () => {
+    let reject = true;
+    const requests: string[] = [];
+    const client = createApiClient(document(), {
+      retry: { maxAttempts: 1 },
+      transport: async (r) => {
+        requests.push(`${r.method} ${r.url.pathname}`);
+        if (r.method === 'POST')
+          return reject
+            ? response({}, 400)
+            : response({ ...bodyOf(r), id: 'server-id' }, 201);
+        return response(bodyOf(r));
+      },
+    });
+    const created = await client.create('/pets', { name: 'Milo' });
+    const localId = String(created['id']);
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    await client.update('/pets', localId, { tag: 'cat' });
+    await client.update('/pets', localId, { tag: 'dog' });
+    await settle();
+    expect(client.pendingWrites().map((w) => [w.type, w.state])).toEqual([
+      ['create', 'failed'],
+      ['update', 'pending'],
+      ['update', 'pending'],
+    ]);
+    expect(requests).toEqual(['POST /api/pets']);
+    reject = false;
+    await client.resolveWrite('/pets', localId, { action: 'retry' });
+    await idle(client);
+    expect(requests).toEqual([
+      'POST /api/pets',
+      'POST /api/pets',
+      'PUT /api/pets/server-id',
+      'PUT /api/pets/server-id',
+    ]);
+    expect(await client.get('/pets', 'server-id')).toEqual({
+      id: 'server-id',
+      name: 'Milo',
+      tag: 'dog',
+    });
+  });
+
+  it('retries a create normally when authenticate fails before sending', async () => {
+    let calls = 0;
+    const { server, requests, transport } = provider(() => undefined);
+    const client = createApiClient(document(), {
+      transport,
+      credentials: { accessToken: 'invented-token' },
+      authenticate: (request) => {
+        if (++calls === 1) throw new Error('token refresh failed');
+        return request;
+      },
+      retry: { baseDelayMs: 1 },
+    });
+    await client.create('/pets', { name: 'Milo' });
+    await idle(client);
+    expect(posts(requests)).toBe(1);
+    expect(server).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+});

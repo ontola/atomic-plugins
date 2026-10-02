@@ -46,3 +46,26 @@ Implemented in `src/client/client.ts`:
 
 Updated README ("Refresh during a pending update", "Uncertain creates") and
 CLAUDE.md. No live-provider or real-browser run was made.
+
+## Turn 2
+
+**Human (via the oversight session, relaying an automated review of PR #309):**
+Fix five findings, each with a regression test: (1) a false conflict when two
+queued edits to the same field are followed by a refresh that shows the first
+one; (2) retrying a failed update overwrote a newer settled value, and the
+stale value stayed visible; (3) one failed-write slot per record let a failed
+create become unreachable, and the README state table did not match the code;
+(4) an `authenticate` error before sending was treated as uncertain; (5)
+conflict detection was skipped when a snapshot equalled the last one after a
+write had settled.
+
+**Assistant:** Added the tests first; six of them failed on the previous
+commit. Changes: settled writes rebase later queued updates' conflict bases,
+and a refresh value equal to an earlier queued value of this client is not a
+conflict; failed updates and deletes are kept per record and lose the fields a
+later settled write sets, and a retry drops fields that newer queued writes set
+(or throws when nothing is left); a failed create stays parked at the head of
+its queue; new writes no longer drop failed writes; errors raised before the
+transport is called keep the normal retry; a settled write invalidates the
+last-synced snapshot for its scope. README and CLAUDE.md now describe this
+behaviour.
