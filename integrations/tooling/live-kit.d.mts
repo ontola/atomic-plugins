@@ -87,7 +87,10 @@ export function createProvider(options: {
   }) => void;
   budget: Budget;
   redact: Redactor;
-  fetcher?: (url: string, init: Record<string, unknown>) => Promise<{
+  fetcher?: (
+    url: string,
+    init: Record<string, unknown>,
+  ) => Promise<{
     status: number;
     headers: { get(name: string): string | null };
     text(): Promise<string>;

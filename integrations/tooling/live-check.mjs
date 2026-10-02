@@ -111,11 +111,13 @@ export async function main(argv, deps = {}) {
     const { positional, flags } = parseArgs(argv, {
       booleans: ['preflight-only', 'help'],
     });
+
     if (flags.help || positional.length === 0) {
       out(USAGE);
 
       return flags.help ? 0 : 2;
     }
+
     const app = APPS[positional[0]];
     if (!app || positional.length > 1)
       throw new GuardError(
@@ -198,6 +200,7 @@ export async function main(argv, deps = {}) {
 
       return 2;
     }
+
     err(`${error instanceof Error ? error.message : String(error)}\n`);
 
     return 1;

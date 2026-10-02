@@ -6,7 +6,7 @@
  * here knows about one provider.
  *
  * Guard rails, all enforced in code and unit-tested offline
- * (`live-kit.test.mjs`):
+ * (`live-kit.node-test.mjs`):
  *
  * - A run needs `--i-understand-this-writes-to <id>`, naming the one
  *   disposable calendar, workspace, repository or database it may write to.
@@ -62,6 +62,7 @@ export function parseArgs(argv, { booleans = [] } = {}) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+
     if (!arg.startsWith('--')) {
       positional.push(arg);
       continue;
@@ -95,7 +96,8 @@ export function confirmedTarget(flags, what) {
   return String(value).trim();
 }
 
-const DISPOSABLE = /(^|[^a-z0-9])(test|testing|disposable|sandbox|scratch|throwaway|livecheck|live[ _-]check)([^a-z0-9]|$)/i;
+const DISPOSABLE =
+  /(^|[^a-z0-9])(test|testing|disposable|sandbox|scratch|throwaway|livecheck|live[ _-]check)([^a-z0-9]|$)/i;
 
 /**
  * Whether a resource's own name says it is disposable: contains one of
@@ -160,7 +162,8 @@ export async function readSecret(
   } = {},
 ) {
   const fromEnv = env[name];
-  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') return fromEnv.trim();
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '')
+    return fromEnv.trim();
   if (!isTTY)
     throw new GuardError(
       `${name} is not set and there is no terminal to ask on. Set ${name} in the environment ` +
@@ -182,7 +185,10 @@ const PATTERNS = [
   [/github_pat_[A-Za-z0-9_]{20,}/g, '[redacted-github-token]'],
   [/gh[pousr]_[A-Za-z0-9]{20,}/g, '[redacted-github-token]'],
   [/(?:secret_|ntn_)[A-Za-z0-9]{20,}/g, '[redacted-notion-token]'],
-  [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted-jwt]'],
+  [
+    /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+    '[redacted-jwt]',
+  ],
   [
     /((?:x-api-key|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi,
     '$1[redacted]',
@@ -218,6 +224,7 @@ export function createRedactor(secrets = {}, { keep = [] } = {}) {
     ]);
     for (const variant of variants) exact.push([variant, `[redacted:${name}]`]);
   }
+
   // Longest first, so a value that contains another is not half-replaced.
   exact.sort((a, b) => b[0].length - a[0].length);
   const kept = [...new Set(keep.filter(k => typeof k === 'string' && k))];
@@ -250,9 +257,14 @@ export function createRedactor(secrets = {}, { keep = [] } = {}) {
 }
 
 /** A logger that prints to stderr, redacted, one line per call. */
-export function createLogger(redact, write = line => process.stderr.write(line)) {
+export function createLogger(
+  redact,
+  write = line => process.stderr.write(line),
+) {
   return (...parts) =>
-    write(`${redact(parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p))).join(' '))}\n`);
+    write(
+      `${redact(parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p))).join(' '))}\n`,
+    );
 }
 
 /* -------------------------------------------------------------- budget */
@@ -284,6 +296,7 @@ export function createBudget({
         throw new BudgetError(
           `Stopped: the run took longer than ${Math.round(timeCap / 60_000)} minutes. A timeout is a failure.`,
         );
+
       if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
         if (mutations >= mutationCap)
           throw new BudgetError(
@@ -331,14 +344,30 @@ export function createProvider({
   const base = new URL(baseUrl);
   const requests = [];
 
-  async function request({ who, method = 'GET', path, query, body, ifMatch, headers = {} }) {
+  async function request({
+    who,
+    method = 'GET',
+    path,
+    query,
+    body,
+    ifMatch,
+    headers = {},
+  }) {
     const verb = method.toUpperCase();
     const url = new URL(base.href.replace(/\/$/, '') + path);
     if (url.origin !== base.origin || url.username || url.password || url.hash)
-      throw new GuardError(`Refusing a request outside ${base.origin}: ${redact(path)}`);
-    for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
+      throw new GuardError(
+        `Refusing a request outside ${base.origin}: ${redact(path)}`,
+      );
+    for (const [k, v] of Object.entries(query ?? {}))
+      url.searchParams.set(k, v);
 
-    allow({ who, method: verb, pathname: url.pathname, query: Object.fromEntries(url.searchParams) });
+    allow({
+      who,
+      method: verb,
+      pathname: url.pathname,
+      query: Object.fromEntries(url.searchParams),
+    });
     budget.spend(verb);
 
     const record = {
@@ -373,11 +402,13 @@ export function createProvider({
       });
       const text = await response.text();
       let parsed = text;
+
       try {
         parsed = text === '' ? null : JSON.parse(text);
       } catch {
         // Not JSON: keep the text.
       }
+
       const out = {
         status: response.status,
         headers: Object.fromEntries(
@@ -395,7 +426,9 @@ export function createProvider({
       return out;
     } catch (error) {
       record.status = 'network-error';
-      record.error = redact(error instanceof Error ? error.message : String(error));
+      record.error = redact(
+        error instanceof Error ? error.message : String(error),
+      );
       record.ms = now() - started;
       throw new Error(record.error);
     } finally {
@@ -419,9 +452,13 @@ export function relayStandIn(provider, platform) {
   return {
     async request(req) {
       if (req.platform !== platform)
-        throw new GuardError(`The app asked for platform ${req.platform}, not ${platform}.`);
+        throw new GuardError(
+          `The app asked for platform ${req.platform}, not ${platform}.`,
+        );
       if (req.connectionId !== connectionId)
-        throw new Error(`No ${platform} connection ${req.connectionId} is delegated to this app. Connect again.`);
+        throw new Error(
+          `No ${platform} connection ${req.connectionId} is delegated to this app. Connect again.`,
+        );
 
       return provider.request({
         who: 'app',
@@ -443,7 +480,10 @@ export function relayStandIn(provider, platform) {
 
 /** `<yyyy-mm-dd>T<hhmmss>Z` of a date, for file names. */
 export function stamp(date) {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
 }
 
 /** A short random id, so two runs on one day never share a record prefix. */
@@ -453,7 +493,10 @@ export function runId() {
 
 function tryGit(args) {
   try {
-    return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
+    return execFileSync('git', args, {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    }).trim();
   } catch {
     return undefined;
   }
@@ -461,9 +504,17 @@ function tryGit(args) {
 
 /** What the evidence says about the code that ran: version, commit and the candidate bundle's hash. */
 export function describeCandidate(app, { appId = app, root = REPO_ROOT } = {}) {
-  const pkg = JSON.parse(readFileSync(join(root, 'integrations', app, 'app/package.json'), 'utf8'));
+  const pkg = JSON.parse(
+    readFileSync(join(root, 'integrations', app, 'app/package.json'), 'utf8'),
+  );
   const bundle = join(root, 'apps', appId, pkg.version, 'ui.js');
-  const dirty = tryGit(['status', '--porcelain', '--', `integrations/${app}`, 'ontology-kit']);
+  const dirty = tryGit([
+    'status',
+    '--porcelain',
+    '--',
+    `integrations/${app}`,
+    'ontology-kit',
+  ]);
 
   return {
     app: appId,
@@ -483,7 +534,16 @@ export function describeCandidate(app, { appId = app, root = REPO_ROOT } = {}) {
  * Records steps and assertions, then writes the evidence: one JSON file and
  * one short Markdown summary. Everything recorded passes through `redact`.
  */
-export function createRecorder({ app, provider, apiVersion, candidate, target, redact, log = () => {}, now = () => new Date(), limits }) {
+export function createRecorder({
+  provider,
+  apiVersion,
+  candidate,
+  target,
+  redact,
+  log = () => {},
+  now = () => new Date(),
+  limits,
+}) {
   const started = now();
   const steps = [];
   const prefix = `livecheck-${started.toISOString().slice(0, 10).replace(/-/g, '')}-${runId()}`;
@@ -492,6 +552,7 @@ export function createRecorder({ app, provider, apiVersion, candidate, target, r
   async function step(id, title, fn, { continueOnFailure = false } = {}) {
     const entry = { id, title, status: 'passed', assertions: [] };
     steps.push(entry);
+
     if (halted) {
       entry.status = 'skipped';
       entry.note = 'An earlier step failed.';
@@ -501,11 +562,16 @@ export function createRecorder({ app, provider, apiVersion, candidate, target, r
     }
 
     const check = (name, ok, detail) => {
-      entry.assertions.push({ name, ok: Boolean(ok), ...(detail === undefined ? {} : { detail: redact.deep(detail) }) });
+      entry.assertions.push({
+        name,
+        ok: Boolean(ok),
+        ...(detail === undefined ? {} : { detail: redact.deep(detail) }),
+      });
       log(`${ok ? '  ok' : 'FAIL'}  ${id}  ${name}`);
 
       return Boolean(ok);
     };
+
     const equal = (name, actual, expected) => {
       const ok = JSON.stringify(actual) === JSON.stringify(expected);
 
@@ -518,6 +584,7 @@ export function createRecorder({ app, provider, apiVersion, candidate, target, r
     };
 
     log(`step  ${id}  ${title}`);
+
     try {
       await fn({
         check,
@@ -527,16 +594,20 @@ export function createRecorder({ app, provider, apiVersion, candidate, target, r
       });
     } catch (error) {
       entry.status = 'failed';
-      entry.error = redact(error instanceof Error ? error.message : String(error));
+      entry.error = redact(
+        error instanceof Error ? error.message : String(error),
+      );
       log(`FAIL  ${id}  ${entry.error}`);
     }
+
     if (entry.assertions.some(a => !a.ok)) entry.status = 'failed';
     if (entry.status === 'failed' && !continueOnFailure) halted = true;
   }
 
   function document({ cleanup, notCovered, preflightOnly, requests = [] }) {
     const ended = now();
-    const failed = steps.some(s => s.status === 'failed') || cleanup.status === 'failed';
+    const failed =
+      steps.some(s => s.status === 'failed') || cleanup.status === 'failed';
 
     return {
       schemaVersion: 1,
@@ -592,13 +663,28 @@ export function renderMarkdown(doc) {
     '',
   ];
   const seen = doc.steps.flatMap(s =>
-    (s.observations ?? []).map(o => `- ${s.id}: ${o.name}: \`${JSON.stringify(o.value)}\``),
+    (s.observations ?? []).map(
+      o => `- ${s.id}: ${o.name}: \`${JSON.stringify(o.value)}\``,
+    ),
   );
   if (seen.length)
-    lines.push('Observed, not asserted (answers to open questions):', '', ...seen, '');
-  const failures = doc.steps.flatMap(s => s.assertions.filter(a => !a.ok).map(a => `${s.id}: ${a.name}`));
-  if (failures.length) lines.push('Failed assertions:', '', ...failures.map(f => `- ${f}`), '');
-  lines.push('Not covered by this run:', '', ...doc.notCovered.map(n => `- ${n}`), '');
+    lines.push(
+      'Observed, not asserted (answers to open questions):',
+      '',
+      ...seen,
+      '',
+    );
+  const failures = doc.steps.flatMap(s =>
+    s.assertions.filter(a => !a.ok).map(a => `${s.id}: ${a.name}`),
+  );
+  if (failures.length)
+    lines.push('Failed assertions:', '', ...failures.map(f => `- ${f}`), '');
+  lines.push(
+    'Not covered by this run:',
+    '',
+    ...doc.notCovered.map(n => `- ${n}`),
+    '',
+  );
   lines.push(
     'No credentials and no personal data are recorded: the content is invented, and email addresses are replaced. A passing run supports only the assertions above, on this date.',
     '',
@@ -623,7 +709,8 @@ export function writeEvidence(doc, outDir, redact) {
 }
 
 /** Where evidence goes unless `--out` says otherwise. */
-export const defaultEvidenceDir = app => join(REPO_ROOT, 'integrations', 'live-evidence', app);
+export const defaultEvidenceDir = app =>
+  join(REPO_ROOT, 'integrations', 'live-evidence', app);
 
 /**
  * What `live-check.mjs` hands a scenario process, through the environment
@@ -636,6 +723,7 @@ export function liveSettings(env = process.env) {
     throw new GuardError(
       `Refusing to run: start this through \`node integrations/tooling/live-check.mjs <app> ${CONFIRM_FLAG} <id>\`.`,
     );
+
   const number = name => {
     const raw = env[name];
     if (raw === undefined || raw === '') return undefined;
@@ -645,6 +733,7 @@ export function liveSettings(env = process.env) {
 
     return n;
   };
+
   const minutes = number('LIVE_CHECK_MAX_MINUTES');
 
   return {

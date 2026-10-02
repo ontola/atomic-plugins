@@ -25,11 +25,19 @@ export function fakeGoogle({
 }) {
   let version = 0;
   const events = new Map<string, Json>();
-  const calls: Array<{ method: string; path: string; headers: Record<string, string> }> = [];
+  const calls: Array<{
+    method: string;
+    path: string;
+    headers: Record<string, string>;
+  }> = [];
   const etag = () => `"${++version}"`;
   for (const e of existing) events.set(e.id as string, { ...e, etag: etag() });
 
-  const reply = (status: number, body?: unknown, headers: Record<string, string> = {}) => ({
+  const reply = (
+    status: number,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) => ({
     status,
     headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
     text: async () => (body === undefined ? '' : JSON.stringify(body)),
@@ -39,17 +47,26 @@ export function fakeGoogle({
     const url = new URL(href);
     const method = String(init.method ?? 'GET');
     const headers = Object.fromEntries(
-      Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]),
+      Object.entries((init.headers ?? {}) as Record<string, string>).map(
+        ([k, v]) => [k.toLowerCase(), v],
+      ),
     );
     calls.push({ method, path: url.pathname + url.search, headers });
-    if (headers.authorization !== `Bearer ${token}`) return reply(401, { error: { code: 401 } });
-    const body = typeof init.body === 'string' ? (JSON.parse(init.body) as Json) : {};
+    if (headers.authorization !== `Bearer ${token}`)
+      return reply(401, { error: { code: 401 } });
+    const body =
+      typeof init.body === 'string' ? (JSON.parse(init.body) as Json) : {};
     const rest = url.pathname.replace('/calendar/v3', '');
 
     if (rest === '/users/me/calendarList')
       return reply(200, {
         items: [
-          { id: 'owner@example.com', summary: 'owner@example.com', primary: true, accessRole: 'owner' },
+          {
+            id: 'owner@example.com',
+            summary: 'owner@example.com',
+            primary: true,
+            accessRole: 'owner',
+          },
           { id: TEST_CALENDAR, summary: calendarName, primary, accessRole },
         ],
       });
@@ -63,13 +80,21 @@ export function fakeGoogle({
         const showDeleted = url.searchParams.get('showDeleted') === 'true';
 
         return reply(200, {
-          items: [...events.values()].filter(e => showDeleted || e.status !== 'cancelled'),
+          items: [...events.values()].filter(
+            e => showDeleted || e.status !== 'cancelled',
+          ),
         });
       }
+
       if (method === 'POST') {
         const newId = body.id as string;
         if (events.has(newId)) return reply(409, {});
-        const created = { status: 'confirmed', htmlLink: `https://example.test/e/${newId}`, ...body, etag: etag() };
+        const created = {
+          status: 'confirmed',
+          htmlLink: `https://example.test/e/${newId}`,
+          ...body,
+          etag: etag(),
+        };
         events.set(newId, created);
 
         return reply(200, created, { etag: created.etag });
@@ -80,13 +105,17 @@ export function fakeGoogle({
 
     const event = events.get(id);
     if (!event) return reply(404, {});
-    if (method === 'GET') return reply(200, event, { etag: event.etag as string });
+    if (method === 'GET')
+      return reply(200, event, { etag: event.etag as string });
+
     if (method === 'PATCH') {
-      if (headers['if-match'] && headers['if-match'] !== event.etag) return reply(412, {});
+      if (headers['if-match'] && headers['if-match'] !== event.etag)
+        return reply(412, {});
       Object.assign(event, body, { etag: etag() });
 
       return reply(200, event, { etag: event.etag as string });
     }
+
     if (method === 'DELETE') {
       if (event.status === 'cancelled') return reply(410, {});
       event.status = 'cancelled';
