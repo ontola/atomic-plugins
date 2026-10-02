@@ -5,9 +5,14 @@
  * every case skips unless SCREENSHOTS_DIR is set. Run it through the driver,
  * which starts the servers and passes the environment:
  *
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets moneybird todoist]
  *
  * Invented data only:
+ * - Moneybird and Todoist: catalog installs like Pets (both are published
+ *   `enabled: false`, which the lane dev-server's catalog lifts), connected
+ *   through the mock proxy's SYNTHETIC `moneybird` and `todoist` fixtures
+ *   (`integrations/money/fixtures/moneybird/`,
+ *   `integrations/issue-tracker/fixtures/todoist/`).
  * - Pets: the catalog install of `pets` (the lane dev-server's catalog,
  *   serving the committed `apps/pets/<version>/ui.js`), connected through the
  *   host's consent bar to the mock proxy's static `pets` fixture.
@@ -217,6 +222,49 @@ test.describe('README screenshots', () => {
     await shoot(page, 'notion-table');
   });
 
+  test('moneybird', async ({ page }) => {
+    test.setTimeout(240_000);
+    // The catalog install, as for Pets, connected through the mock proxy's
+    // synthetic moneybird fixture (invented "Synthetic Studio B.V.").
+    const app = await installDriveApp(page, 'moneybird', 'Moneybird');
+    await app.getByRole('button', { name: 'Connect Moneybird' }).click();
+    await connectThroughMockProxy(page, 'Moneybird');
+    await expect(app.getByRole('status')).toContainText(
+      'Choose the Moneybird administration',
+      { timeout: 30_000 },
+    );
+    await app
+      .getByLabel('Administration')
+      .selectOption({ label: 'Synthetic Studio B.V.' });
+    await app.getByRole('button', { name: 'Import contacts' }).click();
+    await expect(
+      app.getByRole('status').filter({ hasText: 'Last synced' }),
+    ).toContainText('5 contacts', { timeout: 30_000 });
+    // The app's own view is one status line; the contacts are in its table.
+    await page
+      .getByRole('button', { name: 'Moneybird contacts', exact: true })
+      .first()
+      .click();
+    await expect(
+      page.getByRole('main').getByText('Fictief Bakkerij B.V.').first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await shoot(page, 'moneybird');
+  });
+
+  test('todoist', async ({ page }) => {
+    test.setTimeout(240_000);
+    // The catalog install, connected through the mock proxy's synthetic
+    // todoist fixture: five invented active tasks, imported as issue-v1 rows.
+    const app = await installDriveApp(page, 'todoist', 'Todoist');
+    await app.getByRole('button', { name: 'Connect Todoist' }).click();
+    await connectThroughMockProxy(page, 'Todoist');
+    await expect(
+      app.getByRole('status').filter({ hasText: 'Last synced' }),
+    ).toContainText('5 tasks', { timeout: 60_000 });
+    await expect(app.locator('tr[data-task]')).toHaveCount(5);
+    await shoot(page, 'todoist');
+  });
+
   test('money', async ({ page }) => {
     test.setTimeout(300_000);
     // Installed from Drive apps, as a person does. The app makes its own
@@ -279,6 +327,39 @@ async function appFrame(page: Page): Promise<FrameLocator> {
   });
 
   return page.frameLocator(APP_FRAME);
+}
+
+/** Installs an enabled-in-the-dev-server catalog app from Drive apps. */
+async function installDriveApp(
+  page: Page,
+  id: string,
+  title: string,
+): Promise<FrameLocator> {
+  await page.goto(new URL('/app/integrations', page.url()).href);
+  const experimental = page.getByRole('checkbox', {
+    name: 'Show experimental plugins',
+  });
+  await experimental.check();
+  await expect(experimental).toBeEnabled({ timeout: 30_000 });
+  await page
+    .getByRole('region', { name: 'Drive apps' })
+    .locator(`[data-catalog-app="${id}"]`)
+    .getByRole('button', { name: `Install ${title}` })
+    .click();
+
+  return appFrame(page);
+}
+
+/** Accepts the host's consent bar and the mock proxy's connect page. */
+async function connectThroughMockProxy(page: Page, platform: string) {
+  const consent = page.getByRole('group', { name: 'Connect an account' });
+  await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+  await page
+    .getByRole('button', {
+      name: `Use LocalThought to sync ${platform} with this destination`,
+      exact: true,
+    })
+    .click();
 }
 
 /** Installs `<id>-sample` from the user-testing catalog. */
