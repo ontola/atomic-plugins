@@ -8,11 +8,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import { Agent, signRequest } from '@tomic/lib';
+import { SERVER_URL } from '../../../browser/e2e/tests/test-utils';
 import {
-  createFromCatalog,
-  SERVER_URL,
-  waitForSynced,
-} from '../../../browser/e2e/tests/test-utils';
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 import { atomicRequest } from './peer';
 
 // Playwright loads the specs as CommonJS, so __dirname, not import.meta.
@@ -91,25 +91,7 @@ export async function bindHost(agent: Agent, origin: string, drive: string) {
 
 /** A Plugin draft whose source is the bundle, as plugin-routes.spec.ts makes one. */
 export async function createPluginDraft(page: Page) {
-  // `createFromCatalog` reloads the SPA at /app/new and then fills the
-  // template search with Playwright's default 10 s action timeout, which a
-  // slow runner can miss while the page is still on the boot splash (run
-  // 36891774224). Load the page and wait for the search box with room to
-  // spare, so the helper's own reload finds a warm app (as remotestorage's
-  // helpers do).
-  await waitForSynced(page);
-  await page.goto(new URL('/app/new', page.url()).href);
-  await expect(
-    page.getByRole('searchbox', {
-      name: 'Search templates and resource types',
-    }),
-  ).toBeVisible({ timeout: 60_000 });
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
 
   return page.evaluate(
     async ({ code }) => {
@@ -223,10 +205,5 @@ export async function installPlugin(
   const reviewUrl = page.url();
   await dialog.getByRole('button', { name: 'Install', exact: true }).click();
   await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
-  // The install navigates once the Installation and the folder's write grant
-  // are saved locally, before the server has them; a route write in that
-  // window is refused as `500 route-write-failed` (the remoteStorage lane's
-  // race, #248; open-cloud-mesh on PR #280, run 37033430608). Wait for the
-  // outbox to drain before any route request.
-  await waitForSynced(page, 60_000);
+  await waitForOutboxDrained(page);
 }

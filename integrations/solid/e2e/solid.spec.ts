@@ -40,11 +40,13 @@ import {
 } from '@tomic/lib';
 import {
   before,
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
-  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 import { startIssuer, type TestIssuer } from './issuer';
 
 // Playwright loads this spec as CommonJS (no package.json with "type"
@@ -294,25 +296,7 @@ _:p a solid:InsertDeletePatch;
  * URL and the folder.
  */
 async function installPod(page: import('@playwright/test').Page) {
-  // `createFromCatalog` reloads the SPA at /app/new and then fills the
-  // template search with Playwright's default 10 s action timeout, which a
-  // slow runner can miss while the page is still on the boot splash (run
-  // 36891774224). Load the page and wait for the search box with room to
-  // spare, so the helper's own reload finds a warm app (as remotestorage's
-  // helpers do).
-  await waitForSynced(page);
-  await page.goto(new URL('/app/new', page.url()).href);
-  await expect(
-    page.getByRole('searchbox', {
-      name: 'Search templates and resource types',
-    }),
-  ).toBeVisible({ timeout: 60_000 });
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
   const target = await page.evaluate(
     async ({ code }) => {
       const store = window.store!;
@@ -399,10 +383,8 @@ async function installPod(page: import('@playwright/test').Page) {
     },
     { target: storage, writer: pluginAgent },
   );
-  // The page saved the write grant locally; a pod write before the server
-  // has it is refused as `500 route-write-failed` (the remoteStorage lane's
-  // race, #248). Wait for the outbox to drain.
-  await waitForSynced(page, 60_000);
+  // The page saved the write grant locally, so wait for the server to have it.
+  await waitForOutboxDrained(page);
   const origin = new URL(ROUTES_ORIGIN);
   const pod = `${origin.protocol}//${routeSlug(installation)}.${origin.host}/`;
   issuer.setStorage('alice', pod);
