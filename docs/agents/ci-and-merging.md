@@ -29,6 +29,40 @@ merged by the session that made it (#227 rule 12, Michiel, 2026-09-30).
 Never bypass the gate with admin rights. Rule 12 doesn't cover atomic-server
 (only the trekmeester merges `develop`) or deploys and publishing (rule 10).
 
+The required `CI` gate does **not** include GitGuardian, which is a separate
+check. #276 was merged with `CI` green and GitGuardian red (2026-10-02).
+Merge only when `gh pr checks <N>` shows nothing but pass and skipping, and
+compare it with the head SHA as above. A red check that isn't `CI` is a
+reason to wait, not a reason to merge.
+
+- **A GitGuardian hit on an invented test value:** replace the value with a
+  plainly fake, low-entropy string. The offline fake Clockify key in #278 was
+  base64 of a made-up phrase and still read as a high-entropy secret; #283
+  replaced it. Say so on #227: someone with access to the ontola GitGuardian
+  workspace has to mark the incident.
+- **A real secret:** a commit doesn't fix it. Report it on #227 (rule 6) and
+  don't rewrite shared history to hide it.
+- **A branch whose history carries a flagged commit** keeps failing the check
+  after the value is fixed. On your own branch, rebuild it: branch from
+  `origin/main`, cherry-pick the real commits, and `git push
+  --force-with-lease`. Only on a branch nobody else has checked out. #280 went
+  this way.
+
+## Merge conflicts and stale branches
+
+- **`apps.mjs check --published origin/main` fails with "published … was
+  deleted".** The branch is behind `main`: another app version was published
+  there since. Merge `origin/main`. Don't restore files by hand, and never
+  change a published file.
+- **`integrations/READINESS.md`** (one wide table) **and the `VERSIONS` map in
+  `usertest/catalog.mjs`** are edited by almost every plugin PR, so parallel
+  PRs conflict on every merge. Recipe: take `main`'s version of the file,
+  put the PR's own rows (or version bumps) back in, then run
+  `browser/node_modules/.bin/oxfmt -c browser/.oxfmtrc.json integrations`
+  (the table is column-padded). Then diff against `origin/main` and check
+  that only your rows differ. Never `git checkout --theirs` (or `--ours`) on a
+  whole shared file: that lost the Moneybird entry once (#242).
+
 ## Stacked PRs
 
 - Merge only PRs based on `main`. A PR stacked on another waits until the
