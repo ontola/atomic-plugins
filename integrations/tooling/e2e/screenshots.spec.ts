@@ -15,20 +15,15 @@
  *   user-testing catalog (`usertest/catalog.mjs`, `usertest/sample-data/`),
  *   which run the app built from this checkout on an invented Acme Studio
  *   account in the frame. Their yellow "Sample data" line stays in the shot.
- * - Money: the Bank statements importer published to the server and set up,
- *   then the published `apps/money/<version>/ui.js` added test-side as a view
- *   of its Bank transactions table (as `integrations/money/e2e/money.spec.ts`
- *   does; a catalog install does not give a working Money app at this pin),
- *   and the invented `integrations/money/fixtures/usertest/` August statement
- *   imported from inside the app through the host's review.
+ * - Money: the catalog install of `money` (the lane dev-server's catalog,
+ *   serving the committed `apps/money/<version>/ui.js`), then the invented
+ *   `integrations/money/fixtures/usertest/` August statement imported through
+ *   the app's own "Import statement" into its own table.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test, expect, type FrameLocator, type Page } from '@playwright/test';
-import {
-  before,
-  createFromCatalog,
-} from '../../../browser/e2e/tests/test-utils';
+import { before } from '../../../browser/e2e/tests/test-utils';
 
 const OUT = process.env.SCREENSHOTS_DIR;
 const SAMPLE_CATALOG_URL = process.env.SAMPLE_CATALOG_URL;
@@ -224,73 +219,24 @@ test.describe('README screenshots', () => {
 
   test('money', async ({ page }) => {
     test.setTimeout(300_000);
-    const main = page.getByRole('main');
-    const release = await publishImporter(page);
+    // Installed from Drive apps, as a person does. The app makes its own
+    // Bank transactions table (shared `bank-transaction-v1` class) on first
+    // open and writes the imported rows into it itself: no importer.
     await page.goto(new URL('/app/integrations', page.url()).href);
-    await page
-      .getByRole('checkbox', { name: 'Show experimental plugins' })
-      .check();
-    await page
-      .locator(`[data-release="${release}"]`)
-      .first()
-      .getByRole('button', { name: 'Open', exact: true })
-      .click();
-    await page
-      .locator('dialog[open]')
-      .getByRole('button', { name: 'Create draft', exact: true })
-      .click();
-    await expect(
-      main.getByRole('heading', { name: 'Bank statements', level: 1 }),
-    ).toBeVisible({ timeout: 45_000 });
-    await main.getByRole('button', { name: 'Set up', exact: true }).click();
-    await expect(main.getByLabel('File to import')).toBeVisible({
-      timeout: 120_000,
+    const experimental = page.getByRole('checkbox', {
+      name: 'Show experimental plugins',
     });
-    const sidebar = page.getByRole('navigation').last();
-    await sidebar
-      .getByRole('button', { name: 'Expand folder' })
-      .first()
-      .click();
-    await sidebar
-      .getByRole('button', { name: 'Bank transactions', exact: true })
-      .click();
-    await expect(
-      main.getByRole('heading', { name: 'Bank transactions' }),
-    ).toBeVisible({ timeout: 30_000 });
-    const table = new URL(page.url()).searchParams.get('subject')!;
-    const rowClass = await page.evaluate(
-      async subject =>
-        (await window.store!.getResource(subject)).get(
-          'https://atomicdata.dev/properties/classtype',
-        ) as string,
-      table,
-    );
-
-    // The published module, as a new App that renders bank transactions.
-    await createFromCatalog(page, 'App');
-    await expect(main.locator(APP_FRAME)).toBeVisible({ timeout: 45_000 });
-    const version = catalogVersion('money');
-    await loadApp(
-      page,
-      readFileSync(resolve(repo, `apps/money/${version}/ui.js`), 'utf8'),
-      rowClass,
-      'Money',
-    );
-    await page.goto(
-      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
-    );
-    await main.getByRole('button', { name: 'Add view' }).click();
+    await experimental.check();
+    await expect(experimental).toBeEnabled({ timeout: 30_000 });
     await page
-      .getByRole('menuitem', { name: 'Money' })
-      .click({ timeout: 30_000 });
-    await page
-      .locator('dialog[open]')
-      .getByRole('button', { name: 'Read-only' })
+      .getByRole('region', { name: 'Drive apps' })
+      .locator('[data-catalog-app="money"]')
+      .getByRole('button', { name: 'Install Bank statements' })
       .click();
-    const app = page.frameLocator(APP_FRAME);
+    const app = await appFrame(page);
     await expect(
       app.getByRole('heading', { name: 'Bring in your bank transactions' }),
-    ).toBeVisible({ timeout: 45_000 });
+    ).toBeVisible({ timeout: 60_000 });
 
     const name = 'acme-studio-2026-08.mt940';
     await app.locator('input[type="file"]').setInputFiles({
@@ -304,13 +250,6 @@ test.describe('README screenshots', () => {
     await sheet
       .getByRole('button', { name: /^Import \d+ transactions?$/ })
       .click({ timeout: 30_000 });
-    const ask = page.getByRole('group', { name: 'Import with this app' });
-    await ask.getByRole('button', { name: 'Preview import' }).click();
-    const review = page.locator('dialog[open]');
-    await review
-      .getByRole('button', { name: /^Apply \d+ changes$/ })
-      .click({ timeout: 120_000 });
-    await expect(review).toBeHidden({ timeout: 60_000 });
     await expect(sheet).toBeHidden({ timeout: 60_000 });
     await expect(app.getByRole('status').first()).toContainText('Imported', {
       timeout: 60_000,
@@ -378,130 +317,4 @@ async function shoot(page: Page, name: string) {
   await page.mouse.move(0, 0);
   await page.waitForTimeout(1_500);
   await page.screenshot({ path: resolve(OUT!, `${name}.png`) });
-}
-
-function catalogVersion(shortname: string): string {
-  const catalog = JSON.parse(
-    readFileSync(resolve(repo, 'integrations/catalog.json'), 'utf8'),
-  ) as Record<string, unknown>[];
-  const entry = catalog.find(
-    e => e['https://atomicdata.dev/properties/shortname'] === shortname,
-  );
-
-  return entry![
-    'https://atomicdata.dev/integrations/properties/version'
-  ] as string;
-}
-
-/** Publishes the committed Bank statements bundle; returns the release id. */
-async function publishImporter(page: Page): Promise<string> {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
-  await page.evaluate(
-    async source => {
-      const store = window.store!;
-      const subject = new URL(location.href).searchParams.get('subject')!;
-      const plugin = await store.getResource(subject);
-      const sourceProp = Object.entries(plugin.getPropVals()).find(
-        ([, value]) =>
-          typeof value === 'string' && value.includes('export function run'),
-      )?.[0];
-      if (!sourceProp) throw new Error('plugin has no source property');
-      await plugin.set(sourceProp, source);
-      await plugin.set(
-        'https://atomicdata.dev/properties/name',
-        'Bank statements',
-      );
-      await plugin.set(
-        'https://atomicdata.dev/properties/description',
-        'Import bank transactions from MT940 and camt.053 statement exports.',
-      );
-      await plugin.save();
-    },
-    readFileSync(resolve(repo, 'integrations/money/plugin.js'), 'utf8'),
-  );
-  await page.getByRole('tab', { name: 'Code', exact: true }).click();
-  const publication = page.waitForResponse(
-    response =>
-      response.url().endsWith('/plugin-release') &&
-      response.request().method() === 'POST',
-  );
-  await page
-    .getByRole('button', { name: 'Publish to integration store' })
-    .click();
-  const published = await publication;
-  expect(published.ok(), await published.text()).toBe(true);
-
-  return ((await published.json()) as { id: string }).id;
-}
-
-/**
- * Loads `source` into the App on screen, names it, and lets it render
- * `rowClass`. The entry point and `renders` are found by value: their
- * property subjects are minted per drive.
- */
-async function loadApp(
-  page: Page,
-  source: string,
-  rowClass: string,
-  name: string,
-) {
-  await page.evaluate(
-    async args => {
-      const store = window.store!;
-      const subject = new URL(location.href).searchParams.get('subject')!;
-      const app = await store.getResource(subject);
-      let loaded = false;
-
-      // `renders`: the drive-local property, named so by its shortname, that
-      // the App's own class lists. A fresh App may not hold it yet.
-      let renders: string | undefined;
-
-      for (const klass of (app.get('https://atomicdata.dev/properties/isA') ??
-        []) as string[]) {
-        const schema = await store.getResource(klass);
-
-        for (const key of ['recommends', 'requires']) {
-          for (const property of (schema.get(
-            `https://atomicdata.dev/properties/${key}`,
-          ) ?? []) as string[]) {
-            const p = await store.getResource(property);
-            if (
-              p.get('https://atomicdata.dev/properties/shortname') === 'renders'
-            )
-              renders = property;
-          }
-        }
-      }
-
-      if (!renders)
-        throw new Error('could not find the app’s renders property');
-      const current = (app.get(renders) ?? []) as string[];
-      await app.set(renders, [...current, args.rowClass]);
-
-      for (const [, value] of Object.entries(app.getPropVals())) {
-        if (typeof value !== 'string' || !value.includes(':')) continue;
-        const child = await store.getResource(value).catch(() => undefined);
-        const sourceProp =
-          child &&
-          Object.entries(child.getPropVals()).find(
-            ([, v]) =>
-              typeof v === 'string' && v.includes('export async function view'),
-          )?.[0];
-        if (!child || !sourceProp) continue;
-        await child.set(sourceProp, args.source);
-        await child.save();
-        loaded = true;
-      }
-
-      await app.set('https://atomicdata.dev/properties/name', args.name);
-      await app.save();
-      if (!loaded) throw new Error('could not find the app’s entry point');
-    },
-    { source, rowClass, name },
-  );
 }
