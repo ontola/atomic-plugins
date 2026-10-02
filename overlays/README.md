@@ -16,9 +16,11 @@ any file `overlays/<path>` is served at:
 https://ontola.github.io/atomic-plugins/overlays/<path>
 ```
 
-`catalog/2026-10-02.json` lists each platform's overlays by those URLs, and the
-integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. Before this
+Each dated catalog under `catalog/` lists each platform's overlays by those
+URLs. The integration proxy's default `CATALOG_PATH` is
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`
+since #258 (unreleased); proxy 0.2.4, and localthought.io's explicit
+`CATALOG_PATH`, use `catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit
 on `raw.githubusercontent.com`. Pages URLs are not Git-commit URLs, but
 CI preserves published dated catalogs and OAD-revision overlay files
@@ -38,9 +40,21 @@ Dated catalogs and their selected revision files are immutable once on
 `main`; publish a new dated catalog and update the proxy's default or its
 `CATALOG_PATH` to opt in. New overlays do not change an existing catalog.
 The 2026-10-02 catalog selects the full Discord OAD and its existing two-read
-CRUD metadata. The proxy currently refuses the OAD's mixed OAuth/bot-token
-security schemes, so Discord connection support awaits a separate auth
-[follow-up #258](https://github.com/ontola/atomic-plugins/issues/258); successful composition does not certify that connection flow.
+CRUD metadata. Proxy 0.2.4 refuses the OAD's mixed OAuth/bot-token security
+schemes, so that catalog's Discord entry composes but cannot connect.
+`catalog/2026-10-02-auth-profiles.json` is the same catalog except for
+Discord ([#258](https://github.com/ontola/atomic-plugins/issues/258)): it
+lists `APIs/discord.com/10/auth-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+instead of the v1 auth overlay, and selects
+`{"authenticationProfile": "discordUser"}`. The v2 overlay adds
+[authentication profiles](../openapi-extensions/spec/authentication-profiles/README.md)
+to v1's content: `discordUser` (the `discordOAuth` authorization-code
+scheme, which covers `GET /users/@me` and `GET /users/@me/guilds` with
+`identify` and `guilds`) and `discordBot` (the OAD's `BotToken`, every
+operation that accepts it on its own; declared, selected by no catalog). A
+proxy that supports profiles connects Discord with the user profile and
+refuses every other Discord operation. Composition tests cover this; no live
+Discord connection has been made with it.
 
 ## Directory layout and OAD revisions
 
@@ -101,7 +115,7 @@ latest OAD at a particular ref, add `--latest-ref origin/main`. That audit
 will intentionally fail once historical and current revisions coexist.
 These checks establish target provenance, not live-provider compatibility.
 
-Overlays are applied in the order `catalog/2026-10-02.json` lists them, and an action
+Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
 `crud-causality-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml` is listed first because it defines the
 projects/users paths its auth and pagination overlays target, and the

@@ -7,6 +7,31 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 Not yet published to crates.io or deployed.
 
+- Authentication profiles (ontola/atomic-plugins#258): a catalog entry may
+  select `authenticationProfile`, naming one of the composed document's
+  `components.x-authentication-profiles`
+  (`openapi-extensions/spec/authentication-profiles`, 0.1.0-draft). The
+  document may then declare several kinds of security scheme. The proxy uses
+  the profile's one scheme (`oauth2` authorization code, or `apiKey` with its
+  help link and key check), asks only for the OAuth scopes of the operations
+  the profile covers, and answers `404` for every other operation without
+  sending a credential. An unresolvable profile, or one combined with
+  `oauthSecurityScheme`/`apiKeySecurityScheme`, is refused. Without a
+  profile selection nothing changes: mixed kinds stay refused.
+- Security: a stored OAuth token is sent only while its platform still
+  resolves to an OAuth scheme (an API-key connection already required its
+  kind). `Catalog::oauth_provider` now resolves exactly as
+  `Catalog::security_scheme` does, so token exchange and refresh use the
+  selected scheme or profile.
+- Default catalog: `overlays/catalog/2026-10-02-auth-profiles.json`. It
+  differs from `2026-10-02.json` only in Discord, which now lists the
+  `auth-v2` overlay revision and selects the `discordUser` profile: the
+  proxy offers a Discord connection again, with the scopes `identify` and
+  `guilds` and the two reads they cover. Composition-tested against the
+  pinned full OAD; not verified with a live Discord account. 0.2.4 can load
+  the new catalog (it ignores the new selection key), and keeps refusing
+  Discord there.
+
 - Security: the single-use record of a signed request now names its signer.
   The `used_challenges` key was `atomic-request-v2:{sha256(message)}`, over
   the signed message alone, so two agents that signed the same method, URL,

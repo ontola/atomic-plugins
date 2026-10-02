@@ -222,7 +222,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `BASE_URL` | no | Public URL of the proxy, e.g. `https://localthought.io`. Defaults to `http://localhost:8080`. Used for OAuth callback URLs, as the prefix of every signed URL, and (its origin) as a capability's `aud`. Must be exactly what clients use. |
 | `PORT` | no | Port to listen on. Defaults to `8080`. |
 | `SESSION_SECRET` | no; set it in production | Secret for the short-lived consent and OAuth-binding cookies. If unset, a random key is generated at startup (with a warning in the log), and a consent screen open during a restart must be started again. Instances behind one name must share it. |
-| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`, this repository's `overlays/catalog/2026-10-02.json` as GitHub Pages publishes it from `main`. |
+| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`, this repository's `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
 | `DATABASE_URL` | yes | PostgreSQL connection URL. See the TLS note below. |
 | `ENCRYPTION_KEY` | yes | Base64url-encoded, random 32-byte key for sealed provider credentials. Changing it makes every stored connection unreadable. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids (any accepted spelling) the default access policy refuses. |
@@ -261,9 +261,15 @@ localthought.io deployment's `BASE_URL`.
 
 Discord uses `OAUTH_DISCORD_CLIENT_ID` and `OAUTH_DISCORD_CLIENT_SECRET`,
 with callback `https://localthought.io/oauth/discord/callback` on localthought.io.
-Register an OAuth application in the Discord Developer Portal. The initial
-read-only integration uses `identify` and `guilds` to read your profile and
-import server memberships; it does not import messages or require a bot token.
+Register an OAuth application in the Discord Developer Portal. The catalog
+composes Discord's full OAD, which declares a bot token and OAuth together,
+and selects its `discordUser` authentication profile (see "Authentication
+profiles" below): the read-only integration uses `identify` and `guilds` to
+read your profile and import server memberships, and every other Discord
+operation, including all bot-token operations, is refused. It does not
+import messages or require a bot token. This is declared from Discord's
+documentation and composition tests; no live Discord connection has been
+verified with the profile.
 The guild import requests `limit=200`, covering Discord's documented maximum
 number of guilds for a user. The profile endpoint is available as a read
 operation, not an imported collection.
@@ -291,11 +297,11 @@ scope). The initial integration imports contacts; supply the administration ID
 from the Moneybird account when connecting. OAuth tokens without `expires_in`
 remain usable until revoked; tokens with an expiry use the normal refresh flow.
 
-[`overlays/catalog/2026-10-02.json`](../overlays/catalog/2026-10-02.json) in this repository
+[`overlays/catalog/2026-10-02-auth-profiles.json`](../overlays/catalog/2026-10-02-auth-profiles.json) in this repository
 (migrated from the former `localthought/overlays` repository) is the source of
 the integration catalog. GitHub Pages publishes `overlays/` from `main` at
 `https://ontola.github.io/atomic-plugins/overlays/`, and the proxy defaults to
-the `catalog/2026-10-02.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
+the `catalog/2026-10-02-auth-profiles.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
 local fixture for development. Each platform names one pinned OpenAPI document
 (in `localthought/` or `ontola/openapi-directory`, at a commit) and zero or more Overlay
 Specification documents, each served from that same Pages folder. At startup
@@ -318,8 +324,43 @@ default. The proxy passes those choices through.
 **selection.oauthSecurityScheme** is trusted server configuration: when a
 document contains multiple OAuth authorization-code Security Schemes, it names
 the one the proxy uses. The value must be a string naming a declared scheme.
+**selection.authenticationProfile** is trusted server configuration too: it
+names one of the document's `components.x-authentication-profiles`
+(see "Authentication profiles" below), and excludes
+`oauthSecurityScheme` and `apiKeySecurityScheme`.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
+
+### Authentication profiles
+
+A document that declares more than one kind of security scheme (OAuth and an
+API key, say) is refused unless the catalog entry selects an authentication
+profile ([`x-authentication-profiles`](../openapi-extensions/spec/authentication-profiles/README.md),
+0.1.0-draft). A profile names one security scheme. With
+`selection.authenticationProfile` set, the proxy:
+
+- connects with that scheme only: `oauth2` with an authorization-code flow,
+  or `apiKey` (with its `x-api-key-details` help link and key check, as for
+  any API-key platform);
+- asks for the scopes of the operations the profile covers, and of no other:
+  an operation is covered when its effective `security` has a requirement
+  whose only member is the profile's scheme;
+- answers `404 method or path is not in the catalog` for every operation the
+  profile does not cover, without sending any credential upstream, including
+  operations that accept only anonymous access, only another scheme, or the
+  scheme only combined with another;
+- refuses an unknown profile, an undeclared or unsupported scheme, a profile
+  that covers no operation, or a selection that also names a scheme, instead
+  of falling back to anything else;
+- sends a stored OAuth token only while the platform still resolves to an
+  OAuth scheme, so a selection moved to an API-key profile does not send a
+  user's token to that profile's operations (the person connects again).
+
+Declaring profiles in a document changes nothing until a catalog selects
+one. The served document (`GET /catalog/{platform}.yaml`) is the whole
+composed document; a client reads which operations its connection reaches
+from their `security`. Without a profile selection the proxy behaves as
+before.
 
 Overlay URLs use immutable OAD-revision filenames. Publish new overlay
 filenames and a new dated catalog together, then explicitly switch
@@ -519,7 +560,9 @@ from the composed OpenAPI catalog. A platform with one OAuth
 authorization-code Security Scheme uses it directly. A platform with multiple
 such schemes must set the catalog's trusted
 **selection.oauthSecurityScheme**; missing, non-string, or unknown selections
-fail closed. Requests cannot select a scheme or supply endpoints. Scopes are
+fail closed. A mixed-kind platform uses the scheme of its selected
+authentication profile instead (see "Authentication profiles"). Requests
+cannot select a scheme, a profile or supply endpoints. Scopes are
 taken from operation security requirements (falling back to root
 requirements), not every scope supported by the server. Public operations
 require no scopes; unsupported authentication combinations fail closed.
