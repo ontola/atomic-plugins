@@ -124,7 +124,7 @@ A write the server answers with a non-2xx status is classified. The defaults
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
 | 403 with `Retry-After` or `x-ratelimit-remaining: 0` | `retry` | A rate limit, as GitHub sends it |
-| Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` while no write has had a 2xx response since: then `permanent` |
+| Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
 | 408, 425, 429 | `retry` | Backoff retry, or the `Retry-After` delay |
 | Every other 4xx: 400, 404 or 410 to a create or update, 405, 409, 413, 415, 422, ... | `permanent` | The write becomes `failed` at once, after 1 attempt |
 | Anything else: 5xx, and a 1xx or 3xx the transport passed on | `retry` | Backoff retry, or the `Retry-After` delay; a create's 5xx other than 503 becomes `uncertain` without a usable idempotency key ([Uncertain creates](#uncertain-creates)) |
@@ -136,14 +136,19 @@ request was handed to the transport, such as an `authenticate` adapter that
 throws (retried with backoff).
 
 `retry` counts an attempt and sends the write again after the backoff delay
-(`retry.baseDelayMs`, doubled per attempt, at most `retry.maxDelayMs`) or,
-when the response has a `Retry-After` header (delay-seconds or an HTTP date),
-after that delay instead, even when it is longer than `retry.maxDelayMs`. A
-delay above setTimeout's limit (2^31-1 ms, about 24.8 days) is cut to it, and
-a `Retry-After` date in the past means at once; a value that is neither
-(such as `1.5`) is ignored. `retry.maxAttempts` applies
-to `retry` failures. The delay is not stored; after a restart the first
-resend is immediate.
+(`retry.baseDelayMs`, doubled per attempt, at most `retry.maxDelayMs`). A
+`Retry-After` header (delay-seconds or an HTTP date) can only lengthen that
+wait: the delay is the longer of the backoff and the `Retry-After`, which
+may exceed `retry.maxDelayMs` but is cut to `retry.maxRetryAfterMs`
+(default 3600000, 1 hour). `Retry-After: 0`, a date in the past, or a server
+clock behind the client's therefore waits the backoff, so they cannot cause
+a tight loop. The cap is a trade-off: a provider that asks for more than an
+hour is asked again after an hour, which it may answer with another 429;
+raise the cap to wait as long as such a provider asks, at the cost of a queue
+that can stay held that long. A value that is neither delay-seconds nor a
+date (such as `1.5`) is ignored. `retry.maxAttempts` applies to `retry`
+failures. The delay is not stored; after a restart the first resend is
+immediate.
 
 `permanent` counts an attempt and makes the write `failed` at once, as if
 `retry.maxAttempts` were reached: a failed create holds back the writes
@@ -182,8 +187,10 @@ collection: a client has one server URL and one set of credentials (one
 apply to all of its writes. The write that met it becomes `blocked`, without
 counting an attempt; the other writes stay `pending` but are not sent, and
 writes made meanwhile are queued as usual and visible locally. A request
-already in flight completes, and is marked `blocked` too if it is refused.
-Reads (`sync()`) are not affected by the block.
+already sent completes, and its write is marked `blocked` too if it is
+refused. A write whose in-flight mark was still being stored when the block
+began is not sent and keeps its attempt count. Reads (`sync()`) are not
+affected by the block.
 
 ```ts
 const client = createApiClient(doc, {
@@ -202,13 +209,28 @@ client cannot tell by itself that credentials were renewed: the
 `authenticate` adapter returning a request does not show that the server
 accepts it. Do not call `authRenewed()` from `onAuthBlocked` without
 renewing: a write refused again blocks the client again, one request per
-call. After a renewal, a 401 blocks again; a 403 (without rate-limit headers)
-for a request sent after the renewal fails that write instead, until any
-write gets a 2xx response, so a permission that new credentials do not grant
-cannot hold all writes back. A 401 or 403 for a request sent before the
-latest renewal is sent again at once, without counting an attempt.
-`resolveWrite` does not apply to a blocked write (it throws); it still
-retries or discards the record's failed writes.
+call. After a renewal, a 401 blocks again. A 403 (without rate-limit
+headers) fails its write instead of blocking, if it answers a request sent
+after the renewal and before any response showed the renewed credentials
+accepted, so a permission that new credentials do not grant cannot hold all
+writes back. Accepted means: a response to a request sent after the latest
+renewal that is not an `auth` failure, that is a 2xx or a failure classified
+`retry`, `permanent` or `satisfied`. Whether a request counts as sent after
+the renewal is decided when it is sent, not when its answer arrives. A 401
+or 403 for a request sent before the latest renewal is sent again at once,
+without counting an attempt.
+
+`resolveWrite` `discard` drops a blocked write (a blocked create together
+with the writes queued behind it, as for an uncertain one) and leaves the
+client blocked; the record's later writes stay queued. `retry` on a record
+whose queue starts with a blocked write throws unless the record also has
+failed writes, which it then retries behind the queued ones; a blocked
+write itself is resent only by `authRenewed()`.
+
+For an `authenticate` adapter that renews tokens by itself, set
+`onAuthFailure: 'retry'`: an `auth` failure is then retried with backoff like
+a `retry` failure (counting attempts, `retry.maxAttempts` applies), nothing
+is blocked and `onAuthBlocked` is not called. The default is `'block'`.
 
 The block is stored in the durable outbox. A client restored from a blocked
 outbox is blocked, calls `onAuthBlocked` once the restore is done, and sends
@@ -649,7 +671,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `defaultWriteFailureClass`): most 4xx fail at once instead of retrying,
   a 404 or 410 to a delete settles it, and a 401 or 403 makes the write
   `blocked` and stops all writes until `authRenewed()` (`authBlocked()`,
-  `onAuthBlocked`). Retries honour `Retry-After`. `pendingWrites()` entries
+  `onAuthBlocked`, `onAuthFailure: 'retry'` to keep retrying instead).
+  `Retry-After` lengthens the retry delay up to `retry.maxRetryAfterMs`
+  (default 1 hour). `pendingWrites()` entries
   gain `lastStatus`, and `lastError` includes a response body excerpt.
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read

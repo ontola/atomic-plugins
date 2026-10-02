@@ -1521,9 +1521,9 @@ describe('durable outbox: failure classes (#260)', () => {
         lastStatus: undefined,
       },
     ]);
-    // A blocked write waits for authRenewed(), not for resolveWrite.
+    // A blocked write is resent by authRenewed(), not by resolveWrite.
     await expect(
-      b.resolveWrite('/pets', '1', { action: 'discard' }),
+      b.resolveWrite('/pets', '1', { action: 'retry' }),
     ).rejects.toThrow(/authRenewed/);
     // Syncs while blocked send nothing and do not count refresh misses.
     for (let i = 0; i < 4; i += 1) await b.sync();
@@ -1657,6 +1657,56 @@ describe('durable outbox: failure classes (#260)', () => {
       lastError: expect.stringMatching(/process stopped/),
     });
     expect(b.pendingWrites()[0]).not.toHaveProperty('lastStatus');
+  });
+
+  it('does not send a write whose in-flight mark was being stored when the block began', async () => {
+    const storage = new CrashableStorage();
+    let refuseRex!: () => void;
+    const rexGate = new Promise<void>((resolve) => (refuseRex = resolve));
+    let renewed = false;
+    const first = provider([rex, milo]);
+    const transport: Transport = async (r) => {
+      if (r.method === 'GET' || renewed) return first.transport(r);
+      first.requests.push(r);
+      await rexGate;
+      return response({}, 401);
+    };
+    const a = restart(storage, transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    // Milo's in-flight mark is held in storage until Rex has been refused.
+    let releaseStore!: () => void;
+    const storeGate = new Promise<void>((resolve) => (releaseStore = resolve));
+    storage.afterPut = (resource, id): void => {
+      if (resource === '/pets' && id === '2') {
+        storage.afterPut = undefined;
+        storage.outboxGate = storeGate;
+      }
+    };
+    await a.update('/pets', '2', { name: 'Milo II' });
+    refuseRex();
+    await vi.waitFor(() => expect(a.authBlocked()).toBeDefined());
+    storage.outboxGate = undefined;
+    releaseStore();
+    await settle();
+    expect(first.requests.map((r) => r.url.pathname)).toEqual(['/api/pets/1']);
+    expect(a.pendingWrites()).toMatchObject([
+      { id: '1', state: 'blocked', attempts: 0 },
+      { id: '2', state: 'pending', attempts: 0 },
+    ]);
+    const outbox = storage.data.get(OUTBOX)?.get('outbox') as {
+      records: { id: string; queue: { sending?: true }[] }[];
+    };
+    expect(
+      outbox.records.find((r) => r.id === '2')?.queue[0],
+    ).not.toHaveProperty('sending');
+
+    renewed = true;
+    await a.authRenewed();
+    await idle(a);
+    expect(first.pets.get('1')).toMatchObject({ name: 'Rex II' });
+    expect(first.pets.get('2')).toMatchObject({ name: 'Milo II' });
   });
 
   it('settles a resent delete the server had already applied (404)', async () => {

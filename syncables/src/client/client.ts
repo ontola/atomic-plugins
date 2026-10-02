@@ -48,6 +48,12 @@ export interface RetryOptions {
   maxDelayMs?: number;
   /** Stop auto-retrying a write after this many attempts. Default is unlimited (keep retrying until it succeeds). */
   maxAttempts?: number;
+  /**
+   * The longest a `Retry-After` header may hold a write back, in
+   * milliseconds. Default 3600000 (1 hour). A longer `Retry-After` waits this
+   * long instead, so the client may ask again before the server wants it to.
+   */
+  maxRetryAfterMs?: number;
 }
 
 /**
@@ -78,9 +84,10 @@ export interface WriteFailure {
   resource: string;
   id: string;
   /**
-   * True when this request was sent after the latest `authRenewed()` and no
-   * write has had a 2xx response since: the renewed credentials are not yet
-   * seen to work.
+   * True when, as this request was sent, the latest `authRenewed()` had not
+   * yet been followed by an accepted response: a response to a request sent
+   * after that renewal that is not an `auth` failure (a 2xx, or a failure
+   * classified `retry`, `permanent` or `satisfied`).
    */
   afterRenewal: boolean;
 }
@@ -196,6 +203,14 @@ export interface ApiClientOptions {
    * `authRenewed()`.
    */
   onAuthBlocked?: (block: AuthBlock) => void;
+  /**
+   * What an `auth` failure does. `'block'` (the default): the write becomes
+   * `blocked` and the client sends no write until `authRenewed()`. `'retry'`:
+   * it is retried with backoff like a `retry` failure, counting attempts, and
+   * nothing is blocked; for an `authenticate` adapter that renews tokens by
+   * itself.
+   */
+  onAuthFailure?: 'block' | 'retry';
 }
 
 export interface PaginateOptions {
@@ -245,6 +260,8 @@ export type PendingWriteType = 'create' | 'update' | 'delete';
  * - `blocked`: the server refused the client's credentials for this write (an
  *   `auth` failure). The client sends no write, of any record, until
  *   `authRenewed()`; then it is sent again, in its place in the queue.
+ *   `resolveWrite` `discard` drops it (a create with the writes queued
+ *   behind it) and leaves the client blocked; `retry` does not resend it.
  */
 export type PendingWriteState = 'pending' | 'uncertain' | 'failed' | 'blocked';
 
@@ -390,9 +407,10 @@ export interface ApiClient {
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
-   * updates waiting for a refresh (see `WriteResolution`). Throws if that
-   * record has none of these; any other `pending` write cannot be resolved
-   * this way.
+   * updates waiting for a refresh (see `WriteResolution`), or drops its
+   * `blocked` write (`discard` only; the client stays blocked). Throws if
+   * that record has none of these; any other `pending` write cannot be
+   * resolved this way.
    */
   resolveWrite(
     resource: string,
@@ -409,9 +427,9 @@ export interface ApiClient {
   /**
    * Tells the client that its credentials were renewed: `blocked` writes
    * become `pending` and every queue resumes in order. Does nothing when the
-   * client is not blocked. The next 403 without rate-limit headers then
-   * fails its write instead of blocking again, until a write succeeds (see
-   * `defaultWriteFailureClass`).
+   * client is not blocked. A 403 without rate-limit headers to a request sent
+   * after it then fails its write instead of blocking again, until a response
+   * shows the credentials accepted (see `WriteFailure.afterRenewal`).
    */
   authRenewed(): Promise<void>;
   /**
@@ -514,7 +532,9 @@ type WriteOutcome =
   | { status: 'retry'; delayMs: number }
   | { status: 'uncertain' }
   | { status: 'gaveUp' }
-  | { status: 'blocked' };
+  | { status: 'blocked' }
+  /** Not sent: the client was blocked while the write was being stored. */
+  | { status: 'held' };
 
 /** The server answered with a non-2xx status. */
 class HttpStatusError extends Error {
@@ -552,13 +572,10 @@ function retryAfterMs(headers: Record<string, string>): number | undefined {
     : /[a-z]/i.test(value)
       ? Date.parse(value) - Date.now()
       : NaN;
-  // Cut to setTimeout's largest delay (about 24.8 days), which would
-  // otherwise fire at once.
-  return Number.isFinite(ms)
-    ? Math.min(Math.max(0, ms), MAX_TIMER_MS)
-    : undefined;
+  return Number.isFinite(ms) ? Math.max(0, ms) : undefined;
 }
 
+/** setTimeout's largest delay (about 24.8 days); a larger one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const FAILURE_CLASSES = new Set<WriteFailureClass>([
@@ -696,6 +713,10 @@ export function createApiClient(
   const retry = {
     baseDelayMs: options.retry?.baseDelayMs ?? 200,
     maxDelayMs: options.retry?.maxDelayMs ?? 30000,
+    maxRetryAfterMs: Math.min(
+      options.retry?.maxRetryAfterMs ?? 3_600_000,
+      MAX_TIMER_MS,
+    ),
     maxAttempts: options.retry?.maxAttempts,
   };
   // The default in-memory adapter dies with this client: nothing to resume.
@@ -1162,8 +1183,6 @@ export function createApiClient(
         response.body ?? '',
       );
     }
-    // The credentials work (for this request, at least).
-    afterRenewal = false;
     try {
       return response.body ? JSON.parse(response.body) : undefined;
     } catch {
@@ -1197,7 +1216,13 @@ export function createApiClient(
       if (resolvedId !== write.id) records.delete(write.id);
       return settled(write, resolvedId);
     }
-    const epoch = authEpoch;
+    // Taken when the request leaves, after the store below.
+    let epoch = authEpoch;
+    let sentAfterRenewal = false;
+    /** A response other than a refusal of the credentials sent at `epoch`. */
+    const accepted = (): void => {
+      if (epoch === authEpoch) afterRenewal = false;
+    };
     try {
       let resolvedId = write.id;
       // Stored before sending, so a restart knows the request may have left.
@@ -1211,6 +1236,13 @@ export function createApiClient(
           `Outbox not stored, so nothing was sent: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
+      // Blocked by another write while this one was being stored.
+      if (authBlock) {
+        write.sending = false;
+        return { status: 'held' };
+      }
+      epoch = authEpoch;
+      sentAfterRenewal = afterRenewal;
       if (write.type === 'delete') {
         await requestJson({
           url: target(route.deletePath as string, {
@@ -1276,13 +1308,21 @@ export function createApiClient(
         remote(write.scope).set(resolvedId, record);
         setLastKnown(keyFor(write.scope, resolvedId), record);
       }
+      accepted();
       return settled(write, resolvedId);
     } catch (error) {
-      const failureClass =
+      let failureClass =
         error instanceof HttpStatusError
-          ? // Only a request sent after the latest renewal tests it.
-            classify(write, error, afterRenewal && epoch === authEpoch)
+          ? classify(write, error, sentAfterRenewal)
           : 'retry';
+      if (failureClass === 'auth' && options.onAuthFailure === 'retry')
+        failureClass = 'retry';
+      // Any answer but a refusal shows the credentials were accepted.
+      if (
+        (error instanceof HttpStatusError && failureClass !== 'auth') ||
+        error instanceof UnusableResponseError
+      )
+        accepted();
       if (failureClass === 'satisfied') {
         // A delete of a record that is already gone.
         remote(write.scope).delete(write.id);
@@ -1317,18 +1357,23 @@ export function createApiClient(
         write.attempts >= retry.maxAttempts
       )
         return { status: 'gaveUp' };
+      const backoff = Math.min(
+        retry.baseDelayMs * 2 ** (write.attempts - 1),
+        retry.maxDelayMs,
+      );
       const asked =
         error instanceof HttpStatusError
           ? retryAfterMs(error.headers)
           : undefined;
+      // Retry-After only lengthens the wait (never below the backoff, so
+      // "0", a past date or a fast clock cannot make a tight loop), up to
+      // retry.maxRetryAfterMs.
       return {
         status: 'retry',
-        delayMs:
-          asked ??
-          Math.min(
-            retry.baseDelayMs * 2 ** (write.attempts - 1),
-            retry.maxDelayMs,
-          ),
+        delayMs: Math.min(
+          Math.max(backoff, Math.min(asked ?? 0, retry.maxRetryAfterMs)),
+          MAX_TIMER_MS,
+        ),
       };
     }
   }
@@ -1387,6 +1432,12 @@ export function createApiClient(
           return;
         const outcome = await attemptWrite(write);
         write.sending = false;
+        if (outcome.status === 'held') {
+          await persistLater();
+          // The check at the top stops here while blocked; an authRenewed()
+          // during the store finds this queue draining, so go on here.
+          continue;
+        }
         if (outcome.status === 'blocked') {
           write.state = 'blocked';
           const first = !authBlock;
@@ -1404,7 +1455,8 @@ export function createApiClient(
           }
           await persistLater();
           if (first) notifyAuthBlocked();
-          return;
+          // As for 'held': stops at the top unless renewed meanwhile.
+          continue;
         }
         if (outcome.status === 'uncertain') {
           write.state = 'uncertain';
@@ -2056,6 +2108,21 @@ export function createApiClient(
         await persistLater();
         if (!draining.has(key)) void drainQueue(key);
         return;
+      }
+      // Discarding a blocked write drops it (a create with the writes queued
+      // behind it); the block stays. It is resent only by authRenewed().
+      if (queue && head?.state === 'blocked') {
+        if (resolution.action === 'discard') {
+          if (head.type === 'create') queue.splice(0);
+          else queue.shift();
+          if (!queue.length) writeQueues.delete(key);
+          await persistLater();
+          await rebuild(scope, id);
+          if (queue.length && !draining.has(key)) void drainQueue(key);
+          return;
+        }
+        if (resolution.action === 'confirm')
+          throw new Error('Only an uncertain create can be confirmed');
       }
       // A blocked write waits for authRenewed(), not for a refresh.
       const waiting =

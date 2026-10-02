@@ -51,3 +51,32 @@ Tests in `__tests__/unit/client/failure-classes.test.ts` and new cases in
 `durable-outbox.test.ts` (with `expectFailedOlder`). README ("Failure
 classes"), CLAUDE.md and the changelog describe it. No live provider was
 tested.
+
+## Turn 2
+
+**Human (via the oversight session, relaying a verified review of PR #313):**
+Fix four findings, each with a regression test. (1) `Retry-After: 0` or a
+past date causes a hot retry loop: never wait less than the backoff.
+(2) `afterRenewal` is read when the response arrives instead of when the
+request is sent. (3) Only a 2xx clears `afterRenewal`; any non-`auth`
+response should. (4) A write can still be sent after the block began:
+re-check after the in-flight store. Also: allow `resolveWrite` `discard` on
+a blocked write, add an `onAuthFailure: 'block' | 'retry'` option, and add a
+`retry.maxRetryAfterMs` cap (default 1 hour).
+
+**Assistant:** Changes:
+
+- The retry delay is now the longer of the backoff and `Retry-After`, with
+  `Retry-After` capped by `retry.maxRetryAfterMs`.
+- `afterRenewal` and the renewal epoch are captured after the in-flight
+  store, just before sending.
+- Any response at the current epoch other than an `auth` failure clears
+  `afterRenewal`.
+- After the in-flight store, the client checks the block again. If it is
+  set, the write is not sent (outcome `held`) and no attempt is counted.
+- The blocked and held paths continue the drain loop, so a renewal that
+  happens during their store is not lost.
+- Added `discard` for blocked writes (discarding a blocked create also drops
+  the writes queued behind it), plus `onAuthFailure` and `maxRetryAfterMs`.
+- Eight regression tests, each of which fails on the previous commit.
+- README and CLAUDE.md updated.

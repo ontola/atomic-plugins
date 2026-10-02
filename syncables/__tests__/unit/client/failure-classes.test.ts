@@ -328,20 +328,46 @@ describe('retryable failures', () => {
     );
   });
 
-  it('honours a Retry-After that is shorter than the backoff, as seconds or as an HTTP date', async () => {
-    for (const retryAfter of ['0', new Date(Date.now() - 1000).toUTCString()]) {
-      const { writes, transport } = provider([rex], (_r, n) =>
-        n === 1 ? response({}, 503, { 'retry-after': retryAfter }) : undefined,
+  it('never retries sooner than the backoff, whatever Retry-After says', async () => {
+    // "0", a date in the past, or a server clock behind the client's.
+    for (const retryAfter of [
+      '0',
+      new Date(Date.now() - 60_000).toUTCString(),
+    ]) {
+      const { writes, transport } = provider([rex], () =>
+        response({}, 429, { 'retry-after': retryAfter }),
       );
       const client = createApiClient(document(), {
         transport,
-        retry: { baseDelayMs: 60_000 },
+        retry: { baseDelayMs: 100 },
       });
       await client.sync();
       await client.update('/pets', '1', { name: 'Rex II' });
-      await idle(client);
-      expect(writes).toHaveLength(2);
+      await settle(500);
+      // Sent at about 0, 100, 300 ms; the next one waits until about 700 ms.
+      expect(writes.length).toBeGreaterThanOrEqual(2);
+      expect(writes.length).toBeLessThanOrEqual(4);
+      await client
+        .resolveWrite('/pets', '1', { action: 'discard' })
+        .catch(() => undefined);
     }
+  });
+
+  it('caps a long Retry-After at retry.maxRetryAfterMs', async () => {
+    const { times, transport } = provider([rex], (_r, n) =>
+      n === 1 ? response({}, 503, { 'retry-after': '3600' }) : undefined,
+    );
+    const client = createApiClient(document(), {
+      transport,
+      retry: { baseDelayMs: 1, maxRetryAfterMs: 100 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(times).toHaveLength(2);
+    const waited = (times[1] as number) - (times[0] as number);
+    expect(waited).toBeGreaterThanOrEqual(90);
+    expect(waited).toBeLessThan(1000);
   });
 
   it('ignores a Retry-After that is neither delay-seconds nor an HTTP date', async () => {
@@ -598,6 +624,140 @@ describe('auth failures block the client until authRenewed()', () => {
     expect([...pets.values()]).toEqual([
       { name: 'Milo', tag: 'cat', id: 'srv-1' },
     ]);
+  });
+});
+
+describe('auth failures: review of #313', () => {
+  it('judges a 403 by whether it was sent after the renewal, not by what settled meanwhile', async () => {
+    let releaseRex!: (r: TransportResponse) => void;
+    const rexAnswer = new Promise<TransportResponse>((resolve) => {
+      releaseRex = resolve;
+    });
+    let renewed = false;
+    const { pets, writes, transport } = provider([rex, milo], (r) => {
+      if (!renewed) return response({}, 401);
+      // After the renewal Rex's resend waits; Milo's update succeeds first.
+      return r.url.pathname === '/api/pets/1' ? rexAnswer : undefined;
+    });
+    const client = createApiClient(document(), { transport });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(client.authBlocked()).toBeDefined());
+    await client.update('/pets', '2', { name: 'Milo II' });
+    renewed = true;
+    await client.authRenewed();
+    await vi.waitFor(() =>
+      expect(pets.get('2')).toMatchObject({ name: 'Milo II' }),
+    );
+    await settle();
+    releaseRex(response({}, 403));
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed', lastStatus: 403 },
+      ]),
+    );
+    expect(client.authBlocked()).toBeUndefined();
+    expect(writes).toHaveLength(3);
+  });
+
+  it('takes any answer but a refusal after a renewal as accepted credentials', async () => {
+    let renewed = false;
+    const { transport } = provider([rex, milo], (r) => {
+      if (!renewed) return response({}, 401);
+      return r.url.pathname === '/api/pets/1'
+        ? response({}, 422)
+        : response({}, 403);
+    });
+    const client = createApiClient(document(), { transport });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(client.authBlocked()).toBeDefined());
+    renewed = true;
+    await client.authRenewed();
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]).toMatchObject({
+        state: 'failed',
+        lastStatus: 422,
+      }),
+    );
+    // The 422 showed the renewed credentials work: a 403 blocks again.
+    await client.update('/pets', '2', { name: 'Milo II' });
+    await vi.waitFor(() =>
+      expect(client.authBlocked()).toMatchObject({ status: 403, id: '2' }),
+    );
+  });
+
+  it('discards a blocked write with resolveWrite, keeping the block; retry still throws', async () => {
+    const { writes, transport } = provider([rex, milo], () =>
+      response({}, 401),
+    );
+    const client = createApiClient(document(), { transport });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(client.authBlocked()).toBeDefined());
+    await client.update('/pets', '1', { tag: 'wolf' });
+    await expect(
+      client.resolveWrite('/pets', '1', { action: 'retry' }),
+    ).rejects.toThrow(/authRenewed/);
+    await client.resolveWrite('/pets', '1', { action: 'discard' });
+    expect(client.authBlocked()).toBeDefined();
+    expect(client.pendingWrites()).toMatchObject([
+      { id: '1', type: 'update', state: 'pending' },
+    ]);
+    expect(await client.get('/pets', '1')).toEqual({ ...rex, tag: 'wolf' });
+    await settle();
+    expect(writes).toHaveLength(1);
+  });
+
+  it('discards a blocked create with the writes queued behind it', async () => {
+    const { transport } = provider([], () => response({}, 401));
+    const client = createApiClient(document(), { transport });
+    const created = await client.create('/pets', { name: 'Milo' });
+    const id = String(created['id']);
+    await client.update('/pets', id, { tag: 'cat' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('blocked'),
+    );
+    await client.resolveWrite('/pets', id, { action: 'discard' });
+    expect(client.pendingWrites()).toEqual([]);
+    expect(await client.get('/pets', id)).toBeUndefined();
+    expect(client.authBlocked()).toBeDefined();
+  });
+
+  it("retries auth failures with backoff under onAuthFailure: 'retry'", async () => {
+    const blocks: AuthBlock[] = [];
+    const { pets, writes, transport } = provider([rex], (_r, n) =>
+      n <= 2 ? response({}, 401) : undefined,
+    );
+    const client = createApiClient(document(), {
+      transport,
+      onAuthFailure: 'retry',
+      onAuthBlocked: (b) => blocks.push(b),
+      retry: { baseDelayMs: 1 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(writes).toHaveLength(3);
+    expect(pets.get('1')).toMatchObject({ name: 'Rex II' });
+    expect(blocks).toEqual([]);
+
+    const refused = provider([rex], () => response({}, 403));
+    const bounded = createApiClient(document(), {
+      transport: refused.transport,
+      onAuthFailure: 'retry',
+      retry: { baseDelayMs: 1, maxAttempts: 2 },
+    });
+    await bounded.sync();
+    await bounded.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(bounded.pendingWrites()[0]).toMatchObject({
+        state: 'failed',
+        attempts: 2,
+        lastStatus: 403,
+      }),
+    );
+    expect(bounded.authBlocked()).toBeUndefined();
   });
 });
 

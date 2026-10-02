@@ -128,13 +128,20 @@ Data flows through four stages, each its own directory under `src/`:
    adapter throwing) keep the backoff retry. Non-2xx responses are
    classified (`classify`, `defaultWriteFailureClass`, overridable with
    `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
-   `Retry-After` replaces the backoff delay), `permanent` (other 4xx: failed
+   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
+   never below the backoff), `permanent` (other 4xx: failed
    at once, through the same path as `retry.maxAttempts`), `satisfied` (a
    delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
-   renewal with no 2xx since, then `permanent`). `auth` sets the client-wide
+   renewal before an accepted response, then `permanent`; `afterRenewal`
+   and `authEpoch` are captured after the in-flight store, just before
+   sending, and any non-`auth` response at the current epoch clears
+   `afterRenewal`). `onAuthFailure: 'retry'` turns `auth` into `retry`.
+   `auth` sets the client-wide
    `authBlock` (stored in the outbox, `onAuthBlocked`, `authBlocked()`): the
    write becomes `blocked` without counting an attempt, `drainQueue` sends
-   nothing while it is set, `countRefreshMisses` does not count, and
+   nothing while it is set (also re-checked after the in-flight store:
+   outcome `held`), `countRefreshMisses` does not count, `resolveWrite`
+   `discard` drops a blocked head, and
    `authRenewed()` clears it, bumps `authEpoch` and restarts every queue. A
    401/403 for a request sent before the latest renewal (older epoch) is
    resent at once. A failed create (`retry.maxAttempts` or `permanent`) is
