@@ -15,11 +15,16 @@ import type { CalEvent } from './events.js';
 import { listCalendars, PLATFORM, type CalendarEntry } from './relay.js';
 import type { ConnectionReference, PluginStore } from './store.js';
 import {
+  bindingOf,
+  bindTable,
   chooseCalendar,
   chosenCalendar,
   DEFAULT_COLOR,
   discard,
+  ensureRowAccess,
+  hasRowAccess,
   keepAsLocal,
+  layout,
   readEvents,
   refresh,
   removeLocal,
@@ -29,6 +34,7 @@ import {
   send,
   tableName,
   tableOf,
+  unbindTable,
   type CalendarMeta,
   type Choice,
   type Conflict,
@@ -62,11 +68,19 @@ export type ViewState =
   | { kind: 'loading' }
   /**
    * Shown as the view of a table that isn't this app's own (any `event-v1`
-   * table, through the host's "+ Add view"): its events are drawn, read
-   * only, and nothing is synced. "Sync this table" (#177 §6.2 item 14) is
-   * not built.
+   * table, through the host's "+ Add view") and isn't synced: its events are
+   * drawn, read only. "Sync this table to Google Calendar" (#177 §6.2 item
+   * 14) is offered when the host can ask for "Allow editing" and reach the
+   * proxy (`canSync`).
    */
-  | { kind: 'local' }
+  | {
+      kind: 'local';
+      canSync: boolean;
+      /** Waiting for the person to answer the host's "Allow editing" bar. */
+      asking?: boolean;
+      /** Why the last "Sync this table" stopped, or why syncing is paused. */
+      reason?: string;
+    }
   /** The host has no proxy relay (atomic-server#1657 not in this build). */
   | { kind: 'no-relay' }
   | { kind: 'disconnected' }
@@ -100,7 +114,15 @@ export type ViewState =
 
 /** What the `local` state says, in the banner and to screen readers. */
 export const LOCAL_NOTE =
-  'This table isn’t synced with Google Calendar: the app syncs only its own table. Its events are shown here, read only.';
+  'This table isn’t synced with Google Calendar. Its events are shown here, read only.';
+
+/** The `local` state's offer, when the host can do it (`canSync`). */
+export const SYNC_NOTE =
+  'Sync it to keep it and one Google calendar in step: Google’s events are added as rows, and edits made here are sent after you review them. Rows already here stay here only. The app asks you to allow it to edit this table’s rows and to keep each event’s Google id, ETag and sync baseline on its row.';
+
+/** The `local` state on a table that is bound but whose grant was taken back. */
+export const PAUSED_NOTE =
+  'Syncing with Google Calendar is paused: this app may no longer edit this table’s rows, or keep its Google ids on them. Allow editing again to go on.';
 
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
@@ -110,7 +132,11 @@ export function describe(state: ViewState): string {
     case 'loading':
       return 'Loading…';
     case 'local':
-      return LOCAL_NOTE;
+      return state.reason
+        ? `${LOCAL_NOTE} ${state.reason}`
+        : state.canSync
+          ? `${LOCAL_NOTE} ${SYNC_NOTE}`
+          : LOCAL_NOTE;
     case 'no-relay':
       return 'This host cannot reach the integration proxy for apps yet, so nothing was fetched.';
     case 'disconnected':
@@ -331,6 +357,14 @@ export interface Snapshot {
   stale: boolean;
   /** Host operations this host has (pin 007869464 and later). */
   can: { openExternal: boolean; openResource: boolean; disconnect: boolean };
+  /**
+   * Whether the table is the app's own. On another table it syncs through a
+   * row grant, which never deletes a row, so "Remove local copy" isn't
+   * offered there.
+   */
+  own: boolean;
+  /** The name of a table that isn't the app's own, for the setup copy. */
+  table?: string;
 }
 
 export interface Pill {
@@ -363,7 +397,10 @@ export function reviewCount(snapshot: Snapshot): number {
 /** The status pill (DESIGN.md §3): text always accompanies colour. */
 export function pill(snapshot: Snapshot, now = new Date()): Pill {
   const { state, summary, at } = snapshot;
-  if (state.kind === 'local') return { text: 'Not synced', tone: 'muted' };
+  if (state.kind === 'local')
+    return state.asking
+      ? { text: 'Waiting for you…', tone: 'accent', busy: true }
+      : { text: 'Not synced', tone: 'muted' };
   if (state.kind === 'refreshing' || state.kind === 'loading')
     return { text: 'Syncing…', tone: 'accent', busy: true };
   if (state.kind === 'sending')
@@ -404,6 +441,10 @@ export function createController(
   let events: CalEvent[] = [];
   let last: { summary: ImportSummary; at: Date } | undefined;
   let stale = false;
+  /** Whether the table is the app's own; decided on load. */
+  let own = true;
+  /** The name of a table that isn't the app's own. */
+  let foreign: string | undefined;
 
   const set = (next: ViewState) => {
     state = next;
@@ -456,6 +497,27 @@ export function createController(
   const reload = async () => {
     if (!meta) return;
     events = await readEvents(store, meta, last?.summary.conflicts ?? []);
+  };
+
+  /** The `local` state: the table's events, read only, with the offer to sync. */
+  const showLocal = async (reason?: string) => {
+    meta = {
+      summary: foreign ?? (await tableName(store)),
+      color: DEFAULT_COLOR,
+      accessRole: 'reader',
+    };
+    last = undefined;
+    events = [];
+    // A `reader` role: every event is read only until the table is synced.
+    await reload();
+    set({
+      kind: 'local',
+      canSync:
+        !!store.proxy &&
+        typeof store.requestRowAccess === 'function' &&
+        typeof store.rowAccess === 'function',
+      ...(reason ? { reason } : {}),
+    });
   };
 
   /** Adds the calendar's name, colour and account when an older install lacks them. */
@@ -513,6 +575,8 @@ export function createController(
           openResource: typeof store.openResource === 'function',
           disconnect: typeof store.proxy?.disconnect === 'function',
         },
+        own,
+        ...(foreign ? { table: foreign } : {}),
       };
     },
 
@@ -524,16 +588,16 @@ export function createController(
     async load(): Promise<{ refreshing?: Promise<void> }> {
       // First open of 0.2.0 moves the app's own table onto event-v1.
       const adopted = await adopt(store);
+      own = adopted.own;
 
-      if (!adopted.own) {
-        meta = {
-          summary: await tableName(store),
-          color: DEFAULT_COLOR,
-          accessRole: 'reader',
-        };
-        await reload();
-
-        return (set({ kind: 'local' }), {});
+      if (!own) {
+        foreign = await tableName(store);
+        // Not synced until "Sync this table" made a binding; paused when the
+        // grant no longer covers the rows and the app's row extras.
+        const bound = !!(await bindingOf(store, await layout(store)));
+        if (!bound) return (await showLocal(), {});
+        if (!(await hasRowAccess(store)))
+          return (await showLocal(PAUSED_NOTE), {});
       }
 
       const proxy = store.proxy;
@@ -562,6 +626,52 @@ export function createController(
           ? refreshing
           : refreshing.then(() => backfillMeta(proxy)),
       };
+    },
+
+    /**
+     * "Sync this table to Google Calendar", on a table that isn't the app's
+     * own: asks for "Allow editing" (with the row extras) when the grant
+     * doesn't cover them, keeps the choice as a binding under the App, then
+     * goes on as on the app's own table: connect, choose a calendar, import.
+     * Nothing is written to the table or its rows before the person allowed
+     * it, and nothing reaches Google before they choose a calendar.
+     */
+    async syncTable(): Promise<void> {
+      if (state.kind !== 'local' || state.asking || !state.canSync) return;
+      set({ ...state, asking: true });
+      let answer: Awaited<ReturnType<typeof ensureRowAccess>>;
+
+      try {
+        answer = await ensureRowAccess(store);
+      } catch (error) {
+        answer = { status: 'denied', reason: message(error) };
+      }
+
+      if (answer.status !== 'granted')
+        return set({
+          kind: 'local',
+          canSync: true,
+          reason: `Not synced: ${answer.reason.replace(/\.?$/, '.')}`,
+        });
+
+      try {
+        await bindTable(store);
+      } catch (error) {
+        return fail(error);
+      }
+
+      await controller.load();
+    },
+
+    /**
+     * "Not now" on a table that isn't the app's own, before a calendar was
+     * chosen: back to not synced. The grant stays; the host's tab menu
+     * takes it back.
+     */
+    async notNow(): Promise<void> {
+      if (own) return;
+      await unbindTable(store);
+      await controller.load();
     },
 
     async listCalendars(): Promise<void> {
@@ -623,6 +733,10 @@ export function createController(
         state.kind === 'local'
       )
         return;
+      // A grant taken back since the view opened: say so instead of failing
+      // on the first write.
+      if (!own && !(await hasRowAccess(store)))
+        return void (await showLocal(PAUSED_NOTE));
       if (!calendarId) return controller.listCalendars();
       set({ kind: 'refreshing', ...(last ? { summary: last.summary } : {}) });
 
@@ -783,7 +897,7 @@ export function createController(
     },
 
     async removeLocal(conflict: Conflict): Promise<void> {
-      if (!conflict.subject) return;
+      if (!conflict.subject || !own) return;
       await removeLocal(store, conflict.subject);
       await settle(conflict);
     },

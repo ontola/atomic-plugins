@@ -336,6 +336,69 @@ committed `apps/<id>/<version>/ui.js` files at `/apps/...` and points the
 served catalog's `app-module` there, leaving the integrity as committed. The
 host's check therefore still applies.
 
+## Syncing a table the app didn't make
+
+[#177](https://github.com/ontola/atomic-plugins/issues/177) §6.2 item 14:
+a drive app whose rows are a shared class (`event-v1`, `issue-v1`,
+`time-entry-v1`, ...) is offered by the host's "+ Add view" on any table of
+that class. On such a table it can offer "Sync this table to <provider>".
+Calendar 0.3.0 does this for Google Calendar
+([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make));
+issue-tracker and timesheets can follow the same pattern. What the pinned
+host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
+`server/src/handlers/app_write.rs` and the page's `AppPage/hostStore.ts`,
+and checked by the calendar e2e:
+
+| Write                                                                          | Allowed                                                                                                                                                     |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anything under the App (its own subtree)                                       | Always, no grant: create, save, remove, destroy                                                                                                             |
+| A row of the table: the row class's `requires` and `recommends`                | After "Allow editing" (a row grant, #1740), on rows whose parent is the table and whose `isA` includes the row class                                        |
+| A row of the table: the App's `row-extras` (#1849)                             | Only the extras the App declared **when the grant was given**, and only while it still declares them; each must be a Property not defined under another app |
+| A new row                                                                      | With a grant: parent the table, `isA` exactly `[row class]`, properties as above                                                                            |
+| Delete a row                                                                   | Never through a grant                                                                                                                                       |
+| The table itself (name, `classtype`, views), a row's `parent`, `isA` or rights | Never                                                                                                                                                       |
+
+The pattern, as calendar implements it:
+
+1. **Declare the extras first.** On every open, the app makes its provider
+   Properties in its own ontology and lists the ones it keeps on rows as the
+   App's `row-extras` (calendar: `adopt.ts`). A grant given before that
+   (for example "Allow editing" in Add view, before the app first opened)
+   covers none of them.
+2. **Offer, don't assume.** With no binding for the table, show its rows
+   read only and a "Sync this table to <provider>" button. Nothing is
+   written before the person presses it.
+3. **Ask with the host's own question.** Compare `store.rowAccess()`'s
+   `extras` with the subjects the app needs; when the grant is missing or
+   doesn't cover them, call `store.requestRowAccess()`. The host shows its
+   "Allow editing" bar and records a new grant for the list the App declares
+   now, superseding an older one. "Not now" leaves the table unsynced.
+4. **Keep the binding under the App.** The source choice (calendar id,
+   repository, workspace) can't go on the table, which a grant never writes.
+   Calendar makes a resource under the App with a `synced-table` Property
+   (an `atomicURL`, the table's subject) next to `google-calendar-id` and
+   `-meta`, and finds it with `store.query({ property, value: table })`,
+   accepting only a result whose parent is the App. Per-row bookkeeping
+   (provider id, ETag, baseline) goes on the rows, as decision 7 on #177
+   says.
+5. **Then run the same sync as on the app's own table**: compare on open,
+   review before send, the same conflict rules. Rows that were in the table
+   before are local only (Q6); a "Publish to <provider>" is a separate
+   step.
+6. **Check the grant on every open and every sync.** It lapses when the
+   view is removed, the person who gave it loses write access, the app's key
+   changes, or someone revokes it in the tab menu. Without it, say the sync
+   is paused and offer to allow editing again; don't fail on the first
+   write. A provider deletion can't delete the row: offer "keep as local"
+   and tell the person to delete the row in the table.
+
+What this does not give, at the pin: edits made while the app is closed are
+found only on its next open (the app can't read `/changes` or receive
+`afterCommit` from its frame, #177 H6), and nothing syncs in the background
+(H11). The table's owner sees and revokes the grant in the tab's menu. The
+binding is an ordinary resource under the App; what an uninstall does with
+it was not checked.
+
 ## Choosing a placement
 
 Before writing code, decide where each part of a package runs. The full

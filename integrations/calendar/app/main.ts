@@ -18,7 +18,7 @@ import type { Ctx } from './context.js';
 import {
   banner as bannerCopy,
   createController,
-  LOCAL_NOTE,
+  describe,
   pill as pillModel,
   reviewCount,
   syncedAgo,
@@ -371,7 +371,17 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
           tone: 'info',
           role: 'status',
           title: 'Not synced with Google Calendar.',
-          body: LOCAL_NOTE,
+          // The note, then the offer or the reason it stopped.
+          body: describe(state),
+          ...(state.canSync && !state.asking
+            ? {
+                action: {
+                  label: 'Sync this table',
+                  name: 'Sync this table to Google Calendar',
+                  onClick: () => void controller.syncTable(),
+                },
+              }
+            : {}),
         }),
       );
 
@@ -694,10 +704,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
               schedule();
             }),
         onKeep: conflict => void controller.keepAsLocal(conflict),
-        onRemove: conflict => {
-          ui.confirming = undefined;
-          void controller.removeLocal(conflict);
-        },
+        ...(snap.own
+          ? {
+              onRemove: (conflict: Conflict) => {
+                ui.confirming = undefined;
+                void controller.removeLocal(conflict);
+              },
+            }
+          : {}),
         onConfirm: conflict => set({ confirming: conflict }),
         ...(snap.can.openResource
           ? {
@@ -729,6 +743,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
               connecting: state.kind === 'connecting',
               onConnect: () => void controller.connect(),
               onCancel: () => controller.cancelConnect(),
+              ...(snap.own
+                ? {}
+                : {
+                    table: snap.table ?? 'this table',
+                    onNotNow: () => void controller.notNow(),
+                  }),
             }),
           ),
         ];
@@ -750,6 +770,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
             picker(doc, {
               calendars: state.calendars,
               onImport: id => void controller.choose(id),
+              ...(snap.own
+                ? {}
+                : {
+                    table: snap.table ?? 'this table',
+                    onNotNow: () => void controller.notNow(),
+                  }),
             }),
           ),
         ];
