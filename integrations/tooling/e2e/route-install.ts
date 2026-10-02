@@ -53,6 +53,7 @@ export async function openNewPluginDraft(
       }),
     ).toBeVisible({ timeout: 60_000 });
   }
+
   await createFromCatalog(page, 'Plugin');
   await expect(
     page
