@@ -517,7 +517,7 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
 
     // A table the person made, of the shared class, with one row that has
     // only a Day (as the host Calendar view's "+" makes one).
-    const made = await page.evaluate(
+    const table = await page.evaluate(
       async ({ klass, day, name, classtype }) => {
         const store = window.store!;
         const now = new Date();
@@ -541,28 +541,19 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
         // A row missing the class's required Name (#177; ontology-kit's
         // rule: shown as incomplete, never skipped): the server refuses a
         // commit without the property (lib/src/resources.rs
-        // check_required_props), so the only incomplete row this host can
-        // hold has an empty Name. A row without a Day is refused outright.
+        // check_required_props; "Property … atomic-calendar-day missing. Is
+        // required in class … event-v1", seen in this lane on 2026-10-02),
+        // and the page then keeps the refused row in its local outbox, so
+        // the spec does not try one. The incomplete row this host can hold
+        // has an empty Name.
         const retro = await store.newResource({
           parent: made.subject,
           isA: [klass],
           propVals: { [name]: '', [day]: today },
         });
         await retro.save();
-        let refused = '';
 
-        try {
-          const noDay = await store.newResource({
-            parent: made.subject,
-            isA: [klass],
-            propVals: { [name]: 'No day' },
-          });
-          await noDay.save();
-        } catch (error) {
-          refused = error instanceof Error ? error.message : String(error);
-        }
-
-        return { table: made.subject, refused };
+        return made.subject;
       },
       {
         klass: EVENT,
@@ -572,8 +563,6 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
       },
     );
 
-    expect(made.refused).toMatch(/missing\. Is required in class/);
-    const table = made.table;
     await page.goto(
       `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
     );
