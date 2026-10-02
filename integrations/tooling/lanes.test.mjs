@@ -227,6 +227,7 @@ test('the shared route-install e2e helper is listed by exactly the lanes that im
     'willow-drop',
   ];
   assert.deepEqual(importers, expected);
+
   for (const id of expected) {
     const dir = resolve(root, `integrations/${id}/e2e`);
     const text = readdirSync(dir)
@@ -235,6 +236,7 @@ test('the shared route-install e2e helper is listed by exactly the lanes that im
       .join('\n');
     assert.match(text, /tooling\/e2e\/route-install/, id);
   }
+
   assert.throws(
     () =>
       validateConfig(cfg(lane({ id: 'pets', paths: [ROUTE_INSTALL_HELPER] }))),
