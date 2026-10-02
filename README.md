@@ -93,8 +93,12 @@ data only, on the user-testing sample accounts
 "Sample data" line) at the app versions in the table below. Money (taken
 2026-10-01, to be retaken once #295 lands) uses the invented Acme Studio statement
 in `integrations/money/fixtures/usertest/`, and Pets the mock proxy's static
-fixture. The Notion shot shows the app's status view only: the sample's
-table does not show its option columns readably, so there is no shot of it.
+fixture. The Notion shot shows the app's status view only. The optional
+[`notion-table.png`](docs/screenshots/notion-table.png) (taken with
+`... screenshots.mjs notion-table`) shows the sample's table, where the
+Status, Tags and Format options are the host's own coloured chips. It hides
+the columns the app also adds from Notion's raw page fields, which are
+auto-named and empty at 0.4.0, in the host's "Toggle properties" menu first.
 To retake them, set up the pinned atomic-server as in
 [AGENTS.md](AGENTS.md#shared-pinned-atomic-server-build), then run
 `node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]`.

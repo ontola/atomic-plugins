@@ -39,8 +39,13 @@ const SHOTS = [
   'money',
   'notion',
   'timesheets',
+  'notion-table',
 ];
-const wanted = process.argv.slice(2).length ? process.argv.slice(2) : SHOTS;
+/** Only taken when named: the README does not need them to be current. */
+const OPTIONAL = ['notion-table'];
+const wanted = process.argv.slice(2).length
+  ? process.argv.slice(2)
+  : SHOTS.filter(id => !OPTIONAL.includes(id));
 for (const id of wanted)
   if (!SHOTS.includes(id))
     throw new Error(`no screenshot ${id}; known: ${SHOTS.join(', ')}`);

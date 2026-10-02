@@ -26,7 +26,8 @@
  * `POST /fixture/notion/setScenario` with `["<name>"]`:
  * - `default`: the one data source above;
  * - `two-sources`: also a "Reading list" data source whose "Status" has
- *   another property id, plus a people and a date property (not projected);
+ *   another property id, a "Format" select, plus a people and a date property
+ *   (not projected);
  * - `empty`: the search shares no data source;
  * - `unauthorized`: every request answers 401 (the connection was revoked);
  * - `rate-limited`: the search works, every query answers 429 with
@@ -210,6 +211,13 @@ const FINISHED = option(
   'green',
 );
 
+const BOOK = option('e4a8d6f5-0004-4000-8000-000000000001', 'Book', 'orange');
+const ARTICLE = option(
+  'e4a8d6f5-0004-4000-8000-000000000002',
+  'Article',
+  'blue',
+);
+
 /** Another database's "Status": same name and type, another property id. */
 const schema2 = {
   Title: { id: 'title', name: 'Title', type: 'title', title: {} },
@@ -218,6 +226,13 @@ const schema2 = {
     name: 'Status',
     type: 'status',
     status: { options: [TO_READ, READING, FINISHED], groups: [] },
+  },
+  // A plain select next to the status, so both option kinds are served.
+  Format: {
+    id: 'fm%3Ak',
+    name: 'Format',
+    type: 'select',
+    select: { options: [BOOK, ARTICLE] },
   },
   Author: { id: 'au%3Bx', name: 'Author', type: 'rich_text', rich_text: {} },
   Link: { id: 'lk%7Dq', name: 'Link', type: 'url', url: {} },
@@ -239,7 +254,7 @@ export const dataSource2 = {
   url: `https://www.notion.so/${DATABASE_2.replaceAll('-', '')}`,
 };
 
-function page2(id, { title, status, author, link, edited }) {
+function page2(id, { title, status, format, author, link, edited }) {
   const value = (key, content) => ({
     id: schema2[key].id,
     type: schema2[key].type,
@@ -265,6 +280,7 @@ function page2(id, { title, status, author, link, edited }) {
     properties: {
       Title: value('Title', [text(title)]),
       Status: value('Status', status),
+      Format: value('Format', format),
       Author: value('Author', [text(author)]),
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
@@ -279,6 +295,7 @@ export const pages2 = [
   page2('2b3c4d5e-0000-4000-8000-000000000001', {
     title: 'Thinking in Systems',
     status: READING,
+    format: BOOK,
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
     edited: '2026-09-02T09:30:00.000Z',
@@ -286,6 +303,7 @@ export const pages2 = [
   page2('2b3c4d5e-0000-4000-8000-000000000002', {
     title: 'Local-first software',
     status: FINISHED,
+    format: ARTICLE,
     author: 'Kleppmann et al.',
     link: null,
     edited: '2026-08-28T15:00:00.000Z',
