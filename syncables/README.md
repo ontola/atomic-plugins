@@ -71,10 +71,10 @@ replacing newer local edits. Updates use the item's declared PUT, or PATCH
 when PUT is absent. Both currently send JSON records, not JSON Patch documents.
 
 Writes retry with exponential backoff, unlimited by default; set
-`retry.maxAttempts` to bound attempts. The queue, acknowledgements and identity
-remapping are in memory. Persisting records alone does not preserve pending
-writes across restart. A durable outbox, restart recovery and finer
-transient/permanent failure classification remain work in
+`retry.maxAttempts` to bound attempts. Unsettled writes are kept in a durable
+outbox in the client's storage adapter, so a client built later on the same
+storage resumes them (see [Durable outbox and restarts](#durable-outbox-and-restarts)).
+Finer transient/permanent failure classification remains work in
 [#260](https://github.com/ontola/atomic-plugins/issues/260).
 
 ```ts
@@ -179,6 +179,87 @@ when the provider documents one elsewhere, or `false` to never send one. Whether
 the provider actually deduplicates on that key is the provider's contract; it is
 not verified here. A 2xx response with an unusable body stays `uncertain`
 even with a key.
+
+### Durable outbox and restarts
+
+When a `storage` adapter is passed, the client keeps every unsettled write in
+one record of it: namespace `syncables:outbox`, id `outbox`. Without
+`storage`, the default `InMemoryStorageAdapter` ends with the client, so no
+outbox is kept. The outbox holds, per record, the queued writes in order, the
+failed writes, each write's state, attempts and last error, the conflict
+bases and conflicts of pending updates, idempotency keys, the confirmed remote
+record the writes are replayed on, and local ids of creates the server has not
+confirmed (with the writes queued behind them). A client built on the same
+storage restores it before anything else:
+
+```ts
+const client = createApiClient(doc, { storage, transport });
+await client.ready(); // restores the outbox; other async methods wait for it too
+client.pendingWrites(); // pending, uncertain and failed writes from before the restart
+```
+
+Pending writes then resume in their stored order per record (the backoff
+delay is not stored; the first resend is immediate). Uncertain and failed
+writes stay listed, visible locally and resolvable with `resolveWrite`, and
+are not resent. `pendingWrites()` lists restored writes only after `ready()`
+resolves.
+
+The outbox is written as a whole, in one `put`, at each step below, and
+calls are serialized, so the stored record is always one consistent state.
+What a process stop between steps leaves:
+
+| Step | A stop before the next step leaves | On restart |
+| --- | --- | --- |
+| 1. `create`/`update`/`remove` stores the outbox with the write | Nothing recorded, nothing sent; the call had not resolved | Nothing to do |
+| 2. The visible record is updated, the call resolves | The write is recorded; the visible record may be stale | Visible records of every stored write are rebuilt |
+| 3. The outbox marks the write as in flight, then the request is sent | The request may or may not have reached the server | See below |
+| 4. The outcome is stored (settled write removed, follow-ups moved to the server id) | The visible record may still be under the local id | The stored list of records to rebuild is finished |
+
+A write found marked in flight on restart counts as one failed attempt, with
+`lastError` saying the process stopped. A create without an idempotency key
+becomes `uncertain`: it is not resent, so a create the server did apply is not
+duplicated, and `resolveWrite` confirms, retries or discards it as for any
+uncertain create. A create with a stored idempotency key is resent with that
+key. Updates (PUT, or PATCH with the full record) and deletes are resent, as
+they are after a lost response without a restart. If storing the in-flight
+mark fails, the request is not sent; that counts as a failed attempt and is
+retried with backoff.
+
+So the worst case after a stop is `uncertain`, not a duplicate or a silent
+loss. The limits of that claim:
+
+- A `create`, `update` or `remove` call that had not resolved may or may not be
+  in the outbox. Check `pendingWrites()` after `ready()` before repeating it.
+  If storing the outbox fails, the call rejects and the write is not queued.
+- After the write is queued, a failed outbox store (after an outcome, in
+  `sync`, or in `resolveWrite`) does not fail the operation: the stored record
+  stays at the previous state until the next successful store, which writes
+  the whole state again. A stop in that window restores that older state, at
+  worst a write marked in flight (handled as above) or a resolution to redo.
+- The guarantee is only as strong as the adapter's `put`: it must store the
+  whole record or nothing, and keep what it acknowledged.
+- The whole outbox is serialized and stored at each step (about three stores
+  per write, more on retries and id remaps), so the cost of a step grows with
+  the number of unsettled writes. This was not measured; it is meant for
+  hundreds of unsettled writes, not a bulk import.
+- Only one client may use a storage at a time. Two clients on one outbox (two
+  tabs, say) overwrite each other's record and may both send a write; there is
+  no lock.
+- An idempotency key prevents a duplicate only if the provider honours it.
+- A resent update can overwrite a remote change made in the meantime, as an
+  in-memory retry can; a resent delete that was already applied gets whatever
+  the provider answers (often 404) and is retried like any other 4xx.
+- Not stored: the last synced snapshot and conditional-request cache (the
+  next `sync()` reads everything again) and confirmed records without writes.
+
+The record has a `version` (now `1`). Storage without an outbox record, such
+as storage written by an earlier syncables, starts with an empty outbox. A
+record with another version is left unchanged and `ready()` rejects, as do
+the methods that wait for it, rather than overwrite writes this client cannot
+read. Entries for a collection the current document lacks are kept and written
+back unchanged, and tried again by the next client. Set `outboxNamespace` to
+store the outbox under another namespace (it must not equal a collection
+name), or to `false` to keep writes in memory only.
 
 ## One engine in Node and browsers
 
@@ -369,7 +450,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   gain `state` and `conflicts`; same-field refresh conflicts are reported
   (`onConflict`); ambiguous creates become `uncertain` instead of being
   resent, with `resolveWrite` to retry, discard or confirm them, and
-  `Idempotency-Key` retries (`idempotencyKeyHeader`).
+  `Idempotency-Key` retries (`idempotencyKeyHeader`). Unsettled writes are
+  kept in a durable outbox in a supplied storage adapter (`syncables:outbox`,
+  `outboxNamespace`) and resumed by a later client on the same storage
+  (`ready()`); a create in flight when the process stopped becomes
+  `uncertain`. With `storage`, `create`/`update`/`remove` store the outbox before they
+  resolve, and the request leaves after one more outbox store.
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with

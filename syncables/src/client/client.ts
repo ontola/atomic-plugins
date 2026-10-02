@@ -30,6 +30,15 @@ import {
   type Credentials,
 } from './auth.js';
 import { InMemoryStorageAdapter, type StorageAdapter } from './storage.js';
+import {
+  DEFAULT_OUTBOX_NAMESPACE,
+  OUTBOX_RECORD_ID,
+  OUTBOX_VERSION,
+  readOutbox,
+  type StoredRebuild,
+  type StoredRecordWrites,
+  type StoredWrite,
+} from './outbox.js';
 
 export interface RetryOptions {
   /** Delay before the first retry of a failed write, in milliseconds. Doubles on each subsequent attempt. Default 200. */
@@ -83,6 +92,15 @@ export interface ApiClientOptions {
    * `pendingWrites()` until that write settles or is discarded.
    */
   onConflict?: (conflict: WriteConflict) => void;
+  /**
+   * Storage namespace (the `resource` argument of the `StorageAdapter`) of the
+   * durable outbox: one record, id `outbox`, holding every unsettled write so
+   * that a client built later on the same storage resumes them. Default
+   * `syncables:outbox` when `storage` is given; without `storage` (the
+   * default in-memory adapter) there is nothing to resume, so the default is
+   * `false`, which keeps writes in memory only, as before the outbox existed.
+   */
+  outboxNamespace?: string | false;
 }
 
 export interface PaginateOptions {
@@ -190,6 +208,14 @@ export interface PendingWriteInfo {
 
 export interface ApiClient {
   resources: string[];
+  /**
+   * Resolves once the writes an earlier client left in the durable outbox
+   * (see `ApiClientOptions.outboxNamespace`) are restored, and their visible
+   * records rebuilt. Every other async method waits for it; call it before
+   * reading `pendingWrites()` after a restart. Rejects (as do those methods)
+   * when the stored outbox has a version this client cannot read.
+   */
+  ready(): Promise<void>;
   sync(): Promise<SyncResult>;
   /**
    * Calls `sync()` on `options.intervalMs`, skipping a tick if the previous
@@ -208,8 +234,12 @@ export interface ApiClient {
   /**
    * Writes `data` to local storage immediately, under a client-generated id
    * (or `data.id`, if already set) and returns without waiting on the
-   * network. The write to the server happens in the background and is
-   * retried on failure — see `pendingWrites()` for its outcome so far. If
+   * network. Once it resolves, the write is in the durable outbox (unless
+   * `outboxNamespace` is `false`); if it rejects, or the process stops
+   * before it resolves, check `pendingWrites()` after `ready()`: the write
+   * may have been recorded anyway. The write to the server happens in the
+   * background and is retried on failure — see `pendingWrites()` for its
+   * outcome so far. If
    * the server assigns a different id than the one used locally, the
    * record is moved to it once the write settles.
    */
@@ -243,6 +273,7 @@ export interface ApiClient {
    * Writes not yet confirmed by the server, across every resource (or just
    * `resource`, if given) — local storage already reflects them, but the
    * background attempt to apply them server-side hasn't succeeded yet.
+   * Includes writes restored from the durable outbox once `ready()` resolves.
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
@@ -336,6 +367,10 @@ interface QueuedWrite {
   idempotencyKey?: string;
   /** Set by `resolveWrite` confirm: settle without sending. */
   confirmedId?: string;
+  /** The request may be in flight; stored so a restart can tell. */
+  sending?: boolean;
+  /** False until the outbox holding this write is stored; not sent before. */
+  durable?: boolean;
 }
 
 type WriteOutcome =
@@ -482,6 +517,214 @@ export function createApiClient(
     maxDelayMs: options.retry?.maxDelayMs ?? 30000,
     maxAttempts: options.retry?.maxAttempts,
   };
+  // The default in-memory adapter dies with this client: nothing to resume.
+  const outboxNamespace =
+    options.outboxNamespace === undefined
+      ? options.storage
+        ? DEFAULT_OUTBOX_NAMESPACE
+        : false
+      : options.outboxNamespace;
+  if (outboxNamespace !== false && byResource.has(outboxNamespace))
+    throw new Error(
+      `Collection "${outboxNamespace}" clashes with the outbox namespace; set outboxNamespace`,
+    );
+  /** Records whose visible copy must still be rebuilt after an id remap. */
+  const pendingRebuilds = new Map<
+    string,
+    {
+      route: ClientRoute;
+      scope: string;
+      context: Record<string, string>;
+      id: string;
+    }
+  >();
+  /** Stored entries this client cannot restore; written back unchanged. */
+  let unrestorable: unknown[] = [];
+  let outboxChain: Promise<void> = Promise.resolve();
+
+  function storeWrite(write: QueuedWrite): StoredWrite {
+    return {
+      type: write.type,
+      ...(write.data ? { data: write.data } : {}),
+      ...(write.changes ? { changes: write.changes } : {}),
+      attempts: write.attempts,
+      ...(write.lastError ? { lastError: write.lastError } : {}),
+      state: write.state,
+      ...(write.base ? { base: write.base } : {}),
+      ...(write.conflicts?.size
+        ? { conflicts: [...write.conflicts.values()] }
+        : {}),
+      ...(write.idempotencyKey ? { idempotencyKey: write.idempotencyKey } : {}),
+      ...(write.confirmedId !== undefined
+        ? { confirmedId: write.confirmedId }
+        : {}),
+      ...(write.sending ? { sending: true as const } : {}),
+    };
+  }
+
+  /** The whole outbox, as JSON, taken synchronously from the in-memory state. */
+  function outboxSnapshot(): Record<string, unknown> {
+    const records: StoredRecordWrites[] = [];
+    for (const key of new Set([
+      ...gaveUpWrites.keys(),
+      ...writeQueues.keys(),
+    ])) {
+      const failed = gaveUpWrites.get(key) ?? [];
+      const queue = writeQueues.get(key) ?? [];
+      const first = failed[0] ?? queue[0];
+      if (!first) continue;
+      const confirmedRecord = confirmed.get(first.scope)?.get(first.id);
+      records.push({
+        resource: first.route.collection.name,
+        context: first.context,
+        id: first.id,
+        ...(confirmedRecord ? { confirmed: confirmedRecord } : {}),
+        failed: failed.map(storeWrite),
+        queue: queue.map(storeWrite),
+      });
+    }
+    const rebuild: StoredRebuild[] = [...pendingRebuilds.values()].map(
+      ({ route, scope, context, id }) => {
+        const confirmedRecord = confirmed.get(scope)?.get(id);
+        return {
+          resource: route.collection.name,
+          context,
+          id,
+          ...(confirmedRecord ? { confirmed: confirmedRecord } : {}),
+        };
+      },
+    );
+    return JSON.parse(
+      JSON.stringify({
+        version: OUTBOX_VERSION,
+        records,
+        rebuild,
+        unrestorable,
+      }),
+    ) as Record<string, unknown>;
+  }
+
+  /**
+   * Stores the outbox. Calls run one after another; each stores the state
+   * as it is when its turn comes, so the last call stores the newest state.
+   * `rollback` runs before the next call takes its snapshot if this one fails.
+   */
+  function persist(rollback?: () => void): Promise<void> {
+    if (outboxNamespace === false) return Promise.resolve();
+    const link = outboxChain.then(async () => {
+      try {
+        await storage.put(outboxNamespace, OUTBOX_RECORD_ID, outboxSnapshot());
+      } catch (error) {
+        rollback?.();
+        throw error;
+      }
+    });
+    outboxChain = link.catch(() => undefined);
+    return link;
+  }
+
+  /**
+   * For state changes that already happened in memory: a failed store leaves
+   * the stored outbox behind until the next successful one, which stores the
+   * whole state again. A restart in between sees the older state, at worst a
+   * write marked in flight, which it treats as uncertain or resends.
+   */
+  function persistLater(): Promise<void> {
+    return persist().catch(() => undefined);
+  }
+
+  function restoreWrite(
+    route: ClientRoute,
+    scope: string,
+    context: Record<string, string>,
+    id: string,
+    stored: StoredWrite,
+  ): QueuedWrite {
+    const write: QueuedWrite = {
+      route,
+      scope,
+      context,
+      id,
+      type: stored.type,
+      attempts: stored.attempts,
+      state: stored.state,
+      durable: true,
+      ...(stored.data ? { data: stored.data } : {}),
+      ...(stored.changes ? { changes: stored.changes } : {}),
+      ...(stored.lastError ? { lastError: stored.lastError } : {}),
+      ...(stored.base ? { base: stored.base } : {}),
+      ...(stored.conflicts?.length
+        ? {
+            conflicts: new Map(
+              stored.conflicts.map((c) => [c.field, c] as const),
+            ),
+          }
+        : {}),
+      ...(stored.idempotencyKey
+        ? { idempotencyKey: stored.idempotencyKey }
+        : {}),
+      ...(stored.confirmedId !== undefined
+        ? { confirmedId: stored.confirmedId }
+        : {}),
+    };
+    if (stored.sending) {
+      // The process stopped between storing "about to send" and storing the
+      // outcome: the request may or may not have reached the server.
+      write.attempts += 1;
+      write.lastError =
+        'The process stopped while this write may have been in flight';
+      if (write.type === 'create' && !write.idempotencyKey)
+        write.state = 'uncertain';
+    }
+    return write;
+  }
+
+  async function restore(): Promise<void> {
+    if (outboxNamespace === false) return;
+    const outbox = readOutbox(
+      await storage.get(outboxNamespace, OUTBOX_RECORD_ID),
+    );
+    unrestorable = outbox.unrestorable;
+    const touchedKeys = new Map<string, { scope: string; id: string }>();
+    for (const entry of outbox.rebuild) {
+      const route = byResource.get(entry.resource);
+      if (!route) continue;
+      const scope = scopeFor(route, entry.context);
+      if (entry.confirmed) remote(scope).set(entry.id, entry.confirmed);
+      else remote(scope).delete(entry.id);
+      touchedKeys.set(keyFor(scope, entry.id), { scope, id: entry.id });
+    }
+    let changed = outbox.rebuild.length > 0;
+    for (const entry of outbox.records) {
+      const route = byResource.get(entry.resource);
+      if (!route) {
+        unrestorable.push(entry);
+        continue;
+      }
+      const scope = scopeFor(route, entry.context);
+      const key = keyFor(scope, entry.id);
+      if (entry.confirmed) remote(scope).set(entry.id, entry.confirmed);
+      const restored = (stored: StoredWrite): QueuedWrite => {
+        if (stored.sending) changed = true;
+        return restoreWrite(route, scope, entry.context, entry.id, stored);
+      };
+      if (entry.failed.length)
+        gaveUpWrites.set(key, entry.failed.map(restored));
+      if (entry.queue.length) writeQueues.set(key, entry.queue.map(restored));
+      touchedKeys.set(key, { scope, id: entry.id });
+    }
+    // The outbox is stored before the visible record, so a stop in between
+    // leaves the visible record behind; rebuild every record it names.
+    for (const { scope, id } of touchedKeys.values()) await rebuild(scope, id);
+    if (changed) await persist();
+    for (const key of writeQueues.keys())
+      if (!draining.has(key)) void drainQueue(key);
+  }
+
+  // Runs once the constructor has returned: the first step awaits storage.
+  const restored = restore();
+  // Callers observe a failure through ready() and the methods that await it.
+  restored.catch(() => undefined);
 
   function resolveRoute(resource: string): ClientRoute {
     const named = byResource.get(resource);
@@ -616,6 +859,17 @@ export function createApiClient(
     }
     try {
       let resolvedId = write.id;
+      // Stored before sending, so a restart knows the request may have left.
+      write.sending = true;
+      try {
+        await persist(() => {
+          write.sending = false;
+        });
+      } catch (error) {
+        throw new NotSentError(
+          `Outbox not stored, so nothing was sent: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       if (write.type === 'delete') {
         await requestJson({
           url: target(route.deletePath as string, {
@@ -706,18 +960,24 @@ export function createApiClient(
       for (;;) {
         const queue = writeQueues.get(key);
         const write = queue?.[0];
-        // An uncertain or failed create blocks its record until resolveWrite.
-        if (!write || write.state !== 'pending') return;
+        // An uncertain or failed create blocks its record until resolveWrite;
+        // a write is not sent before the outbox holding it is stored.
+        if (!write || write.state !== 'pending' || write.durable === false)
+          return;
         const outcome = await attemptWrite(write);
+        write.sending = false;
         if (outcome.status === 'uncertain') {
           write.state = 'uncertain';
+          await persistLater();
           return;
         }
         if (outcome.status === 'gaveUp' && write.type === 'create') {
           write.state = 'failed';
+          await persistLater();
           return;
         }
         if (outcome.status === 'retry') {
+          await persistLater();
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, outcome.delayMs);
             if (typeof timer.unref === 'function') timer.unref();
@@ -734,9 +994,11 @@ export function createApiClient(
         }
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
           const oldId = write.id;
-          const rest = queue
-            .splice(0)
-            .map((pending) => ({ ...pending, id: outcome.resolvedId }));
+          const oldKey = key;
+          // Moved in place, not copied: a create() still storing the outbox
+          // for one of these writes finds it by identity.
+          const rest = queue.splice(0);
+          for (const pending of rest) pending.id = outcome.resolvedId;
           writeQueues.delete(key);
           draining.delete(key);
           key = keyFor(write.scope, outcome.resolvedId);
@@ -747,12 +1009,25 @@ export function createApiClient(
           writeQueues.set(key, existing);
           ownsQueue = !draining.has(key);
           if (ownsQueue) draining.add(key);
+          const moved = {
+            route: write.route,
+            scope: write.scope,
+            context: write.context,
+          };
+          pendingRebuilds.set(oldKey, { ...moved, id: oldId });
+          pendingRebuilds.set(key, { ...moved, id: outcome.resolvedId });
+          // Settled, moved and still to be made visible: one stored step.
+          await persistLater();
           await rebuild(write.scope, oldId);
           await rebuild(write.scope, outcome.resolvedId);
+          pendingRebuilds.delete(oldKey);
+          pendingRebuilds.delete(key);
+          await persistLater();
           if (!ownsQueue) return;
         } else {
-          await rebuild(write.scope, write.id);
           if (!queue.length) writeQueues.delete(key);
+          await persistLater();
+          await rebuild(write.scope, write.id);
         }
       }
     } finally {
@@ -813,12 +1088,40 @@ export function createApiClient(
     }
   }
 
-  function enqueue(write: Omit<QueuedWrite, 'attempts' | 'state'>): void {
+  /**
+   * Queues a write, stores the outbox holding it, and only then updates the
+   * visible record and lets the write be sent. If storing fails, the write is
+   * taken out again (before any later store) and the error is thrown.
+   */
+  async function enqueue(
+    write: Omit<QueuedWrite, 'attempts' | 'state'>,
+  ): Promise<void> {
+    const queued: QueuedWrite = {
+      ...write,
+      attempts: 0,
+      state: 'pending',
+      durable: false,
+    };
     const key = keyFor(write.scope, write.id);
     const queue = writeQueues.get(key) ?? [];
-    queue.push({ ...write, attempts: 0, state: 'pending' });
+    queue.push(queued);
     writeQueues.set(key, queue);
-    if (!draining.has(key)) void drainQueue(key);
+    await persist(() => {
+      for (const [k, q] of writeQueues) {
+        const at = q.indexOf(queued);
+        if (at < 0) continue;
+        q.splice(at, 1);
+        if (!q.length) writeQueues.delete(k);
+      }
+    });
+    queued.durable = true;
+    try {
+      await rebuild(queued.scope, queued.id);
+    } finally {
+      // A create that settled meanwhile may have moved this write to its id.
+      const current = keyFor(queued.scope, queued.id);
+      if (!draining.has(current)) void drainQueue(current);
+    }
   }
 
   function detectConflicts(
@@ -911,6 +1214,7 @@ export function createApiClient(
   };
 
   async function performSync(): Promise<SyncResult> {
+    await restored;
     const started = new Map(revisions);
     const result = await readCollections(doc, {
       transport: conditionalTransport,
@@ -964,6 +1268,8 @@ export function createApiClient(
         // A write that settled during the rebuild invalidated this snapshot.
         if ((started.get(scope) ?? 0) === (revisions.get(scope) ?? 0))
           lastSyncedItems.set(scope, snapshot.items);
+        // Confirmed records and conflict bases of pending writes moved on.
+        if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
     }
     if (result.errors.length)
@@ -980,6 +1286,7 @@ export function createApiClient(
 
   return {
     resources: [...byResource.keys()],
+    ready: () => restored,
     sync,
     startPolling(pollOptions): PollingHandle {
       let stopped = false;
@@ -1005,6 +1312,7 @@ export function createApiClient(
       };
     },
     async list(resource, context): Promise<Record<string, unknown>[]> {
+      await restored;
       const route = resolveRoute(resource);
       return storage.list(scopeFor(route, contextFor(route, context)));
     },
@@ -1013,10 +1321,12 @@ export function createApiClient(
       id,
       context,
     ): Promise<Record<string, unknown> | undefined> {
+      await restored;
       const route = resolveRoute(resource);
       return storage.get(scopeFor(route, contextFor(route, context)), id);
     },
     async create(resource, data, supplied): Promise<Record<string, unknown>> {
+      await restored;
       const route = resolveRoute(resource);
       if (!route.createPath)
         throw new Error(`Resource ${resource} declares no create operation`);
@@ -1028,8 +1338,7 @@ export function createApiClient(
           ? crypto.randomUUID()
           : String(data[route.collection.idField]);
       const record = { ...data, [route.collection.idField]: id };
-      await storage.put(scope, id, record);
-      enqueue({
+      await enqueue({
         route,
         scope,
         context,
@@ -1048,6 +1357,7 @@ export function createApiClient(
       data,
       supplied,
     ): Promise<Record<string, unknown>> {
+      await restored;
       const route = resolveRoute(resource);
       if (!route.updateMethod || !route.collection.itemUrl)
         throw new Error(`Resource ${resource} declares no update operation`);
@@ -1066,8 +1376,7 @@ export function createApiClient(
         remote(scope).set(id, existing);
       const record = { ...existing, ...data, [route.collection.idField]: id };
       const confirmedRecord = remote(scope).get(id);
-      await storage.put(scope, id, record);
-      enqueue({
+      await enqueue({
         route,
         scope,
         context,
@@ -1085,6 +1394,7 @@ export function createApiClient(
       return record;
     },
     async remove(resource, id, supplied): Promise<void> {
+      await restored;
       const route = resolveRoute(resource);
       if (!route.deletePath)
         throw new Error(`Resource ${resource} declares no delete operation`);
@@ -1094,8 +1404,7 @@ export function createApiClient(
         ...context,
         [route.collection.itemParam ?? 'id']: id,
       });
-      await storage.delete(scope, id);
-      enqueue({ route, scope, context, id, type: 'delete' });
+      await enqueue({ route, scope, context, id, type: 'delete' });
     },
     pendingWrites(resource): PendingWriteInfo[] {
       const name = resource
@@ -1124,6 +1433,7 @@ export function createApiClient(
         }));
     },
     async resolveWrite(resource, id, resolution, supplied): Promise<void> {
+      await restored;
       const route = resolveRoute(resource);
       const scope = scopeFor(route, contextFor(route, supplied));
       const key = keyFor(scope, id);
@@ -1136,12 +1446,14 @@ export function createApiClient(
           throw new Error('Only an uncertain create can be confirmed');
         if (resolution.action === 'discard') {
           writeQueues.delete(key);
+          await persistLater();
           await rebuild(scope, id);
           return;
         }
         if (resolution.action === 'confirm') head.confirmedId = resolution.id;
         if (head.state === 'failed') head.attempts = 0;
         head.state = 'pending';
+        await persistLater();
         if (!draining.has(key)) void drainQueue(key);
         return;
       }
@@ -1175,6 +1487,7 @@ export function createApiClient(
         if (!draining.has(key)) void drainQueue(key);
       }
       gaveUpWrites.delete(key);
+      await persistLater();
       await rebuild(scope, id);
     },
     async paginate(path, pagination = {}): Promise<Record<string, unknown>[]> {

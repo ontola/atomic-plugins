@@ -98,7 +98,8 @@ Data flows through four stages, each its own directory under `src/`:
    from the browser entry.
 
    `storage.ts` holds the record-only `StorageAdapter`. Confirmed remote state
-   and unresolved mutations are held separately in memory; refresh and older
+   and unresolved mutations are held separately in memory (the mutations also
+   in the durable outbox, below); refresh and older
    acknowledgements replay remaining intent to derive the visible record.
    Metadata collection names and bound context identify storage namespaces;
    identical IDs in sibling parents stay separate. Legacy names remain paths.
@@ -131,10 +132,20 @@ Data flows through four stages, each its own directory under `src/`:
    rebase later queued updates' conflict bases and invalidate
    `lastSyncedItems`. See the README's "Uncertain creates".
 
-   Do not mistake a persistent record adapter or raw archive for a durable
-   outbox. Queues, confirmed-state bookkeeping and mappings remain in memory;
-   durable outboxes, restart recovery and finer transient/permanent failure
-   classification remain #260 work. A fully paginated list is
+   `outbox.ts` holds the durable outbox format: one versioned record
+   (`syncables:outbox`/`outbox`, `outboxNamespace`; off without a supplied
+   `storage`) in the same adapter with
+   every unsettled write (queues, failed writes, states, conflict bases,
+   idempotency keys, the confirmed record per written record, pending id-remap
+   rebuilds). It is stored whole, serialized, before the visible record on
+   `create`/`update`/`remove`, before each send (an in-flight mark) and after
+   each outcome. `restore()` runs at construction (`ready()`); a write found in
+   flight counts as an attempt, and a create without an idempotency key becomes
+   `uncertain`. Unknown versions are refused, not overwritten. The README's
+   "Durable outbox and restarts" has the stop-between-steps table; keep it in
+   step with the code. Not stored: `lastSyncedItems`, the conditional cache and
+   confirmed records without writes. Finer transient/permanent failure
+   classification remains #260 work. A fully paginated list is
    not necessarily a consistent snapshot; the existing absence/pruning rule
    still depends on provider behavior.
 
@@ -227,6 +238,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 - `unit/client/pending-writes.test.ts` covers #260 gaps 1 and 2: same-field
   conflicts during refresh, uncertain creates (lost responses, unusable 2xx,
   5xx), their `resolveWrite` resolutions and idempotency-key retries.
+- `unit/client/durable-outbox.test.ts` covers restart recovery: a second
+  client on a copy of the first one's storage taken mid-flight (resume order,
+  in-flight creates/updates/deletes, failed/uncertain/conflict state, format
+  versions and outbox store failures).
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

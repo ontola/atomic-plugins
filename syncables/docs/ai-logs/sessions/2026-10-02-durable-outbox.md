@@ -1,0 +1,56 @@
+# Session log — 2026-10-02: durable outbox and restart recovery
+
+- **Session:** Claude Code session `34aa233c-71c8-572f-a731-1e2db1a082c2` (Remote Control on the maintainer's build VPS), worker subagent of the atomic-plugins oversight session. No shareable URL is exposed to the worker.
+- **Model/tool:** Claude Opus 5.5 (`claude-opus-5-5`) in Claude Code.
+- **Repository touched:** `ontola/atomic-plugins`, `syncables/` only.
+- **Redactions:** Filesystem paths and tool plumbing are omitted. No credentials or provider data; tests use invented data.
+
+This log summarizes the substantive prompts and outputs under the scope in
+[the disclosure guidance](../README.md). The committed diff contains the code.
+
+## Turn 1
+
+**Human (via the oversight session):** Next slice of #260: a durable outbox
+with restart recovery. Persist the write queues, failed writes, uncertain
+state, conflict bases and idempotency keys through the client's existing
+storage adapter, so a new client on the same storage resumes them. On restart,
+pending writes resume in order; writes in flight when the process died count
+as uncertain unless they are idempotent; failed and uncertain writes stay
+visible and resolvable; local ids of unconfirmed creates and their follow-ups
+survive. Version the storage format and tolerate a missing or older record.
+Make atomicity explicit: the worst case after a stop between the outbox write
+and the network call must be "uncertain", never a silent duplicate or loss;
+document it in the README. Out of scope: 401/403/422 classification, remote
+deletes, deletion evidence, version bumps and publishing. Test with
+deterministic fake transports and an in-memory storage shared across two
+client instances, including a crash mid-request.
+
+**Assistant:** Added `src/client/outbox.ts` (the versioned record format and
+its reader) and changed `src/client/client.ts`:
+
+- The whole outbox is one record (`syncables:outbox`/`outbox`, configurable
+  with `outboxNamespace`, `false` to disable, off by default when no `storage`
+  is supplied), stored through a serialized
+  chain so the stored state is always one consistent snapshot. It holds the
+  queues and failed writes per record with state, attempts, last error,
+  conflict bases and conflicts, idempotency keys, the confirmed record the
+  writes replay on, and records still to be rebuilt after an id remap.
+- `create`/`update`/`remove` store the outbox before updating the visible
+  record and before resolving; if that store fails they reject and nothing is
+  queued. Before each request the write is stored as in flight; if that store
+  fails nothing is sent and the attempt counts as failed. Outcomes are stored
+  before visible records are rebuilt.
+- A new client restores the outbox at construction (`ready()`, awaited by the
+  other async methods), rebuilds the visible records it names and resumes the
+  queues. A write found in flight counts as an attempt; a create without an
+  idempotency key becomes `uncertain`, one with a key is resent with it,
+  updates and deletes are resent.
+- A missing record is an empty outbox; a record of another version is left
+  unchanged and `ready()` rejects; entries for unknown collections are kept and
+  written back.
+
+Tests in `__tests__/unit/client/durable-outbox.test.ts` copy the first
+client's storage at the moment of the "crash" and build a second client on
+the copy. README ("Durable outbox and restarts", with a table of what a stop
+between steps leaves), CLAUDE.md and the changelog describe it. No live
+provider, real browser storage or concurrent clients were tested.
