@@ -191,8 +191,9 @@ test.describe('Todoist drive app', () => {
     await expect(fence).toHaveAttribute('data-presence', 'unavailable');
     await expect(fence).toContainText('Todo');
     await expect(fence).toContainText('Synthetic house');
-    // Last seen: an ISO date and time, from the last complete read.
-    await expect(fence.locator('td').last()).toHaveText(
+    // Last seen (the seventh column; the eighth is Open row): an ISO date
+    // and time, from the last complete read.
+    await expect(fence.locator('td').nth(6)).toHaveText(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
     );
     const fenceSubject = (await fence.getAttribute('data-subject'))!;

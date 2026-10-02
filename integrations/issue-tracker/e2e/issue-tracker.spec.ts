@@ -502,9 +502,6 @@ test.describe('GitHub issues drive app', () => {
     await expect(
       app.getByText('Team issues isn’t synced with GitHub.'),
     ).toBeVisible({ timeout: 45_000 });
-    // The nameless row is on the board, marked, with the rest of the table.
-    await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
-    await expect(app.getByText('Plan the offsite')).toBeVisible();
     await app
       .getByRole('button', { name: 'Sync this table to GitHub' })
       .click();
@@ -566,12 +563,15 @@ test.describe('GitHub issues drive app', () => {
       expect(row['github-sync-baseline']).toEqual(expect.any(String));
     }
 
-    // The incomplete row stayed as it was: not sent, still marked.
+    // The incomplete row stayed as it was: not sent, and on the board as
+    // "(no title)" with its tag (the board shows only once the table is
+    // synced; before that the app shows the "isn't synced" offer alone).
     const nameless = rows.find(
       r => r[NAME] === '' && r['github-issue-number'] === undefined,
     )!;
     expect(nameless).not.toHaveProperty('github-sync-baseline');
     await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
+    await expect(app.getByText('(no title)')).toBeVisible();
 
     expect(rows.find(r => r[NAME] === 'Plan the offsite')).not.toHaveProperty(
       'github-issue-number',
