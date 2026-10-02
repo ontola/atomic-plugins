@@ -3,7 +3,7 @@
  * Takes the README's drive app screenshots (#49) into docs/screenshots/:
  *
  *   node integrations/tooling/link-atomic-server.mjs   # once, as in AGENTS.md
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion notion-table timesheets]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]
  *
  * Starts atomic-server, the dev-server and the mock proxy (`pets` fixture) the
  * way run-lane.mjs does, on a fresh store, plus a static server for the
@@ -38,7 +38,6 @@ const SHOTS = [
   'issue-tracker',
   'money',
   'notion',
-  'notion-table',
   'timesheets',
 ];
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : SHOTS;
