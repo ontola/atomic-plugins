@@ -6,14 +6,15 @@
  */
 
 export type ListMethod = 'GET' | 'POST';
+export type HttpMethod = ListMethod | 'PUT' | 'PATCH' | 'DELETE';
 
 export interface TransportRequest {
   /** Absolute URL under the document's `servers[0].url`. */
   url: URL;
-  method: ListMethod;
+  method: HttpMethod;
   /** Lower-case header names. `content-type` is set for a POST. */
   headers: Record<string, string>;
-  /** JSON text; only present for a POST. */
+  /** Request body as text, when present. */
   body?: string;
 }
 
