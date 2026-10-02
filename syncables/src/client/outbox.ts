@@ -33,11 +33,6 @@ export interface StoredWrite {
    * the request may have been in flight.
    */
   sending?: true;
-  /**
-   * Read for outboxes written before `StoredRecordWrites.lastKnown`; no
-   * longer written.
-   */
-  lastKnown?: Record<string, unknown>;
   /** Syncs that ran without releasing a restored update waiting for one. */
   refreshMisses?: number;
   /** The order in which the write was queued. */
@@ -106,7 +101,6 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       typeof value['idempotencyKey'] === 'string') &&
     (value['confirmedId'] === undefined ||
       typeof value['confirmedId'] === 'string') &&
-    (value['lastKnown'] === undefined || isRecord(value['lastKnown'])) &&
     (value['refreshMisses'] === undefined ||
       typeof value['refreshMisses'] === 'number') &&
     (value['seq'] === undefined || typeof value['seq'] === 'number')

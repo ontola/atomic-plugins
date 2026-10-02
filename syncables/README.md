@@ -69,10 +69,13 @@ background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
 when PUT is absent. Both currently send JSON records, not JSON Patch documents.
-An update's response is merged over the record it updated, so a provider
-that answers with only some fields does not shrink the confirmed record. The
-trade-off: a field that the provider removed in that response, rather than
-omitted, stays in the local copy until the next refresh.
+An update's response is merged over the record it sent, so a provider that
+answers with only some fields (or only bookkeeping such as `updatedAt`) does
+not shrink the confirmed record or revert the edit. The trade-off: a field
+that the provider removed in that response, rather than omitted, stays in the
+local copy until the next refresh, and is sent again in later PUT or PATCH
+bodies until then; a strict provider could reject those, for example after a
+field rename.
 
 Writes retry with exponential backoff, unlimited by default; set
 `retry.maxAttempts` to bound attempts. Unsettled writes are kept in a durable

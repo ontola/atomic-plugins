@@ -1358,41 +1358,6 @@ describe('durable outbox: sixth review on #312', () => {
     });
   });
 
-  it('still reads a last known record stored per write', async () => {
-    const storage = new CrashableStorage();
-    await storage.put(OUTBOX, 'outbox', {
-      version: 1,
-      records: [
-        {
-          resource: '/pets',
-          context: {},
-          id: '1',
-          failed: [
-            {
-              type: 'update',
-              changes: { name: 'Rex II' },
-              attempts: 1,
-              state: 'failed',
-              lastKnown: { id: '1', name: 'Rex', tag: 'dog' },
-            },
-          ],
-          queue: [],
-        },
-      ],
-      rebuild: [],
-    });
-    const second = provider();
-    const b = restart(storage, second.transport);
-    await b.ready();
-    await b.resolveWrite('/pets', '1', { action: 'retry' });
-    await vi.waitFor(() => expect(second.requests).toHaveLength(1));
-    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
-      id: '1',
-      name: 'Rex II',
-      tag: 'dog',
-    });
-  });
-
   it('merges a partial update response over the record it updated', async () => {
     const sent: TransportRequest[] = [];
     const client = createApiClient(document(), {
@@ -1420,5 +1385,73 @@ describe('durable outbox: sixth review on #312', () => {
       name: 'Rex III',
       tag: 'dog',
     });
+  });
+});
+
+describe('durable outbox: seventh review on #312', () => {
+  it('keeps the edit when the update response leaves the changed field out', async () => {
+    let remote: Pet[] = [{ id: '1', name: 'Rex', tag: 'dog' }];
+    const sent: TransportRequest[] = [];
+    const conflicts: WriteConflict[] = [];
+    const client = createApiClient(document(), {
+      onConflict: (c) => conflicts.push(c),
+      transport: async (r) => {
+        if (r.method === 'GET') return response(remote);
+        sent.push(r);
+        const body = JSON.parse(r.body ?? '{}') as Pet;
+        remote = [body];
+        // The provider answers with bookkeeping only.
+        return response({ id: '1', updatedAt: `t${sent.length}` });
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(await client.get('/pets', '1')).toMatchObject({
+      name: 'Rex II',
+      tag: 'dog',
+    });
+    await client.update('/pets', '1', { tag: 'wolf' });
+    await idle(client);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({
+      name: 'Rex II',
+      tag: 'wolf',
+    });
+    await client.sync();
+    expect(conflicts).toEqual([]);
+    expect(await client.get('/pets', '1')).toMatchObject({
+      name: 'Rex II',
+      tag: 'wolf',
+    });
+  });
+
+  it('does not report a false conflict for a queued update after a partial response', async () => {
+    let remote: Pet[] = [{ id: '1', name: 'Rex', tag: 'dog' }];
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => (answer = resolve));
+    let puts = 0;
+    const conflicts: WriteConflict[] = [];
+    const client = createApiClient(document(), {
+      onConflict: (c) => conflicts.push(c),
+      transport: async (r) => {
+        if (r.method === 'GET') return response(remote);
+        puts += 1;
+        // The second PUT waits, so a refresh runs while it is pending.
+        if (puts === 2) await gate;
+        const body = JSON.parse(r.body ?? '{}') as Pet;
+        remote = [body];
+        return response({ id: '1' });
+      },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await client.update('/pets', '1', { name: 'Rex III' });
+    await vi.waitFor(() => expect(puts).toBe(2));
+    // The refresh shows the first edit applied: not a remote change.
+    await client.sync();
+    expect(conflicts).toEqual([]);
+    answer();
+    await idle(client);
+    expect(await client.get('/pets', '1')).toMatchObject({ name: 'Rex III' });
   });
 });

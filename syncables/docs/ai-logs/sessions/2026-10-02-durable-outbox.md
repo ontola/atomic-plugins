@@ -160,9 +160,21 @@ CLAUDE.md.
 
 **Assistant:** The last known record is no longer stored per write: a record
 entry carries it once, only without a confirmed copy, and restore spreads it
-to the record's updates (per-write copies from older outboxes are still read;
-the format stays version 1). With a 10 KB record, 1 queued update now gives
+to the record's updates (the format stays version 1). With a 10 KB record, 1 queued update now gives
 a 10.3 KB outbox and 20 give 12.3 KB (the previous commit grew by about
 193 KB). Update responses are merged over the copy they updated; the README
 names the trade-off. Tests cover the size, the record-level copy across a
 restart, the older per-write format and the merge.
+
+## Turn 8
+
+**Human (via the oversight session, relaying a seventh review of PR #312):**
+Merging an update's response over the copy from before the edit reverted the
+edit when the response left the changed field out; merge over the body that
+was sent. Document that removed fields are resent until the next refresh.
+Drop reading the per-write last known record, which only this PR's own
+unmerged commits wrote.
+
+**Assistant:** Both new tests failed on the previous commit (edit reverted,
+false conflict). Update responses now merge over the sent record; the README
+names the resend trade-off; the per-write reader and its test are removed.

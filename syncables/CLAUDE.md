@@ -152,10 +152,10 @@ Data flows through four stages, each its own directory under `src/`:
    queue, whose record the refresh lacks, fails rather than sending a
    partial PUT. `lastKnown` keeps the newest confirmed copy (`setLastKnown`
    on every refresh and settled response; update responses are merged over
-   it); updates, retries and `update()` seeding use it, never the visible
-   record. It is stored once per record entry, and only when `confirmed` is
-   absent, so the outbox grows by the changes per write, not by the record
-   (older per-write copies are still read). Only head writes fail or count
+   the record that was sent); updates, retries and `update()` seeding use
+   it, never the visible record. It is stored once per record entry, and
+   only when `confirmed` is absent, so the outbox grows by the changes per
+   write, not by the record. Only head writes fail or count
    misses: a failed write must never be newer than a queued one of the same
    record (`seq`, stored, lets the tests check this). In-memory updates do
    not fail on a missing record (#260's open remote-delete item). Writes not

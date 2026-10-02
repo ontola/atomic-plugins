@@ -748,7 +748,6 @@ export function createApiClient(
       ...(stored.confirmedId !== undefined
         ? { confirmedId: stored.confirmedId }
         : {}),
-      ...(stored.lastKnown ? { lastKnown: stored.lastKnown } : {}),
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
     };
@@ -825,9 +824,8 @@ export function createApiClient(
       }
       if (failed.length) gaveUpWrites.set(key, failed);
       if (queue.length) writeQueues.set(key, queue);
-      // Stored once per record (older outboxes kept it per write, still read).
-      const known =
-        entry.lastKnown ?? entry.confirmed ?? lastKnownFor(scope, entry.id);
+      // Stored once per record entry.
+      const known = entry.lastKnown ?? entry.confirmed;
       if (known) setLastKnown(key, known);
       touchedKeys.set(key, { scope, id: entry.id });
     }
@@ -1053,15 +1051,11 @@ export function createApiClient(
           throw new UnusableResponseError('Create response has no record');
         }
         // An update's response may hold only some fields: merge it over the
-        // copy it updated rather than letting it replace the record.
+        // record that was sent (the edit included), not over the copy from
+        // before the edit, which would revert it.
         const record = isRecord(result)
           ? write.type === 'update'
-            ? {
-                ...(remote(write.scope).get(write.id) ??
-                  write.lastKnown ??
-                  lastKnownFor(write.scope, write.id)),
-                ...result,
-              }
+            ? { ...data, ...result }
             : result
           : data;
         if (!record) throw new Error('Write returned no record');
