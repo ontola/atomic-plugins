@@ -29,6 +29,7 @@ import {
   createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
+  waitForSynced,
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
@@ -93,6 +94,12 @@ test.describe('willow export route', () => {
     const reviewUrl = page.url();
     await dialog.getByRole('button', { name: 'Install', exact: true }).click();
     await leftReview(page, reviewUrl);
+    // The install navigates once the Installation and the folder's write grant
+    // are saved locally, before the server has them; a route write in that
+    // window is refused as `500 route-write-failed` (the remoteStorage lane's
+    // race, #248; open-cloud-mesh on PR #280, run 37033430608). Wait for the
+    // outbox to drain before any route request.
+    await waitForSynced(page, 60_000);
     const installation = subjectOf(page.url());
     const slug = routeSlug(installation);
 

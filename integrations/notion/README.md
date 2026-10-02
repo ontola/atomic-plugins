@@ -75,8 +75,12 @@ proxy. No credential ever reaches the frame.
 - `app/changes.ts`, `app/send.ts`, `app/view/review.ts`: two-way edits
   after review (#8, #177 Q4–Q7), described in
   [Edits and sending them to Notion](#edits-and-sending-them-to-notion).
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 107,509 bytes for
-  0.3.0 (133,028 for 0.2.0, with the browsing views), including the catalog
+- `app/options.ts`: Notion options as the host's select columns and Tags
+  (0.4.0; see the limits below for the shape), and the translation between
+  option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
+  at the host boundary.
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 113,536 bytes for
+  0.4.0 (107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path and devonian's Atomic Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
 - Dependencies: `syncables@0.18.0` and `devonian@0.6.1` from npm, exact
@@ -109,12 +113,25 @@ What it does not do, and what is not verified:
   row on the next import, unless the row changed that field itself (see
   below). A value the lens cannot read losslessly (formatted text) leaves the
   row's value as it was, is listed in the warnings, and is never sent.
-- Select, status and multi-select columns hold Notion option ids, which stay
-  stable across renames, rather than option names. The host's table shows
-  those ids; the app's Review sheet shows names and colours from the sync
-  record's schema, so a rename shows there after one sync without rewriting
-  rows. Showing names in the table would need a host feature (a value
-  dictionary per column), which the pin does not have.
+- Select, status and multi-select columns are the host's own select
+  columns since 0.4.0 (`app/options.ts`): the Property `isA`
+  SelectProperty, datatype `resourceArray`, `classtype` Tag, `allowsOnly`
+  listing one Tag per Notion option in Notion's order, `max` 1 for select
+  and status. Each Tag is a child of the column's Property with `shortname`
+  (a slug of the option name), `name` (Notion's name), `color` (a hex for
+  Notion's colour name) and `notion-option-id`. The host's table shows the
+  Tags' names as coloured chips and its cell editor offers exactly those
+  Tags; a rename or recolour in Notion updates the Tag on the next sync and
+  rewrites no row, so the value stays keyed by the option id. The lens, the
+  baseline, the review and the send still work in option ids; `options.ts`
+  translates at the host boundary. 0.1.0–0.3.0 stored the ids themselves
+  (the table showed UUIDs); the first 0.4.0 sync upgrades such a column in
+  place and rewrites its rows, and an edit made before that upgrade (a raw
+  id in a cell) is still read as that option, so nothing waiting for review
+  is lost. The pinned host's select cell does not enforce `max`: a status
+  cell given two Tags is held back in the review ("takes one option").
+  Whether the host's chips and cell editor behave as the e2e shows against
+  a real Notion schema is not verified.
 - All shared data sources go into one table, with their columns merged. A
   "Data source" column says where each row came from.
 - The e2e shows the pinned host lets the app add Properties under its
@@ -147,7 +164,8 @@ verified against live Notion or the real integration proxy.
   column. Keys are the column shortnames, which come from Notion's stable
   property ids, so renames on either side leave it as it was. A row imported
   by 0.1.0 has none; its first 0.2.0 sync takes Notion's values (as 0.1.0
-  always did) and writes one.
+  always did) and writes one. The baseline holds option ids for select
+  cells, whatever Tag the cell holds (`options.ts`).
 - **Compare on open.** Whenever the app reads the rows (on open, after a
   table change it is subscribed to, after a sync), it compares each row with
   its baseline (`changes.ts`, no request to Notion). Any difference is an
@@ -204,11 +222,12 @@ an install from the catalog's Drive apps section (the committed
 `apps/notion/<version>/ui.js`, served by the lane's dev-server), then Connect, the
 host's consent bar and the mock proxy's consent page, then the status card
 (the database, "3 rows in this table", no table in the frame), the 3 rows in
-the host's table and their column types. It then walks the app's states
+the host's table with their Status and Tags shown by option name (0.4.0),
+and the columns' datatypes and select-column shape. It then walks the app's states
 against the fixture's scenarios (`setScenario`, `renameOption` drivers): a
 second database on the card with its own count, sync details, a renamed
-option (seen in the Review sheet after a Status edit made in the host, then
-discarded), rate limited, failed, nothing shared and revoked access, "Open
+option (seen in the host's table, then in the Review sheet after a Status
+edit made in the host by setting the option's Tag, then discarded), rate limited, failed, nothing shared and revoked access, "Open
 table", and Disconnect, saving a screenshot of each as a test artefact. It
 runs against the shared mock proxy's `notion` fixture (`fixtures/notion/`),
 so the lane has `platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It

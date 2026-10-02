@@ -132,9 +132,17 @@ function shown(
   switch (field.type) {
     case 'select':
     case 'status':
-      return typeof value === 'string' && value
-        ? option(value)
-        : h(doc, 'i', {}, 'empty');
+      if (typeof value === 'string' && value) return option(value);
+      if (Array.isArray(value) && value.length)
+        // More than one Tag in a single-option cell: shown, held back.
+        return h(
+          doc,
+          'span',
+          { class: 'nt-tags' },
+          value.map(v => option(String(v))),
+        );
+
+      return h(doc, 'i', {}, 'empty');
     case 'multi_select':
       return Array.isArray(value) && value.length
         ? h(
