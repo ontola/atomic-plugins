@@ -92,10 +92,12 @@ export function appEntries(catalog) {
  * `build.mjs` and a `private` `package.json` with just its version. For an
  * app that lives inside another plugin's folder, such as Moneybird inside
  * `integrations/money/` beside the Bank statements importer, whose own
- * package.json version belongs to that importer.
+ * package.json version belongs to that importer, or the Todoist app inside
+ * `integrations/issue-tracker/` beside the GitHub issues app at `app/`.
  */
 export const APP_FOLDERS = Object.freeze({
   moneybird: 'integrations/money/moneybird',
+  todoist: 'integrations/issue-tracker/todoist-app',
 });
 
 /** The repository-relative folder holding an app's `build.mjs`. */

@@ -1,0 +1,14 @@
+{
+  // The Todoist drive app only; kept apart from ../tsconfig.json like
+  // ../app/tsconfig.json. `allowJs` for ontology-kit's .mjs modules (read,
+  // not checked; resolver.mjs has a .d.mts). Run through build.test.ts, or:
+  //   browser/node_modules/.bin/tsc -p integrations/issue-tracker/todoist-app/tsconfig.json
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["*.ts"],
+  "exclude": ["*.test.ts", "fakeStore.ts"]
+}
