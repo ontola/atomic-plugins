@@ -27,6 +27,7 @@
  * the test then skips with that reason instead of failing.
  */
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect } from '@playwright/test';
@@ -71,7 +72,14 @@ test.describe('Solid pod', () => {
     'run through run-lane.mjs solid, which sets the level, routes origin and issuer',
   );
   test.beforeAll(async () => {
-    issuer = await startIssuer(ISSUER);
+    // One key for every attempt of this run: a retry's new worker must not
+    // present a `kid` the server has not seen yet (./issuer.ts). Workers are
+    // children of the run's one runner process, so its pid names the run.
+    // Kept out of the output directory, which CI uploads.
+    issuer = await startIssuer(
+      ISSUER,
+      resolve(tmpdir(), `atomic-plugins-solid-issuer-${process.ppid}.json`),
+    );
   });
   test.afterAll(async () => {
     await issuer?.close();
