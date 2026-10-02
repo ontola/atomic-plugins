@@ -185,14 +185,13 @@ test.describe('README screenshots', () => {
       timeout: 30_000,
     });
     // The lens also leaves its raw Page fields as columns, auto-named and
-    // empty, between the readable ones; scroll past them to the options.
-    // The lens also leaves its raw Page fields as columns, auto-named and
     // empty, and the host's columns are 300 px wide: hide all but the
     // readable name and the option columns.
     const menu = page
       .getByRole('menu')
       .filter({ hasText: 'Toggle properties' });
     const keep = ['Name', 'Status', 'Tags', 'Format'];
+
     for (let round = 0; round < 40; round++) {
       const headers = (await main.getByRole('columnheader').allInnerTexts())
         .map(h => h.trim())
@@ -213,6 +212,7 @@ test.describe('README screenshots', () => {
       await page.keyboard.press('Escape');
       await expect(menu).toBeHidden();
     }
+
     // Close the sidebar, so the fourth column fits, and drop the focus ring.
     await page
       .getByRole('button', { name: /sidebar|menu/i })
