@@ -84,9 +84,19 @@ on github.io.
       <br><b>🐾 Pets</b>: the demo app. Shown is the table its import fills.
     </td>
   </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/moneybird.png"><img src="docs/screenshots/moneybird.png" alt="The Moneybird contacts table after the Moneybird drive app's import: five invented contacts with name, Moneybird source and Moneybird ID"></a>
+      <br><b>🐦 Moneybird</b>: one administration's contacts, read-only. Shown is the table its import fills.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/todoist.png"><img src="docs/screenshots/todoist.png" alt="The Todoist drive app: a list of five invented active tasks with status, presence, due date, priority and project"></a>
+      <br><b>✅ Todoist</b>: your active tasks as issue rows, read-only.
+    </td>
+  </tr>
 </table>
 
-Calendar, GitHub issues, Clockify, Notion and Money were taken on 2026-10-02
+Calendar, GitHub issues, Clockify, Notion, Money, Moneybird and Todoist were taken on 2026-10-02
 against atomic-server pin `a12b74a`, at 1280×800 in the light theme, with
 invented data only. Calendar, GitHub issues, Clockify and Notion run on the
 user-testing sample accounts
@@ -94,8 +104,13 @@ user-testing sample accounts
 "Sample data" line) at the app versions in the table below. Money (0.4.1) is
 installed from Drive apps and imports the invented Acme Studio August
 statement in `integrations/money/fixtures/usertest/` through its own "Import
-statement", with no importer set up; Pets uses the mock proxy's static
-fixture. The Notion shot shows the app's status view only. The optional
+statement", with no importer set up; Pets, Moneybird and Todoist
+are installed from Drive apps and connected through the mock proxy: Pets
+with its static fixture, Moneybird and Todoist with their synthetic
+fixtures (hand-written from the providers' public documentation, not
+recordings; both apps are `enabled: false` in the published catalog, which
+the lane dev-server lifts). The Moneybird shot shows the contacts table its
+import fills, the Todoist shot the app's own task list. The Notion shot shows the app's status view only. The optional
 [`notion-table.png`](docs/screenshots/notion-table.png) (taken with
 `... screenshots.mjs notion-table`) shows the sample's table, where the
 Status, Tags and Format options are the host's own coloured chips. It hides
@@ -103,7 +118,7 @@ the columns the app also adds from Notion's raw page fields, which are
 auto-named and empty at 0.4.0, in the host's "Toggle properties" menu first.
 To retake them, set up the pinned atomic-server as in
 [AGENTS.md](AGENTS.md#shared-pinned-atomic-server-build), then run
-`node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]`.
+`node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets moneybird todoist]`.
 The checklist is in [#49](https://github.com/ontola/atomic-plugins/issues/49).
 
 | App                              | What it does (declared)                                                                                                                                                                                                                                                        | Status                                                                                                                                                                                                                                                                                                                                                   | Code                                                             |
