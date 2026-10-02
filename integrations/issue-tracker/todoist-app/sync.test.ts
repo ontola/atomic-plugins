@@ -381,6 +381,53 @@ describe('controller', () => {
     expect(states).toEqual(['syncing', 'synced']);
   });
 
+  it('lists a hand-made row, and one missing its Name as incomplete, without writing either (#177)', async () => {
+    const store = fakeStore();
+    const controller = track(store);
+    await (
+      await controller.load()
+    ).syncing;
+    const named = await store.newResource({
+      parent: TABLE,
+      isA: [ISSUE_V1],
+      propVals: { [NAME]: 'Written in the table' },
+    });
+    const nameless = await store.newResource({
+      parent: TABLE,
+      isA: [ISSUE_V1],
+      propVals: { [TASK_STATUS]: [TAG_TODO] },
+    });
+    const before = store.writes.length;
+    await controller.sync();
+    const state = controller.state();
+    expect(state.kind).toBe('synced');
+    if (state.kind !== 'synced') return;
+    expect(state.summary).toMatchObject({ total: 5, unchanged: 5 });
+    expect(state.tasks).toHaveLength(7);
+    // Sorted by name: the nameless row first, the hand-made one by its name.
+    expect(state.tasks[0]).toEqual({
+      subject: nameless.subject,
+      name: '',
+      done: false,
+      presence: 'local',
+      incomplete: 'Incomplete: missing Name',
+    });
+    expect(state.tasks.find(t => t.subject === named.subject)).toEqual({
+      subject: named.subject,
+      name: 'Written in the table',
+      done: false,
+      presence: 'local',
+    });
+    expect(state.tasks.filter(t => t.incomplete)).toHaveLength(1);
+    // Neither row was written by the pass.
+    expect(store.writes.slice(before).map(w => w.subject)).not.toContain(
+      named.subject,
+    );
+    expect(store.writes.slice(before).map(w => w.subject)).not.toContain(
+      nameless.subject,
+    );
+  });
+
   it('is disconnected without a connection, and syncs after an existing one is picked', async () => {
     const store = fakeStore({ connected: false, existing: true });
     const controller = track(store);

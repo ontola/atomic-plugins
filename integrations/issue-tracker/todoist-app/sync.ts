@@ -17,7 +17,10 @@
  * read), and only a task no longer in the active list carries its own
  * `todoist-last-seen`, as ../todoist.ts hands it over.
  */
-import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
 import { classes } from '../../../ontology-kit/terms.mjs';
 import type { JSONValue as AtomicJSON } from '../../../browser/lib/src/value.js';
 import type {
@@ -34,6 +37,7 @@ import {
 } from '../todoist.js';
 import {
   type Drive,
+  IS_A,
   ISSUE_V1,
   lastSync,
   NAME,
@@ -63,6 +67,8 @@ export const PLATFORM = TODOIST_PLATFORM;
 
 /** Reads and writes `issue-v1` rows by property subject, strictly (#177 decision 1). */
 const resolver = createResolver({ classes: [classes['issue-v1']] });
+/** The class's required field as the host table heads its column. */
+const COLUMN_NAMES: Readonly<Record<string, string>> = { [NAME]: 'Name' };
 
 export interface SyncSummary {
   /** Task rows in the table after the pass. */
@@ -295,13 +301,22 @@ export async function syncTasks(
   return out;
 }
 
-/** The table's task rows as the view lists them. Reads only. */
+/**
+ * The table's rows as the view lists them. Reads only. A row made in the
+ * table by hand has no `taskId`: its presence is `local`, and the pass
+ * leaves it alone. A row missing the class's required Name (#177;
+ * ontology-kit's rule: shown as incomplete, never skipped) carries the note;
+ * Todoist's next pass fills the Name of an imported row, a hand-made one is
+ * completed in the table.
+ */
 export interface TaskRow {
   subject: string;
-  taskId: string;
+  taskId?: string;
   name: string;
   done: boolean;
   presence: string;
+  /** "Incomplete: missing Name". */
+  incomplete?: string;
   dueDay?: string;
   priority?: string;
   project?: string;
@@ -320,27 +335,32 @@ export async function listTasks(
     value: drive.table,
   })) {
     const row = await store.getResource(subject);
+    const isA = row.get(IS_A);
+    if (!Array.isArray(isA) || !isA.includes(ISSUE_V1)) continue;
     const taskId = text(row.get(p.taskId));
-    if (!taskId) continue;
-    const { values } = resolver.read(row.props, ISSUE_V1);
+    const { values, missing } = resolver.read(row.props, ISSUE_V1);
     const status = values[TASK_STATUS];
     const optional = {
+      taskId,
       dueDay: text(values[TASK_DUE_DATE]),
       priority: text(row.get(p.priority)),
       project: text(row.get(p.project)),
       lastSeen: text(row.get(p.lastSeen)),
+      incomplete: incompleteNote(missing, COLUMN_NAMES),
     };
     out.push({
       subject,
-      taskId,
-      name: text(values[NAME]) ?? taskId,
+      name: text(values[NAME]) ?? '',
       done: Array.isArray(status) && status.includes(TAG_DONE),
-      presence: text(row.get(p.presence)) ?? 'active',
+      presence: taskId ? (text(row.get(p.presence)) ?? 'active') : 'local',
       ...Object.fromEntries(
         Object.entries(optional).filter(([, v]) => v !== undefined),
       ),
     });
   }
 
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.sort(
+    (a, b) =>
+      a.name.localeCompare(b.name) || a.subject.localeCompare(b.subject),
+  );
 }

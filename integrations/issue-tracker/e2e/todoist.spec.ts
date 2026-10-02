@@ -36,7 +36,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const PARENT = 'https://atomicdata.dev/properties/parent';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -210,6 +210,40 @@ test.describe('Todoist drive app', () => {
       'synthetic-task-1',
     ]);
     expect(snapshot.unreachable).toEqual(['synthetic-task-3']);
+
+    // 5. A row made in the table without the class's required Name (#177;
+    // ontology-kit's rule): listed as incomplete, with a way to the row,
+    // never written by a pass; the task rows are unaffected.
+    const nameless = await page.evaluate(
+      async ({ table, klass, task }) => {
+        const store = window.store!;
+        const row = await store.newResource({
+          parent: table,
+          isA: [klass],
+          propVals: { [`${task}/status`]: [`${task}/todo`] },
+        });
+        await row.save();
+
+        return row.subject;
+      },
+      { table: shared.table, klass: issueV1, task: TASK },
+    );
+    await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(synced).toContainText('5 tasks (0 added, 0 updated', {
+      timeout: 60_000,
+    });
+    const local = app.locator('tr[data-local]');
+    await expect(local).toHaveCount(1);
+    await expect(local).toHaveAttribute('data-subject', nameless);
+    await expect(local).toHaveAttribute('data-presence', 'local');
+    await expect(local).toContainText('Incomplete: missing Name');
+    await expect(
+      local.getByRole('button', { name: 'Open row (no name)' }),
+    ).toBeVisible();
+    await expect(rows).toHaveCount(5);
+    expect(
+      Object.keys((await propsOf(page, [nameless]))[nameless]),
+    ).not.toContain(NAME);
 
     // The typed table outside the app shows the tasks.
     await page.goto(

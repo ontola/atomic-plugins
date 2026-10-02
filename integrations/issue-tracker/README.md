@@ -87,8 +87,8 @@ verified behaviour.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 25,926
-bytes for 0.1.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 26,857
+bytes for 0.1.1; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
 connected account's **active tasks** into its own table, nothing more; the
@@ -125,7 +125,18 @@ its own `todoist-last-seen`.
 **Local edits.** Todoist owns the imported columns: a local change to one
 of them is overwritten at the next pass (#97's policy question; this plugin's
 choice, the same as Moneybird's), and nothing is sent to Todoist. A row
-made in the table by hand, with no Todoist task behind it, is left alone.
+made in the table by hand, with no Todoist task behind it, is left alone;
+since 0.1.1 the view lists it too, with presence `local`.
+
+**An incomplete row (0.1.1).** `issue-v1` requires Name. A row without one
+is read through the resolver's `missing` and listed as "(no name)" with
+"Incomplete: missing Name" and, where the host has `store.openResource`, an
+"Open row" button to fill the column in the table (ontology-kit's rule for
+every shared-class view: shown as incomplete, not skipped). Nothing is ever
+sent to Todoist, so there is nothing to hold back; an imported row whose
+Name was cleared in the table gets Todoist's `content` back at the next
+pass, a hand-made one is completed in the table. Unit
+(`todoist-app/sync.test.ts`) and the e2e's step 5.
 
 **Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
 and the fixture: provisioning, import, a refresh that writes no row, and

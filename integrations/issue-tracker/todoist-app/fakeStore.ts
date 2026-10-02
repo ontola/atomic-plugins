@@ -44,6 +44,8 @@ export interface FakeStore extends PluginStore {
   readonly todoist: ReturnType<typeof todoistFixture>;
   /** Makes every relayed call throw with this host error until cleared. */
   fail?: string;
+  /** Subjects passed to `openResource`. */
+  readonly openedRows: string[];
 }
 
 export function fakeStore({
@@ -155,11 +157,19 @@ export function fakeStore({
     },
   };
 
+  const openedRows: string[] = [];
+
   const fake: FakeStore = {
     resources,
     writes,
     calls,
     todoist,
+    openedRows,
+    async openResource(subject) {
+      openedRows.push(subject);
+
+      return { status: 'opened' as const, subject };
+    },
     getApp: async () => APP,
     getData: async () => {
       const classtype = resources.get(table)?.[CLASSTYPE];
