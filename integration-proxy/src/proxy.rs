@@ -924,7 +924,7 @@ mod tests {
         let security = security().await;
         let mut s = state(Some(security.clone()));
         s.catalog = catalog(json!({"authenticationProfile": "user"}));
-        let owner = Agent::new(41);
+        let owner = Agent::new(48);
         let connect = |credential: StoredCredential| {
             let security = security.clone();
             let owner = owner.id();
