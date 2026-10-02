@@ -344,13 +344,14 @@ a drive app whose rows are a shared class (`event-v1`, `issue-v1`,
 that class. On such a table it can offer "Sync this table to <provider>".
 Calendar 0.3.0 does this for Google Calendar
 ([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make)),
+and issue-tracker 0.3.0 for GitHub
+([`issue-tracker/README.md`](issue-tracker/README.md#syncing-a-table-the-app-didnt-make)),
 and timesheets 0.6.0 for Clockify, with that table's observation log under
 its binding
-([`timesheets/README.md`](timesheets/README.md#syncing-a-table-the-app-didnt-make));
-issue-tracker can follow the same pattern. What the pinned
-host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
+([`timesheets/README.md`](timesheets/README.md#syncing-a-table-the-app-didnt-make)).
+What the pinned host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
 `server/src/handlers/app_write.rs` and the page's `AppPage/hostStore.ts`,
-and checked by the calendar e2e:
+and checked by the calendar and issue-tracker e2es:
 
 | Write                                                                          | Allowed                                                                                                                                                     |
 | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -394,6 +395,12 @@ The pattern, as calendar implements it:
    is paused and offer to allow editing again; don't fail on the first
    write. A provider deletion can't delete the row: offer "keep as local"
    and tell the person to delete the row in the table.
+7. **List everything the app writes on rows.** The grant checks every
+   property a row write sends, not only the provider's. Issue-tracker's
+   Bridge sets Atomic's `localId` on each row it imports (so a create a
+   reload interrupted is found again, not made twice), so issue-tracker
+   0.3.0 lists `localId` in `row-extras` too. A property under another app,
+   or on the never-list (`parent`, `isA`, rights, `classtype`), can't be one.
 
 What this does not give, at the pin: edits made while the app is closed are
 found only on its next open (the app can't read `/changes` or receive

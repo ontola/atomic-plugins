@@ -9,6 +9,7 @@ import { SEEDED_REPOSITORY } from '../fixtures/github-issues/scenario.mjs';
 import { createController } from './controller.js';
 import { fakeStore, type FakeStore } from './fakeStore.js';
 import { view } from './main.js';
+import { ISSUE_V1 } from './tracker.js';
 
 const wait = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
@@ -117,6 +118,42 @@ describe('first run', () => {
     await settle(root);
     expect(root.querySelectorAll('[data-issue]')).toHaveLength(2);
     expect(store.calls.some(c => c.path === '/user/repos')).toBe(true);
+  });
+});
+
+describe('an Issue table the app didn’t make (#177 item 14)', () => {
+  const teamStore = () => {
+    const store = fakeStore({ table: 'did:ad:team', connected: false });
+    store.resources.set('did:ad:team', {
+      'https://atomicdata.dev/properties/parent': 'did:ad:drive',
+      'https://atomicdata.dev/properties/name': 'Team issues',
+      'https://atomicdata.dev/properties/classtype': ISSUE_V1,
+    });
+
+    return store;
+  };
+
+  it('offers Sync this table, asks the host, then sets up with the table’s name and Not now', async () => {
+    const { root, store } = await mount({ store: teamStore(), bind: false });
+    expect(root.textContent).toContain('Team issues isn’t synced with GitHub.');
+    const sync = q<HTMLButtonElement>(root, '[data-key=sync-table]');
+    expect(sync.textContent).toBe('Sync this table to GitHub');
+    sync.click();
+    await settle(root);
+    expect(store.asked).toBe(1);
+    expect(q(root, 'h2').textContent).toBe('Sync Team issues with GitHub');
+    q<HTMLButtonElement>(root, '[data-key=not-now]').click();
+    await settle(root);
+    expect(q(root, '[data-key=sync-table]')).not.toBeNull();
+  });
+
+  it('has no Sync button on a host without the row grant', async () => {
+    const store = Object.assign(teamStore(), { requestRowAccess: undefined });
+    const { root } = await mount({ store, bind: false });
+    expect(root.textContent).toContain(
+      'can’t let an app edit another table’s rows',
+    );
+    expect(root.querySelectorAll('.pl-empty button')).toHaveLength(0);
   });
 });
 

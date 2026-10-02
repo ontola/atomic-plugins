@@ -18,6 +18,13 @@
  *   per-record baselines, write journal, view preferences).
  * - One folder under the app for the GitHub comments (Messages `about` a
  *   row), also found by `localId`.
+ * - Since 0.3.0 (#177 §6.2 item 14), per table the app is a view of and
+ *   was asked to sync ("Sync this table to GitHub"): a binding under the
+ *   app, of the same class as the sync resource, whose `synced-table` names
+ *   that table, with its own repository, sync state and comments folder.
+ *   A row grant never writes the table itself, so nothing about the sync
+ *   is kept there; per-row bookkeeping is on the rows, as on the app's own
+ *   table.
  *
  * On first open (`provision`) the app also makes itself a view of
  * `issue-v1`: it adds the class to its App's `renders` and sets its own
@@ -98,6 +105,8 @@ export interface Tracker {
     baseline: string;
     repository: string;
     syncState: string;
+    /** On a binding: the table, not the app's own, it syncs. */
+    syncedTable: string;
   };
   tags: Record<Status, string>;
   commentsFolder: string;
@@ -151,6 +160,14 @@ const PROPERTY_SPECS: PropertySpec[] = [
     description: 'The owner/name of the repository this app syncs with.',
   },
   {
+    key: 'syncedTable',
+    shortname: 'synced-table',
+    name: 'Synced table',
+    datatype: `${A}/datatypes/atomicURL`,
+    description:
+      'The table, not the app’s own, that this sync binding keeps in step with one GitHub repository (on a binding under the app).',
+  },
+  {
     key: 'syncState',
     shortname: 'github-sync-state',
     name: 'GitHub sync state',
@@ -162,6 +179,17 @@ const PROPERTY_SPECS: PropertySpec[] = [
 
 /** The provider extras kept on rows, declared as the App's `row-extras`. */
 const ROW_EXTRAS: OwnProperty[] = ['number', 'provenance', 'baseline'];
+
+/**
+ * Everything the app writes on rows beyond `issue-v1`'s own columns, as the
+ * App declares it in `row-extras`: the provider extras, and Atomic's
+ * `localId`, which the Bridge sets on each row it imports so a create a
+ * reload interrupted is found again instead of made twice. A row grant on
+ * another table covers only what is listed here (atomic-server#1849).
+ */
+export const rowExtras = (
+  properties: Record<OwnProperty, string>,
+): string[] => [...ROW_EXTRAS.map(key => properties[key]), LOCAL_ID];
 
 const asList = (value: JSONValue): string[] =>
   Array.isArray(value)
@@ -185,18 +213,45 @@ export async function findByLocalId(
   return undefined;
 }
 
+/** The app's own properties its ontology already lists, by shortname. */
+async function listedProperties(
+  store: PluginStore,
+  ontology: PluginResource,
+): Promise<Map<string, string>> {
+  const byShortname = new Map<string, string>();
+
+  for (const subject of asList(ontology.get(PROPERTIES))) {
+    const property = await store.getResource(subject);
+    const shortname = property.get(SHORTNAME);
+    if (typeof shortname === 'string') byShortname.set(shortname, subject);
+  }
+
+  return byShortname;
+}
+
+/** The app's own properties, without creating any; undefined when one is missing. */
+async function existingProperties(
+  store: PluginStore,
+  ontology: PluginResource,
+): Promise<Record<OwnProperty, string> | undefined> {
+  const byShortname = await listedProperties(store, ontology);
+  const out = {} as Record<OwnProperty, string>;
+
+  for (const spec of PROPERTY_SPECS) {
+    const subject = byShortname.get(spec.shortname);
+    if (!subject) return undefined;
+    out[spec.key] = subject;
+  }
+
+  return out;
+}
+
 async function ensureProperties(
   store: PluginStore,
   ontology: PluginResource,
 ): Promise<Record<OwnProperty, string>> {
   const listed = asList(ontology.get(PROPERTIES));
-  const byShortname = new Map<string, string>();
-
-  for (const subject of listed) {
-    const property = await store.getResource(subject);
-    const shortname = property.get(SHORTNAME);
-    if (typeof shortname === 'string') byShortname.set(shortname, subject);
-  }
+  const byShortname = await listedProperties(store, ontology);
 
   const created: string[] = [];
   const out = {} as Record<OwnProperty, string>;
@@ -307,29 +362,64 @@ function include(
   return true;
 }
 
-/** The table shown is not this app's own (it was added as a view there). */
-export class OtherTable extends Error {
-  constructor() {
-    super(
-      'This is another Issue table. Syncing a table this app did not make with GitHub is not built yet.',
-    );
-    this.name = 'OtherTable';
-  }
+/** The table shown, and whether it is the app's own or one it is a view of. */
+export interface Where {
+  app: string;
+  table: string;
+  own: boolean;
+  rowClass?: string;
+}
+
+export async function where(store: PluginStore): Promise<Where> {
+  const app = await store.getApp();
+  const data = await store.getData();
+  if (!data?.table) throw new Error('This app has no table to sync into.');
+  const own = (await store.getResource(data.table)).get(PARENT) === app;
+
+  return {
+    app,
+    table: data.table,
+    own,
+    ...(data.rowClass ? { rowClass: data.rowClass } : {}),
+  };
 }
 
 /**
- * Makes this app a view of `issue-v1` (#177 §5, item 3): `renders` lists
- * the class, `row-extras` lists the app's row extras, and its own table's
- * `classtype` is the class. Idempotent. Throws `OtherTable` when the table
- * shown is not the app's own; `renders` and `row-extras` are set first.
+ * Makes this app a view of `issue-v1` (#177 §5, item 3): its own properties
+ * exist, `renders` lists the class and `row-extras` lists what it keeps on
+ * rows (`rowExtras`). Only the app's own subtree is written, so this runs
+ * on any table, and must run before the app asks for a row grant there: a
+ * grant covers the extras declared when it was given. Idempotent.
  */
-async function adopt(
-  store: PluginStore,
-  app: string,
-  table: string,
-  extras: string[],
-): Promise<void> {
-  const resource = await store.getResource(app);
+interface Declared {
+  ontology: PluginResource;
+  properties: Record<OwnProperty, string>;
+}
+
+/**
+ * One `declare` per view (per host `store`). The host's reads can lag the
+ * app's own saves (frameStore.ts), so a second run could read the ontology
+ * without the properties the first one made and make them again; the same
+ * `ontology` object is reused instead, as `provision` always did.
+ */
+const declaredBy = new WeakMap<PluginStore, Promise<Declared>>();
+
+function declare(store: PluginStore, at: Where): Promise<Declared> {
+  let pending = declaredBy.get(store);
+
+  if (!pending) {
+    pending = declareNow(store, at);
+    declaredBy.set(store, pending);
+    pending.catch(() => declaredBy.delete(store));
+  }
+
+  return pending;
+}
+
+async function declareNow(store: PluginStore, at: Where): Promise<Declared> {
+  const ontology = await appOntology(store, at.app, at.rowClass);
+  const properties = await ensureProperties(store, ontology);
+  const resource = await store.getResource(at.app);
   const renders = include(
     resource,
     await appProperty(store, resource, 'renders'),
@@ -338,13 +428,198 @@ async function adopt(
   const declared = include(
     resource,
     await appProperty(store, resource, 'row-extras'),
-    extras,
+    rowExtras(properties),
   );
   if (renders || declared) await resource.save();
-  const own = await store.getResource(table);
-  if (own.get(PARENT) !== app) throw new OtherTable();
-  if (own.get(CLASSTYPE) !== ISSUE_V1)
-    await own.set(CLASSTYPE, ISSUE_V1).save();
+
+  return { ontology, properties };
+}
+
+/**
+ * `declare`, then, on the app's own table, sets its `classtype` to
+ * `issue-v1`. A table the app is a view of is never written.
+ */
+async function adopt(
+  store: PluginStore,
+  at: Where,
+): ReturnType<typeof declare> {
+  const declared = await declare(store, at);
+
+  if (at.own) {
+    const own = await store.getResource(at.table);
+    if (own.get(CLASSTYPE) !== ISSUE_V1)
+      await own.set(CLASSTYPE, ISSUE_V1).save();
+  }
+
+  return declared;
+}
+
+/**
+ * On every open of the app's own table, before a repository is chosen too:
+ * `adopt`, so the App renders `issue-v1` and declares its row extras from
+ * the start and the host's "+ Add view" offers it on other Issue tables
+ * (#177 item 14). Writes nothing on a table the app is a view of.
+ */
+export async function adoptOwnTable(store: PluginStore): Promise<void> {
+  const data = await store.getData();
+  if (!data?.table) return;
+  const at = await where(store);
+  if (at.own) await adopt(store, at);
+}
+
+/**
+ * What the app keeps on rows (`rowExtras`), declared on the App first when
+ * missing. For checking a row grant's `extras` before asking for one.
+ */
+export async function declareRowExtras(store: PluginStore): Promise<string[]> {
+  return rowExtras((await declare(store, await where(store))).properties);
+}
+
+/**
+ * What the app keeps on rows, as far as its ontology has the properties;
+ * undefined when one is missing (then no grant can cover them yet). Writes
+ * nothing.
+ */
+export async function rowExtrasNow(
+  store: PluginStore,
+): Promise<string[] | undefined> {
+  const at = await where(store);
+  const ontology = await appOntology(store, at.app, at.rowClass).catch(
+    () => undefined,
+  );
+  const properties = ontology
+    ? await existingProperties(store, ontology)
+    : undefined;
+
+  return properties ? rowExtras(properties) : undefined;
+}
+
+/**
+ * The binding of the table shown, when it is one the app is a view of: a
+ * resource under the App whose `synced-table` names that table. `hint` is
+ * a subject the caller already knows (the host's `query` can miss a
+ * resource the page has not synced yet). Only one under the App counts:
+ * anyone can make a resource that names the table.
+ */
+async function findBinding(
+  store: PluginStore,
+  at: Where,
+  syncedTable: string,
+  hint?: string,
+): Promise<PluginResource | undefined> {
+  const ours = (r: PluginResource | undefined) =>
+    r?.get(PARENT) === at.app && r.get(syncedTable) === at.table;
+
+  if (hint) {
+    const known = await store.getResource(hint).catch(() => undefined);
+    if (known && ours(known)) return known;
+  }
+
+  for (const subject of await store.query({
+    property: syncedTable,
+    value: at.table,
+  })) {
+    const found = await store.getResource(subject).catch(() => undefined);
+    if (found && ours(found)) return found;
+  }
+
+  return undefined;
+}
+
+/** What `binding` reports about the sync of the table shown. */
+export interface Binding {
+  /** The sync resource (own table) or binding (another table). */
+  subject: string;
+  repository?: string;
+}
+
+/**
+ * The sync resource of the app's own table, or the binding of a table it is
+ * a view of; undefined when there is none yet, which on another table means
+ * "not synced". Writes nothing.
+ */
+export async function binding(
+  store: PluginStore,
+  hint?: string,
+): Promise<Binding | undefined> {
+  const data = await store.getData();
+  if (!data?.table) return undefined;
+  const at = await where(store);
+  const ontology = await appOntology(store, at.app, at.rowClass).catch(
+    () => undefined,
+  );
+  if (!ontology) return undefined;
+  const byShortname = await listedProperties(store, ontology);
+  let sync: PluginResource | undefined;
+
+  if (at.own) sync = await findByLocalId(store, at.app, SYNC_LOCAL_ID);
+  else {
+    const syncedTable = byShortname.get('synced-table');
+    if (!syncedTable) return undefined;
+    sync = await findBinding(store, at, syncedTable, hint);
+  }
+
+  if (!sync) return undefined;
+  const property = byShortname.get('github-repository');
+  const value = property ? sync.get(property) : undefined;
+
+  return {
+    subject: sync.subject,
+    ...(typeof value === 'string' && value ? { repository: value } : {}),
+  };
+}
+
+/**
+ * "Sync this table to GitHub" on a table the app is a view of: makes its
+ * binding under the App when missing, with no repository yet (`provision`
+ * adds it). Writes only the app's own subtree. Returns its subject.
+ */
+export async function bindTable(
+  store: PluginStore,
+  hint?: string,
+): Promise<string> {
+  const at = await where(store);
+  if (at.own) throw new Error('The app’s own table needs no binding.');
+  const { ontology, properties } = await declare(store, at);
+  const found = await findBinding(store, at, properties.syncedTable, hint);
+  if (found) return found.subject;
+  const syncClass = await ensureClass(store, ontology, properties);
+  const name = (await store.getResource(at.table)).get(NAME);
+  const made = await store.newResource({
+    parent: at.app,
+    isA: [syncClass],
+    propVals: {
+      [NAME]: `GitHub sync of ${typeof name === 'string' && name ? name : 'a table'}`,
+      // AtomicServer keeps a localId unique per parent: one binding per table.
+      [LOCAL_ID]: `${SYNC_LOCAL_ID} ${at.table}`,
+      [properties.syncedTable]: at.table,
+    },
+  });
+
+  return made.subject;
+}
+
+/**
+ * "Not now" before a repository was chosen: the table goes back to not
+ * synced. A binding that already names a repository is kept.
+ */
+export async function unbindTable(
+  store: PluginStore,
+  hint?: string,
+): Promise<void> {
+  const at = await where(store);
+  if (at.own) return;
+  const ontology = await appOntology(store, at.app, at.rowClass);
+  const properties = await existingProperties(store, ontology);
+  if (!properties) return;
+  const found = await findBinding(store, at, properties.syncedTable, hint);
+  if (!found) return;
+  const repository = found.get(properties.repository);
+  if (typeof repository === 'string' && repository) return;
+  // Its comments folder, if any, goes first.
+  const comments = await findByLocalId(store, found.subject, COMMENTS_LOCAL_ID);
+  await comments?.destroy();
+  await found.destroy();
 }
 
 /** Whether the table shown is the app's own, not one it was added to as a view. */
@@ -413,7 +688,7 @@ export async function migrateRows(
 async function ensureClass(
   store: PluginStore,
   ontology: PluginResource,
-  recommends: string[],
+  properties: Record<OwnProperty, string>,
 ): Promise<string> {
   const classes = asList(ontology.get(CLASSES));
 
@@ -429,8 +704,13 @@ async function ensureClass(
       [SHORTNAME]: 'github-issue-tracker-sync',
       [NAME]: 'GitHub issue tracker sync',
       [DESCRIPTION]:
-        'Where the GitHub issues app keeps its bound repository and sync state.',
-      [RECOMMENDS]: recommends,
+        'Where the GitHub issues app keeps a table’s bound repository and sync state: its own table’s, or, with the synced table named, another table’s.',
+      [RECOMMENDS]: [
+        NAME,
+        properties.repository,
+        properties.syncState,
+        properties.syncedTable,
+      ],
     },
   });
   await ontology.set(CLASSES, [...classes, klass.subject]).save();
@@ -441,80 +721,66 @@ async function ensureClass(
 /** The bound repository, or undefined before one was chosen. */
 export async function boundRepository(
   store: PluginStore,
+  hint?: string,
 ): Promise<string | undefined> {
-  const app = await store.getApp();
-  const sync = await findByLocalId(store, app, SYNC_LOCAL_ID);
-  if (!sync) return undefined;
-  const data = await store.getData();
-  const ontology = await appOntology(store, app, data?.rowClass).catch(
-    () => undefined,
-  );
-  if (!ontology) return undefined;
-
-  for (const subject of asList(ontology.get(PROPERTIES))) {
-    const property = await store.getResource(subject);
-    if (property.get(SHORTNAME) !== 'github-repository') continue;
-    const value = sync.get(subject);
-
-    return typeof value === 'string' && value ? value : undefined;
-  }
-
-  return undefined;
+  return (await binding(store, hint))?.repository;
 }
 
 /**
  * Creates (or finds) everything above and binds `repository` on first use.
- * A later call with another repository throws: one app, one repository.
+ * A later call with another repository throws: one table, one repository.
+ * On a table the app is a view of, the binding must exist (`bindTable`;
+ * `hint` is its subject when known): the repository, sync state and
+ * comments folder are kept there, and the table is never written.
  */
 export async function provision(
   store: PluginStore,
   repository?: string,
+  hint?: string,
 ): Promise<{
   tracker: Tracker;
   sync: PluginResource;
   repository: string;
   legacy?: Legacy;
 }> {
-  const app = await store.getApp();
-  const data = await store.getData();
-  if (!data?.table) throw new Error('This app has no table to sync into.');
-  const ontology = await appOntology(store, app, data.rowClass);
-  const properties = await ensureProperties(store, ontology);
-  await adopt(
-    store,
-    app,
-    data.table,
-    ROW_EXTRAS.map(key => properties[key]),
-  );
-  const legacy = await legacyStatus(store, ontology);
+  const at = await where(store);
+  const { app } = at;
+  const { ontology, properties } = await adopt(store, at);
+  const legacy = at.own ? await legacyStatus(store, ontology) : undefined;
 
   // The same `ontology` object: a fresh read could lag the save above, and
   // the host's `save` sends every property it holds, stale ones included.
-  const syncClass = await ensureClass(store, ontology, [
-    NAME,
-    properties.repository,
-    properties.syncState,
-  ]);
+  const syncClass = await ensureClass(store, ontology, properties);
 
-  let comments = await findByLocalId(store, app, COMMENTS_LOCAL_ID);
+  let sync = at.own
+    ? await findByLocalId(store, app, SYNC_LOCAL_ID)
+    : await findBinding(store, at, properties.syncedTable, hint);
+  if (!at.own && !sync)
+    throw new Error('Choose “Sync this table to GitHub” first.');
+  // Another table's comments go in a folder under its binding, so the two
+  // syncs never list each other's.
+  const commentsParent = at.own ? app : sync!.subject;
+  let comments = await findByLocalId(store, commentsParent, COMMENTS_LOCAL_ID);
   comments ??= await store.newResource({
-    parent: app,
+    parent: commentsParent,
     isA: [FOLDER],
     propVals: {
       [NAME]: 'GitHub comments',
       [LOCAL_ID]: COMMENTS_LOCAL_ID,
-      [DESCRIPTION]:
-        'Comments on the GitHub issues in this app’s table, as Messages about each row.',
+      [DESCRIPTION]: at.own
+        ? 'Comments on the GitHub issues in this app’s table, as Messages about each row.'
+        : 'Comments on the GitHub issues in the synced table, as Messages about each row.',
     },
   });
 
-  let sync = await findByLocalId(store, app, SYNC_LOCAL_ID);
   const bound = sync?.get(properties.repository);
 
   if (typeof bound === 'string' && bound) {
     if (repository && repository !== bound)
       throw new Error(
-        `This app is bound to ${bound}. Install another app for ${repository}.`,
+        at.own
+          ? `This app is bound to ${bound}. Install another app for ${repository}.`
+          : `This table syncs with ${bound}. It can’t switch to ${repository}.`,
       );
     repository = bound;
   }
@@ -531,11 +797,17 @@ export async function provision(
         [properties.repository]: repository,
       },
     });
+  } else if (bound !== repository) {
+    await sync.set(properties.repository, repository).save();
   }
 
-  const table = await store.getResource(data.table);
-  const tableName = `${repository} issues`;
-  if (table.get(NAME) !== tableName) await table.set(NAME, tableName).save();
+  // The app's own table is named after its repository; a table it is a
+  // view of keeps the name the person gave it (a grant never writes it).
+  if (at.own) {
+    const table = await store.getResource(at.table);
+    const tableName = `${repository} issues`;
+    if (table.get(NAME) !== tableName) await table.set(NAME, tableName).save();
+  }
 
   return {
     repository,
@@ -543,7 +815,7 @@ export async function provision(
     ...(legacy ? { legacy } : {}),
     tracker: {
       app,
-      table: data.table,
+      table: at.table,
       rowClass: ISSUE_V1,
       properties: { status: TASK_STATUS, body: TASK_BODY, ...properties },
       tags: TASK_TAGS,

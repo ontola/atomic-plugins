@@ -10,6 +10,14 @@
  * switched on: `lagReads` (a read after an app write returns the old values
  * that many times) and `hideFromQuery` (a `query` leaves out resources the
  * app created until that many queries later). Test-only; not bundled.
+ *
+ * On a `table` that isn't the app's own (an `issue-v1` table the app is a
+ * view of) writes follow the pinned host's row grant (atomic-server
+ * `app_row_grant.rs`, #1740 and #1849): none on its rows without a grant;
+ * with one, only `issue-v1`'s `requires` and `recommends` plus the
+ * `row-extras` the App declared when it was granted, on rows of exactly
+ * that class; never the table itself, never `destroy`. `rowAccess()` and
+ * `requestRowAccess()` answer as view-client.js does.
  */
 import { githubTracker } from '../fixtures/github-issues/scenario.mjs';
 import type {
@@ -24,11 +32,14 @@ import {
   CLASSTYPE,
   DEFAULT_ONTOLOGY,
   IS_A,
+  ISSUE_V1,
   NAME,
   PARENT,
   PROPERTIES,
   RECOMMENDS,
   SHORTNAME,
+  TASK_BODY,
+  TASK_STATUS,
 } from './tracker.js';
 
 export const APP = 'did:ad:app';
@@ -39,6 +50,15 @@ export const TABLE = 'did:ad:table-items';
 export const APP_CLASS = 'did:ad:plugin-class-app';
 export const RENDERS = 'did:ad:plugin-renders';
 export const ROW_EXTRAS = 'did:ad:plugin-row-extras';
+
+/** `issue-v1`'s `requires` and `recommends` (ontology-kit/source.json). */
+const ISSUE_COLUMNS = [
+  NAME,
+  TASK_STATUS,
+  TASK_BODY,
+  'https://atomicdata.dev/task/v1/assignee',
+  'https://atomicdata.dev/task/v1/due-date',
+];
 
 export interface FakeStore extends PluginStore {
   readonly resources: Map<string, Record<string, JSONValue>>;
@@ -66,6 +86,12 @@ export interface FakeStore extends PluginStore {
   setScheme(scheme: ColorScheme): void;
   /** A person editing a row in the data-browser: no app write, no lag. */
   edit(subject: string, props: Record<string, JSONValue>): void;
+  /** The live row grant on another `table`: the extras it covers, or none. */
+  readonly grant: { extras: string[] } | undefined;
+  /** Someone takes the grant back in the host's tab menu. */
+  revokeGrant(): void;
+  /** How many times the host asked the person ("Allow editing"). */
+  readonly asked: number;
 }
 
 export function fakeStore({
@@ -74,6 +100,8 @@ export function fakeStore({
   relay = true,
   hostApis = true,
   table = TABLE,
+  grant: initialGrant = 'none',
+  answer: answerWith = 'allow',
 }: {
   /** The table the app is shown on; another one is a view on someone's table. */
   table?: string;
@@ -87,6 +115,14 @@ export function fakeStore({
   relay?: boolean;
   /** The host calls of atomic-server pin 007869464 (getMany, openExternal, …). */
   hostApis?: boolean;
+  /**
+   * The grant on another `table` before the app opens: none, or "Allow
+   * editing" from Add view before the app declared its row extras
+   * (`columns`, covering none of them).
+   */
+  grant?: 'none' | 'columns';
+  /** What the person answers when the app asks with `requestRowAccess()`. */
+  answer?: 'allow' | 'deny';
 } = {}): FakeStore {
   // As `createApp` lays it out at the pin.
   const resources = new Map<string, Record<string, JSONValue>>([
@@ -117,6 +153,52 @@ export function fakeStore({
   const calls: HostProxyRequest[] = [];
   const github = githubTracker();
   let next = 0;
+  let grant: { extras: string[] } | undefined =
+    initialGrant === 'columns' ? { extras: [] } : undefined;
+  let asked = 0;
+  const foreign = table !== TABLE;
+
+  /** The App's `row-extras` now. */
+  const declared = () => {
+    const value = resources.get(APP)![ROW_EXTRAS];
+
+    return Array.isArray(value)
+      ? value.filter((v): v is string => typeof v === 'string')
+      : [];
+  };
+
+  /** Refuses a write the pinned host's row grant would refuse. */
+  const checkGrant = (
+    subject: string,
+    parent: JSONValue,
+    isA: JSONValue,
+    written: string[],
+    op: 'create' | 'save' | 'destroy',
+  ) => {
+    if (!foreign) return;
+    if (subject === table)
+      throw new Error('This app may only write its own data.');
+    if (parent !== table) return;
+    if (!grant)
+      throw new Error(
+        'This app is a view of this table but may not edit its rows.',
+      );
+    if (op === 'destroy')
+      throw new Error('Letting an app edit rows does not let it delete them');
+    if (!Array.isArray(isA) || isA.length !== 1 || isA[0] !== ISSUE_V1)
+      throw new Error('This app may only edit rows of the table’s row class');
+    const live = declared();
+    const allowed = new Set([
+      ...ISSUE_COLUMNS,
+      ...grant.extras.filter(extra => live.includes(extra)),
+    ]);
+
+    for (const property of written)
+      if (!allowed.has(property))
+        throw new Error(
+          `This app may edit this table's columns and the row data it was allowed to keep, not ${property}`,
+        );
+  };
 
   const wrap = (
     subject: string,
@@ -125,6 +207,8 @@ export function fakeStore({
     const props = structuredClone(stored);
     /** Removed since the last save; `save` sends them, as view-client.js does. */
     const removed = new Set<string>();
+    /** Set since the last save: what view-client.js sends. */
+    const changed = new Set<string>();
 
     return {
       subject,
@@ -135,17 +219,27 @@ export function fakeStore({
       set(property, value) {
         props[property] = value;
         removed.delete(property);
+        changed.add(property);
 
         return this;
       },
       remove(property) {
         delete props[property];
         removed.add(property);
+        changed.delete(property);
 
         return this;
       },
       async save() {
         const before = resources.get(subject) ?? {};
+        checkGrant(
+          subject,
+          before[PARENT],
+          before[IS_A],
+          [...changed, ...removed],
+          'save',
+        );
+        changed.clear();
         if (fake.lagReads)
           stale.set(subject, {
             props: structuredClone(before),
@@ -162,6 +256,8 @@ export function fakeStore({
         return this;
       },
       async destroy() {
+        const before = resources.get(subject) ?? {};
+        checkGrant(subject, before[PARENT], before[IS_A], [], 'destroy');
         resources.delete(subject);
       },
     };
@@ -310,6 +406,7 @@ export function fakeStore({
       return out;
     },
     async newResource({ parent, isA = [], propVals = {} } = {}) {
+      checkGrant('', parent ?? APP, isA, Object.keys(propVals), 'create');
       const subject = `did:ad:new-${++next}`;
       const stored = {
         ...structuredClone(propVals),
@@ -323,6 +420,46 @@ export function fakeStore({
       return wrap(subject, stored);
     },
     subscribe: () => () => {},
+    get grant() {
+      return grant;
+    },
+    revokeGrant: () => {
+      grant = undefined;
+    },
+    get asked() {
+      return asked;
+    },
+    async rowAccess() {
+      if (!foreign) return { status: 'unavailable' as const };
+
+      return grant
+        ? {
+            status: 'granted' as const,
+            grantedBy: 'did:ad:agent-person',
+            grantedAt: 1,
+            via: 'request',
+            extras: grant.extras,
+          }
+        : { status: 'none' as const };
+    },
+    async requestRowAccess() {
+      if (!foreign)
+        return {
+          status: 'denied' as const,
+          reason: 'This app is not shown as a table view here',
+        };
+      const live = declared();
+      // As the host's rowAccessQuestion: no question when the grant covers the list.
+      if (grant && live.every(extra => grant!.extras.includes(extra)))
+        return { status: 'granted' as const };
+      asked++;
+      if (answerWith === 'deny')
+        return { status: 'denied' as const, reason: 'The person said no' };
+      // A new grant, for the list as the App declares it now.
+      grant = { extras: live };
+
+      return { status: 'granted' as const };
+    },
     counts,
     opened,
     disconnected: [],
