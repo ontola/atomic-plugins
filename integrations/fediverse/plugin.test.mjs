@@ -140,10 +140,16 @@ function inbox(ctx, activity, caller = signedBy(activity.actor)) {
 test('the actor publishes the host-held public key, inbox, outbox and followers', () => {
   const { ctx, calls } = host();
   const doc = json(handle(ctx, request('GET', '/ap/actor')));
-  assert.deepEqual(doc['@context'], [AS, 'https://w3id.org/security/v1']);
+  assert.deepEqual(doc['@context'], [
+    AS,
+    'https://w3id.org/security/v1',
+    'https://purl.archive.org/socialweb/webfinger',
+  ]);
   assert.equal(doc.id, actor);
   assert.equal(doc.type, 'Service');
   assert.equal(doc.preferredUsername, 'alice');
+  // FEP-2c59, port included: Mastodon verifies this handle with WebFinger.
+  assert.equal(doc.webfinger, `alice@${new URL(origin).host}`);
   assert.equal(doc.name, 'Alice');
   assert.equal(doc.summary, '&lt;b&gt;Hi&lt;/b&gt;');
   assert.equal(doc.inbox, `${origin}/ap/inbox`);
@@ -159,6 +165,27 @@ test('the actor publishes the host-held public key, inbox, outbox and followers'
     calls.find(c => c[0] === 'publicKey'),
     ['publicKey', 'actor-key', { keyId: `${actor}#main-key` }],
   );
+});
+
+test('on a non-default port the handle carries the port, in the actor and in WebFinger', () => {
+  // Mastodon derives `preferredUsername@<host>` without the port unless the
+  // actor names its handle (FEP-2c59); seen with Mastodon 4.7.3.
+  const at = 'https://alice.example:8443';
+  const { ctx } = host({}, { origin: at });
+  const doc = json(handle(ctx, request('GET', '/ap/actor')));
+  assert.equal(doc.id, `${at}/ap/actor`);
+  assert.equal(doc.webfinger, 'alice@alice.example:8443');
+  const finger = json(
+    handle(
+      ctx,
+      request('GET', '/.well-known/webfinger', {
+        wellKnown: 'webfinger',
+        query: { resource: 'acct:alice@alice.example:8443' },
+      }),
+    ),
+  );
+  assert.equal(finger.subject, 'acct:alice@alice.example:8443');
+  assert.equal(finger.links[0].href, `${at}/ap/actor`);
 });
 
 test('posts project only selected fields, escaped, newest first', () => {
