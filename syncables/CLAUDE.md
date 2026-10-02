@@ -139,9 +139,14 @@ Data flows through four stages, each its own directory under `src/`:
    idempotency keys, the confirmed record per written record, pending id-remap
    rebuilds). It is stored whole, serialized, before the visible record on
    `create`/`update`/`remove`, before each send (an in-flight mark) and after
-   each outcome. `restore()` runs at construction (`ready()`); a write found in
-   flight counts as an attempt, and a create without an idempotency key becomes
-   `uncertain`. Unknown versions are refused, not overwritten. The README's
+   each outcome. A write whose own first store has not succeeded is left out of
+   other calls' stores. `restore()` runs at construction (`ready()`; retried
+   after a storage error, not after a version refusal); a write found in flight
+   counts as an attempt (`retry.maxAttempts` applies), and a create without a
+   key the client can still send becomes `uncertain`. Restored updates wait
+   (`awaitingRefresh`) for a complete `sync()` of their scope before sending,
+   unless a create precedes them. Unknown versions are refused, not
+   overwritten. The README's
    "Durable outbox and restarts" has the stop-between-steps table; keep it in
    step with the code. Not stored: `lastSyncedItems`, the conditional cache and
    confirmed records without writes. Finer transient/permanent failure

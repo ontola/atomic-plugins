@@ -199,10 +199,24 @@ client.pendingWrites(); // pending, uncertain and failed writes from before the 
 ```
 
 Pending writes then resume in their stored order per record (the backoff
-delay is not stored; the first resend is immediate). Uncertain and failed
-writes stay listed, visible locally and resolvable with `resolveWrite`, and
-are not resent. `pendingWrites()` lists restored writes only after `ready()`
-resolves.
+delay is not stored; the first resend is immediate), with one exception:
+a restored update waits for a `sync()` that reads its collection completely. Updates send the whole
+record, and the confirmed record stored before the stop may be old: sending
+it would overwrite remote changes to fields the update never touched. After
+the refresh the update is replayed on the current remote record and checked
+for conflicts (`onConflict`) like any pending update. While it waits, its
+`pendingWrites()` entry is `pending` with `awaitingRefresh: true`, and writes
+queued behind it wait too. A refresh during which another write to the
+collection settles does not count; the next one does. Updates queued behind a
+restored create do not wait: they replay on the create's response. Restored
+creates and deletes do not wait.
+
+Uncertain and failed writes stay listed, visible locally and resolvable with
+`resolveWrite`, and are not resent. A restored failed update that is retried
+also waits for a refresh. `pendingWrites()` lists restored writes only after
+`ready()` resolves. If reading the outbox fails (a storage error), `ready()`
+and the methods that wait for it reject, and the next call tries the restore
+again.
 
 The outbox is written as a whole, in one `put`, at each step below, and
 calls are serialized, so the stored record is always one consistent state.
@@ -220,17 +234,23 @@ A write found marked in flight on restart counts as one failed attempt, with
 becomes `uncertain`: it is not resent, so a create the server did apply is not
 duplicated, and `resolveWrite` confirms, retries or discards it as for any
 uncertain create. A create with a stored idempotency key is resent with that
-key. Updates (PUT, or PATCH with the full record) and deletes are resent, as
-they are after a lost response without a restart. If storing the in-flight
-mark fails, the request is not sent; that counts as a failed attempt and is
-retried with backoff.
+key, but only if the client can still send it: when the current document no
+longer declares the header, or `idempotencyKeyHeader` is `false`, the create
+becomes `uncertain` too. Deletes are resent, and updates (PUT, or PATCH with
+the full record) are resent after the refresh described above. If the
+restored attempt reaches `retry.maxAttempts`, the write becomes `failed`
+instead (a create without a usable key stays `uncertain`). If storing the
+in-flight mark fails, the request is not sent; that counts as a failed
+attempt and is retried with backoff.
 
 So the worst case after a stop is `uncertain`, not a duplicate or a silent
 loss. The limits of that claim:
 
 - A `create`, `update` or `remove` call that had not resolved may or may not be
   in the outbox. Check `pendingWrites()` after `ready()` before repeating it.
-  If storing the outbox fails, the call rejects and the write is not queued.
+  If storing the outbox fails, the call rejects, the write is not queued, and
+  no other call's store includes it: a write reaches storage only through its
+  own first store.
 - After the write is queued, a failed outbox store (after an outcome, in
   `sync`, or in `resolveWrite`) does not fail the operation: the stored record
   stays at the previous state until the next successful store, which writes
@@ -246,9 +266,10 @@ loss. The limits of that claim:
   tabs, say) overwrite each other's record and may both send a write; there is
   no lock.
 - An idempotency key prevents a duplicate only if the provider honours it.
-- A resent update can overwrite a remote change made in the meantime, as an
-  in-memory retry can; a resent delete that was already applied gets whatever
-  the provider answers (often 404) and is retried like any other 4xx.
+- A restored update is sent only after a refresh, but the provider can still
+  change the record between that read and the request, as without a restart.
+  A resent delete that was already applied gets whatever the provider answers
+  (often 404) and is retried like any other 4xx.
 - Not stored: the last synced snapshot and conditional-request cache (the
   next `sync()` reads everything again) and confirmed records without writes.
 
@@ -256,8 +277,9 @@ The record has a `version` (now `1`). Storage without an outbox record, such
 as storage written by an earlier syncables, starts with an empty outbox. A
 record with another version is left unchanged and `ready()` rejects, as do
 the methods that wait for it, rather than overwrite writes this client cannot
-read. Entries for a collection the current document lacks are kept and written
-back unchanged, and tried again by the next client. Set `outboxNamespace` to
+read. Entries for a collection the current document lacks (queued writes and
+pending rebuilds), and entries that do not parse, are kept and written back
+unchanged; the next client tries them again. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -455,7 +477,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `outboxNamespace`) and resumed by a later client on the same storage
   (`ready()`); a create in flight when the process stopped becomes
   `uncertain`. With `storage`, `create`/`update`/`remove` store the outbox before they
-  resolve, and the request leaves after one more outbox store.
+  resolve, and the request leaves after one more outbox store. A restored
+  update waits for a `sync()` of its collection (`awaitingRefresh`).
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with

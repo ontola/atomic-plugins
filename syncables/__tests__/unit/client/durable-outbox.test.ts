@@ -27,6 +27,11 @@ class CrashableStorage implements StorageAdapter {
   /** Called after each put, with the namespace and id. */
   afterPut: ((resource: string, id: string) => void) | undefined;
   failOutbox = false;
+  /** Fail this many upcoming gets (a transient read error). */
+  failGets = 0;
+  /** Fail only the outbox put with this 1-based number. */
+  failOutboxPut: number | undefined;
+  private outboxPuts = 0;
 
   private ns(resource: string): Map<string, Record<string, unknown>> {
     let ns = this.data.get(resource);
@@ -40,6 +45,10 @@ class CrashableStorage implements StorageAdapter {
     resource: string,
     id: string,
   ): Promise<Record<string, unknown> | undefined> {
+    if (this.failGets > 0) {
+      this.failGets -= 1;
+      throw new Error('storage unavailable (invented)');
+    }
     const value = this.ns(resource).get(id);
     return value && structuredClone(value);
   }
@@ -48,7 +57,11 @@ class CrashableStorage implements StorageAdapter {
     id: string,
     value: Record<string, unknown>,
   ): Promise<void> {
-    if (this.failOutbox && resource === OUTBOX)
+    if (resource === OUTBOX) this.outboxPuts += 1;
+    if (
+      resource === OUTBOX &&
+      (this.failOutbox || this.outboxPuts === this.failOutboxPut)
+    )
       throw new Error('disk full (invented)');
     this.ns(resource).set(id, structuredClone(value));
     this.afterPut?.(resource, id);
@@ -167,7 +180,8 @@ describe('durable outbox: pending writes resume after a restart', () => {
     );
     await settle();
 
-    const second = provider([{ id: '1', name: 'Rex', tag: 'dog' }]);
+    // Meanwhile another client changed a field this one never touched.
+    const second = provider([{ id: '1', name: 'Rex', tag: 'wolf' }]);
     const b = restart(storage.crash(), second.transport);
     await b.ready();
     // Stored state, before anything is resent: same ids, order and attempts.
@@ -184,6 +198,18 @@ describe('durable outbox: pending writes resume after a restart', () => {
       { id: '1', type: 'update', state: 'pending', attempts: 1 },
       { id: '1', type: 'delete', state: 'pending', attempts: 0 },
     ]);
+    // The restored update of an existing record waits for a refresh; the
+    // follow-up of the unconfirmed create does not.
+    expect(b.pendingWrites()[2]).toMatchObject({ awaitingRefresh: true });
+    expect(b.pendingWrites()[1]).not.toHaveProperty('awaitingRefresh');
+    await vi.waitFor(() =>
+      expect(
+        second.requests.map((r) => `${r.method} ${r.url.pathname}`),
+      ).toEqual(['POST /api/pets', 'PUT /api/pets/srv-1']),
+    );
+    await settle();
+    expect(second.requests).toHaveLength(2);
+    await b.sync();
     await idle(b);
     expect(second.requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(
       expect.arrayContaining([
@@ -203,12 +229,12 @@ describe('durable outbox: pending writes resume after a restart', () => {
     expect(order('PUT', '/api/pets/1')).toBeLessThan(
       order('DELETE', '/api/pets/1'),
     );
-    // The update was replayed on the stored confirmed record, not on nothing.
+    // The update was replayed on the refreshed record, keeping the remote tag.
     const put = second.requests.find((r) => r.url.pathname === '/api/pets/1');
     expect(JSON.parse(put?.body ?? '{}')).toEqual({
       id: '1',
       name: 'Rex II',
-      tag: 'dog',
+      tag: 'wolf',
     });
     expect([...second.pets.values()]).toEqual([
       { id: 'srv-1', name: 'Milo', tag: 'cat' },
@@ -355,6 +381,12 @@ describe('durable outbox: a crash with a request in flight', () => {
       { id: '1', type: 'update', state: 'pending', attempts: 1 },
       { id: '2', type: 'delete', state: 'pending', attempts: 1 },
     ]);
+    // The delete goes out at once; the update waits for a refresh. (A
+    // refresh during which a write to the collection settles does not count.)
+    await vi.waitFor(() => expect(second.requests).toHaveLength(1));
+    await settle();
+    expect(second.requests[0]?.method).toBe('DELETE');
+    await b.sync();
     await idle(b);
     expect(
       second.requests.map((r) => `${r.method} ${r.url.pathname}`).sort(),
@@ -415,6 +447,7 @@ describe('durable outbox: failed, uncertain and conflicting writes', () => {
 
     await b.resolveWrite('/pets', localId, { action: 'discard' });
     await b.resolveWrite('/pets', '1', { action: 'retry' });
+    await b.sync();
     await idle(b);
     expect(await b.get('/pets', localId)).toBeUndefined();
     expect(second.requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(
@@ -563,5 +596,185 @@ describe('durable outbox: storage format and failures', () => {
     await a.create('/pets', { name: 'Milo' });
     await idle(a);
     expect(storage.data.has(OUTBOX)).toBe(false);
+  });
+});
+
+describe('durable outbox: review findings on #312', () => {
+  it('makes a restored create uncertain when its key can no longer be sent', async () => {
+    const keyed = document();
+    keyed.paths['/pets']!.post!.parameters = [
+      { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } },
+    ];
+    for (const [doc, options] of [
+      [document(), {}],
+      [keyed, { idempotencyKeyHeader: false as const }],
+    ] as const) {
+      const storage = new CrashableStorage();
+      const first = provider([], () => 'hang-before');
+      const a = restart(storage, first.transport, {}, keyed);
+      await a.create('/pets', { name: 'Milo' });
+      await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+      await settle();
+
+      const second = provider();
+      const b = restart(storage.crash(), second.transport, options, doc);
+      await b.ready();
+      expect(b.pendingWrites()).toMatchObject([
+        { type: 'create', state: 'uncertain', attempts: 1 },
+      ]);
+      await settle();
+      expect(second.requests).toEqual([]);
+    }
+  });
+
+  it('retries a restore that failed on a transient storage error', async () => {
+    const storage = new CrashableStorage();
+    const first = provider([], () => response({}, 503));
+    const a = restart(storage, first.transport, { retry: slowRetry });
+    await a.create('/pets', { name: 'Milo' });
+    await vi.waitFor(() => expect(a.pendingWrites()[0]?.attempts).toBe(1));
+    await settle();
+
+    const crashed = storage.crash();
+    crashed.failGets = 1;
+    const second = provider();
+    const b = restart(crashed, second.transport);
+    await expect(b.ready()).rejects.toThrow(/storage unavailable/);
+    await b.ready();
+    expect(b.pendingWrites()).toMatchObject([{ type: 'create' }]);
+    await idle(b);
+    expect([...second.pets.values()]).toEqual([{ id: 'srv-1', name: 'Milo' }]);
+  });
+
+  it('restores even when storing the restored state fails once', async () => {
+    const storage = new CrashableStorage();
+    const first = provider([], () => 'hang-before');
+    const a = restart(storage, first.transport);
+    await a.create('/pets', { name: 'Milo' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+
+    const crashed = storage.crash();
+    crashed.failOutbox = true;
+    const b = restart(crashed, provider().transport);
+    await b.ready();
+    expect(b.pendingWrites()).toMatchObject([
+      { type: 'create', state: 'uncertain' },
+    ]);
+  });
+
+  it('does not store a create whose own store failed through another create', async () => {
+    const storage = new CrashableStorage();
+    // The first outbox put is A's, the second B's.
+    storage.failOutboxPut = 2;
+    // Every outbox state that reached storage, as a crash would find it.
+    const names: string[][] = [];
+    storage.afterPut = (resource): void => {
+      if (resource !== OUTBOX) return;
+      const stored = storage.data.get(OUTBOX)?.get('outbox') as {
+        records: { queue: { data?: { name: string } }[] }[];
+      };
+      names.push(
+        stored.records.flatMap((r) => r.queue.map((w) => w.data?.name ?? '')),
+      );
+    };
+    const a = restart(storage, provider([], () => 'hang-before').transport);
+    const [first, second] = await Promise.allSettled([
+      a.create('/pets', { name: 'A' }),
+      a.create('/pets', { name: 'B' }),
+    ]);
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    await settle();
+    expect(names.length).toBeGreaterThan(0);
+    for (const stored of names) expect(stored).toEqual(['A']);
+    expect(a.pendingWrites().map((w) => w.type)).toEqual(['create']);
+  });
+
+  it('builds a restored update on refreshed remote state and reports conflicts', async () => {
+    const storage = new CrashableStorage();
+    const first = provider([{ id: '1', name: 'Rex', tag: 'dog' }], (r) =>
+      r.method === 'GET' ? undefined : 'hang-before',
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await settle();
+
+    const seen: WriteConflict[] = [];
+    const second = provider([{ id: '1', name: 'Max', tag: 'wolf' }]);
+    const b = restart(storage.crash(), second.transport, {
+      onConflict: (c) => seen.push(c),
+    });
+    await b.ready();
+    expect(b.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'pending', awaitingRefresh: true },
+    ]);
+    await settle();
+    expect(second.requests).toEqual([]);
+    await b.sync();
+    expect(seen).toMatchObject([
+      { field: 'name', base: 'Rex', remote: 'Max', local: 'Rex II' },
+    ]);
+    await idle(b);
+    expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
+      id: '1',
+      name: 'Rex II',
+      tag: 'wolf',
+    });
+  });
+
+  it('keeps rebuild entries for unknown collections and malformed entries', async () => {
+    const storage = new CrashableStorage();
+    const rebuild = { resource: 'gone', context: {}, id: 'x' };
+    const badRecord = { resource: '/pets', queue: 'not a list' };
+    const badRebuild = { invented: true };
+    await storage.put(OUTBOX, 'outbox', {
+      version: 1,
+      records: [badRecord],
+      rebuild: [rebuild, badRebuild],
+    });
+    const b = restart(storage, provider().transport);
+    await b.ready();
+    await b.create('/pets', { name: 'Milo' });
+    await idle(b);
+    const stored = await storage.get(OUTBOX, 'outbox');
+    expect(stored?.['unrestorable']).toEqual(
+      expect.arrayContaining([rebuild, badRecord, badRebuild]),
+    );
+    expect(stored?.['unrestorable']).toHaveLength(3);
+  });
+
+  it('applies retry.maxAttempts to a write found in flight', async () => {
+    const keyed = document();
+    keyed.paths['/pets']!.post!.parameters = [
+      { name: 'Idempotency-Key', in: 'header', schema: { type: 'string' } },
+    ];
+    const storage = new CrashableStorage();
+    const first = provider([{ id: '1', name: 'Rex' }], (r) =>
+      r.method === 'GET' ? undefined : 'hang-before',
+    );
+    const a = restart(storage, first.transport, {}, keyed);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await a.create('/pets', { name: 'Milo' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(2));
+    await settle();
+
+    const second = provider([{ id: '1', name: 'Rex' }]);
+    const b = restart(
+      storage.crash(),
+      second.transport,
+      { retry: { maxAttempts: 1 } },
+      keyed,
+    );
+    await b.ready();
+    expect(b.pendingWrites()).toMatchObject([
+      { id: '1', type: 'update', state: 'failed', attempts: 1 },
+      { type: 'create', state: 'failed', attempts: 1 },
+    ]);
+    await b.sync();
+    await settle();
+    expect(second.requests).toEqual([]);
   });
 });

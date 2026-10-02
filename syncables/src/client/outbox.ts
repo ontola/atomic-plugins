@@ -141,26 +141,30 @@ export function emptyOutbox(): OutboxDocument {
  * have written writes this one cannot represent. Entries that do not parse
  * are kept aside and written back unchanged.
  */
+/** The stored outbox has a version this client does not read. */
+export class OutboxVersionError extends Error {}
+
 export function readOutbox(value: unknown): OutboxDocument {
   if (value === undefined) return emptyOutbox();
   const raw = JSON.parse(JSON.stringify(value)) as unknown;
   if (!isRecord(raw) || raw['version'] !== OUTBOX_VERSION)
-    throw new Error(
+    throw new OutboxVersionError(
       `The stored syncables outbox has version ${JSON.stringify(isRecord(raw) ? raw['version'] : raw)}; this client reads version ${OUTBOX_VERSION}. It is left unchanged; no writes are restored or accepted.`,
     );
   const outbox = emptyOutbox();
-  // Entries set aside earlier are tried again: the document may have
-  // regained their collection.
-  const entries = [
-    ...(Array.isArray(raw['records']) ? raw['records'] : []),
-    ...(Array.isArray(raw['unrestorable']) ? raw['unrestorable'] : []),
-  ] as unknown[];
-  for (const entry of entries) {
+  const list = (name: string): unknown[] =>
+    Array.isArray(raw[name]) ? (raw[name] as unknown[]) : [];
+  for (const entry of list('records'))
     if (isStoredRecordWrites(entry)) outbox.records.push(entry);
     else outbox.unrestorable.push(entry);
-  }
-  const rebuild = Array.isArray(raw['rebuild']) ? raw['rebuild'] : [];
-  for (const entry of rebuild)
+  for (const entry of list('rebuild'))
     if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
+    else outbox.unrestorable.push(entry);
+  // Entries set aside earlier are tried again: the document may have
+  // regained their collection. Malformed ones stay set aside.
+  for (const entry of list('unrestorable'))
+    if (isStoredRecordWrites(entry)) outbox.records.push(entry);
+    else if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
+    else outbox.unrestorable.push(entry);
   return outbox;
 }

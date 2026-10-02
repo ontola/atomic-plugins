@@ -54,3 +54,27 @@ client's storage at the moment of the "crash" and build a second client on
 the copy. README ("Durable outbox and restarts", with a table of what a stop
 between steps leaves), CLAUDE.md and the changelog describe it. No live
 provider, real browser storage or concurrent clients were tested.
+
+## Turn 2
+
+**Human (via the oversight session, relaying a verified review of PR #312):**
+Fix six findings, each with a regression test: (1) a restored in-flight create
+with a stored key was resent without it when the current document or options
+no longer send the header; (2) a transient storage error during restore left
+the client unusable; (3) a rejected create could reach storage through another
+create's store; (4) restored updates sent a stale full record before any
+refresh, overwriting untouched remote fields and skipping conflict checks
+(decision: they wait for one successful `sync()` of their collection); (5)
+rebuild entries for unknown collections and malformed entries were dropped;
+(6) a restored in-flight attempt ignored `retry.maxAttempts`.
+
+**Assistant:** Added the tests first (all eight new or changed ones failed on
+the previous commit). Changes: a key counts only with a header to send it in;
+a failed restore is retried by the next call unless the version was refused,
+and storing the restored state no longer fails the restore; a store includes
+only writes whose own first store succeeded, plus the write it is for, which
+is marked stored inside that store; restored updates carry `awaitingRefresh`
+(listed on `pendingWrites()`) until a complete read of their collection, unless
+a create precedes them; unknown and malformed entries are kept and retried;
+`retry.maxAttempts` turns a restored in-flight write `failed` (or `uncertain`
+for a create without a usable key). README and CLAUDE.md updated.

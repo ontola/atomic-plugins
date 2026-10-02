@@ -34,6 +34,7 @@ import {
   DEFAULT_OUTBOX_NAMESPACE,
   OUTBOX_RECORD_ID,
   OUTBOX_VERSION,
+  OutboxVersionError,
   readOutbox,
   type StoredRebuild,
   type StoredRecordWrites,
@@ -202,6 +203,12 @@ export interface PendingWriteInfo {
   /** The most recent failure, if at least one attempt has failed. */
   lastError?: string;
   state: PendingWriteState;
+  /**
+   * Set on an update restored from the durable outbox: it is not sent until
+   * a `sync()` has read its collection completely, so the record it sends is
+   * built on current remote state and checked for conflicts first.
+   */
+  awaitingRefresh?: true;
   /** For updates: fields that also changed remotely since the edit was made. */
   conflicts?: WriteConflict[];
 }
@@ -371,6 +378,8 @@ interface QueuedWrite {
   sending?: boolean;
   /** False until the outbox holding this write is stored; not sent before. */
   durable?: boolean;
+  /** A restored update: not sent before a refresh of its collection. */
+  awaitingRefresh?: boolean;
 }
 
 type WriteOutcome =
@@ -562,15 +571,22 @@ export function createApiClient(
     };
   }
 
-  /** The whole outbox, as JSON, taken synchronously from the in-memory state. */
-  function outboxSnapshot(): Record<string, unknown> {
+  /**
+   * The whole outbox, as JSON, taken synchronously from the in-memory state.
+   * Writes whose own first store has not succeeded are left out, apart from
+   * `including` (the write this store is for): a rejected `create` must not
+   * reach storage through another call's store.
+   */
+  function outboxSnapshot(including?: QueuedWrite): Record<string, unknown> {
+    const stored = (write: QueuedWrite): boolean =>
+      write.durable !== false || write === including;
     const records: StoredRecordWrites[] = [];
     for (const key of new Set([
       ...gaveUpWrites.keys(),
       ...writeQueues.keys(),
     ])) {
-      const failed = gaveUpWrites.get(key) ?? [];
-      const queue = writeQueues.get(key) ?? [];
+      const failed = (gaveUpWrites.get(key) ?? []).filter(stored);
+      const queue = (writeQueues.get(key) ?? []).filter(stored);
       const first = failed[0] ?? queue[0];
       if (!first) continue;
       const confirmedRecord = confirmed.get(first.scope)?.get(first.id);
@@ -607,17 +623,27 @@ export function createApiClient(
   /**
    * Stores the outbox. Calls run one after another; each stores the state
    * as it is when its turn comes, so the last call stores the newest state.
-   * `rollback` runs before the next call takes its snapshot if this one fails.
+   * `write`, if given, is a newly queued write: it is included in this store
+   * and marked durable as soon as the store succeeds, before the next call
+   * takes its snapshot. `rollback` runs, also before that, if the store fails.
    */
-  function persist(rollback?: () => void): Promise<void> {
-    if (outboxNamespace === false) return Promise.resolve();
+  function persist(rollback?: () => void, write?: QueuedWrite): Promise<void> {
+    if (outboxNamespace === false) {
+      if (write) write.durable = true;
+      return Promise.resolve();
+    }
     const link = outboxChain.then(async () => {
       try {
-        await storage.put(outboxNamespace, OUTBOX_RECORD_ID, outboxSnapshot());
+        await storage.put(
+          outboxNamespace,
+          OUTBOX_RECORD_ID,
+          outboxSnapshot(write),
+        );
       } catch (error) {
         rollback?.();
         throw error;
       }
+      if (write) write.durable = true;
     });
     outboxChain = link.catch(() => undefined);
     return link;
@@ -631,6 +657,11 @@ export function createApiClient(
    */
   function persistLater(): Promise<void> {
     return persist().catch(() => undefined);
+  }
+
+  /** Whether resending this create is safe: a key, and a header to send it in. */
+  function usableKey(write: QueuedWrite): boolean {
+    return Boolean(write.idempotencyKey && write.route.idempotencyHeader);
   }
 
   function restoreWrite(
@@ -673,8 +704,13 @@ export function createApiClient(
       write.attempts += 1;
       write.lastError =
         'The process stopped while this write may have been in flight';
-      if (write.type === 'create' && !write.idempotencyKey)
+      if (write.type === 'create' && !usableKey(write))
         write.state = 'uncertain';
+      else if (
+        retry.maxAttempts !== undefined &&
+        write.attempts >= retry.maxAttempts
+      )
+        write.state = 'failed';
     }
     return write;
   }
@@ -684,11 +720,18 @@ export function createApiClient(
     const outbox = readOutbox(
       await storage.get(outboxNamespace, OUTBOX_RECORD_ID),
     );
+    // A retried restore starts again from what is stored.
+    writeQueues.clear();
+    gaveUpWrites.clear();
+    confirmed.clear();
     unrestorable = outbox.unrestorable;
     const touchedKeys = new Map<string, { scope: string; id: string }>();
     for (const entry of outbox.rebuild) {
       const route = byResource.get(entry.resource);
-      if (!route) continue;
+      if (!route) {
+        unrestorable.push(entry);
+        continue;
+      }
       const scope = scopeFor(route, entry.context);
       if (entry.confirmed) remote(scope).set(entry.id, entry.confirmed);
       else remote(scope).delete(entry.id);
@@ -708,23 +751,52 @@ export function createApiClient(
         if (stored.sending) changed = true;
         return restoreWrite(route, scope, entry.context, entry.id, stored);
       };
-      if (entry.failed.length)
-        gaveUpWrites.set(key, entry.failed.map(restored));
-      if (entry.queue.length) writeQueues.set(key, entry.queue.map(restored));
+      const failed = entry.failed.map(restored);
+      const queue = entry.queue.map(restored);
+      // An update or delete that reached retry.maxAttempts while in flight
+      // joins the failed writes, as it would have without the stop.
+      const head = queue[0];
+      if (head && head.state === 'failed' && head.type !== 'create')
+        failed.push(queue.shift() as QueuedWrite);
+      // Updates send the whole record, so they wait for a refresh of their
+      // collection instead of replaying on a confirmed record from before
+      // the stop. Behind a create, the create's response is fresh enough.
+      let afterCreate = false;
+      for (const write of [...failed, ...queue]) {
+        if (write.type === 'create') afterCreate = true;
+        if (write.type === 'update' && !afterCreate)
+          write.awaitingRefresh = true;
+      }
+      if (failed.length) gaveUpWrites.set(key, failed);
+      if (queue.length) writeQueues.set(key, queue);
       touchedKeys.set(key, { scope, id: entry.id });
     }
     // The outbox is stored before the visible record, so a stop in between
     // leaves the visible record behind; rebuild every record it names.
     for (const { scope, id } of touchedKeys.values()) await rebuild(scope, id);
-    if (changed) await persist();
+    if (changed) await persistLater();
     for (const key of writeQueues.keys())
       if (!draining.has(key)) void drainQueue(key);
   }
 
-  // Runs once the constructor has returned: the first step awaits storage.
-  const restored = restore();
+  /**
+   * The restore, started at construction. A failure other than a version
+   * refusal is not kept: the next call (or `ready()`) tries again.
+   */
+  let restoring: Promise<void> | undefined;
+  function whenRestored(): Promise<void> {
+    if (!restoring) {
+      const attempt = restore();
+      restoring = attempt;
+      attempt.catch((error: unknown) => {
+        if (!(error instanceof OutboxVersionError) && restoring === attempt)
+          restoring = undefined;
+      });
+    }
+    return restoring;
+  }
   // Callers observe a failure through ready() and the methods that await it.
-  restored.catch(() => undefined);
+  whenRestored().catch(() => undefined);
 
   function resolveRoute(resource: string): ClientRoute {
     const named = byResource.get(resource);
@@ -934,7 +1006,7 @@ export function createApiClient(
       if (
         write.type === 'create' &&
         mayHaveApplied(error) &&
-        (!write.idempotencyKey || error instanceof UnusableResponseError)
+        (!usableKey(write) || error instanceof UnusableResponseError)
       )
         return { status: 'uncertain' };
       if (
@@ -962,7 +1034,12 @@ export function createApiClient(
         const write = queue?.[0];
         // An uncertain or failed create blocks its record until resolveWrite;
         // a write is not sent before the outbox holding it is stored.
-        if (!write || write.state !== 'pending' || write.durable === false)
+        if (
+          !write ||
+          write.state !== 'pending' ||
+          write.durable === false ||
+          write.awaitingRefresh
+        )
           return;
         const outcome = await attemptWrite(write);
         write.sending = false;
@@ -1113,8 +1190,7 @@ export function createApiClient(
         q.splice(at, 1);
         if (!q.length) writeQueues.delete(k);
       }
-    });
-    queued.durable = true;
+    }, queued);
     try {
       await rebuild(queued.scope, queued.id);
     } finally {
@@ -1213,8 +1289,21 @@ export function createApiClient(
     return response;
   };
 
+  /**
+   * Restored updates of `scope` may go out now: a complete read of it has
+   * replaced the confirmed records from before the restart, and checked
+   * them for conflicts.
+   */
+  function releaseRefreshed(scope: string): void {
+    for (const writes of [...gaveUpWrites.values(), ...writeQueues.values()])
+      for (const write of writes)
+        if (write.scope === scope) delete write.awaitingRefresh;
+    for (const [key, queue] of writeQueues)
+      if (queue[0]?.scope === scope && !draining.has(key)) void drainQueue(key);
+  }
+
   async function performSync(): Promise<SyncResult> {
-    await restored;
+    await whenRestored();
     const started = new Map(revisions);
     const result = await readCollections(doc, {
       transport: conditionalTransport,
@@ -1271,6 +1360,7 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
+      releaseRefreshed(scope);
     }
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
@@ -1286,7 +1376,7 @@ export function createApiClient(
 
   return {
     resources: [...byResource.keys()],
-    ready: () => restored,
+    ready: () => whenRestored(),
     sync,
     startPolling(pollOptions): PollingHandle {
       let stopped = false;
@@ -1312,7 +1402,7 @@ export function createApiClient(
       };
     },
     async list(resource, context): Promise<Record<string, unknown>[]> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       return storage.list(scopeFor(route, contextFor(route, context)));
     },
@@ -1321,12 +1411,12 @@ export function createApiClient(
       id,
       context,
     ): Promise<Record<string, unknown> | undefined> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       return storage.get(scopeFor(route, contextFor(route, context)), id);
     },
     async create(resource, data, supplied): Promise<Record<string, unknown>> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       if (!route.createPath)
         throw new Error(`Resource ${resource} declares no create operation`);
@@ -1357,7 +1447,7 @@ export function createApiClient(
       data,
       supplied,
     ): Promise<Record<string, unknown>> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       if (!route.updateMethod || !route.collection.itemUrl)
         throw new Error(`Resource ${resource} declares no update operation`);
@@ -1394,7 +1484,7 @@ export function createApiClient(
       return record;
     },
     async remove(resource, id, supplied): Promise<void> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       if (!route.deletePath)
         throw new Error(`Resource ${resource} declares no delete operation`);
@@ -1423,6 +1513,7 @@ export function createApiClient(
             : {}),
           ...(write.lastError ? { lastError: write.lastError } : {}),
           state: write.state,
+          ...(write.awaitingRefresh ? { awaitingRefresh: true } : {}),
           ...(write.conflicts?.size
             ? {
                 conflicts: [...write.conflicts.values()].map((c) => ({
@@ -1433,7 +1524,7 @@ export function createApiClient(
         }));
     },
     async resolveWrite(resource, id, resolution, supplied): Promise<void> {
-      await restored;
+      await whenRestored();
       const route = resolveRoute(resource);
       const scope = scopeFor(route, contextFor(route, supplied));
       const key = keyFor(scope, id);
