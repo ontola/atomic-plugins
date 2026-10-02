@@ -67,6 +67,8 @@ jobs:
       - name: Validate every overlay's OAD path and last-change pin
         run: python scripts/validate_oad_pins.py --directory /tmp/openapi-directory --published origin/main --fetch-missing
       - run: python tests/test_oad_pins.py
+      - name: Check reviewed pagination variants against their pinned OAD schemas
+        run: python tests/test_pagination_collection.py --directory /tmp/openapi-directory
       - name: Every catalog overlay is published from overlays/
         run: |
           python - <<'PY'

@@ -1,0 +1,339 @@
+# Source: https://docs.digitalocean.com/reference/api/reference/public-apis/
+# Verified against the pinned OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/digitalocean.com/2.0/openapi.yaml
+info:
+  title: DigitalOcean linked pages with operation-specific item envelopes
+  version: 2.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        linkedPages:
+          type: nextLink
+          autoDetect: false
+          description: Follow links.pages.next as the complete next-page URL, preserving its
+            query parameters. Its absence marks the last page. This also preserves page_token
+            on repository listings instead of synthesizing a page number.
+          request:
+            queryParameters:
+              per_page:
+                role: pageSize
+          response:
+            bodyFields:
+              links.pages.next:
+                role: nextLink
+              meta.total:
+                role: totalCount
+  - target: $.paths['/v2/account/keys'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: ssh_keys
+  - target: $.paths['/v2/actions'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: actions
+  - target: $.paths['/v2/apps'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: apps
+  - target: $.paths['/v2/apps/{app_id}/deployments'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: deployments
+  - target: $.paths['/v2/cdn/endpoints'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: endpoints
+  - target: $.paths['/v2/certificates'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: certificates
+  - target: $.paths['/v2/customers/my/invoices'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: invoices
+  - target: $.paths['/v2/domains'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: domains
+  - target: $.paths['/v2/domains/{domain_name}/records'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: domain_records
+  - target: $.paths['/v2/droplets'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: droplets
+  - target: $.paths['/v2/droplets/{droplet_id}/actions'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: actions
+  - target: $.paths['/v2/droplets/{droplet_id}/backups'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: backups
+  - target: $.paths['/v2/droplets/{droplet_id}/firewalls'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: firewalls
+  - target: $.paths['/v2/droplets/{droplet_id}/kernels'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: kernels
+  - target: $.paths['/v2/droplets/{droplet_id}/snapshots'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: snapshots
+  - target: $.paths['/v2/firewalls'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: firewalls
+  - target: $.paths['/v2/floating_ips'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: floating_ips
+  - target: $.paths['/v2/images'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: images
+  - target: $.paths['/v2/kubernetes/clusters'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: kubernetes_clusters
+  - target: $.paths['/v2/load_balancers'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: load_balancers
+  - target: $.paths['/v2/monitoring/alerts'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: policies
+  - target: $.paths['/v2/projects'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: projects
+  - target: $.paths['/v2/projects/{project_id}/resources'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: resources
+  - target: $.paths['/v2/regions'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: regions
+  - target: $.paths['/v2/registry/{registry_name}/repositories'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: repositories
+  - target: $.paths['/v2/registry/{registry_name}/repositoriesV2'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: repositories
+  - target: $.paths['/v2/registry/{registry_name}/{repository_name}/digests'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: manifests
+  - target: $.paths['/v2/registry/{registry_name}/{repository_name}/tags'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: tags
+  - target: $.paths['/v2/reserved_ips'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: reserved_ips
+  - target: $.paths['/v2/sizes'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: sizes
+  - target: $.paths['/v2/snapshots'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: snapshots
+  - target: $.paths['/v2/tags'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: tags
+  - target: $.paths['/v2/uptime/checks'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: checks
+  - target: $.paths['/v2/uptime/checks/{check_id}/alerts'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: alerts
+  - target: $.paths['/v2/volumes'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: volumes
+  - target: $.paths['/v2/volumes/{volume_id}/actions'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: actions
+  - target: $.paths['/v2/volumes/{volume_id}/snapshots'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: snapshots
+  - target: $.paths['/v2/vpcs'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: vpcs
+  - target: $.paths['/v2/vpcs/{vpc_id}/members'].get
+    update:
+      x-pagination:
+        - scheme: linkedPages
+          overrides:
+            response:
+              envelope:
+                itemsField: members
