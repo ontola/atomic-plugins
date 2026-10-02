@@ -214,8 +214,11 @@ headers) fails its write instead of blocking, if it answers a request sent
 after the renewal and before any response showed the renewed credentials
 accepted, so a permission that new credentials do not grant cannot hold all
 writes back. Accepted means: a response to a request sent after the latest
-renewal that is not an `auth` failure, that is a 2xx or a failure classified
-`retry`, `permanent` or `satisfied`. Whether a request counts as sent after
+renewal that is not a refusal, that is a 2xx or a failure classified
+`retry`, `permanent` or `satisfied`, except a failure the default classes
+would call `auth` without the renewal (such as the 403 that this rule makes
+`permanent`): a refusal never counts as acceptance, so several writes the
+renewed credentials may not make all fail rather than block again. Whether a request counts as sent after
 the renewal is decided when it is sent, not when its answer arrives. A 401
 or 403 for a request sent before the latest renewal is sent again at once,
 without counting an attempt.
@@ -224,13 +227,19 @@ without counting an attempt.
 with the writes queued behind it, as for an uncertain one) and leaves the
 client blocked; the record's later writes stay queued. `retry` on a record
 whose queue starts with a blocked write throws unless the record also has
-failed writes, which it then retries behind the queued ones; a blocked
+failed or waiting writes: it then retries the failed writes behind the queued
+ones, or stops the waiting updates from waiting for a refresh; a blocked
 write itself is resent only by `authRenewed()`.
 
 For an `authenticate` adapter that renews tokens by itself, set
 `onAuthFailure: 'retry'`: an `auth` failure is then retried with backoff like
 a `retry` failure (counting attempts, `retry.maxAttempts` applies), nothing
-is blocked and `onAuthBlocked` is not called. The default is `'block'`.
+is blocked and `onAuthBlocked` is not called. A client with `'retry'`
+restored from an outbox stored while blocked drops the stored block and
+sends the `blocked` writes as `pending` ones. The default is `'block'`.
+Under either setting, a create that a classifier calls `auth` but that may
+have been applied (a 5xx other than 503) becomes `uncertain` without a
+usable idempotency key, instead of being resent.
 
 The block is stored in the durable outbox. A client restored from a blocked
 outbox is blocked, calls `onAuthBlocked` once the restore is done, and sends

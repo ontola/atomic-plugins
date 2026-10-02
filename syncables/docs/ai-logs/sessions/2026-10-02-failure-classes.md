@@ -80,3 +80,25 @@ a blocked write, add an `onAuthFailure: 'block' | 'retry'` option, and add a
   the writes queued behind it), plus `onAuthFailure` and `maxRetryAfterMs`.
 - Eight regression tests, each of which fails on the previous commit.
 - README and CLAUDE.md updated.
+
+## Turn 3
+
+**Human (via the oversight session, relaying a second review of PR #313):**
+A 403 that the renewal rule makes `permanent` clears `afterRenewal` itself, so
+the next 403 blocks again; a refusal must not count as acceptance. Amend the
+README on `retry` with waiting writes. With `onAuthFailure: 'retry'`, drop a
+stored block on restore. Apply the uncertain rule to a create that a custom
+classifier calls `auth`.
+
+**Assistant:** Changes:
+
+- `classify` also reports whether the response was a refusal: classified
+  `auth`, or `auth` by the default classes without the renewal flag. This
+  uses the default classifier, so a custom classifier is still called once.
+  Only a response that is not a refusal clears `afterRenewal`.
+- With `onAuthFailure: 'retry'`, restore drops a stored block and its
+  writes become `pending`.
+- A create that a classifier calls `auth`, that may have been applied (a
+  5xx other than 503) and that has no usable key becomes `uncertain`.
+- Three regression tests, each of which fails on the previous commit, and
+  README, JSDoc and CLAUDE.md updates.

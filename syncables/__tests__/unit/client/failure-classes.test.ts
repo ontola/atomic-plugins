@@ -687,6 +687,50 @@ describe('auth failures: review of #313', () => {
     );
   });
 
+  it('fails every write the renewed credentials may not make, without blocking again', async () => {
+    let renewed = false;
+    const { writes, transport } = provider([rex, milo], (r) => {
+      if (!renewed) return response({}, 401);
+      return r.url.pathname === '/api/pets/1' ? response({}, 403) : undefined;
+    });
+    const client = createApiClient(document(), { transport });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(client.authBlocked()).toBeDefined());
+    await client.update('/pets', '1', { tag: 'wolf' });
+    renewed = true;
+    await client.authRenewed();
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed', lastStatus: 403 },
+        { id: '1', state: 'failed', lastStatus: 403 },
+      ]),
+    );
+    await settle();
+    expect(client.authBlocked()).toBeUndefined();
+    expect(writes).toHaveLength(3);
+  });
+
+  it('makes a create that a classifier calls auth on a 5xx uncertain, not blocked', async () => {
+    const { writes, transport } = provider([], () => response({}, 502));
+    const client = createApiClient(document(), {
+      transport,
+      classifyWriteFailure: (f) =>
+        f.status === 502 ? 'auth' : defaultWriteFailureClass(f),
+    });
+    await client.create('/pets', { name: 'Milo' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]).toMatchObject({
+        state: 'uncertain',
+        attempts: 1,
+        lastStatus: 502,
+      }),
+    );
+    await settle();
+    expect(client.authBlocked()).toBeUndefined();
+    expect(writes).toHaveLength(1);
+  });
+
   it('discards a blocked write with resolveWrite, keeping the block; retry still throws', async () => {
     const { writes, transport } = provider([rex, milo], () =>
       response({}, 401),

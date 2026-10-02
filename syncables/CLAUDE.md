@@ -134,8 +134,13 @@ Data flows through four stages, each its own directory under `src/`:
    delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
    renewal before an accepted response, then `permanent`; `afterRenewal`
    and `authEpoch` are captured after the in-flight store, just before
-   sending, and any non-`auth` response at the current epoch clears
-   `afterRenewal`). `onAuthFailure: 'retry'` turns `auth` into `retry`.
+   sending, and any response at the current epoch that `classify` does
+   not report `refused` clears `afterRenewal`; `refused` also covers a 403
+   that is `auth` by default without the renewal flag). `onAuthFailure:
+   'retry'` turns `auth` into `retry` and drops a stored block on restore.
+   A create classified `auth` that `mayHaveApplied` (custom classifier on a
+   5xx) without a usable key goes the `retry` path, so it becomes
+   `uncertain`.
    `auth` sets the client-wide
    `authBlock` (stored in the outbox, `onAuthBlocked`, `authBlocked()`): the
    write becomes `blocked` without counting an attempt, `drainQueue` sends

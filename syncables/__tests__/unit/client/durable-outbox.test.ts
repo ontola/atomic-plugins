@@ -1565,6 +1565,28 @@ describe('durable outbox: failure classes (#260)', () => {
     });
   });
 
+  it("drops a stored block when restored with onAuthFailure: 'retry'", async () => {
+    const crashed = await blockedStorage();
+    const second = provider([rex, milo]);
+    const blocks: unknown[] = [];
+    const b = restart(crashed, second.transport, {
+      onAuthFailure: 'retry',
+      onAuthBlocked: (block) => blocks.push(block),
+    });
+    await b.ready();
+    expect(b.authBlocked()).toBeUndefined();
+    expect(blocks).toEqual([]);
+    expect(b.pendingWrites().map((w) => w.state)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(stored(crashed).authBlock).toBeUndefined();
+    await b.sync();
+    await idle(b);
+    expect(second.pets.get('1')).toEqual({ ...rex, name: 'Rex II' });
+    expect(second.pets.has('2')).toBe(false);
+  });
+
   it('treats a stored blocked write without a stored block as pending, and a malformed block as a block', async () => {
     const crashed = await blockedStorage();
     const unblocked = crashed.crash();

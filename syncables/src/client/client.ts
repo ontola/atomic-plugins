@@ -86,8 +86,9 @@ export interface WriteFailure {
   /**
    * True when, as this request was sent, the latest `authRenewed()` had not
    * yet been followed by an accepted response: a response to a request sent
-   * after that renewal that is not an `auth` failure (a 2xx, or a failure
-   * classified `retry`, `permanent` or `satisfied`).
+   * after that renewal that is not a refusal (a 2xx, or a failure classified
+   * `retry`, `permanent` or `satisfied`, except one the default classes call
+   * `auth` without the renewal, such as a 403 failed because of it).
    */
   afterRenewal: boolean;
 }
@@ -208,7 +209,8 @@ export interface ApiClientOptions {
    * `blocked` and the client sends no write until `authRenewed()`. `'retry'`:
    * it is retried with backoff like a `retry` failure, counting attempts, and
    * nothing is blocked; for an `authenticate` adapter that renews tokens by
-   * itself.
+   * itself. With `'retry'`, a block stored in the outbox is dropped on
+   * restore.
    */
   onAuthFailure?: 'block' | 'retry';
 }
@@ -974,7 +976,10 @@ export function createApiClient(
     gaveUpWrites.clear();
     confirmed.clear();
     unrestorable = outbox.unrestorable;
-    authBlock = outbox.authBlock;
+    // Under onAuthFailure 'retry' nothing blocks: a stored block (from a
+    // client with 'block') is dropped and its writes resume.
+    authBlock =
+      options.onAuthFailure === 'retry' ? undefined : outbox.authBlock;
     const touchedKeys = new Map<string, { scope: string; id: string }>();
     for (const entry of outbox.rebuild) {
       const route = byResource.get(entry.resource);
@@ -987,7 +992,9 @@ export function createApiClient(
       else remote(scope).delete(entry.id);
       touchedKeys.set(keyFor(scope, entry.id), { scope, id: entry.id });
     }
-    let changed = outbox.rebuild.length > 0;
+    let changed =
+      outbox.rebuild.length > 0 ||
+      (outbox.authBlock !== undefined && !authBlock);
     for (const entry of outbox.records) {
       const route = byResource.get(entry.resource);
       if (!route) {
@@ -1311,18 +1318,30 @@ export function createApiClient(
       accepted();
       return settled(write, resolvedId);
     } catch (error) {
-      let failureClass =
+      const classified =
         error instanceof HttpStatusError
           ? classify(write, error, sentAfterRenewal)
-          : 'retry';
-      if (failureClass === 'auth' && options.onAuthFailure === 'retry')
-        failureClass = 'retry';
-      // Any answer but a refusal shows the credentials were accepted.
+          : undefined;
+      let failureClass: WriteFailureClass = classified?.result ?? 'retry';
+      // Any answer but a refusal shows the credentials were accepted; a 403
+      // failed only because of the renewal is still a refusal.
       if (
-        (error instanceof HttpStatusError && failureClass !== 'auth') ||
+        (classified && !classified.refused) ||
         error instanceof UnusableResponseError
       )
         accepted();
+      if (failureClass === 'auth' && options.onAuthFailure === 'retry')
+        failureClass = 'retry';
+      // A create that may have been applied (a classifier calling a 5xx
+      // `auth`) is not resent after a renewal without a usable key: the
+      // `retry` path below makes it uncertain.
+      if (
+        failureClass === 'auth' &&
+        write.type === 'create' &&
+        mayHaveApplied(error) &&
+        !usableKey(write)
+      )
+        failureClass = 'retry';
       if (failureClass === 'satisfied') {
         // A delete of a record that is already gone.
         remote(write.scope).delete(write.id);
@@ -1378,11 +1397,18 @@ export function createApiClient(
     }
   }
 
+  /**
+   * The class of a failed write, and whether the response refused the
+   * credentials: classified `auth`, or `auth` by default had the request not
+   * been sent after a renewal (a 403 made `permanent` by `afterRenewal`).
+   * The latter uses the default classifier only, so a custom one is called
+   * once.
+   */
   function classify(
     write: QueuedWrite,
     error: HttpStatusError,
     sentAfterRenewal: boolean,
-  ): WriteFailureClass {
+  ): { result: WriteFailureClass; refused: boolean } {
     const failure: WriteFailure = {
       type: write.type,
       method:
@@ -1407,8 +1433,11 @@ export function createApiClient(
         // Falls back to the default classification.
       }
     }
-    if (result === 'satisfied' && write.type !== 'delete') return 'permanent';
-    return result;
+    if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
+    const refused =
+      result === 'auth' ||
+      defaultWriteFailureClass({ ...failure, afterRenewal: false }) === 'auth';
+    return { result, refused };
   }
 
   async function drainQueue(initialKey: string): Promise<void> {
