@@ -218,11 +218,17 @@ export function verifyRequest(headers, method, url, body, nowMs = Date.now()) {
   if (!verifyBy(agent, message, signature))
     throw new ProxyRefusal('bad_signature');
 
-  return {
-    agent,
-    replayKey: `${REQUEST_DOMAIN}:${sha256Hex(Buffer.from(message))}`,
-  };
+  return { agent, replayKey: replayKey(agent, message) };
 }
+
+/**
+ * `signature::replay_key`: per canonical agent and signed message, so two
+ * agents signing the same request in one millisecond do not collide. The
+ * real proxy also refuses a live agentless key from an older instance during
+ * a rolling deploy; the mock has no older instances, so it skips that.
+ */
+export const replayKey = (agent, message) =>
+  `${REQUEST_DOMAIN}-agent:${sha256Hex(Buffer.from(`${agent}\n${message}`))}`;
 
 const CLAIMS = ['v', 'connection_id', 'platform', 'aud', 'app', 'cnf', 'exp'];
 
