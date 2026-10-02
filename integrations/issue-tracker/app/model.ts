@@ -132,6 +132,11 @@ export const unconfirmed = (state: Ready): Held[] =>
 export function bannerFor(
   state: ViewState,
   confirmingRemove = false,
+  /**
+   * False on a table the app didn't make: a row grant never deletes a row
+   * (atomic-server#1740), so "Remove from board" isn't offered there.
+   */
+  own = true,
 ): BannerModel | undefined {
   if (state.kind !== 'ready') return undefined;
   const p = state.problem;
@@ -187,7 +192,7 @@ export function bannerFor(
         p.missing?.side === 'remote' && p.missing.entity === 'issue';
       const name = ref(p.missing?.local);
 
-      if (issue && confirmingRemove)
+      if (issue && confirmingRemove && own)
         return {
           tone: 'warn',
           icon: 'ghost',
@@ -206,10 +211,20 @@ export function bannerFor(
             tone: 'warn',
             icon: 'ghost',
             title: `${name} is on this board but no longer on GitHub.`,
-            text: 'It may have been deleted or moved to another repository. Nothing on GitHub will change.',
+            text: own
+              ? 'It may have been deleted or moved to another repository. Nothing on GitHub will change.'
+              : 'It may have been deleted or moved to another repository. Nothing on GitHub will change. To remove it here, delete its row in the table.',
             actions: [
               { label: 'Keep here only', action: 'keep-here' },
-              { label: 'Remove from board', action: 'remove', danger: true },
+              ...(own
+                ? [
+                    {
+                      label: 'Remove from board',
+                      action: 'remove' as const,
+                      danger: true,
+                    },
+                  ]
+                : []),
             ],
             details: p.message,
             problem: p,
