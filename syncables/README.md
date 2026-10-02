@@ -69,12 +69,19 @@ background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
 when PUT is absent. Both currently send JSON records, not JSON Patch documents.
+An update's response is merged over the record it sent, so a provider that
+answers with only some fields (or only bookkeeping such as `updatedAt`) does
+not shrink the confirmed record or revert the edit. The trade-off: a field
+that the provider removed in that response, rather than omitted, stays in the
+local copy until the next refresh, and is sent again in later PUT or PATCH
+bodies until then; a strict provider could reject those, for example after a
+field rename.
 
 Writes retry with exponential backoff, unlimited by default; set
-`retry.maxAttempts` to bound attempts. The queue, acknowledgements and identity
-remapping are in memory. Persisting records alone does not preserve pending
-writes across restart. A durable outbox, restart recovery and finer
-transient/permanent failure classification remain work in
+`retry.maxAttempts` to bound attempts. Unsettled writes are kept in a durable
+outbox in the client's storage adapter, so a client built later on the same
+storage resumes them (see [Durable outbox and restarts](#durable-outbox-and-restarts)).
+Finer transient/permanent failure classification remains work in
 [#260](https://github.com/ontola/atomic-plugins/issues/260).
 
 ```ts
@@ -126,8 +133,12 @@ client.pendingWrites('/pets')[0]?.conflicts; // [{ field, base, remote, local, .
 The conflict is listed until its write settles or is discarded, and is
 dropped if a later refresh shows the remote value equal to the local one. To
 keep the remote value instead, call `update` again with it. Not covered: a
-remote deletion under a pending update (the edit stays visible and is sent),
-conflicts that arrive only in a write's own response, and deletes.
+remote deletion under a pending update (the edit stays visible and is sent; a
+PUT then carries the last confirmed copy of the record with the edit on top),
+conflicts
+that arrive only in a write's own response, and deletes. The remote-deletion
+case remains open in [#260](https://github.com/ontola/atomic-plugins/issues/260);
+only restored updates handle it, as below.
 
 ### Uncertain creates
 
@@ -179,6 +190,146 @@ when the provider documents one elsewhere, or `false` to never send one. Whether
 the provider actually deduplicates on that key is the provider's contract; it is
 not verified here. A 2xx response with an unusable body stays `uncertain`
 even with a key.
+
+### Durable outbox and restarts
+
+When a `storage` adapter is passed, the client keeps every unsettled write in
+one record of it: namespace `syncables:outbox`, id `outbox`. Without
+`storage`, the default `InMemoryStorageAdapter` ends with the client, so no
+outbox is kept. The outbox holds, per record, the queued writes in order, the
+failed writes, each write's state, attempts and last error, the conflict
+bases and conflicts of pending updates, idempotency keys, the confirmed remote
+record the writes are replayed on, and local ids of creates the server has not
+confirmed (with the writes queued behind them). A client built on the same
+storage restores it before anything else:
+
+```ts
+const client = createApiClient(doc, { storage, transport });
+await client.ready(); // restores the outbox; other async methods wait for it too
+client.pendingWrites(); // pending, uncertain and failed writes from before the restart
+```
+
+Pending writes then resume in their stored order per record (the backoff
+delay is not stored; the first resend is immediate), with one exception:
+a restored update waits for a `sync()` that reads its collection completely.
+Updates send the whole record, and the confirmed record stored before the stop
+may be old: sending it would overwrite remote changes to fields the update
+never touched. After the refresh the update is replayed on the current remote
+record and checked for conflicts (`onConflict`) like any pending update.
+
+If that refresh does not return the record (deleted remotely, or filtered out
+of the read), a restored update that would be sent as a PUT, and is at the
+head of its record's queue, becomes `failed` with `lastError` "not in the
+refreshed collection" instead of sending only its own fields as the whole
+record. Failing the head keeps the order (failed writes are always older than
+queued ones), and the next restored update of the record, now the head, fails
+the same way, so several offline edits of a vanished record all fail and none
+is sent. The edit stays visible on the last confirmed record, and a later
+`update` of the record is built on that record, not on the failed edits.
+"Last confirmed record" is the newest copy a refresh or a write response
+confirmed: a record that reappears with other values and then vanishes again
+leaves those newer values as the base, never an older copy.
+`resolveWrite` `retry` sends them on that record, which any of the record's
+writes may have kept, including for an older failed write; when the client
+never had one, it sends the update's fields as they are, which a PUT applies
+as the whole record. A PATCH update is sent (it carries only its changes). A
+restored update queued behind a write that is not an update (a delete, say)
+is released and sent once that write settles.
+
+While it waits, its `pendingWrites()` entry is `pending`
+with `awaitingRefresh: true` (only pending entries carry it), and writes
+queued behind it wait too. A refresh during which a write to the same record
+settles does not release it; writes to other records of the collection do not
+matter. Updates queued behind a restored create do not wait: they replay on
+the create's response. Restored creates and deletes do not wait.
+
+A waiting update can be settled with `resolveWrite`: `retry` sends it now, on
+the confirmed record stored before the stop, and `discard` drops it (writes
+queued behind it stay). After three `sync()` calls that ran without releasing
+it while it was at the head of its record's queue (the collection failed or
+was incomplete, or a write to the record kept settling), it becomes `failed`
+with `lastError` "Waiting for a complete refresh of <collection>", so a
+collection that never reads completely cannot hold it back unseen. Writes
+queued behind it then go ahead. A waiting update behind other queued writes
+does not count misses until it is the head, since failing it there would make
+a failed write newer than queued ones. `retry` resets the count.
+
+Uncertain and failed writes stay listed, visible locally and resolvable with
+`resolveWrite`, and are not resent. Retrying a restored failed update sends it
+at once, as does retrying any failed write of a record whose queued updates are
+waiting. `pendingWrites()` lists restored writes only after
+`ready()` resolves. If reading the outbox fails (a storage error), `ready()`
+and the methods that wait for it reject, and the next call tries the restore
+again.
+
+The outbox is written as a whole, in one `put`, at each step below, and
+calls are serialized, so the stored record is always one consistent state.
+What a process stop between steps leaves:
+
+| Step | A stop before the next step leaves | On restart |
+| --- | --- | --- |
+| 1. `create`/`update`/`remove` stores the outbox with the write | Nothing recorded, nothing sent; the call had not resolved | Nothing to do |
+| 2. The visible record is updated, the call resolves | The write is recorded; the visible record may be stale | Visible records of every stored write are rebuilt |
+| 3. The outbox marks the write as in flight, then the request is sent | The request may or may not have reached the server | See below |
+| 4. The outcome is stored (settled write removed, follow-ups moved to the server id) | The visible record may still be under the local id | The stored list of records to rebuild is finished |
+
+A write found marked in flight on restart counts as one failed attempt, with
+`lastError` saying the process stopped. A create without an idempotency key
+becomes `uncertain`: it is not resent, so a create the server did apply is not
+duplicated, and `resolveWrite` confirms, retries or discards it as for any
+uncertain create. A create with a stored idempotency key is resent with that
+key, but only if the client can still send it: when the current document no
+longer declares the header, or `idempotencyKeyHeader` is `false`, the create
+becomes `uncertain` too. Deletes are resent, and updates (PUT, or PATCH with
+the full record) are resent after the refresh described above. If the
+restored attempt reaches `retry.maxAttempts`, the write becomes `failed`
+instead (a create without a usable key stays `uncertain`). If storing the
+in-flight mark fails, the request is not sent; that counts as a failed
+attempt and is retried with backoff.
+
+So the worst case after a stop is `uncertain`, not a duplicate or a silent
+loss. The limits of that claim:
+
+- A `create`, `update` or `remove` call that had not resolved may or may not be
+  in the outbox. Check `pendingWrites()` after `ready()` before repeating it.
+  If storing the outbox fails, the call rejects, the write is not queued, and
+  no other call's store includes it: a write reaches storage, as outbox or as
+  visible record, only once its own first store has succeeded.
+- After the write is queued, a failed outbox store (after an outcome, in
+  `sync`, or in `resolveWrite`) does not fail the operation: the stored record
+  stays at the previous state until the next successful store, which writes
+  the whole state again. A stop in that window restores that older state, at
+  worst a write marked in flight (handled as above) or a resolution to redo.
+- The guarantee is only as strong as the adapter's `put`: it must store the
+  whole record or nothing, and keep what it acknowledged.
+- The whole outbox is serialized and stored at each step (about three stores
+  per write, more on retries and id remaps). Its size is one copy of each
+  written record's confirmed state (or last known copy) plus, per unsettled
+  write, its own changes and bookkeeping: measured on 2026-10-02 with a
+  10 KB record, 1 queued update gave a 10.3 KB outbox and 20 gave 12.3 KB
+  (about 107 bytes per extra small update). Bytes written per step therefore
+  grow with the number of unsettled writes and records. Throughput was not
+  measured; it is meant for hundreds of unsettled writes, not a bulk import.
+- Only one client may use a storage at a time. Two clients on one outbox (two
+  tabs, say) overwrite each other's record and may both send a write; there is
+  no lock.
+- An idempotency key prevents a duplicate only if the provider honours it.
+- A restored update is sent only after a refresh, but the provider can still
+  change the record between that read and the request, as without a restart.
+  A resent delete that was already applied gets whatever the provider answers
+  (often 404) and is retried like any other 4xx.
+- Not stored: the last synced snapshot and conditional-request cache (the
+  next `sync()` reads everything again) and confirmed records without writes.
+
+The record has a `version` (now `1`). Storage without an outbox record, such
+as storage written by an earlier syncables, starts with an empty outbox. A
+record with another version is left unchanged and `ready()` rejects, as do
+the methods that wait for it, rather than overwrite writes this client cannot
+read. Entries for a collection the current document lacks (queued writes and
+pending rebuilds), and entries that do not parse, are kept and written back
+unchanged; the next client tries them again. Set `outboxNamespace` to
+store the outbox under another namespace (it must not equal a collection
+name), or to `false` to keep writes in memory only.
 
 ## One engine in Node and browsers
 
@@ -369,7 +520,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   gain `state` and `conflicts`; same-field refresh conflicts are reported
   (`onConflict`); ambiguous creates become `uncertain` instead of being
   resent, with `resolveWrite` to retry, discard or confirm them, and
-  `Idempotency-Key` retries (`idempotencyKeyHeader`).
+  `Idempotency-Key` retries (`idempotencyKeyHeader`). Unsettled writes are
+  kept in a durable outbox in a supplied storage adapter (`syncables:outbox`,
+  `outboxNamespace`) and resumed by a later client on the same storage
+  (`ready()`); a create in flight when the process stopped becomes
+  `uncertain`. With `storage`, `create`/`update`/`remove` store the outbox before they
+  resolve, and the request leaves after one more outbox store. A restored
+  update waits for a `sync()` of its collection (`awaitingRefresh`).
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with

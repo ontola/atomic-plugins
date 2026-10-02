@@ -79,8 +79,8 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 113,536 bytes for
-  0.4.0 (107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 113,988 bytes for
+  0.4.1 (113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path and devonian's Atomic Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
 - Dependencies: `syncables@0.18.0` and `devonian@0.6.1` from npm, exact
@@ -134,6 +134,21 @@ What it does not do, and what is not verified:
   a real Notion schema is not verified.
 - All shared data sources go into one table, with their columns merged. A
   "Data source" column says where each row came from.
+- The columns are the four fixed ones (Notion page id, Data source, Notion
+  URL, Last edited in Notion) plus one per Notion property the lens
+  projects (`notion-<hex of the property id>`). Nothing else: syncables also
+  derives one term per field of the Page schema (`object`, `id`,
+  `created-time`, `last-edited-time`, `title`, `properties`, `parent`,
+  `url`, `archived`, `in-trash`), and 0.1.0–0.4.0 made a column of each,
+  named by its raw term path (`…/property/object`), always empty
+  ([#303](https://github.com/ontola/atomic-plugins/issues/303)). Since
+  0.4.1 `notionColumns` takes only the projection's own terms, and the
+  first sync of an upgraded install retires such a column: off the class's
+  `recommends` and the ontology's `properties`, then destroyed. Only a
+  Property with exactly that auto-made name and shortname, and only when
+  no current column binds it; a column a person added (another name) and
+  the rows are left alone. Verified in the fake store and the e2e, not on
+  an upgraded live install.
 - The e2e shows the pinned host lets the app add Properties under its
   ontology and add them to its class's `recommends` (it checks the column
   datatypes). Only the fake store covers later edits to them.

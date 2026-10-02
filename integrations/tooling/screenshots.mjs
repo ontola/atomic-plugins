@@ -3,9 +3,9 @@
  * Takes the README's drive app screenshots (#49) into docs/screenshots/:
  *
  *   node integrations/tooling/link-atomic-server.mjs   # once, as in AGENTS.md
- *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets]
+ *   node integrations/tooling/screenshots.mjs [pets calendar issue-tracker money notion timesheets moneybird todoist]
  *
- * Starts atomic-server, the dev-server and the mock proxy (`pets` fixture) the
+ * Starts atomic-server, the dev-server and the mock proxy (`pets`, `moneybird` and `todoist` fixtures) the
  * way run-lane.mjs does, on a fresh store, plus a static server for the
  * user-testing catalog that `usertest/catalog.mjs` builds (its "(sample data)"
  * entries). Then runs `e2e/screenshots.spec.ts`, which installs each app and
@@ -39,6 +39,8 @@ const SHOTS = [
   'money',
   'notion',
   'timesheets',
+  'moneybird',
+  'todoist',
   'notion-table',
 ];
 /** Only taken when named: the README does not need them to be current. */
@@ -106,7 +108,11 @@ rmSync(resolve(serverCheckout(), `.lane-store/${LABEL}`), {
   recursive: true,
   force: true,
 });
-const stop = await bringUp({ ports, platforms: ['pets'], label: LABEL });
+const stop = await bringUp({
+  ports,
+  platforms: ['pets', 'moneybird', 'todoist'],
+  label: LABEL,
+});
 
 let status = 1;
 
