@@ -1,12 +1,15 @@
 # Fediverse
 
-Status: **experimental; federation verified against a local peer fixture
-only.** One ActivityPub actor per installation, for one Atomic drive: other
-fediverse servers can find it (WebFinger), follow it (accepted
-automatically), receive its public posts as signed deliveries, and send
-replies, which are stored in the drive. Nothing here has been run against a
-real Mastodon, GoToSocial or other fediverse server, and it needs an
-atomic-server newer than the current pin (see [Host requirements](#host-requirements)).
+Status: **experimental; one follow, post and reply round trip verified
+against a real Mastodon (4.7.3) on loopback, in an opt-in test.** One
+ActivityPub actor per installation, for one Atomic drive: other fediverse
+servers can find it (WebFinger), follow it (accepted automatically), receive
+its public posts as signed deliveries, and send replies, which are stored in
+the drive. Only that one Mastodon version has been tried, on test
+certificates and a non-default port, never on the public internet; GoToSocial
+cannot follow it yet (see [Against a real Mastodon](#against-a-real-mastodon)
+and [Known host gaps](#known-host-gaps)). It needs a server built with the
+`plugin-routes` feature (see [Host requirements](#host-requirements)).
 
 The plugin is a QuickJS route handler (`handle(ctx, request)`, the host's
 `http` trigger). It keeps no state between requests, never holds a key and
@@ -19,15 +22,21 @@ is a job in the host's durable delivery queue, signed by the host.
 
 ## What it does
 
-| Route (drive-host mount)                                    | Auth                                            | What                                                                                                                                                      |
-| ----------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /.well-known/webfinger`                                | none                                            | `acct:<username>@<host>` (or the actor URL) → the actor; `rel` filters links. Shared claim for `acct:` with `rels: ["self"]`.                             |
-| `GET /.well-known/nodeinfo`, `/nodeinfo/2.1`                | none                                            | NodeInfo 2.1, `protocols: ["activitypub"]`, the number of public posts.                                                                                   |
-| `GET /ap/actor`                                             | none                                            | A `Service` actor: name and summary from the profile resource, `inbox`, `outbox`, `followers`, and `publicKey` from the host-held `actor-key` (RSA-2048). |
-| `GET /ap/outbox`, `/ap/objects/{id}`, `/ap/activities/{id}` | none                                            | Public posts under `config.posts`, as `Create` activities, 10 per page, newest first.                                                                     |
-| `GET /ap/followers`                                         | none (reads as the Installation)                | An `OrderedCollection` with `totalItems` only: who follows is not published.                                                                              |
-| `POST /ap/outbox`                                           | `atomic` (a version 2 Atomic request signature) | A configured publisher posts a Note: stored as a `Message` under `config.posts`, and a `Create` queued for each follower's inbox.                         |
-| `POST /ap/inbox`                                            | `http-signature`, verified by the host          | Follow, Undo(Follow), Create(Note) replies, Delete.                                                                                                       |
+| Route (drive-host mount)                                    | Auth                                            | What                                                                                                                                                                                         |
+| ----------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/webfinger`                                | none                                            | `acct:<username>@<host>` (or the actor URL) → the actor; `rel` filters links. Shared claim for `acct:` with `rels: ["self"]`.                                                                |
+| `GET /.well-known/nodeinfo`, `/nodeinfo/2.1`                | none                                            | NodeInfo 2.1, `protocols: ["activitypub"]`, the number of public posts.                                                                                                                      |
+| `GET /ap/actor`                                             | none                                            | A `Service` actor: name and summary from the profile resource, `inbox`, `outbox`, `followers`, `webfinger` (FEP-2c59, see below), and `publicKey` from the host-held `actor-key` (RSA-2048). |
+| `GET /ap/outbox`, `/ap/objects/{id}`, `/ap/activities/{id}` | none                                            | Public posts under `config.posts`, as `Create` activities, 10 per page, newest first.                                                                                                        |
+| `GET /ap/followers`                                         | none (reads as the Installation)                | An `OrderedCollection` with `totalItems` only: who follows is not published.                                                                                                                 |
+| `POST /ap/outbox`                                           | `atomic` (a version 2 Atomic request signature) | A configured publisher posts a Note: stored as a `Message` under `config.posts`, and a `Create` queued for each follower's inbox.                                                            |
+| `POST /ap/inbox`                                            | `http-signature`, verified by the host          | Follow, Undo(Follow), Create(Note) replies, Delete.                                                                                                                                          |
+
+The actor names its own handle in `webfinger` (`<username>@<host>`, with
+the port when `origin` has one; [FEP-2c59](https://codeberg.org/fediverse/fep/src/branch/main/fep/2c59/fep-2c59.md)).
+Mastodon 4.7.3 reads it instead of deriving `preferredUsername@<host of the
+actor id>`, which drops the port; without it, an actor on a non-default port
+cannot pass Mastodon's WebFinger check (seen in the Mastodon e2e).
 
 ### Inbox
 
@@ -103,6 +112,10 @@ Exact, and all enforced by the plugin unless marked host:
   path wildcard such as `https://*/users/{segment}/inbox`.
 - Deliveries are retried by the host with backoff for up to 12 attempts or
   72 hours.
+- The host fetches a signer's key with an unsigned `GET` (host). A server
+  that serves actor documents only to signed requests (GoToSocial always;
+  Mastodon with `AUTHORIZED_FETCH=true`) cannot have its requests verified,
+  so its Follow is refused with `401`. See [Known host gaps](#known-host-gaps).
 
 ## Configuration
 
@@ -151,6 +164,111 @@ the `.atomic-server-ref` this plugin landed with) includes:
   certificate that is then the only trusted root for loopback peers. The
   peer's certificate is still verified, hostname included.
 
+## Against a real Mastodon
+
+`e2e/mastodon.spec.ts` (opt-in) runs one round trip with a real Mastodon,
+through Mastodon's own client API and federation, on atomic-server built
+with `plugin-routes` at `--plugin-routes read-write`:
+
+```sh
+FEDIVERSE_MASTODON_E2E=1 node integrations/tooling/run-lane.mjs fediverse --tier e2e
+```
+
+`e2e/mastodon.mjs` starts the official image `ghcr.io/mastodon/mastodon:v4.7.3`
+(Puma and Sidekiq) with `postgres:17-alpine` and `redis:7-alpine`, on the
+host network with every listener on 127.0.0.1 (ports 19930, 19932, 19939),
+no volumes, removed afterwards. A TLS proxy in the test process on
+`127.0.0.1:19943` fronts both Mastodon (`https://mastodon.localhost:19943`)
+and atomic-server (`https://fedi-<run>.localhost:19943`, forwarded to the
+lane's port with `Host` unchanged), with a certificate from a throwaway test
+CA. Mastodon trusts only that CA (`SSL_CERT_FILE`) and is allowed to reach
+loopback (`ALLOWED_PRIVATE_ADDRESSES`); atomic-server trusts it through the
+lane's `ATOMIC_PLUGIN_E2E_PEER_CA` seam. Accounts are invented (`alice`,
+created in Rails with an API token). Needs Docker; set
+`FEDIVERSE_MASTODON_IMAGE` to try another version.
+
+**Result, 2026-10-02:** passed with Mastodon 4.7.3 (`/api/v2/instance`
+`version` `4.7.3`) on atomic-server at the pin `a12b74a6` (the
+`ghcr.io/ontola/atomic-server-e2e:a12b74a6…-plugin-routes` binary). Steps:
+
+1. alice searches for the actor's URL; Mastodon fetches the actor and
+   checks `news@fedi-<run>.localhost:19943` with WebFinger, and shows the
+   account as a bot named after the profile resource.
+2. alice follows; the host verifies Mastodon's signed Follow, the plugin
+   stores the follower and queues an Accept, and Mastodon reports the
+   relationship as `following: true`.
+3. The drive posts through `/ap/outbox`; the host delivers the signed Create
+   to Mastodon's shared inbox, and the Note is in alice's home timeline
+   (`<p>Hello Mastodon, from an Atomic drive</p>`, public).
+4. alice replies (without mentioning the actor); Mastodon delivers the
+   Create to the actor's inbox and the plugin stores it under `replies`
+   with `replyTo` the post.
+5. alice unfollows; Mastodon sends `Undo(Follow)` and the follower is
+   removed.
+
+What Mastodon 4.7.3 sent and accepted, from the proxy's log (attached to the
+test as `mastodon-traffic.json`):
+
+- **Discovery.** Mastodon fetched `GET /ap/actor` (`Accept:
+application/ld+json; profile="https://www.w3.org/ns/activitystreams",
+application/activity+json, text/html;q=0.1`), then `GET
+/.well-known/webfinger?resource=acct:news@<host>:19943` (`Accept:
+application/jrd+json, application/json`, unsigned), then `GET /ap/outbox`
+  and `GET /ap/followers` (`Accept: application/activity+json,
+application/ld+json`). It did this again after the Follow. It made **no
+  NodeInfo request** in this run. Search by handle does not work with a
+  port: `@news@<host>:19943` matches no account (Mastodon's mention syntax
+  has no port), so the test searches by URL.
+- **Its GETs are signed** by its instance actor (`keyId=".../actor#rsa-…"`,
+  draft-cavage, `algorithm="rsa-sha256"`, `headers="host date
+(request-target)"`); the plugin's GET routes are `auth: none` and ignore
+  that.
+- **Its inbox POSTs** are draft-cavage-12 only (no RFC 9421 seen; per its
+  source, Mastodon's `Request` retries with RFC 9421 only after a cavage
+  attempt fails), `algorithm="rsa-sha256"`,
+  `headers="host date content-type digest (request-target)"`, `Digest:
+SHA-256=…`, `Content-Type: application/activity+json`, keyed by
+  `https://<mastodon>/ap/users/<numeric id>#rsa-<hex>` (not `#main-key`;
+  actor ids are `/ap/users/<numeric id>`).
+- **`Host` has no port.** Mastodon's HTTP client sends `Host: fedi-<run>.localhost`
+  for `https://fedi-<run>.localhost:19943/...`, and signs that value. The
+  host binds drives by host name, so the request reaches the drive and the
+  signature verifies; anything that compared `Host` with `origin` would
+  refuse it.
+- **HTTPS only.** WebFinger is always `https://<domain>/.well-known/webfinger`
+  and Mastodon refuses private and loopback addresses unless allowed.
+- **Shared inbox.** Mastodon's actor has `endpoints.sharedInbox`
+  `https://<mastodon>/inbox`, so the host's deliveries (Accept, Create)
+  went there, signed `headers="(request-target) host date digest"`, `Accept:
+*/*`; Mastodon answered `202`. The host's key fetch of alice's actor was an
+  unsigned `GET` with `Accept: application/activity+json,
+application/ld+json; profile=…, application/json`, answered `200`.
+- **The reply** was a `Create` of a `Note` with `inReplyTo` the post's
+  object id, `attributedTo` alice, `to` Public, `cc` her followers, and no
+  `tag`: Mastodon delivers a reply to the replied-to account's inbox
+  without a mention.
+
+Not tried: Mastodon with `AUTHORIZED_FETCH=true` (expected to fail the same
+way GoToSocial does), other Mastodon versions, a real domain on port 443,
+media, edits and deletes of posts.
+
+## Known host gaps
+
+Under the atomic-server freeze these are issue drafts for atomic-server, not
+pull requests:
+
+- **Per-actor inbox paths.** The manifest's `deliver` operation is `https://*/inbox`
+  and the host matches operation paths exactly, so a follower whose inbox is
+  `/users/<name>/inbox` and no shared inbox at `/inbox` is refused with
+  `422`. GoToSocial is expected to be one (its inboxes are per account);
+  that was not checked here, because GoToSocial 0.22.1 serves actor
+  documents only to signed requests.
+- **Unsigned key fetches.** GoToSocial 0.22.1 answered an unsigned `GET` of
+  an actor with `401` ("http request wasn't signed or http signature was
+  invalid"), checked on 2026-10-02 against `superseriousbusiness/gotosocial:latest`
+  on loopback. The host fetches signers' keys unsigned, so it cannot verify
+  any request from such a server.
+
 ## Tests
 
 ```sh
@@ -167,8 +285,10 @@ a signed Accept that the peer verifies against the actor's published key,
 refusal of unsigned, tampered and impersonating requests, a publish over
 `auth: atomic` delivered as a signed Create, a reply stored in the drive,
 and Undo. It is a fixture written for this test, not an independent
-implementation: interoperability with real servers is **declared, not
-verified**.
+implementation. `e2e/mastodon.spec.ts` is the opt-in run against a real
+Mastodon described [above](#against-a-real-mastodon); interoperability with
+any other server, or with Mastodon on the public internet, is **declared,
+not verified**.
 
 Wire shapes follow the [W3C ActivityPub Recommendation](https://www.w3.org/TR/activitypub/),
 [ActivityStreams vocabulary](https://www.w3.org/TR/activitystreams-vocabulary/),
