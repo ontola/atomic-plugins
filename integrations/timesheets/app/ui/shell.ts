@@ -44,6 +44,7 @@ import {
   firstRun,
   loadingPanel,
   noRelay,
+  notSynced,
   outsideWindow,
   problemBanner,
   setupError,
@@ -150,7 +151,7 @@ export function mountShell(
   let scheme: ColorScheme = options.colorScheme ?? 'light';
   /** The host's openExternal, when it has one. */
   const opener = () =>
-    controller.canOpen().external
+    controller.canOpen().external && controller.state().kind !== 'local'
       ? (url: string) => void controller.openExternal(url)
       : undefined;
 
@@ -166,6 +167,8 @@ export function mountShell(
     switch (state.kind) {
       case 'loading':
         return ['idle', 'Loading…'];
+      case 'local':
+        return ['idle', 'Not synced'];
       case 'no-proxy':
         return ['paused', 'Offline'];
       case 'not-connected':
@@ -564,6 +567,7 @@ export function mountShell(
       ),
     );
     if (state.kind === 'no-proxy') content.push(noRelay(h));
+    if (state.kind === 'local') content.push(notSynced(h, state.tableName));
 
     if (failed)
       content.push(
@@ -1009,6 +1013,7 @@ export function mountShell(
         break;
       }
 
+      case 'local':
       case 'no-proxy':
       case 'ready':
 

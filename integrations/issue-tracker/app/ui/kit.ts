@@ -337,9 +337,9 @@ export function chip(name: string, color?: string): HTMLElement {
   return h('span', { class: 'chip' }, dot, name);
 }
 
-export type Glyph = 'todo' | 'doing' | 'done';
+export type Glyph = 'todo' | 'doing' | 'blocked' | 'done';
 
-/** Ring, half ring, filled check: status readable without colour. */
+/** Ring, half ring, barred ring, filled check: status readable without colour. */
 export function statusGlyph(status: Glyph, size = 14): SVGSVGElement {
   return icon(status, size, `glyph g-${status}`);
 }

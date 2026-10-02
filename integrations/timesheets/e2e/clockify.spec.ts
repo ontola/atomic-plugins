@@ -16,7 +16,17 @@
  *
  * Provider data changes and failures go through the mock proxy's local-only
  * fixture driver (`POST /__fixture/clockify`, see
- * `../fixtures/clockify/scenario.mjs`). Run it the way CI does:
+ * `../fixtures/clockify/scenario.mjs`).
+ *
+ * From 0.5.0 the rows are the shared `time-entry-v1` class, linked to rows
+ * of the app's Projects and People tables (`work-project-v1`,
+ * `work-person-v1`; #177): the app's first open retargets its table and
+ * adds the class to its `renders`. The bundle carries the published GitHub
+ * Pages subjects, and the pinned server and the browser fetch those terms
+ * from Pages themselves, as in production (ontology-kit/README.md, "Plugin
+ * e2e tests and the published subjects"): this spec needs network access to
+ * ontola.github.io, and `beforeAll` first checks Pages serves the terms
+ * with the committed bytes. Run it the way CI does:
  *   node integrations/tooling/run-lane.mjs timesheets --tier e2e
  */
 import { createRequire } from 'node:module';
@@ -24,12 +34,30 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import {
+  classes as sharedClasses,
+  properties as sharedProperties,
+} from '../../../ontology-kit/terms.mjs';
 // @ts-expect-error build.mjs is plain JS with no declaration file.
 import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
+/** The shared classes and fields, as the bundle has them (#177). */
+const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
+const WORK_PROJECT = sharedClasses['work-project-v1'].subject;
+const WORK_PERSON = sharedClasses['work-person-v1'].subject;
+const WORK = {
+  start: sharedProperties['work-start'].subject,
+  end: sharedProperties['work-end'].subject,
+  billable: sharedProperties['work-billable'].subject,
+  project: sharedProperties['work-project'].subject,
+  person: sharedProperties['work-person'].subject,
+};
+const NAME = 'https://atomicdata.dev/properties/name';
+const IS_A = 'https://atomicdata.dev/properties/isA';
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 /** The fixture's workspace (`../fixtures/clockify/scenario.mjs`). */
 const WORKSPACE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -57,6 +85,22 @@ async function windowStarts(): Promise<string[]> {
     .map(r => new URL(r.slice(r.indexOf(' ') + 1), 'http://x'))
     .map(u => u.searchParams.get('start')!);
 }
+
+test.beforeAll(async () => {
+  const served = (await import(
+    '../../../ontology-kit/served.mjs' as string
+  )) as {
+    classTermPaths(name: string): string[];
+    servedProblems(paths: string[]): Promise<string[]>;
+    notServedMessage(problems: string[]): string;
+  };
+  const problems = await served.servedProblems([
+    ...served.classTermPaths('time-entry-v1'),
+    ...served.classTermPaths('work-project-v1'),
+    ...served.classTermPaths('work-person-v1'),
+  ]);
+  if (problems.length) throw new Error(served.notServedMessage(problems));
+});
 
 test.describe('timesheets drive app', () => {
   test.beforeEach(before);
@@ -187,14 +231,28 @@ test.describe('timesheets drive app', () => {
       /connection[-_]?code|bearer|capabilit|synthetic-clockify-key/i,
     );
 
-    // Columns are Properties the app created, with Atomic datatypes.
+    // The table is the shared time-entry-v1 class (#177): its columns are
+    // the published properties, and project and person are links.
     expect(await columnDatatypes(page, table)).toMatchObject({
       Start: 'https://atomicdata.dev/datatypes/timestamp',
       End: 'https://atomicdata.dev/datatypes/timestamp',
       Billable: 'https://atomicdata.dev/datatypes/boolean',
-      Project: 'https://atomicdata.dev/datatypes/string',
-      'Clockify entry id': 'https://atomicdata.dev/datatypes/string',
+      Project: 'https://atomicdata.dev/datatypes/atomicURL',
+      Person: 'https://atomicdata.dev/datatypes/atomicURL',
     });
+    const shared = await sharedOf(page, table);
+    expect(shared.table).toBe(TIME_ENTRY);
+    expect(shared.renders).toBe(true);
+    expect(shared.rows).toHaveLength(2);
+    const weeklyRow = shared.rows.find(r => r.name === 'Weekly sync')!;
+    expect(weeklyRow).toMatchObject({
+      isA: [TIME_ENTRY],
+      billable: false,
+      project: { isA: [WORK_PROJECT], name: 'Atomic plugins' },
+      person: { isA: [WORK_PERSON], name: 'Test Person' },
+    });
+    expect(typeof weeklyRow.start).toBe('number');
+    expect(typeof weeklyRow.end).toBe('number');
 
     // Reload: the app finds its connection and settings and syncs on open,
     // without creating duplicates.
@@ -613,9 +671,12 @@ async function columnDatatypes(
         'https://atomicdata.dev/properties/classtype',
       ) as string,
     );
-    const fields = klass.get(
-      'https://atomicdata.dev/properties/recommends',
-    ) as string[];
+    const fields = [
+      ...((klass.get('https://atomicdata.dev/properties/requires') ??
+        []) as string[]),
+      ...((klass.get('https://atomicdata.dev/properties/recommends') ??
+        []) as string[]),
+    ];
     const properties = await Promise.all(fields.map(s => store.getResource(s)));
 
     return Object.fromEntries(
@@ -625,6 +686,77 @@ async function columnDatatypes(
       ]),
     );
   }, table);
+}
+
+interface SharedRow {
+  name: unknown;
+  isA: unknown;
+  start: unknown;
+  end: unknown;
+  billable: unknown;
+  project?: { isA: unknown; name: unknown };
+  person?: { isA: unknown; name: unknown };
+}
+
+/**
+ * The app's table's class, whether the App renders `time-entry-v1`, and the
+ * rows' shared fields with their linked project and person, as committed
+ * on the server.
+ */
+async function sharedOf(
+  page: Page,
+  table: string,
+): Promise<{ table: unknown; renders: boolean; rows: SharedRow[] }> {
+  return page.evaluate(
+    async ({ subject, entry, work, name, isA, classtype }) => {
+      const store = window.store!;
+      const app = new URL(location.href).searchParams.get('subject')!;
+      await store.reloadResource(app);
+      const renders = Object.values(
+        (await store.getResource(app)).getPropVals(),
+      ).some(v => Array.isArray(v) && v.includes(entry));
+
+      const fresh = (s: string) =>
+        store.fetchResourceFromServer(s, { noWebSocket: true });
+
+      const linked = async (s: unknown) => {
+        if (typeof s !== 'string') return undefined;
+
+        const r = await fresh(s);
+
+        return { isA: r.get(isA), name: r.get(name) };
+      };
+
+      const t = await fresh(subject);
+      const collection = await (
+        await store.getResource(subject)
+      ).getChildrenCollection(500);
+      const rows = [];
+
+      for (const member of await collection.getAllMembers()) {
+        const row = await fresh(member);
+        rows.push({
+          name: row.get(name),
+          isA: row.get(isA),
+          start: row.get(work.start),
+          end: row.get(work.end),
+          billable: row.get(work.billable),
+          project: await linked(row.get(work.project)),
+          person: await linked(row.get(work.person)),
+        });
+      }
+
+      return { table: t.get(classtype), renders, rows };
+    },
+    {
+      subject: table,
+      entry: TIME_ENTRY,
+      work: WORK,
+      name: NAME,
+      isA: IS_A,
+      classtype: CLASSTYPE,
+    },
+  );
 }
 
 interface MockConnection {
@@ -687,6 +819,124 @@ async function tableOf(page: Page): Promise<string> {
  * with axe (WCAG 2.1 A/AA rules) and attached as screenshots. No server is
  * needed; it runs in this lane because the lane is where Playwright is.
  */
+test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
+  test.beforeEach(before);
+
+  test('is offered under Add view on a hand-made time-entry-v1 table, and shows its rows without syncing', async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('button', { name: 'Connect Clockify' }),
+    ).toBeVisible({ timeout: 45_000 });
+    // The first open added time-entry-v1 to what the App renders.
+    const own = await tableOf(page);
+    await expect
+      .poll(async () => (await sharedOf(page, own)).renders, {
+        timeout: 30_000,
+      })
+      .toBe(true);
+
+    // A table the person made, of the shared class, with one entry that
+    // links to a project row of their own.
+    const table = await page.evaluate(
+      async ({ entry, project, work, name, classtype }) => {
+        const store = window.store!;
+        const today = new Date();
+        today.setHours(9, 0, 0, 0);
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team hours', [classtype]: entry },
+        });
+        await made.save();
+        const projects = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team projects', [classtype]: project },
+        });
+        await projects.save();
+        const compiler = await store.newResource({
+          parent: projects.subject,
+          isA: [project],
+          propVals: { [name]: 'Compiler' },
+        });
+        await compiler.save();
+        const row = await store.newResource({
+          parent: made.subject,
+          isA: [entry],
+          propVals: {
+            [name]: 'Pairing on the parser',
+            [work.start]: today.getTime(),
+            [work.end]: today.getTime() + 3_600_000,
+            [work.billable]: true,
+            [work.project]: compiler.subject,
+          },
+        });
+        await row.save();
+
+        return made.subject;
+      },
+      {
+        entry: TIME_ENTRY,
+        project: WORK_PROJECT,
+        work: WORK,
+        name: NAME,
+        classtype: CLASSTYPE,
+      },
+    );
+
+    // The table and its entries, as committed (Add view adds a View under
+    // the table, which is the host's, not the app's).
+    const entries = async () => {
+      const { table: klass, rows } = await sharedOf(page, table);
+
+      return {
+        klass,
+        rows: rows.filter(
+          r => Array.isArray(r.isA) && r.isA.includes(TIME_ENTRY),
+        ),
+      };
+    };
+
+    const untouched = await entries();
+    expect(untouched.rows).toHaveLength(1);
+
+    await page.goto(
+      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
+    );
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    // Add view lists drive apps once it has read the drive's plugin schema
+    // and the github.io terms (#177 S1, H1); money measured about 9 s.
+    await page
+      .getByRole('menuitem', { name: 'Clockify' })
+      .click({ timeout: 60_000 });
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(app.getByText('Not synced with Clockify.')).toBeVisible({
+      timeout: 45_000,
+    });
+    await expect(
+      app.getByRole('button', { name: 'Connect Clockify' }),
+    ).toHaveCount(0);
+    await expect(app.getByRole('button', { name: 'Sync now' })).toHaveCount(0);
+    await app.getByRole('tab', { name: 'Entries' }).click();
+    await app.getByRole('button', { name: /Pairing on the parser/ }).click();
+    const detail = app.getByRole('dialog', { name: 'Pairing on the parser' });
+    await expect(detail).toContainText('Compiler');
+    await expect(detail.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+    // Nothing was written to the table or its row.
+    expect(await entries()).toEqual(untouched);
+  });
+});
+
 test.describe('timesheets views, frame by frame', () => {
   test('every design frame renders without axe violations', async ({
     browser,

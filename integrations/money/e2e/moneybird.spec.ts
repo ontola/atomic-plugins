@@ -5,10 +5,12 @@
  * proxy serving the SYNTHETIC Moneybird fixture
  * (`integrations/money/fixtures/moneybird/`, not a recording).
  *
- * The app is installed test-side, the way the Pets spec does it: `New app`
- * from the catalog, then its entry point's source is replaced with
- * `moneybird/build.mjs`'s bundle. There is no catalog install flow for drive
- * apps yet (#94).
+ * The app is installed from the catalog, the way the Pets spec does it:
+ * Integrations, Drive apps, Install. The lane's dev-server stands in for
+ * GitHub Pages: it serves the committed `apps/moneybird/<version>/ui.js` and
+ * points the entry's `app-module` there, keeping `app-module-integrity` as
+ * committed, and serves the entry enabled although the published catalog
+ * keeps it `enabled: false` (integrations/tooling/dev-server.mjs).
  *
  * Journey: connect through the host's consent bar and the mock proxy, choose
  * an administration, import typed rows, reload (the fixture fails that
@@ -18,12 +20,10 @@
  *   node integrations/tooling/run-lane.mjs money --tier e2e
  */
 import { test, expect, type Page } from '@playwright/test';
-import {
-  before,
-  createFromCatalog,
-} from '../../../browser/e2e/tests/test-utils';
-// @ts-expect-error build.mjs is plain JS with no declaration file.
-import { build } from '../moneybird/build.mjs';
+import { before } from '../../../browser/e2e/tests/test-utils';
+
+/** The catalog's version of the Moneybird app (integrations/catalog.json). */
+const VERSION = '0.1.0';
 
 test.describe('moneybird integration', () => {
   test.beforeEach(before);
@@ -36,18 +36,22 @@ test.describe('moneybird integration', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(180_000);
-    const { text } = (await build()) as { text: string };
-
-    await createFromCatalog(page, 'App');
     const main = page.getByRole('main');
+    const app = page.frameLocator('iframe[title="App"]');
+
+    // Discovery and installation from the catalog's Drive apps section.
+    const card = await openCatalogCard(page);
+    await expect(
+      card.getByRole('heading', { name: 'Moneybird' }),
+    ).toBeVisible();
+    await expect(card).toContainText(`Version ${VERSION}`);
+    await card.getByRole('button', { name: 'Install Moneybird' }).click();
     await expect(main.locator('iframe[title="App"]')).toBeVisible({
       timeout: 45_000,
     });
-    await setAppSource(page, text);
-    await page.reload();
-
-    const app = page.frameLocator('iframe[title="App"]');
-    await expect(app.getByRole('heading', { name: 'Moneybird' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Moneybird' })).toBeVisible({
+      timeout: 30_000,
+    });
     await expect(app.getByRole('status')).toContainText('Not connected');
     await app.getByRole('button', { name: 'Connect Moneybird' }).click();
 
@@ -158,30 +162,17 @@ async function tableOf(page: Page): Promise<string> {
   });
 }
 
-/** Replaces the app's entry-point source; copied from `pets/e2e/pets.spec.ts`. */
-async function setAppSource(page: Page, source: string) {
-  await page.evaluate(async (next: string) => {
-    const store = window.store!;
-    const subject = decodeURIComponent(
-      new URL(location.href).searchParams.get('subject')!,
-    );
-    const app = await store.getResource(subject);
+/** The Integrations page's Moneybird card, with experimental plugins shown. */
+async function openCatalogCard(page: Page) {
+  await page.goto(new URL('/app/integrations', page.url()).href);
+  const experimental = page.getByRole('checkbox', {
+    name: 'Show experimental plugins',
+  });
+  await experimental.check();
+  // Disabled while the setting is still saving to the private drive.
+  await expect(experimental).toBeEnabled({ timeout: 30_000 });
 
-    for (const value of Object.values(app.getPropVals())) {
-      if (typeof value !== 'string' || !value.includes(':')) continue;
-      const child = await store.getResource(value).catch(() => undefined);
-      if (!child) continue;
-      const sourceProp = Object.entries(child.getPropVals()).find(
-        ([, v]) =>
-          typeof v === 'string' && v.includes('export async function view'),
-      )?.[0];
-      if (!sourceProp) continue;
-      await child.set(sourceProp, next);
-      await child.save();
-
-      return;
-    }
-
-    throw new Error('could not find the app’s entry point');
-  }, source);
+  return page
+    .getByRole('region', { name: 'Drive apps' })
+    .locator('[data-catalog-app="moneybird"]');
 }

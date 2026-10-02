@@ -422,6 +422,18 @@ export const noRelay = (h: H) =>
     },
   });
 
+/**
+ * The app as the view of another `time-entry-v1` table (#177): its rows,
+ * read only, nothing synced.
+ */
+export const notSynced = (h: H, tableName: string) =>
+  banner(h, {
+    tone: 'info',
+    icon: 'info',
+    lead: 'Not synced with Clockify.',
+    text: `“${tableName}” isn’t this app’s own table, and the app syncs only its own. Its time entries are shown here, read only.`,
+  });
+
 /** L: the week starts before the import window. */
 export function outsideWindow(
   h: H,

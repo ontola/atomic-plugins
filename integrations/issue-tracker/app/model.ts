@@ -11,7 +11,7 @@ import type { IconName } from './ui/dom.js';
 import type { PillState, Tone } from './ui/kit.js';
 import type { Size } from './ui/theme.js';
 
-export const STATUSES: Status[] = ['Todo', 'Doing', 'Done'];
+export const STATUSES: Status[] = ['Todo', 'Doing', 'Blocked', 'Done'];
 /** Done shows this many most recently updated issues, then "Show N more". */
 export const DONE_LIMIT = 20;
 
@@ -56,6 +56,7 @@ export function pillFor(state: ViewState, now: number): Pill | undefined {
     case 'loading':
       return { state: 'idle', text: 'Loading…' };
     case 'no-proxy':
+    case 'other-table':
       return undefined;
     case 'not-connected':
       return { state: 'idle', text: 'Not connected' };
@@ -474,7 +475,7 @@ const byRecent = (a: IssueRow, b: IssueRow) =>
   (b.updatedAt ?? '￿').localeCompare(a.updatedAt ?? '￿');
 
 /**
- * Three columns. Todo and Doing in issue order (new, unsent ones first);
+ * Four columns. Todo, Doing and Blocked in issue order (new, unsent ones first);
  * Done by most recent update, collapsed to `DONE_LIMIT` unless `allDone`.
  */
 export function columns(
@@ -532,7 +533,8 @@ export function canMove(state: ViewState): boolean {
 export const STATUS_KEYS: Record<string, Status> = {
   '1': 'Todo',
   '2': 'Doing',
-  '3': 'Done',
+  '3': 'Blocked',
+  '4': 'Done',
 };
 
 /** The `?` overlay, from DESIGN.md → Interactions. */
@@ -540,7 +542,7 @@ export const SHORTCUTS: [string, string][] = [
   ['J / K or arrows', 'Move focus between issues'],
   ['Enter', 'Open the focused issue'],
   ['Esc', 'Close the panel'],
-  ['1 / 2 / 3', 'Set status to Todo / Doing / Done'],
+  ['1 / 2 / 3 / 4', 'Set status to Todo / Doing / Blocked / Done'],
   ['C', 'Comment on the open issue'],
   ['N', 'New issue'],
   ['B', 'Switch between board and list'],

@@ -24,6 +24,7 @@ export function value(resource, entity) {
   const status = {
     [`${tag}todo`]: 'Todo',
     [`${tag}doing`]: 'Doing',
+    [`${tag}blocked`]: 'Blocked',
     [`${tag}done`]: 'Done',
   }[resource[propertiesByField.status]?.[0]];
   if (!status || resource[propertiesByField.status].length !== 1)

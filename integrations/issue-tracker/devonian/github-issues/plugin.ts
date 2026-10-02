@@ -261,7 +261,12 @@ export async function run(input: Input): Promise<unknown> {
           {
             title: desired.title,
             body: desired.body,
-            labels: desired.status === 'Doing' ? ['atomic:doing'] : [],
+            labels:
+              desired.status === 'Doing'
+                ? ['atomic:doing']
+                : desired.status === 'Blocked'
+                  ? ['atomic:blocked']
+                  : [],
           },
         );
       const remote = project(issue(change.number));
@@ -290,29 +295,34 @@ export async function run(input: Input): Promise<unknown> {
           patch,
         );
       cursor = next;
-    } else if (cursor.stage === 'labels') {
+    } else if (cursor.stage === 'labels' || cursor.stage === 'labels-blocked') {
+      // One workflow label per stage (#177 Q8): `atomic:doing`, then
+      // `atomic:blocked`.
+      const blocked = cursor.stage === 'labels-blocked';
+      const status = blocked ? 'Blocked' : 'Doing';
+      const label = blocked ? 'atomic:blocked' : 'atomic:doing';
+      const op = blocked ? 'blocked' : 'doing';
       const current = issue(cursor.number!);
-      const doing = current.labels.some(
-        l =>
-          (typeof l === 'string' ? l : l.name).toLowerCase() === 'atomic:doing',
+      const has = current.labels.some(
+        l => (typeof l === 'string' ? l : l.name).toLowerCase() === label,
       );
-      const next = { ...cursor, stage: 'local' };
-      if (desired.status === 'Doing' && !doing)
+      const next = { ...cursor, stage: blocked ? 'local' : 'labels-blocked' };
+      if (desired.status === status && !has)
         return external(
-          'doing-add',
+          `${op}-add`,
           'POST',
           `${root}/${cursor.number}/labels`,
           'label',
           next,
           {
-            labels: ['atomic:doing'],
+            labels: [label],
           },
         );
-      if (desired.status !== 'Doing' && doing)
+      if (desired.status !== status && has)
         return external(
-          'doing-remove',
+          `${op}-remove`,
           'DELETE',
-          `${root}/${cursor.number}/labels/atomic%3Adoing`,
+          `${root}/${cursor.number}/labels/${encodeURIComponent(label)}`,
           'label',
           next,
         );

@@ -7,8 +7,31 @@ import {
   describeHeld,
   type ViewState,
 } from './controller.js';
-import { fakeStore, TABLE, type FakeStore } from './fakeStore.js';
-import { ABOUT, DESCRIPTION, NAME, PARENT, SHORTNAME } from './tracker.js';
+import {
+  APP,
+  ONTOLOGY,
+  RENDERS,
+  ROW_CLASS,
+  ROW_EXTRAS,
+  fakeStore,
+  TABLE,
+  type FakeStore,
+} from './fakeStore.js';
+import {
+  ABOUT,
+  ALLOWS_ONLY,
+  CLASSTYPE,
+  DESCRIPTION,
+  IS_A,
+  ISSUE_V1,
+  NAME,
+  PARENT,
+  PROPERTIES,
+  SHORTNAME,
+  TASK_BODY,
+  TASK_STATUS,
+  TASK_TAGS,
+} from './tracker.js';
 
 type Ready = Extract<ViewState, { kind: 'ready' }>;
 
@@ -165,11 +188,7 @@ group('issue-tracker controller: conflict review', () => {
   it('describes each field and applies one side per field', async () => {
     const { store, controller } = await bound();
     const subject = rowByNumber(ready(controller.state()), 2).subject;
-    const status = property(store, 'issue-status');
-    const done = [...store.resources.entries()].find(
-      ([, p]) => p[PARENT] === status && p[SHORTNAME] === 'done',
-    )![0];
-    store.edit(subject, { [NAME]: 'Here', [status]: [done] });
+    store.edit(subject, { [NAME]: 'Here', [TASK_STATUS]: [TASK_TAGS.Done] });
     store.github.updateIssue(SEEDED_REPOSITORY, 2, {
       title: 'There',
       state: 'closed',
@@ -511,3 +530,157 @@ group('issue-tracker controller: the Doing label on GitHub', () => {
     expect(pages.map(c => c.query?.page)).toEqual(['1', '2']);
   });
 });
+
+group(
+  'issue-tracker controller: the shared issue-v1 class (#177 item 6)',
+  () => {
+    it('makes itself a view of issue-v1 and declares its row extras', async () => {
+      const { store } = await bound();
+      const app = store.resources.get(APP)!;
+      expect(app[RENDERS]).toEqual([ROW_CLASS, ISSUE_V1]);
+      expect(app[ROW_EXTRAS]).toEqual([
+        property(store, 'github-issue-number'),
+        property(store, 'github-source'),
+        property(store, 'github-sync-baseline'),
+      ]);
+      expect(store.resources.get(TABLE)![CLASSTYPE]).toBe(ISSUE_V1);
+      // Idempotent: a second open writes neither again.
+      const writes = store.writes.length;
+      await createController(store).start();
+      expect(
+        store.writes
+          .slice(writes)
+          .filter(w => w.subject === APP || w.subject === TABLE),
+      ).toEqual([]);
+    });
+
+    it('syncs Blocked as the atomic:blocked label, both ways (#177 Q8)', async () => {
+      const { store, controller } = await bound();
+      const first = rowByNumber(ready(controller.state()), 1).subject;
+      await controller.edit(first, { status: 'Blocked' });
+      const held = ready(controller.state());
+      expect(held.last!.result.held.map(describeHeld)).toEqual([
+        'Update #1: status Todo → Blocked (add the atomic:blocked label)',
+      ]);
+      await controller.send();
+      const issue = store.github.snapshot(SEEDED_REPOSITORY).issues[0];
+      expect(issue.state).toBe('open');
+      expect(
+        issue.labels.map((l: { name?: string } | string) =>
+          typeof l === 'string' ? l : l.name,
+        ),
+      ).toContain('atomic:blocked');
+      expect(store.resources.get(first)![TASK_STATUS]).toEqual([
+        TASK_TAGS.Blocked,
+      ]);
+
+      // #2 is Doing; GitHub adds atomic:blocked: Blocked wins.
+      store.github.updateIssue(SEEDED_REPOSITORY, 2, {
+        labels: ['atomic:doing', 'atomic:blocked'],
+      });
+      const synced = ready(await controller.sync());
+      expect(rowByNumber(synced, 2).status).toBe('Blocked');
+      expect(rowByNumber(synced, 2).labels).toEqual([]);
+    });
+
+    it('shows a status outside the four tags as it is, and does not fail or send it', async () => {
+      const { store, controller } = await bound();
+      const subject = rowByNumber(ready(controller.state()), 1).subject;
+      store.edit(subject, {
+        [TASK_STATUS]: [TASK_TAGS.Doing, TASK_TAGS.Blocked],
+      });
+      const state = ready(await controller.sync());
+      expect(state.problem).toBeUndefined();
+      expect(state.last!.result.held).toEqual([]);
+      expect(rowByNumber(state, 1)).toMatchObject({
+        status: 'Todo',
+        statusAsIs: ['Doing', 'Blocked'],
+      });
+      // A title change on GitHub comes in; the status here stays as it is.
+      store.github.updateIssue(SEEDED_REPOSITORY, 1, {
+        title: 'Renamed there',
+      });
+      const after = ready(await controller.sync());
+      expect(after.problem).toBeUndefined();
+      expect(store.resources.get(subject)![NAME]).toBe('Renamed there');
+      expect(store.resources.get(subject)![TASK_STATUS]).toEqual([
+        TASK_TAGS.Doing,
+        TASK_TAGS.Blocked,
+      ]);
+    });
+
+    it('rewrites a 0.1.x table in place and keeps an edit not yet sent', async () => {
+      // A 0.1.x install: its own Status column, tags and rows, synced.
+      const store = fakeStore();
+      const status = 'did:ad:prop-issue-status';
+      const tags = {
+        todo: 'did:ad:tag-todo',
+        doing: 'did:ad:tag-doing',
+        done: 'did:ad:tag-done',
+      };
+      store.resources.set(status, {
+        [PARENT]: ONTOLOGY,
+        [SHORTNAME]: 'issue-status',
+        [ALLOWS_ONLY]: Object.values(tags),
+      });
+      for (const [shortname, tag] of Object.entries(tags))
+        store.resources.set(tag, { [PARENT]: status, [SHORTNAME]: shortname });
+      store.resources.get(ONTOLOGY)![PROPERTIES] = [status];
+      const { controller } = await bound(store);
+
+      // Turn the rows back into 0.1.x rows, as 0.1.3 wrote them.
+      for (const [subject, p] of store.resources) {
+        if (p[PARENT] !== TABLE) continue;
+        const done = (p[TASK_STATUS] as string[])[0] === TASK_TAGS.Doing;
+        const { [TASK_STATUS]: _s, [TASK_BODY]: body, ...rest } = p;
+        store.resources.set(subject, {
+          ...rest,
+          [IS_A]: [ROW_CLASS],
+          [status]: [done ? tags.doing : tags.todo],
+          [DESCRIPTION]: body,
+        });
+      }
+
+      store.resources.get(TABLE)![CLASSTYPE] = ROW_CLASS;
+      // 0.1.x never set the marker.
+      const syncState = property(store, 'github-sync-state');
+
+      for (const p of store.resources.values())
+        if (typeof p[syncState] === 'string') {
+          const { migrated: _m, ...old } = JSON.parse(p[syncState] as string);
+          p[syncState] = JSON.stringify(old);
+        }
+
+      const first = rowByNumber(ready(controller.state()), 1).subject;
+      // An edit made under 0.1.x, not sent yet.
+      store.edit(first, { [NAME]: 'Edited before the update' });
+
+      const updated = createController(store);
+      await updated.load();
+      const state = ready(await updated.sync());
+      expect(state.problem).toBeUndefined();
+      expect(store.resources.get(first)).toMatchObject({
+        [IS_A]: [ISSUE_V1],
+        [TASK_STATUS]: [TASK_TAGS.Todo],
+        [TASK_BODY]:
+          'Refreshing the page resets the selection to **All calendars**.',
+      });
+      expect(store.resources.get(first)![status]).toBeUndefined();
+      expect(store.resources.get(first)![DESCRIPTION]).toBeUndefined();
+      expect(state.last!.result.held.map(describeHeld)).toEqual([
+        'Update #1: title “Keep the selected calendar after refresh” → “Edited before the update”',
+      ]);
+    });
+
+    it('only shows a notice on an Issue table it did not make', async () => {
+      const store = fakeStore({ table: 'did:ad:someone-elses-table' });
+      store.resources.set('did:ad:someone-elses-table', {
+        [PARENT]: 'did:ad:drive',
+        [CLASSTYPE]: ISSUE_V1,
+      });
+      const state = await createController(store).start();
+      expect(state.kind).toBe('other-table');
+      expect(store.writes).toEqual([]);
+    });
+  },
+);

@@ -135,7 +135,7 @@ describe('board and list', () => {
     expect(columnOf(root, '#1')).toBe('Todo');
     const card = cardOf(root, '#1');
     card.focus();
-    key(card, '3');
+    key(card, '4');
     expect(columnOf(root, '#1')).toBe('Done');
     await wait(40);
     expect(q(root, '[aria-live=polite]').textContent).toBe('Moved #1 to Done');
@@ -166,7 +166,7 @@ describe('board and list', () => {
     const { root, store } = await mount();
     const card = cardOf(root, '#1');
     card.focus();
-    key(card, '3');
+    key(card, '4');
     await settle(root);
     q(root, '[data-key=review]').click();
     const panel = q(root, '[aria-label="Changes to send to GitHub"]');

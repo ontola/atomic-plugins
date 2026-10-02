@@ -1,4 +1,4 @@
-import { project, issueFields, issueExtras } from './lens/index.js';
+import { project, issueFields, issueExtras, STATUSES } from './lens/index.js';
 import { core, dataBrowser } from '@tomic/lib';
 import { assertEnumerable, assertSaved } from './target.mjs';
 
@@ -137,9 +137,9 @@ export class GitHubPort {
       return;
     }
 
-    if (!['Todo', 'Doing', 'Done'].includes(value.status))
+    if (!STATUSES.includes(value.status))
       throw new Error('Unsupported task status');
-    const current = await this.get(entity, id, context);
+    await this.get(entity, id, context); // validate it is an issue before writing
     await this.request(
       'update_issue',
       {
@@ -148,24 +148,42 @@ export class GitHubPort {
       },
       `${key}:fields`,
     );
+    // Closing keeps the labels as they are, like the pilot. Every open
+    // status leaves exactly its own workflow label (#177 Q8); other labels
+    // are never touched. Read the raw labels: a closed issue may still
+    // carry either one.
+    if (value.status === 'Done') return;
+    const raw = await this.request('get_issue', { number: id });
+    const has = new Set(
+      raw.labels.map(l => (typeof l === 'string' ? l : l.name).toLowerCase()),
+    );
+    const labels = [
+      // [status, label, add action, remove action, add key, remove key]
+      [
+        'Doing',
+        'atomic:doing',
+        'add_doing_label',
+        'remove_doing_label',
+        'doing',
+        'todo',
+      ],
+      [
+        'Blocked',
+        'atomic:blocked',
+        'add_blocked_label',
+        'remove_blocked_label',
+        'blocked',
+        'unblocked',
+      ],
+    ];
 
-    // Only this workflow label is managed. Closing preserves the label like the pilot.
-    if (value.status === 'Doing' && current.value.status !== 'Doing') {
-      await this.request('add_doing_label', { number: id }, `${key}:doing`);
-    } else if (value.status === 'Todo') {
-      // Closed issues may still carry the doing label, so inspect raw labels.
-      const raw = await this.request('get_issue', { number: id });
+    for (const [status, label, , remove, , removeKey] of labels)
+      if (value.status !== status && has.has(label))
+        await this.request(remove, { number: id }, `${key}:${removeKey}`);
 
-      if (
-        raw.labels.some(
-          l =>
-            (typeof l === 'string' ? l : l.name).toLowerCase() ===
-            'atomic:doing',
-        )
-      ) {
-        await this.request('remove_doing_label', { number: id }, `${key}:todo`);
-      }
-    }
+    for (const [status, label, add, , addKey] of labels)
+      if (value.status === status && !has.has(label))
+        await this.request(add, { number: id }, `${key}:${addKey}`);
   }
 }
 
@@ -251,9 +269,7 @@ export class AtomicPort {
     const statuses = r.get(c.status) ?? [c.tags.Todo];
     const status = Object.keys(c.tags).find(s => c.tags[s] === statuses[0]);
     if (statuses.length !== 1 || !status)
-      throw new Error(
-        'Choose exactly one Todo/Doing/Done status; Blocked is unmapped',
-      );
+      throw new Error('Choose exactly one Todo/Doing/Blocked/Done status');
     const title = r.get(core.properties.name),
       body = r.get(c.body) ?? '';
     if (typeof title !== 'string' || !title.trim() || typeof body !== 'string')

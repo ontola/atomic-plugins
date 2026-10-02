@@ -1,6 +1,23 @@
 // @wc-ignore-file
-/** Passive GitHub issue mapping. No store, transport or synchronization state. */
-export type Status = 'Todo' | 'Doing' | 'Done';
+/**
+ * Passive GitHub issue mapping. No store, transport or synchronization state.
+ *
+ * GitHub has only open and closed. The two workflow labels carry the rest
+ * (ontola/atomic-plugins#177, Q8): `atomic:doing` is Doing and
+ * `atomic:blocked` is Blocked. Closed is Done whatever the labels say; an
+ * open issue with both labels is Blocked.
+ */
+export type Status = 'Todo' | 'Doing' | 'Blocked' | 'Done';
+export const STATUSES: readonly Status[] = ['Todo', 'Doing', 'Blocked', 'Done'];
+/** The workflow labels, lower case, by the status they stand for. */
+export const STATUS_LABELS = {
+  Doing: 'atomic:doing',
+  Blocked: 'atomic:blocked',
+} as const;
+const WORKFLOW_LABELS: string[] = Object.values(STATUS_LABELS);
+const labelName = (label: string | { name: string }) =>
+  (typeof label === 'string' ? label : label.name).toLowerCase();
+
 export type Projection = {
   title: string;
   body: string;
@@ -25,19 +42,19 @@ export function project(issue: Issue): Projection {
   )
     throw new Error('GitHub returned an invalid issue');
 
+  const names = issue.labels.map(labelName);
+
   return {
     title: issue.title,
     body: issue.body ?? '',
     status:
       issue.state === 'closed'
         ? 'Done'
-        : issue.labels.some(
-              l =>
-                (typeof l === 'string' ? l : l.name).toLowerCase() ===
-                'atomic:doing',
-            )
-          ? 'Doing'
-          : 'Todo',
+        : names.includes(STATUS_LABELS.Blocked)
+          ? 'Blocked'
+          : names.includes(STATUS_LABELS.Doing)
+            ? 'Doing'
+            : 'Todo',
   };
 }
 export function validate(value: Projection): void {
@@ -45,10 +62,10 @@ export function validate(value: Projection): void {
     typeof value.title !== 'string' ||
     !value.title.trim() ||
     typeof value.body !== 'string' ||
-    !['Todo', 'Doing', 'Done'].includes(value.status)
+    !STATUSES.includes(value.status)
   )
     throw new Error(
-      'Cards require a title, Markdown body and exactly one Todo/Doing/Done status',
+      'Cards require a title, Markdown body and exactly one Todo/Doing/Blocked/Done status',
     );
 }
 
@@ -65,15 +82,17 @@ export function issueFields(value: Projection): {
   };
 }
 
-/** Reverse mapping preserves every field and label outside the projection. */
+/**
+ * Reverse mapping preserves every field and label outside the projection.
+ * Each status leaves exactly its own workflow label, if it has one.
+ */
 export function unproject<T extends Issue>(value: Projection, previous: T): T {
   validate(value);
   const labels = previous.labels.filter(
-    label =>
-      (typeof label === 'string' ? label : label.name).toLowerCase() !==
-      'atomic:doing',
+    label => !WORKFLOW_LABELS.includes(labelName(label)),
   );
-  if (value.status === 'Doing') labels.push('atomic:doing');
+  if (value.status === 'Doing' || value.status === 'Blocked')
+    labels.push(STATUS_LABELS[value.status]);
 
   return { ...previous, ...issueFields(value), labels };
 }
@@ -110,8 +129,8 @@ export interface IssueExtras {
 }
 
 /**
- * Labels (without the `atomic:doing` workflow label, which is the Doing
- * status), assignee logins and GitHub's comment count. Only ever written to
+ * Labels (without the `atomic:doing` and `atomic:blocked` workflow labels,
+ * which are the Doing and Blocked statuses), assignee logins and GitHub's comment count. Only ever written to
  * the Atomic side as provenance metadata: `issueFields`/`issuePatch` above
  * do not read these, so they cannot reach GitHub.
  */
@@ -125,7 +144,10 @@ export function issueExtras(
 
   for (const label of issue.labels) {
     const name = typeof label === 'string' ? label : label?.name;
-    if (typeof name !== 'string' || name.toLowerCase() === 'atomic:doing')
+    if (
+      typeof name !== 'string' ||
+      WORKFLOW_LABELS.includes(name.toLowerCase())
+    )
       continue;
     const raw =
       typeof label === 'object' ? (label as { color?: unknown }).color : '';
