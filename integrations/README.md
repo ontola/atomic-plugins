@@ -228,8 +228,8 @@ enclosing plugin's `package.json` is not read for it.
 | `app-module-integrity`                | `sha384-…` (Subresource Integrity) of those bytes.                                                                                                      |
 | `app-row-name`, `app-row-name-plural` | Optional names for the app's table rows.                                                                                                                |
 
-The host (atomic-server#1689, in the current `.atomic-server-ref` pin, not
-yet merged upstream) lists these entries under **Drive apps** on the
+The host (atomic-server#1689, merged to `develop` in batch #1699 on
+2026-09-24, and in the current `.atomic-server-ref` pin) lists these entries under **Drive apps** on the
 Integrations page, with the same `enabled`/`experimental`/`requires-api-plugins`
 gates as other entries. **Install** downloads `app-module`, refuses it unless
 its bytes match `app-module-integrity`, and creates an ordinary app from it:
