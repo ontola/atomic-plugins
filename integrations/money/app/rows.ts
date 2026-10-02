@@ -20,7 +20,10 @@
  *   `ontology-kit/`. A table of any other class is not a bank transactions
  *   table.
  */
-import { createResolver } from '../../../ontology-kit/resolver.mjs';
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
 import { classes, properties } from '../../../ontology-kit/terms.mjs';
 import {
   GET_MANY_MAX,
@@ -141,6 +144,14 @@ export type StatementFormat = 'mt940' | 'camt053';
 
 export interface Txn {
   subject: string;
+  /**
+   * "Incomplete: missing Amount and Value date" when a required field of
+   * the class (`REQUIRED`) is absent or empty (#177; ontology-kit's rule:
+   * shown as incomplete, never skipped). Such a row is listed apart from
+   * the ledger, summed into no balance or total and compared with no
+   * import; the missing fields below are then `''`.
+   */
+  incomplete?: string;
   account: string;
   currency: string;
   /** Exact signed decimal string. */
@@ -327,13 +338,30 @@ export async function resolveFields(
   return importerLens(store, rowClass);
 }
 
-/** The fields without which a row is not a bank transaction at all. */
+/**
+ * The fields `bank-transaction-v1` requires (`ontology-kit/source.json`),
+ * and the ones without which the importer's class is not a bank
+ * transactions class (`importerLens`). A row of either class that lacks one
+ * is read as incomplete (`readRow`), never skipped.
+ */
 export const REQUIRED: BankField[] = [
   'bank-account',
   'bank-currency',
   'bank-amount',
   'bank-value-date',
 ];
+
+/** The required fields as both classes head their columns. */
+export const REQUIRED_LABELS: Readonly<Record<string, string>> = {
+  'bank-account': 'Account',
+  'bank-currency': 'Currency',
+  'bank-amount': 'Amount',
+  'bank-value-date': 'Value date',
+};
+
+/** Present means neither undefined, null nor the empty string (resolver.mjs). */
+const present = (value: JSONValue) =>
+  value !== undefined && value !== null && value !== '';
 
 export const canAnnotate = (fields: Fields) =>
   Boolean(fields['money-category'] && fields['money-note']);
@@ -349,26 +377,49 @@ export function formatOf(sourceId: string): StatementFormat | undefined {
   }
 }
 
+/**
+ * One row as a `Txn`. With `rowClass`, a child of the table that is not of
+ * that class (a View, say) is `undefined`: not a row at all. A row missing a
+ * required field is returned with `incomplete` set, never dropped
+ * (ontology-kit's rule; at the pin the server refuses a commit that lacks a
+ * required property, so this arises from an empty string, a lensed row or
+ * another writer). The lens path (`importerLens`) reads the same
+ * `REQUIRED` fields, so both classes are judged alike.
+ */
 export function readRow(
   resource: Pick<PluginResource, 'subject' | 'get'>,
   fields: Fields,
+  rowClass?: string,
 ): Txn | undefined {
-  const text = (name: Shortname) => {
+  if (
+    rowClass !== undefined &&
+    !list(resource.get(atomic.isA)).includes(rowClass)
+  )
+    return undefined;
+
+  const raw = (name: Shortname) => {
     const property = fields[name];
-    const value = property ? resource.get(property) : undefined;
+
+    return property ? resource.get(property) : undefined;
+  };
+
+  const text = (name: Shortname) => {
+    const value = raw(name);
 
     return typeof value === 'string' ? value : '';
   };
 
+  const missing = REQUIRED.filter(name => !present(raw(name)));
+  const incomplete = incompleteNote(missing, REQUIRED_LABELS);
   const amount = text('bank-amount');
   const account = text('bank-account');
   const currency = text('bank-currency');
   const valueDate = text('bank-value-date');
-  if (!amount || !account || !currency || !valueDate) return undefined;
   const sourceId = text('bank-source-id');
 
   return {
     subject: resource.subject,
+    ...(incomplete ? { incomplete } : {}),
     account,
     currency,
     amount,
@@ -389,20 +440,22 @@ export function readRow(
 /**
  * Reads `subjects`, reporting progress. With the host's `getMany`, in
  * batches of `GET_MANY_MAX`, a few in flight; otherwise one `getResource`
- * each, `concurrency` in flight. Unreadable rows are skipped, not fatal: one
- * broken resource should not hide a ledger.
+ * each, `concurrency` in flight. Unreadable resources and children that are
+ * not of `rowClass` are skipped, not fatal: one broken resource should not
+ * hide a ledger. Incomplete rows are returned, marked (`Txn.incomplete`).
  */
 export async function readRows(
   store: PluginStore,
   subjects: string[],
   fields: Fields,
+  rowClass: string,
   onProgress?: (loaded: number) => void,
   concurrency = 16,
 ): Promise<Txn[]> {
   return readMany(
     store,
     subjects,
-    r => readRow(r, fields),
+    r => readRow(r, fields, rowClass),
     onProgress,
     concurrency,
   );

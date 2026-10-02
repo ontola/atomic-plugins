@@ -86,6 +86,7 @@ export async function mount(
     setPreviewTab: tab => controller.setPreviewTab(tab),
     applyImport: () => void controller.applyImport(),
     openImporter: () => void controller.openImporter(),
+    openRow: subject => void controller.openRow(subject),
     allowEditing: () => void controller.allowEditing(),
     toggleHelp: open => {
       controller.toggleHelp(open);

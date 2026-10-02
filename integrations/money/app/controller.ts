@@ -139,7 +139,17 @@ export interface Edit {
 export interface State {
   view: ViewState;
   tab: Tab;
+  /** The complete rows: everything the ledger sums, filters and compares. */
   rows: Txn[];
+  /**
+   * Rows of the class missing a required field (`Txn.incomplete`; #177,
+   * ontology-kit's rule: shown as incomplete, never skipped). Kept apart
+   * from `rows`, so no balance, total, account list, statement or import
+   * check ever counts one.
+   */
+  incomplete: Txn[];
+  /** Whether the host can show a row's page (`store.openResource`). */
+  canOpenRows: boolean;
   fields: Fields;
   filters: Filters;
   /** How many of the filtered rows the ledger renders. */
@@ -206,6 +216,8 @@ export interface Controller {
   allowEditing(): Promise<boolean>;
   /** Leaves the app for the importer's page, where Import applies (M-8). */
   openImporter(): Promise<void>;
+  /** Leaves the app for a row's page in the host, to complete it there. */
+  openRow(subject: string): Promise<void>;
   /** ISO date the period filters are relative to. */
   today(): string;
   dispose(): void;
@@ -232,6 +244,8 @@ export function createController(
     view: { kind: 'loading', loaded: 0 },
     tab: 'transactions',
     rows: [],
+    incomplete: [],
+    canOpenRows: Boolean(store.openResource),
     fields: {},
     filters: noFilters({ kind: 'all' }),
     limit: WINDOW,
@@ -254,6 +268,8 @@ export function createController(
   let pendingText: string | undefined;
   let pendingPreview: Preview | undefined;
   let table: string | undefined;
+  /** The table's row class: only children of it are rows. */
+  let rowClass: string | undefined;
   let unsubscribe: (() => void) | undefined;
   let refreshing: Promise<void> | undefined;
   let again = false;
@@ -263,29 +279,49 @@ export function createController(
     render(state);
   };
 
-  const settled = (rows: Txn[]): ViewState =>
-    rows.length ? { kind: 'populated', count: rows.length } : { kind: 'empty' };
+  /** Populated while there is anything to list, incomplete rows included. */
+  const settled = (rows: Txn[], incomplete: Txn[]): ViewState =>
+    rows.length || incomplete.length
+      ? { kind: 'populated', count: rows.length }
+      : { kind: 'empty' };
 
-  /** Re-reads the table's children, fetching only rows not seen before. */
+  /** Complete rows apart from incomplete ones (`Txn.incomplete`). */
+  const split = (all: Txn[]) => ({
+    rows: all.filter(row => !row.incomplete),
+    incomplete: all.filter(row => row.incomplete),
+  });
+
+  /**
+   * Re-reads the table's children, fetching only rows not seen complete
+   * before. The incomplete ones are read again each time (there are few):
+   * the subscription says only that the table changed, and a row completed
+   * in the host should move into the ledger without a reload. A complete
+   * row edited elsewhere is still picked up only at the next load.
+   */
   const refresh = async () => {
-    if (!table) return;
+    if (!table || !rowClass) return;
     const subjects = await store.query({
       property: atomic.parent,
       value: table,
     });
     const known = new Set(state.rows.map(row => row.subject));
+    const wereIncomplete = new Set(state.incomplete.map(row => row.subject));
     const fresh = subjects.filter(s => !known.has(s));
-    const added = await readRows(store, fresh, state.fields);
+    const read = await readRows(store, fresh, state.fields, rowClass);
+    const added = split(read);
     const present = new Set(subjects);
     const wasEmpty = state.rows.length === 0;
     const rows = [
       ...state.rows.filter(row => present.has(row.subject)),
-      ...added,
+      ...added.rows,
     ];
+    const incomplete = added.incomplete;
+    const arrived = read.filter(row => !wereIncomplete.has(row.subject)).length;
     update({
       rows,
-      view: settled(rows),
-      ...(added.length ? { arrived: { count: added.length } } : {}),
+      incomplete,
+      view: settled(rows, incomplete),
+      ...(arrived ? { arrived: { count: arrived } } : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -421,6 +457,7 @@ export function createController(
         const fields = await resolveFields(store, data.rowClass, own?.extras);
         if (!fields) return fail(NOT_A_BANK_TABLE);
         table = data.table;
+        rowClass = data.rowClass;
         const source: Source = resolver.accepts(data.rowClass)
           ? adopted?.ownTable
             ? 'own'
@@ -481,16 +518,19 @@ export function createController(
           if (access) update({ rowAccess: access.status });
         }
 
-        const rows = await readRows(store, subjects, fields, loaded => {
-          // Progress in steps, not per row: each update re-renders.
-          if (loaded % 50 === 0)
-            update({
-              view: { kind: 'loading', loaded, total: subjects.length },
-            });
-        });
+        const { rows, incomplete } = split(
+          await readRows(store, subjects, fields, rowClass, loaded => {
+            // Progress in steps, not per row: each update re-renders.
+            if (loaded % 50 === 0)
+              update({
+                view: { kind: 'loading', loaded, total: subjects.length },
+              });
+          }),
+        );
         update({
           rows,
-          view: settled(rows),
+          incomplete,
+          view: settled(rows, incomplete),
           filters: noFilters(defaultPeriod(rows, today())),
           limit: WINDOW,
           arrived: undefined,
@@ -762,6 +802,17 @@ export function createController(
 
       try {
         await store.openResource(state.importer);
+      } catch (error) {
+        update({
+          openFailure: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    async openRow(subject) {
+      if (!store.openResource) return;
+
+      try {
+        await store.openResource(subject);
       } catch (error) {
         update({
           openFailure: error instanceof Error ? error.message : String(error),

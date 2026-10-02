@@ -30,8 +30,10 @@ import {
   SHARED_TABLE,
   sharedProperty,
   type Data,
+  type SeedRow,
 } from './fakeStore.js';
 import { ensureOwnSchema } from './own.js';
+import { totals } from './amounts.js';
 import { atomic, BANK_TRANSACTION, SHARED_SUBJECT } from './rows.js';
 
 const mt940 = readFileSync(
@@ -224,6 +226,132 @@ describe('reading: the shared class by subject, the importer’s class through t
     await controller.load();
     expect(controller.state().view).toEqual({ kind: 'populated', count: 3 });
     expect(controller.state().rows.map(r => r.amount)).toContain('twelve');
+  });
+});
+
+describe('incomplete rows (#177; ontology-kit’s rule: shown as incomplete, never skipped)', () => {
+  /** A row the person left unfinished: the fixture row with `patch` applied. */
+  const unfinished = (patch: Partial<SeedRow>): SeedRow => ({
+    ...row('-9', '2026-09-03'),
+    ...patch,
+  });
+
+  it('lists a row missing a required field apart from the ledger, with its note; a View of the table is not a row', async () => {
+    const { store, controller } = harness({
+      data: 'shared',
+      rows: [
+        row('-5', '2026-09-01'),
+        unfinished({ 'bank-amount': '' }),
+        unfinished({ 'bank-account': '', 'bank-currency': '' }),
+      ],
+    });
+    // A row with no value date at all (another writer; the server refuses
+    // such a commit at the pin, a lens or an older row may still hold one).
+    store.resources.set(`${SHARED_TABLE}/row-no-date`, {
+      [atomic.parent]: SHARED_TABLE,
+      [atomic.isA]: [BANK_TRANSACTION],
+      [SHARED_SUBJECT['bank-account']]: 'NL42BUNQ0123456789',
+      [SHARED_SUBJECT['bank-currency']]: 'EUR',
+      [SHARED_SUBJECT['bank-amount']]: '12',
+    });
+    // A child of the table that is not of its class: a View. Without the
+    // isA check it would be listed as missing all four fields.
+    store.resources.set(`${SHARED_TABLE}/view-1`, {
+      [atomic.parent]: SHARED_TABLE,
+      [atomic.isA]: ['https://atomicdata.dev/classes/View'],
+    });
+    await controller.load();
+    const state = controller.state();
+    expect(state.view).toEqual({ kind: 'populated', count: 1 });
+    expect(state.rows.map(r => r.amount)).toEqual(['-5']);
+    expect(state.incomplete.map(r => r.incomplete)).toEqual([
+      'Incomplete: missing Amount',
+      'Incomplete: missing Account and Currency',
+      'Incomplete: missing Value date',
+    ]);
+    // What it does have is kept, for the listing.
+    expect(state.incomplete[0]).toMatchObject({
+      amount: '',
+      account: 'NL42BUNQ0123456789',
+      valueDate: '2026-09-03',
+      description: 'Payment -9',
+    });
+    // Never in a balance or total: the ledger sums `rows` only.
+    expect(totals(state.rows)).toEqual([
+      expect.objectContaining({ net: '-5', count: 1 }),
+    ]);
+    expect(state.canOpenRows).toBe(true);
+  });
+
+  it('never counts an incomplete row as already imported, nor as a changed booking', async () => {
+    // Same identity as the fixture's TEST-1 (seedRow derives the source id
+    // from account, currency and reference), but no amount.
+    const stub = row('-9', '2026-09-02', {
+      'bank-amount': '',
+      'bank-account': 'NL00BUNQ0000000000',
+      'bank-reference': 'TEST-1',
+    });
+    const incomplete = harness({ data: 'shared', rows: [stub] });
+    await incomplete.controller.load();
+    await incomplete.controller.importFile(file(mt940));
+    const sheet = incomplete.controller.state().importing;
+    expect(sheet?.step).toBe('preview');
+    if (sheet?.step !== 'preview') return;
+    expect(sheet.preview.fresh).toHaveLength(2);
+    expect(sheet.preview.already).toEqual([]);
+
+    // The same row complete: the file's TEST-1 is then already imported.
+    const complete = harness({
+      data: 'shared',
+      rows: [{ ...stub, 'bank-amount': '-12.34' }],
+    });
+    await complete.controller.load();
+    await complete.controller.importFile(file(mt940));
+    const again = complete.controller.state().importing;
+    expect(again?.step === 'preview' && again.preview.already).toHaveLength(1);
+  });
+
+  it('moves a row into the ledger once it is completed in the host, without a reload', async () => {
+    const { store, controller } = harness({
+      data: 'shared',
+      rows: [row('-5', '2026-09-01'), unfinished({ 'bank-amount': '' })],
+    });
+    await controller.load();
+    const [stub] = controller.state().incomplete;
+    store.resources.get(stub.subject)![SHARED_SUBJECT['bank-amount']] = '-9';
+    // The table's change notification, as the host sends on any row commit.
+    store.addRows([]);
+    await settle();
+    const state = controller.state();
+    expect(state.incomplete).toEqual([]);
+    expect(state.rows.map(r => r.amount).sort()).toEqual(['-5', '-9']);
+    expect(state.view).toEqual({ kind: 'populated', count: 2 });
+    // Completing a row is not an import.
+    expect(state.arrived).toBeUndefined();
+  });
+
+  it('is populated with only incomplete rows, and opens one in the host', async () => {
+    const { store, controller } = harness({
+      data: 'shared',
+      rows: [unfinished({ 'bank-value-date': '' })],
+    });
+    await controller.load();
+    expect(controller.state().view).toEqual({ kind: 'populated', count: 0 });
+    const [stub] = controller.state().incomplete;
+    expect(stub.incomplete).toBe('Incomplete: missing Value date');
+    await controller.openRow(stub.subject);
+    expect(store.opened).toEqual([stub.subject]);
+  });
+
+  it('cannot offer Open row on a host without openResource', async () => {
+    const { controller } = harness({
+      data: 'shared',
+      host: 'legacy',
+      rows: [unfinished({ 'bank-amount': '' })],
+    });
+    await controller.load();
+    expect(controller.state().canOpenRows).toBe(false);
+    expect(controller.state().incomplete).toHaveLength(1);
   });
 });
 
