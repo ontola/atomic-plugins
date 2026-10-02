@@ -407,7 +407,9 @@ export async function ensureOptions({
 /**
  * The select-column shape on a Property the sync creates or upgrades:
  * `isA` SelectProperty next to Property, datatype `resourceArray`,
- * `classtype` Tag. Returns whether anything changed (the caller saves).
+ * `classtype` Tag, and an `allowsOnly` (SelectProperty requires one; the
+ * server checks required properties on commit) that `ensureOptions` fills.
+ * Returns whether anything changed (the caller saves).
  */
 export function shapeSelectProperty(property: PluginResource): boolean {
   const isA = property.get(IS_A);
@@ -416,6 +418,11 @@ export function shapeSelectProperty(property: PluginResource): boolean {
 
   if (!classes.includes(dataBrowser.selectProperty)) {
     property.set(IS_A, [...classes, dataBrowser.selectProperty]);
+    changed = true;
+  }
+
+  if (!Array.isArray(property.get(dataBrowser.allowsOnly))) {
+    property.set(dataBrowser.allowsOnly, []);
     changed = true;
   }
 

@@ -19,7 +19,7 @@ describe('Notion drive-plugin bundle', async () => {
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource, so the size is capped at
     // the measured size plus about 10% (the owner's rule for bundle limits):
-    // 113 470 bytes on 2026-10-02 for 0.4.0 (syncables' read path, the
+    // 113 536 bytes on 2026-10-02 for 0.4.0 (syncables' read path, the
     // catalog document, devonian's Atomic Data API, the sync-status view of
     // #177 Q9, #8's compare-on-open, review and send, and the option Tags of
     // options.ts; JS and embedded CSS minified by esbuild). 0.3.0 measured
