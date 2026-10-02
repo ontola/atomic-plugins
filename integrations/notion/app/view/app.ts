@@ -1,53 +1,33 @@
 // @wc-ignore-file
 /**
- * The Notion app's view: owns the UI state (scope, view, search, sort,
- * selection), renders a controller `ViewState` into the frame, and keeps
- * focus, scroll and the one live region stable across re-renders.
- *
- * View choices live in memory only. The frame is null-origin, where
- * `localStorage` throws, and the bundle deliberately has no storage access
- * (`build.test.ts`), so DESIGN.md's "remember per app" is not done.
+ * The Notion app's view: a small sync-status view (#177 Q9). It renders a
+ * controller `ViewState` into the frame: header (status pill, Sync now),
+ * connection bar (databases, Sync details, menu), the state's banner, the
+ * "Changes to send" strip with its review, and one status card. It owns only
+ * the UI state those need (menu, details, review, the disconnect question)
+ * and keeps focus, scroll and the one live region stable across re-renders.
+ * The rows are browsed and edited in the host's own table and views.
  */
 import { isConnected, isRunning, type ViewState } from '../controller.js';
-import type { Row } from '../rows.js';
 import { byKey, h, icon } from '../ui/dom.js';
 import { plural } from '../ui/format.js';
 import { sprite } from '../ui/icons.js';
 import {
-  openExternal,
   pillElement,
   renderConnbar,
   renderHeader,
   renderBanner,
   renderMenu,
   updatePill,
-  type ChipModel,
 } from '../ui/shell.js';
 import { PL_CSS } from '../ui/styles.js';
-import {
-  ALL,
-  columnsFor,
-  DEFAULT_SORT,
-  defaultView,
-  groupable,
-  pill,
-  searchRows,
-  sortRows,
-  sources as listSources,
-  syncAction,
-} from './model.js';
+import { pill, sources as listSources, syncAction } from './model.js';
 import {
   noDatabases,
-  noRows,
-  PAGE_SIZE,
   preConnection,
-  renderBoard,
   renderDetails,
   renderImport,
-  renderList,
-  renderPeek,
-  renderTable,
-  renderToolbar,
+  renderStatus,
   stateBanner,
   type UiState,
   type ViewContext,
@@ -55,37 +35,24 @@ import {
 import { NT_CSS } from './styles.js';
 import { renderChangesBar, renderReview } from './review.js';
 
-export const NARROW = 640;
-export const WIDE = 960;
-const SEARCH_DEBOUNCE_MS = 150;
-const FLASH_MS = 2500;
-
 export interface AppActions {
   sync(): void;
   connect(): void;
-  /**
-   * Opens an http(s) link through the host (`store.openExternal`), which
-   * asks the person first. Resolves `false` when the host cannot, so the
-   * app shows the URL to copy instead. Absent: always the copy fallback.
-   */
-  openExternal?(url: string): Promise<boolean>;
+  /** Sends the reviewed changes to Notion. */
+  send(): void;
+  /** Puts a row's unsent edits back to what Notion has. */
+  discard(subject: string): void;
+  /** Resolves a field changed both here and in Notion. */
+  resolve(subject: string, shortname: string, keep: 'mine' | 'notion'): void;
   /** Shows the app's data table in the host (`store.openResource`). */
   openTable?(): void;
   /** Stops this app using Notion (`store.proxy.disconnect`). */
   disconnect?(): void;
-  /** Sends the reviewed changes to Notion. */
-  send?(): void;
-  /** Puts a row's unsent edits back to what Notion has. */
-  discard?(subject: string): void;
-  /** Resolves a field changed both here and in Notion. */
-  resolve?(subject: string, shortname: string, keep: 'mine' | 'notion'): void;
 }
 
 export interface AppOptions {
   now?: () => number;
   locale?: string;
-  /** Width override for tests (jsdom has no layout). */
-  width?: () => number;
 }
 
 export interface App {
@@ -98,16 +65,12 @@ export interface App {
   destroy(): void;
 }
 
-const sizeOf = (width: number): ViewContext['size'] =>
-  width < NARROW ? 'narrow' : width < WIDE ? 'medium' : 'wide';
-
 export function createApp(
   root: HTMLElement,
   actions: AppActions,
-  { now = Date.now, locale, width }: AppOptions = {},
+  { now = Date.now, locale }: AppOptions = {},
 ): App {
   const doc = root.ownerDocument;
-  const win = doc.defaultView!;
   const style = h(doc, 'style', { 'data-notion-app': '' }, PL_CSS + NT_CSS);
   (doc.head ?? root).appendChild(style);
   if (doc.body) doc.body.style.margin = '0';
@@ -115,68 +78,15 @@ export function createApp(
   root.replaceChildren(sprite(doc), app);
 
   const pillEl = pillElement(doc);
-  const ui: UiState = {
-    scope: ALL,
-    query: '',
-    sort: DEFAULT_SORT,
-    limit: PAGE_SIZE,
-    details: false,
-    menu: false,
-  };
+  const ui: UiState = { details: false, menu: false };
   let state: ViewState = { kind: 'loading' };
-  const measure = () =>
-    width?.() ?? (app.clientWidth || win.innerWidth || WIDE);
-  let size = sizeOf(measure());
-  let flash = new Set<string>();
-  let flashed: unknown;
   let alertFor: ViewState | undefined;
   let focusAfter: string | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
-  let flashTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const searchInput = h(doc, 'input', {
-    type: 'search',
-    placeholder: 'Search rows…',
-    autocomplete: 'off',
-    'data-key': 'search',
-  });
-  searchInput.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(
-      () => update({ query: searchInput.value, limit: PAGE_SIZE }),
-      SEARCH_DEBOUNCE_MS,
-    );
-  });
 
   const update = (patch: Partial<UiState>) => {
     Object.assign(ui, patch);
     render();
-  };
-
-  const open = (subject: string | undefined) => {
-    const previous = ui.selected;
-    if (subject === undefined && previous) focusAfter = `row:${previous}`;
-    else if (subject && size !== 'narrow') focusAfter = `row:${subject}`;
-    update({ selected: subject, linkFallback: undefined });
-  };
-
-  const openLink = (href: string, row: Row) => {
-    const fallback = () =>
-      update({
-        selected: row.subject,
-        linkFallback: { subject: row.subject, href },
-      });
-
-    if (!actions.openExternal) {
-      if (!openExternal(win, href)) fallback();
-
-      return;
-    }
-
-    actions.openExternal(href).then(handled => {
-      if (!handled) fallback();
-    }, fallback);
   };
 
   // On click, not pointerdown: a re-render between pointerdown and click
@@ -205,18 +115,7 @@ export function createApp(
   doc.addEventListener('click', onClick);
   doc.addEventListener('keydown', onKey);
 
-  const observer =
-    typeof win.ResizeObserver === 'function'
-      ? new win.ResizeObserver(() => {
-          const next = sizeOf(measure());
-
-          if (next !== size) {
-            size = next;
-            render();
-          }
-        })
-      : undefined;
-  observer?.observe(app);
+  // "Synced 4 min ago" keeps up without a state change.
   const tick = setInterval(() => {
     if (state.kind === 'ready') render();
   }, 60_000);
@@ -234,73 +133,24 @@ export function createApp(
   const review = {
     open: () => {
       focusAfter = 'review';
-      update({ review: true, selected: undefined, details: false });
+      update({ review: true, details: false });
     },
     close: () => {
       focusAfter = 'review-open';
       update({ review: false });
     },
-    send: () => actions.send?.(),
-    discard: (subject: string) => actions.discard?.(subject),
+    send: () => actions.send(),
+    discard: (subject: string) => actions.discard(subject),
     resolve: (subject: string, shortname: string, keep: 'mine' | 'notion') =>
-      actions.resolve?.(subject, shortname, keep),
+      actions.resolve(subject, shortname, keep),
   };
 
   function header(): HTMLElement {
-    if (!isConnected(state))
-      return renderHeader(doc, { mark: 'N', name: 'Notion', pill: pillEl });
-    const list = listSources(state.rows, state.last);
-    const chips: ChipModel[] = list.length
-      ? [
-          {
-            key: ALL,
-            label: 'All',
-            count: state.rows.length,
-            pressed: ui.scope === ALL,
-            onClick: () => update({ scope: ALL, selected: undefined }),
-          },
-          ...list.map(s => ({
-            key: s.title,
-            label: s.title,
-            count: s.count,
-            icon: 'db',
-            pressed: ui.scope === s.title,
-            onClick: () =>
-              update({
-                scope: s.title,
-                selected: undefined,
-                groupBy: undefined,
-              }),
-          })),
-        ]
-      : [];
     const sync = syncAction(state);
 
     return renderHeader(doc, {
       mark: 'N',
       name: 'Notion',
-      chips,
-      ...(list.length
-        ? {
-            select: {
-              label: 'Database',
-              value: ui.scope,
-              options: [
-                { value: ALL, label: `All databases (${state.rows.length})` },
-                ...list.map(s => ({
-                  value: s.title,
-                  label: `${s.title} (${s.count})`,
-                })),
-              ],
-              onChange: value =>
-                update({
-                  scope: value,
-                  selected: undefined,
-                  groupBy: undefined,
-                }),
-            },
-          }
-        : {}),
       pill: pillEl,
       ...(sync.shown
         ? {
@@ -344,9 +194,7 @@ export function createApp(
           ? 'Access revoked'
           : state.kind === 'disconnected'
             ? 'Not connected'
-            : actions.send
-              ? [icon(doc, 'sync', 'sm'), 'Edits sent after review']
-              : [icon(doc, 'lock', 'sm'), 'Read-only'],
+            : [icon(doc, 'sync', 'sm'), 'Edits sent after review'],
       ],
       [
         h(
@@ -413,50 +261,17 @@ export function createApp(
     );
   }
 
-  function content(ctx: ViewContext): (Node | null)[] {
+  /** The status card, or what stands in for it before the first rows. */
+  function content(ctx: ViewContext): HTMLElement {
     const s = ctx.state;
     if (
       s.kind === 'importing' ||
       (s.kind === 'ready' && !s.last && !s.rows.length)
     )
-      return [renderImport(ctx, s.kind === 'importing' ? s.progress : [])];
-    if (s.kind === 'no-databases' && !s.rows.length) return [noDatabases(ctx)];
-    if (!s.rows.length) return s.kind === 'ready' ? [noRows(ctx)] : [];
+      return renderImport(ctx, s.kind === 'importing' ? s.progress : []);
+    if (s.kind === 'no-databases' && !s.rows.length) return noDatabases(ctx);
 
-    const selected = ui.selected
-      ? ctx.visible.find(r => r.subject === ui.selected)
-      : undefined;
-    const body =
-      ctx.view === 'board'
-        ? renderBoard(ctx)
-        : ctx.view === 'list'
-          ? renderList(ctx)
-          : renderTable(ctx);
-    if (!selected) return [renderToolbar(ctx), body];
-
-    if (size === 'narrow') {
-      const dialog = h(
-        doc,
-        'dialog',
-        { class: 'nt-sheet', 'aria-labelledby': 'nt-peek-title' },
-        renderPeek(ctx, selected, true),
-      );
-      dialog.addEventListener('cancel', event => {
-        event.preventDefault();
-        open(undefined);
-      });
-
-      return [renderToolbar(ctx), body, dialog];
-    }
-
-    const peek = renderPeek(ctx, selected, false);
-
-    return [
-      renderToolbar(ctx),
-      size === 'wide' && ctx.view === 'table'
-        ? h(doc, 'div', { class: 'nt-split' }, body, peek)
-        : h(doc, 'div', { class: 'nt-content' }, body, peek),
-    ];
+    return renderStatus(ctx);
   }
 
   function render(next?: ViewState) {
@@ -464,17 +279,6 @@ export function createApp(
       if (isRunning(state) && !isRunning(next) && next.kind !== 'ready')
         alertFor = next;
       state = next;
-
-      if (isConnected(state) && state.changed && state.changed !== flashed) {
-        flashed = state.changed;
-        flash = new Set(state.changed);
-        clearTimeout(flashTimer);
-        flashTimer = setTimeout(() => {
-          flash = new Set();
-          render();
-        }, FLASH_MS);
-      }
-
       scheduleRetry();
     }
 
@@ -492,51 +296,22 @@ export function createApp(
     );
 
     updatePill(doc, pillEl, pill(state, now(), locale));
-    app.classList.toggle('is-narrow', size === 'narrow');
     const children: (Node | null)[] = [header()];
 
     if (!isConnected(state)) {
       children.push(preConnection(doc, state, actions.connect));
     } else {
-      const list = listSources(state.rows, state.last);
-      if (ui.scope !== ALL && !list.some(s => s.title === ui.scope))
-        ui.scope = ALL;
-      const columns = columnsFor(ui.scope, list);
-      const scoped =
-        ui.scope === ALL
-          ? state.rows
-          : state.rows.filter(r => r.dataSource === ui.scope);
-      const visible = sortRows(
-        searchRows(scoped, columns, ui.query),
-        columns,
-        ui.sort,
-      );
-      let view = ui.view ?? defaultView(size === 'narrow');
-      if (view === 'board' && (ui.scope === ALL || !groupable(columns).length))
-        view = defaultView(size === 'narrow');
-      if (ui.selected && !visible.some(r => r.subject === ui.selected))
-        ui.selected = undefined;
       const ctx: ViewContext = {
         doc,
         now: now(),
         ...(locale ? { locale } : {}),
-        openLink,
-        ui,
         state,
-        sources: list,
-        columns,
-        visible,
-        scoped,
-        view,
-        size,
-        flash,
+        sources: listSources(state.rows, state.last),
         alert: alertFor === state,
-        searchInput,
-        fallback: new Map(),
         update,
-        open,
         sync: actions.sync,
         connect: actions.connect,
+        ...(actions.openTable ? { openTable: actions.openTable } : {}),
       };
       children.push(
         connbar(),
@@ -568,14 +343,13 @@ export function createApp(
             : // One banner at a time: the confirmation stands in for the state's.
               stateBanner(ctx),
           ui.details ? renderDetails(ctx) : null,
-          ...(actions.send
-            ? [
-                renderChangesBar(doc, state, !!ui.review, review),
-                ...(ui.review
-                  ? [renderReview(doc, state, review)]
-                  : content(ctx)),
-              ]
-            : content(ctx)),
+          renderChangesBar(doc, state, !!ui.review, review),
+          h(
+            doc,
+            'div',
+            { class: 'nt-content', 'data-scroll-key': 'content' },
+            ui.review ? renderReview(doc, state, review) : content(ctx),
+          ),
         ),
       );
     }
@@ -585,13 +359,6 @@ export function createApp(
     for (const el of app.querySelectorAll<HTMLElement>('[data-scroll-key]')) {
       const saved = scrolls.get(el.getAttribute('data-scroll-key'));
       if (saved) [el.scrollTop, el.scrollLeft] = saved;
-    }
-
-    const dialog = app.querySelector('dialog');
-
-    if (dialog && !dialog.open) {
-      if (typeof dialog.showModal === 'function') dialog.showModal();
-      else dialog.setAttribute('open', '');
     }
 
     if (focusKey) {
@@ -619,11 +386,8 @@ export function createApp(
     },
     ui: () => ui,
     destroy() {
-      observer?.disconnect();
       clearInterval(tick);
       clearTimeout(retry);
-      clearTimeout(flashTimer);
-      clearTimeout(searchTimer);
       doc.removeEventListener('click', onClick);
       doc.removeEventListener('keydown', onKey);
       style.remove();
