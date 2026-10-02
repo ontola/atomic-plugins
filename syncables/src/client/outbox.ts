@@ -1,5 +1,6 @@
 import { isRecord } from '../read/model.js';
 import type {
+  AuthBlock,
   PendingWriteState,
   PendingWriteType,
   WriteConflict,
@@ -22,6 +23,8 @@ export interface StoredWrite {
   changes?: Record<string, unknown>;
   attempts: number;
   lastError?: string;
+  /** The HTTP status of the most recent failure. */
+  lastStatus?: number;
   state: PendingWriteState;
   base?: Record<string, unknown>;
   conflicts?: WriteConflict[];
@@ -76,10 +79,16 @@ export interface OutboxDocument {
    * current document does not have). They are written back unchanged.
    */
   unrestorable: unknown[];
+  /**
+   * Present while the client sends no writes because the server refused its
+   * credentials; cleared by `authRenewed()`. Writes in `blocked` state wait
+   * for it.
+   */
+  authBlock?: AuthBlock;
 }
 
 const TYPES = new Set(['create', 'update', 'delete']);
-const STATES = new Set(['pending', 'uncertain', 'failed']);
+const STATES = new Set(['pending', 'uncertain', 'failed', 'blocked']);
 
 function isStringMap(value: unknown): value is Record<string, string> {
   return (
@@ -97,6 +106,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['changes'] === undefined || isRecord(value['changes'])) &&
     (value['base'] === undefined || isRecord(value['base'])) &&
     (value['conflicts'] === undefined || Array.isArray(value['conflicts'])) &&
+    (value['lastStatus'] === undefined ||
+      typeof value['lastStatus'] === 'number') &&
     (value['idempotencyKey'] === undefined ||
       typeof value['idempotencyKey'] === 'string') &&
     (value['confirmedId'] === undefined ||
@@ -142,6 +153,17 @@ export function isStoredRebuild(value: unknown): value is StoredRebuild {
   return isTarget(value);
 }
 
+function isAuthBlock(value: unknown): value is AuthBlock {
+  return (
+    isRecord(value) &&
+    typeof value['status'] === 'number' &&
+    typeof value['lastError'] === 'string' &&
+    typeof value['resource'] === 'string' &&
+    typeof value['id'] === 'string' &&
+    (value['context'] === undefined || isStringMap(value['context']))
+  );
+}
+
 export function emptyOutbox(): OutboxDocument {
   return {
     version: OUTBOX_VERSION,
@@ -183,5 +205,16 @@ export function readOutbox(value: unknown): OutboxDocument {
     if (isStoredRecordWrites(entry)) outbox.records.push(entry);
     else if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
     else outbox.unrestorable.push(entry);
+  // Added within version 1: an outbox without it was not blocked. A
+  // malformed one still blocks, so writes wait for authRenewed().
+  if (raw['authBlock'] !== undefined)
+    outbox.authBlock = isAuthBlock(raw['authBlock'])
+      ? raw['authBlock']
+      : {
+          status: 0,
+          lastError: 'Stored authentication block could not be read',
+          resource: '',
+          id: '',
+        };
   return outbox;
 }

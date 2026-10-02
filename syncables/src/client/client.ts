@@ -48,6 +48,97 @@ export interface RetryOptions {
   maxDelayMs?: number;
   /** Stop auto-retrying a write after this many attempts. Default is unlimited (keep retrying until it succeeds). */
   maxAttempts?: number;
+  /**
+   * The longest a `Retry-After` header may hold a write back, in
+   * milliseconds. Default 3600000 (1 hour). A longer `Retry-After` waits this
+   * long instead, so the client may ask again before the server wants it to.
+   */
+  maxRetryAfterMs?: number;
+}
+
+/**
+ * What the client does with a write the server answered with a non-2xx
+ * status (see `defaultWriteFailureClass` for the defaults):
+ * - `retry`: count a failed attempt and send it again after the backoff delay,
+ *   or after the response's `Retry-After`. A create's 5xx other than 503 still
+ *   becomes `uncertain` without a usable idempotency key.
+ * - `permanent`: count a failed attempt and stop: the write becomes `failed`
+ *   at once, resolvable with `resolveWrite`.
+ * - `auth`: the credentials were refused. No attempt is counted; the write
+ *   becomes `blocked` and the client sends no write until `authRenewed()`.
+ * - `satisfied`: the write's goal already holds, so it settles as if it had
+ *   succeeded. Only a delete can be satisfied; for a create or update it
+ *   counts as `permanent`.
+ */
+export type WriteFailureClass = 'retry' | 'permanent' | 'auth' | 'satisfied';
+
+/** A write the server answered with a non-2xx status, as a classifier sees it. */
+export interface WriteFailure {
+  type: PendingWriteType;
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  status: number;
+  /** Response headers, names lower-cased. */
+  headers: Record<string, string>;
+  /** Response body text. */
+  body: string;
+  resource: string;
+  id: string;
+  /**
+   * True when, as this request was sent, the latest `authRenewed()` had not
+   * yet been followed by an accepted response: a response to a request sent
+   * after that renewal that is not a refusal (a 2xx, or a failure classified
+   * `retry`, `permanent` or `satisfied`, except one the classifier in use
+   * calls `auth` when asked again with `afterRenewal: false`, such as a 403
+   * failed because of the renewal). A custom classifier is therefore called
+   * twice for a failure of a request sent after a renewal that it does not
+   * call `auth`.
+   */
+  afterRenewal: boolean;
+}
+
+/**
+ * The default classification:
+ * - a delete answered 404 or 410: `satisfied` (the record is already gone);
+ * - 401: `auth`;
+ * - 403: `retry` when the response carries `Retry-After` or
+ *   `x-ratelimit-remaining: 0` (a rate limit, as GitHub sends); otherwise
+ *   `permanent` when `afterRenewal` (a refusal that renewed credentials did
+ *   not fix is a missing permission), and `auth` before that;
+ * - 408, 425 and 429: `retry`;
+ * - every other 4xx (400, 404 and 410 on a create or update, 405, 409, 413,
+ *   415, 422, ...): `permanent`;
+ * - anything else (5xx, and 1xx/3xx a transport did not handle): `retry`.
+ */
+export function defaultWriteFailureClass(
+  failure: WriteFailure,
+): WriteFailureClass {
+  const { status, type, headers } = failure;
+  if (type === 'delete' && (status === 404 || status === 410))
+    return 'satisfied';
+  if (status === 401) return 'auth';
+  if (status === 403) {
+    if (
+      headers['retry-after'] !== undefined ||
+      headers['x-ratelimit-remaining'] === '0'
+    )
+      return 'retry';
+    return failure.afterRenewal ? 'permanent' : 'auth';
+  }
+  if (status === 408 || status === 425 || status === 429) return 'retry';
+  if (status >= 400 && status < 500) return 'permanent';
+  return 'retry';
+}
+
+/** The client stopped sending writes because the server refused its credentials. */
+export interface AuthBlock {
+  /** The status that blocked the client (401 or 403 by default; 0 when a stored block could not be read). */
+  status: number;
+  /** The error of the write that met it, with a body excerpt. */
+  lastError: string;
+  /** The write that met it. */
+  resource: string;
+  id: string;
+  context?: Record<string, string>;
 }
 
 export interface ApiClientOptions {
@@ -102,6 +193,29 @@ export interface ApiClientOptions {
    * `false`, which keeps writes in memory only, as before the outbox existed.
    */
   outboxNamespace?: string | false;
+  /**
+   * Classifies a write the server answered with a non-2xx status; see
+   * `WriteFailureClass`. Defaults to `defaultWriteFailureClass`, which a
+   * classifier can call for the cases it does not decide itself. A classifier
+   * that throws or returns another value falls back to the default.
+   */
+  classifyWriteFailure?: (failure: WriteFailure) => WriteFailureClass;
+  /**
+   * Called when a write meets an `auth` failure and the client stops sending
+   * writes, and when a client restores an outbox that was blocked. Renew the
+   * credentials (in the `authenticate` adapter or the transport), then call
+   * `authRenewed()`.
+   */
+  onAuthBlocked?: (block: AuthBlock) => void;
+  /**
+   * What an `auth` failure does. `'block'` (the default): the write becomes
+   * `blocked` and the client sends no write until `authRenewed()`. `'retry'`:
+   * it is retried with backoff like a `retry` failure, counting attempts, and
+   * nothing is blocked; for an `authenticate` adapter that renews tokens by
+   * itself. With `'retry'`, a block stored in the outbox is dropped on
+   * restore.
+   */
+  onAuthFailure?: 'block' | 'retry';
 }
 
 export interface PaginateOptions {
@@ -140,14 +254,21 @@ export type PendingWriteType = 'create' | 'update' | 'delete';
  *   response was lost, unusable, or a 5xx other than 503) and no idempotency
  *   key makes a resend safe. It is not retried automatically; later writes to
  *   the same record wait behind it until `resolveWrite` is called.
- * - `failed`: automatic retries stopped at `retry.maxAttempts`. A failed
- *   create holds back later writes to the record, like an uncertain one. A
+ * - `failed`: the server refused it (a `permanent` failure, see
+ *   `WriteFailureClass`) or automatic retries stopped at `retry.maxAttempts`.
+ *   A failed create holds back later writes to the record, like an uncertain
+ *   one. A
  *   failed update or delete does not: later writes go ahead, and once one of
  *   them settles it replaces the fields it set in the failed update (a failed
  *   delete, or an update with no fields left, is dropped). Otherwise a failed
  *   write stays, and stays visible locally, until `resolveWrite`.
+ * - `blocked`: the server refused the client's credentials for this write (an
+ *   `auth` failure). The client sends no write, of any record, until
+ *   `authRenewed()`; then it is sent again, in its place in the queue.
+ *   `resolveWrite` `discard` drops it (a create with the writes queued
+ *   behind it) and leaves the client blocked; `retry` does not resend it.
  */
-export type PendingWriteState = 'pending' | 'uncertain' | 'failed';
+export type PendingWriteState = 'pending' | 'uncertain' | 'failed' | 'blocked';
 
 /** A field that changed remotely while a local update to it was pending. */
 export interface WriteConflict {
@@ -204,6 +325,8 @@ export interface PendingWriteInfo {
   attempts: number;
   /** The most recent failure, if at least one attempt has failed. */
   lastError?: string;
+  /** The HTTP status behind `lastError`, when `lastError` describes a response. */
+  lastStatus?: number;
   state: PendingWriteState;
   /**
    * Set on a `pending` update restored from the durable outbox: it is not sent
@@ -289,9 +412,10 @@ export interface ApiClient {
   pendingWrites(resource?: string): PendingWriteInfo[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
-   * updates waiting for a refresh (see `WriteResolution`). Throws if that
-   * record has none of these; any other `pending` write cannot be resolved
-   * this way.
+   * updates waiting for a refresh (see `WriteResolution`), or drops its
+   * `blocked` write (`discard` only; the client stays blocked). Throws if
+   * that record has none of these; any other `pending` write cannot be
+   * resolved this way.
    */
   resolveWrite(
     resource: string,
@@ -299,6 +423,20 @@ export interface ApiClient {
     resolution: WriteResolution,
     context?: Record<string, string>,
   ): Promise<void>;
+  /**
+   * Set while the client sends no writes because the server refused its
+   * credentials (see `ApiClientOptions.onAuthBlocked`); otherwise undefined.
+   * Reads (`sync()`) are not affected.
+   */
+  authBlocked(): AuthBlock | undefined;
+  /**
+   * Tells the client that its credentials were renewed: `blocked` writes
+   * become `pending` and every queue resumes in order. Does nothing when the
+   * client is not blocked. A 403 without rate-limit headers to a request sent
+   * after it then fails its write instead of blocking again, until a response
+   * shows the credentials accepted (see `WriteFailure.afterRenewal`).
+   */
+  authRenewed(): Promise<void>;
   /**
    * Fetches every item from a GET or POST list operation at `path`, walking every
    * page per its resolved pagination scheme (explicit `x-pagination` or
@@ -372,6 +510,7 @@ interface QueuedWrite {
   changes?: Record<string, unknown>;
   attempts: number;
   lastError?: string;
+  lastStatus?: number;
   state: PendingWriteState;
   /** Confirmed remote values of the changed fields, for conflict detection. */
   base?: Record<string, unknown>;
@@ -397,17 +536,59 @@ type WriteOutcome =
   | { status: 'succeeded'; resolvedId: string }
   | { status: 'retry'; delayMs: number }
   | { status: 'uncertain' }
-  | { status: 'gaveUp' };
+  | { status: 'gaveUp' }
+  | { status: 'blocked' }
+  /** Not sent: the client was blocked while the write was being stored. */
+  | { status: 'held' };
 
 /** The server answered with a non-2xx status. */
 class HttpStatusError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly headers: Record<string, string>,
+    readonly body: string,
   ) {
     super(message);
   }
 }
+
+/** At most this many characters of an error response body go into `lastError`. */
+const BODY_EXCERPT_LENGTH = 200;
+
+function excerpt(body: string): string {
+  const text = body.replace(/\s+/g, ' ').trim();
+  return text.length > BODY_EXCERPT_LENGTH
+    ? `${text.slice(0, BODY_EXCERPT_LENGTH)}…`
+    : text;
+}
+
+/**
+ * The delay a `Retry-After` header asks for (delay-seconds or an HTTP date),
+ * in milliseconds; undefined when absent or unparseable.
+ */
+function retryAfterMs(headers: Record<string, string>): number | undefined {
+  const value = headers['retry-after']?.trim();
+  if (!value) return undefined;
+  // An HTTP date has letters (a day or month name); anything else that is
+  // not delay-seconds, such as "1.5", is unusable.
+  const ms = /^\d+$/.test(value)
+    ? Number(value) * 1000
+    : /[a-z]/i.test(value)
+      ? Date.parse(value) - Date.now()
+      : NaN;
+  return Number.isFinite(ms) ? Math.max(0, ms) : undefined;
+}
+
+/** setTimeout's largest delay (about 24.8 days); a larger one fires at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+const FAILURE_CLASSES = new Set<WriteFailureClass>([
+  'retry',
+  'permanent',
+  'auth',
+  'satisfied',
+]);
 
 /** The server answered 2xx, so it applied the write, but the body is unusable. */
 class UnusableResponseError extends Error {}
@@ -537,6 +718,10 @@ export function createApiClient(
   const retry = {
     baseDelayMs: options.retry?.baseDelayMs ?? 200,
     maxDelayMs: options.retry?.maxDelayMs ?? 30000,
+    maxRetryAfterMs: Math.min(
+      options.retry?.maxRetryAfterMs ?? 3_600_000,
+      MAX_TIMER_MS,
+    ),
     maxAttempts: options.retry?.maxAttempts,
   };
   // The default in-memory adapter dies with this client: nothing to resume.
@@ -564,6 +749,12 @@ export function createApiClient(
   let unrestorable: unknown[] = [];
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
+  /** Set while no write is sent because the credentials were refused; stored. */
+  let authBlock: AuthBlock | undefined;
+  /** Renewed and not yet seen to work (`WriteFailure.afterRenewal`). */
+  let afterRenewal = false;
+  /** Counts `authRenewed()` calls that unblocked the client. */
+  let authEpoch = 0;
 
   /**
    * Records the newest confirmed copy of a record on all its unsettled
@@ -601,6 +792,9 @@ export function createApiClient(
       ...(write.changes ? { changes: write.changes } : {}),
       attempts: write.attempts,
       ...(write.lastError ? { lastError: write.lastError } : {}),
+      ...(write.lastStatus !== undefined
+        ? { lastStatus: write.lastStatus }
+        : {}),
       state: write.state,
       ...(write.base ? { base: write.base } : {}),
       ...(write.conflicts?.size
@@ -667,6 +861,7 @@ export function createApiClient(
         records,
         rebuild,
         unrestorable,
+        ...(authBlock ? { authBlock } : {}),
       }),
     ) as Record<string, unknown>;
   }
@@ -734,6 +929,9 @@ export function createApiClient(
       ...(stored.data ? { data: stored.data } : {}),
       ...(stored.changes ? { changes: stored.changes } : {}),
       ...(stored.lastError ? { lastError: stored.lastError } : {}),
+      ...(stored.lastStatus !== undefined
+        ? { lastStatus: stored.lastStatus }
+        : {}),
       ...(stored.base ? { base: stored.base } : {}),
       ...(stored.conflicts?.length
         ? {
@@ -759,6 +957,7 @@ export function createApiClient(
       write.attempts += 1;
       write.lastError =
         'The process stopped while this write may have been in flight';
+      delete write.lastStatus;
       if (write.type === 'create' && !usableKey(write))
         write.state = 'uncertain';
       else if (
@@ -780,6 +979,10 @@ export function createApiClient(
     gaveUpWrites.clear();
     confirmed.clear();
     unrestorable = outbox.unrestorable;
+    // Under onAuthFailure 'retry' nothing blocks: a stored block (from a
+    // client with 'block') is dropped and its writes resume.
+    authBlock =
+      options.onAuthFailure === 'retry' ? undefined : outbox.authBlock;
     const touchedKeys = new Map<string, { scope: string; id: string }>();
     for (const entry of outbox.rebuild) {
       const route = byResource.get(entry.resource);
@@ -792,7 +995,9 @@ export function createApiClient(
       else remote(scope).delete(entry.id);
       touchedKeys.set(keyFor(scope, entry.id), { scope, id: entry.id });
     }
-    let changed = outbox.rebuild.length > 0;
+    let changed =
+      outbox.rebuild.length > 0 ||
+      (outbox.authBlock !== undefined && !authBlock);
     for (const entry of outbox.records) {
       const route = byResource.get(entry.resource);
       if (!route) {
@@ -808,6 +1013,9 @@ export function createApiClient(
       };
       const failed = entry.failed.map(restored);
       const queue = entry.queue.map(restored);
+      // Blocked writes wait for authRenewed() only while the client is blocked.
+      for (const write of queue)
+        if (write.state === 'blocked' && !authBlock) write.state = 'pending';
       // An update or delete that reached retry.maxAttempts while in flight
       // joins the failed writes, as it would have without the stop.
       const head = queue[0];
@@ -833,8 +1041,25 @@ export function createApiClient(
     // leaves the visible record behind; rebuild every record it names.
     for (const { scope, id } of touchedKeys.values()) await rebuild(scope, id);
     if (changed) await persistLater();
+    if (authBlock) notifyAuthBlocked();
     for (const key of writeQueues.keys())
       if (!draining.has(key)) void drainQueue(key);
+  }
+
+  function publicAuthBlock(block: AuthBlock): AuthBlock {
+    return {
+      ...block,
+      ...(block.context ? { context: { ...block.context } } : {}),
+    };
+  }
+
+  function notifyAuthBlocked(): void {
+    if (!authBlock) return;
+    try {
+      options.onAuthBlocked?.(publicAuthBlock(authBlock));
+    } catch {
+      // A failing callback does not stop the client.
+    }
   }
 
   /**
@@ -955,9 +1180,17 @@ export function createApiClient(
       );
     }
     if (response.status < 200 || response.status >= 300) {
+      const body = excerpt(response.body ?? '');
       throw new HttpStatusError(
-        `Request to ${request.url.pathname} failed with status ${response.status}`,
+        `Request to ${request.url.pathname} failed with status ${response.status}${body ? `: ${body}` : ''}`,
         response.status,
+        Object.fromEntries(
+          Object.entries(response.headers ?? {}).map(([k, v]) => [
+            k.toLowerCase(),
+            v,
+          ]),
+        ),
+        response.body ?? '',
       );
     }
     try {
@@ -993,6 +1226,13 @@ export function createApiClient(
       if (resolvedId !== write.id) records.delete(write.id);
       return settled(write, resolvedId);
     }
+    // Taken when the request leaves, after the store below.
+    let epoch = authEpoch;
+    let sentAfterRenewal = false;
+    /** A response other than a refusal of the credentials sent at `epoch`. */
+    const accepted = (): void => {
+      if (epoch === authEpoch) afterRenewal = false;
+    };
     try {
       let resolvedId = write.id;
       // Stored before sending, so a restart knows the request may have left.
@@ -1006,6 +1246,13 @@ export function createApiClient(
           `Outbox not stored, so nothing was sent: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
+      // Blocked by another write while this one was being stored.
+      if (authBlock) {
+        write.sending = false;
+        return { status: 'held' };
+      }
+      epoch = authEpoch;
+      sentAfterRenewal = afterRenewal;
       if (write.type === 'delete') {
         await requestJson({
           url: target(route.deletePath as string, {
@@ -1071,10 +1318,54 @@ export function createApiClient(
         remote(write.scope).set(resolvedId, record);
         setLastKnown(keyFor(write.scope, resolvedId), record);
       }
+      accepted();
       return settled(write, resolvedId);
     } catch (error) {
+      const classified =
+        error instanceof HttpStatusError
+          ? classify(write, error, sentAfterRenewal)
+          : undefined;
+      let failureClass: WriteFailureClass = classified?.result ?? 'retry';
+      // Any answer but a refusal shows the credentials were accepted; a 403
+      // failed only because of the renewal is still a refusal.
+      if (
+        (classified && !classified.refused) ||
+        error instanceof UnusableResponseError
+      )
+        accepted();
+      if (failureClass === 'auth' && options.onAuthFailure === 'retry')
+        failureClass = 'retry';
+      // A create that may have been applied (a classifier calling a 5xx
+      // `auth`) is not resent after a renewal without a usable key: the
+      // `retry` path below makes it uncertain.
+      if (
+        failureClass === 'auth' &&
+        write.type === 'create' &&
+        mayHaveApplied(error) &&
+        !usableKey(write)
+      )
+        failureClass = 'retry';
+      if (failureClass === 'satisfied') {
+        // A delete of a record that is already gone.
+        remote(write.scope).delete(write.id);
+        return settled(write, write.id);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const status =
+        error instanceof HttpStatusError ? error.status : undefined;
+      if (failureClass === 'auth') {
+        // Sent with credentials from before the latest renewal: send it
+        // again with the new ones instead of blocking again.
+        if (epoch !== authEpoch) return { status: 'retry', delayMs: 0 };
+        write.lastError = message;
+        if (status !== undefined) write.lastStatus = status;
+        return { status: 'blocked' };
+      }
       write.attempts += 1;
-      write.lastError = error instanceof Error ? error.message : String(error);
+      write.lastError = message;
+      if (status === undefined) delete write.lastStatus;
+      else write.lastStatus = status;
+      if (failureClass === 'permanent') return { status: 'gaveUp' };
       // An idempotency key makes a resend safe, except after a 2xx: the
       // create happened, and a replay would return the same unusable body.
       if (
@@ -1088,14 +1379,77 @@ export function createApiClient(
         write.attempts >= retry.maxAttempts
       )
         return { status: 'gaveUp' };
+      const backoff = Math.min(
+        retry.baseDelayMs * 2 ** (write.attempts - 1),
+        retry.maxDelayMs,
+      );
+      const asked =
+        error instanceof HttpStatusError
+          ? retryAfterMs(error.headers)
+          : undefined;
+      // Retry-After only lengthens the wait (never below the backoff, so
+      // "0", a past date or a fast clock cannot make a tight loop), up to
+      // retry.maxRetryAfterMs.
       return {
         status: 'retry',
         delayMs: Math.min(
-          retry.baseDelayMs * 2 ** (write.attempts - 1),
-          retry.maxDelayMs,
+          Math.max(backoff, Math.min(asked ?? 0, retry.maxRetryAfterMs)),
+          MAX_TIMER_MS,
         ),
       };
     }
+  }
+
+  /**
+   * The class of a failed write, and whether the response refused the
+   * credentials: classified `auth`, or, for a request sent after a renewal,
+   * classified `auth` by the same classifier with `afterRenewal: false` (a
+   * 403 made `permanent` by the renewal rule). For such a request a custom
+   * classifier is called twice.
+   */
+  function classify(
+    write: QueuedWrite,
+    error: HttpStatusError,
+    sentAfterRenewal: boolean,
+  ): { result: WriteFailureClass; refused: boolean } {
+    const failure: WriteFailure = {
+      type: write.type,
+      method:
+        write.type === 'create'
+          ? 'POST'
+          : write.type === 'delete'
+            ? 'DELETE'
+            : (write.route.updateMethod as 'PUT' | 'PATCH'),
+      status: error.status,
+      headers: { ...error.headers },
+      body: error.body,
+      resource: write.route.collection.name,
+      id: write.id,
+      afterRenewal: sentAfterRenewal,
+    };
+    let result = classOf(failure);
+    if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
+    const refused =
+      result === 'auth' ||
+      (sentAfterRenewal &&
+        classOf({ ...failure, afterRenewal: false }) === 'auth');
+    return { result, refused };
+  }
+
+  /** The classifier in use, falling back to the default. */
+  function classOf(failure: WriteFailure): WriteFailureClass {
+    if (options.classifyWriteFailure) {
+      try {
+        const custom = options.classifyWriteFailure({
+          ...failure,
+          headers: { ...failure.headers },
+        });
+        if (FAILURE_CLASSES.has(custom)) return custom;
+      } catch {
+        // Falls back to the default classification.
+      }
+    }
+    return defaultWriteFailureClass(failure);
   }
 
   async function drainQueue(initialKey: string): Promise<void> {
@@ -1107,16 +1461,44 @@ export function createApiClient(
         const queue = writeQueues.get(key);
         const write = queue?.[0];
         // An uncertain or failed create blocks its record until resolveWrite;
-        // a write is not sent before the outbox holding it is stored.
+        // a write is not sent before the outbox holding it is stored, nor
+        // while the credentials are refused (authRenewed restarts the queues).
         if (
           !write ||
           write.state !== 'pending' ||
           write.durable === false ||
-          write.awaitingRefresh
+          write.awaitingRefresh ||
+          authBlock
         )
           return;
         const outcome = await attemptWrite(write);
         write.sending = false;
+        if (outcome.status === 'held') {
+          await persistLater();
+          // The check at the top stops here while blocked; an authRenewed()
+          // during the store finds this queue draining, so go on here.
+          continue;
+        }
+        if (outcome.status === 'blocked') {
+          write.state = 'blocked';
+          const first = !authBlock;
+          if (first) {
+            authBlock = {
+              status: write.lastStatus ?? 0,
+              lastError: write.lastError ?? '',
+              resource: write.route.collection.name,
+              id: write.id,
+              ...(Object.keys(write.context).length
+                ? { context: { ...write.context } }
+                : {}),
+            };
+            afterRenewal = false;
+          }
+          await persistLater();
+          if (first) notifyAuthBlocked();
+          // As for 'held': stops at the top unless renewed meanwhile.
+          continue;
+        }
         if (outcome.status === 'uncertain') {
           write.state = 'uncertain';
           await persistLater();
@@ -1387,6 +1769,7 @@ export function createApiClient(
     }
     write.state = 'failed';
     write.lastError = message;
+    delete write.lastStatus;
     delete write.awaitingRefresh;
     delete write.refreshMisses;
     if (lastKnown) write.lastKnown = lastKnown;
@@ -1460,6 +1843,9 @@ export function createApiClient(
    */
   const REFRESH_MISS_LIMIT = 3;
   async function countRefreshMisses(released: Set<QueuedWrite>): Promise<void> {
+    // While blocked, no write could be sent anyway (and reads likely fail
+    // for the same reason): waiting does not count.
+    if (authBlock) return;
     let changed = false;
     for (const write of allWrites()) {
       if (!write.awaitingRefresh || released.has(write)) continue;
@@ -1723,6 +2109,9 @@ export function createApiClient(
             ? { context: { ...write.context } }
             : {}),
           ...(write.lastError ? { lastError: write.lastError } : {}),
+          ...(write.lastStatus !== undefined
+            ? { lastStatus: write.lastStatus }
+            : {}),
           state: write.state,
           ...(write.awaitingRefresh && write.state === 'pending'
             ? { awaitingRefresh: true }
@@ -1745,7 +2134,7 @@ export function createApiClient(
       const queue = writeQueues.get(key);
       const head = queue?.[0];
       // A parked create (uncertain or failed) holds back everything behind it.
-      if (queue && head && head.state !== 'pending') {
+      if (head && (head.state === 'uncertain' || head.state === 'failed')) {
         if (resolution.action === 'confirm' && head.state !== 'uncertain')
           throw new Error('Only an uncertain create can be confirmed');
         if (resolution.action === 'discard') {
@@ -1761,7 +2150,24 @@ export function createApiClient(
         if (!draining.has(key)) void drainQueue(key);
         return;
       }
-      const waiting = queue?.filter((w) => w.awaitingRefresh) ?? [];
+      // Discarding a blocked write drops it (a create with the writes queued
+      // behind it); the block stays. It is resent only by authRenewed().
+      if (queue && head?.state === 'blocked') {
+        if (resolution.action === 'discard') {
+          if (head.type === 'create') queue.splice(0);
+          else queue.shift();
+          if (!queue.length) writeQueues.delete(key);
+          await persistLater();
+          await rebuild(scope, id);
+          if (queue.length && !draining.has(key)) void drainQueue(key);
+          return;
+        }
+        if (resolution.action === 'confirm')
+          throw new Error('Only an uncertain create can be confirmed');
+      }
+      // A blocked write waits for authRenewed(), not for a refresh.
+      const waiting =
+        queue?.filter((w) => w.awaitingRefresh && w.state === 'pending') ?? [];
       if (queue && waiting.length && !failed) {
         // A restored update waiting for a refresh: send it now, or drop it.
         if (resolution.action === 'confirm')
@@ -1780,7 +2186,9 @@ export function createApiClient(
       }
       if (!failed)
         throw new Error(
-          `Record ${id} of ${resource} has no uncertain, failed or waiting write`,
+          head?.state === 'blocked'
+            ? `Record ${id} of ${resource} has a write blocked by refused credentials; renew them and call authRenewed()`
+            : `Record ${id} of ${resource} has no uncertain, failed or waiting write`,
         );
       if (resolution.action === 'confirm')
         throw new Error('Only an uncertain create can be confirmed');
@@ -1824,6 +2232,22 @@ export function createApiClient(
       gaveUpWrites.delete(key);
       await persistLater();
       await rebuild(scope, id);
+    },
+    authBlocked(): AuthBlock | undefined {
+      return authBlock && publicAuthBlock(authBlock);
+    },
+    async authRenewed(): Promise<void> {
+      await whenRestored();
+      if (!authBlock) return;
+      authBlock = undefined;
+      afterRenewal = true;
+      authEpoch += 1;
+      for (const queue of writeQueues.values())
+        for (const write of queue)
+          if (write.state === 'blocked') write.state = 'pending';
+      await persistLater();
+      for (const [key, queue] of writeQueues)
+        if (queue.length && !draining.has(key)) void drainQueue(key);
     },
     async paginate(path, pagination = {}): Promise<Record<string, unknown>[]> {
       const matched = findRoute(Object.keys(doc.paths), path);

@@ -77,12 +77,13 @@ local copy until the next refresh, and is sent again in later PUT or PATCH
 bodies until then; a strict provider could reject those, for example after a
 field rename.
 
-Writes retry with exponential backoff, unlimited by default; set
-`retry.maxAttempts` to bound attempts. Unsettled writes are kept in a durable
+A write the server refuses for good (most 4xx) fails at once, a write whose
+credentials are refused (401, 403) pauses all writes until the app renews
+them, and other failures retry with exponential backoff, unlimited by
+default; set `retry.maxAttempts` to bound attempts. See
+[Failure classes](#failure-classes). Unsettled writes are kept in a durable
 outbox in the client's storage adapter, so a client built later on the same
 storage resumes them (see [Durable outbox and restarts](#durable-outbox-and-restarts)).
-Finer transient/permanent failure classification remains work in
-[#260](https://github.com/ontola/atomic-plugins/issues/260).
 
 ```ts
 const pet = await client.create('/pets', { name: 'Milo', tag: 'cat' });
@@ -98,7 +99,13 @@ Each entry of `pendingWrites()` has a `state`:
 | --- | --- | --- |
 | `pending` | Queued, in flight or waiting for a retry | Retries automatically |
 | `uncertain` | A create may or may not have reached the server | Nothing, until `resolveWrite` |
-| `failed` | Retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` (see below) |
+| `failed` | The server refused it, or retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` (see below) |
+| `blocked` | The server refused the client's credentials for it | Sends no write at all, until `authRenewed()` |
+
+Entries carry `attempts`, `lastError` (for an HTTP failure: the path, the
+status and up to 200 characters of the response body, whitespace collapsed)
+and `lastStatus` (the HTTP status behind `lastError`, absent when `lastError`
+does not describe a response).
 
 A new `create`/`update`/`remove` does not drop a failed write. A failed create
 holds back later writes to the record, like an uncertain one. A failed update
@@ -106,6 +113,148 @@ or delete does not; later writes go ahead, and once one of them settles, it
 replaces the fields it set in the failed update. A failed update with no
 fields left, and a failed delete followed by any settled write, are dropped.
 Whatever is left stays listed, and visible locally, until `resolveWrite`.
+
+### Failure classes
+
+A write the server answers with a non-2xx status is classified. The defaults
+(`defaultWriteFailureClass`, exported) are:
+
+| Response | Class | What the client does |
+| --- | --- | --- |
+| 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
+| 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
+| 403 with `Retry-After` or `x-ratelimit-remaining: 0` | `retry` | A rate limit, as GitHub sends it |
+| Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
+| 408, 425, 429 | `retry` | Backoff retry, or the `Retry-After` delay |
+| Every other 4xx: 400, 404 or 410 to a create or update, 405, 409, 413, 415, 422, ... | `permanent` | The write becomes `failed` at once, after 1 attempt |
+| Anything else: 5xx, and a 1xx or 3xx the transport passed on | `retry` | Backoff retry, or the `Retry-After` delay; a create's 5xx other than 503 becomes `uncertain` without a usable idempotency key ([Uncertain creates](#uncertain-creates)) |
+
+Failures without a status keep their earlier handling: a transport that
+throws (`uncertain` for a create without a key, otherwise retried), a 2xx
+with an unusable body (`uncertain` for a create), and an error before the
+request was handed to the transport, such as an `authenticate` adapter that
+throws (retried with backoff).
+
+`retry` counts an attempt and sends the write again after the backoff delay
+(`retry.baseDelayMs`, doubled per attempt, at most `retry.maxDelayMs`). A
+`Retry-After` header (delay-seconds or an HTTP date) can only lengthen that
+wait: the delay is the longer of the backoff and the `Retry-After`, which
+may exceed `retry.maxDelayMs` but is cut to `retry.maxRetryAfterMs`
+(default 3600000, 1 hour). `Retry-After: 0`, a date in the past, or a server
+clock behind the client's therefore waits the backoff, so they cannot cause
+a tight loop. The cap is a trade-off: a provider that asks for more than an
+hour is asked again after an hour, which it may answer with another 429;
+raise the cap to wait as long as such a provider asks, at the cost of a queue
+that can stay held that long. A value that is neither delay-seconds nor a
+date (such as `1.5`) is ignored. `retry.maxAttempts` applies to `retry`
+failures. The delay is not stored; after a restart the first resend is
+immediate.
+
+`permanent` counts an attempt and makes the write `failed` at once, as if
+`retry.maxAttempts` were reached: a failed create holds back the writes
+queued behind it, a failed update or delete joins the record's failed writes
+while later writes go ahead, and `resolveWrite` retries or discards them.
+Only the write at the head of its record's queue is sent, so a failed write
+is always older than the record's queued writes.
+
+A 404 or 410 to a delete is the one default that settles a write without a
+2xx. If the delete path itself is wrong (a misconfigured document), deletes
+then settle locally and the next `sync()` brings the records back; classify
+such responses as `permanent` to catch that.
+
+Set `classifyWriteFailure` to change the classes. It receives the write's
+`type`, the HTTP `method`, `status`, lower-cased `headers`, the response
+`body`, `resource`, `id` and `afterRenewal`, and returns `'retry'`,
+`'permanent'`, `'auth'` or `'satisfied'`. A classifier that throws or returns
+another value gets the default class; `satisfied` for a create or update
+counts as `permanent`.
+
+```ts
+import { createApiClient, defaultWriteFailureClass } from 'syncables';
+
+const client = createApiClient(doc, {
+  classifyWriteFailure: (failure) =>
+    // This provider answers 409 while a record is locked for a moment.
+    failure.status === 409 ? 'retry' : defaultWriteFailureClass(failure),
+});
+```
+
+#### Refused credentials
+
+An `auth` failure stops every write of the client, for every record and
+collection: a client has one server URL and one set of credentials (one
+`transport`, `credentials` and `authenticate`), so a refusal is taken to
+apply to all of its writes. The write that met it becomes `blocked`, without
+counting an attempt; the other writes stay `pending` but are not sent, and
+writes made meanwhile are queued as usual and visible locally. A request
+already sent completes, and its write is marked `blocked` too if it is
+refused. A write whose in-flight mark was still being stored when the block
+began is not sent and keeps its attempt count. Reads (`sync()`) are not
+affected by the block.
+
+```ts
+const client = createApiClient(doc, {
+  authenticate,
+  onAuthBlocked: ({ status, lastError, resource, id }) => {
+    // ask the user to sign in again, then:
+    renewToken().then(() => client.authRenewed());
+  },
+});
+client.authBlocked(); // { status, lastError, resource, id } while blocked
+```
+
+`authRenewed()` makes the `blocked` writes `pending` again and resumes every
+queue in its order; it does nothing when the client is not blocked. The
+client cannot tell by itself that credentials were renewed: the
+`authenticate` adapter returning a request does not show that the server
+accepts it. Do not call `authRenewed()` from `onAuthBlocked` without
+renewing: a write refused again blocks the client again, one request per
+call. After a renewal, a 401 blocks again. A 403 (without rate-limit
+headers) fails its write instead of blocking, if it answers a request sent
+after the renewal and before any response showed the renewed credentials
+accepted, so a permission that new credentials do not grant cannot hold all
+writes back. Accepted means: a response to a request sent after the latest
+renewal that is not a refusal, that is a 2xx or a failure classified
+`retry`, `permanent` or `satisfied`, except a failure that the classifier in
+use (`classifyWriteFailure`, or the defaults) calls `auth` when asked again
+with `afterRenewal: false`, such as the 403 that this rule makes
+`permanent`. A refusal never counts as acceptance, so several writes the
+renewed credentials may not make all fail rather than block again. For a
+failure of a request sent after a renewal that it does not call `auth`, a
+custom classifier is therefore called a second time, with `afterRenewal:
+false`; one that returns a class other than `auth` regardless of
+`afterRenewal` makes that response count as acceptance. Whether a request
+counts as sent after the renewal is decided when it is sent, not when its
+answer arrives. A 401
+or 403 for a request sent before the latest renewal is sent again at once,
+without counting an attempt.
+
+`resolveWrite` `discard` drops a blocked write (a blocked create together
+with the writes queued behind it, as for an uncertain one) and leaves the
+client blocked; the record's later writes stay queued. `retry` on a record
+whose queue starts with a blocked write throws unless the record also has
+failed or waiting writes: it then retries the failed writes behind the queued
+ones, or stops the waiting updates from waiting for a refresh; a blocked
+write itself is resent only by `authRenewed()`.
+
+For an `authenticate` adapter that renews tokens by itself, set
+`onAuthFailure: 'retry'`: an `auth` failure is then retried with backoff like
+a `retry` failure (counting attempts, `retry.maxAttempts` applies), nothing
+is blocked and `onAuthBlocked` is not called. A client with `'retry'`
+restored from an outbox stored while blocked drops the stored block and
+sends the `blocked` writes as `pending` ones. The default is `'block'`.
+Under either setting, a create that a classifier calls `auth` but that may
+have been applied (a 5xx other than 503) becomes `uncertain` without a
+usable idempotency key, instead of being resent.
+
+The block is stored in the durable outbox. A client restored from a blocked
+outbox is blocked, calls `onAuthBlocked` once the restore is done, and sends
+no write before `authRenewed()`. Whether credentials were just renewed is
+not stored, so after a restart a 403 blocks again. While blocked, `sync()`
+calls do not count
+towards failing a restored update that waits for a refresh; a complete
+refresh still releases it, and after `authRenewed()` it is sent on the
+newest confirmed record.
 
 ### Refresh during a pending update
 
@@ -154,8 +303,9 @@ automatically, when:
 - the server answered a 5xx other than 503, which can follow a committed create
   (a gateway error or timeout, for example).
 
-A 503 or 429 conventionally means the request was not processed, and other 4xx
-responses mean it was refused; those keep the automatic backoff retry. Updates
+A 503 or 429 conventionally means the request was not processed; those keep
+the automatic backoff retry. Other 4xx responses mean it was refused; they
+follow [Failure classes](#failure-classes), and most fail at once. Updates
 (PUT, or PATCH with the full record) and deletes are resent as before. This
 classification is a convention, not a guarantee: a provider that commits a
 create and then answers 503 can still get a duplicate.
@@ -199,8 +349,9 @@ one record of it: namespace `syncables:outbox`, id `outbox`. Without
 outbox is kept. The outbox holds, per record, the queued writes in order, the
 failed writes, each write's state, attempts and last error, the conflict
 bases and conflicts of pending updates, idempotency keys, the confirmed remote
-record the writes are replayed on, and local ids of creates the server has not
-confirmed (with the writes queued behind them). A client built on the same
+record the writes are replayed on, local ids of creates the server has not
+confirmed (with the writes queued behind them), each write's last HTTP status,
+and the block while the server refuses the client's credentials. A client built on the same
 storage restores it before anything else:
 
 ```ts
@@ -316,8 +467,9 @@ loss. The limits of that claim:
 - An idempotency key prevents a duplicate only if the provider honours it.
 - A restored update is sent only after a refresh, but the provider can still
   change the record between that read and the request, as without a restart.
-  A resent delete that was already applied gets whatever the provider answers
-  (often 404) and is retried like any other 4xx.
+  A resent delete that was already applied usually gets a 404 or 410, which
+  settles it (see [Failure classes](#failure-classes)); any other answer is
+  classified as usual.
 - Not stored: the last synced snapshot and conditional-request cache (the
   next `sync()` reads everything again) and confirmed records without writes.
 
@@ -327,7 +479,10 @@ record with another version is left unchanged and `ready()` rejects, as do
 the methods that wait for it, rather than overwrite writes this client cannot
 read. Entries for a collection the current document lacks (queued writes and
 pending rebuilds), and entries that do not parse, are kept and written back
-unchanged; the next client tries them again. Set `outboxNamespace` to
+unchanged; the next client tries them again. The write field `lastStatus`,
+the state `blocked` and the top-level `authBlock` were added within version
+`1`; a stored `authBlock` that does not parse still blocks the client
+(`status` 0) until `authRenewed()`. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -527,6 +682,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `uncertain`. With `storage`, `create`/`update`/`remove` store the outbox before they
   resolve, and the request leaves after one more outbox store. A restored
   update waits for a `sync()` of its collection (`awaitingRefresh`).
+  Write failures are classified (`classifyWriteFailure`,
+  `defaultWriteFailureClass`): most 4xx fail at once instead of retrying,
+  a 404 or 410 to a delete settles it, and a 401 or 403 makes the write
+  `blocked` and stops all writes until `authRenewed()` (`authBlocked()`,
+  `onAuthBlocked`, `onAuthFailure: 'retry'` to keep retrying instead).
+  `Retry-After` lengthens the retry delay up to `retry.maxRetryAfterMs`
+  (default 1 hour). `pendingWrites()` entries
+  gain `lastStatus`, and `lastError` includes a response body excerpt.
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with
