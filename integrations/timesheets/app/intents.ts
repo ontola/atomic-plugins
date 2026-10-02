@@ -19,7 +19,9 @@
  *   see open intents overlapping its range replaces them: their staged
  *   changes are put back first, then the new plan is staged. An open intent
  *   that reaches outside the new range is not cut in two: the edit is
- *   refused until it is sent or discarded.
+ *   refused until it is sent or discarded. It also names the closed intents
+ *   it overlaps or whose rows it stages (`settledUnder`, #279), so a sent
+ *   edit does not count as open again when a later one changes its rows.
  * - **Concurrent intents** (S21). Two open intents that overlap, where
  *   neither replaces the other, were made on copies that could not see each
  *   other. Equal targets agree. Different targets are a conflict ("your
@@ -240,6 +242,34 @@ export function toSupersede(
     replace,
     outside: replace.filter(i => i.from < span.from || i.to > span.to),
   };
+}
+
+/**
+ * The settled intents a new range edit also replaces (#279): ones already
+ * closed (sent or discarded, not replaced) when it is made, that overlap
+ * its span or made or edited a row it stages. They have nothing staged, so
+ * nothing is put back. Naming them keeps them closed: otherwise the new
+ * edit's change on one of their rows would make them count as open again,
+ * a conflict with the new edit (S21) or, when replaced by a later one, a
+ * put-back of the new edit's change. Only intents this copy can see are
+ * named, so edits made apart (S21) still conflict.
+ */
+export function settledUnder(
+  intents: StoredIntent[],
+  open: StoredIntent[],
+  span: { from: number; to: number },
+  rows: string[],
+): StoredIntent[] {
+  const replaced = new Set(intents.flatMap(i => i.supersedes));
+  const still = new Set(open.map(i => i.id));
+  const staged = new Set(rows);
+
+  return intents.filter(
+    i =>
+      !still.has(i.id) &&
+      !replaced.has(i.id) &&
+      (overlaps(i, span) || i.rows.some(row => staged.has(row))),
+  );
 }
 
 export const targetLabel = (target: RangeTarget): TimeLabel =>
