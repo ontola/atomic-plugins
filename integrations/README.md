@@ -62,6 +62,17 @@ Not covered by the script:
   set `ATOMIC_SERVER_IMAGE` to run the published
   `ghcr.io/ontola/atomic-server-e2e:<pin>` image in Docker instead (AGENTS.md,
   "Shared pinned atomic-server build").
+- where the lanes listen. `serve.mjs` starts the local atomic-server binary
+  with `ATOMIC_IP=127.0.0.1` unless `ATOMIC_IP` is already set (then yours
+  wins), and the dev-server on `127.0.0.1` unless `DEV_SERVER_HOST` is set;
+  the mock proxy already defaulted to loopback. atomic-server's own default
+  is `::`, every interface, which on a host with a public address makes a
+  lane server "available" to anyone who can reach it. With
+  `ATOMIC_SERVER_IMAGE` the container still binds `0.0.0.0` and the port is
+  published on `127.0.0.1` only; the dev-server then listens on `0.0.0.0` so
+  the container can fetch it through `host.docker.internal` (the ontology
+  lane). A peer in Docker must reach the host on `127.0.0.1` too, so use
+  `--network host`, not `host.docker.internal`.
 - certify's `--layer sandbox` and `--layer all` (the default is `--layer js`). Both run
   `cargo test -p atomic-server` from this repo's root for the Rust tests
   named in each `package.json`'s `atomicCertification.sandboxTests`. That

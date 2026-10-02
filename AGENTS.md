@@ -387,6 +387,12 @@ it, apart from `pnpm install` in `browser/`. `run-lane.mjs` and `serve.mjs`
 read the same `ATOMIC_SERVER_CHECKOUT`, so keep it exported while you run
 lanes.
 
+- Lane servers listen on loopback. `serve.mjs` sets `ATOMIC_IP=127.0.0.1` for
+  the local binary unless `ATOMIC_IP` is already set (it wins), and starts
+  the dev-server on `127.0.0.1` (`DEV_SERVER_HOST` overrides). Don't rely on
+  a firewall, and don't make a lane peer in Docker reach the host through
+  `host.docker.internal`: use `--network host`. The image route is
+  unchanged (`0.0.0.0` inside, published on `127.0.0.1`).
 - Treat `$DIR` as read-only once it's built. Never commit in it or change
   its checkout, because other sessions may be using it at the same moment.
 - If you need atomic-server changes, make them in a separate worktree on a
@@ -502,7 +508,11 @@ In order, it:
 - exports `ATOMIC_SERVER_CHECKOUT=$HOME/.cache/atomic-plugins/atomic-server`
   and, because cloud containers have no IPv6, `ATOMIC_IP=0.0.0.0` through
   `$CLAUDE_ENV_FILE`. Without that, atomic-server exits with "Cannot bind to
-  endpoint :::<port>: Address family not supported by protocol";
+  endpoint :::<port>: Address family not supported by protocol.
+  Since `serve.mjs` now defaults to `127.0.0.1` this export is no longer
+  needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
+  in the cloud). The hook still sets it, so cloud lane servers bind
+  `0.0.0.0`; changing that is left to a session that can test in the cloud;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks
