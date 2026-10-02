@@ -626,9 +626,9 @@ async function rendersOf(
       const store = window.store!;
       await store.reloadResource(args.app);
 
-      return Object.values((await store.getResource(args.app)).getPropVals()).some(
-        v => Array.isArray(v) && v.includes(args.klass),
-      );
+      return Object.values(
+        (await store.getResource(args.app)).getPropVals(),
+      ).some(v => Array.isArray(v) && v.includes(args.klass));
     },
     { app, klass },
   );

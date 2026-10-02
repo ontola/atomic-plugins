@@ -6,8 +6,15 @@ This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
 on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
 the pin when this was first verified, includes it; see [Verified](#verified)
-for the pins it was last run against. The current pin is `a12b74a`; this
-package's E2E has not been re-run there (declared, not verified).
+for the pins it was last run against, the current pin `a12b74a` included
+(0.4.0, 2026-10-02).
+
+The importer below is one of two ways in. Since 0.4.0 the Money app
+(`app/`) also imports statements by itself, into a table of the shared
+`bank-transaction-v1` class, after a catalog install: see
+[Money app](#money-app-app) and [Shared class](#shared-class-bank-transaction-v1).
+The importer stays for drives that use it, and the app works on its table
+as before.
 
 1. **Publish** (once per server, by whoever maintains it): create a Plugin,
    replace its source with this folder's `plugin.js`, name it "Bank
@@ -55,14 +62,18 @@ No network operations or secrets are declared. File contents are runtime input,
 not plugin source. Proposals and approved transactions contain financial data
 and are handled by the user's AtomicServer; they are not sent to an LLM.
 
-`app/` is a separate drive app (shape 1 in AGENTS.md), the Money view of the
-same Bank transactions table ([design](design/DESIGN.md), #89). It never runs
-in the QuickJS sandbox and never writes imported bank fields: the importer
-above stays their only writer. `app/build.mjs` bundles it to one ES module
-exporting `view({ root, store })`, with no stylesheet file and no network
-code. It reads the table the host points it at (`store.getData()`), finds the
-banking properties through the table's row class, and subscribes to the table
-so rows from a new import appear without a reload.
+`app/` is a separate drive app (shape 1 in AGENTS.md), the Money view of a
+Bank transactions table ([design](design/DESIGN.md), #89). It never runs in
+the QuickJS sandbox. On the importer's table it never writes imported bank
+fields: the importer above stays their only writer there. On a table of the
+shared class `bank-transaction-v1` (its own table after a catalog install,
+or one someone made) it imports statements itself, with the same readers and
+identity rules, through the host's frame store (see
+[Shared class](#shared-class-bank-transaction-v1)). `app/build.mjs` bundles
+it to one ES module exporting `view({ root, store })`, with no stylesheet
+file and no network code. It reads the table the host points it at
+(`store.getData()`), finds the fields through the table's row class, and
+subscribes to the table so rows from a new import appear without a reload.
 
 Amounts are exact signed decimal **strings**, not floating point numbers.
 Opening/closing balances are reconciled with integer arithmetic (up to five
@@ -141,10 +152,18 @@ Browser: `node integrations/tooling/run-lane.mjs money --tier e2e` runs
 
 ## Money app (`app/`)
 
-A drive app (DESIGN.md in [`design/`](design/DESIGN.md), #89) that shows the
+A drive app (DESIGN.md in [`design/`](design/DESIGN.md), #89) that shows a
 Bank transactions table as a ledger. It is a view of the table it is opened
-on (`store.getData()`), so it belongs on the importer's table as an app
-view; the table's own Table tab stays next to it.
+on (`store.getData()`): the table a catalog install gave it, the importer's
+table (added there with Add view), or any table of the shared class
+`bank-transaction-v1`; the table's own Table tab stays next to it. Whose
+table it is decides how an import gets in (`controller.ts` `Source`):
+
+| Table                                                                | Rows read as                                                           | Import                                                                                  | Category and note                              |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| The importer's Bank transactions (`own` to the importer)             | its drive-local `bank-transaction` class, through the lens (`rows.ts`) | through the importer, with the host's review (`store.importer.run`, atomic-server#1774) | after "Allow editing" (atomic-server#1788)     |
+| The app's own table, from a catalog install                          | `bank-transaction-v1`, by published subject                            | the app's own writes (`app/write.ts`), no review step                                   | at once: the table is in the app's own subtree |
+| Another table of `bank-transaction-v1`, through Add view (#177 §3.0) | `bank-transaction-v1`, by published subject                            | the app's own writes, after "Allow editing" (the grant covers its `row-extras`, #1849)  | after "Allow editing"                          |
 
 - **Transactions**: account switcher (account + currency), a strip per
   account + currency (never summed across currencies) with the latest stored
@@ -163,12 +182,17 @@ view; the table's own Table tab stays next to it.
 - **Import statement**: checks a chosen or dropped file in the browser
   with the importer's own readers and identity rules (`app/check.ts`,
   `identity.ts`), shows the reconciliation per statement and what is new,
-  already imported or blocked, or a designed error, and then imports it
-  through the importer with the host's own review (`importer.run`,
-  atomic-server#1774). Nothing is written before Apply there.
+  already imported or blocked, or a designed error, and then imports it:
+  on the importer's table through the importer with the host's own review
+  (`importer.run`, atomic-server#1774); on a `bank-transaction-v1` table by
+  its own writes (`app/write.ts`), one row per new transaction with
+  progress in the button, then one statement row. Nothing is written before
+  Import. A write that fails midway leaves the rows written so far, which
+  the next check of the same file recognises, so a retry writes the rest.
 - **Imports**: the stored statements, with period, opening → closing,
-  entries and import date; on a table without them, one row per statement
-  the transactions came from.
+  entries and import date: the importer's Imported statements table on its
+  table, the app's own (under the App, see below) on a shared-class table;
+  on a table without them, one row per statement the transactions came from.
 - **Sources**: statement files; Moneybird and QuickBooks shown as not
   available yet.
 
@@ -178,28 +202,101 @@ Each host call is feature-detected (`getMany`, `getTheme`/`onThemeChange`,
 one, a pointer to the importer's Import tab instead of Import, the host's
 refusal instead of a save, statements derived from the rows.
 
-Evidence: unit tests with a fake store that models both a current and an
-older host (`app/*.test.ts`), screenshots and axe from
-`app/harness/screenshots.mjs`, and a host E2E test in `e2e/money.spec.ts`
-against `bc39dac4b`: it sets up the importer, installs the built app
-test-side as a new App that renders bank transactions, adds it as a
-read-only view through Add view, imports the synthetic MT940 from inside
-the app through the host's review, checks the strip's closing balance and
-the Imports tab, saves a category after clicking the host's "Allow
-editing", and checks the in-app check (nothing new; a changed transaction
-blocks).
+Evidence: unit tests with a fake store that models a current and an older
+host and the three tables above (`app/*.test.ts`; `app/shared.test.ts` for
+the shared class), screenshots and axe from `app/harness/screenshots.mjs`,
+and the host E2E tests in `e2e/money.spec.ts` (see [Verified](#verified)):
+the second installs the app from the catalog and imports the synthetic
+MT940 and camt.053 into its own table by the app's own writes, checks the
+rows the server holds (class, subjects, exact strings), the strip's closing
+balance and the Imports tab, saves a category with no "Allow editing", and
+checks the in-app check (nothing new; a changed transaction blocks); the
+third sets up the importer, adds the installed app to its table through Add
+view as a read-only view, imports through the host's review, and saves a
+category after clicking the host's "Allow editing".
 
 Catalog: the `money` entry in `integrations/catalog.json` carries the app
 (`app-module` `apps/money/<version>/ui.js`, the same version as this
 package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
-with `enabled: false`, so the Integrations page does not offer it. Not yet
-a working install path, and not tested since pin `2567fc30b` (the current pin is `a12b74a`, not re-checked): a catalog
-Install creates the app with a row class and table of its own
-(`createApp`), the importer's table offers under Add view only apps whose
-`renders` lists its row class (`useDriveApps.ts` `appsForClass`), and
-`store.importer.run` refuses an app that is not a view of an importer's
-table (`hostStore.ts`). The E2E adds the Bank transaction class to the
-app's `renders` test-side instead.
+with `enabled: false`, so the Integrations page does not offer it. The gate
+of `ontology-kit/` requires that while the shared ontology's base is on
+github.io (the card's `limitation` says "Waits for the stable ontology
+domain"). The install path itself works since 0.4.0 (the E2E installs from
+the catalog's Drive apps section): a catalog Install creates the app with a
+row class and table of its own (`createApp` without `rowClass`), and on
+every open the app fixes what that leaves out, inside its own subtree
+(`app/adopt.ts`; #177 spike S2): its own table's `classtype` becomes
+`bank-transaction-v1`, so what it imports there are shared rows; its App's
+`renders` lists `bank-transaction-v1` and every importer `bank-transaction`
+class in the drive (found by shortname, since Set up mints it per drive), so
+Add view offers it on the importer's table and on any table of the shared
+class (`useDriveApps.ts` `appsForClass`, exact subject); and its `row-extras`
+name the four bookkeeping Properties below. An importer set up after the
+app's last open is picked up by the next one. Once the host lets a catalog
+entry declare its row classes (#177 H2), the first two steps can go.
+
+## Shared class (`bank-transaction-v1`)
+
+Since 0.4.0 the Money app reads and writes the shared class
+`bank-transaction-v1` from [`ontology/`](../../ontology-kit/README.md)
+(#177 item 8): account, currency, amount (an exact decimal string), value
+date, booking date, description, reference, and the person's own category
+and note, at their published GitHub Pages subjects. The shortnames are money
+0.3.0's, unchanged. No host change was needed: the app writes rows the way
+the calendar, timesheets and issue-tracker apps do at the pin.
+
+- **The importer is unchanged.** Its Set up still mints the drive-local
+  `bank-transaction` class and properties from `bankingSchema()`: a
+  manifest `destination` cannot name a published class at the pin (both
+  manifest validators refuse `subject`; that host change is an issue for
+  Joep, superseding draft PR #252). The app reads that class through a lens
+  (`app/rows.ts` `importerLens`): the class's declared properties by
+  shortname, mapped onto the same fields. The lens's `from` is money's own
+  class, so it lives here, not in `ontology-kit/`.
+- **The app's own terms** (`app/own.ts`), all under the App, the one place
+  it may always write: four Properties in the App's own ontology for the
+  bookkeeping that is not part of the shared class (`bank-source-id`,
+  `bank-fingerprint`, `bank-statement`, `bank-transaction-code`), declared
+  as the App's `row-extras`; a `bank-statement-record` class and an
+  "Imported statements" table under the App, one row per imported statement
+  with its reconciled balances, plus `money-table` (which table its
+  transactions went to). Made on first open, found by shortname and class
+  afterwards; a same-named Property with another datatype is an error.
+- **Identity and dedupe** are the importer's (`identity.ts`): the app's
+  rows carry the same `bank-source-id` and `bank-fingerprint`, so a reimport
+  of an overlapping statement is recognised row by row, a changed booking
+  blocks the file, and a reference-free overlap with an earlier import is
+  refused, before anything is written. Not covered: two copies of the app
+  importing the same file at the same moment can both write a row (the
+  importer's server-side `localId` uniqueness has no equivalent for app
+  writes); the next check shows such a row as "already imported" twice.
+- **Reading is strict.** The shared fields are read by subject only, through
+  `ontology-kit/resolver.mjs`: no lookup by shortname or column. An amount
+  that is not an exact decimal with at most five fraction digits is shown
+  as "Not a valid amount" and left out of every sum; it is never parsed as a
+  float.
+- **A table you make yourself** (#177 item 13). Until New Table's class
+  search finds external classes (#177 H10) or a template uses the shared
+  class (H3), make such a table by pasting the class URL:
+  1. New → Table → "Use existing class", paste
+     `https://ontola.github.io/atomic-plugins/ontology/classes/bank-transaction-v1`
+     into the class field and press Enter (search does not find it; typing
+     or pasting the URL does, #177 spike S3).
+  2. On the new table: Add view → Bank statements (listed once the app has
+     been opened once, see above). Import statement asks for "Allow
+     editing" first; so does saving a category or note.
+
+  Rows you add there need account, currency, amount and value date to show
+  in the ledger (a row without them is not shown; the #177 rule "show it as
+  incomplete" is not built yet). This path has unit tests only; no E2E.
+
+- **Needs GitHub Pages.** The server fetches each shared term once, on first
+  use, and keeps it; the browser fetches it through its local-database
+  worker (#177 spike S1, H1). A drive whose server never fetched a term
+  cannot use it while Pages is down.
+- **An older host** without an App ontology (`default-ontology`), row access
+  or `importer.run` gets the 0.3.0 behaviour: reading, and a pointer to the
+  importer's Import tab.
 
 Build: `node integrations/money/app/build.mjs` (writes `app/dist/ui.js`,
 minified, one module). Screenshots, axe and the render budget:
@@ -207,6 +304,28 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.0 (`plugin.js` sha256
+`693f8535adb8920e92e3358349e635ebce45c4b60e48a38687609ae3015fc7b7`, which is
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.0/ui.js`, 108,795 bytes) the three tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-02 against the
+pin `a12b74a` (the build VPS's source build of it), fetching the shared terms
+from the real GitHub Pages URLs; see the end of this section for the second
+run on the kept lane store. What the run adds over 0.3.0: the app is
+installed from the catalog (not test-side); on its own table it imports the
+synthetic MT940 and camt.053 by its own writes, and the server then holds
+rows of class `bank-transaction-v1` with the published property subjects and
+the exact strings (`-12.34`, `2026-09-02`), its statement rows give the strip
+`€107.66`, a category saves with no "Allow editing" bar, a reimport finds
+nothing new and a changed booking is blocked; and Add view on the importer's
+table offers the installed app (the importer's class found by shortname on
+the app's first open), where the 0.3.0 flow runs unchanged. Not verified by
+an E2E: importing into a hand-made `bank-transaction-v1` table after "Allow
+editing" (unit tests only), and a host that serves the real catalog (the
+lane's dev-server serves the committed `apps/money/0.4.0/ui.js`).
+
+Earlier releases:
 
 `e2e/money.spec.ts` passed on 2026-09-25 against the pinned atomic-server
 `bc39dac4b` (earlier against `007869464`, `11264e83e` and `2f403624e`, which includes #1691,
