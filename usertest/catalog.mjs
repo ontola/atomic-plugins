@@ -61,7 +61,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 const VERSIONS = {
   calendar: 'usertest-11',
   'issue-tracker': 'usertest-8',
-  money: 'usertest-3',
+  money: 'usertest-4',
   notion: 'usertest-6',
   timesheets: 'usertest-8',
 };

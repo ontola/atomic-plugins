@@ -1,0 +1,50 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+info:
+  title: discord OAuth authorization requirements and authentication profiles
+  version: 2.0.0
+  description: >-
+    Revision 1's discordOAuth authorization-code scheme and its two reads,
+    plus x-authentication-profiles
+    (openapi-extensions/spec/authentication-profiles). The OAD declares a
+    bot token (BotToken, apiKey) and OAuth 2.0 together; a consumer selects
+    one profile and uses its scheme only on the operations that accept that
+    scheme on its own. Declared from Discord's API reference, not verified
+    against a live Discord account or bot.
+actions:
+- target: $.components.securitySchemes
+  update:
+    discordOAuth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://discord.com/oauth2/authorize
+          tokenUrl: https://discord.com/api/v10/oauth2/token
+          scopes:
+            identify: Read the authenticated user’s profile.
+            guilds: Read the guilds in which the user is a member.
+- target: $.paths['/users/@me'].get
+  update:
+    security:
+    - discordOAuth:
+      - identify
+- target: $.paths['/users/@me/guilds'].get
+  update:
+    security:
+    - discordOAuth:
+      - guilds
+- target: $.components
+  update:
+    x-authentication-profiles:
+      discordUser:
+        securityScheme: discordOAuth
+        description: >-
+          Act as the Discord user who connects, with their OAuth consent
+          (authorization code). Covers reading their profile and the guilds
+          they are a member of.
+      discordBot:
+        securityScheme: BotToken
+        description: >-
+          Act as an application's bot. Discord expects the Authorization
+          header value "Bot " followed by the bot token. Covers every
+          operation that accepts the bot token on its own.

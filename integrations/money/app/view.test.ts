@@ -134,6 +134,66 @@ describe('Money view: the shared class (#177)', () => {
   });
 });
 
+describe('Money view: incomplete rows (#177)', () => {
+  it('lists a row missing its amount above the ledger, with Open row, and leaves it out of the strip', async () => {
+    const store = fakeStore({
+      data: 'shared',
+      rows: [
+        seedRow('-1.50', '2026-09-22'),
+        {
+          ...seedRow('-9', '2026-09-22'),
+          'bank-amount': '',
+          'bank-description': 'Forgot the amount',
+        },
+      ],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is incomplete');
+    const item = region.querySelector('li')!;
+    expect(text(item)).toContain('Forgot the amount');
+    expect(text(item)).toContain('22 Sept');
+    expect(text(item)).toContain('Incomplete: missing Amount');
+    // The ledger and the strip hold the complete row only.
+    expect(root.querySelectorAll('.m-row')).toHaveLength(1);
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€1.50net');
+    expect(
+      text(root.querySelector('[role="tab"][aria-selected="true"]')),
+    ).toMatch(/^Transactions\s*1$/);
+    const button = item.querySelector<HTMLButtonElement>('button')!;
+    expect(text(button)).toBe('Open row');
+    expect(button.getAttribute('aria-label')).toBe(
+      'Open row Forgot the amount',
+    );
+    button.click();
+    await settle();
+    expect(store.opened).toEqual([item.getAttribute('data-incomplete')]);
+  });
+
+  it('with only incomplete rows, lists them above the first-run invitation; no Open row without openResource', async () => {
+    const root = await open(
+      fakeStore({
+        data: 'shared',
+        host: 'legacy',
+        rows: [{ ...seedRow('-9', '2026-09-22'), 'bank-currency': '' }],
+      }),
+    );
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('Incomplete: missing Currency');
+    expect(region.querySelector('button')).toBeNull();
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Bring in your bank transactions',
+    );
+    expect(text(root.querySelector('[role="status"]'))).toBe(
+      'No transactions yet',
+    );
+  });
+});
+
 describe('Money view: ledger', () => {
   it('renders a captioned table with day row groups and spoken amounts at ≥560px', async () => {
     const root = await open(fakeStore({ rows: sampleRows() }));
