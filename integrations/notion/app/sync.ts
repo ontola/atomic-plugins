@@ -639,7 +639,13 @@ export async function syncNotion(
   const pageId = bound.get('notion-page-id');
   if (!pageId) throw new Error('No column to key rows by Notion page id');
   const baselineProperty = bound.get(BASELINE_SHORTNAME);
-  const options = await ensureAllOptions(store, columns, bound, sources, reports);
+  const options = await ensureAllOptions(
+    store,
+    columns,
+    bound,
+    sources,
+    reports,
+  );
 
   const lenses = new NotionRowLenses({ columns, bound });
   const optionColumns = new Map(
@@ -649,6 +655,7 @@ export async function syncNotion(
         : [],
     ),
   );
+
   /** Host row values with select cells as the lens holds them: option ids. */
   const seedValues = (props: Readonly<Record<string, JSONValue>>) => {
     const out: Record<string, JSONValue> = { ...props };
@@ -657,14 +664,14 @@ export async function syncNotion(
       const ids = lensOptionValue(kind, props[property], options);
       // A single-option cell holding several Tags seeds its first: the seed
       // only gives the read something to unset; `keep` carries the cell.
-      const value =
-        kind === 'single' && Array.isArray(ids) ? ids[0] : ids;
+      const value = kind === 'single' && Array.isArray(ids) ? ids[0] : ids;
       if (value === undefined) delete out[property];
       else out[property] = value;
     }
 
     return out;
   };
+
   /** Lens row values with option ids as Tag subjects, for the host. */
   const hostValues = (lensValues: Record<string, LensValue>) => {
     const out: Record<string, JSONValue> = { ...lensValues };
@@ -678,6 +685,7 @@ export async function syncNotion(
 
     return out;
   };
+
   /** A host cell as the host should hold it: raw option ids become Tags. */
   const keptValue = (property: string, value: JSONValue | undefined) => {
     const kind = optionColumns.get(property);
@@ -686,6 +694,7 @@ export async function syncNotion(
       ? hostOptionValue(lensOptionValue(kind, value, options), options)
       : value;
   };
+
   const managed = [
     ...lenses.managed(),
     ...(baselineProperty ? [baselineProperty] : []),

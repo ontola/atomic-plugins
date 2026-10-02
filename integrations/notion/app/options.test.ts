@@ -11,8 +11,20 @@ import {
 } from './options.js';
 
 const index = indexTags([
-  { subject: 'atomic:t1', id: 'o1', name: 'Done', color: '#x', shortname: 'done' },
-  { subject: 'atomic:t2', id: 'o2', name: 'Docs', color: '#x', shortname: 'docs' },
+  {
+    subject: 'atomic:t1',
+    id: 'o1',
+    name: 'Done',
+    color: '#x',
+    shortname: 'done',
+  },
+  {
+    subject: 'atomic:t2',
+    id: 'o2',
+    name: 'Docs',
+    color: '#x',
+    shortname: 'docs',
+  },
 ]);
 
 describe('option tags', () => {
@@ -43,9 +55,9 @@ describe('option codec (host cell <-> lens value)', () => {
   it('gives a single-option column one id, or the list when the cell holds more', () => {
     expect(lensOptionValue('single', ['atomic:t1'], index)).toBe('o1');
     expect(lensOptionValue('single', [], index)).toBeUndefined();
-    expect(lensOptionValue('single', ['atomic:t1', 'atomic:t2'], index)).toEqual(
-      ['o1', 'o2'],
-    );
+    expect(
+      lensOptionValue('single', ['atomic:t1', 'atomic:t2'], index),
+    ).toEqual(['o1', 'o2']);
     expect(lensOptionValue('multiple', ['atomic:t1'], index)).toEqual(['o1']);
     expect(lensOptionValue('multiple', undefined, index)).toEqual([]);
   });
@@ -58,7 +70,9 @@ describe('option codec (host cell <-> lens value)', () => {
     ]);
     expect(hostOptionValue([], index)).toEqual([]);
     expect(hostOptionValue(undefined, index)).toBeUndefined();
-    expect(() => hostOptionValue('o3', index)).toThrow(/No tag for Notion option o3/);
+    expect(() => hostOptionValue('o3', index)).toThrow(
+      /No tag for Notion option o3/,
+    );
     expect(() => hostOptionValue('o1', EMPTY_INDEX)).toThrow(/No tag/);
   });
 });

@@ -116,7 +116,10 @@ export interface OptionIndex {
   readonly bySubject: ReadonlyMap<string, string>;
 }
 
-export const EMPTY_INDEX: OptionIndex = { byId: new Map(), bySubject: new Map() };
+export const EMPTY_INDEX: OptionIndex = {
+  byId: new Map(),
+  bySubject: new Map(),
+};
 
 export function indexTags(tags: Iterable<OptionTag>): OptionIndex {
   const byId = new Map<string, string>();
@@ -206,9 +209,7 @@ export function lensValueFor(
   value: JSONValue | undefined,
   index: OptionIndex,
 ): JSONValue | undefined {
-  return column.options
-    ? lensOptionValue(column.options, value, index)
-    : value;
+  return column.options ? lensOptionValue(column.options, value, index) : value;
 }
 
 /** Whether a Property resource is a select column (the host's shape). */

@@ -15,7 +15,10 @@
  * app opens, reviewed and sent as a page PATCH, and a field changed on both
  * sides waits for "Keep mine" or "Use Notion's". Since 0.3.0 the app is a
  * sync-status view (#177 Q9): the rows are read and edited in the host's
- * table (`setRowField`, a user's commit), never through the app.
+ * table (`setRowField`, a user's commit), never through the app. Since 0.4.0
+ * select, status and multi-select columns are the host's own select columns
+ * (one Tag per Notion option, `app/options.ts`), so the host's table shows
+ * option names, and a status edit sets the option's Tag (`setRowOption`).
  *
  * The app is installed from the catalog, as in the pets spec: the
  * Integrations page's Drive apps section, with the lane's dev-server serving
@@ -30,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -108,8 +111,17 @@ test.describe('notion drive plugin', () => {
         main.getByText(title, { exact: true }).first(),
       ).toBeVisible();
 
+    // Status and Tags cells show the option names (the Tags' chips), not
+    // Notion's option ids (0.4.0, app/options.ts).
+    for (const option of ['In progress', 'Not started', 'release', 'docs'])
+      await expect(
+        main.getByText(option, { exact: true }).first(),
+      ).toBeVisible();
+    await expect(main.getByText(DONE_OPTION)).toHaveCount(0);
+
     // Columns are named after the Notion properties and keep the lens's
-    // datatypes rather than becoming JSON.
+    // datatypes rather than becoming JSON; the option columns are the host's
+    // select columns (`resourceArray` of Tags, `allowsOnly` = the options).
     const datatypes = await page.evaluate(async () => {
       const store = window.store!;
       const table = await store.getResource(
@@ -128,15 +140,32 @@ test.describe('notion drive plugin', () => {
       return Object.fromEntries(
         properties.map(p => [
           p.get('https://atomicdata.dev/properties/name'),
-          p.get('https://atomicdata.dev/properties/datatype'),
+          {
+            datatype: p.get('https://atomicdata.dev/properties/datatype'),
+            isA: p.getClasses(),
+            allowsOnly: (
+              (p.get('https://atomicdata.dev/properties/allowsOnly') as
+                | string[]
+                | undefined) ?? []
+            ).length,
+          },
         ]),
       );
     });
+    const RESOURCE_ARRAY = 'https://atomicdata.dev/datatypes/resourceArray';
+    const SELECT = 'https://atomicdata.dev/classes/SelectProperty';
     expect(datatypes).toMatchObject({
-      Done: 'https://atomicdata.dev/datatypes/boolean',
-      Points: 'https://atomicdata.dev/datatypes/float',
-      Status: 'https://atomicdata.dev/datatypes/string',
-      'Last edited in Notion': 'https://atomicdata.dev/datatypes/timestamp',
+      Done: { datatype: 'https://atomicdata.dev/datatypes/boolean' },
+      Points: { datatype: 'https://atomicdata.dev/datatypes/float' },
+      Status: {
+        datatype: RESOURCE_ARRAY,
+        isA: expect.arrayContaining([SELECT]),
+        allowsOnly: 3,
+      },
+      Tags: { datatype: RESOURCE_ARRAY, allowsOnly: 2 },
+      'Last edited in Notion': {
+        datatype: 'https://atomicdata.dev/datatypes/timestamp',
+      },
     });
 
     // Back to the app for each of its states, against the fixture's
@@ -169,21 +198,44 @@ const STATUS = 'notion-253341555070';
 /**
  * Sets one column (by shortname) of the row named `title` from the host
  * page: a commit by the user, as an edit in the host's table is. This is
- * how rows are edited since 0.3.0; the app has no cells of its own.
+ * how rows are edited since 0.3.0; the app has no cells of its own. With
+ * `option` set, `value` is a Notion option id and the cell gets that
+ * option's Tag, as picking it in the host's select cell would (0.4.0).
  */
 async function setRowField(
   page: Page,
   title: string,
   shortname: string,
   value: string | number | boolean,
+  option = false,
 ) {
   await page.evaluate(
-    async ([rowTitle, short, newValue]) => {
+    async ([rowTitle, short, newValue, asOption]) => {
       const store = window.store!;
       const NAME = 'https://atomicdata.dev/properties/name';
+      const SHORTNAME = 'https://atomicdata.dev/properties/shortname';
+      const ALLOWS_ONLY = 'https://atomicdata.dev/properties/allowsOnly';
       const app = await store.getResource(
         new URL(location.href).searchParams.get('subject')!,
       );
+
+      /** The Tag of a Notion option among a select column's `allowsOnly`. */
+      const tagOf = async (column: string, optionId: string) => {
+        const property = await store.getResource(column);
+        const allowed = (property.get(ALLOWS_ONLY) as string[]) ?? [];
+
+        for (const subject of allowed) {
+          const tag = await store.getResource(subject);
+
+          for (const [key, held] of Object.entries(tag.getPropVals())) {
+            if (held !== optionId) continue;
+            const found = (await store.getResource(key)).get(SHORTNAME);
+            if (found === 'notion-option-id') return subject;
+          }
+        }
+
+        throw new Error(`no tag for option ${optionId} in ${column}`);
+      };
 
       for (const candidate of Object.values(app.getPropVals())) {
         if (typeof candidate !== 'string' || !candidate.includes(':')) continue;
@@ -199,11 +251,12 @@ async function setRowField(
           if (row.get(NAME) !== rowTitle) continue;
 
           for (const property of Object.keys(row.getPropVals())) {
-            const found = (await store.getResource(property)).get(
-              'https://atomicdata.dev/properties/shortname',
-            );
+            const found = (await store.getResource(property)).get(SHORTNAME);
             if (found !== short) continue;
-            await row.set(property, newValue);
+            await row.set(
+              property,
+              asOption ? [await tagOf(property, String(newValue))] : newValue,
+            );
             await row.save();
 
             return;
@@ -215,7 +268,7 @@ async function setRowField(
 
       throw new Error(`no row named ${rowTitle}`);
     },
-    [title, shortname, value] as const,
+    [title, shortname, value, option] as const,
   );
 }
 
@@ -270,13 +323,21 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await page.keyboard.press('Escape');
     await expect(details).toBeHidden();
 
-    // N7: a rename in Notion shows after one sync, rows untouched. The app
-    // shows option names only in the review, so set the row's Status in the
-    // host's table and read it back there: before → after by name, with the
-    // renamed option. Then discard, which puts Notion's value back.
+    // N7: a rename in Notion shows after one sync, rows untouched: the
+    // option's Tag is renamed, so the host's table shows "Shipped" where it
+    // showed "Done" (0.4.0). Then set the row's Status to that option in
+    // the host's table and read it back in the review: before → after by
+    // name. Then discard, which puts Notion's value back.
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
-    await setRowField(page, 'Launch plan', STATUS, DONE_OPTION);
+    const statusAppUrl = page.url();
+    await card.getByRole('button', { name: 'Open table' }).click();
+    await expect(
+      page.getByRole('main').getByText('Shipped', { exact: true }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await shot('n7-table-renamed');
+    await page.goto(statusAppUrl);
+    await setRowField(page, 'Launch plan', STATUS, DONE_OPTION, true);
     await page.reload();
     await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
       timeout: 60_000,

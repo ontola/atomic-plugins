@@ -96,7 +96,8 @@ export async function loadSchema(
       datatype: String(property.get(atomic.datatype) ?? ''),
       ...(isSelectProperty(property)
         ? {
-            options: property.get(dataBrowser.max) === 1 ? 'single' : 'multiple',
+            options:
+              property.get(dataBrowser.max) === 1 ? 'single' : 'multiple',
           }
         : {}),
     });

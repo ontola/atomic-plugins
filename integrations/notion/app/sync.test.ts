@@ -163,9 +163,30 @@ describe('syncNotion', () => {
         ];
       }),
     ).toEqual([
-      [status, [dataBrowser.tag], 'not-started', 'Not started', OPTION_COLOURS.default, 'b1f5a3c2-0001-4000-8000-000000000001'],
-      [status, [dataBrowser.tag], 'in-progress', 'In progress', OPTION_COLOURS.blue, 'b1f5a3c2-0001-4000-8000-000000000002'],
-      [status, [dataBrowser.tag], 'done', 'Done', OPTION_COLOURS.green, 'b1f5a3c2-0001-4000-8000-000000000003'],
+      [
+        status,
+        [dataBrowser.tag],
+        'not-started',
+        'Not started',
+        OPTION_COLOURS.default,
+        'b1f5a3c2-0001-4000-8000-000000000001',
+      ],
+      [
+        status,
+        [dataBrowser.tag],
+        'in-progress',
+        'In progress',
+        OPTION_COLOURS.blue,
+        'b1f5a3c2-0001-4000-8000-000000000002',
+      ],
+      [
+        status,
+        [dataBrowser.tag],
+        'done',
+        'Done',
+        OPTION_COLOURS.green,
+        'b1f5a3c2-0001-4000-8000-000000000003',
+      ],
     ]);
     const tagOf = (id: string) =>
       [...store.resources].find(([, p]) => p[optionId] === id)![0];
@@ -198,7 +219,13 @@ describe('syncNotion', () => {
     );
     // Nothing is written outside the app's own subtree: the ontology, the
     // class, the table and its rows, and the Tags under the column Properties.
-    const own = new Set([ONTOLOGY, ROW_CLASS, TABLE, APP, ...byShortname.values()]);
+    const own = new Set([
+      ONTOLOGY,
+      ROW_CLASS,
+      TABLE,
+      APP,
+      ...byShortname.values(),
+    ]);
     for (const { subject } of store.writes)
       expect(own).toContain(store.resources.get(subject)![PARENT] ?? subject);
   });
@@ -378,7 +405,8 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
     const writes = store.writes.length;
     const done = 'b1f5a3c2-0001-4000-8000-000000000003';
     const tag = [...store.resources].find(
-      ([, p]) => p[atomic.name] === 'Done' && p[IS_A]?.toString() === dataBrowser.tag,
+      ([, p]) =>
+        p[atomic.name] === 'Done' && p[IS_A]?.toString() === dataBrowser.tag,
     )!;
     proxy.api.renameOption(done, 'Shipped');
     const again = await syncNotion(store, transport);

@@ -453,12 +453,15 @@ describe('select cells (options.ts)', () => {
     // cells, no Tags.
     const status = store.resources.get(column(STATUS))!;
     const tags = store.resources.get(column(TAGS))!;
+
     for (const [property, datatype] of [
       [status, 'https://atomicdata.dev/datatypes/string'],
       [tags, 'https://atomicdata.dev/datatypes/json'],
     ] as const) {
       property[atomic.datatype] = datatype;
-      property['https://atomicdata.dev/properties/isA'] = [atomic.propertyClass];
+      property['https://atomicdata.dev/properties/isA'] = [
+        atomic.propertyClass,
+      ];
       for (const key of [
         'https://atomicdata.dev/properties/classtype',
         'https://atomicdata.dev/properties/allowsOnly',
@@ -466,6 +469,7 @@ describe('select cells (options.ts)', () => {
       ])
         delete property[key];
     }
+
     for (const [subject, props] of [...store.resources])
       if (props[PARENT] === column(STATUS) || props[PARENT] === column(TAGS))
         store.resources.delete(subject);
@@ -474,10 +478,12 @@ describe('select cells (options.ts)', () => {
       [CHANGELOG]: [SHIPPED, []],
       [RETRO]: ['b1f5a3c2-0001-4000-8000-000000000001', [DOCS]],
     };
+
     for (const [pageId, [s, t]] of Object.entries(raw)) {
       rowOf(pageId)[1][column(STATUS)] = s;
       rowOf(pageId)[1][column(TAGS)] = t;
     }
+
     // An edit made in the table before the upgrade, as 0.3.0 cells held it.
     edit(LAUNCH, STATUS, SHIPPED);
     expect(changesOf(await controller.load())).toMatchObject([
