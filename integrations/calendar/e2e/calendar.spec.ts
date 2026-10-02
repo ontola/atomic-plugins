@@ -84,6 +84,7 @@ test.describe('calendar drive app', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
 
     const app = page.frameLocator(APP_FRAME);
@@ -331,6 +332,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await page.emulateMedia({ colorScheme: 'light' });
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
@@ -393,6 +395,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
@@ -400,8 +403,8 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
 
     // C8: the host asks before opening Google's page for the event.
     await app.getByRole('button', { name: 'Agenda', exact: true }).click();
-    // The mock's fixture is shared by the lane's tests, so the timed event
-    // may carry an earlier test's title; it is the one with a room.
+    // The mock's fixture is reset above; the timed event is the one with a
+    // room.
     await app
       .getByRole('button', { name: /, Room \d+, Synthetic calendar/ })
       .click();
@@ -447,13 +450,14 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
     await importPrimary(app);
     const table = await tableOf(page);
-    // The mock's fixture is shared by the lane's tests, so the timed event
-    // may carry an earlier test's title; it is the one with a room.
+    // The mock's fixture is reset above; the timed event is the one with a
+    // room.
     const rows = await rowsOf(page);
     const timed = rows.find(r => /^Room \d+$/.test(String(r[LOCATION])))!;
     const trip = rows.find(r => r.name === 'Calendar three-day fixture')!;
@@ -620,6 +624,7 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(300_000);
+    await resetFixture();
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     // The first open declares the row extras and renders event-v1.
@@ -990,6 +995,17 @@ async function driver(name: string, args: unknown[]) {
   if (!response.ok) throw new Error(`driver ${name}: HTTP ${response.status}`);
 
   return response.json();
+}
+
+/**
+ * Puts the mock's calendar back as a new lane has it: the initial events and
+ * ETags, no recorded requests or writes. The mock proxy outlives a test
+ * attempt and its fixture is shared by the file's tests, so each test that
+ * reads or edits it calls this first, and a Playwright retry starts from the
+ * same state as the first attempt.
+ */
+async function resetFixture() {
+  await driver('reset', []);
 }
 
 /** The app's table rows, keyed by property shortname, via window.store. */

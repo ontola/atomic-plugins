@@ -110,6 +110,16 @@ describe('github-issues fixture drivers', () => {
     expect(tracker.snapshot('atomic-fixture/other').issues).toEqual([]);
   });
 
+  it('reset also drops the failures failNext left pending', () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(503, 2);
+    tracker.reset('atomic-fixture/other');
+
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      200,
+    );
+  });
+
   it('failNext answers the next requests with an error, then recovers', () => {
     const tracker = githubTracker({ scenario: 'user-testing' });
     tracker.failNext(503, 2);

@@ -48,7 +48,10 @@ test.describe('notion drive plugin', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(300_000);
-    await driver('setScenario', ['default']);
+    // The mock proxy outlives an attempt: a retry starts from the seeded
+    // pages, options and scenario again, not from what the first one did
+    // (Points 9, the renamed option).
+    await driver('reset', []);
     await installFromCatalog(page);
 
     const app = page.frameLocator(APP_FRAME);
@@ -495,8 +498,9 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(card).toContainText('5 rows in this table');
     await shot('disconnected');
   } finally {
-    await driver('setScenario', ['default']);
-    await driver('renameOption', [DONE_OPTION, 'Done']).catch(() => {});
+    // Leaves the fixture as it found it for any later test; a retry resets
+    // it first as well, so this is not what the retry relies on.
+    await driver('reset', []);
   }
 }
 
