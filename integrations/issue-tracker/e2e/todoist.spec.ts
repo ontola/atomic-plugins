@@ -72,6 +72,10 @@ test.describe('Todoist drive app', () => {
     const status = app.getByRole('status');
     const synced = status.filter({ hasText: 'Last synced' });
     const rows = app.locator('tr[data-task]');
+    // The mock proxy outlives an attempt: a retry finds the tasks an earlier
+    // attempt completed and removed, so bring both back first.
+    for (const id of ['synthetic-task-1', 'synthetic-task-3'])
+      await fixture('reopenTask', [id]);
 
     // 1. Install from the catalog and connect.
     await installFromCatalog(page);

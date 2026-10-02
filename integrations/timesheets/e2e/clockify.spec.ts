@@ -210,10 +210,16 @@ test.describe('timesheets drive app', () => {
 
     // The drive holds settings, never the connection or the key.
     // The connection lives at the proxy, owned by the signed-in user and
-    // delegated to this app; the page keeps nothing credential-like.
-    const connections = await proxyConnections('clockify');
+    // delegated to this app; the page keeps nothing credential-like. The
+    // lane's one mock proxy outlives a test attempt, so a retry also sees the
+    // connection an earlier attempt's agent made: only this attempt's agent's
+    // connections count.
+    const me = await signedInAgent(page);
+    const mine = async () =>
+      (await proxyConnections('clockify')).filter(c => c.owner === me);
+    const connections = await mine();
     expect(connections).toHaveLength(1);
-    expect(connections[0].owner).toBe(await signedInAgent(page));
+    expect(connections[0].owner).toBe(me);
     expect(connections[0].delegations).toHaveLength(1);
     expect(await page.evaluate(() => Object.keys(localStorage))).not.toEqual(
       expect.arrayContaining([
@@ -379,7 +385,7 @@ test.describe('timesheets drive app', () => {
       .getByRole('button', { name: 'Disconnect', exact: true })
       .click();
     await expect(status).toContainText('Not connected', { timeout: 30_000 });
-    expect((await proxyConnections('clockify'))[0].delegations).toHaveLength(0);
+    expect((await mine())[0].delegations).toHaveLength(0);
     await expectRows(page, table);
   });
 
