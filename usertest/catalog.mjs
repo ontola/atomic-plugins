@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Builds the user-testing catalog into a folder that deploy.sh copies to the
- * droplet's /srv/catalog:
+ * user-testing server's /srv/catalog:
  *
  *   node usertest/catalog.mjs [out]      # default out: usertest/out
  *

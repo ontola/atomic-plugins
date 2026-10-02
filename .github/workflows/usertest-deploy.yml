@@ -1,10 +1,11 @@
 name: Deploy user-testing instance
 
-# Deploys usertest/ to the user-testing droplet (usertest/README.md): builds
-# the test catalog with usertest/catalog.mjs, copies it and the page,
-# moderator, collector, Caddyfile and server.sh with usertest/deploy.sh (which
-# restarts Caddy), and optionally restarts the containers. The same commands
-# as a deploy from a laptop, so the two cannot drift.
+# Deploys usertest/ to the user-testing server, claude-build
+# (usertest/README.md): builds the test catalog with usertest/catalog.mjs,
+# copies it and the page, moderator, collector, Caddyfile and server.sh with
+# usertest/deploy.sh (which restarts Caddy), and optionally restarts the
+# containers. The same commands as a deploy from a laptop, so the two cannot
+# drift.
 #
 # Run by hand only (Actions -> Deploy user-testing instance -> Run workflow):
 # restarting the moderator or atomic-server ends sessions in progress, so no
@@ -14,13 +15,16 @@ name: Deploy user-testing instance
 # Setup, once, by a repository admin (see usertest/README.md, "Deploying from
 # GitHub Actions"): a GitHub environment named `usertest` holding
 #   - secret USERTEST_SSH_KEY: a private key whose public half is in the
-#     droplet's /root/.ssh/authorized_keys, used for nothing else;
-#   - secret USERTEST_SSH_KNOWN_HOSTS: the droplet's host key lines
-#     (`ssh-keyscan 178.62.223.35`, checked against the droplet's own
+#     server's /root/.ssh/authorized_keys, used for nothing else (root SSH
+#     login is otherwise off there);
+#   - secret USERTEST_SSH_KNOWN_HOSTS: the server's host key lines
+#     (`ssh-keyscan 188.245.144.252`, checked against the server's own
 #     /etc/ssh/ssh_host_*_key.pub), so the job never trusts a key on first
 #     use;
-#   - variables USERTEST_TARGET (root@178.62.223.35) and USERTEST_BASE_DOMAIN
-#     (178-62-223-35.sslip.io); the defaults below are those values.
+#   - variables USERTEST_TARGET (root@188.245.144.252) and USERTEST_BASE_DOMAIN
+#     (usertest.michielbdejong.com); the defaults below are those values.
+#     Until 2026-10-02 the instance ran on a DigitalOcean droplet
+#     (root@178.62.223.35, 178-62-223-35.sslip.io).
 
 on:
   workflow_dispatch:
@@ -56,13 +60,13 @@ env:
 
 jobs:
   deploy:
-    name: Deploy to the droplet
+    name: Deploy to the user-testing server
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: usertest
     env:
-      TARGET: ${{ vars.USERTEST_TARGET || 'root@178.62.223.35' }}
-      BASE_DOMAIN: ${{ vars.USERTEST_BASE_DOMAIN || '178-62-223-35.sslip.io' }}
+      TARGET: ${{ vars.USERTEST_TARGET || 'root@188.245.144.252' }}
+      BASE_DOMAIN: ${{ vars.USERTEST_BASE_DOMAIN || 'usertest.michielbdejong.com' }}
     steps:
       - name: Checkout atomic-plugins
         uses: actions/checkout@v4
@@ -120,7 +124,7 @@ jobs:
         run: node usertest/catalog.mjs
 
       # Fails when an app changed without a version bump in catalog.mjs,
-      # before anything on the droplet is touched.
+      # before anything on the server is touched.
       - name: Check app versions against the live catalog
         working-directory: atomic-plugins
         run: node usertest/check-live.mjs "https://catalog.$BASE_DOMAIN/catalog.json"

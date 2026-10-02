@@ -202,8 +202,8 @@ In `app/import.test.ts` (fake host, 65 issues + 141 pull requests + 106
 comments), the import went from 581 proxy calls, 343 state writes and
 280,004,627 bytes of state written to 68 proxy calls, 7 state writes and
 6,186,807 bytes; the 187 table writes (one per imported row or Message,
-plus set-up) are unchanged. How long one `/app-write` takes on the droplet
-is not measured here. Later passes that bring in GitHub changes to issues
+plus set-up) are unchanged. How long one `/app-write` takes on the
+user-testing server is not measured here. Later passes that bring in GitHub changes to issues
 already in the table still read each changed item back and checkpoint
 before writing it; for a few changed items that is fine, for hundreds it is
 slow.

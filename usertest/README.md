@@ -3,8 +3,12 @@
 An atomic-server test instance, where people try new Atomic features (the
 drive apps, and parts of Atomic itself) on their own laptop and with their
 own provider accounts. It replaces sessions on one
-prepared laptop. It runs on one DigitalOcean droplet, set up on 2026-09-28
-(Ubuntu 24.04, 2 vCPU, 4 GB, AMS3). This folder holds everything needed to
+prepared laptop. It runs on claude-build, a Hetzner Cloud CPX42 (8 vCPU,
+16 GB, 320 GB, Nuremberg, Ubuntu 24.04, `188.245.144.252`), since 2026-10-02.
+That is also the build server where Claude Code sessions work on these repos
+(see [Sharing the server with builds](#sharing-the-server-with-builds)).
+Until then it ran on a DigitalOcean droplet (`178.62.223.35`, set up on
+2026-09-28, destroyed on 2026-10-02). This folder holds everything needed to
 rebuild it.
 
 | Host | What |
@@ -14,12 +18,32 @@ rebuild it.
 | `https://logs.<base-domain>` | the log collector (`collector/`) |
 | `https://plugins.<base-domain>/usertest/` | the moderated-session page (`page/`) and its voice moderator (`moderator/`, at `/usertest/api/`) |
 | `https://<slug>.routes.<base-domain>` | a server plugin's installation origin, only with plugin routes on ([Trying server plugins](#trying-server-plugins-remotestorage)) |
-| `https://localthought.io` | the integration proxy, shared with everyone else (not on the droplet) |
+| `https://localthought.io` | the integration proxy, shared with everyone else (not on this server) |
 
-The base domain is currently `178-62-223-35.sslip.io`. sslip.io resolves
-`<anything>.<a-b-c-d>.sslip.io` to the IP address `a.b.c.d`, so no DNS setup
-is needed. Drives are tied to the host name. Moving to a real domain later
-means fresh drives.
+The base domain is `usertest.michielbdejong.com`. Its DNS is at Cloudflare:
+two A records, `*.usertest` and `*.routes.usertest`, point to
+`188.245.144.252`, DNS only (not proxied), so Caddy still gets the Let's
+Encrypt certificates itself. A wildcard covers one label, hence the second
+record for the routes hosts. Until 2026-10-02 the base domain was
+`178-62-223-35.sslip.io` on the old droplet. Drives are tied to the host name,
+so testers start with fresh drives on the new domain; the old droplet's store
+is backed up on claude-build in `~/backups/`.
+
+Log in as `claude@188.245.144.252` (key only) and use `sudo`, which needs no
+password. Root SSH login is off, except for the deploy workflow's own key
+([Deploying from GitHub Actions](#deploying-from-github-actions)). A session
+running on claude-build itself runs the commands below without the
+`ssh claude@188.245.144.252` part, for example
+`sudo sh /opt/usertest/moderator/run.sh`.
+
+## Sharing the server with builds
+
+The instance shares claude-build with Claude Code sessions that build and
+test these repos. So that builds don't slow down sessions, the `claude`
+user's slice has `CPUWeight=25` and `IOWeight=50`: builds yield CPU and disk
+to the user-testing containers when both want them. `/usr/local/bin/disk-guard`
+runs from cron every 10 minutes and frees a 20 GB reserve file when the disk
+is 90% full.
 
 ## What differs from the published catalog
 
@@ -27,7 +51,7 @@ means fresh drives.
 app installable: Google Calendar, GitHub issues, Bank statements, Clockify,
 Notion and Pets. It also sets `experimental: false`, so testers need no
 toggle. The published catalog keeps these disabled until launch. Apps not yet
-in `apps/` are built from this checkout and served from the droplet. Pets
+in `apps/` are built from this checkout and served from this server. Pets
 uses its published module.
 
 It also adds a sample-data entry for four of them (#196): "Google Calendar
@@ -52,12 +76,13 @@ Known limits, as of 2026-09-28:
 
 ## Setting it up from scratch
 
-On a fresh Ubuntu 24.04 droplet, as root:
+On a fresh Ubuntu 24.04 server, as root, with the two DNS records above
+pointing to it:
 
 ```sh
 apt-get update && apt-get install -y docker.io caddy
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
-printf 'BASE_DOMAIN=%s\nACME_EMAIL=%s\n' 178-62-223-35.sslip.io you@example.org > /etc/caddy/usertest.env
+printf 'BASE_DOMAIN=%s\nACME_EMAIL=%s\n' usertest.michielbdejong.com you@example.org > /etc/caddy/usertest.env
 mkdir -p /var/lib/usertest-logs
 ```
 
@@ -71,12 +96,17 @@ dependencies installed:
 ```sh
 for a in calendar money notion timesheets; do (cd integrations/$a && pnpm install); done
 (cd integrations/issue-tracker/app && pnpm install --frozen-lockfile)
-USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
-sh usertest/deploy.sh root@178.62.223.35
-ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
-ssh root@178.62.223.35 sh /opt/usertest/moderator/run.sh   # needs /etc/anthropic.env
-ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
+USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
+sh usertest/deploy.sh root@188.245.144.252
+ssh claude@188.245.144.252 sudo sh /opt/usertest/collector/run.sh
+ssh claude@188.245.144.252 sudo sh /opt/usertest/moderator/run.sh   # needs /etc/anthropic.env
+ssh claude@188.245.144.252 sudo sh /opt/usertest/server.sh usertest.michielbdejong.com
 ```
+
+`deploy.sh` logs in as the user it is given and runs its commands without
+`sudo`, so it needs `root@`. On claude-build root SSH login is off except for
+the deploy workflow's key, so a deploy goes through the workflow
+([Deploying from GitHub Actions](#deploying-from-github-actions)).
 
 ## Updating an app
 
@@ -84,17 +114,17 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
    Its sample-data entry, if it has one, follows: its version is the app's
    plus `SAMPLE_VERSION`. A change to `sample-data/` or to a fixture it
    imports bumps `SAMPLE_VERSION` instead.
-2. Run `USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs`,
-   then `sh usertest/deploy.sh root@178.62.223.35`.
+2. Run `USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs`,
+   then `sh usertest/deploy.sh root@188.245.144.252`.
 3. On Integrations, testers who installed the old version see "Update to
    <version>".
 
 Never rebuild into an existing version: the host refuses a module whose bytes
 no longer match the hash in the catalog.
-`node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json`,
+`node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json`,
 run after `catalog.mjs`, fails when an app was rebuilt into a version the
-droplet already serves with other bytes. The deploy workflow below runs it
-before it touches the droplet.
+server already serves with other bytes. The deploy workflow below runs it
+before it touches the server.
 
 ## Deploying from GitHub Actions
 
@@ -108,21 +138,24 @@ progress), the collector, and atomic-server with `server.sh` (ends sessions
 in progress; with a plugin-routes level). Afterwards it checks that the page,
 the moderator's `/health`, the catalog and atomic-server answer.
 
-Setting it up, once, needs a repository admin and root on the droplet:
+Setting it up, once, needs a repository admin and `sudo` on the server:
 
-1. Make a key used for nothing else, and allow it on the droplet:
+1. Make a key used for nothing else, and allow it for root on the server:
 
    ```sh
    ssh-keygen -t ed25519 -N '' -C usertest-deploy -f usertest-deploy
-   ssh root@178.62.223.35 'cat >> /root/.ssh/authorized_keys' < usertest-deploy.pub
+   ssh claude@188.245.144.252 'sudo tee -a /root/.ssh/authorized_keys >/dev/null' < usertest-deploy.pub
    ```
 
-2. Get the droplet's host keys, and compare their fingerprints
-   (`ssh-keygen -lf`) with the droplet's own
-   (`ssh root@178.62.223.35 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done'`):
+   Root SSH login is otherwise off on claude-build; sshd must allow root
+   with this key only.
+
+2. Get the server's host keys, and compare their fingerprints
+   (`ssh-keygen -lf`) with the server's own
+   (`ssh claude@188.245.144.252 'for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf $f; done'`):
 
    ```sh
-   ssh-keyscan 178.62.223.35 > usertest-known-hosts
+   ssh-keyscan 188.245.144.252 > usertest-known-hosts
    ```
 
 3. In the repository's Settings → Environments, create `usertest` (and
@@ -130,12 +163,13 @@ Setting it up, once, needs a repository admin and root on the droplet:
    approval per deploy). Add the secrets `USERTEST_SSH_KEY` (the contents of
    `usertest-deploy`) and `USERTEST_SSH_KNOWN_HOSTS` (the contents of
    `usertest-known-hosts`). The variables `USERTEST_TARGET` and
-   `USERTEST_BASE_DOMAIN` are optional; they default to `root@178.62.223.35`
-   and `178-62-223-35.sslip.io`. Then delete the local `usertest-deploy`.
+   `USERTEST_BASE_DOMAIN` are optional; they default to `root@188.245.144.252`
+   and `usertest.michielbdejong.com`. Then delete the local `usertest-deploy`.
 
-The key logs in as root, like a deploy from a laptop does. Anyone who can
-push to a branch the `usertest` environment allows can deploy, so keep that
-limited to `main`. Not run yet: the workflow has not deployed to the droplet.
+The key logs in as root, which `deploy.sh` needs: it doesn't use `sudo`.
+Anyone who can push to a branch the `usertest` environment allows can deploy,
+so keep that limited to `main`. Not run yet: the workflow has not deployed to
+either server.
 The build and `check-live.mjs` were checked locally on 2026-09-30.
 
 ## Trying server plugins (remoteStorage)
@@ -144,10 +178,10 @@ Server plugins answer HTTP requests themselves (plugin routes). This
 section is for trying [remoteStorage](../integrations/remotestorage/README.md)
 by hand; testers don't need it, and it is off unless `server.sh` is started
 with `USERTEST_PLUGIN_ROUTES`. As of 2026-09-29 none of this has run on the
-droplet yet. Checked locally: the Caddyfile in Docker with Caddy 2.11.4 (a
+old droplet. Checked locally: the Caddyfile in Docker with Caddy 2.11.4 (a
 certificate for an allowlisted routes host, a refused handshake for any
 other; not with Ubuntu 24.04's packaged Caddy 2.6.2, which `deploy.sh`
-validates against on the droplet), and that the `-plugin-routes` image of
+validates against on the old droplet), and that the `-plugin-routes` image of
 the previous pin (`2567fc30b`) starts with these settings. That
 candidate15 has what remoteStorage needs from the host was read from its
 source, not run.
@@ -163,12 +197,12 @@ source, not run.
 - Each server-plugin Installation answers on its own origin,
   `https://<slug>.routes.<base-domain>`, where `<slug>` is 32 hex characters
   (the start of the BLAKE3 hash of the Installation's subject).
-  atomic-server picks the Installation by the `Host` header. sslip.io
-  resolves these names to the droplet like any other.
+  atomic-server picks the Installation by the `Host` header. The
+  `*.routes.usertest` DNS record resolves these names to the server.
 - Caddy (`Caddyfile`, `*.routes.<base-domain>`) proxies those hosts to
-  atomic-server with the `Host` header unchanged. sslip.io has no wildcard
-  certificate, so Caddy gets one certificate per host from Let's Encrypt on
-  the first TLS handshake (on-demand TLS), but only for a host listed in
+  atomic-server with the `Host` header unchanged. Caddy has no wildcard
+  certificate for them, so it gets one certificate per host from Let's
+  Encrypt on the first TLS handshake (on-demand TLS), but only for a host listed in
   `/etc/caddy/routes-allowed/` (a file named after the host). Without that
   list, anyone could make Caddy request certificates for made-up slugs and
   use up the Let's Encrypt rate limits that `plugins.`, `catalog.` and
@@ -177,13 +211,13 @@ source, not run.
   honour `X-Forwarded-Host`/`-Proto` from a trusted proxy. So `server.sh`
   passes `-e ATOMIC_TRUSTED_PROXIES=172.17.0.1` whenever plugin routes are
   on (Caddy reaches the container from the Docker bridge gateway).
-  candidate15, which the droplet ran until then, has no such setting and
+  candidate15, which the old droplet ran until then, has no such setting and
   doesn't read the variable.
 - Without a SHA argument, `server.sh` runs the pinned commit: `deploy.sh`
   copies `.atomic-server-ref` to `/opt/usertest/`, and the deploy workflow
   also passes that SHA explicitly. Its images are published once the pin is
   on main (`atomic-server-e2e-image.yml`). A redeploy followed by a server restart
-  therefore moves the droplet to the new pin; pass an older SHA as the
+  therefore moves the server to the new pin; pass an older SHA as the
   second argument to stay on it.
 
 ### Turning it on
@@ -193,13 +227,13 @@ From a checkout of this repo (`deploy.sh` needs `usertest/out/`, see
 new Caddyfile, creates `/etc/caddy/routes-allowed/` and restarts Caddy:
 
 ```sh
-sh usertest/deploy.sh root@178.62.223.35
-ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh 178-62-223-35.sslip.io
-ssh root@178.62.223.35 docker logs atomic-plugins 2>&1 | grep 'Plugin routes are on'
+sh usertest/deploy.sh root@188.245.144.252
+ssh claude@188.245.144.252 sudo USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh usertest.michielbdejong.com
+ssh claude@188.245.144.252 sudo docker logs atomic-plugins 2>&1 | grep 'Plugin routes are on'
 ```
 
 The last line should say `Plugin routes are on (read-write); installation
-origins are subdomains of https://routes.178-62-223-35.sslip.io.`
+origins are subdomains of https://routes.usertest.michielbdejong.com.`
 Restarting atomic-server interrupts moderated sessions in progress. To turn
 routes off again, run `server.sh` without the variable: Installations of
 server plugins then stay in the drive but answer nothing.
@@ -208,7 +242,7 @@ server plugins then stay in the drive but answer nothing.
 
 In the same browser you will use for the app:
 
-1. Open `https://plugins.178-62-223-35.sslip.io/app/dev-drive` (or your
+1. Open `https://plugins.usertest.michielbdejong.com/app/dev-drive` (or your
    existing test drive). Create a folder for the documents and copy its
    subject.
 2. New → Plugin. Edit it and name it `remoteStorage`. In the source field,
@@ -223,7 +257,7 @@ In the same browser you will use for the app:
    serialization, not as pasted: brackets get backslashes, and fences and
    blank lines are added. Publishing then fails with a QuickJS syntax
    error such as `plugin source: expecting ';' at plugin:437:1`, seen on
-   the droplet on 2026-09-30. The file itself parses as a module in QuickJS
+   the old droplet on 2026-09-30. The file itself parses as a module in QuickJS
    and quickjs-ng. Re-saving it through the rich-text editor was reproduced
    in Node with TipTap 3 and candidate15's editor extensions: 1078 lines in,
    1116 out, and QuickJS rejects the result. If the **Code** tab shows `\[`
@@ -233,11 +267,11 @@ In the same browser you will use for the app:
    `{ "table": "<the folder's subject>", "user": "me" }` and click
    **Install**.
 4. On the Installation page, **Endpoints** lists the route URLs, all on
-   `https://<slug>.routes.178-62-223-35.sslip.io`. Allow that host once:
+   `https://<slug>.routes.usertest.michielbdejong.com`. Allow that host once:
 
    ```sh
-   ssh root@178.62.223.35 touch /etc/caddy/routes-allowed/<slug>.routes.178-62-223-35.sslip.io
-   curl -s "https://<slug>.routes.178-62-223-35.sslip.io/.well-known/webfinger?resource=acct:me@<slug>.routes.178-62-223-35.sslip.io"
+   ssh claude@188.245.144.252 sudo touch /etc/caddy/routes-allowed/<slug>.routes.usertest.michielbdejong.com
+   curl -s "https://<slug>.routes.usertest.michielbdejong.com/.well-known/webfinger?resource=acct:me@<slug>.routes.usertest.michielbdejong.com"
    ```
 
    The first request waits a few seconds for the certificate. The answer is
@@ -247,12 +281,12 @@ In the same browser you will use for the app:
 
 ### Connecting an app
 
-The user address is `me@<slug>.routes.178-62-223-35.sslip.io`. Any
+The user address is `me@<slug>.routes.usertest.michielbdejong.com`. Any
 remoteStorage web app should do, for example
 [Inspektor](https://inspektor.5apps.com/) (browses and edits everything in
 the storage, so it asks for `*:rw`). Paste the address into the app's
 connect widget; it redirects to atomic-server's consent page on
-`plugins.178-62-223-35.sslip.io`, which shows the app's origin and the
+`plugins.usertest.michielbdejong.com`, which shows the app's origin and the
 scopes. Click **Allow** (you must be the agent that manages the
 Installation, which is why step 1 used the same browser). The app gets its
 token and can read and write; each document shows up as a File in the
@@ -279,7 +313,7 @@ menu (`GET /usertest/api/plans`, titled by each plan's first heading), and
 without it the menu starts on `calendar`. A switch is written back into the
 address bar, so a reload keeps it. A `<plan>` the moderator doesn't know
 stays in the menu, and starting with it fails with the list of known plans.
-The code is in `/etc/usertest-moderator.env` on the droplet;
+The code is in `/etc/usertest-moderator.env` on the server;
 `moderator/run.sh` creates it on first run. The page:
 
 1. explains the session, lets the tester pick what to test, says what is
@@ -399,7 +433,7 @@ link, with `<plan>` set to the session plan to preselect (a file name in
 `calendar`):
 
 ```sh
-ssh root@178.62.223.35 '. /etc/usertest-moderator.env; echo "https://plugins.178-62-223-35.sslip.io/usertest/?code=$USERTEST_CODE&session=<plan>"'
+ssh claude@188.245.144.252 "sudo sh -c '. /etc/usertest-moderator.env; echo \"https://plugins.usertest.michielbdejong.com/usertest/?code=\$USERTEST_CODE&session=<plan>\"'"
 ```
 
 Send it with what testers need: Chrome or Edge on a laptop, headphones, a
@@ -412,7 +446,7 @@ To revoke the link, make a new code. The old link stops working, and
 sessions in progress end, because this restarts the moderator:
 
 ```sh
-ssh root@178.62.223.35 'rm /etc/usertest-moderator.env && sh /opt/usertest/moderator/run.sh'
+ssh claude@188.245.144.252 'sudo rm /etc/usertest-moderator.env && sudo sh /opt/usertest/moderator/run.sh'
 ```
 
 ### Findings and triage
@@ -432,7 +466,7 @@ person. Nothing reaches a public repository until Michiel labels it
 For a session that ended without the page saying so (a closed window):
 
 ```sh
-ssh root@178.62.223.35 docker exec usertest-moderator node analyze.mjs <id> [--file]
+ssh claude@188.245.144.252 sudo docker exec usertest-moderator node analyze.mjs <id> [--file]
 ```
 
 Measured on 2026-09-28 on session 1 (about 11 minutes): 34 s, about 2,000
@@ -448,7 +482,7 @@ most 120 turns per session and 20 sessions per UTC day. The moderator keeps
 sessions in memory, so restarting it ends the sessions in progress.
 
 Not verified yet: a full session by a real tester, and Edge. The plan menu
-(2026-09-30) was not run in a browser against the droplet's moderator. The typed-answer
+(2026-09-30) was not run in a browser against the old droplet's moderator. The typed-answer
 box was checked against the moderator with a stub in place of the Claude API
 (2026-09-29), not yet in a browser session with screen sharing.
 
@@ -482,8 +516,8 @@ Verified on 2026-09-28: an error thrown in the data-browser arrived within
 seconds with its stack and URL.
 
 ```sh
-ssh root@178.62.223.35 'tail -f /var/lib/usertest-logs/$(date -u +%F).jsonl'
-ssh root@178.62.223.35 docker logs --since 1h atomic-plugins
+ssh claude@188.245.144.252 'sudo tail -f /var/lib/usertest-logs/$(date -u +%F).jsonl'
+ssh claude@188.245.144.252 sudo docker logs --since 1h atomic-plugins
 heroku logs -a integration-proxy -n 500   # needs access to the Heroku app
 ```
 
@@ -493,7 +527,7 @@ sends. Bodies over 1 MB are refused.
 ## Privacy
 
 Testers connect real accounts, unless they use a sample-data app or the
-sample bank statements, which hold invented data only. Their data is on the droplet, in the Docker
+sample bank statements, which hold invented data only. Their data is on the server, in the Docker
 volume `atomic-plugins-store`, and their provider tokens are in
 localthought.io's database. Error reports can contain what was on screen
 (titles in messages, URLs), and they stay in `/var/lib/usertest-logs`.

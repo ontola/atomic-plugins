@@ -1,13 +1,14 @@
 #!/bin/sh
 # Copies the built catalog (catalog.mjs: catalog.json, apps/, samples/), the
 # Caddyfile, server.sh and the pinned atomic-server commit
-# (.atomic-server-ref) to the droplet, then
-# reloads Caddy. Existing app module versions on the droplet are
+# (.atomic-server-ref) to the user-testing server, then
+# reloads Caddy. Existing app module versions on the server are
 # kept, so testers who installed an older version can still update from it.
 #
-#   sh usertest/deploy.sh root@<droplet-ip> [ssh options…]
+#   sh usertest/deploy.sh root@<server-ip> [ssh options…]
 #
-# It does not restart atomic-server; run server.sh on the droplet for that.
+# It does not restart atomic-server; run server.sh on the server for that.
+# It runs its remote commands without sudo, so <user> must be root.
 set -eu
 
 TARGET=${1:?usage: deploy.sh <user@host> [ssh options…]}
@@ -18,7 +19,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
   { echo "no usertest/out/catalog.json; run node usertest/catalog.mjs first" >&2; exit 1; }
 
 # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and
-# extended attributes that GNU tar on the droplet warns about.
+# extended attributes that GNU tar on the server warns about.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps samples) |
   ssh "$@" "$TARGET" 'mkdir -p /srv/catalog && tar xzf - -C /srv/catalog'
 # .atomic-server-ref goes along so that server.sh without a SHA runs the pin.

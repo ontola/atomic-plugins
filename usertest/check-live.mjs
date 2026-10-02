@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Refuses a deploy that would change an app module under a version the
- * droplet already serves:
+ * user-testing server already serves:
  *
  *   node usertest/check-live.mjs https://catalog.<base-domain>/catalog.json [out]
  *
@@ -9,11 +9,11 @@
  * with the live one. An app whose `app-module` path is the same in both but
  * whose `app-module-integrity` differs was rebuilt into an existing version:
  * the app's code changed without a bump in catalog.mjs's VERSIONS. Deploying
- * it would overwrite that version's ui.js on the droplet, and the host
+ * it would overwrite that version's ui.js on the server, and the host
  * refuses a module whose bytes don't match the hash it installed with.
  * Exits 1 with the app names in that case; bump their versions and rebuild.
  *
- * A live catalog that can't be fetched (a first deploy, the droplet down) is
+ * A live catalog that can't be fetched (a first deploy, the server down) is
  * reported and passes: there is nothing to compare with.
  */
 import { readFileSync } from 'node:fs';
