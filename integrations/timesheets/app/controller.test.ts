@@ -3,7 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { USER, WORKSPACE } from '../fixtures/clockify/scenario.mjs';
 import { readSettings } from './config.js';
 import { createController, describe as describeState } from './controller.js';
-import { APP, fakeStore } from './fakeStore.js';
+import {
+  APP,
+  fakeStore,
+  ONTOLOGY,
+  PARENT,
+  RENDERS,
+  ROW_CLASS,
+  TABLE,
+} from './fakeStore.js';
+import { TIME_ENTRY, WORK_PERSON, WORK_PROJECT } from './fields.js';
+import { atomic } from './ontology.js';
+
+const CLASSTYPE = atomic.classtype;
 import { fixtureProxy } from './fixtureProxy.js';
 import { ensureSchema } from './schema.js';
 
@@ -82,8 +94,24 @@ describe('controller', () => {
         workspaces: [{ id: WORKSPACE.id }, { name: 'Personal' }],
       },
     });
-    // Nothing is written before the person chooses.
-    expect(store.writes).toEqual([]);
+    // Before the person chooses, only the first open's move onto the
+    // shared class is written (#177): the app's own Properties, its
+    // Projects and People tables, the table's class and the App's renders
+    // and row extras. No row, no log, no setting.
+    const written = store.writes.map(w => {
+      const r = store.resources.get(w.subject)!;
+
+      return [ONTOLOGY, TABLE, APP].includes(w.subject)
+        ? w.subject
+        : r[PARENT] === ONTOLOGY
+          ? 'property'
+          : r[CLASSTYPE];
+    });
+    expect([...new Set(written)].sort()).toEqual(
+      [APP, ONTOLOGY, TABLE, 'property', WORK_PERSON, WORK_PROJECT].sort(),
+    );
+    expect(store.resources.get(TABLE)![CLASSTYPE]).toBe(TIME_ENTRY);
+    expect(store.resources.get(APP)![RENDERS]).toEqual([ROW_CLASS, TIME_ENTRY]);
 
     const done = await controller.saveSettings({
       workspaceId: WORKSPACE.id,
@@ -103,11 +131,13 @@ describe('controller', () => {
         lookbackDays: 7,
       },
     });
-    // No connection id, code or token on the App: only the three settings
-    // and the pointer to the observation log.
-    expect(Object.keys(app).sort()).toEqual(
-      [...Object.values(schema.settings), schema.log.log].sort(),
-    );
+    // No connection id, code or token on the App: of its own Properties,
+    // only the three settings and the pointer to the observation log.
+    expect(
+      Object.keys(app)
+        .filter(k => store.resources.get(k)?.[PARENT] === ONTOLOGY)
+        .sort(),
+    ).toEqual([...Object.values(schema.settings), schema.log.log].sort());
     expect(kinds).toEqual([
       'setup',
       'setup',
