@@ -360,7 +360,12 @@ into the view root.
     and the intents it replaces. Written once, never edited, so two
     devices never overwrite each other's intents even where their row
     edits collide. Status is derived: replaced when a later intent names
-    it, open while one of its rows still has a change to send.
+    it, open while one of its rows still has a change to send. A range
+    edit also names the closed intents (sent or discarded) that it
+    overlaps or whose rows it stages, so a sent edit does not count as
+    open again when a later one changes its rows (#279, 0.6.1; before,
+    "did not work" over an entry a sent "worked on" had just made was
+    held as a conflict between your edits).
   - _S22:_ a range edit made where open range edits overlap it replaces
     them: their staged changes are put back first, then the new plan is
     staged. One that reaches outside the new range is not cut in two:
@@ -575,7 +580,9 @@ is how it fits the observation log.
   the range form through to a send in the DOM (`app/ui/ui.test.ts`).
   Two open copies (#123 M5): S21 (the same range, and the same entry,
   edited apart; held on both devices; resolved), equal edits made apart,
-  S22 and its refusal, and the send lease (refused while held, sent once
+  S22 and its refusal, a range edit over the rows of a sent one (#279:
+  no conflict, and a later edit does not put back its change; two
+  devices doing so apart still conflict), and the send lease (refused while held, sent once
   expired, kept through a batch longer than 60 s, lost mid-batch, a sync
   leaving another copy's unconfirmed create alone) in
   `app/multiDevice.test.ts`; S28 (two devices compacting at once, and one

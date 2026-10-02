@@ -410,6 +410,56 @@ describe('a range edit after a sent one (#279)', () => {
     ]);
   });
 
+  it('S21 still holds over a sent edit: two devices that both saw it and edit its rows apart, differently, conflict', async () => {
+    const t = await setup([entry('e', at(8), at(12), { projectId: Q })]);
+    const { a, b, reconnect } = await twoDrives(t);
+
+    await a.editRange({
+      from: at(9),
+      to: at(10),
+      target: { kind: 'worked', projectId: P },
+    });
+    await a.send();
+    expect(t.writes()).toHaveLength(3);
+    reconnect();
+    await b.sync();
+    expect(b.changes().review).toEqual([]);
+
+    // Both name the sent edit as settled, but not each other.
+    expect(
+      await a.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'didNotWork' },
+      }),
+    ).toBe(true);
+    expect(
+      await b.editRange({
+        from: at(9),
+        to: at(10),
+        target: { kind: 'worked', projectId: Q },
+      }),
+    ).toBe(true);
+    expect(local(a)).toEqual([]);
+    expect(local(b)).toEqual([]);
+
+    reconnect();
+    await a.sync();
+    await b.sync();
+    for (const device of [a, b]) {
+      const [conflict] = local(device);
+      expect(conflict).toMatchObject({ from: at(9), to: at(10) });
+      expect(conflict.candidates).toEqual([
+        { kind: 'worked', projectId: Q },
+        { kind: 'didNotWork' },
+      ]);
+      for (const change of device.changes().review)
+        expect(change.blockers).toContain(HELD_BY_CONFLICT);
+    }
+    await a.send();
+    expect(t.writes()).toHaveLength(3);
+  });
+
   it('a later edit over a sent edit’s range does not put back an edit of the sent one’s other row', async () => {
     const t = await setup([entry('e', at(8), at(12), { projectId: Q })]);
     const a = await t.open(t.store, 'frame-a');
