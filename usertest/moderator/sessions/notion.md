@@ -22,10 +22,10 @@ After the thank-you, end your final message with the exact token [END] on its ow
 What success looks like, never to be said:
 
 - Task 2: they install the Notion app from Integrations and connect. Notion's own page picker decides which pages and databases the app may read. Picking none leaves the app with "nothing shared", and that picker is the likely stumbling block. Every shared database goes into one table, with a Data source column. The app itself shows only a status card: the databases and their row counts, the last sync, and an "Open table" button; the rows are in the table (also in the sidebar, under the app, as "Pages").
-- Task 3: the table's own views and filters, or its search. Status and select columns hold Notion's option ids, not names (a known limit; names show only in the app's "Review changes"). Whether they work around that is a finding.
+- Task 3: the table's own views and filters, or its search. Status and select columns show the option names as coloured tags, and a filter on one works like any select column. Whether they find the table's filter is a finding.
 - Task 4: formatted text (bold, links), people, relations, rollups, formulas and files are not copied. "Sync details" in the app lists what was skipped and why. The question is whether they find and understand it.
 - Task 5: "Sync now" in the app. The app also syncs by itself on open when the last sync is older than 15 minutes.
-- Task 6: they edit a cell in the table, go back to the app, see "1 change in 1 row not sent to Notion yet", open "Review changes" (before → after), and press Send. Whether they expect the edit to reach Notion by itself, and whether they find the review, are the findings. A status or tag edit needs the option id, which is why the task asks for text or a number.
+- Task 6: they edit a cell in the table, go back to the app, see "1 change in 1 row not sent to Notion yet", open "Review changes" (before → after), and press Send. Whether they expect the edit to reach Notion by itself, and whether they find the review, are the findings. A status or tag can be changed too, by picking another tag in the cell; the task asks for text or a number to keep it simple. If they pick a status, that is fine: it is reviewed and sent the same way.
 - Task 7: More (⋯) → Disconnect Notion…, then confirm. The rows stay.
 
 Known limits (only new detail about them is a finding):

@@ -66,7 +66,9 @@ What the data looks like after `syncNotion` (`app/sync.ts`):
   `title`) share a column; two "Status" properties with different ids become
   two columns both named "Status".
 - Select, status and multi-select cells hold Notion **option ids**, not
-  names or colours. Rendering them as-is would show UUIDs.
+  names or colours. Rendering them as-is would show UUIDs. (Superseded in
+  0.4.0: those columns are the host's own select columns, one Tag per
+  option, so the host's table shows names and colours; `app/options.ts`.)
 - Projected types: title/plain text, number, checkbox, url, email, phone,
   select/status/multi-select option ids. Date, people, relation, formula,
   rollup, files, and formatted rich text are not projected.
@@ -333,7 +335,8 @@ inside the app; background sync (#10).
 Gaps the implementation must close (each is an issue in `issues.md`):
 
 1. Rows are never shown in the app (N4, N5, N8).
-2. Option ids, not names and colours, are stored (N7).
+2. Option ids, not names and colours, are stored (N7). (Closed in 0.4.0 by
+   the host's select columns and Tags, `app/options.ts`.)
 3. Columns of different databases merge by property id; same-named columns
    are indistinguishable (N6).
 4. Every error is one string; there is no reauth, rate-limit or
