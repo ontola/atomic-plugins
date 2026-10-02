@@ -1445,11 +1445,15 @@ mod tests {
             .unwrap();
         assert_eq!(listed.status(), StatusCode::OK);
         let listed = body_json(listed).await;
-        assert_eq!(listed["connections"][0]["label"], "ada@example.test");
-        assert_eq!(
-            listed["connections"][0]["connection_id"],
-            body["connection_id"]
-        );
+        // Scoped to this test's own connection: the database may also hold
+        // rows an earlier run left for the same agent seed.
+        let mine = listed["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["connection_id"] == body["connection_id"])
+            .expect("the new connection is listed");
+        assert_eq!(mine["label"], "ada@example.test");
     }
 
     fn no_credential_catalog() -> crate::catalog::Catalog {
