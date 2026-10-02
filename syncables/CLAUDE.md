@@ -123,11 +123,36 @@ Data flows through four stages, each its own directory under `src/`:
    unusable 2xx body or a 5xx other than 503 becomes `uncertain` and is not
    resent until `resolveWrite` (retry, discard, or confirm with the server
    id), unless an `Idempotency-Key` header (declared on the create operation
-   or `idempotencyKeyHeader`) lets it retry with the same key. 429/503/4xx,
-   and errors raised before the request reaches the transport (an
-   `authenticate` adapter throwing), keep the backoff retry. A failed create
-   (`retry.maxAttempts`) is parked like an uncertain one; failed updates and
-   deletes are kept per record (`gaveUpWrites`), lose the fields a later
+   or `idempotencyKeyHeader`) lets it retry with the same key. Errors
+   raised before the request reaches the transport (an `authenticate`
+   adapter throwing) keep the backoff retry. Non-2xx responses are
+   classified (`classify`, `defaultWriteFailureClass`, overridable with
+   `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
+   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
+   never below the backoff), `permanent` (other 4xx: failed
+   at once, through the same path as `retry.maxAttempts`), `satisfied` (a
+   delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
+   renewal before an accepted response, then `permanent`; `afterRenewal`
+   and `authEpoch` are captured after the in-flight store, just before
+   sending, and any response at the current epoch that `classify` does
+   not report `refused` clears `afterRenewal`; `refused` also covers a
+   response the classifier in use (`classOf`, called a second time with
+   `afterRenewal: false` for requests sent after a renewal) calls
+   `auth`). `onAuthFailure: 'retry'` turns `auth` into `retry` and drops a stored block on restore.
+   A create classified `auth` that `mayHaveApplied` (custom classifier on a
+   5xx) without a usable key goes the `retry` path, so it becomes
+   `uncertain`.
+   `auth` sets the client-wide
+   `authBlock` (stored in the outbox, `onAuthBlocked`, `authBlocked()`): the
+   write becomes `blocked` without counting an attempt, `drainQueue` sends
+   nothing while it is set (also re-checked after the in-flight store:
+   outcome `held`), `countRefreshMisses` does not count, `resolveWrite`
+   `discard` drops a blocked head, and
+   `authRenewed()` clears it, bumps `authEpoch` and restarts every queue. A
+   401/403 for a request sent before the latest renewal (older epoch) is
+   resent at once. A failed create (`retry.maxAttempts` or `permanent`) is
+   parked like an uncertain one; failed updates and deletes are kept per
+   record (`gaveUpWrites`), lose the fields a later
    settled write sets, and are not dropped by new writes. Settled writes
    rebase later queued updates' conflict bases and invalidate
    `lastSyncedItems`. See the README's "Uncertain creates".
@@ -163,8 +188,7 @@ Data flows through four stages, each its own directory under `src/`:
    overwritten. The README's "Durable outbox and restarts" has the
    stop-between-steps table; keep it in step with the code. Not stored:
    `lastSyncedItems`, the conditional cache and confirmed records without
-   writes. Finer transient/permanent failure classification remains #260
-   work. A fully paginated list is not necessarily a consistent snapshot;
+   writes. A fully paginated list is not necessarily a consistent snapshot;
    the existing absence/pruning rule still depends on provider behavior.
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
@@ -259,7 +283,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 - `unit/client/durable-outbox.test.ts` covers restart recovery: a second
   client on a copy of the first one's storage taken mid-flight (resume order,
   in-flight creates/updates/deletes, failed/uncertain/conflict state, format
-  versions and outbox store failures).
+  versions and outbox store failures), plus the stored auth block and
+  failure statuses.
+- `unit/client/failure-classes.test.ts` covers write failure classes: the
+  default table, permanent 4xx, satisfied deletes, `Retry-After`, the auth
+  block and `authRenewed()`, and `classifyWriteFailure`.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

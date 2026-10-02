@@ -19,6 +19,7 @@ export { createMockServer } from './mock-server/server.js';
 export type { MockServer } from './mock-server/server.js';
 
 export { createApiClient } from './client/node.js';
+export { defaultWriteFailureClass } from './client/client.js';
 export type { ApiClientOptions } from './client/node.js';
 export { credentialsFromEnv } from './client/credentials.js';
 export type {
@@ -32,6 +33,9 @@ export type {
   PendingWriteType,
   WriteConflict,
   WriteResolution,
+  WriteFailure,
+  WriteFailureClass,
+  AuthBlock,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';

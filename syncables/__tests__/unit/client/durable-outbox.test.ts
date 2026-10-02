@@ -1455,3 +1455,301 @@ describe('durable outbox: seventh review on #312', () => {
     expect(await client.get('/pets', '1')).toMatchObject({ name: 'Rex III' });
   });
 });
+
+describe('durable outbox: failure classes (#260)', () => {
+  const rex = { id: '1', name: 'Rex', tag: 'dog' };
+  const milo = { id: '2', name: 'Milo', tag: 'cat' };
+  type Stored = {
+    authBlock?: unknown;
+    records: {
+      id: string;
+      failed: Record<string, unknown>[];
+      queue: Record<string, unknown>[];
+    }[];
+  };
+  const stored = (storage: CrashableStorage): Stored =>
+    storage.data.get(OUTBOX)?.get('outbox') as Stored;
+
+  /** A client blocked by a 401 on an update of Rex, with a delete of Milo queued. */
+  async function blockedStorage(): Promise<CrashableStorage> {
+    const storage = new CrashableStorage();
+    const first = provider([rex, milo], (r) =>
+      r.method === 'GET' ? undefined : response({ message: 'expired' }, 401),
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(a.authBlocked()).toBeDefined());
+    await a.remove('/pets', '2');
+    await settle();
+    expect(first.requests).toHaveLength(1);
+    return storage.crash();
+  }
+
+  it('keeps an auth block across a restart; writes resume only after authRenewed()', async () => {
+    const crashed = await blockedStorage();
+    expect(stored(crashed).authBlock).toMatchObject({ status: 401, id: '1' });
+    const second = provider([rex, milo]);
+    const blocks: unknown[] = [];
+    const b = restart(crashed, second.transport, {
+      onAuthBlocked: (block) => blocks.push(block),
+    });
+    await b.ready();
+    expect(blocks).toEqual([b.authBlocked()]);
+    expect(b.authBlocked()).toMatchObject({ status: 401, id: '1' });
+    expect(
+      b.pendingWrites().map(({ id, type, state, attempts, lastStatus }) => ({
+        id,
+        type,
+        state,
+        attempts,
+        lastStatus,
+      })),
+    ).toEqual([
+      {
+        id: '1',
+        type: 'update',
+        state: 'blocked',
+        attempts: 0,
+        lastStatus: 401,
+      },
+      {
+        id: '2',
+        type: 'delete',
+        state: 'pending',
+        attempts: 0,
+        lastStatus: undefined,
+      },
+    ]);
+    // A blocked write is resent by authRenewed(), not by resolveWrite.
+    await expect(
+      b.resolveWrite('/pets', '1', { action: 'retry' }),
+    ).rejects.toThrow(/authRenewed/);
+    // Syncs while blocked send nothing and do not count refresh misses.
+    for (let i = 0; i < 4; i += 1) await b.sync();
+    await settle();
+    expect(second.requests).toEqual([]);
+    expect(b.pendingWrites()[0]?.state).toBe('blocked');
+
+    await b.authRenewed();
+    expect(stored(crashed).authBlock).toBeUndefined();
+    // Those syncs read the collection, so the restored update is released
+    // and is sent on the record they returned.
+    await idle(b);
+    expect(second.requests.map((r) => r.method).sort()).toEqual([
+      'DELETE',
+      'PUT',
+    ]);
+    expect(second.pets.get('1')).toEqual({ ...rex, name: 'Rex II' });
+    expectFailedOlder(crashed);
+  });
+
+  it('keeps a blocked restored update waiting for a refresh after authRenewed()', async () => {
+    const crashed = await blockedStorage();
+    const second = provider([rex, milo]);
+    const b = restart(crashed, second.transport);
+    await b.authRenewed();
+    await vi.waitFor(() =>
+      expect(second.requests.map((r) => r.method)).toEqual(['DELETE']),
+    );
+    expect(b.pendingWrites()).toMatchObject([
+      { id: '1', state: 'pending', awaitingRefresh: true },
+    ]);
+    second.pets.set('1', { ...rex, tag: 'wolf' });
+    await b.sync();
+    await idle(b);
+    expect(second.pets.get('1')).toEqual({
+      ...rex,
+      name: 'Rex II',
+      tag: 'wolf',
+    });
+  });
+
+  it("drops a stored block when restored with onAuthFailure: 'retry'", async () => {
+    const crashed = await blockedStorage();
+    const second = provider([rex, milo]);
+    const blocks: unknown[] = [];
+    const b = restart(crashed, second.transport, {
+      onAuthFailure: 'retry',
+      onAuthBlocked: (block) => blocks.push(block),
+    });
+    await b.ready();
+    expect(b.authBlocked()).toBeUndefined();
+    expect(blocks).toEqual([]);
+    expect(b.pendingWrites().map((w) => w.state)).toEqual([
+      'pending',
+      'pending',
+    ]);
+    expect(stored(crashed).authBlock).toBeUndefined();
+    await b.sync();
+    await idle(b);
+    expect(second.pets.get('1')).toEqual({ ...rex, name: 'Rex II' });
+    expect(second.pets.has('2')).toBe(false);
+  });
+
+  it('treats a stored blocked write without a stored block as pending, and a malformed block as a block', async () => {
+    const crashed = await blockedStorage();
+    const unblocked = crashed.crash();
+    delete (unblocked.data.get(OUTBOX)?.get('outbox') as Stored).authBlock;
+    const second = provider([rex, milo]);
+    const b = restart(unblocked, second.transport);
+    await b.ready();
+    expect(b.authBlocked()).toBeUndefined();
+    expect(b.pendingWrites().map((w) => w.state)).toEqual([
+      'pending',
+      'pending',
+    ]);
+
+    const malformed = crashed.crash();
+    (malformed.data.get(OUTBOX)?.get('outbox') as Stored).authBlock = {
+      status: 'soon',
+    };
+    const third = provider([rex, milo]);
+    const c = restart(malformed, third.transport);
+    await c.ready();
+    expect(c.authBlocked()).toMatchObject({ status: 0 });
+    expect(c.pendingWrites().map((w) => w.state)).toEqual([
+      'blocked',
+      'pending',
+    ]);
+    await settle();
+    expect(third.requests).toEqual([]);
+  });
+
+  it('stores a permanent failure with its status, older than the writes queued behind it', async () => {
+    const storage = new CrashableStorage();
+    let refuse!: () => void;
+    const gate = new Promise<void>((resolve) => (refuse = resolve));
+    const first = provider([rex], (r) =>
+      r.method === 'PUT' ? 'hang-before' : undefined,
+    );
+    let puts = 0;
+    const transport: Transport = async (r) => {
+      if (r.method === 'PUT' && ++puts === 1) {
+        await gate;
+        return response({ error: 'invented' }, 422);
+      }
+      return first.transport(r);
+    };
+    const a = restart(storage, transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await a.update('/pets', '1', { tag: 'wolf' });
+    refuse();
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+    expectFailedOlder(storage);
+    const crashed = storage.crash();
+    const record = stored(crashed).records[0];
+    expect(record?.failed).toMatchObject([
+      { type: 'update', state: 'failed', attempts: 1, lastStatus: 422 },
+    ]);
+    expect(record?.queue).toMatchObject([
+      { type: 'update', state: 'pending', sending: true },
+    ]);
+
+    const b = restart(crashed, provider([rex]).transport);
+    await b.ready();
+    expect(b.pendingWrites()[0]).toMatchObject({
+      state: 'failed',
+      lastStatus: 422,
+      lastError: expect.stringMatching(/status 422: \{"error":"invented"\}$/),
+    });
+  });
+
+  it('drops the status of an earlier attempt when the process stopped during a later one', async () => {
+    const storage = new CrashableStorage();
+    let puts = 0;
+    const first = provider([rex], (r) => {
+      if (r.method !== 'PUT') return undefined;
+      puts += 1;
+      return puts === 1 ? response({}, 503) : 'hang-before';
+    });
+    const a = restart(storage, first.transport, { retry: { baseDelayMs: 1 } });
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(2));
+    expect(a.pendingWrites()[0]).toMatchObject({ lastStatus: 503 });
+    await settle();
+
+    const b = restart(storage.crash(), provider([rex]).transport);
+    await b.ready();
+    expect(b.pendingWrites()[0]).toMatchObject({
+      attempts: 2,
+      lastError: expect.stringMatching(/process stopped/),
+    });
+    expect(b.pendingWrites()[0]).not.toHaveProperty('lastStatus');
+  });
+
+  it('does not send a write whose in-flight mark was being stored when the block began', async () => {
+    const storage = new CrashableStorage();
+    let refuseRex!: () => void;
+    const rexGate = new Promise<void>((resolve) => (refuseRex = resolve));
+    let renewed = false;
+    const first = provider([rex, milo]);
+    const transport: Transport = async (r) => {
+      if (r.method === 'GET' || renewed) return first.transport(r);
+      first.requests.push(r);
+      await rexGate;
+      return response({}, 401);
+    };
+    const a = restart(storage, transport);
+    await a.sync();
+    await a.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    // Milo's in-flight mark is held in storage until Rex has been refused.
+    let releaseStore!: () => void;
+    const storeGate = new Promise<void>((resolve) => (releaseStore = resolve));
+    storage.afterPut = (resource, id): void => {
+      if (resource === '/pets' && id === '2') {
+        storage.afterPut = undefined;
+        storage.outboxGate = storeGate;
+      }
+    };
+    await a.update('/pets', '2', { name: 'Milo II' });
+    refuseRex();
+    await vi.waitFor(() => expect(a.authBlocked()).toBeDefined());
+    storage.outboxGate = undefined;
+    releaseStore();
+    await settle();
+    expect(first.requests.map((r) => r.url.pathname)).toEqual(['/api/pets/1']);
+    expect(a.pendingWrites()).toMatchObject([
+      { id: '1', state: 'blocked', attempts: 0 },
+      { id: '2', state: 'pending', attempts: 0 },
+    ]);
+    const outbox = storage.data.get(OUTBOX)?.get('outbox') as {
+      records: { id: string; queue: { sending?: true }[] }[];
+    };
+    expect(
+      outbox.records.find((r) => r.id === '2')?.queue[0],
+    ).not.toHaveProperty('sending');
+
+    renewed = true;
+    await a.authRenewed();
+    await idle(a);
+    expect(first.pets.get('1')).toMatchObject({ name: 'Rex II' });
+    expect(first.pets.get('2')).toMatchObject({ name: 'Milo II' });
+  });
+
+  it('settles a resent delete the server had already applied (404)', async () => {
+    const storage = new CrashableStorage();
+    const first = provider([rex, milo], (r) =>
+      r.method === 'DELETE' ? 'hang' : undefined,
+    );
+    const a = restart(storage, first.transport);
+    await a.sync();
+    await a.remove('/pets', '1');
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await settle();
+
+    const crashed = storage.crash();
+    const second = provider([milo], (r) =>
+      r.method === 'DELETE' ? response({ error: 'not found' }, 404) : undefined,
+    );
+    const b = restart(crashed, second.transport);
+    await b.ready();
+    await idle(b);
+    expect(second.requests).toHaveLength(1);
+    expect(await b.get('/pets', '1')).toBeUndefined();
+  });
+});
