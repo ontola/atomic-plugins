@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   loadLanes,
   validateConfig,
@@ -34,6 +43,21 @@ test('every plugin directory has a lane', () => {
     [],
     'add these to integrations/lanes.json',
   );
+});
+
+test('unlanedDirectories skips gitignored output but reports a real unlaned plugin', () => {
+  const base = mkdtempSync(join(tmpdir(), 'lanes-'));
+
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: base });
+    writeFileSync(join(base, '.gitignore'), 'playwright-report/\n');
+    for (const d of ['pets', 'playwright-report', 'newplugin'])
+      mkdirSync(join(base, 'integrations', d), { recursive: true });
+
+    assert.deepEqual(unlanedDirectories([{ id: 'pets' }], base), ['newplugin']);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test('every lane names a directory that exists', () => {
