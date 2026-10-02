@@ -652,6 +652,11 @@ is how it fits the observation log.
   The project list has a second active project and an archived one, so a
   project change and its refusal are testable.
 
+- **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+timesheets --i-understand-this-writes-to <workspace id>` runs this app's
+  controller against one dedicated Clockify test workspace, including the #123
+  POST, split-copy and `billable` checks, and writes evidence; see
+  [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
 - **Not verified:** a real integration proxy or a real Clockify account.
   The `/api/v1/...` paths match the mock fixture, not a recorded live
   response. No live evidence is recorded, so every capability here is

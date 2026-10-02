@@ -17,7 +17,13 @@ export default {
     },
   },
   test: {
-    include: ['*.test.ts', 'app/**/*.test.ts', 'devonian/**/*.test.ts'],
+    include: [
+      '*.test.ts',
+      'app/**/*.test.ts',
+      'devonian/**/*.test.ts',
+      // The live check's offline tests (the mock Clockify); never the live run.
+      'live/*.test.ts',
+    ],
     // app/ui/theme.ts imports theme.css?raw; without this Vitest stubs CSS.
     css: { include: [/theme\.css/] },
   },
