@@ -1,0 +1,17 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/05f0c34c250aee65b4a54b32e04026170493e403/APIs/googleapis.com/androidenterprise/v1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageToken:
+          type: pageToken
+          request:
+            queryParameters:
+              token:
+                role: pageToken
+              maxResults:
+                role: pageSize

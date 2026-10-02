@@ -14,7 +14,7 @@ deprecated.
 - `syncables/` — the `syncables` npm package (OpenAPI-driven mock server and
   sync client), migrated in from the standalone `localthought/syncables`
   repo with its history intact.
-- `overlays/` — OpenAPI Overlays for real providers and the `catalog.json`
+- `overlays/` — OpenAPI Overlays for real providers and the dated `catalog/<date>.json`
   that `integration-proxy/` composes, migrated in from the standalone
   `localthought/overlays` repo with its history intact, and published by
   GitHub Pages at https://ontola.github.io/atomic-plugins/overlays/.

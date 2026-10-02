@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/3655aad18f8ebfdea93439d5866ce00ccb10ae59/APIs/googleapis.com/speech/v1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageToken:
+          type: pageToken
+          request:
+            queryParameters:
+              pageToken:
+                role: pageToken
+              pageSize:
+                role: pageSize
+          response:
+            bodyFields:
+              nextPageToken:
+                role: nextPageToken

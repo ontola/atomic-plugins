@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/83a63469eb15a0e349e33e40a68c2c86ded0d762/APIs/amazonaws.com/ecr/2015-09-21/openapi.yaml
+info:
+  title: AWS ECR API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            ECR list operations (e.g. DescribeRepositories, DescribeImages,
+            ListImages) use NextToken-based pagination in the JSON request
+            body. `maxResults` limits results per request, and `nextToken`
+            from the previous response continues pagination.
+          request:
+            bodyFields:
+              nextToken:
+                role: pageToken
+              maxResults:
+                role: pageSize
+          response:
+            bodyFields:
+              nextToken:
+                role: nextPageToken

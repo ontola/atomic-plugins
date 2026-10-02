@@ -1,0 +1,40 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/920631db31e628be547e9366821d3ebc7fa0ead5/APIs/github.com/api.github.com/1.1.4/openapi.yaml
+info:
+  title: GitHub API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextLink:
+          type: nextLink
+          autoDetect:
+            matchQueryParams: false
+            matchBodyFields: false
+            matchHeaders: true
+            requireAll: false
+          request:
+            queryParameters:
+              per_page:
+                role: pageSize
+          response:
+            headers:
+              Link:
+                role: nextLink
+        pageNumber:
+          type: pageNumber
+          request:
+            queryParameters:
+              page:
+                role: page
+              per_page:
+                role: pageSize
+        cursor:
+          type: pageToken
+          request:
+            queryParameters:
+              cursor:
+                role: pageToken
+              per_page:
+                role: pageSize

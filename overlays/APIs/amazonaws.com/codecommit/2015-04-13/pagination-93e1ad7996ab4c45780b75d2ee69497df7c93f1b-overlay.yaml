@@ -1,0 +1,24 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/93e1ad7996ab4c45780b75d2ee69497df7c93f1b/APIs/amazonaws.com/codecommit/2015-04-13/openapi.yaml
+info:
+  title: AWS CodeCommit API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            CodeCommit list operations (e.g. ListRepositories, ListBranches,
+            GetCommitHistory) use NextToken-based pagination in the JSON
+            request body. Pass the `nextToken` from the previous response
+            to retrieve the next page of results.
+          request:
+            bodyFields:
+              nextToken:
+                role: pageToken
+          response:
+            bodyFields:
+              nextToken:
+                role: nextPageToken

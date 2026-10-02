@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/92e004c355a9529f47ba501600e0f6e1a83b85d3/APIs/googleapis.com/workspaceevents/v1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageToken:
+          type: pageToken
+          request:
+            queryParameters:
+              pageToken:
+                role: pageToken
+              pageSize:
+                role: pageSize
+          response:
+            bodyFields:
+              nextPageToken:
+                role: nextPageToken

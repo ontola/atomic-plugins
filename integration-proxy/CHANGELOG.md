@@ -3,7 +3,18 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## 0.2.3 (unreleased)
+## 0.2.4 (2026-10-02)
+
+- Default catalog: `overlays/catalog/2026-10-02.json`, selecting immutable
+  overlay filenames with the OAD last-change SHA. The full Discord OAD is
+  composed; connecting it awaits separate mixed-authentication support
+  (ontola/atomic-plugins#258).
+
+- Catalog loading checks an overlay's declared `extends` against the original
+  catalog OAD before applying its actions. Relative URI references resolve
+  against the overlay URL; legacy overlays without `extends` remain supported.
+
+## 0.2.3
 
 - A catalog platform whose composed OpenAPI document declares top-level
   `security: []`, no security scheme, and no operation that requires one now
@@ -16,7 +27,7 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   catalog later gives such a platform a scheme, its existing connections
   answer `401 credential_refresh_failed` (connect again).
   (ontola/atomic-plugins#174)
-- The default catalog (`overlays/catalog.json`) gains `pets`, a static,
+- The default catalog (`overlays/catalog/2026-10-02.json`) gains `pets`, a static,
   read-only demo API on GitHub Pages that uses this. 0.2.2 and earlier load
   that catalog and list `pets`, but their consent page answers "This platform
   is not available for connection".

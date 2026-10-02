@@ -129,7 +129,7 @@ describePlatform('relayTransport', () => {
 
   it('asks for exactly the path the proxy catalog allows for the demo provider', async () => {
     // The proxy's `pets` platform is overlays/pets-demo/1.0.0/openapi.json
-    // (overlays/catalog.json); the app bundles the same document.
+    // (overlays/catalog/2026-10-02.json); the app bundles the same document.
     const published = JSON.parse(
       readFileSync(
         new URL(

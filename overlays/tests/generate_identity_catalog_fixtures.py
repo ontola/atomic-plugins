@@ -16,7 +16,7 @@ from openapi_spec_validator import validate
 
 
 ROOT = pathlib.Path(__file__).parents[1]
-CATALOG = json.loads((ROOT / "catalog.json").read_text())
+CATALOG = json.loads((ROOT / "catalog/2026-10-02.json").read_text())
 IDENTITY_PLATFORMS = ("google-calendar", "github-issues")
 # GitHub Pages publishes this folder here once merged to ontola/atomic-plugins'
 # main. Sources under it are read from the checkout instead, so a change is
@@ -37,11 +37,11 @@ def fetch(url, cache):
 
 
 def merge(destination, update):
+    if not isinstance(destination, dict) or not isinstance(update, dict):
+        return copy.deepcopy(update)
     for key, value in update.items():
-        if isinstance(value, dict) and isinstance(destination.get(key), dict):
-            merge(destination[key], value)
-        else:
-            destination[key] = copy.deepcopy(value)
+        destination[key] = merge(destination.get(key), value)
+    return destination
 
 
 def target(document, expression):
@@ -53,7 +53,15 @@ def target(document, expression):
 
 def apply(document, source):
     for action in source["actions"]:
-        merge(target(document, action["target"]), action["update"])
+        keys = [quoted or bare for bare, quoted in re.findall(r"\.([A-Za-z][A-Za-z0-9]*)|\['([^']+)'\]", action["target"][1:])]
+        parent = document
+        for key in keys[:-1]:
+            parent = parent[key]
+        if keys:
+            last = keys[-1]
+            parent[last] = merge(parent[last], action["update"])
+        else:
+            merge(document, action["update"])
 
 
 def platform_config(name):
@@ -87,7 +95,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
-    manifest = {"catalog": {"path": "catalog.json", "sha256": hashlib.sha256((ROOT / "catalog.json").read_bytes()).hexdigest()}, "platforms": {}}
+    manifest = {"catalog": {"path": "catalog/2026-10-02.json", "sha256": hashlib.sha256((ROOT / "catalog/2026-10-02.json").read_bytes()).hexdigest()}, "platforms": {}}
     for name in IDENTITY_PLATFORMS:
         document, provenance = compose(name, args.cache)
         (args.output / f"{name}-composed.yaml").write_text(yaml.safe_dump(document, sort_keys=False))

@@ -1,0 +1,22 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
+info:
+  title: Moneybird announced API throttling
+  version: 1.0.0
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          apiRequests:
+            requests: 150
+            window:
+              seconds: 300
+              kind: unspecified
+            partitionBy: [sourceIp]
+            description: >-
+              Moneybird counts API requests per source IP. Other clients sharing
+              that address also use the quota. The developer guide does not
+              specify fixed or sliding windows. Report endpoints have a stricter
+              quota and are outside this read-only source-record catalog.
+        applies: [apiRequests]

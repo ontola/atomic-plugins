@@ -263,7 +263,7 @@ bundle above and does not touch the Bank transactions table.
 - **Deferred.** The catalog card used to advertise contacts, sales invoices,
   purchase invoices, financial mutations "and the other collections". None of
   those but contacts is imported. `financial_mutations.json` has no
-  pagination overlay (`overlays/moneybird.com/api/v2/pagination-overlay.yaml`)
+  pagination overlay (`overlays/APIs/moneybird.com/v2-readonly/pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`)
   and needs a period `filter`, so it is the likely next collection, but it is
   not attempted here.
 - **Flow.** Connect Moneybird (host consent bar, then the proxy's own

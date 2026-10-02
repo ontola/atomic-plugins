@@ -1,0 +1,33 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/436f35b2ab0734ff9df0a0b55db2b00c52af8234/APIs/ebay.com/commerce-catalog/v1_beta.5.0/openapi.yaml
+info:
+  title: eBay Commerce Catalog API Pagination Schemes
+  version: 1.0.0
+actions:
+- target: "$.components"
+  update:
+    paginationSchemes:
+      offset:
+        type: pageNumber
+        description: >-
+          eBay's standard offset/limit pagination. The response echoes
+          limit/offset, reports the total match count, and includes a
+          next-page URI when further results are available.
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+            offset:
+              role: offset
+        response:
+          bodyFields:
+            total:
+              role: totalCount
+            next:
+              role: nextLink
+            limit:
+              role: pageSize
+- target: "$.paths['/product_summary/search'].get"
+  update:
+    x-pagination:
+    - scheme: offset

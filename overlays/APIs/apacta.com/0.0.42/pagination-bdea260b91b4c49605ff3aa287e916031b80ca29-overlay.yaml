@@ -1,0 +1,19 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/bdea260b91b4c49605ff3aa287e916031b80ca29/APIs/apacta.com/0.0.42/openapi.yaml
+info:
+  title: Apacta API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            Apacta uses page-number pagination. The `page` query parameter
+            selects which page to retrieve. Responses include a `pagination`
+            metadata object alongside the `data` array.
+          request:
+            queryParameters:
+              page:
+                role: page

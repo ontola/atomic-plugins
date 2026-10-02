@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/d4f42b5f3e90ccba013a336d5aa8b263e5646980/APIs/googleapis.com/cloudkms/v1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageToken:
+          type: pageToken
+          request:
+            queryParameters:
+              pageToken:
+                role: pageToken
+              pageSize:
+                role: pageSize
+          response:
+            bodyFields:
+              nextPageToken:
+                role: nextPageToken

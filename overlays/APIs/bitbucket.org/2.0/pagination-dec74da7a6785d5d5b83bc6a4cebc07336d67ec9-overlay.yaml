@@ -1,0 +1,31 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/bitbucket.org/2.0/openapi.yaml
+info:
+  title: Bitbucket API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >-
+            Bitbucket uses page-number pagination. The response includes `next`
+            and `previous` links for navigation, `size` for the total item
+            count, and `page`/`pagelen` confirming the current position.
+          request:
+            queryParameters:
+              page:
+                role: page
+              pagelen:
+                role: pageSize
+          response:
+            bodyFields:
+              next:
+                role: nextLink
+              size:
+                role: totalCount
+              page:
+                role: currentPage
+              pagelen:
+                role: pageSize

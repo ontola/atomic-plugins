@@ -42,9 +42,14 @@ Michiel on [#227](https://github.com/ontola/atomic-plugins/issues/227).
 
 ## The proxy's catalog
 
-The proxy reads its platform catalog (`overlays/catalog.json` on `main`)
-when it starts, so a catalog change reaches localthought.io at its next
-restart or deploy, with no release. The hand-over names the URL it reads as
-`raw.githubusercontent.com/ontola/atomic-plugins/refs/heads/main/overlays/catalog.json`;
-the crate's default is the Pages URL. Which one the Heroku config sets is not
-verified.
+The proxy reads its platform catalog once at startup. Release 0.2.4 defaults
+to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`.
+Dated catalogs and OAD-revision overlay filenames are immutable; publish new
+files and explicitly switch the default or `CATALOG_PATH` to opt in.
+
+On 2026-10-02, before this rollout, Heroku's `CATALOG_PATH` was verified as
+`https://raw.githubusercontent.com/ontola/atomic-plugins/refs/heads/main/overlays/catalog.json`
+and its current release was v82, deploying wrapper commit `e31b4f2d`.
+The unversioned file carries a `_comment` deprecation notice and retains the
+prior OAD revisions until the authorized deployment is confirmed to load the
+dated catalog. Only then remove it; published overlay revision files remain.

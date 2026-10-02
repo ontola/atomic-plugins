@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/a7dd2d8b4f5f50794e51afd84c539c2e61a182fc/APIs/googleapis.com/eventarc/v1beta1/openapi.yaml
+info:
+  title: Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageToken:
+          type: pageToken
+          request:
+            queryParameters:
+              pageToken:
+                role: pageToken
+              pageSize:
+                role: pageSize
+          response:
+            bodyFields:
+              nextPageToken:
+                role: nextPageToken

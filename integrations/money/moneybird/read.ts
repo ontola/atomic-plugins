@@ -108,7 +108,7 @@ export function nextLink(header: string | undefined): string | undefined {
 
 /**
  * Every contact of one administration, archived ones included (as
- * overlays/moneybird.com/api/v2/all-records-selection.json asks). Reads all
+ * overlays/APIs/moneybird.com/v2-readonly/all-records-selection.json asks). Reads all
  * pages before returning, so a failure part-way returns nothing and the
  * caller writes nothing. A contact seen twice (it moved between pages while
  * reading) is kept once, with its last-read value.

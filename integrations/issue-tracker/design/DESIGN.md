@@ -22,8 +22,8 @@ This folder has no user interface. What it has:
 - `todoist.ts`: a read-only projection of Todoist tasks onto an issue list
   (done flag, due day, priority label).
 - Jira: nothing in this folder. The repo has only
-  `overlays/atlassian.com/jira/1001.0.0-SNAPSHOT/pagination-overlay.yaml`.
-  `overlays/catalog.json` has no Jira platform, so the integration proxy
+  `overlays/APIs/atlassian.com/jira/1001.0.0-SNAPSHOT/pagination-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml`.
+  `overlays/catalog/2026-10-02.json` has no Jira platform, so the integration proxy
   cannot relay Jira requests today.
 
 The target shape is the same as `integrations/notion/app/` and

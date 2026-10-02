@@ -1,0 +1,29 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/949c40c36f1dba1f3d1a9272aefa977cfa12a43b/APIs/azure.com/storage-blob/2019-06-01/swagger.yaml
+info:
+  title: Azure Storage Blob API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextLink:
+          type: nextLink
+          description: >-
+            Azure Storage Blob list operations use nextLink-style pagination.
+            When results exceed the page size, the response includes a
+            `nextLink` field with the full URL for the next page.
+            `$maxpagesize` controls the maximum number of items per page.
+          autoDetect:
+            matchQueryParams: false
+            matchBodyFields: false
+            matchResponseFields: true
+            requireAll: false
+          request:
+            queryParameters:
+              $maxpagesize:
+                role: pageSize
+          response:
+            bodyFields:
+              nextLink:
+                role: nextLink

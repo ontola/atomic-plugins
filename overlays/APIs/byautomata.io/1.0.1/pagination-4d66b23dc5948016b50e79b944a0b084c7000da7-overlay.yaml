@@ -1,0 +1,27 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/byautomata.io/1.0.1/openapi.yaml
+info:
+  title: ByAutomata API Pagination Schemes
+  version: 1.0.0
+actions:
+- target: "$.components"
+  update:
+    paginationSchemes:
+      pageNumber:
+        type: pageNumber
+        description: >-
+          ByAutomata paginates results with a 0-based `page` parameter and a
+          fixed page size (approximately 15 companies for `/search`, 10 for
+          `/similar`). There is no client-controlled page size.
+        request:
+          queryParameters:
+            page:
+              role: page
+- target: "$.paths['/search'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber
+- target: "$.paths['/similar'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber

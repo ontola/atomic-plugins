@@ -811,7 +811,7 @@ declares correctly.
 Overlays are applied before an OpenAPI document reaches a drive app:
 `integration-proxy/` (LocalThought) applies them server-side, and a drive
 app bundles an already-composed document (`notion/catalog/generate.py`
-composes Notion's from `overlays/notion.com/`). A native (non-browser)
+composes Notion's from `overlays/APIs/notion.com/`). A native (non-browser)
 caller of the `syncables` npm package can instead apply them itself via
 `ClientConfig.document`/`.overlays` file paths — a convenience that only
 exists off the browser/WASM path.

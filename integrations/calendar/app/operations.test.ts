@@ -34,7 +34,7 @@ const COMPOSED = resolve(
 );
 const AUTH_OVERLAY = resolve(
   here,
-  '../../../overlays/googleapis.com/google-calendar/v3/auth-overlay.yaml',
+  '../../../overlays/APIs/googleapis.com/calendar/v3/auth-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml',
 );
 const AUTH = 'https://www.googleapis.com/auth/';
 

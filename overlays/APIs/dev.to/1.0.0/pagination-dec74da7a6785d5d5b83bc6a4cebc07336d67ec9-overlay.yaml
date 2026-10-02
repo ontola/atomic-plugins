@@ -1,0 +1,21 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/dev.to/1.0.0/openapi.yaml
+info:
+  title: Forem (DEV.to) API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >
+            Forem uses page-number-based pagination across all list endpoints.
+            Clients pass a `page` query parameter (1-indexed) and a `per_page`
+            parameter to control the number of items returned per page.
+          request:
+            queryParameters:
+              page:
+                role: page
+              per_page:
+                role: pageSize

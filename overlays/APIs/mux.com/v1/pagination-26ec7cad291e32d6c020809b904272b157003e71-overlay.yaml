@@ -1,0 +1,24 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/26ec7cad291e32d6c020809b904272b157003e71/APIs/mux.com/v1/openapi.yaml
+info:
+  title: Mux API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          description: >
+            Mux uses page-number pagination across all list endpoints (assets,
+            live streams, incidents, signing keys, etc.). Clients pass a `page`
+            query parameter (1-indexed) to select the desired page and a
+            `limit` parameter to control the number of results returned per
+            page. Responses include a `total_row_count` field so clients can
+            calculate the total number of pages.
+          request:
+            queryParameters:
+              page:
+                role: page
+              limit:
+                role: pageSize

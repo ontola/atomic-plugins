@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4850ea24eea46a34d75536d596b931dea70ba31a/APIs/amazonaws.com/sqs/2012-11-05/openapi.yaml
+info:
+  title: AWS SQS API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            SQS list operations (e.g. ListQueues, ListDeadLetterSourceQueues)
+            use NextToken-based pagination. `NextToken` from the previous
+            response is passed back in the request to retrieve the next page.
+            `MaxResults` limits the number of results per request.
+          request:
+            queryParameters:
+              NextToken:
+                role: pageToken
+              MaxResults:
+                role: pageSize
+          response:
+            bodyFields:
+              NextToken:
+                role: nextPageToken

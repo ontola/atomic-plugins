@@ -572,7 +572,7 @@ export function notionFixture({ scenario = 'default' } = {}) {
 
 export default {
   title: 'Notion',
-  // overlays/catalog.json's notion entry as the proxy composes it; see
+  // overlays/catalog/2026-10-02.json's notion entry as the proxy composes it; see
   // catalog/generate.py.
   // Read on first use, so importing this module (fakeStore.ts, in a jsdom
   // test too) does not touch the file system.

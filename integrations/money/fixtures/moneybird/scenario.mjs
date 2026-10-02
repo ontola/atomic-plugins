@@ -22,7 +22,7 @@
  *   create() turns it off.
  *
  * Archived contacts are left out unless `include_archived=true`, which is
- * what overlays/moneybird.com/api/v2/all-records-selection.json asks for.
+ * what overlays/APIs/moneybird.com/v2-readonly/all-records-selection.json asks for.
  *
  * Recording: replacing synthetic.mjs with a redacted recording needs a
  * Moneybird test administration and an API token (MONEYBIRD_TOKEN,

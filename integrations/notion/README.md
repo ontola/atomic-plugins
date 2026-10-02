@@ -81,7 +81,7 @@ proxy. No credential ever reaches the frame.
   `src/atomic/`.
 - `catalog/`: the composed catalog document, its provenance and
   `generate.py`. The overlays themselves are in
-  `overlays/notion.com/2026-03-11/`; see [`catalog/README.md`](catalog/README.md).
+  `overlays/APIs/notion.com/2026-03-11/`; see [`catalog/README.md`](catalog/README.md).
 - `fixtures/notion/`: an authored mock-proxy fixture serving
   `catalog/notion.json`. It pages the query two rows at a time, so the last
   row is only reachable by sending `next_cursor` back in the body, and

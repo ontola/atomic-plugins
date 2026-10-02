@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/58dbdf39e9c96889d5be996f91ad4d5dddcd5105/APIs/amazonaws.com/lambda/2015-03-31/openapi.yaml
+info:
+  title: AWS Lambda API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        marker:
+          type: pageToken
+          description: >-
+            Lambda list operations use marker-based pagination. Pass the
+            `NextMarker` value from the previous response as the `Marker`
+            query parameter. `MaxItems` controls the maximum number of
+            results returned per request.
+          request:
+            queryParameters:
+              Marker:
+                role: pageToken
+              MaxItems:
+                role: pageSize
+          response:
+            bodyFields:
+              NextMarker:
+                role: nextPageToken

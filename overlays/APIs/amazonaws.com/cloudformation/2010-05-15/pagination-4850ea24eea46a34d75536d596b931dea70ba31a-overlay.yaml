@@ -1,0 +1,24 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4850ea24eea46a34d75536d596b931dea70ba31a/APIs/amazonaws.com/cloudformation/2010-05-15/openapi.yaml
+info:
+  title: AWS CloudFormation API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            CloudFormation list operations (e.g. ListStacks, DescribeStacks,
+            ListStackResources) use NextToken-based pagination. Pass the
+            `NextToken` from the previous response to retrieve the next page
+            of results.
+          request:
+            queryParameters:
+              NextToken:
+                role: pageToken
+          response:
+            bodyFields:
+              NextToken:
+                role: nextPageToken

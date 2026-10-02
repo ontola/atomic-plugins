@@ -9,7 +9,7 @@
  * The three provider operations are the ones the composed `google-calendar`
  * proxy catalog permits for this app
  * (`integration-proxy/tests/identity-catalog/google-calendar-composed.yaml`,
- * composed from `overlays/googleapis.com/google-calendar/v3/`). The scopes
+ * composed from `overlays/APIs/googleapis.com/calendar/v3/`). The scopes
  * are Google OAuth scopes under `https://www.googleapis.com/auth/`.
  * `operations.test.ts` checks each declared operation against that
  * document, and that the app's whole flow uses every declared operation and

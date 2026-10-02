@@ -1,0 +1,26 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/488021395fbc8b36589a094b347ea8aa1d3b20a1/APIs/amazonaws.com/secretsmanager/2017-10-17/openapi.yaml
+info:
+  title: AWS Secrets Manager API Pagination Schemes
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        nextToken:
+          type: pageToken
+          description: >-
+            Secrets Manager list operations (e.g. ListSecrets,
+            ListSecretVersionIds) use NextToken-based pagination in the JSON
+            request body. Pass the `NextToken` from the previous response to
+            retrieve the next page. `MaxResults` limits results per page.
+          request:
+            bodyFields:
+              NextToken:
+                role: pageToken
+              MaxResults:
+                role: pageSize
+          response:
+            bodyFields:
+              NextToken:
+                role: nextPageToken
