@@ -998,14 +998,28 @@ async function driver(name: string, args: unknown[]) {
 }
 
 /**
- * Puts the mock's calendar back as a new lane has it: the initial events and
- * ETags, no recorded requests or writes. The mock proxy outlives a test
+ * Puts the mock's calendar back as a new lane has it, dated today in the
+ * browser's time zone: the initial events and ETags, no recorded requests or writes. The mock proxy outlives a test
  * attempt and its fixture is shared by the file's tests, so each test that
  * reads or edits it calls this first, and a Playwright retry starts from the
  * same state as the first attempt.
  */
 async function resetFixture() {
-  await driver('reset', []);
+  await driver('reset', [todayInBrowserZone()]);
+}
+
+/**
+ * Today as the app sees it: the date in the Playwright project's
+ * `timezoneId` (Europe/Amsterdam, from the pinned host's config), not the
+ * mock's UTC date, which is the day before for two hours each evening. The
+ * en-CA locale formats as `YYYY-MM-DD`.
+ */
+function todayInBrowserZone(): string {
+  const { timezoneId } = test.info().project.use;
+
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezoneId,
+  }).format(new Date());
 }
 
 /** The app's table rows, keyed by property shortname, via window.store. */

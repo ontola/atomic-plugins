@@ -53,4 +53,22 @@ describe('google-calendar fixture drivers', () => {
     );
     expect(sent.status).toBe(200);
   });
+
+  it('reset with a day rebuilds the events on that day', () => {
+    const google = calendarFixture('2026-10-02');
+    google.editRemote('all-day', { summary: 'Edited' });
+    google.reset('2026-10-03');
+    const allDay = google.events.find(e => e.id === 'all-day')!;
+
+    expect(allDay.summary).toBe('Calendar all-day fixture');
+    expect(allDay.start.date).toBe('2026-10-03');
+    expect(google.events.find(e => e.id === 'trip')!.start.date).toBe(
+      '2026-10-10',
+    );
+    google.editRemote('all-day', { summary: 'Edited again' });
+    google.reset();
+    expect(google.events.find(e => e.id === 'all-day')!.start.date).toBe(
+      '2026-10-03',
+    );
+  });
 });
