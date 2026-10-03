@@ -33,6 +33,9 @@
  * - `rate-limited`: the search works, every query answers 429 with
  *   `retry-after: 120`;
  * - `bad-gateway`: every request answers 502.
+ * `reset()` puts everything back as a new instance has it: the seeded pages
+ * and options, the starting scenario and no recorded requests. A spec calls
+ * it first, because the mock proxy outlives a test attempt.
  * `renameOption(id, name)` renames a select/status/multi-select option in
  * every schema, as a rename in Notion does; pages keep the option's id.
  * `editPage(id, properties)` changes a page as someone editing it in Notion
@@ -430,16 +433,21 @@ function patchPage(target, schemaOf, properties) {
 
 export function notionFixture({ scenario = 'default', blank = false } = {}) {
   const requests = [];
+
   // Per instance, so a rename in one test or lane never leaks into another.
-  const data = structuredClone({
-    sources: [
+  const seed = () => {
+    const sources = structuredClone([
       { source: dataSource, pages },
       { source: dataSource2, pages: pages2 },
-    ],
-  });
+    ]);
+    if (blank) for (const entry of sources) entry.pages = [];
+
+    return sources;
+  };
+
+  const data = { sources: seed() };
   let current = scenario;
   let created = 0;
-  if (blank) for (const entry of data.sources) entry.pages = [];
 
   // Any page, whatever the scenario shares, with the data source it is in.
   const locate = id => {
@@ -460,6 +468,21 @@ export function notionFixture({ scenario = 'default', blank = false } = {}) {
 
   return {
     requests,
+    /**
+     * Back to a fresh fixture: the seeded pages and options (undoing an
+     * `editPage`, `renameOption`, `archivePage` or `createPage`), the
+     * scenario the instance started with and no recorded requests. The mock
+     * proxy outlives a test attempt, so a spec calls it first and a
+     * Playwright retry starts from the same state as the first attempt.
+     */
+    reset() {
+      data.sources = seed();
+      current = scenario;
+      created = 0;
+      requests.length = 0;
+
+      return { reset: true, scenario: current };
+    },
     setScenario(name) {
       if (!SCENARIOS.includes(name))
         throw new Error(`Unknown notion scenario ${name}`);
@@ -631,6 +654,7 @@ export default {
   jsonBody: true,
   create: () => notionFixture(),
   drivers: [
+    'reset',
     'setScenario',
     'renameOption',
     'editPage',

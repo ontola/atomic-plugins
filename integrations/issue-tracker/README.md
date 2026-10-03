@@ -527,7 +527,10 @@ Drivers for changes on the GitHub side mid-session, as
 `updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
 `commentAs` (`[repo, number, login, body]`, a comment by someone else) and
 `failNext` (`[status, count]`: the next `count` proxied requests answer 503,
-429/403 as a rate limit, or 401).
+429/403 as a rate limit, or 401). `reset` (`[repo]`) forgets one repository's
+edits, so the next request reseeds it, and drops any pending `failNext`
+failures; a spec calls it first, so a Playwright retry starts from the same
+state as the first attempt.
 
 For live GitHub, `fixtures/github-issues/seed-live-repo.mjs --repo
 <owner>/<name> [--yes]` puts the same `acme-studio/website` issues, labels

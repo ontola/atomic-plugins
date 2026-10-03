@@ -216,6 +216,12 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
   ]);
   for (const list of byCalendar.values())
     for (const event of list) event.etag = etag();
+  // What a fresh fixture holds, etags included, for `reset`.
+  const initial = {
+    version,
+    primary: structuredClone(primary),
+    team: structuredClone(team),
+  };
   const requests = [];
   const writes = [];
   const listOf = id => byCalendar.get(id === 'primary' ? PRIMARY : id);
@@ -294,6 +300,22 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
 
       return structuredClone(event);
     },
+    /**
+     * Test driver: back to a fresh fixture: the initial events with their
+     * initial ETags, no recorded requests and no writes. The mock proxy
+     * outlives a test attempt, so a test calls it first and a Playwright
+     * retry starts from the same state as the first attempt. The arrays are
+     * live (`events`), so they are emptied and refilled in place.
+     */
+    reset() {
+      version = initial.version;
+      primary.splice(0, primary.length, ...structuredClone(initial.primary));
+      team.splice(0, team.length, ...structuredClone(initial.team));
+      requests.length = 0;
+      writes.length = 0;
+
+      return { reset: true };
+    },
     /** Test driver: accepted writes and the primary calendar, as JSON. */
     state() {
       return structuredClone({ writes, events: primary });
@@ -368,6 +390,6 @@ export default {
   document: calendarDocument,
   jsonBody: true,
   // Callable from an e2e spec as POST /fixture/google-calendar/<name>.
-  drivers: ['editRemote', 'cancel', 'state', 'received'],
+  drivers: ['editRemote', 'cancel', 'state', 'received', 'reset'],
   create: () => calendarFixture(),
 };

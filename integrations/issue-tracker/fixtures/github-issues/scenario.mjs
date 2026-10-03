@@ -64,10 +64,14 @@ export function githubTracker({ scenario } = {}) {
      * Forgets everything done to one repository, so the next request seeds it
      * afresh (the seeded and user-testing repositories) or finds it empty. A
      * test calls it first, so a Playwright retry starts from the same state
-     * as the first attempt: the mock proxy outlives an attempt.
+     * as the first attempt: the mock proxy outlives an attempt. It also drops
+     * the failures `failNext` left pending: those are queued for the fixture,
+     * not for one repository, and a test that failed before using them up
+     * would otherwise hand them to its retry's first requests.
      */
     reset(name) {
       repositories.delete(name);
+      failures.length = 0;
 
       return { reset: name };
     },

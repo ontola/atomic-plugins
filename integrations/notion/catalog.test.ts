@@ -246,6 +246,38 @@ describe('Notion fixture', () => {
     ).toBe(false);
     expect(() => api.editPage(pages[1]!.id, { Done: { number: 1 } })).toThrow();
   });
+
+  it('reset undoes edits, renames, archives and the scenario (reset driver)', () => {
+    expect(fixture.drivers).toContain('reset');
+    const api = notionFixture();
+    const before = {
+      page: api.getPage(pages[1]!.id),
+      second: api.getPage(pages[0]!.id),
+    };
+    const option = (
+      before.page.properties.Status as {
+        status: { id: string };
+      }
+    ).status.id;
+    api.editPage(pages[1]!.id, { Done: { checkbox: false } });
+    api.renameOption(option, 'Shipped');
+    api.archivePage(pages[0]!.id);
+    api.setScenario('empty');
+    api.request('GET', url('/v1/pages/anything'));
+    expect(api.requests).toHaveLength(1);
+
+    api.reset();
+
+    expect(api.getPage(pages[1]!.id)).toEqual(before.page);
+    expect(api.getPage(pages[0]!.id)).toEqual(before.second);
+    expect(api.requests).toEqual([]);
+    expect(
+      api.request('POST', url('/v1/search'), {
+        filter: { value: 'page', property: 'object' },
+      }).status,
+    ).toBe(200);
+    expect(api.requests).toHaveLength(1);
+  });
 });
 
 describe('read-only lens over the fixture pages', () => {
