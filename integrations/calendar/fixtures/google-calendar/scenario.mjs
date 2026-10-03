@@ -110,7 +110,7 @@ const patchable = ['summary', 'description', 'location', 'start', 'end'];
  *
  * Primary holds one all-day event, one timed event, a weekly series (its
  * master and one instance), one cancelled event, and a three-day all-day
- * event on the 10th to 12th of `day`'s month, so that a month grid of `day`
+ * event on the 10th to 12th of `firstDay`'s month, so that a month grid of that day
  * always shows all three days. The two all-day events and the timed one are
  * importable in the adapter's scope; the others exercise its skip rules.
  *
@@ -119,10 +119,9 @@ const patchable = ['summary', 'description', 'location', 'start', 'end'];
  * would accept one, so here it would be a bug in the caller. A stale
  * `If-Match` gets 412. Every accepted write gives the event a new ETag.
  */
-export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
-  const tomorrow = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000)
-    .toISOString()
-    .slice(0, 10);
+export function calendarFixture(
+  firstDay = new Date().toISOString().slice(0, 10),
+) {
   let version = 0;
   const etag = () => `"v${++version}"`;
   const calendars = [
@@ -140,84 +139,105 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
       backgroundColor: '#f691b2',
     },
   ];
-  const primary = [
-    {
-      id: 'all-day',
-      summary: 'Calendar all-day fixture',
-      status: 'confirmed',
-      htmlLink:
-        'https://www.google.com/calendar/event?eid=YWxsLWRheSBzeW50aGV0aWM',
-      start: { date: day },
-      end: { date: tomorrow },
-    },
-    {
-      id: 'timed',
-      summary: 'Calendar timed fixture',
-      htmlLink:
-        'https://www.google.com/calendar/event?eid=dGltZWQgc3ludGhldGlj',
-      description: 'Synthetic agenda',
-      location: 'Room 4',
-      status: 'confirmed',
-      start: {
-        dateTime: `${day}T09:30:00+02:00`,
-        timeZone: 'Europe/Amsterdam',
+
+  /** The events of one fixture day, etagged, from the current `version`. */
+  const seed = day => {
+    const tomorrow = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000)
+      .toISOString()
+      .slice(0, 10);
+    const primary = [
+      {
+        id: 'all-day',
+        summary: 'Calendar all-day fixture',
+        status: 'confirmed',
+        htmlLink:
+          'https://www.google.com/calendar/event?eid=YWxsLWRheSBzeW50aGV0aWM',
+        start: { date: day },
+        end: { date: tomorrow },
       },
-      end: { dateTime: `${day}T10:30:00+02:00`, timeZone: 'Europe/Amsterdam' },
-    },
-    {
-      id: 'series',
-      summary: 'Calendar weekly fixture',
-      status: 'confirmed',
-      recurrence: ['RRULE:FREQ=WEEKLY'],
-      start: {
-        dateTime: `${day}T00:30:00+02:00`,
-        timeZone: 'Europe/Amsterdam',
+      {
+        id: 'timed',
+        summary: 'Calendar timed fixture',
+        htmlLink:
+          'https://www.google.com/calendar/event?eid=dGltZWQgc3ludGhldGlj',
+        description: 'Synthetic agenda',
+        location: 'Room 4',
+        status: 'confirmed',
+        start: {
+          dateTime: `${day}T09:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
+        end: {
+          dateTime: `${day}T10:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
       },
-      end: { dateTime: `${day}T01:30:00+02:00`, timeZone: 'Europe/Amsterdam' },
-    },
-    {
-      id: 'series_1',
-      summary: 'Calendar weekly fixture',
-      status: 'confirmed',
-      start: {
-        dateTime: `${day}T00:30:00+02:00`,
-        timeZone: 'Europe/Amsterdam',
+      {
+        id: 'series',
+        summary: 'Calendar weekly fixture',
+        status: 'confirmed',
+        recurrence: ['RRULE:FREQ=WEEKLY'],
+        start: {
+          dateTime: `${day}T00:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
+        end: {
+          dateTime: `${day}T01:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
       },
-      end: { dateTime: `${day}T01:30:00+02:00`, timeZone: 'Europe/Amsterdam' },
-      recurringEventId: 'series',
-      originalStartTime: { dateTime: `${day}T00:30:00+02:00` },
-      attendees: [
-        { email: 'synthetic@example.com', responseStatus: 'accepted' },
-      ],
-    },
-    { id: 'gone', status: 'cancelled' },
-    {
-      id: 'trip',
-      summary: 'Calendar three-day fixture',
-      status: 'confirmed',
-      htmlLink: 'https://www.google.com/calendar/event?eid=dHJpcCBzeW50aGV0aWM',
-      // Google's all-day end is exclusive: the 13th, for the 10th to 12th.
-      start: { date: `${day.slice(0, 7)}-10` },
-      end: { date: `${day.slice(0, 7)}-13` },
-    },
-  ];
-  const team = [
-    {
-      id: 'standup',
-      summary: 'Team standup',
-      status: 'confirmed',
-      start: { dateTime: `${day}T11:00:00+02:00` },
-      end: { dateTime: `${day}T11:15:00+02:00` },
-    },
-  ];
+      {
+        id: 'series_1',
+        summary: 'Calendar weekly fixture',
+        status: 'confirmed',
+        start: {
+          dateTime: `${day}T00:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
+        end: {
+          dateTime: `${day}T01:30:00+02:00`,
+          timeZone: 'Europe/Amsterdam',
+        },
+        recurringEventId: 'series',
+        originalStartTime: { dateTime: `${day}T00:30:00+02:00` },
+        attendees: [
+          { email: 'synthetic@example.com', responseStatus: 'accepted' },
+        ],
+      },
+      { id: 'gone', status: 'cancelled' },
+      {
+        id: 'trip',
+        summary: 'Calendar three-day fixture',
+        status: 'confirmed',
+        htmlLink:
+          'https://www.google.com/calendar/event?eid=dHJpcCBzeW50aGV0aWM',
+        // Google's all-day end is exclusive: the 13th, for the 10th to 12th.
+        start: { date: `${day.slice(0, 7)}-10` },
+        end: { date: `${day.slice(0, 7)}-13` },
+      },
+    ];
+    const team = [
+      {
+        id: 'standup',
+        summary: 'Team standup',
+        status: 'confirmed',
+        start: { dateTime: `${day}T11:00:00+02:00` },
+        end: { dateTime: `${day}T11:15:00+02:00` },
+      },
+    ];
+    for (const list of [primary, team])
+      for (const event of list) event.etag = etag();
+
+    return { primary, team };
+  };
+
+  const { primary, team } = seed(firstDay);
   const byCalendar = new Map([
     [PRIMARY, primary],
     [TEAM, team],
   ]);
-  for (const list of byCalendar.values())
-    for (const event of list) event.etag = etag();
   // What a fresh fixture holds, etags included, for `reset`.
-  const initial = {
+  let initial = {
     version,
     primary: structuredClone(primary),
     team: structuredClone(team),
@@ -305,9 +325,22 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
      * initial ETags, no recorded requests and no writes. The mock proxy
      * outlives a test attempt, so a test calls it first and a Playwright
      * retry starts from the same state as the first attempt. The arrays are
-     * live (`events`), so they are emptied and refilled in place.
+     * live (`events`), so they are emptied and refilled in place. With a
+     * `newDay` (`YYYY-MM-DD`) the fresh fixture is built on that day instead,
+     * so a spec can date it in the browser's time zone, not the mock's (the
+     * default day is the UTC date).
      */
-    reset() {
+    reset(newDay) {
+      if (newDay !== undefined) {
+        version = 0;
+        const fresh = seed(newDay);
+        initial = {
+          version,
+          primary: structuredClone(fresh.primary),
+          team: structuredClone(fresh.team),
+        };
+      }
+
       version = initial.version;
       primary.splice(0, primary.length, ...structuredClone(initial.primary));
       team.splice(0, team.length, ...structuredClone(initial.team));
