@@ -110,7 +110,7 @@ const patchable = ['summary', 'description', 'location', 'start', 'end'];
  *
  * Primary holds one all-day event, one timed event, a weekly series (its
  * master and one instance), one cancelled event, and a three-day all-day
- * event on the 10th to 12th of `day`'s month, so that a month grid of `day`
+ * event on the 10th to 12th of `firstDay`'s month, so that a month grid of that day
  * always shows all three days. The two all-day events and the timed one are
  * importable in the adapter's scope; the others exercise its skip rules.
  *
@@ -119,7 +119,9 @@ const patchable = ['summary', 'description', 'location', 'start', 'end'];
  * would accept one, so here it would be a bug in the caller. A stale
  * `If-Match` gets 412. Every accepted write gives the event a new ETag.
  */
-export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
+export function calendarFixture(
+  firstDay = new Date().toISOString().slice(0, 10),
+) {
   let version = 0;
   const etag = () => `"v${++version}"`;
   const calendars = [
@@ -137,6 +139,7 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
       backgroundColor: '#f691b2',
     },
   ];
+
   /** The events of one fixture day, etagged, from the current `version`. */
   const seed = day => {
     const tomorrow = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000)
@@ -228,7 +231,7 @@ export function calendarFixture(day = new Date().toISOString().slice(0, 10)) {
     return { primary, team };
   };
 
-  const { primary, team } = seed(day);
+  const { primary, team } = seed(firstDay);
   const byCalendar = new Map([
     [PRIMARY, primary],
     [TEAM, team],
