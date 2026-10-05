@@ -66,7 +66,7 @@ stylesheet.
   OpenAPI document (`app/openapi.json`, the same file the mock proxy serves)
   and follows the `Link: rel="next"` pagination. The document's
   `crudResources` drives it, so there is no Pets-specific paging code.
-  `syncables/browser` is the published npm `syncables@0.18.0`, pinned in
+  `syncables/browser` is the published npm `syncables@0.19.0`, pinned in
   `package.json` and `pnpm-lock.yaml` and installed with
   `pnpm install --frozen-lockfile` in this folder; this repo's
   `syncables/src/` is not bundled.
@@ -109,8 +109,8 @@ the 0.2 proxy.
 
 **Install.** The `pets` catalog entry is a drive app entry (#94, closed):
 `app-module` is
-`https://ontola.github.io/atomic-plugins/apps/pets/0.1.2/ui.js`, the
-committed `apps/pets/0.1.2/ui.js` (`app/build.mjs`'s output) as GitHub Pages
+`https://ontola.github.io/atomic-plugins/apps/pets/0.1.3/ui.js`, the
+committed `apps/pets/0.1.3/ui.js` (`app/build.mjs`'s output) as GitHub Pages
 serves it, and `app-module-integrity` pins its bytes. Open
 Integrations, turn on "Show experimental plugins", and choose **Install** on
 the Pets card under **Drive apps**. See
@@ -123,8 +123,8 @@ creates nothing.
 The e2e (`e2e/pets.spec.ts`) goes through the catalog, with the lane's
 dev-server standing in for GitHub Pages: discover the card → install → connect through
 the mock proxy → first import (five rows, typed columns) → reopen from the
-card ("Installed 0.1.2", re-sync unchanged) → update from a rewound "0.0.1"
-back to 0.1.2 with the rows kept. It no longer replaces the app's source
+card ("Installed 0.1.3", re-sync unchanged) → update from a rewound "0.0.1"
+back to 0.1.3 with the rows kept. It no longer replaces the app's source
 from the test.
 
 **Shared code.** `app/store.ts` (the host store types) is a copy of
