@@ -929,8 +929,9 @@ describe('durable outbox: second review on #312', () => {
 });
 
 describe('durable outbox: third review on #312', () => {
-  it('keeps in-memory updates going when a refresh lacks their record', async () => {
+  it('holds a queued update behind one in flight when a refresh lacks their record, and sends it once the record is found', async () => {
     // The reviewer's scenario: u1 in flight, u2 queued, a refresh without a.
+    // The list filters a out; a GET of the record still finds it (#260).
     const server = new Map<string, Pet>([['a', { id: 'a', name: 'A' }]]);
     let listed = true;
     let answer!: () => void;
@@ -938,6 +939,8 @@ describe('durable outbox: third review on #312', () => {
     let puts = 0;
     const client = createApiClient(document(), {
       transport: async (r) => {
+        if (r.method === 'GET' && r.url.pathname === '/api/pets/a')
+          return response(server.get('a'));
         if (r.method === 'GET')
           return response(listed ? [...server.values()] : []);
         puts += 1;
@@ -953,11 +956,16 @@ describe('durable outbox: third review on #312', () => {
     await client.update('/pets', 'a', { name: 'C' });
     listed = false;
     await client.sync();
-    expect(client.pendingWrites().map((w) => w.state)).toEqual([
-      'pending',
-      'pending',
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'pending' },
+      { state: 'pending', awaitingRefresh: true },
     ]);
     answer();
+    await vi.waitFor(() => expect(client.pendingWrites()).toHaveLength(1));
+    await settle();
+    // u2 waits for the next sync, which finds the record with a GET.
+    expect(puts).toBe(1);
+    await client.sync();
     await idle(client);
     expect(server.get('a')?.['name']).toBe('C');
     expect(await client.get('/pets', 'a')).toMatchObject({ name: 'C' });
@@ -974,12 +982,27 @@ describe('durable outbox: third review on #312', () => {
     await vi.waitFor(() => expect(first.requests).toHaveLength(1));
     await settle();
 
-    const second = provider([]);
+    // The list no longer has record 1; a GET of it fails at first, then
+    // finds it (filtered out of the list, not deleted).
+    let found = false;
+    const second = provider([], (r) =>
+      r.method === 'GET' && r.url.pathname === '/api/pets/1'
+        ? found
+          ? response({ id: '1', name: 'Rex', tag: 'dog' })
+          : response({ error: 'invented' }, 503)
+        : undefined,
+    );
     const b = restart(storage.crash(), second.transport);
     await b.ready();
     await b.sync();
     expect(b.pendingWrites()).toMatchObject([{ state: 'failed' }]);
     await b.update('/pets', '1', { tag: 'wolf' });
+    // The record is still missing: the new edit waits for a refresh.
+    expect(b.pendingWrites()[1]).toMatchObject({ awaitingRefresh: true });
+    await settle();
+    expect(second.requests).toEqual([]);
+    found = true;
+    await b.sync();
     await vi.waitFor(() => expect(second.requests).toHaveLength(1));
     // Built on the last confirmed record, without the failed update's name.
     expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
@@ -993,7 +1016,9 @@ describe('durable outbox: third review on #312', () => {
     });
   });
 
-  it('sends a restored PATCH update even when the refresh lacks its record', async () => {
+  it('fails a restored PATCH update like a PUT when the refresh lacks its record', async () => {
+    // #260: the client's PATCH carries the last known record too, so it is
+    // not sent on a record that may be deleted.
     const doc = document();
     const item = doc.paths['/pets/{petId}']!;
     item.patch = item.put!;
@@ -1009,8 +1034,15 @@ describe('durable outbox: third review on #312', () => {
     );
     await b.ready();
     await b.sync();
-    await idle(b);
-    expect(second.requests.map((r) => r.method)).toEqual(['PATCH']);
+    await settle();
+    expect(b.pendingWrites()).toMatchObject([
+      {
+        state: 'failed',
+        missingRecord: 'unknown',
+        lastError: expect.stringMatching(/not in the refreshed collection/),
+      },
+    ]);
+    expect(second.requests).toEqual([]);
   });
 
   it('keeps the refresh miss count across a restart', async () => {
@@ -1225,8 +1257,13 @@ describe('durable outbox: fifth review on #312', () => {
     const crashed = await restoredUpdate();
     for (const resolve of ['retry', 'update'] as const) {
       let listed: Pet[] = [];
+      let found = false;
       const second = provider([], (r) =>
-        r.method === 'GET' ? response(listed) : 'hang-before',
+        r.method !== 'GET'
+          ? 'hang-before'
+          : found && r.url.pathname === '/api/pets/1'
+            ? response({ id: '1', name: 'Rex', tag: 'wolf' })
+            : response(listed),
       );
       const b = restart(crashed.crash(), second.transport);
       await b.ready();
@@ -1247,6 +1284,10 @@ describe('durable outbox: fifth review on #312', () => {
         });
       } else {
         await b.update('/pets', '1', { age: '4' });
+        // Still missing since the last refresh: it waits for the next one,
+        // whose GET finds the record (#260).
+        found = true;
+        await b.sync();
         await vi.waitFor(() => expect(second.requests).toHaveLength(1));
         expect(JSON.parse(second.requests[0]?.body ?? '{}')).toEqual({
           id: '1',

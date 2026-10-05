@@ -5,13 +5,20 @@ import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { readCollections } from '../read/collections.js';
 import {
+  asText,
   discoverReadModel,
   isRecord,
   upstreamOf,
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
-import { bindPath, type ReadLimits } from '../read/pages.js';
+import {
+  bindPath,
+  Budget,
+  BudgetExhausted,
+  RetryBeyondDeadline,
+  type ReadLimits,
+} from '../read/pages.js';
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
@@ -141,6 +148,38 @@ export interface AuthBlock {
   context?: Record<string, string>;
 }
 
+/**
+ * What the client found out about a record a complete refresh no longer
+ * returned:
+ * - `deleted`: the provider deleted it. The API document declares that a
+ *   record absent from a complete read of the collection was deleted
+ *   (`x-completeness: { absent: deleted }`), or a GET of the record answered
+ *   404 or 410.
+ * - `filtered`: it still exists; the list just does not return it. A GET of
+ *   the record answered 2xx with the record.
+ * - `unknown`: neither could be told: the GET answered another status, its
+ *   2xx body did not hold the record, it failed, or no GET was made (the
+ *   resource declares no item GET, or `missingRecordChecks` is `'none'`).
+ */
+export type MissingRecordEvidence = 'deleted' | 'filtered' | 'unknown';
+
+/** A record a complete refresh no longer returned, and what that means. */
+export interface MissingRecord {
+  resource: string;
+  id: string;
+  context?: Record<string, string>;
+  evidence: MissingRecordEvidence;
+  /**
+   * Where the evidence comes from: `declaration` (the API document's
+   * `x-completeness`), `read` (a GET of the record) or `none` (no GET made).
+   */
+  source: 'declaration' | 'read' | 'none';
+  /** The status the GET answered, when one answered. */
+  status?: number;
+  /** For `filtered`: the record the GET returned. */
+  record?: Record<string, unknown>;
+}
+
 export interface ApiClientOptions {
   /** Defaults to document.servers[0].url. */
   baseUrl?: string;
@@ -216,6 +255,26 @@ export interface ApiClientOptions {
    * restore.
    */
   onAuthFailure?: 'block' | 'retry';
+  /**
+   * Which records that a complete `sync()` no longer returns the client
+   * checks with a GET of the record (see `MissingRecordEvidence`), within the
+   * sync's read budget (`limits`):
+   * - `'pending'` (the default): records with a queued update, when that
+   *   update is the first unsettled write of the record and not in flight;
+   * - `'all'`: those, and also records without queued writes, once, in the
+   *   sync that first misses them;
+   * - `'none'`: no GET; without a declaration the evidence is `unknown`.
+   * A collection declared `x-completeness: { absent: deleted }` needs no GET.
+   */
+  missingRecordChecks?: 'pending' | 'all' | 'none';
+  /**
+   * Called with the evidence for each record checked as above. Nothing is
+   * deleted locally because of it; what to do with a record the provider
+   * deleted is the app's decision. A queued update of the record is failed
+   * (`deleted`, `unknown`) or kept and rebased on the returned record
+   * (`filtered`).
+   */
+  onMissingRecord?: (record: MissingRecord) => void;
 }
 
 export interface PaginateOptions {
@@ -338,6 +397,13 @@ export interface PendingWriteInfo {
   awaitingRefresh?: true;
   /** For updates: fields that also changed remotely since the edit was made. */
   conflicts?: WriteConflict[];
+  /**
+   * Set on an update that failed because a complete refresh no longer
+   * returned its record: `deleted` (`lastError` "deleted at the provider") or
+   * `unknown` (`lastError` "not in the refreshed collection"). See
+   * `MissingRecordEvidence`.
+   */
+  missingRecord?: 'deleted' | 'unknown';
 }
 
 export interface ApiClient {
@@ -498,6 +564,10 @@ interface ClientRoute {
   updateMethod?: 'PUT' | 'PATCH';
   deletePath?: string;
   idempotencyHeader?: string;
+  /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
+  absentMeansDeleted?: boolean;
+  /** The item URL declares a GET, so a missing record can be read. */
+  itemReadable?: boolean;
 }
 
 interface QueuedWrite {
@@ -530,6 +600,13 @@ interface QueuedWrite {
   lastKnown?: Record<string, unknown>;
   /** Queue order across the client and its restarts (absent in older outboxes). */
   seq?: number;
+  /** Failed because a complete refresh no longer returned the record. */
+  missingRecord?: 'deleted' | 'unknown';
+  /**
+   * In flight when a complete read lacked its record (`holdMissing` skipped
+   * it): if it stays queued after its response, it is held. Not stored.
+   */
+  holdIfQueued?: boolean;
 }
 
 type WriteOutcome =
@@ -629,6 +706,42 @@ function declaredIdempotencyHeader(
   )?.name;
 }
 
+/**
+ * The Collection Completeness extension's `absent` value for a collection:
+ * from its CRUD Causality Collection Object, which covers the collection's
+ * own fixed `x-list-query`/`x-list-body`, else from its list operation,
+ * which covers only a read that adds nothing to the operation's request (no
+ * fixed query or body), since several collections may share that operation.
+ */
+function declaredAbsence(
+  document: OpenApiDocument,
+  collection: ReadCollection,
+): 'deleted' | 'removed' | undefined {
+  const resources = document.components?.['crudResources'];
+  const resource = isRecord(resources)
+    ? resources[collection.resource]
+    : undefined;
+  const collections = isRecord(resource) ? resource['collections'] : undefined;
+  const definition = isRecord(collections)
+    ? collections[collection.name]
+    : undefined;
+  const operation =
+    document.paths[collection.url]?.[
+      collection.method === 'POST' ? 'post' : 'get'
+    ];
+  const fixed =
+    Object.keys(collection.listQuery).length > 0 ||
+    Object.keys(collection.listBody).length > 0;
+  const declared =
+    isRecord(definition) && definition['x-completeness'] !== undefined
+      ? definition['x-completeness']
+      : fixed
+        ? undefined
+        : operation?.['x-completeness'];
+  const absent = isRecord(declared) ? declared['absent'] : undefined;
+  return absent === 'deleted' || absent === 'removed' ? absent : undefined;
+}
+
 function clientRoutes(
   document: OpenApiDocument,
   collections: ReadCollection[],
@@ -665,6 +778,9 @@ function clientRoutes(
           route.deletePath = path;
       }
     }
+    if (declaredAbsence(document, collection) === 'deleted')
+      route.absentMeansDeleted = true;
+    if (item?.get) route.itemReadable = true;
     const header =
       route.createPath && declaredIdempotencyHeader(document, route.createPath);
     if (header) route.idempotencyHeader = header;
@@ -697,6 +813,17 @@ export function createApiClient(
       : { identityField: options.identityField };
   const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
   for (const route of routes) {
+    // A selection that narrows the read past the collection's own fixed
+    // query makes it no longer the read the declaration speaks of: a record
+    // it leaves out may exist, so a GET decides instead.
+    const narrowed = (options.selection?.query_overrides ?? []).some(
+      (override) =>
+        override.path === route.collection.url &&
+        Object.entries(override.values).some(
+          ([name, value]) => route.collection.listQuery[name] !== asText(value),
+        ),
+    );
+    if (narrowed) delete route.absentMeansDeleted;
     if (options.idempotencyKeyHeader === false) delete route.idempotencyHeader;
     else if (options.idempotencyKeyHeader && route.createPath)
       route.idempotencyHeader = options.idempotencyKeyHeader;
@@ -711,6 +838,11 @@ export function createApiClient(
   /** Failed updates and deletes per record, oldest first. Failed creates stay parked in their queue. */
   const gaveUpWrites = new Map<string, QueuedWrite[]>();
   const draining = new Set<string>();
+  /**
+   * Per record key: ends the backoff wait of the write at the head of the
+   * queue early, for when that write is taken out of the queue meanwhile.
+   */
+  const wakers = new Map<string, () => void>();
   const revisions = new Map<string, number>();
   /** Like `revisions`, per record: settles during a read, by record key. */
   const recordRevisions = new Map<string, number>();
@@ -807,6 +939,7 @@ export function createApiClient(
       ...(write.sending ? { sending: true as const } : {}),
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
+      ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
     };
   }
 
@@ -948,6 +1081,7 @@ export function createApiClient(
         : {}),
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
+      ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
     };
     if (stored.seq !== undefined && stored.seq >= nextSeq)
       nextSeq = stored.seq + 1;
@@ -1473,6 +1607,18 @@ export function createApiClient(
           return;
         const outcome = await attemptWrite(write);
         write.sending = false;
+        // Its record went missing while it was in flight. Answered without
+        // settling (a retry, a refused credential, not sent), it is not
+        // resent on the stale copy: it waits for a sync to check the record.
+        if (write.holdIfQueued) {
+          delete write.holdIfQueued;
+          if (
+            outcome.status === 'retry' ||
+            outcome.status === 'blocked' ||
+            outcome.status === 'held'
+          )
+            write.awaitingRefresh = true;
+        }
         if (outcome.status === 'held') {
           await persistLater();
           // The check at the top stops here while blocked; an authRenewed()
@@ -1514,7 +1660,12 @@ export function createApiClient(
           await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, outcome.delayMs);
             if (typeof timer.unref === 'function') timer.unref();
+            wakers.set(key, () => {
+              clearTimeout(timer);
+              resolve();
+            });
           });
+          wakers.delete(key);
           continue;
         }
         queue.shift();
@@ -1766,6 +1917,9 @@ export function createApiClient(
     if (queue && at >= 0) {
       queue.splice(at, 1);
       if (!queue.length) writeQueues.delete(key);
+      // The head's backoff wait (if it was between retries) ends with it:
+      // the queue goes on, or the drain stops, without waiting it out.
+      if (at === 0) wakers.get(key)?.();
     }
     write.state = 'failed';
     write.lastError = message;
@@ -1777,58 +1931,278 @@ export function createApiClient(
     if (lastKnown) setLastKnown(key, lastKnown);
   }
 
-  function missingMessage(write: QueuedWrite): string {
-    return `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely); not sent, to avoid a partial update`;
+  /** What a sync learned about one missing record. */
+  interface Evidence {
+    evidence: MissingRecordEvidence;
+    source: MissingRecord['source'];
+    status?: number;
+    record?: Record<string, unknown>;
+    /** Why, for `lastError`. */
+    detail: string;
+  }
+
+  function missingMessage(write: QueuedWrite, found: Evidence): string {
+    return found.evidence === 'deleted'
+      ? `Record ${write.id} was deleted at the provider (${found.detail}); not sent`
+      : `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely; ${found.detail}); not sent, to avoid a partial update`;
   }
 
   /**
-   * Releases the restored updates of `scope` whose records this complete
-   * read saw fresh (`isFresh`: no write to the record settled during it).
+   * Holds the updates of a record a complete read lacked: each queued update
+   * up to the record's first create, apart from one in flight, waits
+   * (`awaitingRefresh`) instead of being sent on the last known copy.
+   */
+  function holdMissing(key: string): void {
+    for (const write of writeQueues.get(key) ?? []) {
+      if (write.type === 'create') return;
+      if (write.type !== 'update') continue;
+      if (write.sending) write.holdIfQueued = true;
+      else write.awaitingRefresh = true;
+    }
+  }
+
+  /**
+   * The update a missing record's evidence may fail: the head of the
+   * record's queue, held, stored, pending and not in flight. A write behind
+   * an earlier unsettled one is never failed: that would make a failed write
+   * newer than a queued one, which a settle then drops.
+   */
+  function evidenceHead(key: string): QueuedWrite | undefined {
+    const head = writeQueues.get(key)?.[0];
+    return head &&
+      head.type === 'update' &&
+      head.awaitingRefresh &&
+      head.state === 'pending' &&
+      !head.sending &&
+      head.durable !== false
+      ? head
+      : undefined;
+  }
+
+  /**
+   * Finds out whether a record a complete read lacked was deleted: from the
+   * document's declaration, else with a GET of the record within the sync's
+   * budget. Undefined when the budget is spent (not checked).
+   */
+  async function findEvidence(
+    route: ClientRoute,
+    context: Record<string, string>,
+    id: string,
+    budget: Budget,
+  ): Promise<Evidence | undefined> {
+    if (route.absentMeansDeleted)
+      return {
+        evidence: 'deleted',
+        source: 'declaration',
+        detail: `the API document declares that a record missing from a complete read of ${route.collection.name} was deleted`,
+      };
+    if (options.missingRecordChecks === 'none')
+      return {
+        evidence: 'unknown',
+        source: 'none',
+        detail: 'not checked: missingRecordChecks is none',
+      };
+    if (!route.itemReadable || !route.collection.itemUrl)
+      return {
+        evidence: 'unknown',
+        source: 'none',
+        detail: 'not checked: the document declares no GET for the record',
+      };
+    let response: TransportResponse;
+    let path = route.collection.itemUrl;
+    try {
+      const url = target(route.collection.itemUrl, {
+        ...context,
+        [route.collection.itemParam ?? 'id']: id,
+      });
+      path = url.pathname;
+      response = await budget.send({ url, method: 'GET', headers: {} });
+    } catch (error) {
+      // The budget is spent, or a 429 asks to wait past its deadline.
+      if (
+        error instanceof BudgetExhausted ||
+        error instanceof RetryBeyondDeadline
+      )
+        return undefined;
+      return {
+        evidence: 'unknown',
+        source: 'read',
+        detail: `GET ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    const { status } = response;
+    // Rate-limited after the budget's own 429 retries: not checked.
+    if (status === 429) return undefined;
+    if (status === 404 || status === 410)
+      return {
+        evidence: 'deleted',
+        source: 'read',
+        status,
+        detail: `GET ${path} answered ${status}`,
+      };
+    if (status >= 200 && status < 300) {
+      let body: unknown;
+      try {
+        body = response.body ? JSON.parse(response.body) : undefined;
+      } catch {
+        body = undefined;
+      }
+      const idField = route.collection.idField;
+      if (
+        isRecord(body) &&
+        body[idField] !== undefined &&
+        body[idField] !== null &&
+        String(body[idField]) === id
+      )
+        return {
+          evidence: 'filtered',
+          source: 'read',
+          status,
+          record: body,
+          detail: `GET ${path} answered ${status} with the record`,
+        };
+      return {
+        evidence: 'unknown',
+        source: 'read',
+        status,
+        detail: `GET ${path} answered ${status} without the record`,
+      };
+    }
+    return {
+      evidence: 'unknown',
+      source: 'read',
+      status,
+      detail: `GET ${path} answered ${status}`,
+    };
+  }
+
+  function reportMissing(
+    route: ClientRoute,
+    context: Record<string, string>,
+    id: string,
+    found: Evidence,
+  ): void {
+    try {
+      options.onMissingRecord?.({
+        resource: route.collection.name,
+        id,
+        ...(Object.keys(context).length ? { context: { ...context } } : {}),
+        evidence: found.evidence,
+        source: found.source,
+        ...(found.status !== undefined ? { status: found.status } : {}),
+        ...(found.record ? { record: structuredClone(found.record) } : {}),
+      });
+    } catch {
+      // A failing callback does not stop the sync.
+    }
+  }
+
+  /**
+   * After a complete read of `scope`: releases its held updates whose
+   * records the read returned fresh (`isFresh`: no write to the record
+   * settled during it), and deals with the records it did not return.
    * With `apply`, the read was not applied to the whole collection, so the
    * fresh records are taken over (and checked for conflicts) here.
    * `previous` holds the confirmed records from before the read.
    *
-   * A released PUT update whose record the read did not return would send
-   * only its own fields as the whole record. When it is the first unsettled
-   * write of its record, it fails instead and keeps the last confirmed
-   * record for a retry. Otherwise it goes out as before.
+   * A record with unsettled writes that the read lacks (and that no write
+   * settled on during it) has its queued updates held (`holdMissing`). When
+   * the first of them is the head of its record's queue and not in flight,
+   * the record is checked (`findEvidence`): `deleted` and `unknown` fail
+   * that update and every held update after it, keeping the last confirmed
+   * record for a retry; `filtered` takes over the returned record and
+   * releases them. Held updates behind an earlier unsettled write, and
+   * records the budget did not cover, wait for a later sync. `vanished`
+   * lists records without writes that this read dropped; they are checked
+   * only with `missingRecordChecks: 'all'`.
    */
   async function releaseRefreshed(
-    scope: string,
+    read: {
+      route: ClientRoute;
+      scope: string;
+      context: Record<string, string>;
+      budget: Budget;
+    },
     records: Map<string, Record<string, unknown>>,
     previous: Map<string, Record<string, unknown>>,
     isFresh: (id: string) => boolean,
     apply: boolean,
     released: Set<QueuedWrite>,
+    vanished: string[] = [],
   ): Promise<void> {
+    const { route, scope, context, budget } = read;
+    const missing = new Set<string>();
+    for (const write of allWrites())
+      if (
+        write.scope === scope &&
+        write.durable !== false &&
+        !records.has(write.id) &&
+        isFresh(write.id)
+      )
+        missing.add(write.id);
+    // Held before any request below, so nothing is sent on a stale copy
+    // while the evidence is being read.
+    for (const id of missing) holdMissing(keyFor(scope, id));
+    const evidence = new Map<string, Evidence>();
+    const revisionAtCheck = new Map<string, number>();
+    for (const id of missing) {
+      const key = keyFor(scope, id);
+      if (!evidenceHead(key)) continue;
+      revisionAtCheck.set(key, recordRevisions.get(key) ?? 0);
+      const found = await findEvidence(route, context, id, budget);
+      if (!found) continue;
+      evidence.set(id, found);
+      reportMissing(route, context, id, found);
+    }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
+    for (const [id, found] of evidence) {
+      const key = keyFor(scope, id);
+      // A write to the record settled while it was checked: a later sync
+      // decides on a newer read.
+      if ((recordRevisions.get(key) ?? 0) !== revisionAtCheck.get(key))
+        continue;
+      if (found.evidence === 'filtered' && found.record) {
+        fresh.set(id, found.record);
+        continue;
+      }
+      // Also holds updates queued while the record was being checked.
+      holdMissing(key);
+      for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
+        failWrite(head, missingMessage(head, found), previous.get(id));
+        head.missingRecord =
+          found.evidence === 'deleted' ? 'deleted' : 'unknown';
+        if (found.status !== undefined) head.lastStatus = found.status;
+        released.add(head);
+        touchedIds.add(id);
+      }
+    }
+    const taken = new Map<string, Record<string, unknown>>();
     for (const write of allWrites()) {
       if (write.scope !== scope || !write.awaitingRefresh) continue;
       if (!isFresh(write.id)) continue;
+      const record = records.get(write.id) ?? fresh.get(write.id);
+      // Missing, and not settled above: it waits for a later sync.
+      if (!record) continue;
       released.add(write);
       touchedIds.add(write.id);
-      const record = records.get(write.id);
-      const key = keyFor(scope, write.id);
-      if (
-        !record &&
-        write.route.updateMethod === 'PUT' &&
-        writeQueues.get(key)?.[0] === write
-      ) {
-        failWrite(write, missingMessage(write), previous.get(write.id));
-        continue;
-      }
-      if (apply && record) fresh.set(write.id, record);
+      if (apply || fresh.has(write.id)) taken.set(write.id, record);
       delete write.awaitingRefresh;
       delete write.refreshMisses;
     }
+    if (options.missingRecordChecks === 'all')
+      for (const id of vanished) {
+        if (writeQueues.has(keyFor(scope, id))) continue;
+        const found = await findEvidence(route, context, id, budget);
+        if (found) reportMissing(route, context, id, found);
+      }
     if (!touchedIds.size) return;
-    if (fresh.size) {
-      for (const [id, record] of fresh) {
+    if (taken.size) {
+      for (const [id, record] of taken) {
         remote(scope).set(id, record);
         setLastKnown(keyFor(scope, id), record);
       }
-      detectConflicts(scope, fresh);
+      detectConflicts(scope, taken);
     }
     await persistLater();
     for (const id of touchedIds) await rebuild(scope, id);
@@ -1858,7 +2232,7 @@ export function createApiClient(
       if (write.refreshMisses < REFRESH_MISS_LIMIT) continue;
       failWrite(
         write,
-        `Waiting for a complete refresh of ${write.route.collection.name}: ${REFRESH_MISS_LIMIT} syncs did not read this record completely`,
+        `Waiting for a complete refresh of ${write.route.collection.name}: ${REFRESH_MISS_LIMIT} syncs did not read this record completely, or did not check whether it was deleted`,
       );
     }
     if (!changed) return;
@@ -1872,13 +2246,18 @@ export function createApiClient(
     const started = new Map(revisions);
     const startedRecords = new Map(recordRevisions);
     const released = new Set<QueuedWrite>();
+    // One budget for the read and the GETs of records it no longer returns.
+    const budget = new Budget(
+      conditionalTransport,
+      options.limits,
+      options.sleep,
+    );
     const result = await readCollections(doc, {
       transport: conditionalTransport,
       constants: options.constants ?? {},
       legacy,
+      budget,
       ...(options.selection ? { selection: options.selection } : {}),
-      ...(options.limits ? { limits: options.limits } : {}),
-      ...(options.sleep ? { sleep: options.sleep } : {}),
     });
     const changed = new Set<string>();
     for (const snapshot of result.collections) {
@@ -1892,29 +2271,41 @@ export function createApiClient(
         snapshot.items,
         route.collection.idField,
       );
-      const persisted = differs ? await storage.list(scope) : [];
       const records = new Map(
         snapshot.items.map((item) => [
           String(item[route.collection.idField]),
           item,
         ]),
       );
+      const read = { route, scope, context, budget };
+      // Records no write settled on during the read are still fresh.
+      const isFresh = (id: string): boolean =>
+        (startedRecords.get(keyFor(scope, id)) ?? 0) ===
+        (recordRevisions.get(keyFor(scope, id)) ?? 0);
+      // Updates of records this read lacks stop being sent now, before the
+      // awaits below; releaseRefreshed decides about them.
+      for (const write of allWrites())
+        if (
+          write.scope === scope &&
+          !records.has(write.id) &&
+          isFresh(write.id)
+        )
+          holdMissing(keyFor(scope, write.id));
+      const persisted = differs ? await storage.list(scope) : [];
       // A write acknowledged after this read began is newer than this snapshot.
       if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
         if (differs) changed.add(route.collection.name);
-        // Records no write settled on during the read are still fresh.
         await releaseRefreshed(
-          scope,
+          read,
           records,
           remote(scope),
-          (id) =>
-            (startedRecords.get(keyFor(scope, id)) ?? 0) ===
-            (recordRevisions.get(keyFor(scope, id)) ?? 0),
+          isFresh,
           true,
           released,
         );
         continue;
       }
+      const vanished: string[] = [];
       let confirmedBefore = remote(scope);
       if (differs) {
         // A reused adapter can contain records from before this client instance.
@@ -1924,6 +2315,13 @@ export function createApiClient(
         ]);
         confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
+        const written = new Set(
+          allWrites()
+            .filter((w) => w.scope === scope)
+            .map((w) => w.id),
+        );
+        for (const id of confirmedBefore.keys())
+          if (!records.has(id) && !written.has(id)) vanished.push(id);
         // The newest confirmed copy of each written record: from this read,
         // or, for a record the read lacks, from just before it.
         for (const write of allWrites()) {
@@ -1945,13 +2343,16 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
+      // isFresh: a write that settled on a record during the rebuild above
+      // makes this read too old to judge that record.
       await releaseRefreshed(
-        scope,
-        remote(scope),
+        read,
+        records,
         confirmedBefore,
-        () => true,
+        isFresh,
         false,
         released,
+        vanished,
       );
     }
     await countRefreshMisses(released);
@@ -2053,6 +2454,13 @@ export function createApiClient(
       const existing = await storage.get(scope, id);
       const key = keyFor(scope, id);
       const failed = gaveUpWrites.get(key);
+      // The record's last update failed because a refresh no longer had it,
+      // and nothing confirmed it since: this one waits for the next refresh
+      // and is checked like that one, rather than sent on the last copy.
+      const stillMissing =
+        !remote(scope).has(id) &&
+        Boolean(failed?.some((w) => w.missingRecord)) &&
+        !writeQueues.get(key)?.some((w) => w.type === 'create');
       // The visible record carries failed changes; seeding from it would send
       // them implicitly. With failed writes, seed from their last known record.
       const seed = failed
@@ -2070,6 +2478,7 @@ export function createApiClient(
         id,
         type: 'update',
         changes: data,
+        ...(stillMissing ? { awaitingRefresh: true } : {}),
         ...(confirmedRecord
           ? {
               base: Object.fromEntries(
@@ -2115,6 +2524,9 @@ export function createApiClient(
           state: write.state,
           ...(write.awaitingRefresh && write.state === 'pending'
             ? { awaitingRefresh: true }
+            : {}),
+          ...(write.missingRecord && write.state === 'failed'
+            ? { missingRecord: write.missingRecord }
             : {}),
           ...(write.conflicts?.size
             ? {
@@ -2172,12 +2584,15 @@ export function createApiClient(
         // A restored update waiting for a refresh: send it now, or drop it.
         if (resolution.action === 'confirm')
           throw new Error('Only an uncertain create can be confirmed');
+        const sleeper = queue[0];
         for (const write of waiting) {
           delete write.awaitingRefresh;
           delete write.refreshMisses;
           if (resolution.action === 'discard')
             queue.splice(queue.indexOf(write), 1);
         }
+        // A discarded head that was between retries: its drain goes on now.
+        if (sleeper && queue[0] !== sleeper) wakers.get(key)?.();
         if (!queue.length) writeQueues.delete(key);
         await persistLater();
         await rebuild(scope, id);
@@ -2202,18 +2617,19 @@ export function createApiClient(
           for (const later of newer)
             for (const field of touched(later) ?? Object.keys(changes))
               delete changes[field];
-          return write.type === 'update' && !Object.keys(changes).length
-            ? []
-            : [
-                {
-                  ...write,
-                  changes,
-                  attempts: 0,
-                  state: 'pending',
-                  // Queued behind newer writes now, so newer in order too.
-                  seq: nextSeq++,
-                },
-              ];
+          if (write.type === 'update' && !Object.keys(changes).length)
+            return [];
+          const again: QueuedWrite = {
+            ...write,
+            changes,
+            attempts: 0,
+            state: 'pending',
+            // Queued behind newer writes now, so newer in order too.
+            seq: nextSeq++,
+          };
+          // Describes the failure, which this retry leaves behind.
+          delete again.missingRecord;
+          return [again];
         });
         if (!retried.length)
           throw new Error(

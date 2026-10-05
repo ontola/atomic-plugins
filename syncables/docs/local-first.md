@@ -452,9 +452,11 @@ other complete collections may refresh before `sync()` rejects. Default read
 budgets are 10,000 requests, 5,000 records and 30 minutes, configurable through
 `limits`; exceeding a budget is an incomplete read, not a full snapshot.
 Following all pages does not prove the provider supplied a consistent snapshot
-or that an absent record was deleted. Remote deletion during a pending
-in-memory update and stronger deletion evidence remain
-[#260](https://github.com/ontola/atomic-plugins/issues/260) work.
+or that an absent record was deleted. A queued update of a record a complete
+read no longer returns is held and checked instead: the collection's draft
+`x-completeness` declaration, or a GET of the record, tells a deleted record
+from a filtered one (see the README's "Records a refresh no longer returns").
+Deletion feeds (tombstones, `deleted_since`) are not read.
 
 For a one-off import, use `readCollections` for raw assembled collections or
 `readPlatform` for ontology/datatype projection. For ongoing local reads,
