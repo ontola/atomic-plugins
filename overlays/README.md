@@ -296,7 +296,10 @@ Omit `--directory` to download the seven pinned OADs. CI uses the same full-hist
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
-Nested request body fields are checked segment by segment.
+Nested request body fields are checked segment by segment. Use the pinned
+`requirements-identity-tests.txt` dependencies: openapi-spec-validator 0.7.2
+fixes the older validator's rejection of required properties defined inside
+`oneOf`, as used by Intercom's data-attribute schema.
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
 
