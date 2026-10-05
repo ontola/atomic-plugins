@@ -1,25 +1,65 @@
-# syncables
+# Syncables
 
-This code is open source and is authored and maintained by Michiel de Jong,
-using Claude Code and Codex as tools. Michiel directs development and authorizes
-merges; the session logs record when he delegates review and merge decisions.
-Lockfiles are produced by npm and pnpm.
-This work was [funded by NLNet](https://nlnet.nl/project/TUBS/).
+**Give an existing API a local-first interface.** Syncables is a TypeScript
+library that joins the pages of API collections into a local copy, lets your
+application read and edit that copy, and sends local changes back in the
+background. Your application can work with already-synced data while the API
+is slow or unreachable. The provider does not need to install Syncables or
+change its API.
 
-Reads an OpenAPI document and gives you:
+Use it to build an offline-capable editor, a local dashboard over several
+services, or a data import that follows every declared page. It runs in Node
+and browsers, with direct HTTP or a custom transport such as integration-proxy.
+Supply persistent storage when records and pending writes need to survive a
+restart; the default storage is in memory.
 
-- a **mock API server** that implements it, backed by a real (in-memory)
-  CRUD store per resource, seeded with fake data generated from the
-  document's schemas;
-- an **API client** that talks to any server implementing that OpenAPI
-  document and keeps a local copy of each resource collection in sync.
+## From an API description to a local copy
+
+Syncables builds on three complementary projects:
+
+| Project | What it contributes |
+| --- | --- |
+| [OpenAPI Directory](https://github.com/APIs-guru/openapi-directory) | Machine-readable descriptions of existing APIs: URLs, operations, parameters and schemas. You can also use a provider's own OpenAPI document or write one for a private API. |
+| [openapi-extensions](../openapi-extensions/README.md) | Shared vocabulary for the missing behavior: [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) describe how to reach the next page; [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) describes collections, record identities and operation effects. Syncables implements a subset of these specifications. |
+| [overlays](../overlays/README.md) | Reusable additions to API descriptions, so collection and pagination metadata can be maintained separately from the provider's document. Dated catalogs pair documents with their overlay revisions. |
+
+These are sources of descriptions and conventions, not three npm packages
+you must install. Once you have a composed document, Syncables uses it locally;
+it does not look up a directory or catalog on each request. An API whose document
+already contains the necessary metadata needs no overlay.
+
+```mermaid
+flowchart LR
+  Directory[OpenAPI Directory or provider document] --> Document[Composed OpenAPI document]
+  Extensions[openapi-extensions specifications] --> Overlays[Provider overlays]
+  Overlays --> Document
+  Document --> Syncables
+  API[Provider API] <--> Syncables
+  Syncables <--> Local[Local records and outbox]
+```
+
+To **local-firstify an API**, describe the collections you want, their stable
+identities, pagination and supported writes; choose authentication and storage;
+then point your application at `client.list`, `client.get` and the local write
+methods. Syncables handles collection traversal, page assembly, refreshes and
+the write queue. "Any API" means an API whose needed operations can be expressed
+in the supported model: a read-only API gives you a local read-only copy,
+and custom mutation protocols may need an adapter.
+
+Start with the [local-first guide](docs/local-first.md): it includes a runnable
+offline-edit example, the document/overlay workflow, direct and proxy transports,
+persistence and write recovery. The API details below serve as a reference.
+This README describes current source, including the **Unreleased** changes;
+the guide explains how to run that source before an npm release.
 
 ## Usage
 
+For published releases, install with `npm install syncables`. To build the
+current source, run these commands from `syncables/` with Node 22:
+
 ```sh
-pnpm install
-pnpm build
-pnpm test
+npm ci
+npm run build:release
 ```
 
 ```ts
@@ -30,11 +70,18 @@ const document = await loadOpenApiDocument('./petstore.yaml');
 const server = createMockServer(document);
 const { url } = await server.listen();
 
-const client = createApiClient(document, { baseUrl: url });
+const client = createApiClient(document, { baseUrl: url, credentialPrefix: false });
 await client.sync(); // pulls every discovered resource collection into local storage
 
-const pets = await client.list('/pets');
+const pets = await client.list('/pets'); // a local read, with no API request
 ```
+
+The mock server makes it possible to try the workflow without credentials. It
+uses an in-memory CRUD store and synthetic records generated from the schemas.
+For a real provider, load its composed document and configure a
+[transport and authentication](#transports-and-direct-authentication) instead.
+The mock server uses legacy path-pair discovery and does not implement all
+metadata-driven behavior of a real provider.
 
 When `components.crudResources` is present, the client and reader use its
 collection names, identity bindings and nested collection graph. Without
@@ -716,6 +763,12 @@ of the project's NLnet grant, which is split into two parts:
 
 ## Generative AI use
 
+This code is open source and is authored and maintained by Michiel de Jong,
+using Claude Code and Codex as tools. Michiel directs development and authorizes
+merges; the session logs record when he delegates review and merge decisions.
+Lockfiles are produced by npm and pnpm.
+This work was [funded by NLNet](https://nlnet.nl/project/TUBS/).
+
 syncables is developed with **Claude Code** (Anthropic) and **Codex** (OpenAI).
 The maintainer directs design and decides how changes are reviewed, tested and
 merged. Explicitly delegated agent review and merge decisions are recorded in
@@ -737,4 +790,3 @@ As an NLnet-funded project, it records AI-assisted work with reference to
   [`docs/ai-logs/pending-historical-sessions.md`](docs/ai-logs/pending-historical-sessions.md)).
 - AI-drafted content is identified as assisted work; the disclosure log
   records the maintainer's review or delegation and the validation performed.
-
