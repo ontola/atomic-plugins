@@ -2283,14 +2283,14 @@ export function createApiClient(
         (startedRecords.get(keyFor(scope, id)) ?? 0) ===
         (recordRevisions.get(keyFor(scope, id)) ?? 0);
       // Updates of records this read lacks stop being sent now, before the
-      // awaits below; releaseRefreshed decides about them.
-      for (const write of allWrites())
-        if (
-          write.scope === scope &&
-          !records.has(write.id) &&
-          isFresh(write.id)
-        )
-          holdMissing(keyFor(scope, write.id));
+      // awaits below; releaseRefreshed decides about them. A record it
+      // returns is no longer missing: an in-flight update an earlier read
+      // marked (holdIfQueued) goes on as usual after its response.
+      for (const write of allWrites()) {
+        if (write.scope !== scope || !isFresh(write.id)) continue;
+        if (records.has(write.id)) delete write.holdIfQueued;
+        else holdMissing(keyFor(scope, write.id));
+      }
       const persisted = differs ? await storage.list(scope) : [];
       // A write acknowledged after this read began is newer than this snapshot.
       if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
@@ -2585,6 +2585,10 @@ export function createApiClient(
         if (resolution.action === 'confirm')
           throw new Error('Only an uncertain create can be confirmed');
         const sleeper = queue[0];
+        // Retrying sends now: an in-flight write marked for holding is not
+        // held after its response either.
+        if (resolution.action === 'retry')
+          for (const write of queue) delete write.holdIfQueued;
         for (const write of waiting) {
           delete write.awaitingRefresh;
           delete write.refreshMisses;
@@ -2640,6 +2644,7 @@ export function createApiClient(
         for (const write of pending) {
           delete write.awaitingRefresh;
           delete write.refreshMisses;
+          delete write.holdIfQueued;
         }
         pending.push(...retried);
         writeQueues.set(key, pending);
