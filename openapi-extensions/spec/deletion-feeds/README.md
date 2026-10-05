@@ -14,7 +14,7 @@ covers lists that leave nothing out. Many APIs instead report deletions
 directly, in one of three shapes:
 
 * a list of changes since a cursor, in which deleted objects appear as
-  tombstones (a `deleted: true` field, a `status: cancelled`);
+  tombstones (a `deleted: true` field, a `status: deleted`);
 * an endpoint that lists deleted objects;
 * an event log in which an event's action or type says that an object was
   deleted.
@@ -37,18 +37,28 @@ APIs, and no overlay declares `x-deletion-feed`.
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
 | YNAB 1.0.0 (`youneedabudget.com/1.0.0`, `dec74da7`) | The list itself, e.g. `GET /budgets/{budget_id}/transactions`, with `last_knowledge_of_server` | Query `last_knowledge_of_server`; response `data.server_knowledge` | `deleted: true`; "Deleted transactions will only be included in delta requests" |
-| Google Calendar v3 (`googleapis.com/calendar/v3`, `32237fa5`) | The list itself, `GET /calendars/{calendarId}/events`, with `syncToken` | Query `syncToken`; response `nextSyncToken`, on the last page only; 410 when it expired | `status: cancelled` ("cancelled (deleted)"); only `id` is guaranteed |
-| Asana 1.0 (`asana.com/1.0`, `bdea260b`) | `GET /events?resource=...` | Query `sync`; response `sync`; 412 with a fresh token for a missing or expired one; `has_more` | `action: deleted` (also `changed`, `added`, `removed`, `undeleted`); the object is `resource` |
-| Box 2.0.0 (`box.com/2.0.0`, `dec74da7`) | `GET /events`; also `GET /folders/trash/items` | Query `stream_position`; response `next_stream_position` | `event_type: ITEM_TRASH`; trashed items can be restored, so this is not a deletion in the sense of §4.3 |
+| Google Calendar v3 (`googleapis.com/calendar/v3`, `32237fa5`) | The list itself, `GET /calendars/{calendarId}/events`, with `syncToken` | Query `syncToken`; response `nextSyncToken`, on the last page only; 410 when it expired | `status: cancelled` ("cancelled (deleted)"); only `id` is guaranteed. The `get` method "always returns" cancelled events, and an organizer's cancelled events "can be restored (undeleted)" |
+| Asana 1.0 (`asana.com/1.0`, `bdea260b`) | `GET /events?resource=...`; `resource` is a required query parameter | Query `sync`; response `sync`; 412 with a fresh token for a missing or expired one; `has_more` | `action: deleted` (also `changed`, `added`, `removed`, `undeleted`); the object is `resource` |
+| Box 2.0.0 (`box.com/2.0.0`, `dec74da7`) | `GET /events`; also `GET /folders/trash/items` | Query `stream_position`; response `next_stream_position` | `event_type: ITEM_TRASH`. A trashed file stays readable at `GET /files/{file_id}/trash`; the document does not say whether its own `GET /files/{file_id}` then answers 404 |
 | Stripe 2022-11-15 (`stripe.com/2022-11-15`, `dec74da7`) | `GET /v1/events`, 30 days back | `ending_before`, an event id, newest first | `type: customer.deleted` and similar; the object is `data.object` |
 | Todoist 1 (`todoist.com/1`, `ac07532b`) | none in this document | none | `is_deleted` on projects and tasks |
 | Xero Accounting 2.9.4 (`xero.com/xero_accounting/2.9.4`, `c9c64afb`) | The lists, with an `If-Modified-Since` header | A time the client chooses | `Status: DELETED` on some objects |
 
-YNAB, Google Calendar and Asana fit this version. Box's events have the
-shape, but a trashed item can be restored, which §4.3 does not count as a
-deletion. Stripe's cursor is the id of the newest event and its events
-come newest first, Xero's is a client-chosen time in a header, and Todoist's
-document has no feed; §8 lists these as not covered.
+Only YNAB fits this version as documented. The others do not fit (yet):
+
+* Google Calendar's cancelled events are returned by the event's own `get`
+  and can be restored, so they fail §4.3's test (the object's read answers
+  404 or 410).
+* Asana's `GET /events` needs the required query parameter `resource`; fixed
+  query parameters of a feed are not covered (§8), so a consumer that sends
+  only the cursor gets an error.
+* Box's `ITEM_TRASH` has the shape, but whether a trashed item's own read
+  answers 404 or 410 (§4.3) is not documented; unverified.
+* Stripe's cursor is the id of the newest event and its events come newest
+  first, Xero's is a client-chosen time in a header, and Todoist's document
+  has no feed.
+
+§8 lists these cases as not covered.
 
 ## 2. Overview
 
@@ -208,9 +218,11 @@ objects as deleted.
 
 ### 7.1 A change list with a status marker
 
-An (invented) calendar API whose `GET /calendars/{calendarId}/events` takes a
+An invented calendar API (not Google Calendar, whose cancelled events stay
+readable, §1.1) whose `GET /calendars/{calendarId}/events` takes a
 `syncToken`, returns `nextSyncToken` on its last page, answers 410 for an
-expired token, and returns deleted events with `status: cancelled`:
+expired token, and lists deleted events with `status: cancelled` (their own
+`GET` answers 404):
 
 ```yaml
 x-deletion-feed:
@@ -225,9 +237,11 @@ x-deletion-feed:
 
 ### 7.2 An event log
 
-An (invented) project tool whose `GET /projects/{projectId}/events` takes a
+An invented project tool whose `GET /projects/{projectId}/events` takes a
 `sync` token and returns `{ data: [{ action, resource: { gid } }], sync }`,
-answering 412 with a fresh `sync` for a missing or expired token:
+answering 412 with a fresh `sync` for a missing or expired token. (Asana's
+own `GET /events` takes the resource as a required query parameter instead,
+which this version does not cover; §1.1.)
 
 ```yaml
 x-deletion-feed:
@@ -264,10 +278,11 @@ x-deletion-feed:
   item (Stripe's `ending_before`).
 * Feeds whose items come newest first.
 * Cursors in a header or a request body, and fixed query parameters that the
-  feed needs (Google Calendar's `showDeleted`, for example).
-* A tombstone returned by the object's own `read` operation (Google Calendar
-  returns a cancelled event from its `get`); this version describes items of
-  the feed only.
+  feed needs (Asana's required `resource`, Google Calendar's `showDeleted`).
+* Tombstones for objects that stay readable through their own `read`
+  operation (Google Calendar returns a cancelled event from its `get`, and
+  it can be restored): §4.3 does not count them as deletions, so Google
+  Calendar's event list does not fit this version.
 * Restores: an item after a tombstone that is not one is only "not a
   tombstone"; this version does not say the object exists again.
 
