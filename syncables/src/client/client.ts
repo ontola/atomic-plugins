@@ -5,6 +5,7 @@ import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { readCollections } from '../read/collections.js';
 import {
+  asText,
   discoverReadModel,
   isRecord,
   upstreamOf,
@@ -15,6 +16,7 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  RetryBeyondDeadline,
   type ReadLimits,
 } from '../read/pages.js';
 import { paginate as paginateOperation } from '../read/read.js';
@@ -600,6 +602,11 @@ interface QueuedWrite {
   seq?: number;
   /** Failed because a complete refresh no longer returned the record. */
   missingRecord?: 'deleted' | 'unknown';
+  /**
+   * In flight when a complete read lacked its record (`holdMissing` skipped
+   * it): if it stays queued after its response, it is held. Not stored.
+   */
+  holdIfQueued?: boolean;
 }
 
 type WriteOutcome =
@@ -701,7 +708,10 @@ function declaredIdempotencyHeader(
 
 /**
  * The Collection Completeness extension's `absent` value for a collection:
- * from its CRUD Causality Collection Object, else from its list operation.
+ * from its CRUD Causality Collection Object, which covers the collection's
+ * own fixed `x-list-query`/`x-list-body`, else from its list operation,
+ * which covers only a read that adds nothing to the operation's request (no
+ * fixed query or body), since several collections may share that operation.
  */
 function declaredAbsence(
   document: OpenApiDocument,
@@ -719,10 +729,15 @@ function declaredAbsence(
     document.paths[collection.url]?.[
       collection.method === 'POST' ? 'post' : 'get'
     ];
+  const fixed =
+    Object.keys(collection.listQuery).length > 0 ||
+    Object.keys(collection.listBody).length > 0;
   const declared =
     isRecord(definition) && definition['x-completeness'] !== undefined
       ? definition['x-completeness']
-      : operation?.['x-completeness'];
+      : fixed
+        ? undefined
+        : operation?.['x-completeness'];
   const absent = isRecord(declared) ? declared['absent'] : undefined;
   return absent === 'deleted' || absent === 'removed' ? absent : undefined;
 }
@@ -798,6 +813,17 @@ export function createApiClient(
       : { identityField: options.identityField };
   const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
   for (const route of routes) {
+    // A selection that narrows the read past the collection's own fixed
+    // query makes it no longer the read the declaration speaks of: a record
+    // it leaves out may exist, so a GET decides instead.
+    const narrowed = (options.selection?.query_overrides ?? []).some(
+      (override) =>
+        override.path === route.collection.url &&
+        Object.entries(override.values).some(
+          ([name, value]) => route.collection.listQuery[name] !== asText(value),
+        ),
+    );
+    if (narrowed) delete route.absentMeansDeleted;
     if (options.idempotencyKeyHeader === false) delete route.idempotencyHeader;
     else if (options.idempotencyKeyHeader && route.createPath)
       route.idempotencyHeader = options.idempotencyKeyHeader;
@@ -1581,6 +1607,18 @@ export function createApiClient(
           return;
         const outcome = await attemptWrite(write);
         write.sending = false;
+        // Its record went missing while it was in flight. Answered without
+        // settling (a retry, a refused credential, not sent), it is not
+        // resent on the stale copy: it waits for a sync to check the record.
+        if (write.holdIfQueued) {
+          delete write.holdIfQueued;
+          if (
+            outcome.status === 'retry' ||
+            outcome.status === 'blocked' ||
+            outcome.status === 'held'
+          )
+            write.awaitingRefresh = true;
+        }
         if (outcome.status === 'held') {
           await persistLater();
           // The check at the top stops here while blocked; an authRenewed()
@@ -1879,6 +1917,9 @@ export function createApiClient(
     if (queue && at >= 0) {
       queue.splice(at, 1);
       if (!queue.length) writeQueues.delete(key);
+      // The head's backoff wait (if it was between retries) ends with it:
+      // the queue goes on, or the drain stops, without waiting it out.
+      if (at === 0) wakers.get(key)?.();
     }
     write.state = 'failed';
     write.lastError = message;
@@ -1914,8 +1955,9 @@ export function createApiClient(
   function holdMissing(key: string): void {
     for (const write of writeQueues.get(key) ?? []) {
       if (write.type === 'create') return;
-      if (write.type === 'update' && !write.sending)
-        write.awaitingRefresh = true;
+      if (write.type !== 'update') continue;
+      if (write.sending) write.holdIfQueued = true;
+      else write.awaitingRefresh = true;
     }
   }
 
@@ -1976,7 +2018,12 @@ export function createApiClient(
       path = url.pathname;
       response = await budget.send({ url, method: 'GET', headers: {} });
     } catch (error) {
-      if (error instanceof BudgetExhausted) return undefined;
+      // The budget is spent, or a 429 asks to wait past its deadline.
+      if (
+        error instanceof BudgetExhausted ||
+        error instanceof RetryBeyondDeadline
+      )
+        return undefined;
       return {
         evidence: 'unknown',
         source: 'read',
@@ -1984,6 +2031,8 @@ export function createApiClient(
       };
     }
     const { status } = response;
+    // Rate-limited after the budget's own 429 retries: not checked.
+    if (status === 429) return undefined;
     if (status === 404 || status === 410)
       return {
         evidence: 'deleted',
@@ -2126,9 +2175,6 @@ export function createApiClient(
         if (found.status !== undefined) head.lastStatus = found.status;
         released.add(head);
         touchedIds.add(id);
-        // Its backoff wait (if it was between retries) ends with it: the
-        // queue goes on, or the drain stops, without waiting it out.
-        wakers.get(key)?.();
       }
     }
     const taken = new Map<string, Record<string, unknown>>();
@@ -2538,12 +2584,15 @@ export function createApiClient(
         // A restored update waiting for a refresh: send it now, or drop it.
         if (resolution.action === 'confirm')
           throw new Error('Only an uncertain create can be confirmed');
+        const sleeper = queue[0];
         for (const write of waiting) {
           delete write.awaitingRefresh;
           delete write.refreshMisses;
           if (resolution.action === 'discard')
             queue.splice(queue.indexOf(write), 1);
         }
+        // A discarded head that was between retries: its drain goes on now.
+        if (sleeper && queue[0] !== sleeper) wakers.get(key)?.();
         if (!queue.length) writeQueues.delete(key);
         await persistLater();
         await rebuild(scope, id);

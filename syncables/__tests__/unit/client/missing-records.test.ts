@@ -97,6 +97,8 @@ function crudDocument(
     onOperation?: boolean;
     method?: 'put' | 'patch';
     itemGet?: boolean;
+    /** The collection's fixed `x-list-query`. */
+    listQuery?: Record<string, string>;
   } = {},
 ): OpenApiDocument {
   const doc = prepareDocument({
@@ -113,6 +115,9 @@ function crudDocument(
           collections: {
             pets: {
               urlTemplate: '/pets',
+              ...(options.listQuery
+                ? { 'x-list-query': options.listQuery }
+                : {}),
               ...(options.completeness && !options.onOperation
                 ? { 'x-completeness': options.completeness }
                 : {}),
@@ -128,6 +133,10 @@ function crudDocument(
     delete item.put;
   }
   if (options.itemGet === false) delete item.get;
+  // A declared query parameter, so a selection may narrow the list by it.
+  doc.paths['/pets']!.get!.parameters = [
+    { name: 'tag', in: 'query', schema: { type: 'string' } },
+  ];
   if (options.completeness && options.onOperation)
     doc.paths['/pets']!.get!['x-completeness'] = options.completeness;
   return doc;
@@ -831,5 +840,162 @@ describe('missing records: restarts', () => {
     ]);
     await settle();
     expect(second.writes).toEqual([]);
+  });
+});
+
+describe('missing records: review findings on #324', () => {
+  it('reads the record when a selection narrows a collection declared absent: deleted', async () => {
+    const { client, fake } = await editedThenMissing({
+      doc: crudDocument({ completeness: { absent: 'deleted' } }),
+      client: {
+        selection: {
+          query_overrides: [{ path: '/pets', values: { tag: 'cat' } }],
+        },
+      },
+    });
+    await client.sync();
+    // Not "deleted" by declaration: the GET finds rex, so the edit is kept.
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()[0]).toMatchObject({ state: 'pending' });
+    expect(client.pendingWrites()[0]).not.toHaveProperty('missingRecord');
+  });
+
+  it('keeps the declaration when a selection only repeats the fixed x-list-query', async () => {
+    const { client, fake } = await editedThenMissing({
+      doc: crudDocument({
+        completeness: { absent: 'deleted' },
+        listQuery: { tag: 'dog' },
+      }),
+      client: {
+        selection: {
+          query_overrides: [{ path: '/pets', values: { tag: 'dog' } }],
+        },
+      },
+    });
+    await client.sync();
+    expect(fake.itemGets).toEqual([]);
+    expect(client.pendingWrites()[0]).toMatchObject({
+      missingRecord: 'deleted',
+    });
+  });
+
+  it('ignores an operation-level declaration for a collection with a fixed query', async () => {
+    const { client, fake } = await editedThenMissing({
+      doc: crudDocument({
+        completeness: { absent: 'deleted' },
+        onOperation: true,
+        listQuery: { tag: 'dog' },
+      }),
+    });
+    await client.sync();
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()[0]).toMatchObject({ state: 'pending' });
+  });
+
+  for (const [label, answer] of [
+    [
+      'a Retry-After past the read deadline',
+      (): TransportResponse => ({
+        status: 429,
+        headers: { 'retry-after': '3600' },
+        body: '',
+      }),
+    ],
+    [
+      'no usable Retry-After',
+      (): TransportResponse => ({ status: 429, headers: {}, body: '' }),
+    ],
+  ] as const)
+    it(`keeps the update held, unchecked, when the GET meets a 429 with ${label}`, async () => {
+      const reports: MissingRecord[] = [];
+      const { client } = await editedThenMissing({
+        item: answer,
+        client: {
+          limits: { timeoutMs: 60_000 },
+          onMissingRecord: (r) => reports.push(r),
+        },
+      });
+      await client.sync();
+      expect(reports).toEqual([]);
+      expect(client.pendingWrites()[0]).toMatchObject({
+        state: 'pending',
+        awaitingRefresh: true,
+      });
+      expect(client.pendingWrites()[0]).not.toHaveProperty('missingRecord');
+    });
+
+  it('wakes the drain when a held head in backoff fails after three syncs, so a retry is sent at once', async () => {
+    // One request per sync: the list. The record is never checked.
+    const { client, fake, unblock } = await editedThenMissing({
+      client: { limits: { maxRequests: 1 } },
+    });
+    for (let i = 0; i < 3; i++) await client.sync();
+    expect(client.pendingWrites()[0]).toMatchObject({
+      state: 'failed',
+      lastError: expect.stringMatching(/Waiting for a complete refresh/),
+    });
+    unblock();
+    await client.resolveWrite('/pets', '1', { action: 'retry' });
+    // Well within the 60 s backoff the first attempt was waiting out.
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+  });
+
+  it('wakes the drain when a held head in backoff is discarded, so a new update is sent', async () => {
+    const { client, fake, unblock } = await editedThenMissing({
+      client: { limits: { maxRequests: 1 } },
+    });
+    await client.sync();
+    expect(client.pendingWrites()[0]).toMatchObject({ awaitingRefresh: true });
+    unblock();
+    await client.resolveWrite('/pets', '1', { action: 'discard' });
+    await client.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    expect(JSON.parse(fake.writes[0]?.body ?? '{}')).toMatchObject({
+      tag: 'wolf',
+    });
+  });
+
+  it('holds an in-flight update that the refresh dropped, if its answer is a retry', async () => {
+    let listRex = true;
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => (answer = resolve));
+    let puts = 0;
+    let fail = true;
+    const fake = provider([rex, tom], {
+      listed: (pet) => listRex || pet['id'] !== '1',
+      behave: () => {
+        puts += 1;
+        return fail ? response({ error: 'invented' }, 503) : undefined;
+      },
+    });
+    const client = createApiClient(crudDocument(), {
+      transport: async (r) => {
+        if (r.method === 'PUT' && puts === 0) await gate;
+        return fake.transport(r);
+      },
+      retry: { baseDelayMs: 50 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex 2' });
+    await settle();
+    listRex = false;
+    await client.sync();
+    expect(fake.itemGets).toEqual([]);
+    answer();
+    // Answered 503: held, not resent on the stale copy after the backoff.
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]).toMatchObject({
+        attempts: 1,
+        awaitingRefresh: true,
+      }),
+    );
+    await settle(200);
+    expect(puts).toBe(1);
+    fail = false;
+    await client.sync();
+    expect(fake.itemGets).toEqual(['1']);
+    await idle(client);
+    expect(puts).toBe(2);
+    expect(fake.pets.get('1')).toMatchObject({ name: 'Rex 2' });
   });
 });

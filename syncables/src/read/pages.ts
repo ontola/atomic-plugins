@@ -46,6 +46,9 @@ export const DEFAULT_READ_LIMITS: ReadLimits = {
 /** A whole-read budget ran out: stop every collection, keep what was read. */
 export class BudgetExhausted extends Error {}
 
+/** A 429's `Retry-After` reaches past the read's deadline. */
+export class RetryBeyondDeadline extends Error {}
+
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -99,7 +102,9 @@ export class Budget {
       }
       const delay = Math.max(0, at - Date.now());
       if (Date.now() + delay > this.deadline) {
-        throw new Error('API retry delay exceeds the remaining read time');
+        throw new RetryBeyondDeadline(
+          'API retry delay exceeds the remaining read time',
+        );
       }
       await this.sleep(delay);
     }
