@@ -179,17 +179,28 @@ complete read of the collection was deleted SHOULD use:
 1. `x-completeness: { absent: deleted }` on the collection (Collection
    Completeness): the object was deleted. No request is needed.
 2. The last item about the object in a feed read: a tombstone means the
-   object was deleted when the read was made, unless a later feed read has a
-   later item about it that is not a tombstone. This holds whatever the
+   object was deleted when the read was made. This holds whatever the
    collection's `x-completeness` says, and without one.
 3. The object's own `read` operation.
 
-For a document that conforms to §4.3, steps 2 and 3 agree: an object with a
-tombstone answers 404 or 410 to its read. A consumer MAY therefore take them
-in either order, for example read the object first and use the feed only for
+A tombstone says nothing about what happened after its feed read: the
+object can be restored, or recreated with the same identity. A consumer
+MAY read the object first and use a feed read made after that only for
 objects whose read did not decide (no answer, or one other than 404, 410 or
-a 2xx with the object), and MAY keep tombstones from an earlier feed read to
-use before reading the object.
+a 2xx with the object). A consumer MAY keep a tombstone from an earlier feed
+read and use it in place of reading the object, but only until any of these
+supersedes it:
+
+* a later feed read has a later item about the object that is not a
+  tombstone;
+* a later read of the object answers 2xx with the object, or a later
+  complete read of the collection returns it;
+* the API accepts a later write to the object with a 2xx.
+
+A consumer SHOULD read the feed again before it relies on a kept tombstone,
+to rule out the first case. When that read fails, it MAY still rely on the
+kept tombstone; an object restored in the meantime is then treated as
+deleted, although it exists, until a later read supersedes the tombstone.
 
 A feed read in which the object has no tombstone (no item, or a last item
 that is not one) does not show that the object exists. A deletion that
@@ -327,9 +338,13 @@ unless `x-completeness: { absent: deleted }` applies or its missing-record
 checks are off. It reads the feed once per sync, per bound context, at the
 end of the sync after the reads of missing records, from a cursor kept in its
 durable outbox when it has storage. For a record the collection read lacked,
-it uses a tombstone kept from an earlier feed read first, then the record's
-read, then, when that read did not decide, the tombstone of this sync's feed
-read (§5 allows this order). It keeps tombstones only for records with
-unsettled writes. It does not use the "not deleted" case of §5. Cursors in a
+it uses a tombstone kept from an earlier feed read in place of the record's
+read, deciding at the end of the sync, after that sync's feed read: a later
+item about the record that is not a tombstone in a complete read supersedes
+it, and a failed or incomplete read leaves it standing (§5). Otherwise it
+reads the record, and when that read did not decide, uses the tombstone of
+this sync's feed read. It keeps tombstones only for records with unsettled
+writes, and drops one when a read returns the record or a write to it is
+answered with a 2xx. It does not use the "not deleted" case of §5. Cursors in a
 header or body, and the other cases in §8, are not implemented. Not verified
 against a real provider.
