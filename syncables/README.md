@@ -991,7 +991,7 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
-- **Unreleased**: A queued update (PUT or PATCH) whose record a complete
+- **0.20.0**: A queued update (PUT or PATCH) whose record a complete
   refresh no longer returns is held rather than sent on its last known copy,
   in memory as after a restart; the client checks the record, within the
   sync's read budget, through the collection's `x-completeness` declaration
