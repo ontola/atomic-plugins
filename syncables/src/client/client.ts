@@ -586,6 +586,41 @@ interface ClientRoute {
   itemReadable?: boolean;
   /** `x-deletion-feed`: the operation that reports deletions. */
   deletionFeed?: DeletionFeed;
+  /** `x-read-tombstone`: the item GET answers 2xx with a tombstone for a deleted record. */
+  readTombstone?: Tombstone;
+}
+
+/** A parsed Tombstone Object (draft Deletion Feeds extension, §4.3). */
+interface Tombstone {
+  field: string;
+  values: (string | number | boolean)[];
+}
+
+/**
+ * Parses a Tombstone Object: `field` a non-empty string, `values` a
+ * non-empty list of strings, numbers and booleans. Undefined otherwise.
+ */
+function parseTombstone(value: unknown): Tombstone | undefined {
+  if (!isRecord(value)) return undefined;
+  const { field, values } = value;
+  if (
+    typeof field !== 'string' ||
+    field === '' ||
+    !Array.isArray(values) ||
+    !values.length ||
+    !values.every((v) => ['string', 'number', 'boolean'].includes(typeof v))
+  )
+    return undefined;
+  return { field, values: values as (string | number | boolean)[] };
+}
+
+/** Whether the value at the marker's field equals one of its values (same JSON type). */
+function isTombstone(
+  item: Record<string, unknown>,
+  tombstone: Tombstone,
+): boolean {
+  const marker = readNestedField(item, tombstone.field);
+  return tombstone.values.some((v) => v === marker);
 }
 
 /** A parsed Deletion Feed Object (draft Deletion Feeds extension). */
@@ -603,7 +638,7 @@ interface DeletionFeed {
     responseField: string;
     expiredStatuses: number[];
   };
-  tombstone?: { field: string; values: (string | number | boolean)[] };
+  tombstone?: Tombstone;
 }
 
 interface QueuedWrite {
@@ -847,23 +882,35 @@ function declaredDeletionFeed(
     };
   }
   if (tombstone !== undefined) {
-    if (!isRecord(tombstone)) return undefined;
-    const { field, values } = tombstone;
-    if (
-      !text(field) ||
-      !Array.isArray(values) ||
-      !values.length ||
-      !values.every((value) =>
-        ['string', 'number', 'boolean'].includes(typeof value),
-      )
-    )
-      return undefined;
-    feed.tombstone = {
-      field,
-      values: values as (string | number | boolean)[],
-    };
+    const parsed = parseTombstone(tombstone);
+    if (!parsed) return undefined;
+    feed.tombstone = parsed;
   }
   return feed;
+}
+
+/**
+ * The draft Deletion Feeds extension's `x-read-tombstone` for a
+ * collection's resource: from its CRUD Resource Object, else from the GET
+ * operation of its item URL. Every collection of the resource shares it. A
+ * declaration that does not parse is ignored.
+ */
+function declaredReadTombstone(
+  document: OpenApiDocument,
+  collection: ReadCollection,
+): Tombstone | undefined {
+  const resources = document.components?.['crudResources'];
+  const resource = isRecord(resources)
+    ? resources[collection.resource]
+    : undefined;
+  const read = collection.itemUrl
+    ? document.paths[collection.itemUrl]?.get
+    : undefined;
+  const declared =
+    isRecord(resource) && resource['x-read-tombstone'] !== undefined
+      ? resource['x-read-tombstone']
+      : read?.['x-read-tombstone'];
+  return declared === undefined ? undefined : parseTombstone(declared);
 }
 
 function clientRoutes(
@@ -906,6 +953,8 @@ function clientRoutes(
       route.absentMeansDeleted = true;
     const feed = declaredDeletionFeed(document, collection);
     if (feed) route.deletionFeed = feed;
+    const readTombstone = declaredReadTombstone(document, collection);
+    if (readTombstone) route.readTombstone = readTombstone;
     if (item?.get) route.itemReadable = true;
     const header =
       route.createPath && declaredIdempotencyHeader(document, route.createPath);
@@ -2304,14 +2353,8 @@ export function createApiClient(
         for (const item of page.items) {
           const id = asText(readNestedField(item, feed.idField));
           if (!id) continue;
-          const marker = feed.tombstone
-            ? readNestedField(item, feed.tombstone.field)
-            : undefined;
           // The last item about a record decides: oldest first (§4.1).
-          last.set(
-            id,
-            !feed.tombstone || feed.tombstone.values.some((v) => v === marker),
-          );
+          last.set(id, !feed.tombstone || isTombstone(item, feed.tombstone));
         }
       }
     } catch (error) {
@@ -2461,17 +2504,29 @@ export function createApiClient(
         body = undefined;
       }
       const idField = route.collection.idField;
-      if (
+      const record =
         isRecord(body) &&
         body[idField] !== undefined &&
         body[idField] !== null &&
         String(body[idField]) === id
-      )
+          ? body
+          : undefined;
+      // `x-read-tombstone`: the read answers 2xx for a deleted record, with
+      // a marker. Not stored: the next check reads the record again.
+      const tombstone = route.readTombstone;
+      if (record && tombstone && isTombstone(record, tombstone))
+        return {
+          evidence: 'deleted',
+          source: 'read',
+          status,
+          detail: `GET ${path} answered ${status} with a tombstone: ${tombstone.field} is ${JSON.stringify(readNestedField(record, tombstone.field))}`,
+        };
+      if (record)
         return {
           evidence: 'filtered',
           source: 'read',
           status,
-          record: body,
+          record,
           detail: `GET ${path} answered ${status} with the record`,
         };
       return {
