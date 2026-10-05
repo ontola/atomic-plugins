@@ -356,7 +356,7 @@ update that is not in flight, the client looks for evidence:
 
 | Evidence | Found by | The held updates |
 | --- | --- | --- |
-| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it (no GET is made), a GET of the record answers 404 or 410, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
+| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
 | `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
@@ -463,10 +463,10 @@ with `missingRecordChecks: 'none'`.
 The read binds the feed operation's path parameters from the collection's
 bound context, sends `cursor.parameter` with the stored cursor if there is
 one, and follows every page as for a collection read (Pagination Schemes).
-The items are the array at `envelope.itemsField`. They count against the
-same `limits.maxRecords` as the sync's collection reads: the records the
-collections returned plus the items of earlier feed reads in the sync plus
-this one's must stay within it, or the read is incomplete (below). An item
+The items are the array at `envelope.itemsField`. Each feed read counts its
+own items against `limits.maxRecords`, from 0: more makes it incomplete
+(below). A sync therefore reads at most `limits.maxRecords` collection
+records plus `limits.maxRecords` items per feed read. An item
 is about the record whose identity is the value at `idField`; items that are
 not objects, or have no such value, are skipped. For each record, its last
 item in the read decides: it is a tombstone when the value at
@@ -475,8 +475,12 @@ item in the read decides: it is a tombstone when the value at
 For a record the complete read lacked, in a collection with a feed, the
 client looks in this order:
 
-1. a tombstone stored from an earlier sync's feed read (below): `deleted`,
-   `source: 'feed'`, no GET;
+1. a tombstone stored from an earlier sync's feed read (below): no GET; the
+   record is `deleted` (`source: 'feed'`) at the end of the sync, unless
+   that sync's feed read completes with a later item about it that is not a
+   tombstone (restored), which drops the tombstone and leaves the updates
+   held, for a GET in the next sync. A feed read that fails or does not
+   complete leaves the stored verdict standing;
 2. a GET of the record, as above: a 404 or 410 (`deleted`) or a 2xx with the
    record (`filtered`) decides;
 3. when the GET did not decide (another answer: `unknown`; or not made,
@@ -496,9 +500,12 @@ last returned it and the feed read that issued the cursor (spec §5).
 
 A complete feed read stores the ids whose last item is a tombstone, but only
 for records with unsettled writes (queued or failed), in the
-[outbox](#durable-outbox-and-restarts) next to the cursor; a later item that
-is not a tombstone, a collection read that returns the record, or the
-record's writes all settling removes the id. This covers a record deleted
+[outbox](#durable-outbox-and-restarts) next to the cursor. A later item that
+is not a tombstone, a collection read that returns the record, a GET that
+finds it (`filtered`, which happens for a stored tombstone only when the
+feed is not read, a document without the declaration, say), a write to it
+that the provider answers with a 2xx, or the record's writes all settling
+removes the id. This covers a record deleted
 between the collection read and the feed read of one sync, and a sync whose
 GETs used up the budget: the next sync, also in a new client on the same
 storage, uses the stored tombstone before any GET.
@@ -518,9 +525,9 @@ the budget hands back included), a body that is not JSON, no array at
 parameter without a value, more items than `limits.maxRecords` leaves, or
 the budget spent before or during it. Its items are ignored and the stored
 cursor stays, so the next sync reads from it again: a backlog since the
-cursor larger than what `limits.maxRecords` leaves after the collection
-reads is read again in every sync and never completes, until the limit is
-raised (the provider's cursor does not move past it by itself). The exception is a status listed in
+cursor of more than `limits.maxRecords` items is read again in every sync
+and never completes, until the limit is raised (the provider's cursor does
+not move past it by itself). The exception is a status listed in
 `cursor.expiredStatuses`: the value at `cursor.responseField` in its JSON body
 becomes the cursor, and without one the cursor is dropped, so the next read
 has none. A declaration that does not parse (no GET operation with that
@@ -720,7 +727,8 @@ loss. The limits of that claim:
   store leaves the older cursor, and the next client reads from it again (the
   draft spec asks feeds to accept a cursor more than once); a stop after it,
   before the failed updates are stored, leaves them held, and the next sync
-  fails them on the stored tombstone.
+  fails them on the stored tombstone, unless its feed read reports the
+  record restored.
 - Not stored: the last synced snapshot and conditional-request cache (the
   next `sync()` reads everything again) and confirmed records without writes.
 

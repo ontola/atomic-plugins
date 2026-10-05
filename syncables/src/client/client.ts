@@ -1511,6 +1511,9 @@ export function createApiClient(
     for (const id of new Set([write.id, resolvedId])) {
       const key = keyFor(write.scope, id);
       recordRevisions.set(key, (recordRevisions.get(key) ?? 0) + 1);
+      // The provider accepted a write to the record: a tombstone a feed
+      // reported for it earlier no longer says it is deleted.
+      feedTombstones.get(write.scope)?.ids.delete(id);
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -2133,9 +2136,13 @@ export function createApiClient(
       previous: Record<string, unknown> | undefined;
       /** A record without writes (`missingRecordChecks: 'all'`). */
       vanished?: true;
+      /**
+       * A tombstone stored from an earlier feed read: `deleted` unless this
+       * sync's complete feed read has a later item about the record that
+       * is not a tombstone.
+       */
+      stored?: true;
     }[];
-    /** Records read in this sync, against `limits.maxRecords`. */
-    records: number;
     /** A stored tombstone was dropped: the outbox is stored at the end. */
     tombstonesChanged: boolean;
   }
@@ -2214,8 +2221,9 @@ export function createApiClient(
   /**
    * Reads the collection's deletion feed once (`x-deletion-feed`), through
    * the sync's budget, from the stored cursor, and returns the ids whose
-   * last item in the read is a tombstone. Its items count against the
-   * sync's `limits.maxRecords` (`round.records`). A read that does not
+   * last item in the read is a tombstone (`tombstones`), and those whose
+   * last item is not one (`others`). Its items count against
+   * `limits.maxRecords` on their own, from 0. A read that does not
    * complete (a non-2xx page, a body without the declared items or cursor,
    * the budget or record limit spent) yields no ids and leaves the cursor
    * as it was, apart from a declared expired status: its body's cursor
@@ -2228,8 +2236,16 @@ export function createApiClient(
     scope: string,
     context: Record<string, string>,
     budget: Budget,
-    round: SyncRound,
-  ): Promise<Set<string>> {
+  ): Promise<{
+    complete: boolean;
+    tombstones: Set<string>;
+    others: Set<string>;
+  }> {
+    const incomplete = {
+      complete: false,
+      tombstones: new Set<string>(),
+      others: new Set<string>(),
+    };
     const feed = route.deletionFeed as DeletionFeed;
     const stored = feedCursors.get(scope);
     const cursor =
@@ -2253,6 +2269,7 @@ export function createApiClient(
     };
     const last = new Map<string, boolean>();
     let body: unknown;
+    let count = 0;
     try {
       for await (const page of walkPages({
         document: doc,
@@ -2269,11 +2286,11 @@ export function createApiClient(
         itemsField: feed.itemsField,
       })) {
         body = page.body;
-        round.records += page.items.length;
-        // Shared with the collection reads: more is an incomplete read.
-        if (round.records > budget.limits.maxRecords)
+        count += page.items.length;
+        // As for a collection read: more items than the limit is incomplete.
+        if (count > budget.limits.maxRecords)
           throw new BudgetExhausted(
-            `Read exceeds ${budget.limits.maxRecords} records with the deletion feed`,
+            `Deletion feed read exceeds ${budget.limits.maxRecords} records`,
           );
         for (const item of page.items) {
           const id = asText(readNestedField(item, feed.idField));
@@ -2306,18 +2323,21 @@ export function createApiClient(
         );
         if (changed) await persistLater();
       }
-      return new Set();
+      return incomplete;
     }
     if (feed.cursor) {
       const next = isRecord(body)
         ? readNestedField(body, feed.cursor.responseField)
         : undefined;
       // Without the next cursor the read does not have the declared shape.
-      if (typeof next !== 'string' && !Number.isFinite(next)) return new Set();
+      if (typeof next !== 'string' && !Number.isFinite(next)) return incomplete;
       setCursor(next);
     }
     const tombstones = new Set(
       [...last].filter(([, tomb]) => tomb).map(([id]) => id),
+    );
+    const others = new Set(
+      [...last].filter(([, tomb]) => !tomb).map(([id]) => id),
     );
     // Kept for the next sync (and a restart), only for records with
     // unsettled writes; a later item that is not a tombstone removes one.
@@ -2329,7 +2349,7 @@ export function createApiClient(
       } else if (ids.delete(id)) changed = true;
     }
     if (changed) await persistLater();
-    return tombstones;
+    return { complete: true, tombstones, others };
   }
 
   /** Whether the record has queued or failed writes. */
@@ -2358,17 +2378,14 @@ export function createApiClient(
 
   /**
    * Finds out whether a record a complete read lacked was deleted: from the
-   * document's declaration, else from a tombstone the collection's deletion
-   * feed reported in an earlier sync (`tombstones`, stored), else with a GET
-   * of the record within the sync's budget. Undefined when the budget is
-   * spent (not checked).
+   * document's declaration, else with a GET of the record within the sync's
+   * budget. Undefined when the budget is spent (not checked).
    */
   async function findEvidence(
     route: ClientRoute,
     context: Record<string, string>,
     id: string,
     budget: Budget,
-    tombstones: Set<string>,
   ): Promise<Evidence | undefined> {
     if (route.absentMeansDeleted)
       return {
@@ -2376,7 +2393,6 @@ export function createApiClient(
         source: 'declaration',
         detail: `the API document declares that a record missing from a complete read of ${route.collection.name} was deleted`,
       };
-    if (tombstones.has(id)) return feedEvidence(route);
     if (options.missingRecordChecks === 'none')
       return {
         evidence: 'unknown',
@@ -2547,7 +2563,7 @@ export function createApiClient(
     if (stored)
       for (const id of records.keys())
         if (stored.delete(id)) sync.tombstonesChanged = true;
-    const tombstones = feedRead && stored ? stored : new Set<string>();
+
     // Undecided by this sync's GETs: the feed read at the end may decide.
     const undecided = (found: Evidence | undefined): boolean =>
       feedRead && (!found || found.evidence === 'unknown');
@@ -2555,7 +2571,20 @@ export function createApiClient(
     for (const id of missing) {
       const key = keyFor(scope, id);
       if (!evidenceHead(key)) continue;
-      const found = await findEvidence(route, context, id, budget, tombstones);
+      // A tombstone kept from an earlier feed read: no GET; this sync's feed
+      // read, at its end, confirms it or drops it (`finishFeeds`).
+      if (feedRead && stored?.has(id)) {
+        sync.undecided.push({
+          scope,
+          context,
+          id,
+          revision: revisionAtCheck.get(key) ?? 0,
+          previous: previous.get(id),
+          stored: true,
+        });
+        continue;
+      }
+      const found = await findEvidence(route, context, id, budget);
       if (undecided(found)) {
         sync.undecided.push({
           scope,
@@ -2581,6 +2610,8 @@ export function createApiClient(
         continue;
       if (found.evidence === 'filtered' && found.record) {
         fresh.set(id, found.record);
+        // It exists: a stored tombstone for it is stale.
+        if (stored?.delete(id)) sync.tombstonesChanged = true;
         continue;
       }
       if (failMissing(scope, id, found, previous.get(id), released))
@@ -2602,13 +2633,7 @@ export function createApiClient(
     if (options.missingRecordChecks === 'all')
       for (const id of vanished) {
         if (writeQueues.has(keyFor(scope, id))) continue;
-        const found = await findEvidence(
-          route,
-          context,
-          id,
-          budget,
-          tombstones,
-        );
+        const found = await findEvidence(route, context, id, budget);
         if (undecided(found))
           sync.undecided.push({
             scope,
@@ -2639,8 +2664,11 @@ export function createApiClient(
    * At the end of a sync, after every collection read and evidence GET:
    * reads each collection's deletion feed from the budget left, and settles
    * the missing records the GETs left undecided. A tombstone makes one
-   * `deleted` (`source: 'feed'`); without one, an `unknown` GET answer
-   * fails it as `unknown`, and an unchecked one stays held.
+   * `deleted` (`source: 'feed'`), as does a stored one (`stored`) unless
+   * this complete read has a later item about the record that is not a
+   * tombstone (then it stays held, for a GET next sync); without one, an
+   * `unknown` GET answer fails it as `unknown`, and an unchecked one stays
+   * held.
    */
   async function finishFeeds(
     round: SyncRound,
@@ -2649,7 +2677,7 @@ export function createApiClient(
   ): Promise<void> {
     const touched: { scope: string; id: string }[] = [];
     for (const { route, scope, context } of round.feeds) {
-      const tombstones = await readFeed(route, scope, context, budget, round);
+      const feed = await readFeed(route, scope, context, budget);
       for (const record of round.undecided) {
         if (record.scope !== scope) continue;
         // A write to the record settled since the check began: a later
@@ -2659,9 +2687,13 @@ export function createApiClient(
           record.revision
         )
           continue;
-        const found = tombstones.has(record.id)
-          ? feedEvidence(route)
-          : record.found;
+        // A stored tombstone stands unless this complete read has a later
+        // item about the record that is not one; then the next sync reads it.
+        const found =
+          feed.tombstones.has(record.id) ||
+          (record.stored && !(feed.complete && feed.others.has(record.id)))
+            ? feedEvidence(route)
+            : record.found;
         if (!found) continue;
         reportMissing(route, record.context, record.id, found);
         if (
@@ -2730,7 +2762,6 @@ export function createApiClient(
     const round: SyncRound = {
       feeds: [],
       undecided: [],
-      records: result.collections.reduce((n, c) => n + c.items.length, 0),
       tombstonesChanged: false,
     };
     const changed = new Set<string>();

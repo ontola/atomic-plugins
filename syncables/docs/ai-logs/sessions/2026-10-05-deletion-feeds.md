@@ -92,3 +92,23 @@ records against `maxRecords`. Tests for both review scenarios (two
 collections with a four-request budget; eight new clients on one storage),
 stored tombstones across a restart, and the shared record limit; spec §1.1,
 §5 and the reference implementation note, README and CLAUDE.md updated.
+
+## Turn 4
+
+**Human (via the oversight session):** A third review: a stale stored
+tombstone fails an update of a record that exists, without a GET (a
+restore the feed already reports; a restore after which a write settled).
+Decide stored tombstones at the end of the sync, after its feed read, and
+drop them when a write to the record settles with a 2xx or a GET finds it;
+qualify the spec's "MAY keep tombstones"; count each feed read against
+`maxRecords` on its own, since the shared count left a mid-sized collection
+without a cursor.
+
+**Assistant:** A record with a stored tombstone now waits, without a GET, for
+the end-of-sync feed read: a complete read with a later non-tombstone item
+drops the tombstone and leaves the record held for a GET next sync; a failed
+or incomplete read leaves the verdict standing. A 2xx write settle and a
+`filtered` GET drop a stored tombstone. Each feed read counts its own items
+from 0. Tests for both review scenarios, the GET drop, a failing feed, and a
+six-record collection with `maxRecords: 10`; spec §5 lists what supersedes a
+kept tombstone; README and CLAUDE.md updated.

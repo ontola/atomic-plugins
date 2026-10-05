@@ -179,25 +179,28 @@ Data flows through four stages, each its own directory under `src/`:
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
    the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
-   draft spec in `openapi-extensions/spec/collection-completeness/`), else a
-   tombstone stored from an earlier feed read (`feedTombstones`, in the
-   outbox, only for records with unsettled writes; dropped when a read
-   returns the record or a later item is not a tombstone), else
+   draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
    `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
    `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
    For a collection with a deletion feed (`x-deletion-feed`,
    `declaredDeletionFeed`, draft spec in
-   `openapi-extensions/spec/deletion-feeds/`), unchecked and `unknown`
-   records go to `SyncRound.undecided`; `finishFeeds`, after every
-   collection's checks, reads each feed once (`readFeed`: `walkPages`
-   through the same `Budget`, from the cursor in `feedCursors`, items
-   counted in `SyncRound.records` against the sync-wide `maxRecords`;
+   `openapi-extensions/spec/deletion-feeds/`), a record with a tombstone
+   stored from an earlier feed read (`feedTombstones`, in the outbox, only
+   for records with unsettled writes; dropped when a read or a `filtered`
+   GET returns the record, a write to it settles with a 2xx, or a later
+   item is not a tombstone) goes to `SyncRound.undecided` with `stored`
+   and no GET; unchecked and `unknown` GET answers go there too.
+   `finishFeeds`, after every collection's checks, reads each feed once
+   (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
+   `feedCursors`, items counted per read against `maxRecords`;
    an incomplete or malformed read gives no tombstones and keeps the
    cursor, apart from a declared expired status) and settles them: a
-   tombstone fails the heads as `deleted` (`source: 'feed'`, `failMissing`),
-   else `unknown` fails as before and unchecked stays held. Not read under
+   tombstone, or a stored one this complete read does not supersede with a
+   later non-tombstone item, fails the heads as `deleted` (`source: 'feed'`,
+   `failMissing`); else `unknown` fails as before, and unchecked or
+   superseded stays held. Not read under
    `absent: deleted` or `missingRecordChecks: 'none'`.
    The declaration is dropped for a collection a `selection` narrows past its
    `x-list-query`, and an operation-level one counts only without a fixed
