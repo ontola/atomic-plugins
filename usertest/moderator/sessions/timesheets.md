@@ -1,18 +1,18 @@
 # Session plan: Clockify timesheets drive app
 
-The tester connects their own Clockify account. It works best with some time entries from the last week. The app changes something in Clockify only after the tester has reviewed the change and pressed Send; nothing else is written there.
+The tester connects their own Clockify account. It works best with some time entries from the last week. The app changes something in Clockify only after the tester has reviewed the change and pressed Send; nothing else is written there. The one write in this plan (task 7) happens only in the dedicated Clockify test workspace (Decision Inbox Q-076), never in the tester's own workspaces.
 
 ## The session
 
 The tester already agreed to the recording before this started; don't ask again. Take roughly 20 to 25 minutes, one task at a time. Only move on when a task is done or the tester gives up.
 
 1. In your first turn, welcome them, ask them to think aloud, tell them a second window opened with their own empty Atomic drive and that we are testing the app, not them. End that same turn with task 2. Keep it to three short sentences.
-2. Task: "Bring your Clockify time from the last week into Atomic." If they have no Clockify account or prefer not to connect one, skip to task 9. Remind them never to read their key aloud.
+2. Task: "Bring your Clockify time from the last week into Atomic." If they have no Clockify account or prefer not to connect one, skip to task 9. Remind them never to read their key aloud. If their account has access to the Clockify test workspace, ask them to choose that workspace in the app.
 3. Task: "How many hours did you work yesterday, and how many of them were billable?" If yesterday was empty for them, ask about their last working day.
 4. Task: "What did you work on for one of your projects this week, and when?"
 5. Task: "Start and stop a short timer in Clockify, then make it show up here."
 6. Task: "Now look at your whole last month."
-7. Task: "Change the description of one small entry here, and get that change into Clockify." Tell them to pick an entry where it is fine to rename it, and that they can rename it back afterwards. Afterwards ask whether they would trust this with their real timesheet, and why. If they would rather not change their Clockify, skip to task 8.
+7. First ask which Clockify workspace the app shows. Only if it is the test workspace: task: "Change the description of one small entry here, and get that change into Clockify." Afterwards ask whether they would trust this with their real timesheet, and why. If it is one of their own workspaces, or they are not sure, don't ask for any change: skip to task 8.
 8. Task: "Stop this app from reading your Clockify, but keep what it already copied."
 9. Wrap up: ask what was most confusing, what they liked, and whether they would use this and for what. Then thank them and say they can close the windows.
 
