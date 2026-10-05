@@ -565,6 +565,80 @@ describe('deletion feeds: stored tombstones', () => {
     expect(storage.outbox()).not.toHaveProperty('feedTombstones');
   });
 
+  it('does not store a tombstone for a record a write settled on during the sync (a PUT answered 200 while the feed read is in flight)', async () => {
+    let okOnce = false;
+    const fake = provider([rex, tom], {
+      write: () => {
+        if (!okOnce) return unavailable();
+        okOnce = false;
+        return undefined;
+      },
+    });
+    const { storage } = await edited({ fake, edits: 2 });
+    // Deleted and restored; the feed logs only the deletion.
+    fake.remove('1');
+    fake.pets.set('1', rex);
+    okOnce = true;
+    let putAnswered!: () => void;
+    const answered = new Promise<void>((resolve) => (putAnswered = resolve));
+    const client = createApiClient(feedDocument(), {
+      storage,
+      transport: async (r) => {
+        // The feed read waits for the first PUT's 200.
+        if (r.url.pathname.endsWith('/pet-changes')) await answered;
+        const answer = await fake.transport(r);
+        if (r.method === 'PUT') putAnswered();
+        return answer;
+      },
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.sync();
+    expectFailedOlder(storage);
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([{ attempts: 1 }]),
+    );
+    await settle();
+    expect(storage.outbox()).not.toHaveProperty('feedTombstones');
+    fake.itemGets.length = 0;
+    fake.hidden.add('1');
+    await client.sync();
+    expectFailedOlder(storage);
+    // The second update is read with a GET, not failed on the old tombstone.
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+  });
+
+  it('does not store again a tombstone that a list read returning the record dropped in the same sync', async () => {
+    let replay = false;
+    const fake = provider([rex, tom], {
+      write: unavailable,
+      // A feed that reports the old deletion again.
+      feed: (since) =>
+        replay
+          ? response({
+              changes: [{ id: '1', state: 'deleted' }],
+              next: since ?? 'c0',
+            })
+          : undefined,
+    });
+    const { client, storage } = await storedTombstone(fake);
+    // Restored without a restore item; the list returns it.
+    fake.pets.set('1', rex);
+    replay = true;
+    await client.sync();
+    expectFailedOlder(storage);
+    expect(storage.outbox()).not.toHaveProperty('feedTombstones');
+    fake.hidden.add('1');
+    replay = false;
+    await client.sync();
+    expectFailedOlder(storage);
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'pending' },
+      { state: 'pending' },
+    ]);
+  });
+
   it("keeps the stored verdict when this sync's feed read fails", async () => {
     let broken = false;
     const fake = provider([rex, tom], {

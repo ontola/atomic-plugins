@@ -190,7 +190,10 @@ Data flows through four stages, each its own directory under `src/`:
    stored from an earlier feed read (`feedTombstones`, in the outbox, only
    for records with unsettled writes; dropped when a read or a `filtered`
    GET returns the record, a write to it settles with a 2xx, or a later
-   item is not a tombstone) goes to `SyncRound.undecided` with `stored`
+   item is not a tombstone; not stored by a feed read for a record a write
+   settled on during the sync, or whose stored tombstone a read dropped
+   earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
+   `stored`
    and no GET; unchecked and `unknown` GET answers go there too.
    `finishFeeds`, after every collection's checks, reads each feed once
    (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
