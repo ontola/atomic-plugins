@@ -27,7 +27,8 @@ that a list is complete. This extension adds that one statement:
   member, and what an object's absence from such a read means.
 
 It does not describe deletion feeds (tombstones, `deleted_since`
-parameters); see §8.
+parameters); the [Deletion Feeds extension](../deletion-feeds/README.md)
+does.
 
 ## 2. Overview
 
@@ -190,8 +191,8 @@ A conforming consumer:
 ## 8. Not covered
 
 * Deletion feeds: a tombstone list or a `deleted_since` parameter that
-  reports deletions directly. A later version may add a way to name such an
-  operation for a collection.
+  reports deletions directly. The [Deletion Feeds extension](../deletion-feeds/README.md)
+  names such an operation for a collection (`x-deletion-feed`).
 * Partial completeness (complete within a time window, or for the
   authenticated principal's own objects only). Describe those with the
   [Filtering proposal](../filtering/README.md) and leave this field out.

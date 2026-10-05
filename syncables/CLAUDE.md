@@ -184,6 +184,24 @@ Data flows through four stages, each its own directory under `src/`:
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
    `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
    `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
+   For a collection with a deletion feed (`x-deletion-feed`,
+   `declaredDeletionFeed`, draft spec in
+   `openapi-extensions/spec/deletion-feeds/`), a record with a tombstone
+   stored from an earlier feed read (`feedTombstones`, in the outbox, only
+   for records with unsettled writes; dropped when a read or a `filtered`
+   GET returns the record, a write to it settles with a 2xx, or a later
+   item is not a tombstone) goes to `SyncRound.undecided` with `stored`
+   and no GET; unchecked and `unknown` GET answers go there too.
+   `finishFeeds`, after every collection's checks, reads each feed once
+   (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
+   `feedCursors`, items counted per read against `maxRecords`;
+   an incomplete or malformed read gives no tombstones and keeps the
+   cursor, apart from a declared expired status) and settles them: a
+   tombstone, or a stored one this complete read does not supersede with a
+   later non-tombstone item, fails the heads as `deleted` (`source: 'feed'`,
+   `failMissing`); else `unknown` fails as before, and unchecked or
+   superseded stays held. Not read under
+   `absent: deleted` or `missingRecordChecks: 'none'`.
    The declaration is dropped for a collection a `selection` narrows past its
    `x-list-query`, and an operation-level one counts only without a fixed
    query or body. An update in flight when `holdMissing` ran gets
@@ -194,8 +212,8 @@ Data flows through four stages, each its own directory under `src/`:
    `deleted`/`unknown` fail the head and each following held update
    (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
    `wakers`); `filtered` takes the returned record as confirmed (conflicts
-   checked) and releases. A record settled on during the check is left to
-   the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
+   checked) and releases. A record settled on during the check (up to the
+   end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
@@ -316,6 +334,13 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
+  for records the GET left undecided (on the collection or list operation,
+  `idField`, no `tombstone` field, a restore after a tombstone), stored
+  tombstones across a restart, the cursor advancing and surviving a restart,
+  paginated feeds, the budget (two collections, a new client per sync, the
+  shared `maxRecords`), malformed and expired reads, and precedence against
+  `x-completeness` and the GET.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

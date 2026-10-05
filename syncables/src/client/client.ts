@@ -1,5 +1,9 @@
 import { discoverResources } from '../resources/discover.js';
-import type { OpenApiDocument, ParameterObject } from '../openapi/types.js';
+import type {
+  OpenApiDocument,
+  OperationObject,
+  ParameterObject,
+} from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
@@ -16,9 +20,12 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  PageStatusError,
   RetryBeyondDeadline,
+  walkPages,
   type ReadLimits,
 } from '../read/pages.js';
+import { readNestedField } from '../pagination/response-parser.js';
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
@@ -43,6 +50,8 @@ import {
   OUTBOX_VERSION,
   OutboxVersionError,
   readOutbox,
+  type StoredFeedCursor,
+  type StoredFeedTombstones,
   type StoredRebuild,
   type StoredRecordWrites,
   type StoredWrite,
@@ -153,8 +162,10 @@ export interface AuthBlock {
  * returned:
  * - `deleted`: the provider deleted it. The API document declares that a
  *   record absent from a complete read of the collection was deleted
- *   (`x-completeness: { absent: deleted }`), or a GET of the record answered
- *   404 or 410.
+ *   (`x-completeness: { absent: deleted }`), a GET of the record answered
+ *   404 or 410, or the collection's deletion feed (`x-deletion-feed`)
+ *   reported it with a tombstone: in an earlier sync (stored, used before
+ *   the GET), or in this sync's feed read when the GET did not decide.
  * - `filtered`: it still exists; the list just does not return it. A GET of
  *   the record answered 2xx with the record.
  * - `unknown`: neither could be told: the GET answered another status, its
@@ -171,9 +182,10 @@ export interface MissingRecord {
   evidence: MissingRecordEvidence;
   /**
    * Where the evidence comes from: `declaration` (the API document's
-   * `x-completeness`), `read` (a GET of the record) or `none` (no GET made).
+   * `x-completeness`), `feed` (a tombstone in the collection's deletion
+   * feed), `read` (a GET of the record) or `none` (no GET made).
    */
-  source: 'declaration' | 'read' | 'none';
+  source: 'declaration' | 'feed' | 'read' | 'none';
   /** The status the GET answered, when one answered. */
   status?: number;
   /** For `filtered`: the record the GET returned. */
@@ -263,8 +275,12 @@ export interface ApiClientOptions {
    *   update is the first unsettled write of the record and not in flight;
    * - `'all'`: those, and also records without queued writes, once, in the
    *   sync that first misses them;
-   * - `'none'`: no GET; without a declaration the evidence is `unknown`.
+   * - `'none'`: no GET and no deletion feed read; without a declaration
+   *   the evidence is `unknown`.
    * A collection declared `x-completeness: { absent: deleted }` needs no GET.
+   * A collection with an `x-deletion-feed` has its feed read once per sync,
+   * at its end, after these GETs; its tombstones decide records the GETs
+   * did not, and are kept so that the next sync needs no GET for them.
    */
   missingRecordChecks?: 'pending' | 'all' | 'none';
   /**
@@ -568,6 +584,26 @@ interface ClientRoute {
   absentMeansDeleted?: boolean;
   /** The item URL declares a GET, so a missing record can be read. */
   itemReadable?: boolean;
+  /** `x-deletion-feed`: the operation that reports deletions. */
+  deletionFeed?: DeletionFeed;
+}
+
+/** A parsed Deletion Feed Object (draft Deletion Feeds extension). */
+interface DeletionFeed {
+  operationId: string;
+  /** Path template of the feed operation. */
+  path: string;
+  operation: OperationObject;
+  /** Dot-path to the items array; `''` for the body itself. */
+  itemsField: string;
+  /** Dot-path to the identity of the record an item is about. */
+  idField: string;
+  cursor?: {
+    parameter: string;
+    responseField: string;
+    expiredStatuses: number[];
+  };
+  tombstone?: { field: string; values: (string | number | boolean)[] };
 }
 
 interface QueuedWrite {
@@ -742,6 +778,94 @@ function declaredAbsence(
   return absent === 'deleted' || absent === 'removed' ? absent : undefined;
 }
 
+/**
+ * The draft Deletion Feeds extension's `x-deletion-feed` for a collection:
+ * from its CRUD Causality Collection Object, else from its list operation.
+ * A declaration that does not parse, or names no GET operation of the
+ * document, is ignored.
+ */
+function declaredDeletionFeed(
+  document: OpenApiDocument,
+  collection: ReadCollection,
+): DeletionFeed | undefined {
+  const resources = document.components?.['crudResources'];
+  const resource = isRecord(resources)
+    ? resources[collection.resource]
+    : undefined;
+  const collections = isRecord(resource) ? resource['collections'] : undefined;
+  const definition = isRecord(collections)
+    ? collections[collection.name]
+    : undefined;
+  const list =
+    document.paths[collection.url]?.[
+      collection.method === 'POST' ? 'post' : 'get'
+    ];
+  const declared =
+    isRecord(definition) && definition['x-deletion-feed'] !== undefined
+      ? definition['x-deletion-feed']
+      : list?.['x-deletion-feed'];
+  if (!isRecord(declared)) return undefined;
+  const text = (value: unknown): value is string =>
+    typeof value === 'string' && value !== '';
+  const { operationId, envelope, cursor, tombstone, idField } = declared;
+  if (!text(operationId)) return undefined;
+  const found = Object.entries(document.paths).find(
+    ([, item]) => item?.get?.operationId === operationId,
+  );
+  if (!found) return undefined;
+  const feed: DeletionFeed = {
+    operationId,
+    path: found[0],
+    operation: found[1].get as OperationObject,
+    itemsField: '',
+    idField: collection.idField,
+  };
+  if (envelope !== undefined) {
+    if (!isRecord(envelope)) return undefined;
+    const field = envelope['itemsField'];
+    if (field !== undefined && typeof field !== 'string') return undefined;
+    feed.itemsField = field ?? '';
+  }
+  if (idField !== undefined) {
+    if (!text(idField)) return undefined;
+    feed.idField = idField;
+  }
+  if (cursor !== undefined) {
+    if (!isRecord(cursor)) return undefined;
+    const { parameter, responseField, expiredStatuses = [] } = cursor;
+    if (
+      !text(parameter) ||
+      !text(responseField) ||
+      !Array.isArray(expiredStatuses) ||
+      !expiredStatuses.every((status) => Number.isInteger(status))
+    )
+      return undefined;
+    feed.cursor = {
+      parameter,
+      responseField,
+      expiredStatuses: expiredStatuses as number[],
+    };
+  }
+  if (tombstone !== undefined) {
+    if (!isRecord(tombstone)) return undefined;
+    const { field, values } = tombstone;
+    if (
+      !text(field) ||
+      !Array.isArray(values) ||
+      !values.length ||
+      !values.every((value) =>
+        ['string', 'number', 'boolean'].includes(typeof value),
+      )
+    )
+      return undefined;
+    feed.tombstone = {
+      field,
+      values: values as (string | number | boolean)[],
+    };
+  }
+  return feed;
+}
+
 function clientRoutes(
   document: OpenApiDocument,
   collections: ReadCollection[],
@@ -780,6 +904,8 @@ function clientRoutes(
     }
     if (declaredAbsence(document, collection) === 'deleted')
       route.absentMeansDeleted = true;
+    const feed = declaredDeletionFeed(document, collection);
+    if (feed) route.deletionFeed = feed;
     if (item?.get) route.itemReadable = true;
     const header =
       route.createPath && declaredIdempotencyHeader(document, route.createPath);
@@ -879,6 +1005,16 @@ export function createApiClient(
   >();
   /** Stored entries this client cannot restore; written back unchanged. */
   let unrestorable: unknown[] = [];
+  /** Deletion feed cursors, by scope; stored in the outbox. */
+  const feedCursors = new Map<string, StoredFeedCursor>();
+  /**
+   * Tombstones a deletion feed reported, by scope, for records with
+   * unsettled writes; stored in the outbox (only for such records).
+   */
+  const feedTombstones = new Map<
+    string,
+    { resource: string; context: Record<string, string>; ids: Set<string> }
+  >();
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
   /** Set while no write is sent because the credentials were refused; stored. */
@@ -944,6 +1080,21 @@ export function createApiClient(
   }
 
   /**
+   * Stored tombstones, of records that still have unsettled writes; the
+   * others are dropped from memory too.
+   */
+  function storedFeedTombstones(): {
+    feedTombstones?: StoredFeedTombstones[];
+  } {
+    const entries: StoredFeedTombstones[] = [];
+    for (const [scope, { resource, context, ids }] of feedTombstones) {
+      for (const id of ids) if (!unsettled(scope, id)) ids.delete(id);
+      if (ids.size) entries.push({ resource, context, tombstones: [...ids] });
+    }
+    return entries.length ? { feedTombstones: entries } : {};
+  }
+
+  /**
    * The whole outbox, as JSON, taken synchronously from the in-memory state.
    * Writes whose own first store has not succeeded are left out, apart from
    * `including` (the write this store is for): a rejected `create` must not
@@ -993,6 +1144,8 @@ export function createApiClient(
         version: OUTBOX_VERSION,
         records,
         rebuild,
+        ...(feedCursors.size ? { feedCursors: [...feedCursors.values()] } : {}),
+        ...storedFeedTombstones(),
         unrestorable,
         ...(authBlock ? { authBlock } : {}),
       }),
@@ -1112,7 +1265,24 @@ export function createApiClient(
     writeQueues.clear();
     gaveUpWrites.clear();
     confirmed.clear();
+    feedCursors.clear();
+    feedTombstones.clear();
     unrestorable = outbox.unrestorable;
+    for (const entry of outbox.feedTombstones) {
+      const route = byResource.get(entry.resource);
+      if (route)
+        feedTombstones.set(scopeFor(route, entry.context), {
+          resource: entry.resource,
+          context: entry.context,
+          ids: new Set(entry.tombstones),
+        });
+      else unrestorable.push(entry);
+    }
+    for (const entry of outbox.feedCursors) {
+      const route = byResource.get(entry.resource);
+      if (route) feedCursors.set(scopeFor(route, entry.context), entry);
+      else unrestorable.push(entry);
+    }
     // Under onAuthFailure 'retry' nothing blocks: a stored block (from a
     // client with 'block') is dropped and its writes resume.
     authBlock =
@@ -1341,6 +1511,9 @@ export function createApiClient(
     for (const id of new Set([write.id, resolvedId])) {
       const key = keyFor(write.scope, id);
       recordRevisions.set(key, (recordRevisions.get(key) ?? 0) + 1);
+      // The provider accepted a write to the record: a tombstone a feed
+      // reported for it earlier no longer says it is deleted.
+      feedTombstones.get(write.scope)?.ids.delete(id);
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -1941,6 +2114,72 @@ export function createApiClient(
     detail: string;
   }
 
+  /** Per-sync bookkeeping of deletion feeds. */
+  interface SyncRound {
+    /** Feeds to read at the end of the sync, after every evidence GET. */
+    feeds: {
+      route: ClientRoute;
+      scope: string;
+      context: Record<string, string>;
+    }[];
+    /**
+     * Missing records of collections with a feed that this sync's GETs did
+     * not decide: unchecked (budget spent, `found` absent) or `unknown`.
+     */
+    undecided: {
+      scope: string;
+      context: Record<string, string>;
+      id: string;
+      found?: Evidence;
+      /** `recordRevisions` when the check began. */
+      revision: number;
+      previous: Record<string, unknown> | undefined;
+      /** A record without writes (`missingRecordChecks: 'all'`). */
+      vanished?: true;
+      /**
+       * A tombstone stored from an earlier feed read: `deleted` unless this
+       * sync's complete feed read has a later item about the record that
+       * is not a tombstone.
+       */
+      stored?: true;
+    }[];
+    /** A stored tombstone was dropped: the outbox is stored at the end. */
+    tombstonesChanged: boolean;
+  }
+
+  function feedEvidence(route: ClientRoute): Evidence {
+    return {
+      evidence: 'deleted',
+      source: 'feed',
+      detail: `the deletion feed ${route.deletionFeed?.operationId} reports it deleted`,
+    };
+  }
+
+  /**
+   * Fails the held updates at the head of a missing record's queue, oldest
+   * first, on `deleted` or `unknown` evidence. True when one failed.
+   */
+  function failMissing(
+    scope: string,
+    id: string,
+    found: Evidence,
+    previous: Record<string, unknown> | undefined,
+    released: Set<QueuedWrite>,
+  ): boolean {
+    const key = keyFor(scope, id);
+    // Also holds updates queued while the record was being checked.
+    holdMissing(key);
+    let failed = false;
+    for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
+      failWrite(head, missingMessage(head, found), previous);
+      head.missingRecord = found.evidence === 'deleted' ? 'deleted' : 'unknown';
+      if (found.status !== undefined) head.lastStatus = found.status;
+      released.add(head);
+      failed = true;
+    }
+    return failed;
+  }
+
   function missingMessage(write: QueuedWrite, found: Evidence): string {
     return found.evidence === 'deleted'
       ? `Record ${write.id} was deleted at the provider (${found.detail}); not sent`
@@ -1977,6 +2216,164 @@ export function createApiClient(
       head.durable !== false
       ? head
       : undefined;
+  }
+
+  /**
+   * Reads the collection's deletion feed once (`x-deletion-feed`), through
+   * the sync's budget, from the stored cursor, and returns the ids whose
+   * last item in the read is a tombstone (`tombstones`), and those whose
+   * last item is not one (`others`). Its items count against
+   * `limits.maxRecords` on their own, from 0. A read that does not
+   * complete (a non-2xx page, a body without the declared items or cursor,
+   * the budget or record limit spent) yields no ids and leaves the cursor
+   * as it was, apart from a declared expired status: its body's cursor
+   * replaces the stored one, else the stored one is dropped. A changed
+   * cursor is stored in the outbox. A complete read also updates the stored
+   * tombstones of records with unsettled writes (`feedTombstones`).
+   */
+  async function readFeed(
+    route: ClientRoute,
+    scope: string,
+    context: Record<string, string>,
+    budget: Budget,
+  ): Promise<{
+    complete: boolean;
+    tombstones: Set<string>;
+    others: Set<string>;
+  }> {
+    const incomplete = {
+      complete: false,
+      tombstones: new Set<string>(),
+      others: new Set<string>(),
+    };
+    const feed = route.deletionFeed as DeletionFeed;
+    const stored = feedCursors.get(scope);
+    const cursor =
+      feed.cursor && stored?.operation === feed.operationId
+        ? stored.cursor
+        : undefined;
+    let changed = false;
+    const setCursor = (value: unknown): void => {
+      if (typeof value === 'string' || Number.isFinite(value)) {
+        const text = String(value);
+        if (stored?.operation === feed.operationId && stored.cursor === text)
+          return;
+        feedCursors.set(scope, {
+          resource: route.collection.name,
+          context: { ...context },
+          operation: feed.operationId,
+          cursor: text,
+        });
+        changed = true;
+      } else if (feedCursors.delete(scope)) changed = true;
+    };
+    const last = new Map<string, boolean>();
+    let body: unknown;
+    let count = 0;
+    try {
+      for await (const page of walkPages({
+        document: doc,
+        operation: feed.operation,
+        budget,
+        upstream,
+        path: bindPath(feed.path, context),
+        method: 'GET',
+        query:
+          cursor !== undefined && feed.cursor
+            ? { [feed.cursor.parameter]: cursor }
+            : {},
+        body: {},
+        itemsField: feed.itemsField,
+      })) {
+        body = page.body;
+        count += page.items.length;
+        // As for a collection read: more items than the limit is incomplete.
+        if (count > budget.limits.maxRecords)
+          throw new BudgetExhausted(
+            `Deletion feed read exceeds ${budget.limits.maxRecords} records`,
+          );
+        for (const item of page.items) {
+          const id = asText(readNestedField(item, feed.idField));
+          if (!id) continue;
+          const marker = feed.tombstone
+            ? readNestedField(item, feed.tombstone.field)
+            : undefined;
+          // The last item about a record decides: oldest first (§4.1).
+          last.set(
+            id,
+            !feed.tombstone || feed.tombstone.values.some((v) => v === marker),
+          );
+        }
+      }
+    } catch (error) {
+      if (
+        error instanceof PageStatusError &&
+        feed.cursor?.expiredStatuses.includes(error.status)
+      ) {
+        let refused: unknown;
+        try {
+          refused = JSON.parse(error.body);
+        } catch {
+          refused = undefined;
+        }
+        setCursor(
+          isRecord(refused)
+            ? readNestedField(refused, feed.cursor.responseField)
+            : undefined,
+        );
+        if (changed) await persistLater();
+      }
+      return incomplete;
+    }
+    if (feed.cursor) {
+      const next = isRecord(body)
+        ? readNestedField(body, feed.cursor.responseField)
+        : undefined;
+      // Without the next cursor the read does not have the declared shape.
+      if (typeof next !== 'string' && !Number.isFinite(next)) return incomplete;
+      setCursor(next);
+    }
+    const tombstones = new Set(
+      [...last].filter(([, tomb]) => tomb).map(([id]) => id),
+    );
+    const others = new Set(
+      [...last].filter(([, tomb]) => !tomb).map(([id]) => id),
+    );
+    // Kept for the next sync (and a restart), only for records with
+    // unsettled writes; a later item that is not a tombstone removes one.
+    for (const [id, tomb] of last) {
+      const ids = storedTombstones(scope, route, context);
+      if (tomb && unsettled(scope, id)) {
+        if (!ids.has(id)) changed = true;
+        ids.add(id);
+      } else if (ids.delete(id)) changed = true;
+    }
+    if (changed) await persistLater();
+    return { complete: true, tombstones, others };
+  }
+
+  /** Whether the record has queued or failed writes. */
+  function unsettled(scope: string, id: string): boolean {
+    const key = keyFor(scope, id);
+    return writeQueues.has(key) || gaveUpWrites.has(key);
+  }
+
+  /** The stored tombstone ids of a scope, created empty. */
+  function storedTombstones(
+    scope: string,
+    route: ClientRoute,
+    context: Record<string, string>,
+  ): Set<string> {
+    let entry = feedTombstones.get(scope);
+    if (!entry) {
+      entry = {
+        resource: route.collection.name,
+        context: { ...context },
+        ids: new Set(),
+      };
+      feedTombstones.set(scope, entry);
+    }
+    return entry.ids;
   }
 
   /**
@@ -2122,6 +2519,7 @@ export function createApiClient(
       scope: string;
       context: Record<string, string>;
       budget: Budget;
+      sync: SyncRound;
     },
     records: Map<string, Record<string, unknown>>,
     previous: Map<string, Record<string, unknown>>,
@@ -2130,7 +2528,7 @@ export function createApiClient(
     released: Set<QueuedWrite>,
     vanished: string[] = [],
   ): Promise<void> {
-    const { route, scope, context, budget } = read;
+    const { route, scope, context, budget, sync } = read;
     const missing = new Set<string>();
     for (const write of allWrites())
       if (
@@ -2143,13 +2541,61 @@ export function createApiClient(
     // Held before any request below, so nothing is sent on a stale copy
     // while the evidence is being read.
     for (const id of missing) holdMissing(keyFor(scope, id));
-    const evidence = new Map<string, Evidence>();
+    // Taken before the checks: a write that settles on a record from
+    // here on (during a GET, or the feed read at the end of the sync)
+    // leaves it to a later sync.
     const revisionAtCheck = new Map<string, number>();
     for (const id of missing) {
       const key = keyFor(scope, id);
-      if (!evidenceHead(key)) continue;
       revisionAtCheck.set(key, recordRevisions.get(key) ?? 0);
+    }
+    // Read once per sync, at its end, after every evidence GET
+    // (`finishFeeds`); not needed when the declaration already settles
+    // every missing record.
+    const feedRead = Boolean(
+      route.deletionFeed &&
+        !route.absentMeansDeleted &&
+        options.missingRecordChecks !== 'none',
+    );
+    if (feedRead) sync.feeds.push({ route, scope, context });
+    // A record this read returns exists: a stored tombstone for it is stale.
+    const stored = feedTombstones.get(scope)?.ids;
+    if (stored)
+      for (const id of records.keys())
+        if (stored.delete(id)) sync.tombstonesChanged = true;
+
+    // Undecided by this sync's GETs: the feed read at the end may decide.
+    const undecided = (found: Evidence | undefined): boolean =>
+      feedRead && (!found || found.evidence === 'unknown');
+    const evidence = new Map<string, Evidence>();
+    for (const id of missing) {
+      const key = keyFor(scope, id);
+      if (!evidenceHead(key)) continue;
+      // A tombstone kept from an earlier feed read: no GET; this sync's feed
+      // read, at its end, confirms it or drops it (`finishFeeds`).
+      if (feedRead && stored?.has(id)) {
+        sync.undecided.push({
+          scope,
+          context,
+          id,
+          revision: revisionAtCheck.get(key) ?? 0,
+          previous: previous.get(id),
+          stored: true,
+        });
+        continue;
+      }
       const found = await findEvidence(route, context, id, budget);
+      if (undecided(found)) {
+        sync.undecided.push({
+          scope,
+          context,
+          id,
+          ...(found ? { found } : {}),
+          revision: revisionAtCheck.get(key) ?? 0,
+          previous: previous.get(id),
+        });
+        continue;
+      }
       if (!found) continue;
       evidence.set(id, found);
       reportMissing(route, context, id, found);
@@ -2164,18 +2610,12 @@ export function createApiClient(
         continue;
       if (found.evidence === 'filtered' && found.record) {
         fresh.set(id, found.record);
+        // It exists: a stored tombstone for it is stale.
+        if (stored?.delete(id)) sync.tombstonesChanged = true;
         continue;
       }
-      // Also holds updates queued while the record was being checked.
-      holdMissing(key);
-      for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
-        failWrite(head, missingMessage(head, found), previous.get(id));
-        head.missingRecord =
-          found.evidence === 'deleted' ? 'deleted' : 'unknown';
-        if (found.status !== undefined) head.lastStatus = found.status;
-        released.add(head);
+      if (failMissing(scope, id, found, previous.get(id), released))
         touchedIds.add(id);
-      }
     }
     const taken = new Map<string, Record<string, unknown>>();
     for (const write of allWrites()) {
@@ -2194,7 +2634,17 @@ export function createApiClient(
       for (const id of vanished) {
         if (writeQueues.has(keyFor(scope, id))) continue;
         const found = await findEvidence(route, context, id, budget);
-        if (found) reportMissing(route, context, id, found);
+        if (undecided(found))
+          sync.undecided.push({
+            scope,
+            context,
+            id,
+            ...(found ? { found } : {}),
+            revision: recordRevisions.get(keyFor(scope, id)) ?? 0,
+            previous: undefined,
+            vanished: true,
+          });
+        else if (found) reportMissing(route, context, id, found);
       }
     if (!touchedIds.size) return;
     if (taken.size) {
@@ -2208,6 +2658,56 @@ export function createApiClient(
     for (const id of touchedIds) await rebuild(scope, id);
     for (const [key, queue] of writeQueues)
       if (queue[0]?.scope === scope && !draining.has(key)) void drainQueue(key);
+  }
+
+  /**
+   * At the end of a sync, after every collection read and evidence GET:
+   * reads each collection's deletion feed from the budget left, and settles
+   * the missing records the GETs left undecided. A tombstone makes one
+   * `deleted` (`source: 'feed'`), as does a stored one (`stored`) unless
+   * this complete read has a later item about the record that is not a
+   * tombstone (then it stays held, for a GET next sync); without one, an
+   * `unknown` GET answer fails it as `unknown`, and an unchecked one stays
+   * held.
+   */
+  async function finishFeeds(
+    round: SyncRound,
+    budget: Budget,
+    released: Set<QueuedWrite>,
+  ): Promise<void> {
+    const touched: { scope: string; id: string }[] = [];
+    for (const { route, scope, context } of round.feeds) {
+      const feed = await readFeed(route, scope, context, budget);
+      for (const record of round.undecided) {
+        if (record.scope !== scope) continue;
+        // A write to the record settled since the check began: a later
+        // sync decides on a newer read.
+        if (
+          (recordRevisions.get(keyFor(scope, record.id)) ?? 0) !==
+          record.revision
+        )
+          continue;
+        // A stored tombstone stands unless this complete read has a later
+        // item about the record that is not one; then the next sync reads it.
+        const found =
+          feed.tombstones.has(record.id) ||
+          (record.stored && !(feed.complete && feed.others.has(record.id)))
+            ? feedEvidence(route)
+            : record.found;
+        if (!found) continue;
+        reportMissing(route, record.context, record.id, found);
+        if (
+          !record.vanished &&
+          failMissing(scope, record.id, found, record.previous, released)
+        )
+          touched.push({ scope, id: record.id });
+      }
+    }
+    if (!touched.length && !round.tombstonesChanged) return;
+    await persistLater();
+    for (const { scope, id } of touched) await rebuild(scope, id);
+    for (const [key, queue] of writeQueues)
+      if (queue.length && !draining.has(key)) void drainQueue(key);
   }
 
   /**
@@ -2259,6 +2759,11 @@ export function createApiClient(
       budget,
       ...(options.selection ? { selection: options.selection } : {}),
     });
+    const round: SyncRound = {
+      feeds: [],
+      undecided: [],
+      tombstonesChanged: false,
+    };
     const changed = new Set<string>();
     for (const snapshot of result.collections) {
       if (!snapshot.complete) continue;
@@ -2277,7 +2782,7 @@ export function createApiClient(
           item,
         ]),
       );
-      const read = { route, scope, context, budget };
+      const read = { route, scope, context, budget, sync: round };
       // Records no write settled on during the read are still fresh.
       const isFresh = (id: string): boolean =>
         (startedRecords.get(keyFor(scope, id)) ?? 0) ===
@@ -2355,6 +2860,7 @@ export function createApiClient(
         vanished,
       );
     }
+    await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
