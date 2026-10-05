@@ -505,7 +505,11 @@ is not a tombstone, a collection read that returns the record, a GET that
 finds it (`filtered`, which happens for a stored tombstone only when the
 feed is not read, a document without the declaration, say), a write to it
 that the provider answers with a 2xx, or the record's writes all settling
-removes the id. This covers a record deleted
+removes the id. The feed read does not store a tombstone for a record that
+a write settled on earlier in the same sync (a PUT answered 200 while the
+feed was being read, say), or whose stored tombstone a read returning the
+record dropped earlier in the same sync: the tombstone in the feed may be
+older than that evidence that the record exists. This covers a record deleted
 between the collection read and the feed read of one sync, and a sync whose
 GETs used up the budget: the next sync, also in a new client on the same
 storage, uses the stored tombstone before any GET.

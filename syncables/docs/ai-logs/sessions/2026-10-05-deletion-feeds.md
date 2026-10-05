@@ -112,3 +112,17 @@ or incomplete read leaves the verdict standing. A 2xx write settle and a
 from 0. Tests for both review scenarios, the GET drop, a failing feed, and a
 six-record collection with `maxRecords: 10`; spec §5 lists what supersedes a
 kept tombstone; README and CLAUDE.md updated.
+
+## Turn 5
+
+**Human (via the oversight session):** After #327 merged, a fourth review
+nit: the feed read can store a tombstone again after a 2xx write or a read
+of the record dropped it in the same sync, so a restored record's next
+update fails as deleted without a GET. Keep a per-sync "superseded" set.
+
+**Assistant:** The feed read no longer stores a tombstone for a record whose
+revision changed during the sync (a write settled on it) or whose stored
+tombstone a list read or `filtered` GET dropped earlier in the sync
+(`SyncRound.superseded`). Tests for the PUT-during-feed-read race and the
+list-read variant, both failing without the change; README and CLAUDE.md
+updated.

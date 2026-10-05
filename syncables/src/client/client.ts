@@ -2145,6 +2145,14 @@ export function createApiClient(
     }[];
     /** A stored tombstone was dropped: the outbox is stored at the end. */
     tombstonesChanged: boolean;
+    /**
+     * Record keys whose stored tombstone this sync dropped because a read
+     * returned the record (list or `filtered` GET): the feed read at the
+     * end does not store a tombstone for them again.
+     */
+    superseded: Set<string>;
+    /** `recordRevisions` when the sync began. */
+    startedRecords: Map<string, number>;
   }
 
   function feedEvidence(route: ClientRoute): Evidence {
@@ -2236,6 +2244,7 @@ export function createApiClient(
     scope: string,
     context: Record<string, string>,
     budget: Budget,
+    round: SyncRound,
   ): Promise<{
     complete: boolean;
     tombstones: Set<string>;
@@ -2343,7 +2352,14 @@ export function createApiClient(
     // unsettled writes; a later item that is not a tombstone removes one.
     for (const [id, tomb] of last) {
       const ids = storedTombstones(scope, route, context);
-      if (tomb && unsettled(scope, id)) {
+      const key = keyFor(scope, id);
+      // Not after this sync saw the record exist: a read returned it, or a
+      // write to it settled (which also drops a stored tombstone).
+      const current =
+        !round.superseded.has(key) &&
+        (recordRevisions.get(key) ?? 0) ===
+          (round.startedRecords.get(key) ?? 0);
+      if (tomb && current && unsettled(scope, id)) {
         if (!ids.has(id)) changed = true;
         ids.add(id);
       } else if (ids.delete(id)) changed = true;
@@ -2562,7 +2578,10 @@ export function createApiClient(
     const stored = feedTombstones.get(scope)?.ids;
     if (stored)
       for (const id of records.keys())
-        if (stored.delete(id)) sync.tombstonesChanged = true;
+        if (stored.delete(id)) {
+          sync.tombstonesChanged = true;
+          sync.superseded.add(keyFor(scope, id));
+        }
 
     // Undecided by this sync's GETs: the feed read at the end may decide.
     const undecided = (found: Evidence | undefined): boolean =>
@@ -2611,7 +2630,10 @@ export function createApiClient(
       if (found.evidence === 'filtered' && found.record) {
         fresh.set(id, found.record);
         // It exists: a stored tombstone for it is stale.
-        if (stored?.delete(id)) sync.tombstonesChanged = true;
+        if (stored?.delete(id)) {
+          sync.tombstonesChanged = true;
+          sync.superseded.add(key);
+        }
         continue;
       }
       if (failMissing(scope, id, found, previous.get(id), released))
@@ -2677,7 +2699,7 @@ export function createApiClient(
   ): Promise<void> {
     const touched: { scope: string; id: string }[] = [];
     for (const { route, scope, context } of round.feeds) {
-      const feed = await readFeed(route, scope, context, budget);
+      const feed = await readFeed(route, scope, context, budget, round);
       for (const record of round.undecided) {
         if (record.scope !== scope) continue;
         // A write to the record settled since the check began: a later
@@ -2763,6 +2785,8 @@ export function createApiClient(
       feeds: [],
       undecided: [],
       tombstonesChanged: false,
+      superseded: new Set(),
+      startedRecords,
     };
     const changed = new Set<string>();
     for (const snapshot of result.collections) {
