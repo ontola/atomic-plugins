@@ -208,13 +208,15 @@ Checks:
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
-## Reviewed standalone pagination variants
+## Reviewed standalone pagination overlays
 
-These replacements use explicit operation selections and locate the returned
-item arrays through per-operation `response.envelope.itemsField` overrides.
-They add new `pagination-v2` filenames for the same pinned OADs; old files and
-dated catalog selections are unchanged. Select a v2 file instead of its v1
-variant when composing that provider's document.
+These overlays use explicit operation selections and locate the returned
+item arrays through `response.envelope.itemsField`. Replacements use new
+`pagination-v2` filenames for the same pinned OADs; first overlays for a new
+OAD revision use `pagination`. Old files and dated catalog selections are
+unchanged. Select a v2 file instead of its v1 variant when composing that
+provider's document; the new services can be composed with their pinned OAD
+directly.
 
 | Variant | Declared coverage | Sources |
 | --- | --- | --- |
@@ -222,6 +224,9 @@ variant when composing that provider's document.
 | [DigitalOcean v2](APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 39 collections declaring a next link and item array in the pinned OAD. Includes droplets, projects, and repository listings. | [Links and pagination](https://docs.digitalocean.com/reference/api/reference/public-apis/) |
 | [Notion v2](APIs/notion.com/2026-03-11/pagination-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Three list operations: POST search/data-source query and GET views. `results` envelopes, with distinct body and query cursor fields. | [Pagination](https://developers.notion.com/reference/intro#pagination), [Search](https://developers.notion.com/reference/post-search) |
 | [Spotify v2](APIs/spotify.com/1.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 19 single-collection reads, including nested albums/artists/categories/playlists and top-level items. | [API calls](https://developer.spotify.com/documentation/web-api/concepts/api-calls), [Categories](https://developer.spotify.com/documentation/web-api/reference/get-categories), [Followed artists](https://developer.spotify.com/documentation/web-api/reference/get-followed), [Recently played](https://developer.spotify.com/documentation/web-api/reference/get-recently-played) |
+| [Intercom](APIs/intercom.com/2.16/pagination-4a302a4352fcb52ab0735f4781376c28913d8028-overlay.yaml) | Eight cursor operations: five GET lists and POST contacts/conversations/tickets searches. Explicit `data`, `conversations`, `events` or `tickets` envelopes. | [Pagination](https://developers.intercom.com/docs/build-an-integration/learn-more/rest-apis/pagination), [2.16 changelog](https://developers.intercom.com/docs/references/changelog) |
+| [Mailchimp](APIs/mailchimp.com/3.0.91/pagination-b6b0af39fa9d35f81fbea6b7962cc6dea857e889-overlay.yaml) | 56 GET collections with declared `count`, `offset`, `total_items` and a single item array. Includes lists/members, campaigns, reports and commerce. | [Pagination and partial responses](https://mailchimp.com/developer/marketing/docs/methods-parameters/#pagination), [Lists](https://mailchimp.com/developer/marketing/api/lists/get-lists-info/) |
+| [HubSpot owners](APIs/hubspot.com/crm-owners/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | One owner collection at the pinned OAD's `/crm/owners/2026-03`, using `paging.next.after` and `results`. | [Owner pagination migration](https://developers.hubspot.com/changelog/sunset-v2-owners-api), [Pinned request and response schemas](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/crm-owners/2026-03/openapi.yaml) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -257,8 +262,29 @@ seven independently paged collections; recommendations have no next link.
 The variant targets the pinned 2022-11-15 OAD, and current Spotify access modes
 and deprecated endpoints still need separate live evidence.
 
-These are documentation and composition checks as of 2026-10-02, not live
-provider certification. The metadata follows the
+Intercom separates query cursors from the search body's nested
+`pagination.starting_after` and `pagination.per_page` fields. Both schemes
+read `pages.next.starting_after` and stop when the next cursor is absent.
+The pinned contacts GET omits pagination query parameters, so it is excluded;
+company reads and activity-log searches have different request shapes.
+No request/response schema repair is made in this overlay.
+
+Mailchimp uses zero-based offsets and `total_items`, rather than a next URL.
+The item envelope varies by collection. Keep that array and `total_items`
+when using `fields` or `exclude_fields`; filtering these out prevents correct
+traversal. Mailchimp's original OAD fails standard OpenAPI validation because
+it declares a boolean default for a string field (`notify_on_subscribe`).
+The regression checks the unchanged source error and preserves its entire
+standard contract; the overlay adds only pagination metadata. The audience
+contacts endpoint uses a cursor and is excluded; activity-feed lacks a total count, and landing pages lacks an offset. A single
+abuse-report read declares count/offset but has no item array and is excluded.
+HubSpot owner reads keep their email and archived filters when returning the
+opaque `paging.next.after` token as `after`. The individual owner read is
+outside the selection; the overlay preserves the OAD's versioned path.
+
+These are documentation and composition checks as of 2026-10-02 (Slack,
+DigitalOcean, Notion and Spotify) and 2026-10-05 (Intercom, Mailchimp and HubSpot),
+not live provider certification. The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
 
@@ -266,10 +292,14 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the four pinned OADs. CI uses the same full-history
+Omit `--directory` to download the seven pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
+Nested request body fields are checked segment by segment. Use the pinned
+`requirements-identity-tests.txt` dependencies: openapi-spec-validator 0.7.2
+fixes the older validator's rejection of required properties defined inside
+`oneOf`, as used by Intercom's data-attribute schema.
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
 
