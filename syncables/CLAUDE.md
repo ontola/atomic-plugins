@@ -182,7 +182,13 @@ Data flows through four stages, each its own directory under `src/`:
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
-   `filtered`, else `unknown`; budget spent means unchecked (held, a miss).
+   `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
+   `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
+   The declaration is dropped for a collection a `selection` narrows past its
+   `x-list-query`, and an operation-level one counts only without a fixed
+   query or body. An update in flight when `holdMissing` ran gets
+   `holdIfQueued` (not stored) and is held if its outcome leaves it queued.
+   `failWrite` and the waiting-path `discard` wake a removed head's drain.
    `deleted`/`unknown` fail the head and each following held update
    (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
    `wakers`); `filtered` takes the returned record as confirmed (conflicts

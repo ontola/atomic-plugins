@@ -78,6 +78,19 @@ Placed under `x-completeness` on a CRUD Causality Collection Object, or on
 the Operation Object of an operation that lists the collection. When both are
 present, the Collection Object's applies.
 
+On a Collection Object, the declaration covers reads of that collection as
+the document defines it. CRUD Causality's Collection Object has no field for
+fixed query parameters or request bodies; a consumer that defines a
+collection with such values through its own extension (syncables'
+`x-list-query` and `x-list-body`, for example) applies a Collection Object's
+declaration to reads with exactly those values. On an Operation Object, the
+declaration covers only a read that sends no query parameter and no request
+body beyond what the operation requires (its path parameters). Several
+collections can share one list URL with different fixed queries, and a
+declaration on the shared operation says nothing about any of them. A read
+that sends any further narrowing parameter, such as a user's filter
+selection, is not a complete read (§3) under either placement.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `absent` | `deleted` \| `removed` | **Yes** | What it means when an object that was a member is absent from a complete read. See §4.2. |
@@ -142,10 +155,13 @@ components:
 
 An (invented) issue tracker whose `GET /projects/{projectId}/issues` returns
 open issues only by default declares no Completeness Object for that
-collection. If a fixed query parameter such as `state=all` makes the read
-return every issue of the project, a collection defined with that parameter
-can declare `absent: removed` when issues can also be moved to another
-project, and `absent: deleted` only when they cannot.
+collection. CRUD Causality cannot define a collection with a fixed query
+parameter such as `state=all`; a consumer extension can (syncables'
+`x-list-query`). For a collection defined that way, the read returns every
+issue of the project, and its Collection Object can declare
+`absent: removed` when issues can also be moved to another project, and
+`absent: deleted` only when they cannot. The same declaration on the list
+operation would not apply to that collection (§4.1).
 
 ## 7. Validation
 
@@ -183,7 +199,9 @@ A conforming consumer:
 ## Reference Implementation
 
 [`syncables`](../../../syncables/README.md#records-a-refresh-no-longer-returns)
-reads `absent: deleted` (on the Collection Object, or on the list operation)
-to treat a record missing from a complete refresh as deleted without reading
-it; `removed`, or no declaration, makes it read the record first. Not
-verified against a real provider.
+reads `absent: deleted` (on the Collection Object, or on the list operation
+of a collection without a fixed `x-list-query` or `x-list-body`) to treat a
+record missing from a complete refresh as deleted without reading it. A
+selection that adds or changes a query parameter of the collection, `removed`,
+or no declaration makes it read the record first. Not verified against a real
+provider.

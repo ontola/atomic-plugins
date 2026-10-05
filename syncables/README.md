@@ -361,9 +361,13 @@ update that is not in flight, the client looks for evidence:
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'` | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
 `x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
-read from the collection's CRUD Causality definition, else from its list
-operation (which also serves a document without `crudResources`). `absent: removed`, like no
-declaration, leads to a GET. A wrong `deleted` declaration makes filtered
+read from the collection's CRUD Causality definition, which covers its fixed
+`x-list-query`/`x-list-body`, else from its list operation, which counts only
+for a collection with neither (the operation may serve several collections;
+this also serves a document without `crudResources`). A `selection` that adds
+or changes a query parameter of the collection makes its reads narrower than
+the declaration, so it is not used for that collection. `absent: removed`,
+like no declaration, leads to a GET. A wrong `deleted` declaration makes filtered
 records count as deleted; no overlay declares one yet, and the behaviour has
 not been verified against a real provider.
 
@@ -372,7 +376,10 @@ authentication, the conditional-request cache and `storeResponse`, and counts
 against the same budget as the sync's read (`limits`: requests, time and 429
 retries). It runs after all collections are read, so it gets what the read
 left. Records the budget does not cover are not checked in that sync; their
-updates stay held and the next sync checks them. A held update that is the
+updates stay held and the next sync checks them. A 429 counts as the budget
+being spent too: one whose `Retry-After` reaches past the read's deadline,
+and any 429 the budget hands back (it waits out a usable `Retry-After` up to
+`limits.maxRetries` times, and returns a 429 without one at once). A held update that is the
 first queued write of its record fails after three syncs that did not release
 it, with `lastError` "Waiting for a complete refresh", as a restored update
 does ([below](#durable-outbox-and-restarts)).
@@ -380,7 +387,9 @@ does ([below](#durable-outbox-and-restarts)).
 Only the first queued write of a record is failed, and only when no earlier
 write of the record is in flight. An update already in flight when the read
 shows its record missing is left to its response (a 404 makes it `failed`,
-see [Failure classes](#failure-classes)). The held updates behind it wait for
+see [Failure classes](#failure-classes)). If that response leaves it queued
+(a `retry` answer such as a 503, or `blocked`), it is held too and is not
+resent before a sync checks the record. The held updates behind it wait for
 that response and then for the next sync, which checks the record if it is
 still missing; they are not sent when the in-flight one settles. Updates
 held behind another queued write (a delete, say) likewise wait until they
