@@ -1,6 +1,6 @@
 # OpenAPI Deletion Feeds Extension
 
-**Spec version:** 0.1.0-draft
+**Spec version:** 0.2.0-draft
 
 ---
 
@@ -26,13 +26,23 @@ returns the feed, how to recognise a tombstone and which object it is about,
 and, optionally, the cursor that limits a read to changes since the previous
 one.
 
+Some APIs keep a deleted object readable: its own read answers 2xx with a
+marker instead of 404 (Google Calendar's `status: cancelled`). A second
+field, `x-read-tombstone` (§4.4), on a CRUD Causality Resource Object (§4.1
+there) or on the Operation Object of the resource's `read` operation,
+declares that marker, so that such an answer reports the deletion. A
+document can declare it with or without a feed. It is part of this
+extension rather than a sibling one because it is a Tombstone Object
+(§4.3) and changes what §4.3 and §5 say about the object's own read; a
+separate extension would have to amend both.
+
 ### 1.1 Shapes in real APIs
 
 The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs, and no overlay declares `x-deletion-feed`.
+APIs, and no overlay declares `x-deletion-feed` or `x-read-tombstone`.
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
@@ -50,8 +60,11 @@ transaction's own read answers 404 or 410 (§4.3); that is neither documented
 nor verified, as for Box below. The others do not fit (yet):
 
 * Google Calendar's cancelled events are returned by the event's own `get`
-  and can be restored, so they fail §4.3's test (the object's read answers
-  404 or 410).
+  (a 2xx with `status: cancelled`), and an organizer's can be restored. They
+  fit §4.3 only when the event resource declares that marker in
+  `x-read-tombstone` (§4.4). Whether its event list then fits
+  `x-deletion-feed` as well is not settled here (§8 lists its `showDeleted`
+  parameter), and neither declaration has live evidence.
 * Asana's `GET /events` needs the required query parameter `resource`; fixed
   query parameters of a feed are not covered (§8), so a consumer that sends
   only the cursor gets an error.
@@ -86,6 +99,22 @@ components:
             tombstone:                # Tombstone Object (§4.3)
               field: deleted
               values: [true]
+```
+
+A resource whose own read answers 2xx for a deleted object (an invented
+calendar, §7.4):
+
+```yaml
+components:
+  crudResources:
+    event:
+      identity:
+        urlTemplate: /calendars/{calendarId}/events/{eventId}
+        bindings:
+          eventId: { field: id }
+      x-read-tombstone:               # Tombstone Object (§4.3), see §4.4
+        field: status
+        values: [cancelled]
 ```
 
 ## 3. Conventions
@@ -162,9 +191,59 @@ cursor; otherwise the consumer discards its cursor and the next read has none.
 
 A tombstone has the meaning `absent: deleted` has in Collection Completeness
 §4.2: the object no longer exists, and the resource's `read` operation, if it
-has one, answers 404 or 410 for it. A state that keeps the object readable
-through its own URL (archived, in a trash it can be restored from) is not a
-deletion, and its marker MUST NOT be declared as a tombstone value.
+has one, answers 404 or 410 for it, or a read tombstone (§4.4) when the
+resource declares `x-read-tombstone`. A state in which the object's read
+still answers 2xx without a read tombstone (archived, in a trash it can be
+restored from) is not a deletion, and its marker MUST NOT be declared as a
+tombstone value.
+
+### 4.4 Read Tombstones
+
+A Tombstone Object (§4.3) placed under `x-read-tombstone` on a CRUD
+Causality Resource Object (§4.1 there), or on the Operation Object of the
+resource's `read` operation (the `GET` of its `identity.urlTemplate`). When
+both are present, the Resource Object's applies. It is not placed on a
+Collection Object: the read belongs to the resource, and every collection of
+the resource shares it.
+
+A _read tombstone_ is a 2xx response to the resource's `read` operation
+whose body is a JSON object about the object read (its identity field, the
+one `identity.bindings` binds to the template variable of the object's own
+identity, holds the value that was read) and whose value at the Tombstone
+Object's `field` (a dot-path into that body) equals one of its `values`
+(same JSON type and value). A 2xx response about the object without that
+value is the object, as for any read.
+
+By declaring `x-read-tombstone`, the document states:
+
+* a read tombstone reports that the object was deleted when the read was
+  made: it has the meaning of a tombstone (§4.3), as a 404 or 410 would;
+* the provider documents the marked state as the object's deletion. A state
+  it documents as something else (archived, hidden, completed, moved to a
+  trash) MUST NOT be declared, even when the collection's list leaves the
+  object out.
+
+The declaration does not say whether a deleted object can be restored.
+Providers that keep a deleted object readable often allow it (Google
+Calendar's organizers can restore a cancelled event, §1.1), so a consumer
+treats every read tombstone as possibly restorable:
+
+* A read tombstone is the object's state at that read only. A later read of
+  the object that answers 2xx without the marker, a later complete read of
+  the collection that returns the object, or a later feed item about it that
+  is not a tombstone supersedes it.
+* A consumer SHOULD NOT keep a read tombstone in place of reading the object
+  again, as §5 allows for a feed tombstone: reading again is the same
+  request, and shows a restore.
+* A consumer SHOULD NOT send a write it queued before the read tombstone to
+  the object without its user's or application's decision. On a restorable
+  state the write may restore the object, or change a deleted one, and
+  neither is what the write was made for.
+* Restoring an object is an ordinary write that the provider documents; this
+  extension does not describe it.
+
+There is no field that says a state is restorable: the rules above hold
+either way, so it would change nothing a consumer does.
 
 ## 5. Relation to CRUD Causality and Collection Completeness
 
@@ -181,20 +260,26 @@ complete read of the collection was deleted SHOULD use:
 2. The last item about the object in a feed read: a tombstone means the
    object was deleted when the read was made. This holds whatever the
    collection's `x-completeness` says, and without one.
-3. The object's own `read` operation.
+3. The object's own `read` operation: a 404, a 410 or a read tombstone
+   (§4.4) means it was deleted; another 2xx response about the object means
+   it exists.
+
+For a resource that declares `x-read-tombstone`, the 404 or 410 that
+`absent: deleted` stands for (Collection Completeness §4.2) includes a read
+tombstone.
 
 A tombstone says nothing about what happened after its feed read: the
 object can be restored, or recreated with the same identity. A consumer
 MAY read the object first and use a feed read made after that only for
 objects whose read did not decide (no answer, or one other than 404, 410 or
-a 2xx with the object). A consumer MAY keep a tombstone from an earlier feed
+a 2xx with the object, a read tombstone included). A consumer MAY keep a tombstone from an earlier feed
 read and use it in place of reading the object, but only until any of these
 supersedes it:
 
 * a later feed read has a later item about the object that is not a
   tombstone;
-* a later read of the object answers 2xx with the object, or a later
-  complete read of the collection returns it;
+* a later read of the object answers 2xx with the object, other than a read
+  tombstone, or a later complete read of the collection returns it;
 * the API accepts a later write to the object with a 2xx.
 
 A consumer SHOULD read the feed again before it relies on a kept tombstone,
@@ -231,10 +316,20 @@ actions:
         tombstone: { field: deleted, values: [true] }
 ```
 
+And for a resource whose own read returns tombstones:
+
+```yaml
+actions:
+  - target: $.components.crudResources.event
+    update:
+      x-read-tombstone: { field: status, values: [cancelled] }
+```
+
 An overlay author SHOULD have evidence for the declaration (provider
 documentation, or observed behaviour) and SHOULD cite it in the overlay's
 `description`. A wrong tombstone value makes a consumer treat existing
-objects as deleted.
+objects as deleted. For `x-read-tombstone`, that evidence includes the
+provider documenting the marked state as deletion (§4.4).
 
 ## 7. Examples
 
@@ -292,6 +387,34 @@ x-deletion-feed:
   cursor: { parameter: since, responseField: next }
 ```
 
+### 7.4 An item read that returns tombstones
+
+An invented calendar API whose `GET /calendars/{calendarId}/events/{eventId}`
+answers 200 with `{ "id": "<eventId>", "status": "cancelled" }` for a deleted
+event, whose documentation calls that state "cancelled (deleted)", and whose
+event list leaves cancelled events out:
+
+```yaml
+components:
+  crudResources:
+    event:
+      identity:
+        urlTemplate: /calendars/{calendarId}/events/{eventId}
+        bindings:
+          eventId: { field: id }
+      x-read-tombstone: { field: status, values: [cancelled] }
+      collections:
+        events:
+          urlTemplate: /calendars/{calendarId}/events
+```
+
+A consumer that no longer finds an event in a complete read of `events`
+reads it: a 200 with `status: cancelled` means it was deleted, a 200 with
+another status means the list only leaves it out. A later 200 with another
+status, after a restore, supersedes the read tombstone (§4.4). Google
+Calendar's documents describe a similar `get` (§1.1); this example is not a
+declaration for it.
+
 ## 8. Not covered
 
 * Cursors the API does not return: a time the consumer chooses itself
@@ -301,10 +424,11 @@ x-deletion-feed:
 * Feeds whose items come newest first.
 * Cursors in a header or a request body, and fixed query parameters that the
   feed needs (Asana's required `resource`, Google Calendar's `showDeleted`).
-* Tombstones for objects that stay readable through their own `read`
-  operation (Google Calendar returns a cancelled event from its `get`, and
-  it can be restored): §4.3 does not count them as deletions, so Google
-  Calendar's event list does not fit this version.
+* Tombstones in responses other than the `read` operation's: a list read
+  that returns deleted objects with the marker (Google Calendar's
+  `showDeleted`), or a write answered 2xx with one. `x-read-tombstone`
+  (§4.4) is about the `read` operation only.
+* Whether a deleted object can be restored, and how (§4.4).
 * Restores: an item after a tombstone that is not one is only "not a
   tombstone"; this version does not say the object exists again.
 
@@ -317,7 +441,10 @@ A conforming document:
 * MUST NOT declare a tombstone value for a state in which the object remains
   readable through its own URL (§4.3);
 * MUST NOT declare a feed whose items about one object are not oldest first
-  (§4.1).
+  (§4.1);
+* MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
+  NOT declare in it a state that the provider does not document as the
+  object's deletion (§4.4).
 
 A conforming consumer:
 
@@ -328,7 +455,12 @@ A conforming consumer:
 * MAY treat an object as deleted when the last item about it in a feed read
   is a tombstone;
 * MUST NOT treat an object as existing because a feed read has no tombstone
-  for it, other than as §5 allows.
+  for it, other than as §5 allows;
+* MAY treat an object as deleted when its read answers a read tombstone
+  (§4.4), and MUST NOT count a 2xx response as one unless its body is about
+  the object read;
+* SHOULD NOT keep a read tombstone in place of reading the object again
+  (§4.4).
 
 ## Reference Implementation
 
@@ -344,7 +476,21 @@ item about the record that is not a tombstone in a complete read supersedes
 it, and a failed or incomplete read leaves it standing (§5). Otherwise it
 reads the record, and when that read did not decide, uses the tombstone of
 this sync's feed read. It keeps tombstones only for records with unsettled
-writes, and drops one when a read returns the record or a write to it is
-answered with a 2xx. It does not use the "not deleted" case of §5. Cursors in a
-header or body, and the other cases in §8, are not implemented. Not verified
-against a real provider.
+writes, and drops one when a read returns the record (not a read tombstone)
+or a write to it is answered with a 2xx. It does not use the "not deleted"
+case of §5. Cursors in a header or body, and the other cases in §8, are not
+implemented.
+
+It reads `x-read-tombstone` (on the CRUD Resource Object, else on the GET
+operation of the item path) in its read of a missing record: a 2xx whose
+body has the record's identity and the marker makes the record deleted, with
+that GET's status, where it would otherwise be found to exist. That read
+comes in the same place as any read of the record: after
+`x-completeness: { absent: deleted }` and a kept feed tombstone, and before
+this sync's feed read. It does not keep read tombstones: the next check of
+the record reads it again. A record found deleted this way is handled as for
+any deletion: the held updates at the head of its queue fail, and are sent
+only if the caller retries them. It does not look for the marker in list
+reads or write responses.
+
+Not verified against a real provider.

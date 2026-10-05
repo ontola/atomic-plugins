@@ -163,11 +163,14 @@ export interface AuthBlock {
  * - `deleted`: the provider deleted it. The API document declares that a
  *   record absent from a complete read of the collection was deleted
  *   (`x-completeness: { absent: deleted }`), a GET of the record answered
- *   404 or 410, or the collection's deletion feed (`x-deletion-feed`)
+ *   404 or 410, or 2xx with the record and the resource's declared
+ *   read-tombstone marker (`x-read-tombstone`), or the collection's
+ *   deletion feed (`x-deletion-feed`)
  *   reported it with a tombstone: in an earlier sync (stored, used before
  *   the GET), or in this sync's feed read when the GET did not decide.
  * - `filtered`: it still exists; the list just does not return it. A GET of
- *   the record answered 2xx with the record.
+ *   the record answered 2xx with the record, without a declared
+ *   read-tombstone marker.
  * - `unknown`: neither could be told: the GET answered another status, its
  *   2xx body did not hold the record, it failed, or no GET was made (the
  *   resource declares no item GET, or `missingRecordChecks` is `'none'`).
