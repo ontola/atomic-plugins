@@ -795,6 +795,17 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: A queued update (PUT or PATCH) whose record a complete
+  refresh no longer returns is held rather than sent on its last known copy,
+  in memory as after a restart; the client checks the record, within the
+  sync's read budget, through the collection's `x-completeness` declaration
+  (draft Collection Completeness extension) or a GET of the record, and fails
+  the update (`missingRecord: 'deleted'` or `'unknown'`) or sends it on the
+  returned record (`filtered`). `onMissingRecord` reports the evidence;
+  `missingRecordChecks` (`'pending'`, `'all'`, `'none'`) sets which records
+  are read. Behaviour change for restored updates: a PATCH is no longer sent
+  on a missing record, and a PUT the GET finds is now sent instead of failed.
+
 - **0.19.0**: Shared browser/Node local-first client, resource traversal
   and pagination; injected read/write transports; constructor and Node
   environment credentials with supplied auth adapters; optional original
@@ -819,16 +830,6 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `Retry-After` lengthens the retry delay up to `retry.maxRetryAfterMs`
   (default 1 hour). `pendingWrites()` entries
   gain `lastStatus`, and `lastError` includes a response body excerpt.
-  A queued update (PUT or PATCH) whose record a complete refresh no longer
-  returns is held rather than sent on its last known copy, in memory as
-  after a restart; the client checks the record, within the sync's read
-  budget, through the collection's `x-completeness` declaration (draft
-  Collection Completeness extension) or a GET of the record, and fails the
-  update (`missingRecord: 'deleted'` or `'unknown'`) or sends it on the
-  returned record (`filtered`). `onMissingRecord` reports the evidence;
-  `missingRecordChecks` (`'pending'`, `'all'`, `'none'`) sets which records
-  are read. Behaviour change for restored updates: a PATCH is no longer sent
-  on a missing record, and a PUT the GET finds is now sent instead of failed.
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with
