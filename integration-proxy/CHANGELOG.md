@@ -3,9 +3,10 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## Unreleased
+## 0.2.5
 
-Not yet published to crates.io or deployed.
+Version set; not yet published to crates.io or deployed. Publishing and
+deploying wait for Michiel's OK.
 
 - Authentication profiles (ontola/atomic-plugins#258): a catalog entry may
   select `authenticationProfile`, naming one of the composed document's
