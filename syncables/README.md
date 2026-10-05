@@ -574,7 +574,8 @@ provider (GET <path> answered <status> with a tombstone: <field> is
 <value>); not sent". `onMissingRecord` gets no `record` for it. A body with
 the marker about another id is `unknown`, as before. A declaration that does
 not parse (no `field`, `values` empty or not strings, numbers and booleans)
-is ignored.
+is ignored; when the resource's does not parse, the item GET operation's
+applies.
 
 The order of the checks does not change: `x-completeness: { absent:
 deleted }` first (no GET), then a stored feed tombstone (no GET), then the
@@ -587,7 +588,12 @@ A read tombstone is not stored, unlike a feed tombstone: a GET in a later
 check shows the record's state at that time, a restore included, where a
 kept tombstone could outlive it. An update of the record that is still held
 (a new `update()` of it is, as after any missing-record failure) is checked
-with a GET in a later sync. A provider may let a deleted record be restored (Google Calendar's
+with a GET in a later sync. One exception: when the collection also has a
+deletion feed and this sync's feed read reports the record deleted, that
+feed read stores a feed tombstone for it (its failed writes are unsettled),
+and the next check uses the stored tombstone before any GET, as described
+[above](#deletion-feeds), until a feed item that is not a tombstone, a read
+returning the record, or a 2xx write drops it. A provider may let a deleted record be restored (Google Calendar's
 documents say an organizer's cancelled events can be); a GET after the
 restore answers without the marker, so the new update is `filtered` and
 sent. The failed updates stay failed until `resolveWrite`: `retry` sends

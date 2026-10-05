@@ -230,7 +230,8 @@ treats every read tombstone as possibly restorable:
 
 * A read tombstone is the object's state at that read only. A later read of
   the object that answers 2xx without the marker, or a later complete read
-  of the collection that returns the object, supersedes it. A consumer MAY
+  of the collection that returns the object without the marker, supersedes
+  it. A consumer MAY
   also take a feed read made after it, whose last item about the object is
   not a tombstone, as superseding it.
 * A consumer SHOULD NOT keep a read tombstone in place of reading the object
@@ -280,7 +281,8 @@ object, but only until any of these supersedes it:
 * a later feed read has a later item about the object that is not a
   tombstone;
 * a later read of the object answers 2xx with the object, other than a read
-  tombstone, or a later complete read of the collection returns it;
+  tombstone, or a later complete read of the collection returns it without
+  a read tombstone's marker;
 * the API accepts a later write to the object with a 2xx.
 
 A consumer SHOULD read the feed again before it relies on a kept tombstone,
@@ -439,8 +441,8 @@ A conforming document:
 
 * MUST name, in `operationId`, a `GET` operation of the document;
 * MUST give `tombstone.values` at least one value;
-* MUST NOT declare a tombstone value for a state in which the object remains
-  readable through its own URL (§4.3);
+* MUST NOT declare a tombstone value for a state in which the object's read
+  still answers 2xx without a read tombstone (§4.3, §4.4);
 * MUST NOT declare a feed whose items about one object are not oldest first
   (§4.1);
 * MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
@@ -490,7 +492,12 @@ comes in the same place as any read of the record: after
 `x-completeness: { absent: deleted }` and a kept feed tombstone, and before
 this sync's feed read; an item in that feed read that is not a tombstone
 does not supersede it (it does not use that MAY of §4.4). It does not keep
-read tombstones: the next check of the record reads it again. A record
+read tombstones as such. When the collection also has a feed, though, the
+feed read at the end of that sync keeps a feed tombstone for the record (its
+failed writes are unsettled) if the feed reports it, and the next check uses
+that kept tombstone before any read, as above. Without one, the next check
+of the record reads it again. When the resource's declaration does not
+parse, it uses the operation's. A record
 found deleted this way is handled as for any deletion: the held updates at
 the head of its queue fail, and are sent only if the caller retries them.
 It does not look for the marker in list reads or write responses.

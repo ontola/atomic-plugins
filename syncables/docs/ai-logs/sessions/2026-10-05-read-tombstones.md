@@ -44,3 +44,21 @@ PATCH, the placements, malformed declarations, the in-flight head, the
 budget, no storing with a restore afterwards, restarts, and precedence
 against `x-completeness` and stored and feed tombstones. README, CLAUDE.md
 and the Unreleased changelog entry were updated.
+
+## Turn 2
+
+**Human (via the oversight session):** Review of PR #330: §9 still forbids
+tombstone values for states that stay readable, contradicting §4.3/§4.4; the
+supersede rules should require a list read that returns the object without
+the marker; Collection Completeness §4.2 should mention read tombstones;
+"not stored" overstates, since a feed read can store a feed tombstone for
+the failed record; and a malformed resource-level declaration should fall
+back to the operation's.
+
+**Assistant:** Reworded §9 and the two supersede rules, added the note to
+Collection Completeness §4.2, and described the feed-stored tombstone in the
+README, CLAUDE.md and the reference implementation note.
+`declaredReadTombstone` now falls back to the item GET operation's
+declaration when the resource's does not parse. Two tests added: the
+fallback, and a feed tombstone stored after a read-tombstone failure being
+used before any GET in the next sync.

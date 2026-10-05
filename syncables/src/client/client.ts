@@ -896,7 +896,8 @@ function declaredDeletionFeed(
  * The draft Deletion Feeds extension's `x-read-tombstone` for a
  * collection's resource: from its CRUD Resource Object, else from the GET
  * operation of its item URL. Every collection of the resource shares it. A
- * declaration that does not parse is ignored.
+ * declaration that does not parse is ignored; when the resource's does not
+ * parse, the operation's applies.
  */
 function declaredReadTombstone(
   document: OpenApiDocument,
@@ -909,11 +910,11 @@ function declaredReadTombstone(
   const read = collection.itemUrl
     ? document.paths[collection.itemUrl]?.get
     : undefined;
-  const declared =
-    isRecord(resource) && resource['x-read-tombstone'] !== undefined
-      ? resource['x-read-tombstone']
-      : read?.['x-read-tombstone'];
-  return declared === undefined ? undefined : parseTombstone(declared);
+  return (
+    parseTombstone(
+      isRecord(resource) ? resource['x-read-tombstone'] : undefined,
+    ) ?? parseTombstone(read?.['x-read-tombstone'])
+  );
 }
 
 function clientRoutes(

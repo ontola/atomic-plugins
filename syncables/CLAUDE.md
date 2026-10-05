@@ -183,8 +183,10 @@ Data flows through four stages, each its own directory under `src/`:
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
-   on the CRUD Resource Object else the item GET operation, a Tombstone
-   Object of the deletion-feeds draft; not stored) `deleted`, other 2xx
+   on the CRUD Resource Object, else, or when that one does not parse, the
+   item GET operation, a Tombstone Object of the deletion-feeds draft; not
+   stored itself, though with a feed the end-of-sync feed read may store a
+   feed tombstone for the failed record) `deleted`, other 2xx
    with the record `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
    `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
    For a collection with a deletion feed (`x-deletion-feed`,

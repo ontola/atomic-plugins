@@ -458,6 +458,22 @@ describe('read tombstones: the GET of a missing record', () => {
     expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
   });
 
+  it("falls back to the item GET operation's declaration when the CRUD Resource Object's does not parse", async () => {
+    const { client, fake } = await edited({
+      doc: tombstoneDocument({
+        marker: { field: 'status', values: [] },
+        operationMarker: CANCELLED,
+      }),
+    });
+    fake.cancel('1');
+    await client.sync();
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted', lastStatus: 200 },
+    ]);
+    await settle();
+    expect(fake.writes).toEqual([]);
+  });
+
   it('reads the declaration on the item GET of a legacy document without crudResources', async () => {
     const doc = prepareDocument({
       ...petsDocument,
@@ -663,6 +679,38 @@ describe('read tombstones: precedence', () => {
     ]);
     expect(client.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'deleted', lastStatus: 200 },
+    ]);
+  });
+
+  it("with a feed, keeps the feed's tombstone for the failed record, and the next check uses it before any GET", async () => {
+    const reports: MissingRecord[] = [];
+    const { client, storage, fake } = await edited({
+      doc: tombstoneDocument({ feed: true }),
+      client: { onMissingRecord: (r) => reports.push(r) },
+    });
+    fake.cancel('1');
+    await client.sync();
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted', lastStatus: 200 },
+    ]);
+    // Stored by the feed read, not by the GET: its failed write is unsettled.
+    expect(storage.outbox()).toMatchObject({
+      feedTombstones: [{ resource: 'pets', context: {}, tombstones: ['1'] }],
+    });
+    await client.update('/pets', '1', { tag: 'wolf' });
+    fake.requests.length = 0;
+    await client.sync();
+    expectFailedOlder(storage);
+    expect(fake.requests).toEqual(['list', 'feed']);
+    expect(reports.at(-1)).toEqual({
+      resource: 'pets',
+      id: '1',
+      evidence: 'deleted',
+      source: 'feed',
+    });
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted', lastStatus: 200 },
+      { state: 'failed', missingRecord: 'deleted' },
     ]);
   });
 
