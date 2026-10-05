@@ -65,9 +65,9 @@ overlay revision files remain immutable. The full Discord document composes,
 but its mixed bot-token/OAuth connection support awaits
 [atomic-plugins#258](https://github.com/ontola/atomic-plugins/issues/258).
 
-#258 (unreleased) adds authentication profiles and the catalog
-`overlays/catalog/2026-10-02-auth-profiles.json`, which selects Discord's
-user profile and becomes the next release's default. Discord connects only
+#258 (in 0.2.5, version set but not yet published) adds authentication
+profiles and the catalog `overlays/catalog/2026-10-02-auth-profiles.json`,
+which selects Discord's user profile and is 0.2.5's default. Discord connects only
 once both are live: a release with profile support, and Heroku's explicit
 `CATALOG_PATH` switched to the new catalog (or unset). 0.2.4 can load the new
 catalog and keeps refusing Discord on it. Both steps need Michiel's OK.
