@@ -13,6 +13,7 @@ import {
 } from '../pagination/request-builder.js';
 import {
   parsePaginationState,
+  readNestedField,
   setNestedField,
 } from '../pagination/response-parser.js';
 import type { PaginationSchemeObject } from '../pagination/types.js';
@@ -48,6 +49,17 @@ export class BudgetExhausted extends Error {}
 
 /** A 429's `Retry-After` reaches past the read's deadline. */
 export class RetryBeyondDeadline extends Error {}
+
+/** A page answered a non-2xx status; carries the status and the body text. */
+export class PageStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(message);
+  }
+}
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,6 +150,20 @@ export function pageItems(
   return array.filter(isRecord);
 }
 
+/** The array at a dot-path of the body (`''`: the body), its objects only. */
+function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
+  const array =
+    path === ''
+      ? body
+      : isRecord(body)
+        ? readNestedField(body, path)
+        : undefined;
+  if (!Array.isArray(array)) {
+    throw new Error(`No items array at ${path || 'the body root'}`);
+  }
+  return array.filter(isRecord);
+}
+
 /** Fills `{name}` path variables, percent-encoding each value. */
 export function bindPath(
   template: string,
@@ -165,11 +191,18 @@ export interface PageWalk {
   /** Fixed JSON body fields (POST only); the cursor is merged in per page. */
   body: Record<string, unknown>;
   pageSize?: number;
+  /**
+   * Dot-path to the items array in each body, `''` for the body itself.
+   * Without it, `pageItems` locates the array.
+   */
+  itemsField?: string;
 }
 
 export interface Page {
   url: URL;
   items: Record<string, unknown>[];
+  /** The parsed response body. */
+  body: unknown;
 }
 
 function withBody(
@@ -255,8 +288,10 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
 
     const response = await budget.send(request);
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(
+      throw new PageStatusError(
         `${request.method} ${url.pathname} responded ${response.status} (failed with status ${response.status})`,
+        response.status,
+        response.body,
       );
     }
     let body: unknown;
@@ -266,9 +301,12 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
-    const items = pageItems(body, responseSchema, scheme);
+    const items =
+      walk.itemsField === undefined
+        ? pageItems(body, responseSchema, scheme)
+        : itemsAt(body, walk.itemsField);
     itemsSoFar += items.length;
-    yield { url, items };
+    yield { url, items, body };
 
     if (!scheme) {
       return;

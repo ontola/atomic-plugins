@@ -179,7 +179,15 @@ Data flows through four stages, each its own directory under `src/`:
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
    the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
-   draft spec in `openapi-extensions/spec/collection-completeness/`), else
+   draft spec in `openapi-extensions/spec/collection-completeness/`), else a
+   tombstone in the collection's deletion feed (`x-deletion-feed`,
+   `declaredDeletionFeed`, draft spec in
+   `openapi-extensions/spec/deletion-feeds/`; `readFeed` reads it once per
+   complete sync of the scope, through the sync's `Budget` and `walkPages`,
+   from the cursor in `feedCursors`, which the outbox stores; an incomplete
+   or malformed read gives no tombstones and keeps the cursor, apart from a
+   declared expired status; not read under `absent: deleted` or
+   `missingRecordChecks: 'none'`; `source: 'feed'`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
    `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
@@ -194,8 +202,8 @@ Data flows through four stages, each its own directory under `src/`:
    `deleted`/`unknown` fail the head and each following held update
    (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
    `wakers`); `filtered` takes the returned record as confirmed (conflicts
-   checked) and releases. A record settled on during the check is left to
-   the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
+   checked) and releases. A record settled on during the check (from before
+   the feed read on) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
@@ -316,6 +324,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
+  (on the collection or list operation, `idField`, no `tombstone` field, a
+  restore after a tombstone), the GET fallback, the cursor advancing and
+  surviving a restart, paginated feeds, the budget, malformed and expired
+  reads, and precedence against `x-completeness` and the GET.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

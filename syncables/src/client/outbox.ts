@@ -7,7 +7,8 @@ import type {
 } from './client.js';
 
 /**
- * The durable outbox: one record, `{ version, records, rebuild }`, kept in a
+ * The durable outbox: one record, `{ version, records, rebuild }` (plus
+ * `feedCursors` and `authBlock` when set), kept in a
  * reserved namespace of the client's `StorageAdapter`. The whole outbox is
  * one record so that every transition (a write settling, an id remap moving
  * follow-up writes) is a single `put`, which an adapter can make atomic.
@@ -72,10 +73,24 @@ export interface StoredRebuild {
   confirmed?: Record<string, unknown>;
 }
 
+/**
+ * The cursor of a collection's deletion feed (`x-deletion-feed`), per
+ * collection and bound context: what the next feed read sends. `operation`
+ * is the feed's `operationId`; a cursor for another operation is not sent.
+ */
+export interface StoredFeedCursor {
+  resource: string;
+  context: Record<string, string>;
+  operation: string;
+  cursor: string;
+}
+
 export interface OutboxDocument {
   version: typeof OUTBOX_VERSION;
   records: StoredRecordWrites[];
   rebuild: StoredRebuild[];
+  /** Added within version 1; absent in an outbox without feed cursors. */
+  feedCursors: StoredFeedCursor[];
   /**
    * Entries this version cannot restore (malformed, or for a collection the
    * current document does not have). They are written back unchanged.
@@ -158,6 +173,18 @@ export function isStoredRebuild(value: unknown): value is StoredRebuild {
   return isTarget(value);
 }
 
+export function isStoredFeedCursor(value: unknown): value is StoredFeedCursor {
+  return (
+    isRecord(value) &&
+    typeof value['resource'] === 'string' &&
+    isStringMap(value['context']) &&
+    typeof value['operation'] === 'string' &&
+    typeof value['cursor'] === 'string' &&
+    // Not a record entry: those carry an id.
+    value['id'] === undefined
+  );
+}
+
 function isAuthBlock(value: unknown): value is AuthBlock {
   return (
     isRecord(value) &&
@@ -174,6 +201,7 @@ export function emptyOutbox(): OutboxDocument {
     version: OUTBOX_VERSION,
     records: [],
     rebuild: [],
+    feedCursors: [],
     unrestorable: [],
   };
 }
@@ -204,11 +232,15 @@ export function readOutbox(value: unknown): OutboxDocument {
   for (const entry of list('rebuild'))
     if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
     else outbox.unrestorable.push(entry);
+  for (const entry of list('feedCursors'))
+    if (isStoredFeedCursor(entry)) outbox.feedCursors.push(entry);
+    else outbox.unrestorable.push(entry);
   // Entries set aside earlier are tried again: the document may have
   // regained their collection. Malformed ones stay set aside.
   for (const entry of list('unrestorable'))
     if (isStoredRecordWrites(entry)) outbox.records.push(entry);
     else if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
+    else if (isStoredFeedCursor(entry)) outbox.feedCursors.push(entry);
     else outbox.unrestorable.push(entry);
   // Added within version 1: an outbox without it was not blocked. A
   // malformed one still blocks, so writes wait for authRenewed().
