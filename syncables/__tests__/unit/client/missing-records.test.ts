@@ -999,3 +999,140 @@ describe('missing records: review findings on #324', () => {
     expect(fake.pets.get('1')).toMatchObject({ name: 'Rex 2' });
   });
 });
+
+describe('missing records: holdIfQueued nits on #324', () => {
+  /**
+   * rex and tom. PUTs are counted; the first waits for `answer()` and then
+   * answers 503; later ones succeed.
+   */
+  function inFlight(): {
+    client: ApiClient;
+    storage: CrashableStorage;
+    fake: ReturnType<typeof provider>;
+    puts: () => number;
+    answer: () => void;
+    listRex: (listed: boolean) => void;
+  } {
+    let listed = true;
+    let puts = 0;
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const fake = provider([rex, tom], {
+      listed: (pet) => listed || pet['id'] !== '1',
+      behave: () => {
+        puts += 1;
+        return puts === 1 ? response({ error: 'invented' }, 503) : undefined;
+      },
+    });
+    const storage = new CrashableStorage();
+    const client = createApiClient(crudDocument(), {
+      storage,
+      transport: async (r) => {
+        if (r.method === 'PUT' && puts === 0) await gate;
+        return fake.transport(r);
+      },
+      retry: { baseDelayMs: 50 },
+    });
+    return {
+      client,
+      storage,
+      fake,
+      puts: () => puts,
+      answer: open,
+      listRex: (value): void => {
+        listed = value;
+      },
+    };
+  }
+
+  it('does not hold an in-flight update on an earlier sync once a later sync returns its record', async () => {
+    const t = inFlight();
+    await t.client.sync();
+    await t.client.update('/pets', '1', { name: 'Rex 2' });
+    await settle();
+    expectFailedOlder(t.storage);
+    // Sync A lacks rex while the update is in flight.
+    t.listRex(false);
+    await t.client.sync();
+    expectFailedOlder(t.storage);
+    // Sync B has rex again, the update still in flight.
+    t.listRex(true);
+    await t.client.sync();
+    expectFailedOlder(t.storage);
+    t.answer();
+    // The 503 is retried after the backoff, without a third sync.
+    await idle(t.client);
+    expectFailedOlder(t.storage);
+    expect(t.puts()).toBe(2);
+    expect(t.fake.itemGets).toEqual([]);
+    expect(t.fake.pets.get('1')).toMatchObject({ name: 'Rex 2' });
+  });
+
+  it('lets resolveWrite retry on a waiting update also release the in-flight one marked for holding', async () => {
+    const t = inFlight();
+    await t.client.sync();
+    await t.client.update('/pets', '1', { name: 'Rex 2' });
+    await settle();
+    await t.client.update('/pets', '1', { tag: 'wolf' });
+    t.listRex(false);
+    await t.client.sync();
+    expectFailedOlder(t.storage);
+    expect(t.client.pendingWrites()[1]).toMatchObject({
+      awaitingRefresh: true,
+    });
+    await t.client.resolveWrite('/pets', '1', { action: 'retry' });
+    expectFailedOlder(t.storage);
+    t.answer();
+    // u1's 503 does not hold it again: both go out without another sync.
+    await idle(t.client);
+    expectFailedOlder(t.storage);
+    expect(t.puts()).toBe(3);
+    expect(t.fake.itemGets).toEqual([]);
+    expect(t.fake.pets.get('1')).toMatchObject({ name: 'Rex 2', tag: 'wolf' });
+  });
+
+  it('lets resolveWrite retry on a failed update also release the in-flight one marked for holding', async () => {
+    // u0 is refused (400) and fails; u1 is then in flight.
+    let puts = 0;
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let listed = true;
+    const fake = provider([rex, tom], {
+      listed: (pet) => listed || pet['id'] !== '1',
+      behave: () => {
+        puts += 1;
+        if (puts === 1) return response({ error: 'invented' }, 400);
+        if (puts === 2) return response({ error: 'invented' }, 503);
+        return undefined;
+      },
+    });
+    const storage = new CrashableStorage();
+    const client = createApiClient(crudDocument(), {
+      storage,
+      transport: async (r) => {
+        if (r.method === 'PUT' && puts === 1) await gate;
+        return fake.transport(r);
+      },
+      retry: { baseDelayMs: 50 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { tag: 'wolf' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    await client.update('/pets', '1', { name: 'Rex 2' });
+    await settle();
+    listed = false;
+    await client.sync();
+    expectFailedOlder(storage);
+    await client.resolveWrite('/pets', '1', { action: 'retry' });
+    expectFailedOlder(storage);
+    open();
+    // u1's 503 does not hold it again; u1 and the retried u0 are sent.
+    await idle(client);
+    expectFailedOlder(storage);
+    expect(puts).toBe(4);
+    expect(fake.itemGets).toEqual([]);
+    expect(fake.pets.get('1')).toMatchObject({ name: 'Rex 2', tag: 'wolf' });
+  });
+});
