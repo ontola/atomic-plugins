@@ -8,7 +8,7 @@ import type {
 
 /**
  * The durable outbox: one record, `{ version, records, rebuild }` (plus
- * `feedCursors` and `authBlock` when set), kept in a
+ * `feedCursors`, `feedTombstones` and `authBlock` when set), kept in a
  * reserved namespace of the client's `StorageAdapter`. The whole outbox is
  * one record so that every transition (a write settling, an id remap moving
  * follow-up writes) is a single `put`, which an adapter can make atomic.
@@ -85,12 +85,25 @@ export interface StoredFeedCursor {
   cursor: string;
 }
 
+/**
+ * Ids a collection's deletion feed reported with a tombstone, per collection
+ * and bound context, kept only for records that have unsettled writes: the
+ * next sync uses them before it reads such a record.
+ */
+export interface StoredFeedTombstones {
+  resource: string;
+  context: Record<string, string>;
+  tombstones: string[];
+}
+
 export interface OutboxDocument {
   version: typeof OUTBOX_VERSION;
   records: StoredRecordWrites[];
   rebuild: StoredRebuild[];
   /** Added within version 1; absent in an outbox without feed cursors. */
   feedCursors: StoredFeedCursor[];
+  /** Added within version 1; absent in an outbox without stored tombstones. */
+  feedTombstones: StoredFeedTombstones[];
   /**
    * Entries this version cannot restore (malformed, or for a collection the
    * current document does not have). They are written back unchanged.
@@ -173,6 +186,19 @@ export function isStoredRebuild(value: unknown): value is StoredRebuild {
   return isTarget(value);
 }
 
+export function isStoredFeedTombstones(
+  value: unknown,
+): value is StoredFeedTombstones {
+  return (
+    isRecord(value) &&
+    typeof value['resource'] === 'string' &&
+    isStringMap(value['context']) &&
+    Array.isArray(value['tombstones']) &&
+    value['tombstones'].every((id) => typeof id === 'string') &&
+    value['id'] === undefined
+  );
+}
+
 export function isStoredFeedCursor(value: unknown): value is StoredFeedCursor {
   return (
     isRecord(value) &&
@@ -202,6 +228,7 @@ export function emptyOutbox(): OutboxDocument {
     records: [],
     rebuild: [],
     feedCursors: [],
+    feedTombstones: [],
     unrestorable: [],
   };
 }
@@ -235,12 +262,16 @@ export function readOutbox(value: unknown): OutboxDocument {
   for (const entry of list('feedCursors'))
     if (isStoredFeedCursor(entry)) outbox.feedCursors.push(entry);
     else outbox.unrestorable.push(entry);
+  for (const entry of list('feedTombstones'))
+    if (isStoredFeedTombstones(entry)) outbox.feedTombstones.push(entry);
+    else outbox.unrestorable.push(entry);
   // Entries set aside earlier are tried again: the document may have
   // regained their collection. Malformed ones stay set aside.
   for (const entry of list('unrestorable'))
     if (isStoredRecordWrites(entry)) outbox.records.push(entry);
     else if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
     else if (isStoredFeedCursor(entry)) outbox.feedCursors.push(entry);
+    else if (isStoredFeedTombstones(entry)) outbox.feedTombstones.push(entry);
     else outbox.unrestorable.push(entry);
   // Added within version 1: an outbox without it was not blocked. A
   // malformed one still blocks, so writes wait for authRenewed().

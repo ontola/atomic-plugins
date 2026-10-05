@@ -14,9 +14,10 @@ import {
 import { petsDocument } from '../../fixtures/pets.js';
 
 // #325: a collection's declared deletion feed (draft Deletion Feeds
-// extension, x-deletion-feed) is read once per sync, from a cursor kept in
-// the outbox, before the client GETs a record a complete refresh no longer
-// returns. Transports and data are invented.
+// extension, x-deletion-feed) is read once per sync, at its end, after the
+// GETs of records a complete refresh no longer returns, from a cursor kept
+// in the outbox. Its tombstones decide what those GETs left undecided, and
+// are kept for the next sync. Transports and data are invented.
 
 const OUTBOX = 'syncables:outbox';
 
@@ -147,9 +148,10 @@ function feedDocument(
 
 /**
  * A fake provider with a change log. `remove` deletes a pet and logs a
- * tombstone; `hide` takes it out of the list only. The feed returns the
+ * tombstone; `hidden` takes it out of the list only. The feed returns the
  * changes after the cursor (none without one) and the newest cursor, `c<n>`.
- * `feed` may answer a feed read itself.
+ * `feed` may answer a feed read itself, `item` a GET of one pet. `requests`
+ * lists every read in order: `list`, `feed`, `get <id>`.
  */
 function provider(
   initial: Pet[],
@@ -164,6 +166,7 @@ function provider(
   log: Record<string, unknown>[];
   itemGets: string[];
   feedReads: (string | null)[];
+  requests: string[];
   writes: string[];
   remove: (id: string) => void;
   lastFeedUrl?: URL;
@@ -174,6 +177,7 @@ function provider(
   const log: Record<string, unknown>[] = [];
   const itemGets: string[] = [];
   const feedReads: (string | null)[] = [];
+  const requests: string[] = [];
   const writes: string[] = [];
   const transport: Transport = async (r) => {
     const [, , collection, rawId] = r.url.pathname.split('/');
@@ -181,6 +185,7 @@ function provider(
     if (collection === 'pet-changes') {
       const since = r.url.searchParams.get('since');
       feedReads.push(since);
+      requests.push('feed');
       result.lastFeedUrl = r.url;
       const answer = hooks.feed?.(since);
       if (answer) return answer;
@@ -189,15 +194,18 @@ function provider(
     }
     if (r.method === 'GET' && id) {
       itemGets.push(id);
+      requests.push(`get ${id}`);
       const answer = hooks.item?.(id);
       if (answer) return answer;
       const pet = pets.get(id);
       return pet ? response(pet) : response({ error: 'not found' }, 404);
     }
-    if (r.method === 'GET')
+    if (r.method === 'GET') {
+      requests.push('list');
       return response(
         [...pets.values()].filter((p) => !hidden.has(String(p['id']))),
       );
+    }
     writes.push(`${r.method} ${r.url.pathname}`);
     const answer = hooks.write?.();
     if (answer) return answer;
@@ -213,6 +221,7 @@ function provider(
     log,
     itemGets,
     feedReads,
+    requests,
     writes,
     remove: (id): void => {
       pets.delete(id);
@@ -228,6 +237,19 @@ const settle = (ms = 20): Promise<void> =>
 
 const rex = { id: '1', name: 'Rex', tag: 'dog' };
 const tom = { id: '2', name: 'Tom', tag: 'cat' };
+
+const unavailable = (): TransportResponse =>
+  response({ error: 'invented' }, 503);
+
+/** Writes answer 503; with `undecided`, so do GETs of one pet (`unknown`). */
+function heldProvider(
+  options: { undecided?: boolean } = {},
+): ReturnType<typeof provider> {
+  return provider([rex, tom], {
+    write: unavailable,
+    ...(options.undecided ? { item: unavailable } : {}),
+  });
+}
 
 /**
  * A client that synced rex and tom (one feed read, no cursor yet), then
@@ -248,9 +270,7 @@ async function edited(
   storage: CrashableStorage;
   fake: ReturnType<typeof provider>;
 }> {
-  const fake =
-    options.fake ??
-    provider([rex, tom], { write: () => response({ error: 'invented' }, 503) });
+  const fake = options.fake ?? heldProvider();
   const storage = options.storage ?? new CrashableStorage();
   const client = createApiClient(options.doc ?? feedDocument(), {
     ...options.client,
@@ -273,15 +293,17 @@ async function edited(
   );
   await settle(5);
   fake.writes.length = 0;
+  fake.requests.length = 0;
   return { client, storage, fake };
 }
 
 describe('deletion feeds: a tombstone', () => {
   for (const onOperation of [false, true])
-    it(`fails every held update of a record the feed reports deleted, without a GET (declared on the ${onOperation ? 'list operation' : 'collection'})`, async () => {
+    it(`fails every held update of a record whose GET was undecided and that the feed reports deleted (declared on the ${onOperation ? 'list operation' : 'collection'})`, async () => {
       const reports: MissingRecord[] = [];
       const { client, storage, fake } = await edited({
         doc: feedDocument({ onOperation }),
+        fake: heldProvider({ undecided: true }),
         client: { onMissingRecord: (r) => reports.push(r) },
         edits: 2,
       });
@@ -289,8 +311,9 @@ describe('deletion feeds: a tombstone', () => {
       fake.remove('1');
       await client.sync();
       expectFailedOlder(storage);
+      // The feed is read last, after the GET.
+      expect(fake.requests).toEqual(['list', 'get 1', 'feed']);
       expect(fake.feedReads).toEqual([null, 'c0']);
-      expect(fake.itemGets).toEqual([]);
       expect(client.pendingWrites()).toMatchObject([
         {
           state: 'failed',
@@ -311,24 +334,41 @@ describe('deletion feeds: a tombstone', () => {
       expect(await client.get('/pets', '1')).toMatchObject({ name: 'Edit 3' });
     });
 
-  it('reads a record whose last item in the feed is not a tombstone (restored)', async () => {
-    const { client, fake } = await edited();
+  it('uses the feed for a record whose GET the budget did not cover (a 429 handed back)', async () => {
+    const fake = provider([rex, tom], {
+      write: unavailable,
+      item: () => response({ error: 'slow down' }, 429),
+    });
+    const { client, storage } = await edited({ fake });
+    fake.remove('1');
+    await client.sync();
+    expectFailedOlder(storage);
+    expect(fake.requests).toEqual(['list', 'get 1', 'feed']);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted' },
+    ]);
+  });
+
+  it('fails an undecided record as unknown when its last feed item is not a tombstone (restored)', async () => {
+    const { client, fake } = await edited({
+      fake: heldProvider({ undecided: true }),
+    });
     fake.log.push({ id: '1', state: 'deleted' }, { id: '1', state: 'active' });
     fake.hidden.add('1');
     await client.sync();
-    expect(fake.itemGets).toEqual(['1']);
-    // The GET found it: filtered, so the update stays pending.
-    expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'unknown', lastStatus: 503 },
+    ]);
   });
 
   it('treats every item as a tombstone when the declaration has no tombstone field', async () => {
     const { client, fake } = await edited({
       doc: feedDocument({ feed: { ...FEED, tombstone: undefined } }),
+      fake: heldProvider({ undecided: true }),
     });
     fake.pets.delete('1');
     fake.log.push({ id: '1' });
     await client.sync();
-    expect(fake.itemGets).toEqual([]);
     expect(client.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'deleted' },
     ]);
@@ -343,11 +383,11 @@ describe('deletion feeds: a tombstone', () => {
           tombstone: { field: 'action', values: ['deleted'] },
         },
       }),
+      fake: heldProvider({ undecided: true }),
     });
     fake.pets.delete('1');
     fake.log.push({ action: 'deleted', resource: { gid: '1' } });
     await client.sync();
-    expect(fake.itemGets).toEqual([]);
     expect(client.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'deleted' },
     ]);
@@ -355,7 +395,7 @@ describe('deletion feeds: a tombstone', () => {
 
   it("reports a record without writes from the feed with missingRecordChecks 'all'", async () => {
     const reports: MissingRecord[] = [];
-    const fake = provider([rex, tom]);
+    const fake = provider([rex, tom], { item: unavailable });
     const client = createApiClient(feedDocument(), {
       transport: fake.transport,
       missingRecordChecks: 'all',
@@ -364,23 +404,98 @@ describe('deletion feeds: a tombstone', () => {
     await client.sync();
     fake.remove('2');
     await client.sync();
-    expect(fake.itemGets).toEqual([]);
+    expect(fake.itemGets).toEqual(['2']);
     expect(reports).toEqual([
       { resource: 'pets', id: '2', evidence: 'deleted', source: 'feed' },
     ]);
   });
 });
 
+describe('deletion feeds: stored tombstones', () => {
+  it('keeps a tombstone for a record with writes, and uses it before the GET in the next sync, also after a restart', async () => {
+    const { storage, fake } = await edited({ edits: 2 });
+    const first = createApiClient(feedDocument(), {
+      storage,
+      transport: async (r) => {
+        const answer = await fake.transport(r);
+        // Deleted between the list read and the feed read.
+        if (r.url.pathname.endsWith('/pets') && r.method === 'GET')
+          fake.remove('1');
+        return answer;
+      },
+      retry: { baseDelayMs: 60_000 },
+    });
+    await first.ready();
+    await first.sync();
+    expect(fake.requests).toEqual(['list', 'feed']);
+    expect(storage.outbox()).toMatchObject({
+      feedTombstones: [{ resource: 'pets', context: {}, tombstones: ['1'] }],
+    });
+    fake.requests.length = 0;
+    const crashed = storage.crash();
+    const reports: MissingRecord[] = [];
+    const restarted = createApiClient(feedDocument(), {
+      storage: crashed,
+      transport: fake.transport,
+      onMissingRecord: (r) => reports.push(r),
+    });
+    await restarted.sync();
+    expectFailedOlder(crashed);
+    // The stored tombstone decides; no GET.
+    expect(fake.requests).toEqual(['list', 'feed']);
+    expect(reports).toMatchObject([
+      { id: '1', evidence: 'deleted', source: 'feed' },
+    ]);
+    expect(restarted.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted' },
+      { state: 'failed', missingRecord: 'deleted' },
+    ]);
+  });
+
+  it('drops a stored tombstone when a read returns the record', async () => {
+    const storage = new CrashableStorage();
+    await storage.put(OUTBOX, 'outbox', {
+      version: 1,
+      records: [],
+      rebuild: [],
+      unrestorable: [],
+      feedTombstones: [{ resource: 'pets', context: {}, tombstones: ['1'] }],
+    });
+    const fake = heldProvider();
+    const { client } = await edited({ fake, storage });
+    expect(storage.outbox()).not.toHaveProperty('feedTombstones');
+    fake.hidden.add('1');
+    await client.sync();
+    // Read with a GET (filtered), not failed on the stale tombstone.
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+  });
+
+  it('does not store tombstones of records without unsettled writes', async () => {
+    const storage = new CrashableStorage();
+    const fake = provider([rex, tom]);
+    const client = createApiClient(feedDocument(), {
+      storage,
+      transport: fake.transport,
+    });
+    await client.sync();
+    fake.remove('2');
+    await client.sync();
+    expect(storage.outbox()).not.toHaveProperty('feedTombstones');
+  });
+});
+
 describe('deletion feeds: no tombstone, no feed', () => {
-  it('reads the record with a GET when the feed has no tombstone for it', async () => {
+  it('lets the GET decide, before the feed read', async () => {
     const reports: MissingRecord[] = [];
     const { client, fake } = await edited({
       client: { onMissingRecord: (r) => reports.push(r) },
     });
     fake.hidden.add('1');
+    // A tombstone in this sync's feed does not override the GET's answer.
+    fake.log.push({ id: '1', state: 'deleted' });
     await client.sync();
-    expect(fake.feedReads).toEqual([null, 'c0']);
-    expect(fake.itemGets).toEqual(['1']);
+    expect(fake.requests).toEqual(['list', 'get 1', 'feed']);
     expect(reports).toMatchObject([
       { id: '1', evidence: 'filtered', source: 'read', status: 200 },
     ]);
@@ -449,7 +564,8 @@ describe('deletion feeds: the cursor', () => {
   });
 
   it('survives a restart: the next client reads from the stored cursor and finds the tombstone', async () => {
-    const { storage, fake } = await edited({ edits: 2 });
+    const fake = heldProvider({ undecided: true });
+    const { storage } = await edited({ fake, edits: 2 });
     // Stopped after the first sync; rex is deleted meanwhile.
     fake.remove('1');
     const crashed = storage.crash();
@@ -461,7 +577,6 @@ describe('deletion feeds: the cursor', () => {
     await restarted.sync();
     expectFailedOlder(crashed);
     expect(fake.feedReads).toEqual([null, 'c0']);
-    expect(fake.itemGets).toEqual([]);
     expect(restarted.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'deleted' },
       { state: 'failed', missingRecord: 'deleted' },
@@ -517,20 +632,22 @@ describe('deletion feeds: the cursor', () => {
     });
   });
 
-  it('keeps a stored cursor of a collection the document lacks, unchanged', async () => {
+  it('keeps stored feed state of a collection the document lacks, unchanged', async () => {
     const storage = new CrashableStorage();
-    const kept = {
+    const cursor = {
       resource: 'gone',
       context: {},
       operation: 'listGone',
       cursor: 'g1',
     };
+    const tombstones = { resource: 'gone', context: {}, tombstones: ['5'] };
     await storage.put(OUTBOX, 'outbox', {
       version: 1,
       records: [],
       rebuild: [],
       unrestorable: [],
-      feedCursors: [kept],
+      feedCursors: [cursor],
+      feedTombstones: [tombstones],
     });
     const client = createApiClient(feedDocument(), {
       storage,
@@ -541,7 +658,10 @@ describe('deletion feeds: the cursor', () => {
       unrestorable: unknown[];
       feedCursors: unknown[];
     };
-    expect(outbox.unrestorable).toEqual([kept]);
+    expect(outbox.unrestorable).toHaveLength(2);
+    expect(outbox.unrestorable).toEqual(
+      expect.arrayContaining([cursor, tombstones]),
+    );
     expect(outbox.feedCursors).toHaveLength(1);
   });
 
@@ -572,7 +692,8 @@ describe('deletion feeds: pages', () => {
     doc.paths['/pet-changes']!.get!['x-pagination'] = [{ scheme: 'token' }];
     const pages: string[] = [];
     const fake = provider([rex, tom], {
-      write: () => response({ error: 'invented' }, 503),
+      write: unavailable,
+      item: unavailable,
       feed: (since) => {
         if (since === null) return undefined;
         const url = fake.lastFeedUrl as URL;
@@ -592,7 +713,6 @@ describe('deletion feeds: pages', () => {
     fake.pets.delete('1');
     await client.sync();
     expect(pages).toEqual(['1', '2']);
-    expect(fake.itemGets).toEqual([]);
     expect(client.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'deleted' },
     ]);
@@ -603,76 +723,119 @@ describe('deletion feeds: pages', () => {
 });
 
 describe('deletion feeds: the read budget', () => {
-  it('uses a tombstone from a feed read that took the last request; a record without one stays held', async () => {
-    const reports: MissingRecord[] = [];
-    const { client, storage, fake } = await edited({
-      ids: ['1', '2'],
-      // The list and the feed; no request left for a GET.
-      client: {
-        limits: { maxRequests: 2 },
-        onMissingRecord: (r) => reports.push(r),
+  it('does not starve the GETs of other collections (#327 review B1)', async () => {
+    // Two collections, each with a feed and a held update of a record the
+    // list filters out; four requests: two lists and two GETs.
+    const doc = feedDocument();
+    const components = doc.components as Record<string, unknown>;
+    const resources = components['crudResources'] as Record<string, unknown>;
+    resources['cat'] = {
+      identity: {
+        urlTemplate: '/cats/{catId}',
+        bindings: { catId: { field: 'id' } },
       },
+      collections: {
+        cats: {
+          urlTemplate: '/cats',
+          'x-deletion-feed': { ...FEED, operationId: 'listCatChanges' },
+        },
+      },
+    };
+    doc.paths['/cats'] = doc.paths['/pets']!;
+    doc.paths['/cats/{catId}'] = doc.paths['/pets/{petId}']!;
+    doc.paths['/cat-changes'] = {
+      get: {
+        operationId: 'listCatChanges',
+        responses: { '200': { description: 'Changes since the cursor' } },
+      },
+    };
+    let hide = false;
+    const requests: string[] = [];
+    const transport: Transport = async (r) => {
+      const [, , collection, id] = r.url.pathname.split('/');
+      const pet =
+        collection === 'cats' || collection === 'cat-changes' ? tom : rex;
+      requests.push(`${r.method} ${collection}${id ? `/${id}` : ''}`);
+      if (r.method !== 'GET') return unavailable();
+      if (collection?.endsWith('-changes'))
+        return response({ changes: [], next: 'c0' });
+      if (id) return response(pet);
+      return response(hide ? [] : [pet]);
+    };
+    const client = createApiClient(doc, {
+      transport,
+      limits: { maxRequests: 4 },
+      retry: { baseDelayMs: 60_000 },
     });
-    fake.remove('1');
-    fake.hidden.add('2');
     await client.sync();
-    expectFailedOlder(storage);
-    expect(fake.feedReads).toEqual([null, 'c0']);
-    expect(fake.itemGets).toEqual([]);
-    expect(reports).toMatchObject([{ id: '1', source: 'feed' }]);
-    expect(client.pendingWrites()).toMatchObject([
-      { id: '1', state: 'failed', missingRecord: 'deleted' },
-      { id: '2', state: 'pending', awaitingRefresh: true },
-    ]);
-    // The next sync reads the feed after the GETs: tom gets its GET.
-    await client.sync();
-    expect(fake.itemGets).toEqual(['2']);
-    expect(fake.feedReads).toEqual([null, 'c0']);
-    expect(client.pendingWrites()[1]).toMatchObject({
-      id: '2',
-      state: 'pending',
-    });
-    expect(client.pendingWrites()[1]).not.toHaveProperty('awaitingRefresh');
-  });
-
-  it('does not starve the GETs: with a feed, an update of a filtered record ends pending, not failed (#327 review)', async () => {
-    const { client, fake } = await edited({
-      client: { limits: { maxRequests: 2 } },
-    });
-    fake.hidden.add('1');
-    for (let i = 0; i < 4; i++) {
-      await client.sync();
-      expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
-    }
-    // Syncs 1 and 3 read the feed first and spare the unchecked update;
-    // syncs 2 and 4 read the record first and find it.
-    expect(fake.itemGets).toEqual(['1', '1']);
-    expect(fake.feedReads).toEqual([null, 'c0', 'c0']);
-    expect(client.pendingWrites()[0]).not.toHaveProperty('awaitingRefresh');
-    expect(client.pendingWrites()[0]).not.toHaveProperty(
-      'lastError',
-      expect.stringMatching(/Waiting for a complete refresh/),
+    await client.update('pets', '1', { name: 'Rex 2' });
+    await client.update('cats', '2', { name: 'Tom 2' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites().map((w) => w.attempts)).toEqual([1, 1]),
     );
+    hide = true;
+    requests.length = 0;
+    for (let i = 0; i < 3; i++) {
+      await client.sync();
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending' },
+        { state: 'pending' },
+      ]);
+    }
+    // Every sync GETs both records; the feeds get no request.
+    expect(requests.filter((r) => /^GET (pets|cats)\/\d/.test(r))).toEqual([
+      'GET pets/1',
+      'GET cats/2',
+      'GET pets/1',
+      'GET cats/2',
+      'GET pets/1',
+      'GET cats/2',
+    ]);
+    expect(requests.filter((r) => r.includes('-changes'))).toEqual([]);
   });
 
-  it('treats a feed read of more than limits.maxRecords items as incomplete: GET instead, cursor kept', async () => {
+  it('never holds an update forever when every sync is a new client whose feed would take the budget (#327 review B2)', async () => {
+    const fake = heldProvider();
+    const { storage } = await edited({ fake });
+    fake.hidden.add('1');
+    for (let round = 0; round < 8; round++) {
+      // A page open: a new client on the same storage, list plus one GET.
+      const client = createApiClient(feedDocument(), {
+        storage,
+        transport: fake.transport,
+        limits: { maxRequests: 2 },
+        retry: { baseDelayMs: 60_000 },
+      });
+      await client.sync();
+      expectFailedOlder(storage);
+      // Found by the GET: released, to be sent (the provider answers 503).
+      expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+      expect(client.pendingWrites()[0]).not.toHaveProperty('awaitingRefresh');
+    }
+    expect(fake.itemGets).toHaveLength(8);
+  });
+
+  it('counts the feed against the sync-wide maxRecords: over it, the read is incomplete and the cursor kept', async () => {
+    // After the removal the list returns 1 record and the feed 2: 3 over
+    // a limit of 2, which the feed alone would not exceed.
     const { client, storage, fake } = await edited({
+      fake: heldProvider({ undecided: true }),
       client: { limits: { maxRecords: 2 } },
     });
     fake.remove('1');
-    fake.log.push({ id: '7', state: 'active' }, { id: '8', state: 'active' });
+    fake.log.push({ id: '8', state: 'active' });
     await client.sync();
     expect(fake.feedReads).toEqual([null, 'c0']);
-    expect(fake.itemGets).toEqual(['1']);
+    // No tombstone used: the GET's unknown stands.
     expect(client.pendingWrites()).toMatchObject([
-      { state: 'failed', missingRecord: 'deleted', lastStatus: 404 },
+      { state: 'failed', missingRecord: 'unknown', lastStatus: 503 },
     ]);
     expect(storage.outbox()).toMatchObject({
       feedCursors: [{ cursor: 'c0' }],
     });
   });
 
-  it('keeps the updates held and the cursor unchanged when the budget is spent before the feed read', async () => {
+  it('keeps the updates held and the cursor unchanged when the budget is spent before the GET and the feed read', async () => {
     const { storage, fake } = await edited();
     fake.remove('1');
     // A client on the same storage whose budget covers the list only.
@@ -703,10 +866,11 @@ describe('deletion feeds: a malformed or refused feed', () => {
     ['a 500', response({ error: 'invented' }, 500)],
   ];
   for (const [label, answer] of cases)
-    it(`ignores a feed read with ${label}: GET instead, cursor unchanged`, async () => {
+    it(`ignores a feed read with ${label}: no tombstone, cursor unchanged`, async () => {
       let broken = false;
       const fake = provider([rex, tom], {
-        write: () => response({ error: 'invented' }, 503),
+        write: unavailable,
+        item: unavailable,
         feed: () => (broken ? answer : undefined),
       });
       const { client, storage } = await edited({ fake });
@@ -715,7 +879,7 @@ describe('deletion feeds: a malformed or refused feed', () => {
       await client.sync();
       expect(fake.itemGets).toEqual(['1']);
       expect(client.pendingWrites()).toMatchObject([
-        { state: 'failed', missingRecord: 'deleted', lastStatus: 404 },
+        { state: 'failed', missingRecord: 'unknown', lastStatus: 503 },
       ]);
       expect(storage.outbox()).toMatchObject({
         feedCursors: [{ cursor: 'c0' }],
@@ -795,29 +959,40 @@ describe('deletion feeds: precedence', () => {
     expect(reports).toMatchObject([{ id: '1', source: 'declaration' }]);
   });
 
-  it("uses a tombstone over absent: 'removed'", async () => {
+  it("uses a tombstone after an undecided GET under absent: 'removed'", async () => {
     const reports: MissingRecord[] = [];
     const { client, fake } = await edited({
       doc: feedDocument({ completeness: { absent: 'removed' } }),
+      fake: heldProvider({ undecided: true }),
       client: { onMissingRecord: (r) => reports.push(r) },
     });
     fake.remove('1');
     await client.sync();
-    expect(fake.itemGets).toEqual([]);
+    expect(fake.requests).toEqual(['list', 'get 1', 'feed']);
     expect(reports).toMatchObject([
       { id: '1', evidence: 'deleted', source: 'feed' },
     ]);
   });
 
-  it('uses a tombstone without a GET, even where the GET would answer 2xx', async () => {
-    const { client, fake } = await edited();
-    // Listed as deleted but still readable: the feed decides, unread.
-    fake.hidden.add('1');
-    fake.log.push({ id: '1', state: 'deleted' });
+  it('lets a GET that answers 404 decide before the feed', async () => {
+    const reports: MissingRecord[] = [];
+    const { client, fake } = await edited({
+      client: { onMissingRecord: (r) => reports.push(r) },
+    });
+    fake.remove('1');
     await client.sync();
-    expect(fake.itemGets).toEqual([]);
+    expect(fake.requests).toEqual(['list', 'get 1', 'feed']);
+    expect(reports).toEqual([
+      {
+        resource: 'pets',
+        id: '1',
+        evidence: 'deleted',
+        source: 'read',
+        status: 404,
+      },
+    ]);
     expect(client.pendingWrites()).toMatchObject([
-      { state: 'failed', missingRecord: 'deleted' },
+      { state: 'failed', missingRecord: 'deleted', lastStatus: 404 },
     ]);
   });
 });

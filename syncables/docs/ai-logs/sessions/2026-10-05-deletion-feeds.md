@@ -67,3 +67,28 @@ incomplete, and an unchanged cursor is not stored again. Regression tests
 for each, README and CLAUDE.md updated; the spec's survey now says only
 YNAB fits as documented, with the reasons for Google Calendar, Asana and
 Box (unverified).
+
+## Turn 3
+
+**Human (via the oversight session):** A second review found the
+alternation still starves GETs across collections (one feed's read takes
+another collection's GET budget) and across restarts (the alternation was
+in memory). Replace it: read every feed only at the end of the sync, after
+all collection reads and evidence GETs; use its tombstones for held updates
+the GETs did not decide; store tombstones of records with unsettled writes
+in the outbox so the next sync, also after a restart, uses them before its
+GETs; count feed items against the sync-wide `maxRecords`; say in the spec
+that the GET and the feed agree for conforming APIs, and that YNAB's item
+read on a deleted transaction is undocumented.
+
+**Assistant:** Removed the ordering, sparing and alternation. `finishFeeds`
+reads each feed at the end of the sync and settles records whose GET was
+unchecked or `unknown`: a tombstone fails them as `deleted`, otherwise an
+`unknown` fails as before and an unchecked one stays held. `feedTombstones`
+(outbox, version 1) keeps tombstones of records with unsettled writes and is
+used before the GET; a read that returns the record, or a later
+non-tombstone item, removes one. Feed items count with the collection
+records against `maxRecords`. Tests for both review scenarios (two
+collections with a four-request budget; eight new clients on one storage),
+stored tombstones across a restart, and the shared record limit; spec §1.1,
+§5 and the reference implementation note, README and CLAUDE.md updated.
