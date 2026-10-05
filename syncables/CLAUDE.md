@@ -182,7 +182,12 @@ Data flows through four stages, each its own directory under `src/`:
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
-   `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
+   and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
+   on the CRUD Resource Object, else, or when that one does not parse, the
+   item GET operation, a Tombstone Object of the deletion-feeds draft; not
+   stored itself, though with a feed the end-of-sync feed read may store a
+   feed tombstone for the failed record) `deleted`, other 2xx
+   with the record `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
    `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
    For a collection with a deletion feed (`x-deletion-feed`,
    `declaredDeletionFeed`, draft spec in
@@ -344,6 +349,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   paginated feeds, the budget (two collections, a new client per sync, the
   shared `maxRecords`), malformed and expired reads, and precedence against
   `x-completeness` and the GET.
+- `unit/client/read-tombstones.test.ts` covers `x-read-tombstone`: a 2xx
+  GET with and without the marker, PUT and PATCH, the placements (CRUD
+  Resource Object, item GET operation, ignored on a collection, legacy
+  documents), malformed declarations, the in-flight head and the budget,
+  no storing, restarts, and precedence against `x-completeness` and stored
+  and feed tombstones.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

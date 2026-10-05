@@ -110,6 +110,10 @@ MAY be present or absent.
 | `deleted` | It no longer exists: the resource's `read` operation, if it has one, answers 404 or 410 for it. Objects are members of this collection for as long as they exist (no archiving, no moving to another collection). |
 | `removed` | It is no longer a member of this collection. It MAY still exist, for example archived or moved to another collection, and remain readable and writable through its own URL. |
 
+For a resource that declares `x-read-tombstone` ([Deletion Feeds](../deletion-feeds/README.md)
+0.2.0-draft, §4.4), the 404 or 410 of `deleted` includes a read tombstone: a
+2xx read whose body carries the declared deletion marker.
+
 `removed` still tells a consumer that the list does not filter by default; it
 does not tell it whether the object exists. A consumer that needs to know
 reads the object itself.

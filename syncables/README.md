@@ -356,8 +356,8 @@ update that is not in flight, the client looks for evidence:
 
 | Evidence | Found by | The held updates |
 | --- | --- | --- |
-| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
-| `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
+| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410, or 2xx with the record carrying the resource's [read tombstone](#read-tombstones) marker, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
+| `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id, and that is not a read tombstone | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
 `x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
@@ -481,7 +481,8 @@ client looks in this order:
    tombstone (restored), which drops the tombstone and leaves the updates
    held, for a GET in the next sync. A feed read that fails or does not
    complete leaves the stored verdict standing;
-2. a GET of the record, as above: a 404 or 410 (`deleted`) or a 2xx with the
+2. a GET of the record, as above: a 404 or 410 (`deleted`), a read
+   tombstone (`deleted`, [below](#read-tombstones)) or another 2xx with the
    record (`filtered`) decides;
 3. when the GET did not decide (another answer: `unknown`; or not made,
    because the budget was spent or a 429 came back), this sync's feed read:
@@ -492,7 +493,8 @@ client looks in this order:
 A record failed through the feed has `lastError` "Record <id> was deleted at
 the provider (the deletion feed <operationId> reports it deleted); not sent"
 and no `lastStatus`. For an API that fits the spec, the GET and the feed
-agree: a record with a tombstone answers 404 or 410 to its GET (spec §4.3).
+agree: a record with a tombstone answers 404 or 410 to its GET, or a read
+tombstone where the resource declares one (spec §4.3).
 A missing record without a tombstone is never taken as `filtered` from the
 feed alone: the update needs a fresh copy of the record to be sent on, and
 the feed does not show that the record was not deleted between the read that
@@ -539,6 +541,65 @@ has none. A declaration that does not parse (no GET operation with that
 `values` that are not a non-empty list of strings, numbers and booleans, and
 so on) is ignored. No overlay declares `x-deletion-feed`, and the behaviour
 has not been verified against a real provider.
+
+### Read tombstones
+
+Some providers keep a deleted record readable: its GET answers 2xx with a
+marker (an invented calendar whose deleted events read as
+`{ "id": "e1", "status": "cancelled" }`; Google Calendar's documents
+describe this for events, which is not verified and not declared in any
+overlay). Without a declaration, such an answer looks like the record, so
+the missing record would be `filtered` and its held updates sent on the
+deleted record. The draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
+declares the marker with `x-read-tombstone`, a Tombstone Object on the
+resource's CRUD Causality definition, else on the GET operation of its item
+path (the resource's wins; a declaration on a collection is ignored, since
+every collection of the resource shares the item read):
+
+```yaml
+crudResources:
+  event:
+    identity:
+      urlTemplate: /calendars/{calendarId}/events/{eventId}
+      bindings: { eventId: { field: id } }
+    x-read-tombstone: { field: status, values: [cancelled] }
+```
+
+When the GET of a missing record answers 2xx with a JSON object whose
+identity field is the record's id and whose value at `field` (a dot-path)
+equals one of `values` (same JSON type), the record is `deleted` with
+`source: 'read'` and the GET's status: its held updates fail as for a 404,
+with `lastStatus` that 2xx and `lastError` "Record <id> was deleted at the
+provider (GET <path> answered <status> with a tombstone: <field> is
+<value>); not sent". `onMissingRecord` gets no `record` for it. A body with
+the marker about another id is `unknown`, as before. A declaration that does
+not parse (no `field`, `values` empty or not strings, numbers and booleans)
+is ignored; when the resource's does not parse, the item GET operation's
+applies.
+
+The order of the checks does not change: `x-completeness: { absent:
+deleted }` first (no GET), then a stored feed tombstone (no GET), then the
+GET, then this sync's feed read for a GET that did not decide. A read
+tombstone decides, so the feed read at the end of the sync (still made, for
+its cursor) does not report the record again, and a later item in that feed
+read that is not a tombstone does not undo the GET's verdict.
+
+A read tombstone is not stored, unlike a feed tombstone: a GET in a later
+check shows the record's state at that time, a restore included, where a
+kept tombstone could outlive it. An update of the record that is still held
+(a new `update()` of it is, as after any missing-record failure) is checked
+with a GET in a later sync. One exception: when the collection also has a
+deletion feed and this sync's feed read reports the record deleted, that
+feed read stores a feed tombstone for it (its failed writes are unsettled),
+and the next check uses the stored tombstone before any GET, as described
+[above](#deletion-feeds), until a feed item that is not a tombstone, a read
+returning the record, or a 2xx write drops it. A provider may let a deleted record be restored (Google Calendar's
+documents say an organizer's cancelled events can be); a GET after the
+restore answers without the marker, so the new update is `filtered` and
+sent. The failed updates stay failed until `resolveWrite`: `retry` sends
+them on the last confirmed copy, which on such a provider may restore the
+record or change a deleted one; that is the caller's choice. Records in a
+list read, and write responses, are not checked for the marker.
 
 ### Uncertain creates
 
@@ -945,6 +1006,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   in the outbox (`feedCursors`); a tombstone in it marks a missing record
   `deleted` (`source: 'feed'`) when the GET did not decide, and is kept
   (`feedTombstones`) so that the next sync uses it before a GET.
+  A resource's declared read tombstone (`x-read-tombstone`, same draft
+  extension) makes a GET of a missing record that answers 2xx with the
+  record and that marker `deleted` (`source: 'read'`) instead of
+  `filtered`; it is not stored.
 
 - **0.19.0**: Shared browser/Node local-first client, resource traversal
   and pagination; injected read/write transports; constructor and Node
