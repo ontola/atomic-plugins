@@ -36,7 +36,7 @@ APIs, and no overlay declares `x-deletion-feed`.
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
-| YNAB 1.0.0 (`youneedabudget.com/1.0.0`, `dec74da7`) | The list itself, e.g. `GET /budgets/{budget_id}/transactions`, with `last_knowledge_of_server` | Query `last_knowledge_of_server`; response `data.server_knowledge` | `deleted: true`; "Deleted transactions will only be included in delta requests" |
+| YNAB 1.0.0 (`youneedabudget.com/1.0.0`, `dec74da7`) | The list itself, e.g. `GET /budgets/{budget_id}/transactions`, with `last_knowledge_of_server` | Query `last_knowledge_of_server`; response `data.server_knowledge` | `deleted: true`; "Deleted transactions will only be included in delta requests". The document does not say what `GET /budgets/{budget_id}/transactions/{transaction_id}` answers for a deleted transaction |
 | Google Calendar v3 (`googleapis.com/calendar/v3`, `32237fa5`) | The list itself, `GET /calendars/{calendarId}/events`, with `syncToken` | Query `syncToken`; response `nextSyncToken`, on the last page only; 410 when it expired | `status: cancelled` ("cancelled (deleted)"); only `id` is guaranteed. The `get` method "always returns" cancelled events, and an organizer's cancelled events "can be restored (undeleted)" |
 | Asana 1.0 (`asana.com/1.0`, `bdea260b`) | `GET /events?resource=...`; `resource` is a required query parameter | Query `sync`; response `sync`; 412 with a fresh token for a missing or expired one; `has_more` | `action: deleted` (also `changed`, `added`, `removed`, `undeleted`); the object is `resource` |
 | Box 2.0.0 (`box.com/2.0.0`, `dec74da7`) | `GET /events`; also `GET /folders/trash/items` | Query `stream_position`; response `next_stream_position` | `event_type: ITEM_TRASH`. A trashed file stays readable at `GET /files/{file_id}/trash`; the document does not say whether its own `GET /files/{file_id}` then answers 404 |
@@ -44,7 +44,10 @@ APIs, and no overlay declares `x-deletion-feed`.
 | Todoist 1 (`todoist.com/1`, `ac07532b`) | none in this document | none | `is_deleted` on projects and tasks |
 | Xero Accounting 2.9.4 (`xero.com/xero_accounting/2.9.4`, `c9c64afb`) | The lists, with an `If-Modified-Since` header | A time the client chooses | `Status: DELETED` on some objects |
 
-Only YNAB fits this version as documented. The others do not fit (yet):
+YNAB has the shape of this version (a change list with a cursor it returns
+and a tombstone marker), but its document does not say that a deleted
+transaction's own read answers 404 or 410 (§4.3); that is neither documented
+nor verified, as for Box below. The others do not fit (yet):
 
 * Google Calendar's cancelled events are returned by the event's own `get`
   and can be restored, so they fail §4.3's test (the object's read answers
@@ -171,14 +174,22 @@ puts into the object's `urlTemplate`, and the collection's context supplies
 the rest (CRUD Causality §4.1.2).
 
 A consumer that needs to know whether a member it no longer finds in a
-complete read of the collection was deleted SHOULD use, in this order:
+complete read of the collection was deleted SHOULD use:
 
 1. `x-completeness: { absent: deleted }` on the collection (Collection
    Completeness): the object was deleted. No request is needed.
-2. The last item about the object in a feed read made after the collection
-   read that lacked it: a tombstone means the object was deleted. This holds
-   whatever the collection's `x-completeness` says, and without one.
+2. The last item about the object in a feed read: a tombstone means the
+   object was deleted when the read was made, unless a later feed read has a
+   later item about it that is not a tombstone. This holds whatever the
+   collection's `x-completeness` says, and without one.
 3. The object's own `read` operation.
+
+For a document that conforms to §4.3, steps 2 and 3 agree: an object with a
+tombstone answers 404 or 410 to its read. A consumer MAY therefore take them
+in either order, for example read the object first and use the feed only for
+objects whose read did not decide (no answer, or one other than 404, 410 or
+a 2xx with the object), and MAY keep tombstones from an earlier feed read to
+use before reading the object.
 
 A feed read in which the object has no tombstone (no item, or a last item
 that is not one) does not show that the object exists. A deletion that
@@ -311,12 +322,14 @@ A conforming consumer:
 ## Reference Implementation
 
 [`syncables`](../../../syncables/README.md#deletion-feeds) reads
-`x-deletion-feed` (on the Collection Object, else on the list operation): it
-reads the feed once per sync after a complete read of the collection (per
-bound context), unless `x-completeness: { absent: deleted }` applies or its
-missing-record checks are off, from a cursor kept in its durable outbox when
-it has storage. It treats a record that the read lacked and whose last item in
-the feed is a tombstone as deleted, without a GET; it reads a record without
-a tombstone with a GET, and does not use the §5 case. Cursors in a header or
-body, and the other cases in §8, are not implemented. Not verified against a
-real provider.
+`x-deletion-feed` (on the Collection Object, else on the list operation),
+unless `x-completeness: { absent: deleted }` applies or its missing-record
+checks are off. It reads the feed once per sync, per bound context, at the
+end of the sync after the reads of missing records, from a cursor kept in its
+durable outbox when it has storage. For a record the collection read lacked,
+it uses a tombstone kept from an earlier feed read first, then the record's
+read, then, when that read did not decide, the tombstone of this sync's feed
+read (§5 allows this order). It keeps tombstones only for records with
+unsettled writes. It does not use the "not deleted" case of §5. Cursors in a
+header or body, and the other cases in §8, are not implemented. Not verified
+against a real provider.
