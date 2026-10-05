@@ -10,10 +10,10 @@ importers:
     dependencies:
       devonian:
         specifier: 0.6.1
-        version: 0.6.1(syncables@0.18.0)
+        version: 0.6.1(syncables@0.19.0)
       syncables:
-        specifier: 0.18.0
-        version: 0.18.0
+        specifier: 0.19.0
+        version: 0.19.0
 
 packages:
 
@@ -134,8 +134,8 @@ packages:
   pure-rand@6.1.0:
     resolution: {integrity: sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==}
 
-  syncables@0.18.0:
-    resolution: {integrity: sha512-yHd1wBggwt0LeAizBOfvcyRj2gzainoqoIO+yt9qWv/LU+TrQgKyGK0ua64VCRzzpvNr3AlLWmYZV6+XgWbzYA==}
+  syncables@0.19.0:
+    resolution: {integrity: sha512-/h4GPnTvNWPOReUM7ezF9t8jaftIcV/CYwf15aH/h9PboSVQlLMx7q5CSQQQUYnmvYaTM62kRtSHuoi7a8z6+w==}
     engines: {node: '>= 22.11 < 23'}
 
   tslib@2.8.1:
@@ -224,14 +224,14 @@ snapshots:
   detect-libc@2.1.2:
     optional: true
 
-  devonian@0.6.1(syncables@0.18.0):
+  devonian@0.6.1(syncables@0.19.0):
     dependencies:
       '@automerge/automerge-repo': 2.5.6
       effect: 3.22.2
       fast-json-stable-stringify: 2.1.0
       tslib: 2.8.1
     optionalDependencies:
-      syncables: 0.18.0
+      syncables: 0.19.0
     transitivePeerDependencies:
       - supports-color
 
@@ -263,7 +263,7 @@ snapshots:
 
   pure-rand@6.1.0: {}
 
-  syncables@0.18.0:
+  syncables@0.19.0:
     dependencies:
       js-yaml: 4.1.1
       tslib: 2.8.1

@@ -795,7 +795,7 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
-- **Unreleased**: Shared browser/Node local-first client, resource traversal
+- **0.19.0**: Shared browser/Node local-first client, resource traversal
   and pagination; injected read/write transports; constructor and Node
   environment credentials with supplied auth adapters; optional original
   read-response storage; scoped nested collections and POST lists; pending
