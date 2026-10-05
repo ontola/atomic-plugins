@@ -140,11 +140,12 @@ components:
             absent: deleted
 ```
 
-An issue tracker whose `GET /repos/{owner}/{repo}/issues` returns open issues
-only by default would declare no Completeness Object for that collection, or,
-if a fixed query parameter (`state=all`) makes the read complete and closing
-is the only way to leave it besides deletion, `absent: deleted` on a
-collection whose definition includes that parameter.
+An (invented) issue tracker whose `GET /projects/{projectId}/issues` returns
+open issues only by default declares no Completeness Object for that
+collection. If a fixed query parameter such as `state=all` makes the read
+return every issue of the project, a collection defined with that parameter
+can declare `absent: removed` when issues can also be moved to another
+project, and `absent: deleted` only when they cannot.
 
 ## 7. Validation
 

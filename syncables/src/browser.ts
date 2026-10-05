@@ -54,6 +54,8 @@ export type {
   WriteFailure,
   WriteFailureClass,
   AuthBlock,
+  MissingRecord,
+  MissingRecordEvidence,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,
   PollOptions,

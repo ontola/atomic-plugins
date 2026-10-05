@@ -31,6 +31,12 @@ export interface CollectionReadOptions {
   probe?: boolean;
   /** Legacy path-pair discovery is opt-in for the existing client API. */
   legacy?: { identityField?: string };
+  /**
+   * A budget shared with requests the caller makes after the read (the
+   * client's deletion-evidence reads). When given, `limits`, `sleep` and
+   * `storeResponse` are not used: the budget's own transport and limits are.
+   */
+  budget?: Budget;
   /** Called per accepted record, before it is added to its collection. */
   onRecord?: (
     value: Record<string, unknown>,
@@ -124,11 +130,13 @@ export async function readCollections(
   for (const param of rootParameters(model)) {
     if (!constants[param]) throw new Error(`Enter a value for ${param}`);
   }
-  const budget = new Budget(
-    captureReadResponses(options.transport, options.storeResponse),
-    options.limits,
-    options.sleep,
-  );
+  const budget =
+    options.budget ??
+    new Budget(
+      captureReadResponses(options.transport, options.storeResponse),
+      options.limits,
+      options.sleep,
+    );
   const upstream = upstreamOf(doc);
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];

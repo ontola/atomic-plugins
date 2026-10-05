@@ -173,17 +173,33 @@ Data flows through four stages, each its own directory under `src/`:
    unless a create precedes them; a settle on the same record during the
    read (`recordRevisions`) skips the release, three non-releasing syncs
    fail it, and `resolveWrite` retries or discards it (the miss count is
-   stored). A released restored PUT update at the head of its record's
-   queue, whose record the refresh lacks, fails rather than sending a
-   partial PUT. `lastKnown` keeps the newest confirmed copy (`setLastKnown`
-   on every refresh and settled response; update responses are merged over
+   stored). A complete read lacking a record with queued updates (restored
+   or in memory, PUT or PATCH) holds them (`holdMissing`: `awaitingRefresh`
+   on each update up to the first create, never on one with `sending`), at
+   once in `performSync` and again in `releaseRefreshed`. When the record's
+   queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
+   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   draft spec in `openapi-extensions/spec/collection-completeness/`), else
+   GETs the item through the sync's shared `Budget` (passed to
+   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   `filtered`, else `unknown`; budget spent means unchecked (held, a miss).
+   `deleted`/`unknown` fail the head and each following held update
+   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
+   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   checked) and releases. A record settled on during the check is left to
+   the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
+   `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   `update()` holds a new edit of a record whose failed writes carry
+   `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
+   confirmed copy (`setLastKnown` on every refresh and settled response;
+   update responses are merged over
    the record that was sent); updates, retries and `update()` seeding use
    it, never the visible record. It is stored once per record entry, and
    only when `confirmed` is absent, so the outbox grows by the changes per
    write, not by the record. Only head writes fail or count
    misses: a failed write must never be newer than a queued one of the same
-   record (`seq`, stored, lets the tests check this). In-memory updates do
-   not fail on a missing record (#260's open remote-delete item). Writes not
+   record (`seq`, stored, lets the tests check this; `expectFailedOlder` in
+   the tests). Writes not
    yet durable are skipped by `rebuild`. Unknown versions are refused, not
    overwritten. The README's "Durable outbox and restarts" has the
    stop-between-steps table; keep it in step with the code. Not stored:
@@ -288,6 +304,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 - `unit/client/failure-classes.test.ts` covers write failure classes: the
   default table, permanent 4xx, satisfied deletes, `Retry-After`, the auth
   block and `authRenewed()`, and `classifyWriteFailure`.
+- `unit/client/missing-records.test.ts` covers records a complete refresh no
+  longer returns: the in-flight-head ordering case, PUT and PATCH, the
+  evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
+  the shared read budget, `missingRecordChecks`, and restarts.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

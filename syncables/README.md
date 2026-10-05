@@ -144,15 +144,16 @@ Each entry of `pendingWrites()` has a `state`:
 
 | `state` | Meaning | What the client does |
 | --- | --- | --- |
-| `pending` | Queued, in flight or waiting for a retry | Retries automatically |
+| `pending` | Queued, in flight, waiting for a retry, or held for a refresh (`awaitingRefresh: true`) | Retries automatically; a held update waits for a `sync()` |
 | `uncertain` | A create may or may not have reached the server | Nothing, until `resolveWrite` |
-| `failed` | The server refused it, or retries stopped at `retry.maxAttempts` | Nothing, until `resolveWrite` (see below) |
+| `failed` | The server refused it, retries stopped at `retry.maxAttempts`, or a refresh no longer returned its record (`missingRecord`, [below](#records-a-refresh-no-longer-returns)) | Nothing, until `resolveWrite` (see below) |
 | `blocked` | The server refused the client's credentials for it | Sends no write at all, until `authRenewed()` |
 
 Entries carry `attempts`, `lastError` (for an HTTP failure: the path, the
 status and up to 200 characters of the response body, whitespace collapsed)
 and `lastStatus` (the HTTP status behind `lastError`, absent when `lastError`
-does not describe a response).
+does not describe a response). A failed update whose record a refresh no
+longer returned also carries `missingRecord` (`deleted` or `unknown`).
 
 A new `create`/`update`/`remove` does not drop a failed write. A failed create
 holds back later writes to the record, like an uncertain one. A failed update
@@ -328,13 +329,94 @@ client.pendingWrites('/pets')[0]?.conflicts; // [{ field, base, remote, local, .
 
 The conflict is listed until its write settles or is discarded, and is
 dropped if a later refresh shows the remote value equal to the local one. To
-keep the remote value instead, call `update` again with it. Not covered: a
-remote deletion under a pending update (the edit stays visible and is sent; a
-PUT then carries the last confirmed copy of the record with the edit on top),
-conflicts
-that arrive only in a write's own response, and deletes. The remote-deletion
-case remains open in [#260](https://github.com/ontola/atomic-plugins/issues/260);
-only restored updates handle it, as below.
+keep the remote value instead, call `update` again with it. Not covered:
+conflicts that arrive only in a write's own response, and deletes. A refresh
+that no longer returns the record at all is handled below.
+
+### Records a refresh no longer returns
+
+A complete `sync()` of a collection (every page read, within the read budget)
+can lack a record that has queued updates. The provider may have deleted it,
+or the list may just not return it (a default filter, a view that depends on
+the credentials). The client does not send such an update on the record's
+last known copy: a PUT built on it could recreate a deleted record on some
+providers, or write back fields that changed remotely. That applies to PATCH
+too, since the client's PATCH body also carries the whole last known record
+with the changes on top (JSON, not JSON Patch); a PATCH to a deleted record is
+a 404 at best and recreates it at worst.
+
+When a complete read lacks the record (and no write to it settled during the
+read), every queued update of the record up to its first create, apart from
+one already in flight, is held: it is not sent, and its `pendingWrites()`
+entry shows `awaitingRefresh: true` (a `blocked` one is held too, shows it
+once `authRenewed()` makes it `pending`, and is checked only then). Updates queued behind a create of
+the record are not held, since the record is not expected in the list before
+the create settles. When the first queued write of the record is a held
+update that is not in flight, the client looks for evidence:
+
+| Evidence | Found by | The held updates |
+| --- | --- | --- |
+| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), or a GET of the record answers 404 or 410 | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status |
+| `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
+| `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'` | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
+
+`x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
+read from the collection's CRUD Causality definition, else from its list
+operation (which also serves a document without `crudResources`). `absent: removed`, like no
+declaration, leads to a GET. A wrong `deleted` declaration makes filtered
+records count as deleted; no overlay declares one yet, and the behaviour has
+not been verified against a real provider.
+
+The GET uses the record's item path, the client's transport and
+authentication, the conditional-request cache and `storeResponse`, and counts
+against the same budget as the sync's read (`limits`: requests, time and 429
+retries). It runs after all collections are read, so it gets what the read
+left. Records the budget does not cover are not checked in that sync; their
+updates stay held and the next sync checks them. A held update that is the
+first queued write of its record fails after three syncs that did not release
+it, with `lastError` "Waiting for a complete refresh", as a restored update
+does ([below](#durable-outbox-and-restarts)).
+
+Only the first queued write of a record is failed, and only when no earlier
+write of the record is in flight. An update already in flight when the read
+shows its record missing is left to its response (a 404 makes it `failed`,
+see [Failure classes](#failure-classes)). The held updates behind it wait for
+that response and then for the next sync, which checks the record if it is
+still missing; they are not sent when the in-flight one settles. Updates
+held behind another queued write (a delete, say) likewise wait until they
+are first. This keeps the order the client relies on: a failed write is
+never newer than a queued write of the same record. (A settled write takes
+its fields out of older failed writes, so a failed write newer than it would
+lose its edit; an earlier attempt at this feature did that.)
+
+Nothing is deleted locally because of the evidence: the failed updates stay
+visible, as failed updates do, and records without writes are pruned from
+the visible copy by a complete read exactly as before. What a deleted record
+means for the app is its decision. `resolveWrite` `retry` sends the failed
+updates on the record's last confirmed copy (a PUT may then recreate a
+deleted record; that is the caller's choice), and `discard` drops them. A new
+`update()` of such a record, while its failed writes carry `missingRecord`
+and no refresh, GET or write response has confirmed the record since, is
+held too and checked by the next sync.
+
+```ts
+const client = createApiClient(doc, {
+  onMissingRecord: ({ resource, id, evidence, source, status, record }) => {
+    // evidence: 'deleted' | 'filtered' | 'unknown'
+    // source: 'declaration' | 'read' | 'none'
+  },
+  missingRecordChecks: 'pending', // default; or 'all', or 'none'
+});
+```
+
+`onMissingRecord` is called for every record checked, with the GET's status
+and, for `filtered`, the returned record. `missingRecordChecks: 'all'` also
+checks records without unsettled writes: those the client had confirmed and
+that a read drops from its confirmed copy, once, in that sync (a record the
+budget did not cover is not checked later); the report changes nothing in
+the client. `'none'` makes no GET: without a declaration the evidence is
+`unknown`, so the updates fail. (Before this, an update made in the running
+client was sent on the last known copy.)
 
 ### Uncertain creates
 
@@ -398,7 +480,8 @@ failed writes, each write's state, attempts and last error, the conflict
 bases and conflicts of pending updates, idempotency keys, the confirmed remote
 record the writes are replayed on, local ids of creates the server has not
 confirmed (with the writes queued behind them), each write's last HTTP status,
-and the block while the server refuses the client's credentials. A client built on the same
+the `missingRecord` evidence of failed updates, and the block while the
+server refuses the client's credentials. A client built on the same
 storage restores it before anything else:
 
 ```ts
@@ -416,23 +499,22 @@ never touched. After the refresh the update is replayed on the current remote
 record and checked for conflicts (`onConflict`) like any pending update.
 
 If that refresh does not return the record (deleted remotely, or filtered out
-of the read), a restored update that would be sent as a PUT, and is at the
-head of its record's queue, becomes `failed` with `lastError` "not in the
-refreshed collection" instead of sending only its own fields as the whole
-record. Failing the head keeps the order (failed writes are always older than
-queued ones), and the next restored update of the record, now the head, fails
-the same way, so several offline edits of a vanished record all fail and none
-is sent. The edit stays visible on the last confirmed record, and a later
-`update` of the record is built on that record, not on the failed edits.
-"Last confirmed record" is the newest copy a refresh or a write response
-confirmed: a record that reappears with other values and then vanishes again
-leaves those newer values as the base, never an older copy.
-`resolveWrite` `retry` sends them on that record, which any of the record's
-writes may have kept, including for an older failed write; when the client
-never had one, it sends the update's fields as they are, which a PUT applies
-as the whole record. A PATCH update is sent (it carries only its changes). A
-restored update queued behind a write that is not an update (a delete, say)
-is released and sent once that write settles.
+of the read), the restored updates are checked as described in
+[Records a refresh no longer returns](#records-a-refresh-no-longer-returns):
+PUT and PATCH alike, they fail (`deleted`, `unknown`) or are sent on the
+record a GET returned (`filtered`), and several offline edits of a deleted
+record all fail with none sent. The edit stays visible on the last confirmed
+record, and a later `update` of the record is built on that record, not on
+the failed edits. "Last confirmed record" is the newest copy a refresh, a
+write response or such a GET confirmed: a record that reappears with other
+values and then vanishes again leaves those newer values as the base, never
+an older copy. `resolveWrite` `retry` sends them on that record, which any of
+the record's writes may have kept, including for an older failed write; when
+the client never had one, it sends the update's fields as they are, which a
+PUT applies as the whole record. A restored update queued behind a write that
+is not an update (a delete, say) is released by a refresh that returns its
+record and sent once that write settles; if the refresh lacks the record, it
+waits until it is first in its queue and a later sync checks it.
 
 While it waits, its `pendingWrites()` entry is `pending`
 with `awaitingRefresh: true` (only pending entries carry it), and writes
@@ -526,9 +608,9 @@ record with another version is left unchanged and `ready()` rejects, as do
 the methods that wait for it, rather than overwrite writes this client cannot
 read. Entries for a collection the current document lacks (queued writes and
 pending rebuilds), and entries that do not parse, are kept and written back
-unchanged; the next client tries them again. The write field `lastStatus`,
-the state `blocked` and the top-level `authBlock` were added within version
-`1`; a stored `authBlock` that does not parse still blocks the client
+unchanged; the next client tries them again. The write fields `lastStatus`
+and `missingRecord`, the state `blocked` and the top-level `authBlock` were
+added within version `1`; a stored `authBlock` that does not parse still blocks the client
 (`status` 0) until `authRenewed()`. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
@@ -737,6 +819,16 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `Retry-After` lengthens the retry delay up to `retry.maxRetryAfterMs`
   (default 1 hour). `pendingWrites()` entries
   gain `lastStatus`, and `lastError` includes a response body excerpt.
+  A queued update (PUT or PATCH) whose record a complete refresh no longer
+  returns is held rather than sent on its last known copy, in memory as
+  after a restart; the client checks the record, within the sync's read
+  budget, through the collection's `x-completeness` declaration (draft
+  Collection Completeness extension) or a GET of the record, and fails the
+  update (`missingRecord: 'deleted'` or `'unknown'`) or sends it on the
+  returned record (`filtered`). `onMissingRecord` reports the evidence;
+  `missingRecordChecks` (`'pending'`, `'all'`, `'none'`) sets which records
+  are read. Behaviour change for restored updates: a PATCH is no longer sent
+  on a missing record, and a PUT the GET finds is now sent instead of failed.
 
 - **0.18.0**: Adds the `syncables/browser` entry point: a browser-safe read
   path with an injected transport. Adds request-body pagination, with
