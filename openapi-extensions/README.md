@@ -21,6 +21,7 @@ Each extension lives in its own directory under [`spec/`](spec/), with its own s
 - [Filtering and per-item Links](spec/filtering/README.md): API field predicates, authentication-dependent views, and minimal extensions to standard OpenAPI Links (draft for issue #17).
 - [API Key Details](spec/api-key-details/README.md): a help link and a key-check operation for an `apiKey` security scheme (`x-api-key-details`), so a client can link to where a key is made and test a pasted key before storing it (draft for ontola/atomic-plugins#121).
 - [Authentication Profiles](spec/authentication-profiles/README.md): named profiles (`x-authentication-profiles`), each one security scheme and exactly the operations that accept it on its own, so a consumer that selects one can use a document that declares several credential kinds without sending a credential where it is not accepted (draft for ontola/atomic-plugins#258).
+- [Collection Completeness](spec/collection-completeness/README.md): states that a complete read of a collection returns every member, and whether an object absent from it was deleted or only left the collection (`x-completeness`), so a sync client can tell a deleted record from a filtered one (draft for ontola/atomic-plugins#260).
 - [OAuth Authentication Scheme Details](spec/oauth-authentication-details/README.md): token-endpoint authentication capabilities, PKCE requirements, authorization-request parameters, and token-issuance semantics (draft for issues #14, #15, and #16).
 
 ## Adding a new extension
