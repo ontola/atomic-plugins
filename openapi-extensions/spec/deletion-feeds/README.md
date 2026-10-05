@@ -229,9 +229,10 @@ Calendar's organizers can restore a cancelled event, §1.1), so a consumer
 treats every read tombstone as possibly restorable:
 
 * A read tombstone is the object's state at that read only. A later read of
-  the object that answers 2xx without the marker, a later complete read of
-  the collection that returns the object, or a later feed item about it that
-  is not a tombstone supersedes it.
+  the object that answers 2xx without the marker, or a later complete read
+  of the collection that returns the object, supersedes it. A consumer MAY
+  also take a feed read made after it, whose last item about the object is
+  not a tombstone, as superseding it.
 * A consumer SHOULD NOT keep a read tombstone in place of reading the object
   again, as §5 allows for a feed tombstone: reading again is the same
   request, and shows a restore.
@@ -272,9 +273,9 @@ A tombstone says nothing about what happened after its feed read: the
 object can be restored, or recreated with the same identity. A consumer
 MAY read the object first and use a feed read made after that only for
 objects whose read did not decide (no answer, or one other than 404, 410 or
-a 2xx with the object, a read tombstone included). A consumer MAY keep a tombstone from an earlier feed
-read and use it in place of reading the object, but only until any of these
-supersedes it:
+a 2xx with the object, a read tombstone included). A consumer MAY keep a
+tombstone from an earlier feed read and use it in place of reading the
+object, but only until any of these supersedes it:
 
 * a later feed read has a later item about the object that is not a
   tombstone;
@@ -487,10 +488,11 @@ body has the record's identity and the marker makes the record deleted, with
 that GET's status, where it would otherwise be found to exist. That read
 comes in the same place as any read of the record: after
 `x-completeness: { absent: deleted }` and a kept feed tombstone, and before
-this sync's feed read. It does not keep read tombstones: the next check of
-the record reads it again. A record found deleted this way is handled as for
-any deletion: the held updates at the head of its queue fail, and are sent
-only if the caller retries them. It does not look for the marker in list
-reads or write responses.
+this sync's feed read; an item in that feed read that is not a tombstone
+does not supersede it (it does not use that MAY of §4.4). It does not keep
+read tombstones: the next check of the record reads it again. A record
+found deleted this way is handled as for any deletion: the held updates at
+the head of its queue fail, and are sent only if the caller retries them.
+It does not look for the marker in list reads or write responses.
 
 Not verified against a real provider.
