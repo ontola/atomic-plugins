@@ -1,0 +1,476 @@
+# Reviewed 2026-10-05 against the pinned OAD and official documentation.
+# Source: https://mailchimp.com/developer/marketing/docs/methods-parameters/#pagination
+# Explicit selections require declared request fields, continuation/count fields and item arrays.
+overlay: 1.0.0
+info:
+  title: Mailchimp explicit collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b6b0af39fa9d35f81fbea6b7962cc6dea857e889/APIs/mailchimp.com/3.0.91/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      offsetPages:
+        type: pageNumber
+        autoDetect: false
+        description: Start offset at 0 and advance by the returned item count; total_items counts all
+          matching items. Preserve filters. Partial-response fields/exclude_fields must retain the item
+          array and total_items.
+        request:
+          queryParameters:
+            offset:
+              role: offset
+            count:
+              role: pageSize
+        response:
+          bodyFields:
+            total_items:
+              role: totalCount
+- target: $.paths['/activity-feed/chimp-chatter'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: chimp_chatter
+- target: $.paths['/account-exports'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: exports
+- target: $.paths['/audiences'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: audiences
+- target: $.paths['/authorized-apps'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: apps
+- target: $.paths['/automations'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: automations
+- target: $.paths['/batches'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: batches
+- target: $.paths['/batch-webhooks'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: webhooks
+- target: $.paths['/template-folders'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: folders
+- target: $.paths['/campaign-folders'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: folders
+- target: $.paths['/campaigns'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: campaigns
+- target: $.paths['/connected-sites'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: sites
+- target: $.paths['/conversations'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/file-manager/files'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: files
+- target: $.paths['/file-manager/folders'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: folders
+- target: $.paths['/file-manager/folders/{folder_id}/files'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: files
+- target: $.paths['/lists'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: lists
+- target: $.paths['/lists/{list_id}/abuse-reports'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: abuse_reports
+- target: $.paths['/lists/{list_id}/activity'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: activity
+- target: $.paths['/lists/{list_id}/growth-history'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: history
+- target: $.paths['/lists/{list_id}/interest-categories'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: categories
+- target: $.paths['/lists/{list_id}/interest-categories/{interest_category_id}/interests'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: interests
+- target: $.paths['/lists/{list_id}/segments'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: segments
+- target: $.paths['/lists/{list_id}/segments/{segment_id}/members'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: members
+- target: $.paths['/lists/{list_id}/members'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: members
+- target: $.paths['/lists/{list_id}/members/{subscriber_hash}/tags'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: tags
+- target: $.paths['/lists/{list_id}/members/{subscriber_hash}/events'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: events
+- target: $.paths['/lists/{list_id}/members/{subscriber_hash}/notes'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: notes
+- target: $.paths['/lists/{list_id}/merge-fields'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: merge_fields
+- target: $.paths['/reports'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: reports
+- target: $.paths['/reports/{campaign_id}/click-details'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: urls_clicked
+- target: $.paths['/reports/{campaign_id}/click-details/{link_id}/members'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: members
+- target: $.paths['/reports/{campaign_id}/open-details'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: members
+- target: $.paths['/reports/{campaign_id}/email-activity'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: emails
+- target: $.paths['/reports/{campaign_id}/locations'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: locations
+- target: $.paths['/reports/{campaign_id}/sent-to'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: sent_to
+- target: $.paths['/reports/{campaign_id}/unsubscribed'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: unsubscribes
+- target: $.paths['/reports/{campaign_id}/ecommerce-product-activity'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: products
+- target: $.paths['/templates'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: templates
+- target: $.paths['/ecommerce/orders'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: orders
+- target: $.paths['/ecommerce/stores'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: stores
+- target: $.paths['/ecommerce/stores/{store_id}/carts'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: carts
+- target: $.paths['/ecommerce/stores/{store_id}/carts/{cart_id}/lines'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: lines
+- target: $.paths['/ecommerce/stores/{store_id}/customers'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: customers
+- target: $.paths['/ecommerce/stores/{store_id}/promo-rules'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: promo_rules
+- target: $.paths['/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: promo_codes
+- target: $.paths['/ecommerce/stores/{store_id}/orders'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: orders
+- target: $.paths['/ecommerce/stores/{store_id}/orders/{order_id}/lines'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: lines
+- target: $.paths['/ecommerce/stores/{store_id}/products'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: products
+- target: $.paths['/ecommerce/stores/{store_id}/products/{product_id}/variants'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: variants
+- target: $.paths['/ecommerce/stores/{store_id}/products/{product_id}/images'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: images
+- target: $.paths['/sms-campaigns'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: sms_campaigns
+- target: $.paths['/facebook-ads'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: facebook_ads
+- target: $.paths['/reporting/facebook-ads'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: facebook_ads
+- target: $.paths['/reporting/facebook-ads/{outreach_id}/ecommerce-product-activity'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: products
+- target: $.paths['/reporting/landing-pages'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: landing_pages
+- target: $.paths['/reporting/surveys'].get
+  update:
+    x-pagination:
+    - scheme: offsetPages
+      overrides:
+        response:
+          envelope:
+            itemsField: surveys

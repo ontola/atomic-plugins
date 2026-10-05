@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import yaml
 from jsonschema import Draft4Validator
 from openapi_spec_validator import validate
+from openapi_spec_validator.validation.exceptions import OpenAPIValidationError
 
 from generate_identity_catalog_fixtures import ROOT, apply, fetch, merge
 
@@ -27,6 +28,9 @@ VARIANTS = {
     "digitalocean": "APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
     "notion": "APIs/notion.com/2026-03-11/pagination-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
     "spotify": "APIs/spotify.com/1.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
+    "intercom": "APIs/intercom.com/2.16/pagination-4a302a4352fcb52ab0735f4781376c28913d8028-overlay.yaml",
+    "mailchimp": "APIs/mailchimp.com/3.0.91/pagination-b6b0af39fa9d35f81fbea6b7962cc6dea857e889-overlay.yaml",
+    "hubspot": "APIs/hubspot.com/crm-owners/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
 }
 
 
@@ -99,7 +103,9 @@ class PaginationCollectionTests(unittest.TestCase):
                     if request.get("bodyFields"):
                         body = resolve(document, operation["requestBody"])
                         body_schema = body["content"]["application/json"]["schema"]
-                        self.assertLessEqual(set(request["bodyFields"]), set(properties(document, body_schema)))
+                        for field, metadata in request["bodyFields"].items():
+                            expected = "integer" if metadata["role"] == "pageSize" else "string"
+                            self.assertEqual(field_schema(document, body_schema, field)["type"], expected)
                     response = resolve(document, operation["responses"]["200"])
                     schema = response["content"]["application/json"]["schema"]
                     for field, metadata in scheme["response"]["bodyFields"].items():
@@ -113,7 +119,8 @@ class PaginationCollectionTests(unittest.TestCase):
             with self.subTest(provider=name):
                 standard = copy.deepcopy(document)
                 standard["components"].pop("paginationSchemes")
-                validate(standard)
+                if name != "mailchimp":
+                    validate(standard)
                 if name == "slack":
                     # Only users.list's malformed metadata reference is repaired;
                     # all other schemas, parameters, operations and security stay.
@@ -136,6 +143,18 @@ class PaginationCollectionTests(unittest.TestCase):
                 for _, _, _, operation, _ in list(applications(standard)):
                     operation.pop("x-pagination", None)
                 self.assertEqual(standard, original)
+                if name == "mailchimp":
+                    # The source OAD has a boolean default on a string field.
+                    # Preserve it: this metadata overlay must not silently
+                    # repair unrelated provider request/response contracts.
+                    errors = []
+                    for source in (original, standard):
+                        with self.assertRaises(OpenAPIValidationError) as raised:
+                            validate(source)
+                        errors.append(raised.exception)
+                    self.assertEqual(errors[0].message, "False is not of type 'string'")
+                    self.assertEqual(errors[1].message, errors[0].message)
+                    self.assertEqual(list(errors[1].absolute_path), list(errors[0].absolute_path))
 
     def test_slack_envelopes_and_explicit_cursor_scope(self):
         document = self.documents["slack"][1]
@@ -240,6 +259,68 @@ class PaginationCollectionTests(unittest.TestCase):
         schema = response["content"]["application/json"]["schema"]
         items = field_schema(document, schema, "categories.items")
         self.assertEqual(items["items"]["$ref"], "#/components/schemas/CategoryObject")
+
+    def test_intercom_query_and_nested_body_cursors(self):
+        document = self.documents["intercom"][1]
+        selected = {(path, method): (application["scheme"], application["overrides"]["response"]["envelope"]["itemsField"])
+                    for path, method, _, _, application in applications(document)}
+        self.assertEqual(selected, {
+            ("/macros", "get"): ("queryCursorPages", "data"),
+            ("/conversations", "get"): ("queryCursorPages", "conversations"),
+            ("/data_connectors", "get"): ("queryCursorPages", "data"),
+            ("/data_connectors/{data_connector_id}/execution_results", "get"): ("queryCursorPages", "data"),
+            ("/messages/status", "get"): ("queryCursorPages", "events"),
+            ("/contacts/search", "post"): ("bodyCursorPages", "data"),
+            ("/conversations/search", "post"): ("bodyCursorPages", "conversations"),
+            ("/tickets/search", "post"): ("bodyCursorPages", "tickets"),
+        })
+        schemes = document["components"]["paginationSchemes"]
+        self.assertEqual(schemes["bodyCursorPages"]["request"], {"bodyFields": {
+            "pagination.starting_after": {"role": "cursor"}, "pagination.per_page": {"role": "pageSize"},
+        }})
+        self.assertEqual(set(schemes["queryCursorPages"]["request"]), {"queryParameters"})
+        for scheme in schemes.values():
+            self.assertEqual(scheme["response"]["bodyFields"], {"pages.next.starting_after": {"role": "nextCursor"}})
+        # Contacts omit the request parameters in the source. Company reads
+        # and activity-log search use different pagination request shapes.
+        for path, method in (("/contacts", "get"), ("/companies", "get"),
+                             ("/admins/activity_logs/search", "post"), ("/calls/search", "post")):
+            self.assertNotIn("x-pagination", document["paths"][path][method])
+
+    def test_mailchimp_offset_envelopes_and_totals(self):
+        document = self.documents["mailchimp"][1]
+        selected = {path: application["overrides"]["response"]["envelope"]["itemsField"]
+                    for path, _, _, _, application in applications(document)}
+        self.assertEqual(len(selected), 56)
+        for path, envelope in {
+            "/lists": "lists", "/lists/{list_id}/members": "members", "/campaigns": "campaigns",
+            "/reports/{campaign_id}/click-details": "urls_clicked", "/ecommerce/stores": "stores",
+            "/lists/{list_id}/growth-history": "history", "/reporting/surveys": "surveys",
+        }.items():
+            self.assertEqual(selected[path], envelope)
+        scheme = document["components"]["paginationSchemes"]["offsetPages"]
+        self.assertEqual(scheme["type"], "pageNumber")
+        self.assertEqual(scheme["request"], {"queryParameters": {
+            "offset": {"role": "offset"}, "count": {"role": "pageSize"},
+        }})
+        self.assertEqual(scheme["response"]["bodyFields"], {"total_items": {"role": "totalCount"}})
+        # A cursor collection, a single read with offset/count, a collection
+        # lacking total_items, and count without offset are distinct cases.
+        for path in ("/audiences/{audience_id}/contacts", "/lists/{list_id}/abuse-reports/{report_id}",
+                     "/lists/{list_id}/members/{subscriber_hash}/activity-feed", "/landing-pages"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+    def test_hubspot_owner_cursor_and_individual_read(self):
+        document = self.documents["hubspot"][1]
+        selected = [(path, method) for path, method, _, _, _ in applications(document)]
+        self.assertEqual(selected, [("/crm/owners/2026-03", "get")])
+        scheme = document["components"]["paginationSchemes"]["ownerCursorPages"]
+        self.assertEqual(scheme["type"], "pageToken")
+        self.assertEqual(scheme["request"], {"queryParameters": {
+            "after": {"role": "cursor"}, "limit": {"role": "pageSize"},
+        }})
+        self.assertEqual(scheme["response"]["bodyFields"], {"paging.next.after": {"role": "nextCursor"}})
+        self.assertNotIn("x-pagination", document["paths"]["/crm/owners/2026-03/{ownerId}"]["get"])
 
 
 if __name__ == "__main__":
