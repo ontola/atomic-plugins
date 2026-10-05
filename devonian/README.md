@@ -5,9 +5,9 @@
 
 [![A Tiktaalik leaving its pond in search for another one](https://cdn.mos.cms.futurecdn.net/fi8nrWxvEb5sowf5jkQ8RY-700-80.jpg.webp)](https://www.livescience.com/43596-devonian-period.html)
 
-Inspired by [the Cambria Project](https://github.com/inkandswitch/cambria-project), Devonian drops the DSL approach and adds a focus on mapping between not just differences in schema, but also differences in primary key assignment between two Systems of Record.
+Inspired by [the Cambria Project](https://github.com/inkandswitch/cambria-project), Devonian uses TypeScript transformations to bridge differences in data shape and primary key assignment between independent systems of record. Scoped identity maps record which external records correspond; they do not track causality or resolve conflicts.
 
-*Identifier Maps are the Vector Clocks of Data Portability.*
+Already familiar with Cambria? Start with [Devonian for Cambria users](docs/from-cambria.md), which explains the value algebra, connector API, identity maps and current limits.
 
 ## Native Atomic Data API
 
@@ -90,7 +90,7 @@ This way, if I kill my bridge bot and restart it on a different server, it will 
 
 ## Comparison with other lens projects
 ### Cambria
-My first starting point was to take Cambria, even though it was clearly labeled as a research project and not a production ready tool. The reason I stopped using Cambria as my basis is that I found [its list of lens operations](https://github.com/inkandswitch/cambria-project/tree/26fca3231053e96edaac9ad13e88db0be4ab4668?tab=readme-ov-file#lens-operations) too restricting in what a lens can do. For instance, I couldn't find a way to convert a number to a string. I wanted to switch from writing lenses in a DSL to writing lenses in a general purpose programming language like JavaScript. Also, while Cambria can convert individual database rows and their schema, it doesn't seem fit for translations between multiple related database tables, nor for translation of operations.
+Cambria's lens language translates documents, JSON Patch edits and schemas, with a graph connecting schema versions. Devonian uses application-written TypeScript mappings and scoped identities for bridges between systems with their own IDs and write APIs. It does not generate schemas or provide Cambria's schema-version graph. See [Devonian for Cambria users](docs/from-cambria.md) for the comparison and concrete examples.
 
 ### Jonathan Edwards 'Edit History'
 In [Braid meeting 106](https://braid.org/meeting-106) (from 48:30), Jonathan Edwards presented his experiment that treats a schema conversion as an edit operation in a spreadsheet. This also uses a DSL with operations like `split-table` and `join`. I have yet to study this further to understand the benefits of using a DSL over using a Turing-complete language. I think it has something to do with applying a schema change in a distributed database, but I'll update this section as soon as I understand more of it.
