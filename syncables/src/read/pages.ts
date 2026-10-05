@@ -73,6 +73,12 @@ export class Budget {
   readonly limits: ReadLimits;
   private readonly deadline: number;
   private requests = 0;
+  private answered = 0;
+
+  /** Responses received through this budget so far (429 retries included). */
+  get responses(): number {
+    return this.answered;
+  }
 
   constructor(
     private readonly transport: Transport,
@@ -95,6 +101,7 @@ export class Budget {
         );
       }
       const raw = await this.transport(request);
+      this.answered += 1;
       const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
       if (response.status !== 429 || retries >= this.limits.maxRetries) {
         return response;

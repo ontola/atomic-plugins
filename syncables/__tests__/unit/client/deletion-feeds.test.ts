@@ -471,6 +471,29 @@ describe('deletion feeds: the cursor', () => {
     });
   });
 
+  it('stores the outbox only when the cursor changes', async () => {
+    const storage = new CrashableStorage();
+    let puts = 0;
+    const put = storage.put.bind(storage);
+    storage.put = async (resource, id, value): Promise<void> => {
+      if (resource === OUTBOX) puts += 1;
+      await put(resource, id, value);
+    };
+    const fake = provider([rex, tom]);
+    const client = createApiClient(feedDocument(), {
+      storage,
+      transport: fake.transport,
+    });
+    await client.sync();
+    expect(puts).toBe(1);
+    await client.sync();
+    expect(fake.feedReads).toEqual([null, 'c0']);
+    expect(puts).toBe(1);
+    fake.log.push({ id: '9', state: 'active' });
+    await client.sync();
+    expect(puts).toBe(2);
+  });
+
   it('does not send a stored cursor of another feed operation', async () => {
     const storage = new CrashableStorage();
     await storage.put(OUTBOX, 'outbox', {
@@ -601,6 +624,52 @@ describe('deletion feeds: the read budget', () => {
       { id: '1', state: 'failed', missingRecord: 'deleted' },
       { id: '2', state: 'pending', awaitingRefresh: true },
     ]);
+    // The next sync reads the feed after the GETs: tom gets its GET.
+    await client.sync();
+    expect(fake.itemGets).toEqual(['2']);
+    expect(fake.feedReads).toEqual([null, 'c0']);
+    expect(client.pendingWrites()[1]).toMatchObject({
+      id: '2',
+      state: 'pending',
+    });
+    expect(client.pendingWrites()[1]).not.toHaveProperty('awaitingRefresh');
+  });
+
+  it('does not starve the GETs: with a feed, an update of a filtered record ends pending, not failed (#327 review)', async () => {
+    const { client, fake } = await edited({
+      client: { limits: { maxRequests: 2 } },
+    });
+    fake.hidden.add('1');
+    for (let i = 0; i < 4; i++) {
+      await client.sync();
+      expect(client.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+    }
+    // Syncs 1 and 3 read the feed first and spare the unchecked update;
+    // syncs 2 and 4 read the record first and find it.
+    expect(fake.itemGets).toEqual(['1', '1']);
+    expect(fake.feedReads).toEqual([null, 'c0', 'c0']);
+    expect(client.pendingWrites()[0]).not.toHaveProperty('awaitingRefresh');
+    expect(client.pendingWrites()[0]).not.toHaveProperty(
+      'lastError',
+      expect.stringMatching(/Waiting for a complete refresh/),
+    );
+  });
+
+  it('treats a feed read of more than limits.maxRecords items as incomplete: GET instead, cursor kept', async () => {
+    const { client, storage, fake } = await edited({
+      client: { limits: { maxRecords: 2 } },
+    });
+    fake.remove('1');
+    fake.log.push({ id: '7', state: 'active' }, { id: '8', state: 'active' });
+    await client.sync();
+    expect(fake.feedReads).toEqual([null, 'c0']);
+    expect(fake.itemGets).toEqual(['1']);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'deleted', lastStatus: 404 },
+    ]);
+    expect(storage.outbox()).toMatchObject({
+      feedCursors: [{ cursor: 'c0' }],
+    });
   });
 
   it('keeps the updates held and the cursor unchanged when the budget is spent before the feed read', async () => {

@@ -454,15 +454,31 @@ After a complete read of a collection, `sync()` reads its feed once per bound
 context (a collection under `/owners/{ownerId}/pets` has one feed read per
 owner). It does so in every such sync, whether or not a record is missing, so
 that the cursor stays recent. The read comes after every collection has been
-read and before the GETs of that collection's missing records, and counts
-against the same budget (`limits`). The feed is not read when the
-collection's `x-completeness: { absent: deleted }` applies, which settles every
-missing record without a request, or with `missingRecordChecks: 'none'`.
+read and counts against the same budget (`limits`). The feed is not read when
+the collection's `x-completeness: { absent: deleted }` applies, which settles
+every missing record without a request, or with `missingRecordChecks:
+'none'`.
+
+So that the feed does not take the budget the GETs of missing records need,
+it is read before those GETs only when a record of that collection and
+context needs evidence (the first queued write of a missing record is a
+held, idle update, or, with `missingRecordChecks: 'all'`, a record without
+writes vanished). Otherwise it is read at the end of the sync, after every
+collection's GETs, from the budget left. When a feed read before the GETs
+ran out of budget (or read more than `limits.maxRecords` items), or got at
+least one response and left a held update unchecked because the budget was
+spent (or a 429 came back), the next sync reads that feed at the end
+instead, so the GETs go first; the sync after that reads it first again.
+Such an unchecked update does not count as one of the three syncs that did
+not release it (see [Durable outbox and restarts](#durable-outbox-and-restarts)),
+so the feed alone never makes it fail. Which feeds go last is kept in memory
+only; a new client reads the feed first.
 
 The read binds the feed operation's path parameters from the collection's
 bound context, sends `cursor.parameter` with the stored cursor if there is
 one, and follows every page as for a collection read (Pagination Schemes).
-The items are the array at `envelope.itemsField`. An item is about the
+The items are the array at `envelope.itemsField`; a read of more than
+`limits.maxRecords` items is incomplete (below). An item is about the
 record whose identity is the value at `idField`; items that are not objects,
 or have no such value, are skipped. For each record, its last item in the
 read decides: it is a tombstone when the value at `tombstone.field` equals
@@ -484,7 +500,8 @@ missing; the next sync's feed read starts after it, so that record is read
 with a GET.
 
 The cursor is the value at `cursor.responseField` in the body of the last
-page (a string or a number, kept as text). It is stored in the
+page (a string or a number, kept as text). When it differs from the stored
+one, it is stored in the
 [outbox](#durable-outbox-and-restarts), per collection and bound context,
 with the feed's `operationId`; a stored cursor of another operation is not
 sent. The first read has no cursor (a change list may then leave out
@@ -495,7 +512,8 @@ memory only and a new client starts without one.
 A read that does not complete is not used: a page answered non-2xx (a 429
 the budget hands back included), a body that is not JSON, no array at
 `envelope.itemsField`, no string or number at `cursor.responseField`, a path
-parameter without a value, or the budget spent before or during it. Its
+parameter without a value, more than `limits.maxRecords` items, or the budget
+spent before or during it. Its
 items are ignored and the stored cursor stays, so the next sync reads from
 it again; the missing records are read with a GET, if the budget has
 requests left, and otherwise stay held. The exception is a status listed in
@@ -674,8 +692,8 @@ loss. The limits of that claim:
   whole record or nothing, and keep what it acknowledged.
 - The whole outbox is serialized and stored at each step (about three stores
   per write, more on retries and id remaps), and once more after each feed
-  read that sets or drops a deletion feed's cursor, also when no write is
-  pending. Its size is one copy of each
+  read that changes or drops a stored deletion feed cursor (not when the
+  feed returns the cursor it was sent), also when no write is pending. Its size is one copy of each
   written record's confirmed state (or last known copy) plus, per unsettled
   write, its own changes and bookkeeping: measured on 2026-10-02 with a
   10 KB record, 1 queued update gave a 10.3 KB outbox and 20 gave 12.3 KB

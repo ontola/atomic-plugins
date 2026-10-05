@@ -586,6 +586,18 @@ interface ClientRoute {
   deletionFeed?: DeletionFeed;
 }
 
+/** Per-sync bookkeeping of deletion feed reads. */
+interface SyncRound {
+  /** Held updates left unchecked because a feed read took the budget. */
+  spared: Set<QueuedWrite>;
+  /** Feeds to read at the end of the sync, from the budget left. */
+  deferredFeeds: {
+    route: ClientRoute;
+    scope: string;
+    context: Record<string, string>;
+  }[];
+}
+
 /** A parsed Deletion Feed Object (draft Deletion Feeds extension). */
 interface DeletionFeed {
   operationId: string;
@@ -1005,6 +1017,12 @@ export function createApiClient(
   let unrestorable: unknown[] = [];
   /** Deletion feed cursors, by scope; stored in the outbox. */
   const feedCursors = new Map<string, StoredFeedCursor>();
+  /**
+   * Scopes whose feed read took budget that the GETs of their missing
+   * records then lacked: the next sync reads their feed after the GETs.
+   * Not stored.
+   */
+  const feedAfterGets = new Set<string>();
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
   /** Set while no write is sent because the credentials were refused; stored. */
@@ -2117,16 +2135,27 @@ export function createApiClient(
    * the sync's budget, from the stored cursor, and returns the ids whose
    * last item in the read is a tombstone. A read that does not complete
    * (a non-2xx page, a body without the declared items or cursor, the
-   * budget spent) yields no ids and leaves the cursor as it was, apart from
-   * a declared expired status: its body's cursor replaces the stored one,
-   * else the stored one is dropped. A new cursor is stored in the outbox.
+   * budget spent, more than `limits.maxRecords` items) yields no ids and
+   * leaves the cursor as it was, apart from a declared expired status: its
+   * body's cursor replaces the stored one, else the stored one is dropped. A
+   * changed cursor is stored in the outbox. `used`: the read got at least
+   * one response, so it spent budget; `exhausted`: the budget stopped it.
    */
   async function readFeed(
     route: ClientRoute,
     scope: string,
     context: Record<string, string>,
     budget: Budget,
-  ): Promise<Set<string>> {
+  ): Promise<{ tombstones: Set<string>; used: boolean; exhausted: boolean }> {
+    const answeredBefore = budget.responses;
+    const outcome = (
+      tombstones: Set<string>,
+      exhausted = false,
+    ): { tombstones: Set<string>; used: boolean; exhausted: boolean } => ({
+      tombstones,
+      used: budget.responses > answeredBefore,
+      exhausted,
+    });
     const feed = route.deletionFeed as DeletionFeed;
     const stored = feedCursors.get(scope);
     const cursor =
@@ -2134,18 +2163,22 @@ export function createApiClient(
         ? stored.cursor
         : undefined;
     const setCursor = async (value: unknown): Promise<void> => {
-      if (typeof value === 'string' || Number.isFinite(value))
+      if (typeof value === 'string' || Number.isFinite(value)) {
+        const text = String(value);
+        if (stored?.operation === feed.operationId && stored.cursor === text)
+          return;
         feedCursors.set(scope, {
           resource: route.collection.name,
           context: { ...context },
           operation: feed.operationId,
-          cursor: String(value),
+          cursor: text,
         });
-      else feedCursors.delete(scope);
+      } else if (!feedCursors.delete(scope)) return;
       await persistLater();
     };
     const last = new Map<string, boolean>();
     let body: unknown;
+    let count = 0;
     try {
       for await (const page of walkPages({
         document: doc,
@@ -2162,6 +2195,12 @@ export function createApiClient(
         itemsField: feed.itemsField,
       })) {
         body = page.body;
+        count += page.items.length;
+        // As for a collection read: more items than the limit is incomplete.
+        if (count > budget.limits.maxRecords)
+          throw new BudgetExhausted(
+            `Feed read exceeds ${budget.limits.maxRecords} records`,
+          );
         for (const item of page.items) {
           const id = asText(readNestedField(item, feed.idField));
           if (!id) continue;
@@ -2176,6 +2215,11 @@ export function createApiClient(
         }
       }
     } catch (error) {
+      if (
+        error instanceof BudgetExhausted ||
+        error instanceof RetryBeyondDeadline
+      )
+        return outcome(new Set(), true);
       if (
         error instanceof PageStatusError &&
         feed.cursor?.expiredStatuses.includes(error.status)
@@ -2192,17 +2236,20 @@ export function createApiClient(
             : undefined,
         );
       }
-      return new Set();
+      return outcome(new Set());
     }
     if (feed.cursor) {
       const next = isRecord(body)
         ? readNestedField(body, feed.cursor.responseField)
         : undefined;
       // Without the next cursor the read does not have the declared shape.
-      if (typeof next !== 'string' && !Number.isFinite(next)) return new Set();
+      if (typeof next !== 'string' && !Number.isFinite(next))
+        return outcome(new Set());
       await setCursor(next);
     }
-    return new Set([...last].filter(([, tomb]) => tomb).map(([id]) => id));
+    return outcome(
+      new Set([...last].filter(([, tomb]) => tomb).map(([id]) => id)),
+    );
   }
 
   /**
@@ -2357,6 +2404,7 @@ export function createApiClient(
       scope: string;
       context: Record<string, string>;
       budget: Budget;
+      sync: SyncRound;
     },
     records: Map<string, Record<string, unknown>>,
     previous: Map<string, Record<string, unknown>>,
@@ -2365,7 +2413,7 @@ export function createApiClient(
     released: Set<QueuedWrite>,
     vanished: string[] = [],
   ): Promise<void> {
-    const { route, scope, context, budget } = read;
+    const { route, scope, context, budget, sync } = read;
     const missing = new Set<string>();
     for (const write of allWrites())
       if (
@@ -2386,19 +2434,46 @@ export function createApiClient(
       revisionAtCheck.set(key, recordRevisions.get(key) ?? 0);
     }
     // Once per sync, after the collection reads; not needed when the
-    // declaration already settles every missing record.
-    const tombstones =
+    // declaration already settles every missing record. Read before the
+    // GETs only when a record here needs evidence, and not in the sync after
+    // one in which it took budget those GETs lacked; otherwise at the end of
+    // the sync, from the budget left (`readDeferredFeeds`).
+    let tombstones = new Set<string>();
+    let feedUsed = false;
+    if (
       route.deletionFeed &&
       !route.absentMeansDeleted &&
       options.missingRecordChecks !== 'none'
-        ? await readFeed(route, scope, context, budget)
-        : new Set<string>();
+    ) {
+      const needed =
+        [...missing].some((id) => evidenceHead(keyFor(scope, id))) ||
+        (options.missingRecordChecks === 'all' &&
+          vanished.some((id) => !writeQueues.has(keyFor(scope, id))));
+      if (needed && !feedAfterGets.has(scope)) {
+        const feed = await readFeed(route, scope, context, budget);
+        tombstones = feed.tombstones;
+        feedUsed = feed.used;
+        if (feed.exhausted) feedAfterGets.add(scope);
+      } else {
+        feedAfterGets.delete(scope);
+        sync.deferredFeeds.push({ route, scope, context });
+      }
+    }
     const evidence = new Map<string, Evidence>();
     for (const id of missing) {
       const key = keyFor(scope, id);
-      if (!evidenceHead(key)) continue;
+      const head = evidenceHead(key);
+      if (!head) continue;
       const found = await findEvidence(route, context, id, budget, tombstones);
-      if (!found) continue;
+      if (!found) {
+        // Unchecked for lack of budget the feed read took: not a refresh
+        // miss, and the next sync reads the feed after the GETs.
+        if (feedUsed) {
+          sync.spared.add(head);
+          feedAfterGets.add(scope);
+        }
+        continue;
+      }
       evidence.set(id, found);
       reportMissing(route, context, id, found);
     }
@@ -2470,13 +2545,17 @@ export function createApiClient(
    * fails, so it is listed and can be retried or discarded.
    */
   const REFRESH_MISS_LIMIT = 3;
-  async function countRefreshMisses(released: Set<QueuedWrite>): Promise<void> {
+  async function countRefreshMisses(
+    released: Set<QueuedWrite>,
+    spared: Set<QueuedWrite>,
+  ): Promise<void> {
     // While blocked, no write could be sent anyway (and reads likely fail
     // for the same reason): waiting does not count.
     if (authBlock) return;
     let changed = false;
     for (const write of allWrites()) {
-      if (!write.awaitingRefresh || released.has(write)) continue;
+      if (!write.awaitingRefresh || released.has(write) || spared.has(write))
+        continue;
       // Only the head: failing a write behind unsettled ones would make a
       // failed write newer than queued ones, which a settle then drops.
       if (writeQueues.get(keyFor(write.scope, write.id))?.[0] !== write)
@@ -2500,6 +2579,7 @@ export function createApiClient(
     const started = new Map(revisions);
     const startedRecords = new Map(recordRevisions);
     const released = new Set<QueuedWrite>();
+    const round: SyncRound = { spared: new Set(), deferredFeeds: [] };
     // One budget for the read and the GETs of records it no longer returns.
     const budget = new Budget(
       conditionalTransport,
@@ -2531,7 +2611,7 @@ export function createApiClient(
           item,
         ]),
       );
-      const read = { route, scope, context, budget };
+      const read = { route, scope, context, budget, sync: round };
       // Records no write settled on during the read are still fresh.
       const isFresh = (id: string): boolean =>
         (startedRecords.get(keyFor(scope, id)) ?? 0) ===
@@ -2609,7 +2689,10 @@ export function createApiClient(
         vanished,
       );
     }
-    await countRefreshMisses(released);
+    // Feeds not read before the GETs, from what budget is left.
+    for (const { route, scope, context } of round.deferredFeeds)
+      await readFeed(route, scope, context, budget);
+    await countRefreshMisses(released, round.spared);
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
     return { changed: [...changed] };

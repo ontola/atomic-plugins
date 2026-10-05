@@ -46,3 +46,24 @@ object was not deleted. In syncables:
   and the changelog's Unreleased entry updated.
 
 Not verified against a real provider; no overlay declares `x-deletion-feed`.
+
+## Turn 2
+
+**Human (via the oversight session):** Review of PR #327. The feed read
+starves the evidence GETs (with `maxRequests: 2`, a filtered record's
+update failed after three syncs instead of being read); keep reading the
+feed every sync (Q-079 is open) but make the budget fair, and keep a
+starved check from counting as a refresh miss. Count `maxRecords` in the
+feed read; store the outbox only when the cursor changes. In the spec, list
+Google Calendar (cancelled events stay readable) and Asana (required
+`resource` query parameter) as not fitting, and apply §4.3's test to Box.
+
+**Assistant:** The feed is read before a collection's GETs only when one of
+its missing records needs evidence, otherwise at the end of the sync; a
+feed read that ran out of budget, or took budget a GET then lacked, moves
+that feed to the end for the next sync, and the unchecked update is not
+counted as a miss. A feed read over `limits.maxRecords` items is
+incomplete, and an unchanged cursor is not stored again. Regression tests
+for each, README and CLAUDE.md updated; the spec's survey now says only
+YNAB fits as documented, with the reasons for Google Calendar, Asana and
+Box (unverified).

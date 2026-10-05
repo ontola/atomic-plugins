@@ -186,7 +186,13 @@ Data flows through four stages, each its own directory under `src/`:
    complete sync of the scope, through the sync's `Budget` and `walkPages`,
    from the cursor in `feedCursors`, which the outbox stores; an incomplete
    or malformed read gives no tombstones and keeps the cursor, apart from a
-   declared expired status; not read under `absent: deleted` or
+   declared expired status, or more than `maxRecords` items; read before
+   the GETs only when the scope has an `evidenceHead` (or `vanished` under
+   `'all'`) and the scope is not in `feedAfterGets`, else at the end of the
+   sync (`SyncRound.deferredFeeds`); a feed read that ran out of budget, or
+   that got a response before a GET went unchecked, puts the scope in
+   `feedAfterGets` for one sync and the unchecked head in `spared`, which
+   `countRefreshMisses` does not count; not read under `absent: deleted` or
    `missingRecordChecks: 'none'`; `source: 'feed'`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
