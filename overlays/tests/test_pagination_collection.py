@@ -25,6 +25,12 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    "google_drive": "APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml",
+    "google_gmail": "APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml",
+    "google_people": "APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+    "google_tasks": "APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
+    "google_youtube": "APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "google_storage": "APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml",
     'asana': 'APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml',
     'zendesk': 'APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml',
     'squareup': 'APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml',
@@ -628,6 +634,111 @@ class PaginationCollectionTests(unittest.TestCase):
             self.assertEqual(response["headers"]["Link"]["schema"], {"type": "string"})
         for path in ("/api/v1/accounts/relationships", "/api/v1/directory", "/api/v1/instance/peers"):
             self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+    def test_google_pages_keep_sync_checkpoints_and_estimates_separate(self):
+        for service in ("drive", "gmail", "people", "tasks", "youtube", "storage"):
+            with self.subTest(service=service):
+                document = self.documents["google_" + service][1]
+                scheme = document["components"]["paginationSchemes"]["forwardPages"]
+                self.assertFalse(scheme["autoDetect"])
+                self.assertEqual(scheme["request"], {"queryParameters": {"pageToken": {"role": "cursor"}}})
+                self.assertIn("short or empty", scheme["description"])
+                for _, method, _, _, application in applications(document):
+                    self.assertEqual(method, "get")
+                    effective = merge(copy.deepcopy(scheme), application["overrides"])
+                    # Neither a future-sync checkpoint nor an estimated total
+                    # determines continuation within this listing.
+                    self.assertEqual(effective["response"]["bodyFields"], {"nextPageToken": {"role": "nextCursor"}})
+                    self.assertIn(set(effective["request"]["queryParameters"]),
+                                  ({"pageToken", "pageSize"}, {"pageToken", "maxResults"}))
+
+    def test_google_drive_projections_and_ordinary_collection_scope(self):
+        document = self.documents["google_drive"][1]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        expected = {"/drives": "drives", "/files": "files", "/files/{fileId}/comments": "comments",
+                    "/files/{fileId}/comments/{commentId}/replies": "replies", "/files/{fileId}/listLabels": "labels",
+                    "/files/{fileId}/permissions": "permissions", "/files/{fileId}/revisions": "revisions"}
+        self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, expected)
+        for path in ("/files/{fileId}/comments", "/files/{fileId}/comments/{commentId}/replies"):
+            self.assertIn("fields query is required", selected[path]["description"])
+            self.assertIn("nextPageToken", selected[path]["description"])
+        self.assertEqual(selected["/files/{fileId}/listLabels"]["overrides"]["request"],
+                         {"queryParameters": {"maxResults": {"role": "pageSize"}}})
+        for path, method in (("/changes", "get"), ("/changes/watch", "post"),
+                             ("/teamdrives", "get"), ("/files/{fileId}", "get")):
+            self.assertNotIn("x-pagination", document["paths"][path][method])
+
+    def test_google_gmail_collection_envelopes_exclude_history(self):
+        document = self.documents["google_gmail"][1]
+        base = "/gmail/v1/users/{userId}/"
+        expected = {base + suffix: envelope for suffix, envelope in {
+            "drafts": "drafts", "messages": "messages", "threads": "threads",
+            "settings/cse/identities": "cseIdentities", "settings/cse/keypairs": "cseKeyPairs",
+        }.items()}
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, expected)
+        for path, app in selected.items():
+            size = "pageSize" if "/settings/cse/" in path else "maxResults"
+            self.assertEqual(app["overrides"]["request"], {"queryParameters": {size: {"role": "pageSize"}}})
+        self.assertNotIn("x-pagination", document["paths"][base + "history"]["get"])
+        self.assertNotIn("x-pagination", document["paths"][base + "watch"]["post"])
+
+    def test_google_people_full_lists_keep_masks_and_sync_modes(self):
+        original, document = self.documents["google_people"]
+        expected = {"/v1/contactGroups": "contactGroups", "/v1/otherContacts": "otherContacts",
+                    "/v1/people:listDirectoryPeople": "people", "/v1/people:searchDirectoryPeople": "people",
+                    "/v1/{resourceName}/connections": "connections"}
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, expected)
+        for path, app in selected.items():
+            self.assertIn("omit syncToken", app["description"])
+            self.assertIn("nextSyncToken", app["description"])
+            self.assertEqual(document["paths"][path]["get"]["parameters"], original["paths"][path]["get"]["parameters"])
+        # Contact search returns one bounded result set, not this page mode.
+        self.assertNotIn("x-pagination", document["paths"]["/v1/people:searchContacts"]["get"])
+
+    def test_google_tasks_list_scope_preserves_completion_filters(self):
+        original, document = self.documents["google_tasks"]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual(set(selected), {"/tasks/v1/lists/{tasklist}/tasks", "/tasks/v1/users/@me/lists"})
+        for app in selected.values():
+            self.assertEqual(app["overrides"]["response"]["envelope"], {"itemsField": "items"})
+        path = "/tasks/v1/lists/{tasklist}/tasks"
+        self.assertEqual(document["paths"][path]["get"]["parameters"], original["paths"][path]["get"]["parameters"])
+        description = document["components"]["paginationSchemes"]["forwardPages"]["description"]
+        for flag in ("showCompleted", "showHidden", "showDeleted"):
+            self.assertIn(flag, description)
+        self.assertNotIn("x-pagination", document["paths"][path]["post"])
+
+    def test_google_youtube_collection_modes_exclude_streams_and_id_batches(self):
+        document = self.documents["google_youtube"][1]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual(set(selected), {"/youtube/v3/" + suffix for suffix in
+                                        ("playlistItems", "playlists", "subscriptions", "commentThreads", "comments", "search")})
+        self.assertIn("parentId only", selected["/youtube/v3/comments"]["description"])
+        for resource in ("comments", "commentThreads"):
+            self.assertIn("unsupported with id", selected["/youtube/v3/" + resource]["description"])
+        for app in selected.values():
+            self.assertEqual(app["overrides"]["response"]["envelope"], {"itemsField": "items"})
+        for resource in ("liveChat/messages", "members", "videoCategories", "videos"):
+            self.assertNotIn("x-pagination", document["paths"]["/youtube/v3/" + resource]["get"])
+
+    def test_google_storage_flat_objects_and_schema_doc_disagreements(self):
+        document = self.documents["google_storage"][1]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, {
+            "/b": "items", "/b/{bucket}/o": "items", "/b/{bucket}/operations": "operations",
+            "/projects/{projectId}/hmacKeys": "items",
+        })
+        self.assertIn("omit delimiter", selected["/b/{bucket}/o"]["description"])
+        self.assertIn("prefixes", selected["/b/{bucket}/o"]["description"])
+        self.assertEqual(selected["/b/{bucket}/operations"]["overrides"]["request"],
+                         {"queryParameters": {"pageSize": {"role": "pageSize"}}})
+        # Folder docs say maxResults while the pin says pageSize; cache docs
+        # omit pagination inputs. Preserve these routes for a separate review.
+        for resource in ("folders", "managedFolders", "anywhereCaches"):
+            self.assertNotIn("x-pagination", document["paths"]["/b/{bucket}/" + resource]["get"])
+        self.assertNotIn("x-pagination", document["paths"]["/b/{bucket}/o/watch"]["post"])
 
 
 if __name__ == "__main__":
