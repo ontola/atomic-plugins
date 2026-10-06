@@ -9,9 +9,14 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
+      "devonian/lenses": ["../../devonian/src/lenses/index.ts"],
       "@tomic/lib": ["../../browser/lib/src/index.ts"]
     }
   },
-  "include": ["localthought.ts", "app/**/*.ts"],
+  "include": [
+    "localthought.ts",
+    "app/**/*.ts",
+    "devonian/clockify/lens/algebra.ts"
+  ],
   "exclude": ["app/**/*.test.ts", "app/fixtureProxy.ts"]
 }

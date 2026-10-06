@@ -51,6 +51,8 @@ import {
 } from './drive.js';
 import {
   lookupTasks,
+  rateLimited,
+  type RateLimitOptions,
   readActiveTasks,
   readProjects,
   type TodoistGet,
@@ -104,7 +106,11 @@ export function relayGet(
       method: 'GET',
     });
 
-    return { status: response.status, body: response.body } as TodoistResponse;
+    return {
+      status: response.status,
+      body: response.body,
+      ...(response.headers ? { headers: response.headers } : {}),
+    } as TodoistResponse;
   };
 }
 
@@ -215,19 +221,23 @@ export interface SyncOptions {
   now?: () => string;
   /** Page cap for the reads; tests force a partial read with it. */
   read?: { pageSize?: number; maxPages?: number };
+  /** How a 429 is waited out (`read.ts` `rateLimited`); tests pin the clock and the wait. */
+  rateLimit?: RateLimitOptions;
 }
 
 /**
  * Reads the projects, the complete active-task list and, for each previously
  * imported task now missing from a complete list, that task by id; then
- * reconciles (`reconcileTodoistTasks`) and writes what changed.
+ * reconciles (`reconcileTodoistTasks`) and writes what changed. A 429 that
+ * cannot be waited out throws `TodoistRateLimited` before any write.
  */
 export async function syncTasks(
   store: PluginStore,
-  get: TodoistGet,
+  rawGet: TodoistGet,
   drive: Drive,
-  { now = () => new Date().toISOString(), read }: SyncOptions = {},
+  { now = () => new Date().toISOString(), read, rateLimit }: SyncOptions = {},
 ): Promise<SyncSummary> {
+  const get = rateLimited(rawGet, rateLimit);
   const projects = await readProjects(get, read);
   const fetched: FetchedPlatform = await readActiveTasks(get, read);
   const { previous, rows } = await previousTasks(

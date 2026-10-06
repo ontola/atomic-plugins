@@ -24,6 +24,12 @@
  *    row is `unavailable`, stays open, keeps its values and says when it was
  *    last seen. Nothing is removed and nothing is sent to Todoist.
  *
+ * At each step the shared sync-status card (`integrations/sync-status/`,
+ * Q-084; `../todoist-app/status.ts`) heads the view: the last sync and its
+ * counts, that the app is read-only and overwrites local edits, and the #99
+ * results as counted groups. The visually hidden `role="status"` line keeps
+ * the summary sentence this spec waits on.
+ *
  * The rows use the published GitHub Pages subject of `issue-v1`, which the
  * pinned server and the browser fetch themselves, so `beforeAll` first checks
  * Pages serves it with the committed bytes (ontology-kit/served.mjs); this
@@ -36,7 +42,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const NAME = 'https://atomicdata.dev/properties/name';
 const PARENT = 'https://atomicdata.dev/properties/parent';
@@ -71,6 +77,7 @@ test.describe('Todoist drive app', () => {
     const app = page.frameLocator(APP_FRAME);
     const status = app.getByRole('status');
     const synced = status.filter({ hasText: 'Last synced' });
+    const card = app.getByRole('region', { name: 'Sync status' });
     const rows = app.locator('tr[data-task]');
     // The mock proxy outlives an attempt: a retry finds the tasks an earlier
     // attempt completed and removed, so bring both back first.
@@ -83,6 +90,10 @@ test.describe('Todoist drive app', () => {
       timeout: 30_000,
     });
     await expect(status).toContainText('Not connected');
+    // The card, before anything was read: read-only all the same.
+    await expect(card).toContainText('Not synced yet');
+    await expect(card).toContainText('Not connected.');
+    await expect(card).toContainText('Read-only: edits here stay in Atomic.');
     await app.getByRole('button', { name: 'Connect Todoist' }).click();
 
     const consent = page.getByRole('group', { name: 'Connect an account' });
@@ -104,6 +115,17 @@ test.describe('Todoist drive app', () => {
       { timeout: 60_000 },
     );
     await expect(rows).toHaveCount(5);
+    // The card after the first import (Q-084): the sync, its counts, the
+    // task count, and the exact write-back words.
+    await expect(card).toContainText('Synced just now');
+    await expect(card).toContainText(
+      'Last sync: 5 added, 0 updated, 0 unchanged',
+    );
+    await expect(card).toContainText('5 tasks from Todoist');
+    await expect(card).toContainText(
+      'Read-only: edits here stay in Atomic. Nothing is sent to Todoist. An edit here to an imported column (Name, Status, Description, Due date) is overwritten at the next sync; a row added here is kept.',
+    );
+    await expect(card).not.toContainText('completed in Todoist');
     const plants = rows.filter({ hasText: 'Water the synthetic plants' });
     await expect(plants).toHaveAttribute('data-task', 'synthetic-task-1');
     await expect(plants).toContainText('Todo');
@@ -178,6 +200,15 @@ test.describe('Todoist drive app', () => {
     await expect(rows).toHaveCount(5);
     await expect(plants).toHaveAttribute('data-presence', 'completed');
     await expect(plants).toContainText('Done');
+    // The #99 result on the card, as a counted group naming the task.
+    await expect(card).toContainText(
+      'Last sync: 0 added, 1 updated, 4 unchanged',
+    );
+    await expect(card).toContainText(
+      '1 task is completed in Todoist: closed here and kept in the table.',
+    );
+    await card.getByText('Which').first().click();
+    await expect(card).toContainText('Water the synthetic plants');
     const plantsSubject = (await plants.getAttribute('data-subject'))!;
     const after = await propsOf(page, [plantsSubject]);
     expect(after[plantsSubject][`${TASK}/status`]).toEqual([`${TASK}/done`]);
@@ -193,6 +224,9 @@ test.describe('Todoist drive app', () => {
     );
     const fence = rows.filter({ hasText: 'Paint the fictional fence' });
     await expect(fence).toHaveAttribute('data-presence', 'unavailable');
+    await expect(card).toContainText(
+      '1 task can no longer be reached in Todoist (gone, or no access): kept here, open, with the last values Todoist sent; not closed.',
+    );
     await expect(fence).toContainText('Todo');
     await expect(fence).toContainText('Synthetic house');
     // Last seen (the seventh column; the eighth is Open row): an ISO date
@@ -248,6 +282,11 @@ test.describe('Todoist drive app', () => {
     await expect(
       local.getByRole('button', { name: 'Open row (no name)' }),
     ).toBeVisible();
+    await expect(card).toContainText(
+      '1 task is incomplete (missing Name): listed, not counted above.',
+    );
+    await expect(card).toContainText('5 tasks from Todoist');
+    await expect(card.getByRole('button', { name: 'Open row' })).toBeVisible();
     await expect(rows).toHaveCount(5);
     expect((await propsOf(page, [nameless]))[nameless][NAME]).toBe('');
 
