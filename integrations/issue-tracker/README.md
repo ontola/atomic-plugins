@@ -224,7 +224,7 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 177,467 bytes for
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 178,137 bytes for
 0.4.0) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
 per table**: the app's own table, and each other Issue table it was asked
@@ -310,15 +310,29 @@ per consecutive rate-limited failure, up to 60 min; a pass that ends
 rate-limited always re-arms the timer at the fresh time, `app/retry.ts`). A
 write GitHub refused this way wrote nothing: `proxyTransport` drops its
 journal entry instead of leaving it uncertain, and the Bridge drops the saved
-operation (`bridge.mjs` `attempt`, on `notSent`), so the change is planned
-again next pass from both sides' current state, held for review like a new
-one, and never shows as "may already be there" after a reload. In the same
-view the controller keeps the review approval for that retry, keyed by the
-row's subject and its exact content (`review.mjs` `approvalKey`), so the
-retry sends exactly the reviewed rows without a second review and a second
-row with the same content is held; a reload, or any other outcome, drops the
-approval and the change is reviewed again. An edit made while the limit
-lasts is simply held with the rest.
+operation (`bridge.mjs` `attempt`, on `notSent`), so what is still missing is
+planned again next pass from both sides' current state, held for review like
+a new write, and never shows as "may already be there" after a reload. An
+operation may have been applied in part before the refused request (a create
+with status Doing or Blocked is an issue POST and then a label POST; an
+update is a fields PATCH and then label calls): a create whose issue POST got
+its receipt is first bound to the issue it made, with the create's values as
+the baseline (`Bridge.bindCreated`, as "It landed" does), so the next pass
+finds the row bound and plans the missing label as a plain status update
+instead of importing the issue as a second row; an applied PATCH simply
+shows as the remote side agreeing with the edit. In the same view the
+controller keeps the review approval for that retry, keyed by the row's
+subject, the entity and its exact content (`review.mjs` `approvalKey`; the
+provider id is left out, so the rest of a half-made create passes as the
+update of the issue it made), so the retry sends exactly the reviewed rows
+without a second review and a second row with the same content is held; a
+reload, or any other outcome, drops the approval and the remaining change is
+reviewed again ("Update #3: status Todo → Doing"), with the issue already on
+GitHub without its label until then. An edit made while the limit lasts is
+simply held with the rest. Not covered: an update that changed both text and
+status and was interrupted after its PATCH reconciles the text as agreed and
+holds the status; a multi-write operation interrupted by anything other than
+a refusal (a lost answer) resumes as before, flagged to check GitHub.
 Unit-tested with fake transports (`app/rateLimit.test.ts`,
 `app/controller.test.ts`): 429, a secondary-limit 403, `retry-after` as
 seconds and as a date, `x-ratelimit-reset`, the cap, the bounded retries,

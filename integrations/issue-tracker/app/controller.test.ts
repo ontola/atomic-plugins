@@ -875,6 +875,116 @@ group('issue-tracker controller: GitHub rate limits', () => {
     expect(describeHeld(edited.last!.result.held[0])).toMatch(/Renamed|Done/);
   });
 
+  /** The next `skip` writes pass; the one after is refused for an hour. */
+  const limitAfter = (store: FakeStore, skip: number) => {
+    store.rateLimit = {
+      status: 403,
+      headers: { 'retry-after': '3600' },
+      remaining: 1,
+      writesOnly: true,
+      skip,
+      message: 'You have exceeded a secondary rate limit.',
+    };
+  };
+
+  const issues = (store: FakeStore) =>
+    store.github.snapshot(SEEDED_REPOSITORY).issues as {
+      number: number;
+      title: string;
+      labels: (string | { name: string })[];
+    }[];
+  const labelsOf = (issue: { labels: (string | { name: string })[] }) =>
+    issue.labels.map(l => (typeof l === 'string' ? l : l.name));
+
+  it('a create applied in part (issue made, status label refused) completes on the next sync: one issue, one row, nothing held', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Doing',
+    });
+    limitAfter(store, 1);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    const made = issues(store).filter(i => i.title === 'Half-made');
+    expect(made).toHaveLength(1);
+    expect(labelsOf(made[0])).toEqual([]);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    expect(labelsOf(issues(store).find(i => i.title === 'Half-made')!)).toEqual(
+      ['atomic:doing'],
+    );
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    const row = after.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made[0].number);
+    expect(row.status).toBe('Doing');
+    expect(row.localOnly).toBeUndefined();
+    // And the pass after that has nothing left to do.
+    const settled = ready(await controller.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+  });
+
+  it('the same across a reload: the row is bound to the issue it made, the label change is held for review, nothing is duplicated', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Blocked',
+    });
+    limitAfter(store, 1);
+    ready(await controller.send());
+    const made = issues(store).find(i => i.title === 'Half-made')!;
+
+    const again = createController(store);
+    await again.load();
+    const synced = ready(await again.sync());
+    expect(synced.problem).toBeUndefined();
+    expect(synced.last!.result.rows).toHaveLength(rowsBefore + 1);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    // The rest of the create, as a plain change to review: not uncertain.
+    expect(synced.last!.result.uncertain).toEqual([]);
+    expect(synced.last!.result.held.map(describeHeld)).toEqual([
+      `Update #${made.number}: status Todo → Blocked (add the atomic:blocked label)`,
+    ]);
+    expect(synced.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    ready(await again.send());
+    expect(labelsOf(issues(store).find(i => i.title === 'Half-made')!)).toEqual(
+      ['atomic:blocked'],
+    );
+    const settled = ready(await again.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // The issue number reaches the row's column with the completed update.
+    const row = settled.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made.number);
+    expect(row.status).toBe('Blocked');
+  });
+
+  it('an update whose fields PATCH applied before its label POST was refused still recovers', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Doing' });
+    limitAfter(store, 1);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    expect(labelsOf(issues(store)[0])).toEqual(['bug']);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(labelsOf(issues(store)[0])).toEqual(['bug', 'atomic:doing']);
+    expect(rowByNumber(after, 1).status).toBe('Doing');
+  });
+
   it('describes the rate limit with its retry time', () => {
     const until = Date.UTC(2026, 9, 6, 14, 5);
     expect(

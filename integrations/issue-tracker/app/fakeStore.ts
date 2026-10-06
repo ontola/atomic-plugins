@@ -84,6 +84,8 @@ export interface FakeStore extends PluginStore {
     remaining: number;
     writesOnly?: boolean;
     message?: string;
+    /** Matching calls let through first (the create before its label). */
+    skip?: number;
   };
   /** Answers every call with this integration-proxy refusal code. */
   refusal?: string;
@@ -277,6 +279,22 @@ export function fakeStore({
     };
   };
 
+  const answerLimited = (limit: NonNullable<FakeStore['rateLimit']>) => {
+    limit.remaining--;
+
+    return {
+      status: limit.status,
+      headers: limit.headers,
+      body: {
+        message:
+          limit.message ??
+          'API rate limit exceeded for user ID 1. Check the documentation.',
+        documentation_url:
+          'https://docs.github.com/rest/overview/rate-limits-for-the-rest-api',
+      },
+    };
+  };
+
   const proxy: HostProxy = {
     async request(request) {
       calls.push(request);
@@ -313,19 +331,8 @@ export function fakeStore({
       const limit = fake.rateLimit;
 
       if (limit && limit.remaining > 0 && (write || !limit.writesOnly)) {
-        limit.remaining--;
-
-        return {
-          status: limit.status,
-          headers: limit.headers,
-          body: {
-            message:
-              limit.message ??
-              'API rate limit exceeded for user ID 1. Check the documentation.',
-            documentation_url:
-              'https://docs.github.com/rest/overview/rate-limits-for-the-rest-api',
-          },
-        };
+        if (limit.skip) limit.skip--;
+        else return answerLimited(limit);
       }
 
       const url = new URL(

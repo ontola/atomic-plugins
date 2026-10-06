@@ -696,6 +696,28 @@ function bridgeFor(options: PassOptions) {
       delete journal[id];
       await state.saveJournal();
     },
+    /**
+     * A create GitHub answered (its receipt is journalled): the record it
+     * made and what was sent, for `Bridge.bindCreated` when the rest of the
+     * operation was refused.
+     */
+    async created(entity: string, subject: string) {
+      const entry = journal[await createId(entity, subject)];
+      const receipt = entry?.receipt as { body?: string } | undefined;
+      if (!entry?.signature || typeof receipt?.body !== 'string')
+        return undefined;
+      const made = JSON.parse(receipt.body) as {
+        number?: unknown;
+        id?: unknown;
+      };
+      const id = entity === 'issue' ? made.number : made.id;
+      if (!Number.isSafeInteger(id)) return undefined;
+      const { args } = JSON.parse(entry.signature) as {
+        args: { title?: string; body?: string };
+      };
+
+      return { id: id as number, sent: { title: args.title, body: args.body } };
+    },
   };
   const sent = { value: 0 };
   let sinceFlush = 0;

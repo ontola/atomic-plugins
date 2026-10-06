@@ -20,10 +20,10 @@ describe('GitHub issues drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource; keep an eye on the size.
-    // Measured 177,467 bytes (173.3 KiB) on 2026-10-06 for 0.4.0, with the
+    // Measured 178,137 bytes (174.0 KiB) on 2026-10-06 for 0.4.0, with the
     // JS and the embedded stylesheets minified: 0.3.1 plus the shared
-    // sync-status card (Q-084), GitHub rate-limit handling, the retry plan
-    // and the github-last-sync stamp. Earlier:
+    // sync-status card (Q-084), GitHub rate-limit handling, the retry plan,
+    // the github-last-sync stamp and binding a half-made create. Earlier:
     // 162,541 bytes on 2026-10-02 for 0.3.1 (incomplete rows: a row missing
     // its Name shown, marked, never synced; #177);
     // 160,628 bytes on 2026-10-02 for 0.3.0 ("Sync this table to GitHub"
@@ -34,8 +34,8 @@ describe('GitHub issues drive-app bundle', async () => {
     // baselines on the rows, #177 item 6); 137,315 bytes
     // on 2026-10-01 after resolving uncertain creates (#156); 125,472 bytes
     // on 2026-09-24 for the designed board/list/detail UI (#89). The limit is
-    // the latest plus 10%, rounded up to the next KiB.
-    expect(bytes).toBeLessThan(189 * 1024);
+    // the latest plus 10%, rounded up to the next KiB (195,951 -> 192 KiB).
+    expect(bytes).toBeLessThan(192 * 1024);
   });
 
   it('has no storage or network access of its own', () => {

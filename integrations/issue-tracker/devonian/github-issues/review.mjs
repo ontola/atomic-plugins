@@ -26,13 +26,18 @@ export function proposalKey(entity, id, value) {
 }
 
 /**
- * An approval for one row: its subject and its proposal key. A proposal key
- * names content, not a row (a create's is `["issue", null, {…}]`), so an
- * approval that outlives the pass it was given in must say which row it was
- * for, or a second row with the same content would be sent unreviewed.
+ * An approval for one row: its subject, the entity and the content of its
+ * proposal key. A proposal key names content, not a row (a create's is
+ * `["issue", null, {…}]`), so an approval that outlives the pass it was
+ * given in must say which row it was for, or a second row with the same
+ * content would be sent unreviewed. The provider id is left out: the row
+ * pins it, and a create applied in part comes back as an update of the
+ * record it made, with the same reviewed content.
  */
 export function approvalKey(subject, key) {
-  return JSON.stringify([subject, key]);
+  const [entity, , value] = JSON.parse(key);
+
+  return JSON.stringify([subject, entity, value]);
 }
 
 /**

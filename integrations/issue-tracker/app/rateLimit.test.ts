@@ -248,7 +248,9 @@ describe('through the relay, with the write journal', () => {
       headers: { 'retry-after': '2' },
       remaining: 1,
     };
+    // A fixed clock: the wait is read off `until` with the same `now`.
     const dispatch = relayDispatch(store.proxy!, 'c1', {
+      now: () => NOW,
       sleep: sleeps(slept),
     });
     const receipt = await dispatch('/repos/atomic-fixture/tracker/issues', {
@@ -315,7 +317,10 @@ describe('through the relay, with the write journal', () => {
       repository: 'atomic-fixture/tracker',
       journal,
       save: async () => {},
-      dispatch: relayDispatch(store.proxy!, 'c1', { sleep: sleeps(slept) }),
+      dispatch: relayDispatch(store.proxy!, 'c1', {
+        now: () => NOW,
+        sleep: sleeps(slept),
+      }),
     });
     store.rateLimit = {
       status: 429,
