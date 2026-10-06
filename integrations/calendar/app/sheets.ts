@@ -60,7 +60,12 @@ function status(doc: Document, p: 'sending' | Outcome | undefined): Child {
         '! Unknown whether Google applied it',
       );
     case 'failed':
-      return h(doc, 'span', { class: 'rs fail' }, '! Google refused it');
+      return h(
+        doc,
+        'span',
+        { class: 'rs fail' },
+        p.written ? '! Written, but not saved here' : '! Google refused it',
+      );
     case 'not-sent':
       return h(doc, 'span', { class: 'rs wait' }, 'Not sent');
   }
@@ -73,6 +78,12 @@ const OUTCOME_TEXT: Record<Outcome['status'], string> = {
   failed: 'Google refused it',
   'not-sent': 'Not sent, because an earlier change’s outcome is unknown',
 };
+
+/** The outcome as a sentence, for screen readers. */
+const outcomeText = (o: Outcome) =>
+  o.status === 'failed' && o.written
+    ? 'Written to Google, but the row here could not be updated; the next sync reads it back'
+    : OUTCOME_TEXT[o.status];
 
 export function review(
   ctx: Ctx,
@@ -172,7 +183,7 @@ export function review(
                   doc,
                   'span',
                   { class: 'sr-only' },
-                  `${o.title}: ${OUTCOME_TEXT[o.status]}`,
+                  `${o.title}: ${outcomeText(o)}`,
                 ),
               ),
               o.status === 'stale'

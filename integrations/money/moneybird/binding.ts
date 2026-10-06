@@ -55,6 +55,45 @@ export function parseCollections(value: JSONValue): Collection[] {
   return COLLECTIONS.filter(c => names.includes(c));
 }
 
+/** When each collection last refreshed without error (`own.ts` `LAST_SYNC`). */
+export type LastGood = Partial<Record<Collection, Date>>;
+
+/** What `formatLastSync` writes: `Date.prototype.toISOString`'s shape, UTC only. */
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/**
+ * `contacts:2026-10-06T12:00:00.000Z,hours:…` as dates. Unknown names,
+ * times not in that strict ISO 8601 shape, and times later than `now` (a
+ * clock that was wrong when they were written) are dropped, so a stored
+ * time never reads "Synced just now" for a sync that did not happen.
+ */
+export function parseLastSync(value: JSONValue, now = Date.now()): LastGood {
+  const out: LastGood = {};
+  if (typeof value !== 'string') return out;
+
+  for (const part of value.split(',')) {
+    const at = part.indexOf(':');
+    if (at < 0) continue;
+    const name = part.slice(0, at).trim();
+    const text = part.slice(at + 1).trim();
+    if (!ISO_UTC.test(text)) continue;
+    const time = Date.parse(text);
+    if (
+      COLLECTIONS.includes(name as Collection) &&
+      Number.isFinite(time) &&
+      time <= now
+    )
+      out[name as Collection] = new Date(time);
+  }
+
+  return out;
+}
+
+export const formatLastSync = (lastGood: LastGood) =>
+  COLLECTIONS.filter(c => lastGood[c])
+    .map(c => `${c}:${lastGood[c]!.toISOString()}`)
+    .join(',');
+
 export const formatCollections = (collections: readonly Collection[]) =>
   COLLECTIONS.filter(c => collections.includes(c)).join(',');
 

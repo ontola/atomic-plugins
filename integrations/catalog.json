@@ -155,11 +155,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Calendar through the host's consent bar and choose a calendar. It syncs when opened and on Sync now; Send sends the reviewed edits. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One calendar per table, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it) and the table's existing rows are not uploaded. Waits for the stable ontology domain. Mock-tested only: not yet verified against a live Google account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google calendar events agenda week month schedule drive app two-way review",
-    "https://atomicdata.dev/integrations/properties/version": "0.3.1",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.2",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-Dpav1FxAR55QleDltgiGDau5GWwgsWR4lE1DBuw1NpGUfzva7KFBrVPXTSZFGDG0"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.2/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-n7ZsDzZd12auROdJND0P7VEOKoEjsITs24bmQ5wTInXF2qFug4VIrvY+LyONzQdY"
   },
   {
     "https://atomicdata.dev/properties/localId": "todoist",
@@ -239,11 +239,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar, choose an administration and tick what to import. The chosen collections refresh whenever the app is opened and on Sync now, each on its own: one that fails is reported next to the others. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. One administration per app. Hours and mutations cover this calendar year only; Moneybird answers at most 100 mutations per request, so a day with 100 or more is refused rather than imported incompletely. Tested against a synthetic fixture, not a real Moneybird account. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts hours time entries financial mutations bank transactions ledger finance administration drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.2.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-thsBlBl724A+WF1UB6470BO/0TEhoM2qQWtepRvbiAcbCgMOMV3Xt9E0qHZi0jPF"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.3.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-vj2Y6emubJtyxLmP67WliYKzI22tRcnmFqI8dLjR4gjsQQvNJ08/iLIfX7XVs1Lt"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",

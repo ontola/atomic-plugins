@@ -19,7 +19,8 @@
     "app/*.ts",
     "app/ui/*.ts",
     "app/harness/*.ts",
-    "moneybird/*.ts"
+    "moneybird/*.ts",
+    "../sync-status/css.d.ts"
   ],
   "exclude": [
     "app/*.test.ts",

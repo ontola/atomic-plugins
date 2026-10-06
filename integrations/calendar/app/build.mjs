@@ -9,12 +9,16 @@
  * AGENTS.md), for esbuild and for `browser/lib/src/plugin-reconcile.ts`,
  * which `../adapter.ts` imports. No npm dependencies of its own.
  * No code splitting and no CSS file: "a plugin in the drive is one module".
+ * The shared sync-status card's `card.css?raw` import is served by
+ * `cssRawPlugin` (`integrations/sync-status/build.mjs`), minified the same
+ * way as the stylesheets below.
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -76,7 +80,7 @@ export async function build({ outfile } = {}) {
     splitting: false,
     legalComments: 'none',
     minify: true,
-    plugins: [minifiedStyles(esbuild)],
+    plugins: [minifiedStyles(esbuild), cssRawPlugin(esbuild)],
     write: false,
     outfile: outfile ?? path('dist/ui.js'),
     logLevel: 'silent',

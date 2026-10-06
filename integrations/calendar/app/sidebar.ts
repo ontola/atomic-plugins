@@ -1,11 +1,12 @@
 // @wc-ignore-file
 /**
  * The sidebar at 900px and wider (DESIGN.md §4): a mini month that moves the
- * main view, the imported calendar with its visibility checkbox and
- * Read-only tag, and what was not imported.
+ * main view, and the imported calendar with its visibility checkbox and
+ * Read-only tag. What was not imported is the sync-status card's
+ * (`ui/status.ts`), above the views.
  */
 import type { Ctx } from './context.js';
-import type { CalendarMeta, ImportSummary } from './sync.js';
+import type { CalendarMeta } from './sync.js';
 import { isReadOnly } from './sync.js';
 import { h, ICONS, svg } from './ui/dom.js';
 import { addDays, longDay, mondayOf, monthTitle } from './time.js';
@@ -19,11 +20,8 @@ export function sidebar(
     weekDays,
     meta,
     visible,
-    summary,
-    whyOpen,
     onMonth,
     onVisible,
-    onWhy,
   }: {
     /** Any date in the month shown. */
     month: string;
@@ -32,11 +30,8 @@ export function sidebar(
     weekDays: number;
     meta: CalendarMeta;
     visible: boolean;
-    summary?: ImportSummary;
-    whyOpen: boolean;
     onMonth: (date: string) => void;
     onVisible: (visible: boolean) => void;
-    onWhy: () => void;
   },
 ): HTMLElement {
   const { doc } = ctx;
@@ -76,7 +71,6 @@ export function sidebar(
     );
   }
 
-  const skipped = summary?.skipped;
   const readOnly = isReadOnly(meta.accessRole);
 
   return h(
@@ -164,79 +158,5 @@ export function sidebar(
         ),
       ),
     ),
-    skipped && anySkipped(skipped)
-      ? h(
-          doc,
-          'section',
-          { class: 'side-sec note' },
-          h(doc, 'h2', {}, 'Not shown'),
-          h(
-            doc,
-            'p',
-            {},
-            notShown(skipped, summary?.unreadable),
-            ' ',
-            h(
-              doc,
-              'button',
-              {
-                class: 'link',
-                'aria-expanded': whyOpen ? 'true' : 'false',
-                'data-key': 'why',
-                onclick: onWhy,
-              },
-              'Why?',
-            ),
-          ),
-          whyOpen
-            ? h(
-                doc,
-                'p',
-                {},
-                'Recurring events aren’t imported yet, so a series is never mapped in part. Cancelled events, and events whose start or end this app can’t read, are counted, never treated as a deletion here.',
-              )
-            : null,
-        )
-      : null,
   );
-}
-
-/** True when the last scan left any event out of the table. */
-export function anySkipped(skipped: {
-  recurring: number;
-  cancelled: number;
-  unreadable?: number;
-}): boolean {
-  return Boolean(skipped.recurring || skipped.cancelled || skipped.unreadable);
-}
-
-export function notShown(
-  skipped: { recurring: number; cancelled: number; unreadable?: number },
-  unreadable: Array<{ title: string }> = [],
-) {
-  const parts: string[] = [];
-  if (skipped.recurring)
-    parts.push(
-      `${skipped.recurring} recurring ${skipped.recurring === 1 ? 'event' : 'events'}`,
-    );
-  if (skipped.cancelled)
-    parts.push(
-      `${skipped.cancelled} cancelled ${skipped.cancelled === 1 ? 'event' : 'events'}`,
-    );
-
-  if (skipped.unreadable) {
-    const names = unreadable
-      .slice(0, 3)
-      .map(e => `“${e.title.trim() || '(untitled)'}”`)
-      .join(', ');
-    parts.push(
-      `${skipped.unreadable} ${skipped.unreadable === 1 ? 'event' : 'events'} with dates this app can’t read${names ? ` (${names}${unreadable.length > 3 ? ', …' : ''})` : ''}`,
-    );
-  }
-
-  const total =
-    skipped.recurring + skipped.cancelled + (skipped.unreadable ?? 0);
-  const verb = total === 1 ? 'isn’t' : 'aren’t';
-
-  return `${parts.join(' and ')} ${verb} imported yet.`;
 }

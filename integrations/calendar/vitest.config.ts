@@ -20,10 +20,14 @@ export default {
     include: [
       '*.test.ts',
       'app/*.test.ts',
+      'app/ui/*.test.ts',
       'devonian/**/*.test.ts',
       'fixtures/**/*.test.ts',
       // The live check's offline tests (an in-memory Google); never the live run.
       'live/*.test.ts',
     ],
+    // The shared sync-status card (app/ui/status.ts, main.ts) imports
+    // card.css?raw; without this Vitest stubs CSS to ''.
+    css: { include: [/card\.css/] },
   },
 };
