@@ -14,16 +14,29 @@ import {
   ensureRowAccess,
   findHome,
   formatCollections,
+  formatLastSync,
   hasRowAccess,
   layout,
   parseCollections,
+  parseLastSync,
   unbindTable,
   type Collection,
+  type LastGood,
   type Layout,
 } from './binding.js';
 import { WORK_PERSON, WORK_PROJECT } from './hours.js';
-import { adopt, COLLECTIONS_TERM, ensureTables, type Adopted } from './own.js';
-import { readAdministrations, type Administration } from './read.js';
+import {
+  adopt,
+  COLLECTIONS_TERM,
+  ensureTables,
+  LAST_SYNC,
+  type Adopted,
+} from './own.js';
+import {
+  MoneybirdError,
+  readAdministrations,
+  type Administration,
+} from './read.js';
 import {
   ADMINISTRATION,
   PLATFORM,
@@ -34,10 +47,40 @@ import {
   type SyncSummary,
 } from './sync.js';
 import type { ConnectionReference, PluginStore } from './store.js';
+import { throttled, type Wait } from './throttle.js';
 
-export type Results = Partial<
-  Record<Collection, SyncSummary | { error: string }>
->;
+/** One collection's refresh that failed; `problem` names the kinds with a plain next step. */
+export interface Failed {
+  error: string;
+  /** Moneybird answered 429 past the retries (`throttle.ts`), or 401/403. */
+  problem?: 'rate-limited' | 'reauth';
+}
+
+export type Results = Partial<Record<Collection, SyncSummary | Failed>>;
+
+/** The latest sync this page load. */
+export interface SyncRecord {
+  at: Date;
+  collections: Collection[];
+  results: Results;
+}
+
+/**
+ * What the card needs beyond the state, kept apart from it so the last sync
+ * still shows while the settings are open or after a later error
+ * (`controller.history()`, also handed to `render`).
+ */
+export interface SyncHistory {
+  last?: SyncRecord;
+  /**
+   * When each collection last refreshed without error: this page load's
+   * syncs, and before them the home's `moneybird-last-sync`, so the gap
+   * after a failed refresh is named across page loads.
+   */
+  lastGood: LastGood;
+  /** The collections this view syncs (the table's one, or the stored choice), once the home is known. */
+  chosen?: Collection[];
+}
 
 export type ViewState =
   | { kind: 'loading' }
@@ -71,6 +114,8 @@ export type ViewState =
       connection: ConnectionReference;
       administration: string;
       collections: Collection[];
+      /** Paused by `throttle.ts`: a 429 retry, or pacing under the limit. */
+      waiting?: Wait;
     }
   | {
       kind: 'synced';
@@ -86,6 +131,8 @@ export type ViewState =
       connection?: ConnectionReference;
       administration?: string;
       collections?: Collection[];
+      /** The table is this app's own or bound to it, so its syncs write here. */
+      bound?: boolean;
     };
 
 const NOUNS: Record<Collection, string> = {
@@ -99,7 +146,7 @@ const labels = (collections: readonly Collection[]) =>
 
 export function describeResult(
   collection: Collection,
-  result: SyncSummary | { error: string },
+  result: SyncSummary | Failed,
 ): string {
   if ('error' in result)
     return `${NOUNS[collection]}: refresh failed: ${result.error} Rows imported earlier are kept.`;
@@ -134,7 +181,9 @@ export function describe(state: ViewState): string {
         ? `Choose the Moneybird administration to import ${labels(state.collections)} into “${state.table}” from.`
         : 'Choose the Moneybird administration and what to import.';
     case 'syncing':
-      return `Importing ${labels(state.collections)}…`;
+      return state.waiting
+        ? `Importing ${labels(state.collections)}… ${describeWait(state.waiting)}`
+        : `Importing ${labels(state.collections)}…`;
 
     case 'synced': {
       const parts = COLLECTIONS.filter(c => state.results[c]).map(c =>
@@ -149,25 +198,49 @@ export function describe(state: ViewState): string {
   }
 }
 
+/** "Moneybird is limiting requests: retrying in 4 s." / "Pacing requests under Moneybird’s limit: next in 12 s." */
+export function describeWait(wait: Wait): string {
+  const s = `${Math.ceil(wait.ms / 1000)} s`;
+
+  return wait.reason === 'rate-limited'
+    ? `Moneybird is limiting requests (429): retrying in ${s}.`
+    : `Pacing requests under Moneybird’s limit: next in ${s}.`;
+}
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+/** A failed refresh, with the kinds the card gives a next step. */
+const failed = (error: unknown): Failed => {
+  const status = error instanceof MoneybirdError ? error.status : undefined;
+
+  return {
+    error: message(error),
+    ...(status === 429
+      ? { problem: 'rate-limited' }
+      : status === 401 || status === 403
+        ? { problem: 'reauth' }
+        : {}),
+  };
+};
 
 /** Collections for an administration chosen by 0.1.x, before there was a choice. */
 const LEGACY_COLLECTIONS: Collection[] = ['contacts'];
 
 export function createController(
   store: PluginStore,
-  render: (state: ViewState) => void,
+  render: (state: ViewState, history: SyncHistory) => void,
 ) {
   let state: ViewState = { kind: 'loading' };
   let where: Layout | undefined;
   let adopted: Adopted | undefined;
   /** The App (own table) or the table's binding: where the settings live. */
   let home: string | undefined;
+  const history: SyncHistory = { lastGood: {} };
 
   const set = (next: ViewState) => {
-    state = next;
-    render(state);
+    state = next.kind === 'error' && home ? { ...next, bound: true } : next;
+    render(state, history);
   };
 
   const term = (shortname: string) => adopted!.properties.get(shortname)!;
@@ -177,6 +250,34 @@ export function createController(
 
   /** The one collection a shared-class table (a view, or the app's own) holds. */
   const fixed = (): Collection | undefined => where?.collection;
+
+  /**
+   * What the home remembers, for the card, as soon as the home is known and
+   * before any state is shown: the collections this view syncs, and the
+   * stored last good refresh per collection (unless this page load already
+   * knows a later one). So a table that holds imported rows never reads "Not
+   * synced yet", not even while disconnected or paused.
+   */
+  const remember = async () => {
+    if (!home) return;
+    const resource = await store.getResource(home);
+    const chosen = fixed();
+    const stored = parseCollections(
+      resource.get(term(COLLECTIONS_TERM.shortname)),
+    );
+    history.chosen = chosen
+      ? [chosen]
+      : stored.length
+        ? stored
+        : [...COLLECTIONS];
+
+    for (const [c, at] of Object.entries(
+      parseLastSync(resource.get(term(LAST_SYNC.shortname))),
+    ) as [Collection, Date][]) {
+      const known = history.lastGood[c];
+      if (!known || known < at) history.lastGood[c] = at;
+    }
+  };
 
   const settings = async () => {
     const resource = await store.getResource(home!);
@@ -254,6 +355,8 @@ export function createController(
 
   const controller = {
     state: () => state,
+    /** The latest sync this page load and the last good refresh per collection. */
+    history: () => history,
 
     /**
      * Adopts, finds where this view is and its settings, then starts one
@@ -288,6 +391,8 @@ export function createController(
             return {};
           }
 
+          await remember();
+
           if (!(await hasRowAccess(store, where, adopted))) {
             set({ kind: 'paused', table: where.name, collection });
 
@@ -295,6 +400,7 @@ export function createController(
           }
         } else {
           home = where.app;
+          await remember();
         }
       } catch (error) {
         set({ kind: 'error', message: message(error) });
@@ -329,6 +435,7 @@ export function createController(
         }
 
         home = await bindTable(store, where, adopted);
+        await remember();
       } catch (error) {
         set({ kind: 'error', message: message(error) });
 
@@ -429,8 +536,36 @@ export function createController(
       if (chosen && !(await hasRowAccess(store, where, adopted)))
         return set({ kind: 'paused', table: where.name, collection: chosen });
 
-      set({ kind: 'syncing', connection, administration, collections });
-      const get = relayGet(proxy, connection);
+      const syncing = {
+        kind: 'syncing' as const,
+        connection,
+        administration,
+        collections,
+      };
+      set(syncing);
+      // One paced wrapper for the whole sync, so the three collections share
+      // the window; a wait shows on the card while it lasts, counting down.
+      let ticker: ReturnType<typeof setInterval> | undefined;
+      const get = throttled(relayGet(proxy, connection), {
+        onWait: waiting => {
+          const until = Date.now() + waiting.ms;
+          set({ ...syncing, waiting });
+          clearInterval(ticker);
+          ticker = setInterval(
+            () =>
+              set({
+                ...syncing,
+                waiting: { ...waiting, ms: Math.max(0, until - Date.now()) },
+              }),
+            1000,
+          );
+        },
+        onResume: () => {
+          clearInterval(ticker);
+          ticker = undefined;
+          set(syncing);
+        },
+      });
       const results: Results = {};
 
       // Only the own tables this view needs are made: the contacts table's
@@ -472,16 +607,36 @@ export function createController(
             );
           }
         } catch (error) {
-          results[collection] = { error: message(error) };
+          results[collection] = failed(error);
         }
       }
+
+      clearInterval(ticker);
+      const at = new Date();
+      const refreshed = collections.filter(c => !('error' in results[c]!));
+      for (const c of refreshed) history.lastGood[c] = at;
+      history.last = { at, collections, results };
+      history.chosen = [...collections];
+
+      // Remember the good refreshes across page loads (one write per sync
+      // that refreshed anything). A failure here is not the sync's: the
+      // card still knows this page load's times.
+      if (refreshed.length && home)
+        try {
+          const resource = await store.getResource(home);
+          const value = formatLastSync(history.lastGood);
+          if (resource.get(term(LAST_SYNC.shortname)) !== value)
+            await resource.set(term(LAST_SYNC.shortname), value).save();
+        } catch {
+          // Kept in memory only, this page load.
+        }
 
       set({
         kind: 'synced',
         connection,
         administration,
         collections,
-        at: new Date(),
+        at,
         results,
       });
     },

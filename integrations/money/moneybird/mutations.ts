@@ -97,35 +97,63 @@ export const mutationSourceId = (administrationId: string, id: string) =>
 const text = (value: unknown) =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
+/** The mutation as the person knows it: the contra account's name, else the message, else "Mutation <id>". */
+export function mutationLabel(mutation: FinancialMutation): string {
+  const message = typeof mutation.message === 'string' ? mutation.message : '';
+
+  return (
+    text(mutation.contra_account_name) ??
+    (message.trim() || `Mutation ${mutation.id}`)
+  );
+}
+
+/**
+ * Why `mutationOf` leaves a mutation out, completing "<n> mutations …" on
+ * the sync-status card; `undefined` for one it imports. The first failing
+ * requirement, in the order `mutationOf` checks them.
+ */
+export function mutationSkipReason(
+  mutation: FinancialMutation,
+): string | undefined {
+  const amount = typeof mutation.amount === 'string' ? mutation.amount : '';
+  if (!AMOUNT.test(amount))
+    return 'with an amount Moneybird did not send as a decimal string: not imported, never approximated.';
+  const date = typeof mutation.date === 'string' ? mutation.date : '';
+  if (!DATE.test(date))
+    return 'with a date that is not YYYY-MM-DD: not imported.';
+  if (!text(mutation.currency)) return 'without a currency: not imported.';
+  if (!identifier(mutation.financial_account_id))
+    return 'without a financial account: not imported.';
+
+  return undefined;
+}
+
 /**
  * The row for one financial mutation, or `undefined` when a required shared
- * field cannot be filled exactly: an `amount` that is not a decimal string
- * (a JSON number would already have been parsed to a float), a `date` that
- * is not `YYYY-MM-DD`, no currency, or no financial account. Such a
- * mutation is counted as skipped, never approximated.
+ * field cannot be filled exactly (`mutationSkipReason`): an `amount` that is
+ * not a decimal string (a JSON number would already have been parsed to a
+ * float), a `date` that is not `YYYY-MM-DD`, no currency, or no financial
+ * account. Such a mutation is counted as skipped, never approximated.
  */
 export function mutationOf(
   mutation: FinancialMutation,
   administrationId: string,
   accounts: ReadonlyMap<string, FinancialAccount>,
 ): MutationRow | undefined {
-  const amount = typeof mutation.amount === 'string' ? mutation.amount : '';
-  const date = typeof mutation.date === 'string' ? mutation.date : '';
-  const currency = text(mutation.currency);
-  const accountId = identifier(mutation.financial_account_id);
-  if (!AMOUNT.test(amount) || !DATE.test(date) || !currency || !accountId)
-    return undefined;
+  if (mutationSkipReason(mutation) !== undefined) return undefined;
+  const amount = mutation.amount as string;
+  const date = mutation.date as string;
+  const currency = text(mutation.currency)!;
+  const accountId = identifier(mutation.financial_account_id)!;
   const message = typeof mutation.message === 'string' ? mutation.message : '';
-  const contraName = text(mutation.contra_account_name);
   const row: MutationRow = {
     identity: mutationSourceId(administrationId, mutation.id),
-    name: contraName ?? message.trim() ?? '',
+    name: mutationLabel(mutation),
     account: accounts.get(accountId)?.identifier ?? `moneybird:${accountId}`,
     currency,
     amount,
     valueDate: date,
   };
-  if (!row.name) row.name = `Mutation ${mutation.id}`;
   if (message) row.description = message;
   const reference =
     text(mutation.account_servicer_transaction_id) ??

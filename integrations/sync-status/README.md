@@ -82,6 +82,10 @@ published app that bundles the card, and published `apps/` files are
 immutable, so such a change needs a new version of each adopter (and
 `apps.mjs check` fails until it has one). Keep the card's words
 app-neutral, and bundle every adopter when they do change.
+Moneybird (`integrations/money/moneybird/status.ts`, 0.3.0) has
+its own client and is read-only, so it sets no `writes`; its per-collection
+results go in `rowsScope`, a failed collection is a `neg` problem next to
+the ones that went on, and skipped records are `ignored` groups.
 
 ## What is verified
 
@@ -93,5 +97,9 @@ Google Calendar's mapping passes in `calendar/app/ui/status.test.ts` (15
 tests), its DOM in `calendar/app/view.test.ts`, and the `calendar` e2e checks
 the card after the import, after a 412, after a lost response and on a
 read-only hand-made table.
+Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
+`view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
+before any sync, after the import, after a failed contacts refresh and on an
+unsynced table.
 Nothing here has been seen by a user tester yet: the wording is a sensible
 default, not a verified fix for findings #6, #7 and #14.
