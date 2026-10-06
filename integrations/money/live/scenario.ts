@@ -23,7 +23,7 @@
  */
 import { createController } from '../moneybird/controller.js';
 import { CONTACT_FIELDS, sourceId } from '../moneybird/contacts.js';
-import { fakeStore, TABLE } from '../moneybird/fakeStore.js';
+import { APP, fakeStore, TABLE } from '../moneybird/fakeStore.js';
 import type { HostProxy } from '../moneybird/store.js';
 import { ensureProperties, PARENT, SOURCE_ID } from '../moneybird/sync.js';
 import {
@@ -415,9 +415,15 @@ export async function runMoneybirdCheck(
 
     await recorder.step(
       'S3',
-      'A second sync writes nothing',
+      'A second sync writes no row',
       async ({ equal }) => {
-        const writes = store.writes.length;
+        // The one write a sync makes besides rows: `moneybird-last-sync` on
+        // the App (the home here), when each collection last refreshed
+        // without error (0.3.0). Every other write would show here.
+        const rowWrites = () =>
+          store.writes.filter(w => !(w.op === 'save' && w.subject === APP));
+        const writes = rowWrites().length;
+        const all = store.writes.length;
         const before = (await rows()).get(N.one);
         await controller.sync();
         const state = synced();
@@ -428,8 +434,15 @@ export async function runMoneybirdCheck(
         );
         equal(
           'no row was written and the first row is as it was',
-          [store.writes.length, (await rows()).get(N.one)],
+          [rowWrites().length, (await rows()).get(N.one)],
           [writes, before],
+        );
+        equal(
+          'the only other write is the App’s moneybird-last-sync',
+          store.writes
+            .slice(all)
+            .every(w => w.op === 'save' && w.subject === APP),
+          true,
         );
       },
       { continueOnFailure: true },

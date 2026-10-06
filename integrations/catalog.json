@@ -218,11 +218,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar, choose an administration and tick what to import. The chosen collections refresh whenever the app is opened and on Sync now, each on its own: one that fails is reported next to the others. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. One administration per app. Hours and mutations cover this calendar year only; Moneybird answers at most 100 mutations per request, so a day with 100 or more is refused rather than imported incompletely. Tested against a synthetic fixture, not a real Moneybird account. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts hours time entries financial mutations bank transactions ledger finance administration drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.2.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-thsBlBl724A+WF1UB6470BO/0TEhoM2qQWtepRvbiAcbCgMOMV3Xt9E0qHZi0jPF"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.3.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-vj2Y6emubJtyxLmP67WliYKzI22tRcnmFqI8dLjR4gjsQQvNJ08/iLIfX7XVs1Lt"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",

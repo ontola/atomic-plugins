@@ -8,13 +8,16 @@
  *
  * Needs an atomic-server checkout's `browser/` beside `integrations/` (see
  * AGENTS.md), for esbuild. No npm dependencies of its own.
- * No code splitting and no CSS file: "a plugin in the drive is one module".
+ * No code splitting and no CSS file: "a plugin in the drive is one module";
+ * the shared sync-status card's `card.css?raw` is embedded as minified text
+ * by `cssRawPlugin` (`integrations/sync-status/build.mjs`).
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -24,6 +27,9 @@ export async function build({ outfile } = {}) {
   const esbuild = require('esbuild');
   const result = await esbuild.build({
     entryPoints: [path('main.ts')],
+    // Any path esbuild embeds is relative to this; pinned to the repository
+    // root so the bytes do not depend on where the build was started.
+    absWorkingDir: path('../../..'),
     bundle: true,
     format: 'esm',
     platform: 'browser',
@@ -33,6 +39,7 @@ export async function build({ outfile } = {}) {
     legalComments: 'none',
     write: false,
     outfile: outfile ?? path('ui.js'),
+    plugins: [cssRawPlugin(esbuild)],
     logLevel: 'silent',
   });
   const text = result.outputFiles[0].text;
