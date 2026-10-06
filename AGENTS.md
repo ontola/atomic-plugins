@@ -306,6 +306,21 @@ on #177 (question 12).
 
 ## Agent collaboration
 
+### Keep going
+
+Once Michiel authorizes a task, keep going until the agreed outcome is complete.
+Carry the work through implementation, conflict resolution, required checks,
+fixes, and PR completion within the existing authorization. A status update,
+passing local tests, or opening a draft PR is not a stopping point when necessary
+work remains. Do not wait for another "go" between these steps.
+
+Pause only when further progress requires a user decision, missing access, an
+external dependency, or an action outside the existing authorization. State the
+specific blocker, who can remove it, and what remains; continue independent work
+where possible. Existing merge gates and publication permissions still apply.
+Completing an agreed part of a larger issue does not authorize unrelated work or
+closing that issue while its remaining steps are outstanding.
+
 Several Claude Code sessions and their subagents work on this repo at the
 same time. These are the working agreements between them.
 
