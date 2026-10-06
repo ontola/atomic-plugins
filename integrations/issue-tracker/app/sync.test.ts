@@ -662,8 +662,9 @@ group('frame store adapter', () => {
     const listed = store.resources.get('did:ad:ontology')?.[
       PROPERTIES
     ] as string[];
-    // Number, source, baseline, repository, sync state, synced table.
-    expect(listed.length).toBe(6);
+    // Number, source, baseline, repository, sync state, synced table,
+    // last sync.
+    expect(listed.length).toBe(7);
   });
 });
 

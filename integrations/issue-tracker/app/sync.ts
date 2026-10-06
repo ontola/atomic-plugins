@@ -67,6 +67,7 @@ import {
   type Tracker,
 } from './tracker.js';
 import { relayDispatch, type Dispatch } from './transport.js';
+import type { RateLimitOptions } from './rateLimit.js';
 
 /** Stable, so saved snapshots keep binding (`Bridge` checks `binding.base`). */
 export const BRIDGE_BASE = 'https://github-issues-app.invalid/bridge';
@@ -600,12 +601,23 @@ export interface PassOptions {
   repository: string;
   tracker: Tracker;
   state: SyncState;
-  /** Proposal keys a person approved in this view. */
+  /**
+   * Writes a person approved in this view, as `approvalKey(subject, key)`
+   * (review.mjs): the row and the exact content, so an approval kept for a
+   * retry never lets a second row with the same content through.
+   */
   approved?: Set<string>;
+  /**
+   * The sync resource's `github-last-sync` property: stamped with the time a
+   * pass completes, so a reload still names the last good sync.
+   */
+  lastSyncProperty?: string;
   /** The app's own saves, corrected for on read; lives as long as the view. */
   overlay?: Overlay;
   /** Tests inject the relay directly. */
   dispatch?: Dispatch;
+  /** How the relay waits out GitHub's rate limits, and who is told (`rateLimit.ts`). */
+  rateLimits?: RateLimitOptions;
   /**
    * Called as the pass imports GitHub issues and comments into the table,
    * so the view can show them before the pass ends.
@@ -654,7 +666,8 @@ function bridgeFor(options: PassOptions) {
     journal: state.state.journal,
     save: () => state.saveJournal(),
     dispatch:
-      options.dispatch ?? relayDispatch(options.proxy, options.connectionId),
+      options.dispatch ??
+      relayDispatch(options.proxy, options.connectionId, options.rateLimits),
   });
   const remote = new GitHubPort(undefined, { repository }, transport);
   const journal = state.state.journal as Record<
@@ -682,6 +695,28 @@ function bridgeFor(options: PassOptions) {
       if (journal[id]?.receipt) return;
       delete journal[id];
       await state.saveJournal();
+    },
+    /**
+     * A create GitHub answered (its receipt is journalled): the record it
+     * made and what was sent, for `Bridge.bindCreated` when the rest of the
+     * operation was refused.
+     */
+    async created(entity: string, subject: string) {
+      const entry = journal[await createId(entity, subject)];
+      const receipt = entry?.receipt as { body?: string } | undefined;
+      if (!entry?.signature || typeof receipt?.body !== 'string')
+        return undefined;
+      const made = JSON.parse(receipt.body) as {
+        number?: unknown;
+        id?: unknown;
+      };
+      const id = entity === 'issue' ? made.number : made.id;
+      if (!Number.isSafeInteger(id)) return undefined;
+      const { args } = JSON.parse(entry.signature) as {
+        args: { title?: string; body?: string };
+      };
+
+      return { id: id as number, sent: { title: args.title, body: args.body } };
     },
   };
   const sent = { value: 0 };
@@ -770,7 +805,13 @@ function bridgeFor(options: PassOptions) {
     imported,
     devonian,
     local,
-    remote: reviewGate(counted(remote, sent), options.approved ?? new Set()),
+    remote: reviewGate(
+      counted(remote, sent),
+      options.approved ?? new Set(),
+      // The Bridge is constructed right here; the gate asks only while it
+      // finishes a record's saved operation.
+      () => (bridge as { publishing?: string } | undefined)?.publishing,
+    ),
     base: BRIDGE_BASE,
     snapshot: state.state.snapshot,
     save: saveSnapshot,
@@ -963,6 +1004,8 @@ export async function runPass(options: PassOptions): Promise<PassResult> {
   const publish = options.state.state.publish ?? [];
   const left = publish.filter(id => !local.bound('issue', id));
   if (left.length !== publish.length) options.state.state.publish = left;
+  if (options.lastSyncProperty)
+    options.state.stamp(options.lastSyncProperty, new Date().toISOString());
   await options.state.flush();
 
   return summary(bridge, atomicStore, sent, local, options);
