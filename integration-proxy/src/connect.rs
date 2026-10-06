@@ -2003,9 +2003,9 @@ mod tests {
         let (upstream, server) = http_key_check_upstream().await;
         let security = crate::test_support::security().await;
         for (seed, scheme, username) in [
-            (23u8, bearer(), None),
+            (70u8, bearer(), None),
             (
-                24,
+                71,
                 basic(serde_json::json!({"token": "password", "usernameLabel": "Email"})),
                 Some("ada@example.test"),
             ),
@@ -2120,9 +2120,34 @@ mod tests {
     /// the router and its `TraceLayer`) log neither half of the credential
     /// nor its base64 form. `log`-crate records of dependencies are not
     /// captured here.
+    ///
+    /// `tracing` caches per-callsite interest process-wide, so a thread-local
+    /// subscriber misses events while other tests run in parallel. The test
+    /// therefore runs itself alone in a child process of the same test
+    /// binary.
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn postgres_no_http_token_reaches_the_logs() {
+        const CHILD: &str = "INTEGRATION_PROXY_LOG_CAPTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "connect::tests::postgres_no_http_token_reaches_the_logs",
+                    "--include-ignored",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let logs = LogBuffer::default();
         let writer = logs.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -2131,6 +2156,7 @@ mod tests {
             .with_writer(move || writer.clone())
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::info!("log capture started");
 
         let (upstream, key_server) = http_key_check_upstream().await;
         let security = crate::test_support::security().await;
@@ -2170,7 +2196,7 @@ mod tests {
             .unwrap()
             .1
             .into_owned();
-        let owner = Agent::new(25);
+        let owner = Agent::new(72);
         let redeemed = body_json(redeem_as(&s, &owner, &code, &"a".repeat(43)).await).await;
         let connection_id = redeemed["connection_id"].as_str().unwrap();
 
@@ -2209,8 +2235,14 @@ mod tests {
         provider.abort();
 
         let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
-        // The capture works: the router's TraceLayer recorded the request.
-        assert!(logs.contains("/proxy/"), "{logs}");
+        // The capture works, and the router's TraceLayer reached it.
+        assert!(logs.contains("log capture started"), "{logs}");
+        assert!(
+            logs.contains("tower_http") && logs.contains("/proxy/"),
+            "{logs}"
+        );
+        // ... and so did the HTTP client's, for the key check and upstream.
+        assert!(logs.contains("hyper_util"), "{logs}");
         let encoded = basic_header("ada@example.test", "good-token");
         for secret in [
             "good-token",

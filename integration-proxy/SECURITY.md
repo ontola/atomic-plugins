@@ -107,10 +107,11 @@ never forwarded: anything but `Capability …` is refused with
 Upstream cookies and credentials are not passed back. `StoredCredential`'s
 `Debug` output names only the kind and platform; the crate's own logging
 records neither, and `tower-http`'s `TraceLayer` is used with its default,
-which does not record headers. A test records every `tracing` event at
-`TRACE` during a Basic consent, key check, redeem and proxied request and
-finds neither half of the credential nor its base64 form; `log`-crate records
-of dependencies are not part of that capture.
+which does not record headers. A test, run alone in a child process,
+records every `tracing` event at `TRACE` (the proxy's, `tower-http`'s and
+`hyper-util`'s) during a Basic consent, key check, redeem and proxied
+request, and finds neither half of the credential nor its base64 form;
+`log`-crate records of dependencies are not part of that capture.
 
 Risks that remain, and what the proxy does about them:
 

@@ -1016,7 +1016,7 @@ mod tests {
             password: "api_token".into(),
         })
         .unwrap();
-        let owner = Agent::new(61);
+        let owner = Agent::new(73);
         let fixture = |scheme: serde_json::Value, credential: Vec<u8>| {
             let security = security.clone();
             let owner_id = owner.id();
@@ -1031,7 +1031,7 @@ mod tests {
                 Fixture {
                     state: s,
                     security,
-                    owner: Agent::new(61),
+                    owner: Agent::new(73),
                     id,
                     _server: server,
                 }
@@ -1047,8 +1047,8 @@ mod tests {
         assert_eq!(body["signature_forwarded"], false);
         // Through a frame capability: the capability is consumed here, and
         // only the connection's token goes upstream.
-        let app = Agent::new(62);
-        let frame = Agent::new(63);
+        let app = Agent::new(74);
+        let frame = Agent::new(75);
         f.security
             .put_delegation(&f.id, &app.id(), None)
             .await
@@ -1144,7 +1144,7 @@ mod tests {
         let security = security().await;
         let mut s = state(Some(security.clone()));
         s.catalog = catalog(json!({"authenticationProfile": "pat"}));
-        let owner = Agent::new(64);
+        let owner = Agent::new(76);
         let id = security
             .create_connection(
                 "mixed",
