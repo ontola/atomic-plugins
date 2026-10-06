@@ -78,11 +78,19 @@ export const DEFAULT_RETRY_MS = 60_000;
 export const MAX_INLINE_WAIT_MS = 10_000;
 /** Inline retries per request; past this the read gives up on that request. */
 export const MAX_INLINE_RETRIES = 2;
+/** Longest wait a `Retry-After` can name here: a day. Anything longer is clamped. */
+export const MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
+
+/** RFC 9110 §5.6.7's IMF-fixdate: "Tue, 06 Oct 2026 12:00:00 GMT". */
+const IMF_FIXDATE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
 /**
- * `Retry-After` is delay-seconds or an HTTP date (RFC 9110 §10.2.3). Returns
- * the wait in milliseconds from `now` (never negative), or `undefined` when
- * the value is missing or unusable.
+ * `Retry-After` is delay-seconds or an HTTP date (RFC 9110 §10.2.3). Only
+ * those two shapes count (digits, or an IMF-fixdate): anything else is
+ * `undefined`, and the caller falls back to `DEFAULT_RETRY_MS`. Returns the
+ * wait in milliseconds from `now`, never negative and never more than
+ * `MAX_RETRY_AFTER_MS`, so a huge value cannot make an invalid date.
  */
 export function parseRetryAfter(
   value: string | undefined,
@@ -90,14 +98,12 @@ export function parseRetryAfter(
 ): number | undefined {
   if (value === undefined) return undefined;
   const text = value.trim();
-  if (!text) return undefined;
-  if (/^\d+$/.test(text)) return Number(text) * 1000;
-  // An HTTP date names its month; a bare number other than delay-seconds
-  // ("-5") is not one, whatever `Date.parse` makes of it.
-  if (!/[A-Za-z]/.test(text)) return undefined;
+  const clamp = (ms: number) => Math.min(MAX_RETRY_AFTER_MS, Math.max(0, ms));
+  if (/^\d+$/.test(text)) return clamp(Number(text) * 1000);
+  if (!IMF_FIXDATE.test(text)) return undefined;
   const at = Date.parse(text);
 
-  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+  return Number.isFinite(at) ? clamp(at - now) : undefined;
 }
 
 export interface RateLimitOptions {

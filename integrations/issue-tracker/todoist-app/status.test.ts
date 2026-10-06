@@ -10,6 +10,8 @@ import { clockTime, type ViewState } from './controller.js';
 import {
   ignoredGroups,
   nextStep,
+  NO_RELAY_NOTE,
+  OTHER_TABLE_NOTE,
   syncStatusFor,
   WRITE_BACK_NOTE,
 } from './status.js';
@@ -71,31 +73,48 @@ const synced = (over: Partial<SyncSummary> = {}): ViewState => ({
 });
 
 const lines = (state: ViewState) =>
-  statusLines(syncStatusFor({ state, ...WORDS }), NOW);
+  statusLines(syncStatusFor({ state, now: NOW, ...WORDS }), NOW);
 
 describe('syncStatusFor', () => {
-  it('is read-only in every state and says local edits are overwritten', () => {
-    const states: ViewState[] = [
+  it('is read-only in every state, and says local edits are overwritten wherever it syncs', () => {
+    const syncing: ViewState[] = [
       { kind: 'loading' },
-      { kind: 'no-relay' },
-      { kind: 'other-table' },
       { kind: 'disconnected', tasks: [] },
       { kind: 'connecting', tasks: [] },
       { kind: 'syncing', connection: CONNECTION, tasks: TASKS },
       synced(),
       { kind: 'error', message: 'x', at: NOW, tasks: TASKS },
     ];
+    const never: [ViewState, string][] = [
+      [{ kind: 'other-table' }, OTHER_TABLE_NOTE],
+      [{ kind: 'no-relay' }, NO_RELAY_NOTE],
+    ];
 
-    for (const state of states) {
+    for (const [state, note] of [
+      ...syncing.map((s): [ViewState, string] => [s, WRITE_BACK_NOTE]),
+      ...never,
+    ]) {
       const status = syncStatusFor({ state });
       expect(status.provider).toBe('Todoist');
       expect(status.writeBack).toBe('read-only');
-      expect(status.writeBackNote).toBe(WRITE_BACK_NOTE);
+      expect(status.writeBackNote).toBe(note);
       expect(status.writes).toBeUndefined();
       const { mode } = statusLines(status, NOW);
       expect(mode).toMatch(/^Read-only: edits here stay in Atomic\./);
+      expect(mode).toContain(note);
+    }
+
+    for (const state of syncing) {
+      const { mode } = lines(state);
       expect(mode).toContain('Nothing is sent to Todoist.');
       expect(mode).toContain('overwritten at the next sync');
+    }
+
+    // Where this app never syncs, the card does not promise a next sync.
+    for (const [state] of never) {
+      const { mode } = lines(state);
+      expect(mode).not.toContain('next sync');
+      expect(mode).toContain('nothing');
     }
   });
 
@@ -194,17 +213,28 @@ describe('syncStatusFor', () => {
     expect(groups.some(g => /added here/.test(g.reason))).toBe(false);
   });
 
-  it('names a partial read as a problem over an otherwise good sync', () => {
+  it('names a partial read as a problem over an otherwise good sync, with the last complete read', () => {
     const state = synced({ complete: false });
-    const status = syncStatusFor({ state });
+    const status = syncStatusFor({ state, now: NOW });
     expect(status.last?.ok).toBe(true);
     expect(status.problems).toEqual([
       expect.objectContaining({
         lead: 'The read was partial, so no missing task was checked.',
-        text: expect.stringContaining('50'),
+        text: expect.stringContaining('cap of 50'),
       }),
     ]);
+    expect(status.problems?.[0].text).toContain(
+      'The last complete read was 4 min ago.',
+    );
     expect(lines(state).tone).toBe('warn');
+
+    const { lastGood: _, ...fresh } = state as ViewState & {
+      lastGood?: string;
+    };
+    const first = syncStatusFor({ state: fresh as ViewState, now: NOW });
+    expect(first.problems?.[0].text).toContain(
+      'There has been no complete read yet.',
+    );
   });
 
   it('shows a failed sync with the next step and the last good read', () => {

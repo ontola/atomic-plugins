@@ -20,14 +20,14 @@ describe('Todoist drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 38,435 bytes minified on 2026-10-06 for 0.2.0, at the
+    // Measured 39,066 bytes minified on 2026-10-06 for 0.2.0, at the
     // a12b74a6783b pin: ../todoist.ts, ontology-kit's terms and resolver,
     // the issue-v1 provisioning and the plain-DOM view, the hand-made and
     // incomplete rows with "Open row" (0.1.1, 26,857 bytes), plus (0.2.0)
     // the shared sync-status card with its minified CSS, the status
     // mapping and the rate-limit handling. The limit is that plus about
     // 10%, rounded up.
-    expect(bytes).toBeLessThan(42_300);
+    expect(bytes).toBeLessThan(43_000);
   });
 
   it('bundles the shared sync-status card and its minified stylesheet', () => {

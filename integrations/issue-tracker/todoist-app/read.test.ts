@@ -13,6 +13,7 @@ import {
   lookupTasks,
   MAX_INLINE_RETRIES,
   MAX_INLINE_WAIT_MS,
+  MAX_RETRY_AFTER_MS,
   parseRetryAfter,
   rateLimited,
   readActiveTasks,
@@ -58,17 +59,35 @@ function fake(script: TodoistResponse[]) {
 }
 
 describe('parseRetryAfter', () => {
-  it('reads delay-seconds and HTTP dates, never negative, else undefined', () => {
+  it('reads delay-seconds and IMF-fixdates, never negative, clamped to a day, else undefined', () => {
     expect(parseRetryAfter('3', NOW)).toBe(3000);
     expect(parseRetryAfter(' 0 ', NOW)).toBe(0);
     expect(parseRetryAfter(new Date(NOW + 90_000).toUTCString(), NOW)).toBe(
       90_000,
     );
     expect(parseRetryAfter(new Date(NOW - 90_000).toUTCString(), NOW)).toBe(0);
+    // Clamped, so neither a huge number nor a far date yields Infinity or an
+    // invalid date downstream.
+    expect(parseRetryAfter('9'.repeat(30), NOW)).toBe(MAX_RETRY_AFTER_MS);
+    expect(
+      parseRetryAfter(
+        new Date(NOW + 40 * MAX_RETRY_AFTER_MS).toUTCString(),
+        NOW,
+      ),
+    ).toBe(MAX_RETRY_AFTER_MS);
     expect(parseRetryAfter(undefined, NOW)).toBeUndefined();
     expect(parseRetryAfter('', NOW)).toBeUndefined();
     expect(parseRetryAfter('soon', NOW)).toBeUndefined();
     expect(parseRetryAfter('-5', NOW)).toBeUndefined();
+    expect(parseRetryAfter('1.5', NOW)).toBeUndefined();
+    // Other date shapes (ISO, RFC 850, asctime) are not IMF-fixdates.
+    expect(
+      parseRetryAfter(new Date(NOW + 5000).toISOString(), NOW),
+    ).toBeUndefined();
+    expect(
+      parseRetryAfter('Tuesday, 06-Oct-26 12:00:05 GMT', NOW),
+    ).toBeUndefined();
+    expect(parseRetryAfter('Tue Oct  6 12:00:05 2026', NOW)).toBeUndefined();
   });
 });
 

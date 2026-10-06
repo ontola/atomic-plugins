@@ -87,7 +87,7 @@ verified behaviour.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,435
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 39,066
 bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
@@ -147,7 +147,10 @@ Q-084) heads the view; `todoist-app/status.ts` maps the controller's state
 onto it, pure, and `main.ts` renders it on every state change. It says, in
 every state: "Read-only: edits here stay in Atomic. Nothing is sent to
 Todoist. An edit here to an imported column (Name, Status, Description, Due
-date) is overwritten at the next sync; a row added here is kept." Then the
+date) is overwritten at the next sync; a row added here is kept." (On
+another app's Issue table, which this app never syncs, and on a host without
+the proxy client, the note says instead that nothing is read, sent or
+overwritten there.) Then the
 last sync ("Synced 4 min ago", its added, updated and unchanged counts, "5
 tasks from Todoist"), or a failed one with the plain next step (401/403
 "Reconnect Todoist."; 5xx "try again in a moment") and when the last
@@ -157,26 +160,31 @@ groups naming the tasks under "Which": completed in Todoist (closed here),
 deleted, no longer reachable (kept open, not closed), could not be checked
 (checked again next time); rows added here and incomplete rows (with "Open
 row" on a single one) are listed the same way. A partial read is a warning
-over an otherwise good sync. The card is not a live region: the one
+over an otherwise good sync that names the last complete read. A load that
+fails (the host cannot answer which connection the app has) is a visible
+error state, never "Loading…" for good. The card is not a live region: the one
 `role="status"` line is kept, visually hidden, with the summary sentence
 the e2e waits on. `build.mjs` bundles the card through
 `cssRawPlugin` from `../../sync-status/build.mjs` (its CSS minified), and the
 `issue-tracker` lane lists `integrations/sync-status/**` in its `paths`.
 
 **Rate limits (0.2.0).** Todoist answers 429 with `Retry-After`
-(delay-seconds or an HTTP date), which the host relays. `read.ts`'s
-`rateLimited` wraps every GET of a pass: a `Retry-After` of at most 10 s is
-waited out and the same request retried, at most twice per request (so at
-most 20 s per request); a longer one, one retry too many, or no usable header
-(60 s is assumed) throws `TodoistRateLimited` with the time to try again,
-before any row is written. A 429 on a by-id check stops the pass the same way
+(delay-seconds or an IMF-fixdate, "Tue, 06 Oct 2026 12:00:00 GMT"), which
+the host relays; any other shape counts as no header, and a wait is clamped
+to a day. `read.ts`'s `rateLimited` wraps every GET of a pass: a
+`Retry-After` of at most 10 s is waited out and the same request retried, at
+most twice per request (so at most 20 s per request); a longer one, one retry
+too many, or no usable header (60 s is assumed) throws `TodoistRateLimited`
+with the time to try again, before any row is written. A 429 on a by-id check stops the pass the same way
 rather than marking the task unconfirmed. The controller then retries the
 whole (idempotent) pass by itself at that time when it is within 15 min, at
 most 3 times in a row, and the card says "Todoist is rate-limiting; retrying
 at 14:05."; otherwise, or after the third, it says "Todoist is rate-limiting;
 the sync stopped." with "Try again after 14:05." "Sync now" cancels a waiting
 retry and starts the count afresh. Every wait honours `Retry-After`; none is
-unbounded. The same pattern as the calendar, Notion and Clockify apps, with
+unbounded. `dispose()` cancels a waiting retry and keeps a sync in flight
+from scheduling one; the host has no teardown hook for a view yet, so only
+tests call it. The same pattern as the calendar, Notion and Clockify apps, with
 no shared code: it lives in this folder. Tested against fake transports only
 (`read.test.ts`, `sync.test.ts`); Todoist's real limits and header form are
 not verified (#46).

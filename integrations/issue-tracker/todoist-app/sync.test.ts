@@ -689,4 +689,55 @@ describe('controller under a rate limit', () => {
     controller.dispose();
     expect(timers[1].cleared).toBe(true);
   });
+
+  it('schedules no retry when disposed while a sync is in flight', async () => {
+    const store = fakeStore();
+    const { controller, timers } = limited(store);
+    await (
+      await controller.load()
+    ).syncing;
+    store.limitNext = { count: 1, retryAfter: '30' };
+    // Disposed before the pass has read anything: it still runs to its 429.
+    const inFlight = controller.sync();
+    controller.dispose();
+    await inFlight;
+    expect(controller.state()).toMatchObject({
+      kind: 'error',
+      rateLimited: { retrying: false },
+    });
+    expect(timers).toHaveLength(0);
+  });
+});
+
+describe('controller when loading fails', () => {
+  it('shows a visible error state, keeping the rows imported earlier', async () => {
+    const store = fakeStore();
+    const states: string[] = [];
+    const first = createController(store, () => undefined, {
+      now: () => T1,
+      clock: () => Date.parse(T1),
+    });
+    await (
+      await first.load()
+    ).syncing;
+
+    store.proxy!.connections = async () => {
+      throw new Error('host offline');
+    };
+
+    const controller = createController(store, s => states.push(s.kind), {
+      now: () => T2,
+      clock: () => Date.parse(T2),
+    });
+    expect(await controller.load()).toEqual({});
+    const state = controller.state();
+    expect(state).toMatchObject({
+      kind: 'error',
+      message: 'Could not load: host offline',
+      at: Date.parse(T2),
+      lastGood: T1,
+    });
+    expect((state as { tasks: unknown[] }).tasks).toHaveLength(5);
+    expect(states).toEqual(['error']);
+  });
 });

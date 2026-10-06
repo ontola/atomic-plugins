@@ -189,6 +189,8 @@ export function createController(
   /** The automatic retry waiting for Todoist's `Retry-After`, if any. */
   let retryHandle: unknown;
   let autoRetries = 0;
+  /** After `dispose()`: no new timer, whatever a sync still in flight finds. */
+  let disposed = false;
 
   const set = (next: ViewState) => {
     state = next;
@@ -248,7 +250,23 @@ export function createController(
       if (!proxy) return (set({ kind: 'no-relay' }), {});
       if (!(await ready())) return {};
       const rows = await reread();
-      const [connection] = await proxy.connections({ platform: PLATFORM });
+      let connection: Connection | undefined;
+
+      try {
+        [connection] = await proxy.connections({ platform: PLATFORM });
+      } catch (error) {
+        // Asking the host for the connection failed: a visible error state,
+        // never "Loading…" for good. Rows imported earlier are still listed.
+        set({
+          kind: 'error',
+          message: `Could not load: ${message(error)}`,
+          at: clock(),
+          ...rows,
+        });
+
+        return {};
+      }
+
       if (!connection) return (set({ kind: 'disconnected', ...rows }), {});
 
       return { syncing: controller.sync(connection) };
@@ -318,7 +336,9 @@ export function createController(
         if (error instanceof TodoistRateLimited) {
           const wait = Math.max(0, error.retryAt - at);
           const retrying =
-            wait <= MAX_AUTO_RETRY_MS && autoRetries < MAX_AUTO_RETRIES;
+            !disposed &&
+            wait <= MAX_AUTO_RETRY_MS &&
+            autoRetries < MAX_AUTO_RETRIES;
 
           if (retrying) {
             autoRetries++;
@@ -350,8 +370,14 @@ export function createController(
       }
     },
 
-    /** Stops an automatic retry that is waiting (the view is going away). */
+    /**
+     * Stops an automatic retry that is waiting, and keeps a sync still in
+     * flight from scheduling one. The host has no teardown hook for a view
+     * yet (the frame is simply discarded), so `main.ts` cannot call this;
+     * tests do.
+     */
     dispose(): void {
+      disposed = true;
       cancelRetry();
     },
   };

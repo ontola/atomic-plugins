@@ -142,7 +142,16 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   connect.addEventListener('click', () => void controller.connect());
   sync.addEventListener('click', () => void controller.sync());
 
+  // `load()` ends in an `error` state itself when the host fails it; this
+  // is the last resort for anything it did not foresee, shown on the card
+  // too, never only on the hidden status line.
   await controller.load().catch((error: unknown) => {
-    status.textContent = `Could not load: ${error instanceof Error ? error.message : String(error)}`;
+    const current = controller.state();
+    render({
+      kind: 'error',
+      message: `Could not load: ${error instanceof Error ? error.message : String(error)}`,
+      at: Date.now(),
+      tasks: 'tasks' in current ? current.tasks : [],
+    });
   });
 }

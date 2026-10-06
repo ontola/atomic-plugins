@@ -15,10 +15,11 @@
  * (`todoist-last-sync` on the App), so a gap is never hidden; a rate limit
  * says whether the app retries by itself and when.
  */
-import type {
-  IgnoredGroup,
-  Problem,
-  SyncStatus,
+import {
+  ago,
+  type IgnoredGroup,
+  type Problem,
+  type SyncStatus,
 } from '../../sync-status/card.js';
 import { rateLimitWords, type ViewState } from './controller.js';
 import { MAX_PAGES } from './read.js';
@@ -31,11 +32,22 @@ export interface StatusInput {
   timeZone?: string;
   /** Where the host can show a row: the "Open row" action on one incomplete row. */
   onOpenRow?: (subject: string) => void;
+  /** The clock, for "ago" in the card's own text; `Date.now()` by default. */
+  now?: number;
 }
 
-/** Appended to "Read-only: edits here stay in Atomic." in every state. */
+/**
+ * Appended to "Read-only: edits here stay in Atomic." wherever this app
+ * syncs: every state but the two below.
+ */
 export const WRITE_BACK_NOTE =
   'Nothing is sent to Todoist. An edit here to an imported column (Name, Status, Description, Due date) is overwritten at the next sync; a row added here is kept.';
+/** `other-table`: a view on another app's table, which this app never syncs. */
+export const OTHER_TABLE_NOTE =
+  'This app syncs only its own table, so nothing here is read, sent or overwritten.';
+/** `no-relay`: no sync can run on this host. */
+export const NO_RELAY_NOTE =
+  'Nothing is sent to Todoist, and nothing is read or overwritten until this Atomic Server can connect apps to it.';
 
 /** The plain next step after a failed sync, by Todoist's answer. */
 export function nextStep(status: number | undefined): string {
@@ -115,11 +127,17 @@ export function ignoredGroups(
 
 export function syncStatusFor(input: StatusInput): SyncStatus {
   const { state } = input;
+  const now = input.now ?? Date.now();
   const words = { locale: input.locale, timeZone: input.timeZone };
   const status: SyncStatus = {
     provider: 'Todoist',
     writeBack: 'read-only',
-    writeBackNote: WRITE_BACK_NOTE,
+    writeBackNote:
+      state.kind === 'other-table'
+        ? OTHER_TABLE_NOTE
+        : state.kind === 'no-relay'
+          ? NO_RELAY_NOTE
+          : WRITE_BACK_NOTE,
     rowNoun: ['task', 'tasks'],
   };
   const problems: Problem[] = [];
@@ -176,7 +194,11 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
       if (!s.complete)
         problems.push({
           lead: 'The read was partial, so no missing task was checked.',
-          text: `Todoist kept sending pages past the cap of ${MAX_PAGES}; tasks past it were not read, no task was settled, and the time of the last complete read was not moved.`,
+          text: `Todoist kept sending pages past the cap of ${MAX_PAGES}; tasks past it were not read and no task was settled. ${
+            lastGood === undefined
+              ? 'There has been no complete read yet.'
+              : `The last complete read was ${ago(lastGood, now)}.`
+          }`,
         });
 
       break;
