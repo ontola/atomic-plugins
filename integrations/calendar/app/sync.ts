@@ -105,8 +105,8 @@ export const NOTES = 'atomic-calendar-notes';
 /**
  * The app's own Properties, by shortname: its provider extras. Created under
  * the app's ontology on first use. The first four are kept on each row, and
- * declared on the App as `row-extras` (`ROW_EXTRAS`); the last two on the
- * app's own table.
+ * declared on the App as `row-extras` (`ROW_EXTRAS`); the last three on the
+ * app's own table, or on its sync binding for another table.
  */
 export const SPECS: Record<string, Spec> = {
   'google-event-id': {
@@ -148,6 +148,12 @@ export const SPECS: Record<string, Spec> = {
     datatype: `${DT}/atomicURL`,
     description:
       'The table, not the app’s own, that this sync binding keeps in step with Google Calendar (on a binding under the app).',
+  },
+  'google-last-sync': {
+    name: 'Google Calendar last sync',
+    datatype: `${DT}/string`,
+    description:
+      'When a full read of the calendar last succeeded, as an ISO 8601 UTC timestamp (next to the calendar id), so a failed or paused sync can name the last good one.',
   },
 };
 
@@ -407,10 +413,14 @@ export async function ensureRowAccess(
   };
 }
 
-/** The calendar this table syncs with, once chosen, and what was kept about it. */
+/**
+ * The calendar this table syncs with, once chosen, what was kept about it,
+ * and when a read of it last succeeded (`google-last-sync`, 0.3.2; absent
+ * on a table last synced by an older version).
+ */
 export async function chosenCalendar(
   store: PluginStore,
-): Promise<{ id: string; meta?: CalendarMeta } | undefined> {
+): Promise<{ id: string; meta?: CalendarMeta; lastSync?: Date } | undefined> {
   const where = await layout(store);
   const found = await existing(store, where);
   const idProp = found.get('google-calendar-id');
@@ -422,8 +432,33 @@ export async function chosenCalendar(
   if (typeof id !== 'string' || !id) return undefined;
   const metaProp = found.get('google-calendar-meta');
   const meta = metaProp ? parseMeta(binding.get(metaProp)) : undefined;
+  const lastProp = found.get('google-last-sync');
+  const lastSync = lastProp
+    ? parseLastSync(binding.get(lastProp), Date.now())
+    : undefined;
 
-  return { id, ...(meta ? { meta } : {}) };
+  return {
+    id,
+    ...(meta ? { meta } : {}),
+    ...(lastSync ? { lastSync } : {}),
+  };
+}
+
+/** `saveLastSync`'s shape: `2026-10-06T12:00:00.000Z`, seconds required, UTC only. */
+const LAST_SYNC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+/**
+ * A stored `google-last-sync`, or undefined when it is not the strict ISO
+ * 8601 UTC shape `saveLastSync` writes, not a real instant, or later than
+ * `now`: a time written by a device whose clock ran ahead would otherwise
+ * read as "Synced just now" for as long as it stays in the future.
+ */
+export function parseLastSync(raw: JSONValue, now: number): Date | undefined {
+  if (typeof raw !== 'string' || !LAST_SYNC.test(raw)) return undefined;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at) || at > now) return undefined;
+
+  return new Date(at);
 }
 
 /** Binds the table to one calendar. A table never switches calendars. */
@@ -1049,7 +1084,16 @@ export type Outcome =
   | { status: 'stale'; title: string }
   /** The call threw: Google may or may not have the change. */
   | { status: 'uncertain'; title: string; message: string }
-  | { status: 'failed'; title: string; message: string }
+  | {
+      status: 'failed';
+      title: string;
+      message: string;
+      /**
+       * Google confirmed the PATCH, and what failed came after it: saving the
+       * row's new baseline here. The next preview reads the event back.
+       */
+      written?: boolean;
+    }
   /** Not attempted, because an earlier write's outcome was unknown. */
   | { status: 'not-sent'; title: string };
 
@@ -1085,6 +1129,8 @@ export async function send(
     }
 
     progress?.(outcomes.length);
+    /** Google confirmed the PATCH; a failure after this is not "refused". */
+    let written = false;
 
     try {
       const event = await applyEdit(
@@ -1093,6 +1139,7 @@ export async function send(
         pending.edit,
         pending.etag,
       );
+      written = true;
       const projection = project(event);
 
       if (pending.edit.subject && projection) {
@@ -1127,6 +1174,7 @@ export async function send(
           status: 'failed',
           title,
           message: error instanceof Error ? error.message : String(error),
+          ...(written ? { written: true } : {}),
         });
     }
 
@@ -1223,6 +1271,26 @@ export async function readEvents(
   }
 
   return out;
+}
+
+/**
+ * Records that a full read of the calendar succeeded at `at`, next to the
+ * calendar id (`google-last-sync`): what names the last good sync after a
+ * reload, when a later read fails or the sync is paused.
+ */
+export async function saveLastSync(
+  store: PluginStore,
+  at: Date,
+): Promise<void> {
+  const where = await layout(store);
+  const props = (await properties(store, where, true))!;
+  const subject = await bindingOf(store, where);
+  if (!subject) return;
+  await (
+    await store.getResource(subject)
+  )
+    .set(props['google-last-sync'], at.toISOString())
+    .save();
 }
 
 /** Stores what the calendar list says about the imported calendar. */

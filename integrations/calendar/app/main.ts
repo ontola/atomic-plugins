@@ -21,23 +21,16 @@ import {
   describe,
   pill as pillModel,
   reviewCount,
-  syncedAgo,
   type Problem,
   type Snapshot,
   type ViewState,
 } from './controller.js';
 import { detail, editor } from './drawer.js';
-import {
-  busyDays,
-  drawn,
-  latestEvent,
-  nextEvent,
-  type CalEvent,
-} from './events.js';
+import { busyDays, latestEvent, nextEvent, type CalEvent } from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
 import { reportUncaught } from './report.js';
-import { anySkipped, notShown, sidebar } from './sidebar.js';
+import { sidebar } from './sidebar.js';
 import type { ViewArgs } from './store.js';
 import type { Choice, Conflict, ImportSummary } from './sync.js';
 import {
@@ -59,8 +52,10 @@ import {
   segmented,
 } from './ui/chrome.js';
 import { focusKey, h, ICONS, restoreFocus, svg } from './ui/dom.js';
+import { syncStatusFor } from './ui/status.js';
 import { PLUGIN_CSS } from './ui/styles.js';
 import { installTheme } from './ui/theme.js';
+import { renderSyncStatus, syncStatusCss } from '../../sync-status/card.js';
 import { dayCount, firstHour, ROW, week } from './week.js';
 
 type Sheet = 'review' | 'conflicts' | 'shortcuts';
@@ -77,7 +72,6 @@ interface Ui {
   menu: boolean;
   /** The one calendar's visibility toggle (chip, sidebar checkbox). */
   visible: boolean;
-  why: boolean;
   /** Seconds left before a rate-limited sync retries. */
   countdown?: number;
   choices: Map<Conflict, Partial<Record<keyof Projection, Choice>>>;
@@ -108,7 +102,8 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   reportUncaught(root.ownerDocument.defaultView ?? window);
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
-  installTheme(root, `${PLUGIN_CSS}\n${CALENDAR_CSS}`, store);
+  // The shared chrome, the calendar's own rules, then the sync-status card's.
+  installTheme(root, `${PLUGIN_CSS}\n${CALENDAR_CSS}\n${syncStatusCss}`, store);
   root.classList.add('pl-app');
   const zone = viewerZone();
   const today = () => wall(Date.now(), zone).date;
@@ -120,7 +115,6 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     month: today(),
     menu: false,
     visible: true,
-    why: false,
     choices: new Map(),
     conflictErrors: new Map(),
     scrollTo: firstHour(wall(Date.now(), zone).minutes),
@@ -319,14 +313,13 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   function cbar(snap: Snapshot): HTMLElement {
     const busy =
       snap.state.kind === 'refreshing' || snap.state.kind === 'sending';
+    // The last sync and its time are the sync-status card's (`ui/status.ts`).
     const detailText =
       snap.state.kind === 'refreshing'
         ? 'Reading events…'
         : snap.state.kind === 'sending'
           ? 'Sending changes…'
-          : snap.at
-            ? `Last synced ${syncedAgo(snap.at).replace(/^at /, '')}`
-            : undefined;
+          : undefined;
 
     return connectionBar(doc, {
       provider: 'Google Calendar',
@@ -363,6 +356,30 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
           : []),
       ],
     });
+  }
+
+  /**
+   * The shared sync-status card (Q-084), first in every data view: the last
+   * sync and what it did, whether edits go back to Google, what waits or
+   * failed to send, which events are left out and why, and a problem's next
+   * step. The banners below keep their actions (Retry, Reconnect, the
+   * rate-limit countdown, Sync this table).
+   */
+  function syncStatus(snap: Snapshot, c: Ctx): HTMLElement {
+    return renderSyncStatus(
+      doc,
+      syncStatusFor({
+        snapshot: snap,
+        onConflicts: () => openSheet('conflicts'),
+        ...(snap.can.openResource
+          ? {
+              onOpenRow: (subject: string) =>
+                void controller.openInHost(subject),
+            }
+          : {}),
+      }),
+      { now: c.now, buttonClass: 'btn btn-sm' },
+    );
   }
 
   function banners(snap: Snapshot): HTMLElement | undefined {
@@ -579,17 +596,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       });
     } else if (ui.view === 'week')
       body = week(c, events, from, days, c.width - (c.width >= 900 ? 232 : 0));
-    else
-      body = agenda(
-        c,
-        events,
-        ui.anchor,
-        snap.summary && anySkipped(snap.summary.skipped)
-          ? notShown(snap.summary.skipped, snap.summary.unreadable)
-          : undefined,
-      );
-
-    const incomplete = incompleteRows(snap, events);
+    else body = agenda(c, events, ui.anchor);
 
     return h(
       doc,
@@ -597,7 +604,6 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       { class: 'main' },
       toolbar(narrow, from, days, snap.can.openResource),
       ui.view === 'agenda' ? dayStrip(c, events, ui.anchor) : null,
-      incomplete ?? null,
       ui.view === 'week' && !(empty && snap.summary)
         ? body
         : h(doc, 'div', { class: 'view', 'data-scroll': 'view' }, body),
@@ -660,59 +666,6 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         ? { onOpenRow: () => void controller.openInHost(event.subject) }
         : {}),
     });
-  }
-
-  /**
-   * The rows missing a required `event-v1` field (#177; ontology-kit's
-   * rule: shown as incomplete, not skipped), with a way to the row in the
-   * host. One missing a Day is drawn on no day, so this list is the only
-   * place it appears.
-   */
-  function incompleteRows(
-    snap: Snapshot,
-    events: CalEvent[],
-  ): HTMLElement | undefined {
-    const rows = events.filter(e => e.incomplete);
-    if (!rows.length) return undefined;
-
-    return h(
-      doc,
-      'section',
-      { class: 'incomplete', 'aria-label': 'Incomplete rows' },
-      h(
-        doc,
-        'p',
-        {},
-        `${rows.length === 1 ? '1 row is' : `${rows.length} rows are`} incomplete and not sent to Google. A row without a Day is not drawn on any day.`,
-      ),
-      h(
-        doc,
-        'ul',
-        {},
-        ...rows.map(e =>
-          h(
-            doc,
-            'li',
-            { 'data-subject': e.subject },
-            h(doc, 'b', {}, e.title || '(untitled)'),
-            h(doc, 'span', { class: 'tagline warn' }, e.incomplete!),
-            drawn(e) ? null : h(doc, 'span', { class: 'fine' }, 'not drawn'),
-            snap.can.openResource
-              ? h(
-                  doc,
-                  'button',
-                  {
-                    class: 'btn btn-ghost btn-sm',
-                    'data-key': `open-row-${e.subject}`,
-                    onclick: () => void controller.openInHost(e.subject),
-                  },
-                  'Open row',
-                )
-              : null,
-          ),
-        ),
-      ),
-    );
   }
 
   function sheetFor(snap: Snapshot, c: Ctx): HTMLElement | undefined {
@@ -885,6 +838,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         doc,
         'main',
         { class: 'pl-main' },
+        syncStatus(snap, c),
         banners(snap),
         h(
           doc,
@@ -898,11 +852,8 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
                 weekDays: days,
                 meta: snap.meta,
                 visible: ui.visible,
-                ...(snap.summary ? { summary: snap.summary } : {}),
-                whyOpen: ui.why,
                 onMonth: date => set({ month: date }),
                 onVisible: visible => set({ visible }),
-                onWhy: () => set({ why: !ui.why }),
               })
             : null,
           content(snap, c, narrow),
