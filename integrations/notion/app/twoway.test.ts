@@ -349,7 +349,7 @@ describe('review and send', () => {
 
   it('stops at a PATCH with no answer: unknown, and the rest is not sent', async () => {
     const base = fixtureProxy();
-    const { controller, edit, patches } = await synced({
+    const { controller, edit, patches, rowOf } = await synced({
       request: async request => {
         if (request.method === 'PATCH') {
           await base.request(request);
@@ -377,6 +377,21 @@ describe('review and send', () => {
       pending: 1,
       uncertain: 1,
     });
+    // The strip and the Send button count the same: pressing Send again
+    // sends only the row that waits, leaves the uncertain one to the next
+    // sync, and keeps its outcome, so the card goes on naming it.
+    const again = await controller.send();
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+    expect('outcomes' in again && again.outcomes).toMatchObject([
+      { status: 'unknown', subject: rowOf(LAUNCH)[0] },
+      { status: 'unknown', subject: rowOf(CHANGELOG)[0] },
+    ]);
+    expect(
+      syncStatusFor({ state: again, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 0, uncertain: 2 });
+    // Nothing left that Send would send: a third press is a no-op.
+    expect(await controller.send()).toBe(again);
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
   });
 
   it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {
@@ -396,7 +411,7 @@ describe('review and send', () => {
     expect('outcomes' in state && state.outcomes).toMatchObject([
       {
         status: 'unknown',
-        message: expect.stringMatching(/answered 502, so it is unknown/),
+        message: expect.stringMatching(/^Notion answered 502: /),
       },
     ]);
     expect(patches()).toEqual([]);

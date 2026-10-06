@@ -8,7 +8,7 @@
  * views went (#177 Q9), that is the host's own table and views.
  */
 import type { FieldChange, RowChange } from '../changes.js';
-import { sendable } from '../changes.js';
+import { writeQueue } from '../changes.js';
 import type { ConnectedState } from '../controller.js';
 import type { SendOutcome } from '../send.js';
 import type { JSONValue } from '../store.js';
@@ -71,9 +71,6 @@ export function optionPill(
   );
 }
 
-const fieldCount = (changes: readonly RowChange[]) =>
-  changes.reduce((n, c) => n + c.fields.length, 0);
-
 /** The one-line strip above the status card, when there is something to review. */
 export function renderChangesBar(
   doc: Document,
@@ -83,7 +80,10 @@ export function renderChangesBar(
 ): HTMLElement | null {
   const changes = state.changes ?? [];
   if (open || (!changes.length && !state.outcomes?.length)) return null;
-  const conflicts = changes.filter(c => c.fields.some(f => f.conflict)).length;
+  // The same count as the sync-status card right below (`writeQueue`): in
+  // rows, without the rows the last Send left to the next sync.
+  const { queued } = writeQueue(changes, state.outcomes);
+  const conflicts = queued.filter(c => c.fields.some(f => f.conflict)).length;
 
   return h(
     doc,
@@ -94,10 +94,10 @@ export function renderChangesBar(
       doc,
       'p',
       {},
-      changes.length
+      queued.length
         ? [
-            h(doc, 'b', {}, plural(fieldCount(changes), 'change')),
-            ` in ${plural(changes.length, 'row')} not sent to Notion yet`,
+            h(doc, 'b', {}, plural(queued.length, 'change')),
+            ' not sent to Notion yet',
             conflicts
               ? ` · ${plural(conflicts, 'row')} also changed in Notion`
               : '',
@@ -107,7 +107,7 @@ export function renderChangesBar(
     button(doc, {
       kind: 'secondary',
       size: 'sm',
-      label: changes.length ? 'Review changes' : 'Show results',
+      label: queued.length ? 'Review changes' : 'Show results',
       key: 'review-open',
       onClick: actions.open,
     }),
@@ -170,7 +170,8 @@ export function renderReview(
   const outcomes = new Map(
     (state.outcomes ?? []).map(o => [o.subject, o] as const),
   );
-  const ready = changes.filter(sendable);
+  // The same queue as the strip and the card: Send sends exactly `ready`.
+  const { ready, held } = writeQueue(changes, state.outcomes);
   const busy = !!state.sending || state.kind !== 'ready';
   const optionsOf = (change: RowChange, field: FieldChange) =>
     new Map(
@@ -383,19 +384,19 @@ export function renderReview(
         label: state.sending
           ? 'Sending…'
           : ready.length
-            ? `Send ${plural(fieldCount(ready), 'change')}`
+            ? `Send ${plural(ready.length, 'change')}`
             : 'Send',
         key: 'review-send',
         busy: !!state.sending,
         disabled: !ready.length || busy,
         onClick: actions.send,
       }),
-      ready.length < changes.length &&
+      held.length > 0 &&
         h(
           doc,
           'span',
           { class: 'nt-muted' },
-          `${plural(changes.length - ready.length, 'row')} held back until resolved`,
+          `${plural(held.length, 'row')} held back until resolved`,
         ),
     ),
   );

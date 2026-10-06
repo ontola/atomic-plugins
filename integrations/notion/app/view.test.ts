@@ -520,10 +520,39 @@ describe('view (DOM)', () => {
       app.render({ ...ready, changes: [] });
       expect(q('.nt-changes')).toBeNull();
       app.render({ ...ready, changes });
+      // Counted in rows, as the card right below counts (`writeQueue`).
       expect(q('.nt-changes')?.textContent).toContain(
-        '2 changes in 2 rows not sent to Notion yet · 1 row also changed in Notion',
+        '2 changes not sent to Notion yet · 1 row also changed in Notion',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '2 changes waiting to send to Notion; 1 held back until it is fixed.',
       );
       expect(q('.nt-summary')).toBeTruthy();
+      // A row whose PATCH got no answer is still a change, but neither the
+      // strip nor the card counts it as waiting: the strip agrees with the
+      // card's "1 change waiting" and "1 change sent without an answer".
+      app.render({
+        ...ready,
+        changes,
+        outcomes: [
+          {
+            subject: changes[0]!.subject,
+            name: changes[0]!.name,
+            status: 'unknown',
+            message: 'No answer from Notion.',
+          },
+        ],
+      });
+      expect(q('.nt-changes')?.textContent).toContain(
+        '1 change not sent to Notion yet',
+      );
+      expect(q('.nt-changes')?.textContent).not.toContain('2 changes');
+      expect(q('.ss')?.textContent).toContain(
+        '1 change waiting to send to Notion',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '1 change sent without an answer from Notion',
+      );
     });
 
     it('reviews before → after with option names, sends only what can be sent', () => {

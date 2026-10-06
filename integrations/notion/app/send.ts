@@ -64,9 +64,13 @@ export type SendOutcome = { subject: string; name: string } & (
    * could not be updated from its answer; the next sync reads it back.
    */
   | { status: 'refused'; message: string; written?: true }
-  /** Not sent, and the batch stopped (connection, rate limit, no answer). */
+  /** Not sent, and the batch stopped (a proxy refusal, a rate limit). */
   | { status: 'failed'; message: string }
-  /** The PATCH got no answer: Notion may or may not have applied it. */
+  /**
+   * The PATCH got no usable answer (none, or a 5xx a gateway may send after
+   * Notion applied it): Notion may or may not have applied it. The batch
+   * stops; the next sync settles the row (`changes.ts` `isSettled`).
+   */
   | { status: 'unknown'; message: string }
 );
 
@@ -262,7 +266,8 @@ export async function sendChanges({
       report({
         ...who,
         status: 'unknown',
-        message: `Notion answered ${answer.status}, so it is unknown whether the change was applied: ${notionMessage(answer.status, answer.body)}`,
+        // Short: the review's own prefix already says it is unknown.
+        message: `Notion answered ${answer.status}: ${notionMessage(answer.status, answer.body)}`,
       });
       break;
     }

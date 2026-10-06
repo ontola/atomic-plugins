@@ -93,7 +93,7 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,466 bytes for
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,587 bytes for
   0.5.0 (115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
@@ -201,8 +201,13 @@ verified against live Notion or the real integration proxy.
   table change it is subscribed to, after a sync), it compares each row with
   its baseline (`changes.ts`, no request to Notion). Any difference is an
   edit, wherever it was made: the app's table, another view, another
-  device. A renamed row counts as a title edit. "N changes in M rows not
-  sent to Notion yet" then shows above the rows.
+  device. A renamed row counts as a title edit. "N changes not sent to
+  Notion yet" then shows above the sync-status card, counted in rows and
+  with the same count as the card and the review's Send button
+  (`changes.ts` `writeQueue`): a row the last Send left to the next sync
+  (no usable answer, or written but not confirmed here) is listed in the
+  review with its outcome but not counted as waiting, and Send leaves it
+  alone.
 - **Sync is three-way per field** (`sync.ts`, `compareOnSync`): a field only
   Notion changed takes Notion's value; a field only the row changed is kept
   and stays in the review; a field both changed to the same value is

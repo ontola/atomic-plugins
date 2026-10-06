@@ -1,6 +1,12 @@
 // @wc-ignore-file
 import type { OpenApiDocument } from 'syncables/browser';
-import { localChanges, type Conflicts, type RowChange } from './changes.js';
+import {
+  isSettled,
+  localChanges,
+  writeQueue,
+  type Conflicts,
+  type RowChange,
+} from './changes.js';
 import { classifyFailure, type ProviderFailure } from './errors.js';
 import {
   loadRecord,
@@ -267,16 +273,24 @@ export function createController(
         !proxy ||
         running ||
         current.kind !== 'ready' ||
-        !current.connectionId ||
-        !current.changes?.length
+        !current.connectionId
       )
         return current;
+      // Exactly what the review's Send button and the sync-status card
+      // count (`writeQueue`): the rows the last Send left to the next sync
+      // (no usable answer, or written but not confirmed here) are not sent
+      // again, and their outcomes are kept until that sync, so the card
+      // keeps naming them.
+      const queue = writeQueue(current.changes, current.outcomes);
+      if (!queue.ready.length) return current;
       schema ??= await loadSchema(store);
       if (!schema) return current;
       running = true;
-      const outcomes: SendOutcome[] = [];
+      const outcomes: SendOutcome[] = (current.outcomes ?? []).filter(
+        isSettled,
+      );
       const before = current;
-      set({ ...before, sending: true, outcomes: [] });
+      set({ ...before, sending: true, outcomes: [...outcomes] });
 
       try {
         await sendChanges({
@@ -284,7 +298,7 @@ export function createController(
           proxy,
           connectionId: before.connectionId!,
           schema,
-          changes: before.changes!,
+          changes: queue.ready,
           onOutcome: outcome => {
             outcomes.push(outcome);
             if (outcome.status === 'changed')
