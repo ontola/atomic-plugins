@@ -17,6 +17,7 @@
 import type { NotionFieldType } from '../devonian/notion/index.js';
 import { isNotionFieldType } from '../devonian/notion/index.js';
 import type { SyncRecord } from './record.js';
+import type { SendOutcome } from './send.js';
 import type { DataSourceReport } from './sync.js';
 import type { Row } from './rows.js';
 import type { JSONValue } from './store.js';
@@ -259,6 +260,45 @@ export interface RowChange {
 /** A row can be sent when it has no unresolved conflict and no problem. */
 export const sendable = (change: RowChange) =>
   change.fields.every(f => !f.conflict && !f.problem);
+
+/**
+ * An outcome that leaves its row to the next sync: the PATCH got no usable
+ * answer (none, or a 5xx; `unknown`), or stood but the row here could not
+ * be updated from it (`refused` with `written`). The row is still listed
+ * as a change, since its baseline did not advance, but it is not waiting
+ * to be sent, and Send leaves it alone.
+ */
+export const isSettled = (outcome: SendOutcome) =>
+  outcome.status === 'unknown' ||
+  (outcome.status === 'refused' && outcome.written === true);
+
+export interface WriteQueue {
+  /** The changes that wait to be sent: every row but the settled ones. */
+  queued: RowChange[];
+  /** Of `queued`: what Send sends (`sendable`). */
+  ready: RowChange[];
+  /** Of `queued`: rows Send skips, a conflict or a refused value in them. */
+  held: RowChange[];
+}
+
+/**
+ * The write queue in rows, the one count the "Changes to send" strip, the
+ * review's Send button, the sync-status card (`view/status.ts`) and the
+ * controller's `send()` share, so they cannot disagree.
+ */
+export function writeQueue(
+  changes: readonly RowChange[] = [],
+  outcomes: readonly SendOutcome[] = [],
+): WriteQueue {
+  const settled = new Set(outcomes.filter(isSettled).map(o => o.subject));
+  const queued = changes.filter(c => !settled.has(c.subject));
+
+  return {
+    queued,
+    ready: queued.filter(sendable),
+    held: queued.filter(c => !sendable(c)),
+  };
+}
 
 /**
  * Notion's values for fields that conflict, by row subject and shortname,

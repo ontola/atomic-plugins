@@ -21,8 +21,9 @@
  * one round trip; it is a declared limit, not handled.
  *
  * A relay call that throws on the PATCH may or may not have reached Notion:
- * that row is "unknown", and the batch stops. A refusal by the proxy or a
- * rate limit also stops the batch.
+ * that row is "unknown", and the batch stops. So is a 5xx answer (a gateway
+ * may answer 502 or 504 after Notion applied the PATCH). A refusal by the
+ * proxy or a rate limit also stops the batch; those wrote nothing.
  */
 import {
   notionFieldValue,
@@ -57,11 +58,19 @@ export type SendOutcome = { subject: string; name: string } & (
   | { status: 'changed'; notion: Record<string, JSONValue | undefined> }
   /** Archived, in trash, or no longer shared with the integration. */
   | { status: 'gone' }
-  /** Not sent: the value cannot be written, or Notion refused it. */
-  | { status: 'refused'; message: string }
-  /** Not sent, and the batch stopped (connection, rate limit, no answer). */
+  /**
+   * Not sent: the value cannot be written, or Notion refused it. With
+   * `written`, the opposite: Notion applied the PATCH, but the row here
+   * could not be updated from its answer; the next sync reads it back.
+   */
+  | { status: 'refused'; message: string; written?: true }
+  /** Not sent, and the batch stopped (a proxy refusal, a rate limit). */
   | { status: 'failed'; message: string }
-  /** The PATCH got no answer: Notion may or may not have applied it. */
+  /**
+   * The PATCH got no usable answer (none, or a 5xx a gateway may send after
+   * Notion applied it): Notion may or may not have applied it. The batch
+   * stops; the next sync settles the row (`changes.ts` `isSettled`).
+   */
   | { status: 'unknown'; message: string }
 );
 
@@ -242,10 +251,23 @@ export async function sendChanges({
       break;
     }
 
-    if (answer.status === 429 || answer.status >= 500) {
+    if (answer.status === 429) {
       report({
         ...who,
         status: 'failed',
+        message: notionMessage(answer.status, answer.body),
+      });
+      break;
+    }
+
+    // A 5xx may come from a gateway after Notion applied the PATCH (502,
+    // 504), so it is not "nothing was written": unknown, like a lost answer.
+    if (answer.status >= 500) {
+      report({
+        ...who,
+        status: 'unknown',
+        // Short ("Notion answered 502[: message]"): the review's own prefix
+        // already says it is unknown.
         message: notionMessage(answer.status, answer.body),
       });
       break;
@@ -271,6 +293,7 @@ export async function sendChanges({
       report({
         ...who,
         status: 'refused',
+        written: true,
         message: `Sent to Notion, but this row could not be updated here: ${message(error)}. The next sync reads it back.`,
       });
       continue;

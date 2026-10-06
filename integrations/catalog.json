@@ -260,11 +260,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is not imported, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "notion database table rows pages two-way review sync status drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.4.2",
+    "https://atomicdata.dev/integrations/properties/version": "0.5.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.4.2/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-UtZI+UAhXTGgkkMdlcJfZko3GC5Cto3OOB4kZHxmtXVUETWqLH5yKYizGtJleBvW"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-ImBCQKWLeSJOT2SumM7X3LN9vhdaG3iQOudeGxOOpwuSt1vNqzLThEroDKX5ggBC"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",

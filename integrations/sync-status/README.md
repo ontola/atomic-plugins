@@ -68,13 +68,16 @@ named with the failure ("Last good sync 3 days ago.").
 
 ### Mapping a syncables client's `pendingWrites()`
 
-For an app whose writes go through `syncables/browser` (Pets, Notion) rather
+For an app whose writes go through `syncables/browser` (Pets; not Notion,
+whose reads use syncables but whose writes are its own `send.ts`) rather
 than its own client, `writes` is: `pending` the entries with `state:
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app: Notion, issue-tracker and money adopt the card in
-follow-ups. Google Calendar (0.3.2) has its own client and counts its review
+done for any app: issue-tracker and money adopt the card in follow-ups.
+Notion (0.5.0) counts its own review list and send outcomes, like Clockify
+(`notion/app/view/status.ts`, on `changes.ts` `writeQueue`, which its strip,
+Send button and controller share). Google Calendar (0.3.2) has its own client and counts its review
 and send outcomes, like Clockify. It says a `412` as a problem of its own
 instead of `notWritten`, whose wording names Clockify's "Changes to send"
 sheet: a change to `card.ts` or `card.css` changes the bytes of every
@@ -101,5 +104,9 @@ Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
 `view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
 before any sync, after the import, after a failed contacts refresh and on an
 unsynced table.
+Notion's mapping passes in `notion/app/view/status.test.ts` (18 tests) and
+through the real controller in `notion/app/twoway.test.ts`; the `notion` e2e
+checks the card after the first sync, after a failed sync (with the last good
+sync named) and after Disconnect (read-only).
 Nothing here has been seen by a user tester yet: the wording is a sensible
 default, not a verified fix for findings #6, #7 and #14.
