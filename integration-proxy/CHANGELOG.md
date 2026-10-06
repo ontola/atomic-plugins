@@ -3,10 +3,10 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## 0.2.5
+## 0.2.5 (2026-10-05)
 
-Version set; not yet published to crates.io or deployed. Publishing and
-deploying wait for Michiel's OK.
+Published to crates.io on 2026-10-05 (tag `integration-proxy-v0.2.5`) and
+deployed to localthought.io on 2026-10-06 (Heroku v86; catalog switch v87).
 
 - Authentication profiles (ontola/atomic-plugins#258): a catalog entry may
   select `authenticationProfile`, naming one of the composed document's
