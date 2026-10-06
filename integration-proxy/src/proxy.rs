@@ -33,9 +33,10 @@ use crate::{
 };
 
 /// The provider credential sealed in a connection row, interpreted only here
-/// and where it is minted (`oauth.rs`'s callback, `connect.rs`'s apiKey and
-/// no-credential branches).
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// and where it is minted (`oauth.rs`'s callback, `connect.rs`'s apiKey,
+/// http and no-credential branches). Its `Debug` output names the kind and
+/// platform only, never a secret.
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind")]
 pub(crate) enum StoredCredential {
     #[serde(rename = "oauth")]
@@ -47,10 +48,41 @@ pub(crate) enum StoredCredential {
     },
     #[serde(rename = "api_key")]
     ApiKey { provider: String, key: String },
+    /// A token for an `http` `bearer` scheme, sent as
+    /// `Authorization: Bearer <token>`.
+    #[serde(rename = "http_bearer")]
+    HttpBearer { provider: String, token: String },
+    /// The two halves of an `http` `basic` credential, sent as
+    /// `Authorization: Basic base64(username:password)`. One half is the
+    /// pasted token; the other is fixed by the scheme's
+    /// `x-api-key-details.basicCredentials` or, for a username only, typed
+    /// by the person.
+    #[serde(rename = "http_basic")]
+    HttpBasic {
+        provider: String,
+        username: String,
+        password: String,
+    },
     /// A connection to a platform whose document requires no security
     /// (`SecurityScheme::NoCredential`): only the platform it is for.
     #[serde(rename = "none")]
     NoCredential { provider: String },
+}
+
+impl std::fmt::Debug for StoredCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self {
+            Self::OAuth { .. } => "oauth",
+            Self::ApiKey { .. } => "api_key",
+            Self::HttpBearer { .. } => "http_bearer",
+            Self::HttpBasic { .. } => "http_basic",
+            Self::NoCredential { .. } => "none",
+        };
+        f.debug_struct("StoredCredential")
+            .field("kind", &kind)
+            .field("provider", &self.provider())
+            .finish_non_exhaustive()
+    }
 }
 
 impl StoredCredential {
@@ -58,6 +90,8 @@ impl StoredCredential {
         match self {
             Self::OAuth { provider, .. }
             | Self::ApiKey { provider, .. }
+            | Self::HttpBearer { provider, .. }
+            | Self::HttpBasic { provider, .. }
             | Self::NoCredential { provider } => provider,
         }
     }
@@ -262,10 +296,24 @@ async fn authenticate(
 /// How to attach a resolved credential to the outbound upstream request.
 /// `None` covers query-located API keys, already appended to the target URL
 /// before the request is built.
-enum CredentialInjection {
+pub(crate) enum CredentialInjection {
     Bearer(String),
+    Basic { username: String, password: String },
     Header { name: String, value: String },
     None,
+}
+
+impl CredentialInjection {
+    /// Attaches the credential. reqwest marks the `Authorization` value it
+    /// builds for `Bearer` and `Basic` as sensitive.
+    pub(crate) fn apply(self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            Self::Bearer(token) => request.bearer_auth(token),
+            Self::Basic { username, password } => request.basic_auth(username, Some(password)),
+            Self::Header { name, value } => request.header(name, value),
+            Self::None => request,
+        }
+    }
 }
 
 pub async fn forward(
@@ -424,6 +472,29 @@ async fn forward_inner(
                 }
             }
         }
+        StoredCredential::HttpBearer { token, .. } => {
+            // Only while the platform still resolves to a bearer scheme: a
+            // token connected for it is not sent under another kind.
+            match state.catalog.security_scheme(platform) {
+                Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                    auth: crate::providers::HttpAuth::Bearer,
+                    ..
+                })) => CredentialInjection::Bearer(token.clone()),
+                _ => return Err(ApiError::CredentialRefreshFailed),
+            }
+        }
+        StoredCredential::HttpBasic {
+            username, password, ..
+        } => match state.catalog.security_scheme(platform) {
+            Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                auth: crate::providers::HttpAuth::Basic(_),
+                ..
+            })) => CredentialInjection::Basic {
+                username: username.clone(),
+                password: password.clone(),
+            },
+            _ => return Err(ApiError::CredentialRefreshFailed),
+        },
         StoredCredential::NoCredential { .. } => {
             // Only while the catalog still says the platform needs none: if
             // it has since gained a scheme, this connection holds nothing to
@@ -526,12 +597,9 @@ fn upstream_request(
     required_headers: &[(String, String)],
     body: Bytes,
 ) -> reqwest::RequestBuilder {
-    let mut request = client.request(method, target);
-    request = match injection {
-        CredentialInjection::Bearer(token) => request.bearer_auth(token),
-        CredentialInjection::Header { name, value } => request.header(name, value),
-        CredentialInjection::None => request,
-    };
+    // The caller's own `Authorization` (a frame capability) is consumed by
+    // `authenticate` and never copied: only the headers below go upstream.
+    let mut request = injection.apply(client.request(method, target));
     if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
         request = request.header(header::CONTENT_TYPE, content_type);
     }

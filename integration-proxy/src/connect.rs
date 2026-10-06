@@ -98,7 +98,7 @@ enum KeyCheck {
 }
 
 /// Calls the scheme's `x-api-key-details.keyCheck` once with `key`
-/// (openapi-extensions/spec/api-key-details, section 4.3). The shared client
+/// (openapi-extensions/spec/api-key-details, section 4.4). The shared client
 /// follows no redirects; this call also gets a 10-second timeout. Nothing
 /// here logs, and no error carries the key or the request URL.
 async fn check_api_key(
@@ -109,21 +109,65 @@ async fn check_api_key(
     let Some(check) = &scheme.key_check else {
         return KeyCheck::Accepted(None);
     };
+    let injection = match scheme.location {
+        crate::providers::ApiKeyLocation::Header => crate::proxy::CredentialInjection::Header {
+            name: scheme.name.clone(),
+            value: key.to_owned(),
+        },
+        crate::providers::ApiKeyLocation::Query => {
+            return run_key_check(state, check, Some((&scheme.name, key)), None).await
+        }
+        crate::providers::ApiKeyLocation::Cookie => return KeyCheck::Undetermined,
+    };
+    run_key_check(state, check, None, Some(injection)).await
+}
+
+/// The same key check for an `http` scheme's credential: the scheme's
+/// `x-api-key-details.keyCheck`, called once with exactly the
+/// `Authorization` header a proxied request would carry.
+async fn check_http_credential(
+    state: &AppState,
+    scheme: &crate::providers::HttpScheme,
+    credential: &crate::proxy::StoredCredential,
+) -> KeyCheck {
+    let Some(check) = &scheme.key_check else {
+        return KeyCheck::Accepted(None);
+    };
+    let injection = match credential {
+        crate::proxy::StoredCredential::HttpBearer { token, .. } => {
+            crate::proxy::CredentialInjection::Bearer(token.clone())
+        }
+        crate::proxy::StoredCredential::HttpBasic {
+            username, password, ..
+        } => crate::proxy::CredentialInjection::Basic {
+            username: username.clone(),
+            password: password.clone(),
+        },
+        _ => return KeyCheck::Undetermined,
+    };
+    run_key_check(state, check, None, Some(injection)).await
+}
+
+/// Calls `check` once, with the credential in `query` (a query parameter)
+/// or `injection` (a header), and reads the answer as section 4.4 of
+/// openapi-extensions/spec/api-key-details says.
+async fn run_key_check(
+    state: &AppState,
+    check: &crate::providers::KeyCheck,
+    query: Option<(&str, &str)>,
+    injection: Option<crate::proxy::CredentialInjection>,
+) -> KeyCheck {
     let mut url = check.url.clone();
     #[cfg(test)]
     if let Some(upstream) = &state.test_upstream {
         url = Url::parse(&format!("{}{}", upstream.trim_end_matches('/'), url.path())).unwrap();
     }
-    let request = match scheme.location {
-        crate::providers::ApiKeyLocation::Header => {
-            state.http_client.get(url).header(scheme.name.as_str(), key)
-        }
-        crate::providers::ApiKeyLocation::Query => {
-            url.query_pairs_mut().append_pair(&scheme.name, key);
-            state.http_client.get(url)
-        }
-        crate::providers::ApiKeyLocation::Cookie => return KeyCheck::Undetermined,
-    };
+    if let Some((name, value)) = query {
+        url.query_pairs_mut().append_pair(name, value);
+    }
+    let request = injection
+        .unwrap_or(crate::proxy::CredentialInjection::None)
+        .apply(state.http_client.get(url));
     let Ok(response) = request
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -340,6 +384,23 @@ fn consent_page(
                         description: scheme.description.as_deref(),
                         help_url: scheme.help_url.as_deref(),
                         problem,
+                        ..templates::ApiKeyHelp::default()
+                    })
+                }
+                crate::providers::SecurityScheme::Http(scheme) => {
+                    templates::ConnectKind::ApiKey(templates::ApiKeyHelp {
+                        description: scheme.description.as_deref(),
+                        help_url: scheme.help_url.as_deref(),
+                        problem,
+                        secret: templates::SecretName::ApiToken,
+                        username_label: match &scheme.auth {
+                            crate::providers::HttpAuth::Basic(
+                                crate::providers::BasicCredentials::TokenAsPasswordAskingUsername {
+                                    label,
+                                },
+                            ) => Some(label.as_str()),
+                            _ => None,
+                        },
                     })
                 }
                 crate::providers::SecurityScheme::NoCredential => {
@@ -371,6 +432,7 @@ fn consent_page(
             format!("{base}; script-src {script}; form-action 'self'")
         }
         crate::providers::SecurityScheme::ApiKey(_)
+        | crate::providers::SecurityScheme::Http(_)
         | crate::providers::SecurityScheme::NoCredential => format!(
             "{base}; script-src {script}; form-action 'self' {}",
             form_action_source(target)
@@ -385,8 +447,13 @@ fn consent_page(
 #[derive(Deserialize)]
 pub struct Approval {
     csrf: String,
+    /// The pasted secret: an API key, or an `http` scheme's token.
     #[serde(default)]
     api_key: Option<String>,
+    /// The username an `http` `basic` scheme asks for
+    /// (`basicCredentials.usernameLabel`); ignored for every other kind.
+    #[serde(default)]
+    username: Option<String>,
 }
 
 fn valid_api_key(approval: &Approval) -> Option<&str> {
@@ -395,6 +462,68 @@ fn valid_api_key(approval: &Approval) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|key| (4..=512).contains(&key.len()))
+}
+
+/// The credential an `http` scheme's consent form submitted, laid out as
+/// the scheme says, or why it cannot be used. A bearer token must be
+/// visible ASCII (it goes into a header as it is); a Basic half may be any
+/// text without control characters, and the username half may not contain
+/// `:` (RFC 7617).
+fn http_credential(
+    platform: &str,
+    scheme: &crate::providers::HttpScheme,
+    approval: &Approval,
+) -> Result<crate::proxy::StoredCredential, &'static str> {
+    use crate::providers::{BasicCredentials, HttpAuth};
+    use crate::proxy::StoredCredential;
+    let token = valid_api_key(approval).ok_or("Enter a valid API token")?;
+    let printable = |text: &str| !text.chars().any(char::is_control);
+    let provider = platform.to_owned();
+    match &scheme.auth {
+        HttpAuth::Bearer => {
+            if !token.bytes().all(|b| b.is_ascii_graphic()) {
+                return Err("Enter a valid API token");
+            }
+            Ok(StoredCredential::HttpBearer {
+                provider,
+                token: token.to_owned(),
+            })
+        }
+        HttpAuth::Basic(layout) => {
+            if !printable(token) {
+                return Err("Enter a valid API token");
+            }
+            let (username, password) = match layout {
+                BasicCredentials::TokenAsUsername { password } => {
+                    if token.contains(':') {
+                        return Err("Enter a valid API token");
+                    }
+                    (token.to_owned(), password.clone())
+                }
+                BasicCredentials::TokenAsPasswordWithUsername { username } => {
+                    (username.clone(), token.to_owned())
+                }
+                BasicCredentials::TokenAsPasswordAskingUsername { .. } => {
+                    let username = approval
+                        .username
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| {
+                            (1..=256).contains(&name.chars().count())
+                                && printable(name)
+                                && !name.contains(':')
+                        })
+                        .ok_or("Enter a valid username and API token")?;
+                    (username.to_owned(), token.to_owned())
+                }
+            };
+            Ok(StoredCredential::HttpBasic {
+                provider,
+                username,
+                password,
+            })
+        }
+    }
 }
 
 /// `POST /connect/authorize`: the consent form's submission.
@@ -468,6 +597,39 @@ pub async fn authorize(
             }
         }
     }
+    // The same for an `http` scheme's token: built and checked before the
+    // consent is spent, and handed off below as it was checked.
+    let mut http_credential_checked = None;
+    if let Ok(scheme @ crate::providers::SecurityScheme::Http(_)) =
+        state.catalog.security_scheme(&consent.request.platform)
+    {
+        let crate::providers::SecurityScheme::Http(http) = &scheme else {
+            unreachable!("matched as Http above");
+        };
+        let credential = match http_credential(&consent.request.platform, http, &approval) {
+            Ok(credential) => credential,
+            Err(message) => return error(message),
+        };
+        match check_http_credential(&state, http, &credential).await {
+            KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected => {
+                let Ok(target) = consent.request.validate() else {
+                    return error("Connection request expired or invalid; start again from your hub");
+                };
+                let problem = format!(
+                    "{} did not accept that API token. Check it and enter it again.",
+                    templates::platform_label(&consent.request.platform)
+                );
+                return consent_page(&state, jar, &consent, &target, &scheme, Some(&problem));
+            }
+            KeyCheck::Undetermined => {
+                return error(
+                    "Could not check the API token with the platform; nothing was stored. Try again later",
+                )
+            }
+        }
+        http_credential_checked = Some(credential);
+    }
     match security
         .consume_nonce(&format!("consent:{}", consent.csrf))
         .await
@@ -493,6 +655,17 @@ pub async fn authorize(
             let credential = crate::proxy::StoredCredential::ApiKey {
                 provider: consent.request.platform.clone(),
                 key: key.to_owned(),
+            };
+            let code =
+                match labelled_handoff(security, &consent.request, credential, key_label).await {
+                    Ok(code) => code,
+                    Err(()) => return error("Could not complete connection"),
+                };
+            finish_with_connection_code(jar, &consent.request.redirect_uri, &code)
+        }
+        Ok(crate::providers::SecurityScheme::Http(_)) => {
+            let Some(credential) = http_credential_checked else {
+                return error("Enter a valid API token");
             };
             let code =
                 match labelled_handoff(security, &consent.request, credential, key_label).await {
@@ -884,6 +1057,7 @@ mod tests {
                 Form(Approval {
                     csrf: csrf.into(),
                     api_key: None,
+                    username: None,
                 }),
             )
             .await;
@@ -1030,6 +1204,7 @@ mod tests {
             Form(Approval {
                 csrf: "wrong".into(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;
@@ -1059,6 +1234,7 @@ mod tests {
                 Form(Approval {
                     csrf: csrf.into(),
                     api_key: None,
+                    username: None,
                 }),
             )
             .await;
@@ -1139,6 +1315,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("  ".into()),
+                username: None,
             }),
         )
         .await;
@@ -1151,6 +1328,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("clockify-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1175,6 +1353,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("clockify-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1457,6 +1636,7 @@ mod tests {
                 Form(Approval {
                     csrf: consent.csrf.clone(),
                     api_key: Some(key.into()),
+                    username: None,
                 }),
             )
         };
@@ -1596,6 +1776,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("unexpected-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1748,6 +1929,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;
@@ -1790,6 +1972,7 @@ mod tests {
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;

@@ -372,8 +372,9 @@ impl Catalog {
             _ => Err("platform does not use an OAuth security scheme".into()),
         }
     }
-    /// Resolves whichever kind of security scheme (OAuth or static apiKey)
-    /// the platform's composed document declares, generically. With an
+    /// Resolves whichever kind of security scheme (OAuth, static apiKey, a
+    /// bearer or basic http token, or none) the platform's composed document
+    /// declares, generically. With an
     /// `authenticationProfile` selection the document may declare several
     /// kinds, and the selected profile decides
     /// (openapi-extensions/spec/authentication-profiles).
@@ -388,7 +389,13 @@ impl Catalog {
         }
         let oauth_scheme = self.selected_string(platform, "oauthSecurityScheme")?;
         let api_key_scheme = self.selected_string(platform, "apiKeySecurityScheme")?;
-        crate::providers::SecurityScheme::from_document(&document, oauth_scheme, api_key_scheme)
+        let http_scheme = self.selected_string(platform, "httpSecurityScheme")?;
+        crate::providers::SecurityScheme::from_document(
+            &document,
+            oauth_scheme,
+            api_key_scheme,
+            http_scheme,
+        )
     }
     fn selected_string(&self, platform: &str, key: &str) -> Result<Option<&str>, String> {
         match self
@@ -412,10 +419,13 @@ impl Catalog {
                 .is_some()
                 || self
                     .selected_string(platform, "apiKeySecurityScheme")?
+                    .is_some()
+                || self
+                    .selected_string(platform, "httpSecurityScheme")?
                     .is_some())
         {
             return Err(
-                "authenticationProfile selection excludes oauthSecurityScheme and apiKeySecurityScheme"
+                "authenticationProfile selection excludes oauthSecurityScheme, apiKeySecurityScheme and httpSecurityScheme"
                     .into(),
             );
         }
