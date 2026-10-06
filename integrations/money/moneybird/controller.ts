@@ -1,40 +1,112 @@
 // @wc-ignore-file
+/**
+ * The view's state machine. One open: adopt (own Properties, tables,
+ * `renders`, `row-extras`), find where this view is (the app's own table, or
+ * a table it is a view of and its binding), find the connection and the
+ * settings, then sync the chosen collections once. Every collection is
+ * synced on its own: one that fails is reported next to the ones that
+ * succeeded, and its rows imported earlier are kept.
+ */
+import {
+  bindTable,
+  collectionOf,
+  COLLECTION_LABELS,
+  COLLECTIONS,
+  ensureRowAccess,
+  findHome,
+  formatCollections,
+  hasRowAccess,
+  layout,
+  parseCollections,
+  unbindTable,
+  type Collection,
+  type Layout,
+} from './binding.js';
+import { adopt, COLLECTIONS_TERM, ensureTables, type Adopted } from './own.js';
 import { readAdministrations, type Administration } from './read.js';
 import {
   ADMINISTRATION,
-  ensureProperties,
   PLATFORM,
   relayGet,
   syncContacts,
+  syncHours,
+  syncMutations,
   type SyncSummary,
 } from './sync.js';
 import type { ConnectionReference, PluginStore } from './store.js';
+
+export type Results = Partial<
+  Record<Collection, SyncSummary | { error: string }>
+>;
 
 export type ViewState =
   | { kind: 'loading' }
   /** The host has no proxy relay (atomic-server#1624 not in this build). */
   | { kind: 'no-relay' }
-  | { kind: 'disconnected' }
+  /** A table the app is a view of, of a class it cannot sync into. */
+  | { kind: 'unsupported'; message: string }
+  /** A table the app is a view of, not synced: offer "Sync this table". */
+  | {
+      kind: 'unsynced';
+      table: string;
+      collection: Collection;
+      message?: string;
+    }
+  /** Bound, but the grant lapsed: offer "Allow editing" again. */
+  | { kind: 'paused'; table: string; collection: Collection }
+  | { kind: 'disconnected'; table?: string }
   | { kind: 'connecting' }
   | {
       kind: 'choosing';
       connection: ConnectionReference;
       administrations: Administration[];
+      /** Pre-selected collections. */
+      collections: Collection[];
+      /** False on a table the app is a view of: the collection is fixed. */
+      selectable: boolean;
+      table?: string;
     }
-  | { kind: 'syncing'; connection: ConnectionReference; administration: string }
+  | {
+      kind: 'syncing';
+      connection: ConnectionReference;
+      administration: string;
+      collections: Collection[];
+    }
   | {
       kind: 'synced';
       connection: ConnectionReference;
       administration: string;
+      collections: Collection[];
       at: Date;
-      summary: SyncSummary;
+      results: Results;
     }
   | {
       kind: 'error';
       message: string;
       connection?: ConnectionReference;
       administration?: string;
+      collections?: Collection[];
     };
+
+const NOUNS: Record<Collection, string> = {
+  contacts: 'contacts',
+  hours: 'time entries',
+  mutations: 'mutations',
+};
+
+const labels = (collections: readonly Collection[]) =>
+  collections.map(c => COLLECTION_LABELS[c].toLowerCase()).join(', ');
+
+export function describeResult(
+  collection: Collection,
+  result: SyncSummary | { error: string },
+): string {
+  if ('error' in result)
+    return `${NOUNS[collection]}: refresh failed: ${result.error} Rows imported earlier are kept.`;
+  const skipped = result.skipped ? `, ${result.skipped} skipped` : '';
+
+  return `${result.total} ${NOUNS[collection]} (${result.added} added, ${result.updated} updated, ${result.unchanged} unchanged${skipped})`;
+}
 
 export function describe(state: ViewState): string {
   switch (state.kind) {
@@ -42,86 +114,228 @@ export function describe(state: ViewState): string {
       return 'Loading…';
     case 'no-relay':
       return 'This host cannot reach the integration proxy for apps yet.';
+    case 'unsupported':
+      return state.message;
+    case 'unsynced':
+      return `Not synced with Moneybird. “${state.table}” can hold Moneybird ${COLLECTION_LABELS[state.collection].toLowerCase()}; “Sync this table to Moneybird” imports them here, read-only on the Moneybird side.${state.message ? ` ${state.message}` : ''}`;
+    case 'paused':
+      return `Syncing “${state.table}” with Moneybird is paused: this app may no longer edit its rows. Allow editing again to resume.`;
     case 'disconnected':
-      return 'Not connected. Connect Moneybird to import your contacts (read-only).';
+      return state.table
+        ? `Not connected. Connect Moneybird to import into “${state.table}” (read-only).`
+        : 'Not connected. Connect Moneybird to import your contacts, hours and financial mutations (read-only).';
     case 'connecting':
       return 'Waiting for you to confirm the connection…';
     case 'choosing':
-      return state.administrations.length
-        ? 'Choose the Moneybird administration to import contacts from.'
-        : 'This Moneybird account has no administrations to import from.';
+      if (!state.administrations.length)
+        return 'This Moneybird account has no administrations to import from.';
+
+      return state.table
+        ? `Choose the Moneybird administration to import ${labels(state.collections)} into “${state.table}” from.`
+        : 'Choose the Moneybird administration and what to import.';
     case 'syncing':
-      return 'Importing contacts…';
+      return `Importing ${labels(state.collections)}…`;
 
     case 'synced': {
-      const s = state.summary;
+      const parts = COLLECTIONS.filter(c => state.results[c]).map(c =>
+        describeResult(c, state.results[c]!),
+      );
 
-      return `Last synced ${state.at.toLocaleTimeString()}: ${s.total} contacts (${s.added} added, ${s.updated} updated, ${s.unchanged} unchanged).`;
+      return `Last synced ${state.at.toLocaleTimeString()}: ${parts.join('; ')}.`;
     }
 
     case 'error':
-      return `Refresh failed: ${state.message} Contacts imported earlier are kept.`;
+      return `Refresh failed: ${state.message} Rows imported earlier are kept.`;
   }
 }
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/** Collections for an administration chosen by 0.1.x, before there was a choice. */
+const LEGACY_COLLECTIONS: Collection[] = ['contacts'];
+
 export function createController(
   store: PluginStore,
   render: (state: ViewState) => void,
 ) {
   let state: ViewState = { kind: 'loading' };
+  let where: Layout | undefined;
+  let adopted: Adopted | undefined;
+  /** The App (own table) or the table's binding: where the settings live. */
+  let home: string | undefined;
 
   const set = (next: ViewState) => {
     state = next;
     render(state);
   };
 
-  const chosen = async (): Promise<string | undefined> => {
-    const property = (await ensureProperties(store, [ADMINISTRATION])).get(
-      ADMINISTRATION.shortname,
-    )!;
-    const value = (await store.getResource(await store.getApp())).get(property);
+  const term = (shortname: string) => adopted!.properties.get(shortname)!;
+  const tableName = () => (where?.own ? undefined : where?.name);
 
-    return typeof value === 'string' && value ? value : undefined;
+  /** The one collection a table the app is a view of can hold. */
+  const fixed = (): Collection | undefined =>
+    where && !where.own ? collectionOf(where.rowClass) : undefined;
+
+  const settings = async () => {
+    const resource = await store.getResource(home!);
+    const administration = resource.get(term(ADMINISTRATION.shortname));
+    const chosen = fixed();
+    const collections = chosen
+      ? [chosen]
+      : parseCollections(resource.get(term(COLLECTIONS_TERM.shortname)));
+
+    return {
+      administration:
+        typeof administration === 'string' && administration
+          ? administration
+          : undefined,
+      collections,
+    };
   };
 
   const choose = async (connection: ConnectionReference) => {
     const administrations = await readAdministrations(
       relayGet(store.proxy!, connection),
     );
-    set({ kind: 'choosing', connection, administrations });
+    const chosen = fixed();
+    const stored = (await settings()).collections;
+    set({
+      kind: 'choosing',
+      connection,
+      administrations,
+      collections: chosen
+        ? [chosen]
+        : stored.length
+          ? stored
+          : [...COLLECTIONS],
+      selectable: !chosen,
+      ...(tableName() ? { table: tableName()! } : {}),
+    });
   };
 
-  return {
-    state: () => state,
+  /** From "adopted and placed" on: the connection, the settings, then a sync. */
+  const proceed = async (): Promise<{ syncing?: Promise<void> }> => {
+    const proxy = store.proxy!;
+    const [connection] = await proxy.connections({ platform: PLATFORM });
 
-    /**
-     * Finds this app's connection and administration, then starts one sync.
-     * Resolves once that is known, not when the sync ends.
-     */
-    async load(): Promise<{ syncing?: Promise<void> }> {
-      const proxy = store.proxy;
-      if (!proxy) return (set({ kind: 'no-relay' }), {});
-      const [connection] = await proxy.connections({ platform: PLATFORM });
-      if (!connection) return (set({ kind: 'disconnected' }), {});
+    if (!connection) {
+      set({
+        kind: 'disconnected',
+        ...(tableName() ? { table: tableName()! } : {}),
+      });
 
-      try {
-        const administration = await chosen();
+      return {};
+    }
 
-        if (!administration) {
-          await choose(connection);
+    try {
+      const { administration, collections } = await settings();
 
-          return {};
-        }
-
-        return { syncing: this.sync(connection, administration) };
-      } catch (error) {
-        set({ kind: 'error', connection, message: message(error) });
+      if (!administration) {
+        await choose(connection);
 
         return {};
       }
+
+      return {
+        syncing: controller.sync(
+          connection,
+          administration,
+          collections.length ? collections : LEGACY_COLLECTIONS,
+        ),
+      };
+    } catch (error) {
+      set({ kind: 'error', connection, message: message(error) });
+
+      return {};
+    }
+  };
+
+  const controller = {
+    state: () => state,
+
+    /**
+     * Adopts, finds where this view is and its settings, then starts one
+     * sync. Resolves once that is known, not when the sync ends.
+     */
+    async load(): Promise<{ syncing?: Promise<void> }> {
+      if (!store.proxy) return (set({ kind: 'no-relay' }), {});
+
+      try {
+        where = await layout(store);
+        adopted = await adopt(store);
+
+        if (!where.own) {
+          const collection = collectionOf(where.rowClass);
+
+          if (!collection) {
+            set({
+              kind: 'unsupported',
+              message: `“${where.name}” is not a table this app can sync: its rows are neither time entries (time-entry-v1) nor bank transactions (bank-transaction-v1).`,
+            });
+
+            return {};
+          }
+
+          home = await findHome(store, where, adopted);
+
+          if (!home) {
+            set({ kind: 'unsynced', table: where.name, collection });
+
+            return {};
+          }
+
+          if (!(await hasRowAccess(store, where, adopted))) {
+            set({ kind: 'paused', table: where.name, collection });
+
+            return {};
+          }
+        } else {
+          home = where.app;
+        }
+      } catch (error) {
+        set({ kind: 'error', message: message(error) });
+
+        return {};
+      }
+
+      return proceed();
+    },
+
+    /**
+     * "Sync this table to Moneybird" (or "Allow editing" again): asks for
+     * the host's grant, makes the binding, then goes on as on an open.
+     */
+    async syncTable(): Promise<void> {
+      if (!where || !adopted || where.own) return;
+      const collection = collectionOf(where.rowClass);
+      if (!collection) return;
+
+      try {
+        const answer = await ensureRowAccess(store, where, adopted);
+
+        if (answer.status !== 'granted') {
+          await unbindTable(store, where, adopted);
+          set({
+            kind: 'unsynced',
+            table: where.name,
+            collection,
+            message: answer.reason,
+          });
+
+          return;
+        }
+
+        home = await bindTable(store, where, adopted);
+      } catch (error) {
+        set({ kind: 'error', message: message(error) });
+
+        return;
+      }
+
+      await (
+        await proceed()
+      ).syncing;
     },
 
     async connect(): Promise<void> {
@@ -133,31 +347,48 @@ export function createController(
         // On consent the host navigates away and this view reloads; the
         // promise only settles when the person cancels.
         await proxy.connect({ platform: PLATFORM });
-        set({ kind: 'disconnected' });
+        set({
+          kind: 'disconnected',
+          ...(tableName() ? { table: tableName()! } : {}),
+        });
       } catch (error) {
         set({ kind: 'error', message: message(error) });
       }
     },
 
-    /** Stores the administration on the App resource, then imports it. */
-    async select(administration: string): Promise<void> {
-      if (state.kind !== 'choosing') return;
+    /** Stores the administration and collections on the home, then imports. */
+    async select(
+      administration: string,
+      collections: readonly Collection[] = COLLECTIONS,
+    ): Promise<void> {
+      if (state.kind !== 'choosing' || !home) return;
       const { connection } = state;
+      const chosen = fixed();
+      const wanted = chosen
+        ? [chosen]
+        : COLLECTIONS.filter(c => collections.includes(c));
+
+      if (!wanted.length)
+        return set({
+          kind: 'error',
+          connection,
+          message: 'Choose at least one collection to import.',
+        });
 
       try {
-        const property = (await ensureProperties(store, [ADMINISTRATION])).get(
-          ADMINISTRATION.shortname,
-        )!;
-        await (
-          await store.getResource(await store.getApp())
-        )
-          .set(property, administration)
-          .save();
+        const resource = await store.getResource(home);
+        resource.set(term(ADMINISTRATION.shortname), administration);
+        if (!chosen)
+          resource.set(
+            term(COLLECTIONS_TERM.shortname),
+            formatCollections(wanted),
+          );
+        await resource.save();
       } catch (error) {
         return set({ kind: 'error', connection, message: message(error) });
       }
 
-      await this.sync(connection, administration);
+      await this.sync(connection, administration, wanted);
     },
 
     async change(): Promise<void> {
@@ -176,33 +407,67 @@ export function createController(
       administration = 'administration' in state
         ? state.administration
         : undefined,
+      collections = 'collections' in state && state.collections
+        ? state.collections
+        : undefined,
     ): Promise<void> {
       const proxy = store.proxy;
       if (!proxy) return set({ kind: 'no-relay' });
-      if (!connection || !administration || state.kind === 'syncing') return;
-      set({ kind: 'syncing', connection, administration });
+      if (
+        !connection ||
+        !administration ||
+        !collections?.length ||
+        !where ||
+        !adopted ||
+        state.kind === 'syncing'
+      )
+        return;
+      const chosen = fixed();
 
-      try {
-        const summary = await syncContacts(
-          store,
-          relayGet(proxy, connection),
-          administration,
-        );
-        set({
-          kind: 'synced',
-          connection,
-          administration,
-          at: new Date(),
-          summary,
-        });
-      } catch (error) {
-        set({
-          kind: 'error',
-          connection,
-          administration,
-          message: message(error),
-        });
+      if (chosen && !(await hasRowAccess(store, where, adopted)))
+        return set({ kind: 'paused', table: where.name, collection: chosen });
+
+      set({ kind: 'syncing', connection, administration, collections });
+      const get = relayGet(proxy, connection);
+      const results: Results = {};
+
+      for (const collection of collections) {
+        try {
+          if (collection === 'contacts')
+            results.contacts = await syncContacts(store, get, administration);
+          else if (collection === 'hours') {
+            const own = await ensureTables(store, where.app);
+            results.hours = await syncHours(store, get, administration, {
+              ...own,
+              hours: chosen === 'hours' ? where.table : own.hours,
+            });
+          } else {
+            const table =
+              chosen === 'mutations'
+                ? where.table
+                : (await ensureTables(store, where.app)).mutations;
+            results.mutations = await syncMutations(
+              store,
+              get,
+              administration,
+              table,
+            );
+          }
+        } catch (error) {
+          results[collection] = { error: message(error) };
+        }
       }
+
+      set({
+        kind: 'synced',
+        connection,
+        administration,
+        collections,
+        at: new Date(),
+        results,
+      });
     },
   };
+
+  return controller;
 }

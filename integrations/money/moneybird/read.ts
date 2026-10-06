@@ -334,7 +334,9 @@ export async function readFinancialMutations(
       );
     const label = `financial mutations ${range.from}..${range.to}`;
     const body = ok(
-      await get(`${collection}?filter=${encodeURIComponent(periodFilter(range))}`),
+      await get(
+        `${collection}?filter=${encodeURIComponent(periodFilter(range))}`,
+      ),
       label,
     );
 
