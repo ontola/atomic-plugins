@@ -1,0 +1,152 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.figma.com/docs/rest-api/component-endpoints/
+overlay: 1.0.0
+info:
+  title: Figma explicit collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f9b511f8ad2a8c19004af2a38815ab808dd18a98/APIs/figma.com/0.43.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedPages:
+        type: nextLink
+        autoDetect: false
+        description: Follow pagination.next_page to continue; no next URL ends traversal. Preserve the
+          returned query parameters.
+        request: {}
+        response:
+          bodyFields:
+            pagination.next_page:
+              role: nextLink
+      teamCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Treat meta.cursor.after as an opaque numeric cursor, returned as the after query
+          parameter. Do not send before during forward traversal. Stop when after is absent.
+        request:
+          queryParameters:
+            after:
+              role: cursor
+              schema:
+                type: number
+            page_size:
+              role: pageSize
+        response:
+          bodyFields:
+            meta.cursor.after:
+              role: nextCursor
+              schema:
+                type: number
+      analyticsCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Return the response cursor as the cursor query parameter, preserving group_by and
+          date filters. The OAD declares cursor absent when next_page is false.
+        request:
+          queryParameters:
+            cursor:
+              role: cursor
+        response:
+          envelope:
+            itemsField: rows
+          bodyFields:
+            cursor:
+              role: nextCursor
+      aiCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Return next_cursor as cursor, preserving user and date filters. Empty next_cursor
+          ends traversal.
+        request:
+          queryParameters:
+            cursor:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: rows
+          bodyFields:
+            next_cursor:
+              role: nextCursor
+- target: $.paths['/v1/files/{file_key}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedPages
+      overrides:
+        response:
+          envelope:
+            itemsField: versions
+        request:
+          queryParameters:
+            page_size:
+              role: pageSize
+- target: $.paths['/v1/files/{file_key}/comments/{comment_id}/reactions'].get
+  update:
+    x-pagination:
+    - scheme: linkedPages
+      overrides:
+        response:
+          envelope:
+            itemsField: reactions
+- target: $.paths['/v1/teams/{team_id}/components'].get
+  update:
+    x-pagination:
+    - scheme: teamCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: meta.components
+- target: $.paths['/v1/teams/{team_id}/component_sets'].get
+  update:
+    x-pagination:
+    - scheme: teamCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: meta.component_sets
+- target: $.paths['/v1/teams/{team_id}/styles'].get
+  update:
+    x-pagination:
+    - scheme: teamCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: meta.styles
+- target: $.paths['/v2/webhooks'].get
+  update:
+    x-pagination:
+    - scheme: linkedPages
+      overrides:
+        response:
+          envelope:
+            itemsField: webhooks
+- target: $.paths['/v1/ai_usage/daily'].get
+  update:
+    x-pagination:
+    - scheme: aiCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/component/actions'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/component/usages'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/style/actions'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/style/usages'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/variable/actions'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages
+- target: $.paths['/v1/analytics/libraries/{file_key}/variable/usages'].get
+  update:
+    x-pagination:
+    - scheme: analyticsCursorPages

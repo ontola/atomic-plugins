@@ -227,6 +227,9 @@ directly.
 | [Intercom](APIs/intercom.com/2.16/pagination-4a302a4352fcb52ab0735f4781376c28913d8028-overlay.yaml) | Eight cursor operations: five GET lists and POST contacts/conversations/tickets searches. Explicit `data`, `conversations`, `events` or `tickets` envelopes. | [Pagination](https://developers.intercom.com/docs/build-an-integration/learn-more/rest-apis/pagination), [2.16 changelog](https://developers.intercom.com/docs/references/changelog) |
 | [Mailchimp](APIs/mailchimp.com/3.0.91/pagination-b6b0af39fa9d35f81fbea6b7962cc6dea857e889-overlay.yaml) | 56 GET collections with declared `count`, `offset`, `total_items` and a single item array. Includes lists/members, campaigns, reports and commerce. | [Pagination and partial responses](https://mailchimp.com/developer/marketing/docs/methods-parameters/#pagination), [Lists](https://mailchimp.com/developer/marketing/api/lists/get-lists-info/) |
 | [HubSpot owners](APIs/hubspot.com/crm-owners/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | One owner collection at the pinned OAD's `/crm/owners/2026-03`, using `paging.next.after` and `results`. | [Owner pagination migration](https://developers.hubspot.com/changelog/sunset-v2-owners-api), [Pinned request and response schemas](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/crm-owners/2026-03/openapi.yaml) |
+| [Confluence v2](APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml) | 67 GET collections with declared cursor/limit, `Link` response header and `results` array, including pages, spaces, attachments, comments and tasks. | [Pagination](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
+| [Figma](APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml) | 13 GET collections: versions, reactions, webhooks, three team libraries, six library analytics and daily AI usage. | [Team libraries](https://developers.figma.com/docs/rest-api/component-endpoints/), [Version history](https://developers.figma.com/docs/rest-api/version-history-endpoints/), [Library analytics](https://developers.figma.com/docs/rest-api/library-analytics-endpoints/), [AI usage](https://developers.figma.com/docs/rest-api/ai-usage-endpoints/) |
+| [ClickUp v3](APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml) | Nine GET collections: channels, followers, members, messages, reactions, replies, tagged users, attachments and Docs. `data` or `docs` envelopes. | [Chat messages](https://developer.clickup.com/reference/getchatmessages), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/88ea4994e816563201c2069526252475d77e853f/APIs/clickup.com/v3/version/openapi.yaml) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -282,9 +285,33 @@ HubSpot owner reads keep their email and archived filters when returning the
 opaque `paging.next.after` token as `after`. The individual owner read is
 outside the selection; the overlay preserves the OAD's versioned path.
 
+Confluence v2 follows `rel="next"` in the declared `Link` response header,
+with the top-level `results` envelope. Those RFC 8288 targets can be relative;
+consumers must resolve them against the request URL, as syncables does. The
+body's `_links.next` is also relative and is not duplicated as a second
+continuation source. Individual pages with nested included collections and
+ancestor reads without a declared `Link` header are excluded.
+
+Figma uses different schemes for numeric `meta.cursor.after` tokens in team
+libraries, string cursors in analytics and AI usage, and `pagination.next_page`
+URLs in versions, reactions and webhooks. Numeric tokens remain opaque and
+are returned through `after`; backward `before` pagination is not selected.
+Analytics responses declare their cursor absent when `next_page` is false.
+Their `rows` arrays can be selected by `oneOf`; the regression checks every
+declared alternative. Activity logs omit a cursor request parameter in the
+pinned OAD, so that endpoint remains outside the selection.
+
+ClickUp v3 returns `next_cursor` through the `cursor` query parameter, keeping
+filters and content-format settings. Docs uses `docs`; the other eight
+collections use `data`. The deprecated Docs request parameter `next_cursor`
+is not selected. ClickUp v2 task reads start `page` at zero and use a
+`last_page` flag, while comment pagination derives two continuation values
+from the last item. Neither is described by this v3 cursor overlay.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
-DigitalOcean, Notion and Spotify) and 2026-10-05 (Intercom, Mailchimp and HubSpot),
-not live provider certification. The metadata follows the
+DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
+and 2026-10-06 (Confluence, Figma and ClickUp), not live provider certification.
+The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
 
@@ -292,7 +319,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the seven pinned OADs. CI uses the same full-history
+Omit `--directory` to download the ten pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
