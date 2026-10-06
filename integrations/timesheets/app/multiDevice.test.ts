@@ -530,6 +530,9 @@ describe('one sender at a time: the lease (#123 M5)', () => {
       {
         status: 'not-sent',
         message: expect.stringMatching(/Another open copy/),
+        // When the other copy's turn ends: the sync-status card stops
+        // naming the lease once this has passed.
+        until: lease(t).until,
       },
     ]);
     expect(t.writes()).toEqual([]);

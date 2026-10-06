@@ -327,6 +327,81 @@ describe('sending (review first)', () => {
     expect(t.writes()).toEqual([]);
   });
 
+  it('a PUT that stood, whose verification finds the entry no longer complete, fails as written', async () => {
+    const t = await setup();
+    await edit(await t.row('entry-2'), { [NAME]: 'Renamed' });
+    const { review } = await t.sync();
+    // Fresh read, PUT, verification read: the first GET passes untouched,
+    // the second finds the timer running again (end cleared in Clockify).
+    const path = ENTRY_PATH('entry-2');
+    t.proxy.fixture.state.onNextRequest.push(
+      { match: `GET ${path}` },
+      {
+        match: `GET ${path}`,
+        id: 'entry-2',
+        patch: {
+          timeInterval: { ...t.entry('entry-2').timeInterval, end: null },
+        },
+      },
+    );
+
+    const { outcomes } = await t.send(review);
+
+    expect(t.writes().map(w => w.method)).toEqual(['PUT']);
+    expect(outcomes).toEqual([
+      {
+        entryId: 'entry-2',
+        title: 'Weekly sync',
+        kind: 'update',
+        status: 'failed',
+        message: 'Clockify no longer lists it as a completed entry.',
+        written: true,
+      },
+    ]);
+  });
+
+  it('an exception after the write stood (saving the row) fails as written', async () => {
+    const t = await setup();
+    await edit(await t.row('entry-2'), { [NAME]: 'Renamed' });
+    const { review } = await t.sync();
+    const serve = t.proxy.fixture.request.bind(t.proxy.fixture);
+
+    // Right after Clockify accepts the PUT, the next save of a table row
+    // (the row's new baseline) fails.
+    t.proxy.fixture.request = async (
+      method: string,
+      url: URL,
+      body: unknown,
+    ) => {
+      const response = await serve(method, url, body);
+      if (method === 'PUT') t.store.failRowSaves(1);
+
+      return response;
+    };
+
+    const { outcomes } = await t.send(review);
+
+    expect(t.writes().map(w => w.method)).toEqual(['PUT']);
+    expect(outcomes).toMatchObject([
+      { status: 'failed', message: 'Simulated write failure', written: true },
+    ]);
+    // Clockify has the rename; the row's baseline is read back next sync.
+    expect(t.entry('entry-2').description).toBe('Renamed');
+  });
+
+  it('a write Clockify refused with a 4xx is not `written`', async () => {
+    const t = await setup();
+    await edit(await t.row('entry-2'), { [NAME]: 'Renamed' });
+    const { review } = await t.sync();
+    t.proxy.fixture.state.failBefore = { status: 400 };
+
+    const { outcomes } = await t.send(review);
+
+    expect(outcomes[0]).toMatchObject({ status: 'failed' });
+    expect(outcomes[0].written).toBeUndefined();
+    expect(outcomes[0].message).toMatch(/^Clockify answered 400/);
+  });
+
   it('S17: a change in Clockify before the fresh read wins, and nothing is written', async () => {
     const t = await setup();
     await edit(await t.row('entry-2'), { [NAME]: 'Mine' });

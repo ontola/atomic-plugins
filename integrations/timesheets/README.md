@@ -110,7 +110,15 @@ into the view root.
   names the last good sync ("Last good sync 3 days ago."). Without a proxy
   relay (frame K) the card is read-only, with the reason. A `not-sent`
   outcome stays a pending change (never "uncertain"); when another copy holds
-  the send lease, the card says so once. The wording is a default
+  the send lease, the card says so once, and (0.7.1) only until that lease's
+  turn ends; a successful sync drops the "uncertain" and "not-sent" outcomes
+  it settled (`recovered` and the review take over), so "checked on the next
+  sync" never outlives that sync. A `failed` send whose Clockify write stood
+  (the verification read found the entry no longer complete, or saving the
+  row threw afterwards) carries `written: true` (`SendOutcome`) and is
+  worded as written, not as "nothing was written". The settings sheet over
+  the data keeps the last sync (`setup.last`), so a failure stays on the
+  card there. The wording is a default
   taken for usertest-findings #6, #7 and #14 and has not been seen by a
   tester yet.
 

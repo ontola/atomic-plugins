@@ -27,6 +27,8 @@ export interface StatusInput {
   changes: ChangesState;
   /** "Sync now", when the app can sync right now. */
   onSync?: () => void;
+  /** The clock, for "until" checks (a held lease that has since ended). */
+  now?: number;
 }
 
 /** The plain next step after a failed sync, by its kind (#89 frame J). */
@@ -59,8 +61,10 @@ function lastSync(
   state: ViewState,
   sheet: Timesheet,
 ): SyncStatus['last'] | undefined {
+  // `setup` keeps the last sync while the settings sheet is open over the
+  // data, so a failure stays visible there.
   const outcome: SyncOutcome | undefined =
-    state.kind === 'ready' ? state.last : undefined;
+    state.kind === 'ready' || state.kind === 'setup' ? state.last : undefined;
 
   if (outcome?.ok) {
     const { created, updated, unchanged, removed } = outcome.result;
@@ -138,6 +142,7 @@ export function syncStatusFor(
   input: StatusInput & { onOpenRow?: (id: string) => void },
 ): SyncStatus {
   const { state, sheet, changes } = input;
+  const now = input.now ?? Date.now();
   const local = state.kind === 'local';
   // Read-only on screen: a table that isn't synced, and a host without a
   // proxy relay (frame K), where nothing can be sent. `setup` (the settings
@@ -185,6 +190,8 @@ export function syncStatusFor(
           (r.status === 'refused'
             ? 'Clockify does not allow this change.'
             : 'Clockify answered with an error.'),
+        // The write stood; the verification read or saving the row failed.
+        ...(r.written ? { written: true } : {}),
       }));
     // Only `uncertain` is uncertain. `not-sent` is a change the send never
     // attempted (the rest of a batch after an uncertain one, or every
@@ -197,8 +204,12 @@ export function syncStatusFor(
         r.status === 'changed' ||
         r.status === 'gone',
     ).length;
+    // Only while the other copy's turn can still be running: the outcome
+    // stays listed until a sync or send replaces it, and the lease ends.
+    const live = (until: string | undefined) =>
+      until === undefined || Date.parse(until) > now;
     leaseHeld = results.find(
-      r => r.status === 'not-sent' && r.message,
+      r => r.status === 'not-sent' && r.message && live(r.until),
     )?.message;
     status.writes = {
       pending: changes.review.length,
@@ -265,7 +276,8 @@ export function syncStatusFor(
   const elsewhere =
     state.kind === 'ready' &&
     state.last?.ok &&
-    state.last.result.sendingElsewhereUntil;
+    state.last.result.sendingElsewhereUntil &&
+    Date.parse(state.last.result.sendingElsewhereUntil) > now;
   if (elsewhere || leaseHeld)
     problems.push({
       lead: 'Another open copy of this app is sending changes to Clockify.',

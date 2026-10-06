@@ -43,7 +43,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;

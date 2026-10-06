@@ -33,7 +33,7 @@ specifies:
 
 Which app uses which class today: Google Calendar (`calendar` 0.3.1) writes
 `event-v1`; GitHub issues (`issue-tracker` 0.3.1) and Todoist (`todoist` 0.1.1)
-write `issue-v1`; Clockify (`timesheets` 0.7.0) writes `time-entry-v1`, linked
+write `issue-v1`; Clockify (`timesheets` 0.7.1) writes `time-entry-v1`, linked
 to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
 writes `bank-transaction-v1`. Calendar, issue-tracker and timesheets also
 offer themselves as a view of a hand-made table of their class, and (from

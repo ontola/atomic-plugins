@@ -265,6 +265,44 @@ describe('renderSyncStatus', () => {
     ).toBeNull();
   });
 
+  it('a failure after the write stood is worded as written, apart from the others', () => {
+    const { card, key } = render({
+      ...base,
+      last: { ok: true, at: NOW },
+      writes: {
+        pending: 0,
+        failed: [
+          { title: 'Standup', reason: 'Clockify answered 400.' },
+          {
+            title: 'Weekly sync',
+            reason: 'Clockify no longer lists it as a completed entry.',
+            written: true,
+          },
+        ],
+      },
+    });
+    expect(text(key('failed'))).toBe(
+      '1 change could not be sent to Clockify; nothing was written. Standup: Clockify answered 400.',
+    );
+    expect(text(key('failed-written'))).toBe(
+      '1 change was written to Clockify, but could not be finished here; the next sync reads it back. Weekly sync: Clockify no longer lists it as a completed entry.',
+    );
+    expect(key('failed-written')!.getAttribute('data-tone')).toBe('neg');
+    expect(card.getAttribute('data-tone')).toBe('neg');
+    const only = render({
+      ...base,
+      last: { ok: true, at: NOW },
+      writes: {
+        pending: 0,
+        failed: [{ title: 'a', reason: 'b', written: true }],
+      },
+    });
+    expect(only.key('failed')).toBeNull();
+    expect(text(only.key('failed-written'))).not.toContain(
+      'nothing was written',
+    );
+  });
+
   it('sends that wrote nothing are one line pointing at the review, and a note', () => {
     const { card, key } = render({
       ...base,
