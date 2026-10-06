@@ -721,11 +721,17 @@ export async function syncRow(
   return {
     valuesChanged,
     ...(notice ? { notice } : {}),
+    // An unconfirmed send, settled by this read. A delete that is still
+    // requested cannot have arrived: the entry is here, being synced. (Its
+    // values match the row's, so the value check alone would say it had.)
     ...(state.outbox
       ? {
-          recovered: same(ordered(state.local), ordered(remote))
-            ? ('applied' as const)
-            : ('not-applied' as const),
+          recovered:
+            same(ordered(state.local), ordered(remote)) &&
+            !state.deleteRequested &&
+            state.outbox.op !== 'delete'
+              ? ('applied' as const)
+              : ('not-applied' as const),
         }
       : {}),
     state: { ...state, local: result.values, baseline: result.baseline },
@@ -1441,7 +1447,9 @@ async function sendOne(
     };
   }
 
-  track.written = true;
+  // A delete answered 404 wrote nothing: the entry was already gone.
+  if (!(response.status === 404 && change.kind === 'delete'))
+    track.written = true;
 
   if (change.kind === 'update' && response.body) {
     await log.append({

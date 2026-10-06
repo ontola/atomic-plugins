@@ -602,8 +602,10 @@ export function createController(
         );
         await refreshIntents(schema);
         // The last send's outcomes stay listed, except those this read
-        // settled: an uncertain send is now `recovered` (or listed again),
-        // and a `not-sent` change is back in `review`. Left in, they would
+        // settled: an uncertain send is now in `recovered`, as applied or
+        // not (`syncRow`; a still-requested delete of an entry that still
+        // exists is not applied, and is listed again), and a `not-sent`
+        // change is back in `review`. Left in, they would
         // say "checked on the next sync" after that sync, and name another
         // copy's lease long after its turn ended.
         const settled = (changes.outcomes?.results ?? []).filter(

@@ -243,7 +243,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.7.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-SK41ZkdJ1X1Ezq02zsGHAjPCj3yb09BySmQyV7BE8Wn2p2Zxi4zHa02PeXxdE4vd"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-gYkk+Tt/Snp7NRm+A3IwZ3U5wEj4jICkSlpt3Eirt0x2CDJNMbta7W++LLpSibX0"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",

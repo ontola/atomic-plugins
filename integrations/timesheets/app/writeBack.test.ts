@@ -466,6 +466,29 @@ describe('sending (review first)', () => {
     expect((await t.row('entry-1')).get(t.schema.sync.outbox)).toBe('');
   });
 
+  it('an uncertain DELETE of an entry that is still there is recovered as not applied, and listed again', async () => {
+    const t = await setup();
+    await edit(await t.row('entry-2'), {
+      [t.schema.sync.deleteRequested]: true,
+    });
+    const { review } = await t.sync();
+    expect(review).toMatchObject([{ kind: 'delete', entryId: 'entry-2' }]);
+    t.proxy.fixture.control({ action: 'failBefore', status: 503 });
+
+    expect((await t.send(review)).outcomes[0].status).toBe('uncertain');
+    expect(t.entry('entry-2')).toBeDefined();
+
+    // The row's values still match Clockify's (a delete changes none), so
+    // the value check alone would call the send applied; the entry's
+    // presence says it was not.
+    const next = await t.sync();
+    expect(next.recovered).toEqual([
+      { entryId: 'entry-2', title: 'Weekly sync', applied: false },
+    ]);
+    expect(next.review).toMatchObject([{ kind: 'delete', entryId: 'entry-2' }]);
+    expect((await t.row('entry-2')).get(t.schema.sync.outbox)).toBe('');
+  });
+
   it('S16/S20: a PUT that failed before applying is listed again after reopening, and sent once more', async () => {
     const t = await setup();
     await edit(await t.row('entry-2'), { [NAME]: 'Mine' });
