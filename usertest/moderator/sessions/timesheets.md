@@ -27,12 +27,14 @@ What success looks like, never to be said:
 - Task 2: they install the Clockify app from Integrations and connect. The integration proxy's consent page asks for their Clockify API key, which they create in Clockify's profile settings. Then they choose a workspace and a 7- or 30-day window, and the Week grid appears. The API key step is the likely stumbling block: note where they look for the key (atomic-plugins#121: the consent page has no help link).
 - Task 3: read from the Week grid's day total and the billable split.
 - Task 4: the Projects view, or the entry drawer from the grid.
-- Task 5: "Sync now". A running timer is only counted ("1 timer is running"), not shown, until it stops.
+- Task 5: "Sync now". A running timer is only counted ("1 timer is running"), not shown, until it stops. From 0.7.0 the sync-status card at the top of the view answers "did anything happen?": "Synced just now", the entries in the window, "Last sync: 0 added, 1 updated, …", and "1 entry is a running timer: counted, and shown once stopped in Clockify." Whether the tester reads it, and whether its words make sense to them, is a finding either way (usertest-findings #7).
 - Task 6: the settings sheet, switching the window to 30 days.
 - Task 7: they open the entry (the grid or the drawer) and edit it. The edit shows at once, but it is held under "Changes to send" until they press "Send 1 to Clockify". Whether they find that list and understand why Clockify still shows the old text is the main question. If Clockify changed the same entry meanwhile, a conflict shows and Clockify's value is kept; that counts too. Ask them to check Clockify afterwards. A changed start or end is rounded down to whole minutes.
 - Task 8: Disconnect in settings. The copied rows stay.
 
 Known limits (only new detail about them is a finding):
+
+- From 0.7.0 the card also says "Edits here are sent to Clockify after you review them." (or "Read-only: edits here stay in Atomic." on a table that isn't synced), lists changes waiting to send or refused, and shows time no read covers as "… not loaded yet. … Sync now to load it." (usertest-findings #6, #14). The wording has not been seen by a tester before; a tester who still expects a hand-typed row to reach Clockify, or still asks what "not loaded" means, is a finding.
 
 - Editable: an entry's description, project, billable flag, start and end, and deleting an entry; tags, tasks and custom fields are not. Running timers, breaks, locked entries and entries with custom fields can't be edited. Editing a time range ("Edit a time range…", for example marking an hour as not worked) is also there, but is not a task here: it is a stretch if the tester finds it, and its wording and result are a finding either way.
 - Tags, tasks and rates are not copied, and only the tester's own entries are.

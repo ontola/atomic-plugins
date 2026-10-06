@@ -22,7 +22,8 @@ import type { ColorScheme, PluginStore } from '../store.js';
 import { FRAMES, renderFrame, type FrameId } from './preview.js';
 import type { Shell } from './shell.js';
 import { css } from './theme.js';
-import { unknownIn } from './coverage.js';
+import { renderUnknown, unknownIn } from './coverage.js';
+import { builder } from './dom.js';
 
 const { JSDOM } = createRequire(
   new URL('../../../../browser/data-browser/package.json', import.meta.url),
@@ -243,6 +244,104 @@ describe('frames', () => {
     );
     expect(buttons(root, 'Sync now')).toHaveLength(1);
     expect(buttons(root, 'Import 30 days instead')).toHaveLength(1);
+  });
+
+  it('the sync-status card (Q-084) heads every data view: last sync, counts, write-back, what is left out', () => {
+    const { root } = frame('a');
+    const cards = root.querySelectorAll('section[aria-label="Sync status"]');
+    expect(cards).toHaveLength(1);
+    const card = cards[0];
+    expect(card.getAttribute('data-tone')).toBe('warn');
+    expect(text(card.querySelector('[data-key="headline"]'))).toBe(
+      'Synced 4 min ago',
+    );
+    // 61 entries in the sample, 52 of them inside the 30-day window.
+    expect(text(card.querySelector('[data-key="rows"]'))).toBe(
+      '52 entries in the last 30 days',
+    );
+    expect(text(card.querySelector('[data-key="counts"]'))).toBe(
+      'Last sync: 0 added, 0 updated, 61 unchanged',
+    );
+    expect(text(card.querySelector('[data-key="mode"]'))).toBe(
+      'Edits here are sent to Clockify after you review them.',
+    );
+    expect(text(card.querySelector('[data-key="ignored"]'))).toBe(
+      '1 entry is a running timer: counted, and shown once stopped in Clockify.',
+    );
+    // The card is the one place for the last sync: the connection bar
+    // keeps the account, the window and Settings.
+    expect(text(root.querySelector('.conn'))).not.toContain('Last synced');
+    expect(text(root.querySelector('.conn'))).not.toContain('61 entries');
+    // Only the app's live region announces; the card is a named region.
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(card.querySelector('h2')!.className).toBe('ss-sr');
+  });
+
+  it('the card shows a failed sync with its next step, and the pending changes', () => {
+    const j = frame('j').root.querySelector(
+      'section[aria-label="Sync status"]',
+    )!;
+    expect(j.getAttribute('data-tone')).toBe('neg');
+    expect(text(j.querySelector('[data-key="headline"]'))).toBe(
+      'Sync failed 2 h ago',
+    );
+    expect(text(j.querySelector('.ss-problem b'))).toBe('Reconnect Clockify.');
+    const n1 = frame('n1').root.querySelector(
+      'section[aria-label="Sync status"]',
+    )!;
+    expect(text(n1.querySelector('[data-key="pending"]'))).toBe(
+      '2 changes waiting to send to Clockify; 1 held back until it is fixed.',
+    );
+    // N1's send outcome is "Sent": nothing failed, so no failed item.
+    expect(n1.querySelector('[data-key="failed"]')).toBeNull();
+    expect(n1.getAttribute('data-tone')).toBe('warn');
+  });
+
+  it('the "Not loaded" note says what to do, with Sync now when the app can sync', () => {
+    const { doc } = frame('a');
+    const h = builder(doc);
+    const sheet = { timeZone: 'UTC' } as Parameters<typeof renderUnknown>[1];
+    const span = { from: 0, to: 1e12 };
+    const gap = [
+      { from: Date.UTC(2026, 8, 16), to: Date.UTC(2026, 8, 16, 14) },
+    ];
+    let synced = 0;
+    const note = renderUnknown(h, sheet, span, gap, () => synced++)!;
+    expect(note.getAttribute('aria-label')).toBe('Not loaded');
+    expect(text(note.querySelector('p'))).toBe(
+      'Not loaded yet: 16 Sep 00:00 – 14:00. Clockify has not been read for this time, so entries there may be missing; it is not shown as “did not work”. Sync now to load it.',
+    );
+    expect(buttons(note, 'Sync now')).toHaveLength(1);
+    buttons(note, 'Sync now')[0].click();
+    expect(synced).toBe(1);
+    const plain = renderUnknown(h, sheet, span, gap)!;
+    expect(text(plain)).not.toContain('Sync now');
+    expect(plain.querySelector('button')).toBeNull();
+  });
+
+  it('the tail since the last complete read is not "Not loaded"; an older gap is', () => {
+    const checked = 1_000_000_000;
+    const sheet = {
+      lastChecked: new Date(checked).toISOString(),
+      window: { from: 0, to: checked + 5 * 60_000 },
+      unknown: [
+        // Since the last read, up to now: the card's "Synced 5 min ago".
+        { from: checked - 10_000, to: checked + 5 * 60_000 },
+        // A span the last read left uncovered: still reported.
+        { from: checked - 3 * 60_000, to: checked - 60_000 },
+        // A vanished timer's span, from before the read to now: reported.
+        { from: checked - 60 * 60_000, to: checked + 5 * 60_000 },
+      ],
+    };
+    expect(
+      unknownIn(sheet as unknown as Parameters<typeof unknownIn>[0], {
+        from: 0,
+        to: 1e12,
+      }),
+    ).toEqual([
+      { from: checked - 3 * 60_000, to: checked - 60_000 },
+      { from: checked - 60 * 60_000, to: checked + 5 * 60_000 },
+    ]);
   });
 
   it.each([

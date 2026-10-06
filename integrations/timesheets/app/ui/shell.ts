@@ -59,7 +59,9 @@ import {
   waiting,
   warningBanner,
 } from './states.js';
+import { syncStatusFor } from './status.js';
 import { duration, runningNote, weekFoot, weekTable } from './week.js';
+import { renderSyncStatus } from '../../../sync-status/card.js';
 
 export type Size = 'narrow' | 'mid' | 'wide';
 type ViewName = 'week' | 'entries' | 'projects';
@@ -280,7 +282,6 @@ export function mountShell(
     else if (userName)
       items.push(h('span', null, 'Connected as ', h('b', null, userName)));
 
-    const inWindow = sheet ? entriesInWindow(sheet) : 0;
     let progress: HTMLElement | null = null;
 
     if (state.kind === 'syncing' && state.progress) {
@@ -314,18 +315,9 @@ export function mountShell(
       }
     }
 
-    const failed = failure(state);
-
-    if (failed && sheet?.lastChecked)
-      items.push(
-        h(
-          'span',
-          null,
-          'Last synced ',
-          h('b', null, ago(Date.parse(sheet.lastChecked), now())),
-        ),
-      );
-    else if (windowText)
+    // The last sync, its counts and the entry count are the sync-status
+    // card's (`status.ts`), not this bar's.
+    if (windowText)
       items.push(
         h(
           'span',
@@ -337,11 +329,6 @@ export function mountShell(
             ? ''
             : ', your entries only',
         ),
-      );
-
-    if (sheet && state.kind === 'ready' && size === 'wide')
-      items.push(
-        h('span', null, `${inWindow} ${inWindow === 1 ? 'entry' : 'entries'}`),
       );
 
     if (state.kind === 'ready') {
@@ -525,7 +512,26 @@ export function mountShell(
     const content: Child[] = [];
     const failed = failure(state);
     const last = state.kind === 'ready' ? state.last : undefined;
+    const canSyncNow = state.kind === 'ready' || state.kind === 'syncing';
 
+    // The shared sync-status card (Q-084) first: the last sync and what it
+    // did, whether edits go back to Clockify, what waits or failed to send,
+    // what is left out, and the next step for a problem.
+    content.push(
+      renderSyncStatus(
+        doc,
+        syncStatusFor({
+          state,
+          sheet,
+          changes: controller.changes(),
+          ...(canSyncNow ? { onSync: sync } : {}),
+          ...(controller.canOpen().resource
+            ? { onOpenRow: (id: string) => void controller.openRow(id) }
+            : {}),
+        }),
+        { now: now(), buttonClass: 'btn sec' },
+      ),
+    );
     content.push(
       renderChanges(
         h,
@@ -655,7 +661,13 @@ export function mountShell(
         : null;
     const unknown =
       ui.view !== 'projects'
-        ? renderUnknown(h, sheet, span, unknownIn(sheet, span))
+        ? renderUnknown(
+            h,
+            sheet,
+            span,
+            unknownIn(sheet, span),
+            state.kind === 'ready' ? sync : undefined,
+          )
         : null;
     const incomplete =
       ui.view !== 'projects'

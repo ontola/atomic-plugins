@@ -43,7 +43,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.6.2';
+const VERSION = '0.7.0';
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;
@@ -157,6 +157,19 @@ test.describe('timesheets drive app', () => {
         timeout: 60_000,
       },
     );
+    // The shared sync-status card (Q-084): what the sync did, what is left
+    // out, and that edits reach Clockify only after a review
+    // (usertest-findings #6 and #7).
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card).toContainText('Synced just now');
+    await expect(card).toContainText('2 entries in the last 7 days');
+    await expect(card).toContainText(
+      'Last sync: 2 added, 0 updated, 0 unchanged',
+    );
+    await expect(card).toContainText(
+      'Edits here are sent to Clockify after you review them.',
+    );
+    await expect(card).toContainText('1 entry is a running timer');
 
     // #89 views, read from the observation log's mirror (not the rows).
     await expect(
@@ -370,7 +383,11 @@ test.describe('timesheets drive app', () => {
     );
     await expect(
       app.getByRole('note', { name: 'Not loaded' }).first(),
-    ).toContainText('Not loaded: ');
+    ).toContainText('Not loaded yet: ');
+    // The sync-status card names the gap and the next step (Q-084).
+    await expect(
+      app.getByRole('region', { name: 'Sync status' }),
+    ).toContainText('not loaded yet. Clockify has not been read for that time');
     await expect(
       app.getByRole('region', { name: 'Conflicts in Clockify' }),
     ).toHaveCount(0);
@@ -937,6 +954,11 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     await expect(app.getByText('Not synced with Clockify.')).toBeVisible({
       timeout: 45_000,
     });
+    // The sync-status card says so in the words the write-back case uses
+    // (Q-084; usertest-findings #6).
+    await expect(
+      app.getByRole('region', { name: 'Sync status' }),
+    ).toContainText('Read-only: edits here stay in Atomic.');
     await expect(
       app.getByRole('button', { name: 'Connect Clockify' }),
     ).toHaveCount(0);

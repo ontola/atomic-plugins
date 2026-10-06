@@ -135,10 +135,14 @@ test('a lane filter covers its own directory and only explicit sibling dependenc
 
     const [own, ...extra] = laneFilter(lane);
     assert.equal(own, `integrations/${lane.id}/**`);
+    // Under integrations/ a lane may claim only its declared build
+    // dependency or a shared package that lives there (sync-status, Q-084),
+    // never another plugin's folder.
     for (const path of extra)
       assert.ok(
         !path.startsWith('integrations/') ||
-          PLUGIN_BUILD_DEPENDENCIES[lane.id]?.includes(path),
+          PLUGIN_BUILD_DEPENDENCIES[lane.id]?.includes(path) ||
+          SHARED_PACKAGES.some(pkg => path.startsWith(`${pkg}/`)),
         `${lane.id} claims ${path}`,
       );
   }

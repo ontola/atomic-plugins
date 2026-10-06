@@ -65,7 +65,7 @@ Live account data must never be checked into fixtures.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 167 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 178 KB, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -84,6 +84,29 @@ into the view root.
   candidates. View, week and open entry live in memory only.
   `app/ui/preview.ts` renders every frame from the mockup's sample data
   for the DOM tests and the e2e's screenshot and axe pass.
+
+- **Sync-status card** (0.7.0; Decision Inbox Q-084). Every data view
+  starts with the shared card from
+  [`integrations/sync-status/`](../sync-status/README.md), a
+  `region` named "Sync status", filled by `app/ui/status.ts` from the
+  controller's state, the `Timesheet` and the "Changes to send" list: the
+  last sync ("Synced 4 min ago", "Sync failed just now" with the error and
+  the next step by problem kind, "Not synced yet", or "Syncing…"), the
+  entries in the window and the last sync's added, updated, unchanged and
+  removed counts; "Edits here are sent to Clockify after you review them."
+  or, as the view of a table that isn't synced, "Read-only: edits here stay
+  in Atomic."; changes waiting to send (and how many are held back),
+  changes Clockify refused or that errored, and sends without an answer;
+  what is left out or not editable (incomplete rows with "Open row",
+  running timers, breaks, locked entries, entries with custom fields); and
+  time in the window no complete read covers, as a problem with "Sync now".
+  The connection bar no longer repeats the last sync or the entry count.
+  The "Not loaded" note over a week now says what to do ("Clockify has not
+  been read for this time … Sync now to load it.") and leaves out the tail
+  since the last complete read, which the card's "Synced … ago" already
+  covers (`unknownIn`; usertest-findings #14). The wording is a default
+  taken for usertest-findings #6, #7 and #14 and has not been seen by a
+  tester yet.
 
 - **Connecting.** "Connect Clockify" calls
   `store.proxy.connect({ platform: 'clockify' })`. The host, not the frame,
@@ -440,8 +463,10 @@ into the view root.
     hooks from it: `unknown` (the window's unknown spans) and `conflicts`
     (`app/timeline/types.ts` `TimelineConflict`: the views' `Conflict` plus
     kind, span, entries and candidates). `app/ui/coverage.ts` renders them
-    as a "Not loaded" note and a "Conflicts in Clockify" list, whose
-    resolve buttons (M4, above) appear once connected and synced.
+    as a "Not loaded yet" note (with "Sync now"; the tail since the last
+    complete read is left to the sync-status card, 0.7.0) and a "Conflicts
+    in Clockify" list, whose resolve buttons (M4, above) appear once
+    connected and synced.
 - **Errors.** If the window's first page fails, the pass fails and rows
   are not touched ("Import failed: …. Rows already in the table are
   kept."). If a later page fails, what was read is kept as an incomplete
