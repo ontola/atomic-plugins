@@ -1030,6 +1030,9 @@ select.sel {
 .unknown strong {
   color: var(--pl-text);
 }
+.unknown > .btn {
+  margin-top: 6px;
+}
 .conflicts {
   padding: 11px 14px;
   border-radius: var(--pl-radius);

@@ -15,9 +15,11 @@
  * minifies it with esbuild's CSS minifier before embedding it; Vitest reads
  * it as written.
  */
-import css from './theme.css?raw';
+import { syncStatusCss } from '../../../sync-status/card.js';
+import theme from './theme.css?raw';
 
-export { css };
+/** The app's rules, then the shared sync-status card's (`.ss-*`, Q-084). */
+export const css = `${theme}\n${syncStatusCss}`;
 
 /** Appends the one `<style>` element to the view root. */
 export function installStyles(root: HTMLElement): HTMLStyleElement {
