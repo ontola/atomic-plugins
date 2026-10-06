@@ -28,8 +28,10 @@ export const MUTATIONS_CAP = 100;
 /**
  * At most this many `financial_mutations.json` requests per import. A year
  * of n mutations needs about 1 + 2 · (n / 100) · log2(365) requests with the
- * halving below; 200 covers roughly 1,000 mutations a year, well under the
- * provider's announced 150 requests per 300 s only when they are spread.
+ * halving below; 200 covers roughly 1,000 mutations a year. That is more
+ * than the provider's announced 150 requests per 300 s, so the controller
+ * wraps the reader in `throttle.ts`, which paces them under that limit and
+ * retries a 429 as its `Retry-After` says.
  */
 export const MAX_MUTATION_REQUESTS = 200;
 
