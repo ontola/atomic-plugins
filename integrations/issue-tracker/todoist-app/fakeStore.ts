@@ -44,6 +44,13 @@ export interface FakeStore extends PluginStore {
   readonly todoist: ReturnType<typeof todoistFixture>;
   /** Makes every relayed call throw with this host error until cleared. */
   fail?: string;
+  /**
+   * Answers the next `count` relayed calls with 429 and this `retry-after`
+   * header (seconds or an HTTP date; none when undefined), as Todoist would
+   * through the proxy. `only` limits it to list pages or by-id lookups.
+   * Cleared once spent.
+   */
+  limitNext?: { count: number; retryAfter?: string; only?: 'list' | 'lookup' };
   /** Subjects passed to `openResource`. */
   readonly openedRows: string[];
 }
@@ -135,6 +142,25 @@ export function fakeStore({
     async request(request) {
       calls.push(request);
       if (fake.fail) throw new Error(fake.fail);
+
+      const kind = /\/tasks\/[^?]/.test(request.path) ? 'lookup' : 'list';
+
+      if (
+        fake.limitNext &&
+        fake.limitNext.count > 0 &&
+        (fake.limitNext.only ?? kind) === kind
+      ) {
+        const { retryAfter } = fake.limitNext;
+        if (--fake.limitNext.count <= 0) delete fake.limitNext;
+
+        return {
+          status: 429,
+          headers:
+            retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+          body: { error: 'Synthetic rate limit (429)' },
+        };
+      }
+
       const result = todoist.request(
         request.method ?? 'GET',
         new URL(`/proxy/todoist${request.path}`, 'https://proxy.example'),

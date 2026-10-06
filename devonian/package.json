@@ -24,6 +24,10 @@
       "types": "./build/src/background/index.d.ts",
       "default": "./build/src/background/index.js"
     },
+    "./lenses": {
+      "types": "./build/src/lenses/index.d.ts",
+      "default": "./build/src/lenses/index.js"
+    },
     "./reflect": {
       "types": "./build/src/reflect/index.d.ts",
       "browser": "./build/src/reflect/browser.js",
