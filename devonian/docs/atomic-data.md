@@ -1,5 +1,8 @@
 # Native Atomic Data API
 
+For a conceptual introduction from schema evolution and bidirectional mappings,
+start with [Devonian for Cambria users](from-cambria.md).
+
 Devonian's resource API stores Atomic Data directly: named resources have an `@id` subject URL, property keys are URLs, and values are checked against a local property catalog. Platform objects exist at connector boundaries. Every name in this guide is exported from both the package root (`devonian`) and, from 0.7.0, the `devonian/atomic` subpath, which carries only this API (no row API, no `effect`) for small browser bundles. The original `DevonianTable`, `DevonianLens`, and numeric row storage APIs remain compatible and are not automatically migrated.
 
 ## Resource storage
@@ -49,6 +52,13 @@ Mappings are ordinary Atomic Data resources using the definitions in [../vocab](
 `unbind(scope, subject)` forgets the external ID bound to `subject` in one scope and returns it, or `undefined` when there was none. It deletes only that mapping resource, so the next snapshot no longer carries it; the native resource, the external record and mappings in other scopes are kept, and no connector is called. Use it when the external record is gone and the native resource should stay as a local-only copy. After it, `lookup` and `externalId` return `undefined` for that pair, `lens.publish(subject)` creates a new external record, and `lens.ingest` of the same external record again binds it to the subject `subjectFor` allocates, which is the original subject when that subject was allocated for this ID. An application that must not re-link a record it unbound records that decision itself and does not ingest or publish it.
 
 ## Connector lenses
+
+`AtomicLens` below orchestrates connector I/O and identities. The new,
+unreleased [value lens algebra](value-lenses.md) instead maps supplied values
+without I/O. A host can use its `get`/`put` transformations inside an Atomic
+lens's `read`/`write` callbacks; the host still translates full values into
+Atomic patches and explicitly schedules publishing. It adds no automatic
+subscription, identity resolution or durable synchronization protocol.
 
 `AtomicLens<External>` accepts a store, identity map, scope, connector, and two transformations:
 

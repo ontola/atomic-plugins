@@ -116,7 +116,8 @@ async function bundle(
       nodeImports,
     };
   } catch (error) {
-    if (nodeImports.length > 0) return { text: '', metafile: { inputs: {}, outputs: {} }, nodeImports };
+    if (nodeImports.length > 0)
+      return { text: '', metafile: { inputs: {}, outputs: {} }, nodeImports };
     throw error;
   }
 }
@@ -165,6 +166,7 @@ const drivers: Record<string, string> = {
   '.': 'root',
   './atomic': 'atomic',
   './background': 'background',
+  './lenses': 'lenses',
   './reflect': 'reflect',
 };
 
@@ -186,7 +188,11 @@ describe(`browser bundles (${useBuild ? 'build/' : 'src/'})`, () => {
   );
 
   it('the guard catches Node built-ins (reflect without the browser condition)', async () => {
-    const { nodeImports } = await bundle(exportTarget('./reflect', []), 'esm', []);
+    const { nodeImports } = await bundle(
+      exportTarget('./reflect', []),
+      'esm',
+      [],
+    );
     expect(nodeImports.some((i) => i.startsWith('node:fs/promises'))).toBe(
       true,
     );
@@ -194,8 +200,13 @@ describe(`browser bundles (${useBuild ? 'build/' : 'src/'})`, () => {
 
   it('never bundles Automerge from any entry point', async () => {
     for (const subpath of subpaths) {
-      const { metafile } = await bundle(exportTarget(subpath, ['browser']), 'esm');
-      expect(packagesIn(metafile).filter((p) => p.startsWith('@automerge/'))).toEqual([]);
+      const { metafile } = await bundle(
+        exportTarget(subpath, ['browser']),
+        'esm',
+      );
+      expect(
+        packagesIn(metafile).filter((p) => p.startsWith('@automerge/')),
+      ).toEqual([]);
     }
   });
 
@@ -215,7 +226,21 @@ describe(`browser bundles (${useBuild ? 'build/' : 'src/'})`, () => {
         '[typeof process, typeof Buffer, typeof require, typeof module, typeof global]',
         context,
       ),
-    ).toEqual(['undefined', 'undefined', 'undefined', 'undefined', 'undefined']);
+    ).toEqual([
+      'undefined',
+      'undefined',
+      'undefined',
+      'undefined',
+      'undefined',
+    ]);
+  });
+
+  it('keeps the lens algebra free of runtime packages', async () => {
+    const { metafile } = await bundle(
+      exportTarget('./lenses', ['browser']),
+      'esm',
+    );
+    expect(packagesIn(metafile)).toEqual([]);
   });
 
   it.each(Object.entries(drivers))(
@@ -251,6 +276,13 @@ const expected: Record<string, unknown> = {
     bound: null,
   },
   './background': { runs: 1, outcome: 'ran', stored: true },
+  './lenses': {
+    title: 'After',
+    body: null,
+    getPut: true,
+    putGet: true,
+    stablePut: true,
+  },
   './reflect': {
     counterpart: { system: 'b', id: '9' },
     kv: 'v',
