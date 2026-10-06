@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS app_runtimes (
   PRIMARY KEY (owner, agent)
 );
 CREATE INDEX IF NOT EXISTS app_runtimes_app_idx ON app_runtimes (owner, app);
+CREATE TABLE IF NOT EXISTS key_check_limits (
+  bucket TEXT NOT NULL,
+  slot INTEGER NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (bucket, slot)
+);
+CREATE INDEX IF NOT EXISTS key_check_limits_expires_at_idx ON key_check_limits (expires_at);
 ";
 
 /// A pending provider authorization, from `/connect/authorize` to the
@@ -194,6 +201,22 @@ fn db_error(error: tokio_postgres::Error) -> String {
 pub struct Security {
     database: Arc<RwLock<Arc<Client>>>,
     encryption_key: [u8; 32],
+    /// `HMAC-SHA256(ENCRYPTION_KEY, KEY_CHECK_SUBKEY_LABEL)`: the key of the
+    /// key-check buckets, so the encryption key itself is used only by
+    /// XChaCha20-Poly1305.
+    key_check_key: [u8; 32],
+}
+
+const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
+
+fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    let mut mac =
+        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    for part in parts {
+        mac.update(part);
+    }
+    mac.finalize().into_bytes().into()
 }
 
 impl Security {
@@ -229,6 +252,7 @@ impl Security {
         spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
         Ok(Self {
             database,
+            key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             encryption_key,
         })
     }
@@ -296,6 +320,81 @@ impl Security {
             .await
             .map_err(db_error)?;
         Ok(rows == 1)
+    }
+
+    /// The `key_check_limits` bucket of one client network and platform: a
+    /// hex HMAC-SHA256 of both under a subkey derived from `ENCRYPTION_KEY`
+    /// (`HMAC(ENCRYPTION_KEY, "integration-proxy-key-check-limit-v1")`), so
+    /// the address cannot be read back from a row or a log line, nor found
+    /// by hashing every IPv4 address without the key. (The platform is
+    /// logged next to the bucket on purpose.)
+    pub fn key_check_bucket(&self, platform: &str, network: &str) -> String {
+        hmac_sha256(
+            &self.key_check_key,
+            &[platform.as_bytes(), b"\0", network.as_bytes()],
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+    }
+
+    /// Takes one of `bucket`'s `limit` key checks. Each is a row
+    /// `(bucket, slot)` for one of the slots `1..=limit`, kept for `window`
+    /// after it was taken, so at most `limit` checks are made in any
+    /// `window` (a sliding window), across instances and concurrent
+    /// requests: the primary key lets only one request take a slot. `None`
+    /// when a check was taken; otherwise the seconds until a slot frees.
+    pub async fn take_key_check_allowance(
+        &self,
+        bucket: &str,
+        limit: u32,
+        window: Duration,
+    ) -> Result<Option<u64>, String> {
+        let limit = i32::try_from(limit).unwrap_or(i32::MAX);
+        let window = window.as_secs_f64();
+        let database = self.client().await;
+        database
+            .execute(
+                "DELETE FROM key_check_limits WHERE expires_at <= NOW()",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        // Each pass takes the lowest free (or expired, not yet swept) slot,
+        // finds every slot taken, or loses that slot to a concurrent
+        // request and tries again; there are only `limit` slots to lose.
+        for _ in 0..=limit {
+            let taken = database
+                .execute(
+                    "INSERT INTO key_check_limits (bucket, slot, expires_at) \
+                     SELECT $1, s, NOW() + make_interval(secs => $3) \
+                     FROM generate_series(1, $2) AS s \
+                     WHERE NOT EXISTS (SELECT 1 FROM key_check_limits k \
+                       WHERE k.bucket = $1 AND k.slot = s AND k.expires_at > NOW()) \
+                     ORDER BY s LIMIT 1 \
+                     ON CONFLICT (bucket, slot) DO UPDATE SET expires_at = EXCLUDED.expires_at \
+                     WHERE key_check_limits.expires_at <= NOW()",
+                    &[&bucket, &limit, &window],
+                )
+                .await
+                .map_err(db_error)?;
+            if taken == 1 {
+                return Ok(None);
+            }
+            let row = database
+                .query_one(
+                    "SELECT COUNT(*), EXTRACT(EPOCH FROM MIN(expires_at) - NOW())::float8 \
+                     FROM key_check_limits WHERE bucket = $1 AND expires_at > NOW()",
+                    &[&bucket],
+                )
+                .await
+                .map_err(db_error)?;
+            let (count, next_free): (i64, Option<f64>) = (row.get(0), row.get(1));
+            if count >= i64::from(limit) {
+                return Ok(Some(next_free.unwrap_or(1.0).ceil().max(1.0) as u64));
+            }
+        }
+        Ok(Some(1))
     }
 
     pub fn seal(&self, plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
@@ -872,6 +971,49 @@ pub(crate) mod tests {
             .consume_nonce(&format!("post-reconnect-{tag}"))
             .await
             .expect("query after reconnect"));
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231() {
+        // RFC 4231, test case 2.
+        let mac = hmac_sha256(b"Jefe", &[b"what do ya want ", b"for nothing?"]);
+        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// The key-check buckets are keyed by a subkey derived from
+    /// `ENCRYPTION_KEY`, never by the encryption key itself.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn key_check_buckets_use_a_derived_subkey() {
+        let security = crate::test_support::security().await;
+        let subkey = hmac_sha256(&security.encryption_key, &[KEY_CHECK_SUBKEY_LABEL]);
+        assert_eq!(security.key_check_key, subkey);
+        assert_ne!(security.key_check_key, security.encryption_key);
+        let hex = |mac: [u8; 32]| mac.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let bucket = security.key_check_bucket("clockify", "198.51.100.7");
+        assert_eq!(
+            bucket,
+            hex(hmac_sha256(&subkey, &[b"clockify", b"\0", b"198.51.100.7"]))
+        );
+        assert_ne!(
+            bucket,
+            hex(hmac_sha256(
+                &security.encryption_key,
+                &[b"clockify", b"\0", b"198.51.100.7"]
+            ))
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify", "198.51.100.8")
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify-x", "198.51.100.7")
+        );
     }
 
     #[tokio::test]

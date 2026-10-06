@@ -105,8 +105,12 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   most 5 key checks (unreleased): the fifth rejection spends it and answers
   `400` "Too many attempts to enter a key for this connection; start again
   from your hub", and nothing is checked for it after that. This bounds one
-  consent page, not a client: anyone can open a new one, and there is no
-  per-client or per-IP rate limit yet (SECURITY.md). A 2xx may give a label (at most
+  consent page, not a client: anyone can open a new one. Across consent
+  pages, one client network makes at most `KEY_CHECK_LIMIT_PER_HOUR` (default
+  20) key checks per platform in any hour (unreleased); over that, the
+  answer is `429` "Too many key checks from your network for <Platform>; try
+  again later" with `Retry-After`, before any key check and without spending
+  the consent (SECURITY.md). A 2xx may give a label (at most
   200 characters, sealed with the connection). A platform whose scheme is
   `type: http` with `scheme: bearer` or `scheme: basic` (unreleased; see
   "HTTP tokens" below) works the same way: the page asks for an API token
@@ -242,6 +246,8 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `ALLOWED_AGENTS` | no | When set, comma-separated agent ids; the default access policy admits only these owners. |
 | `OPERATOR_NAME` | no | Who runs this proxy, as the landing and consent pages name them. Defaults to `this integration proxy`, and the pages then name no one. The consent page also shows the host of `BASE_URL`. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
+| `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
+| `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
 
 OAuth credentials are provider-specific. For a catalog platform named
@@ -483,7 +489,8 @@ private and may change in any release:
 | `build_app_with_access(&Config, Arc<dyn AccessPolicy>)` | The same, admitting connection owners through a custom policy (e.g. a SaaS account and tier lookup). |
 | `AccessPolicy`, `Access`, `AllowAll`, `EnvAccessPolicy` | The admission check asked about every owner; `AllowAll` for a self-hosted proxy. |
 | `AgentId`, `parse_agent_id` | A parsed agent id; `as_str()` is the canonical `atomic:agent:` form. |
-| `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve. |
+| `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve, recording each request's peer address (`into_make_service_with_connect_info::<SocketAddr>()`) for the key-check limit. A caller that serves `build_app`'s router itself should do the same; without it, and without a trusted `X-Forwarded-For`, all clients share one limit. |
+| `TrustForwardedFor`, `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR` | `Config::trust_forwarded_for` and the default of `Config::key_check_limit_per_hour`. Unreleased. |
 | `run() -> ExitCode` | What the binary does: init `tracing` from `RUST_LOG` (default `info`), `Config::from_env`, `serve`, print any `Error` to stderr. |
 | `Error` | Startup/serve failure; `Display` is the one-line message the binary prints. |
 
@@ -543,6 +550,12 @@ git commit -am "Deploy atomic-integration-proxy <version> from crates.io"
 
 Merging that to its `main` deploys. Do not copy this source tree there: the
 wrapper is the whole repository now.
+
+The release after 0.2.5 limits key checks per client network
+(`KEY_CHECK_LIMIT_PER_HOUR`). On Heroku every request's peer address is the
+router's, so set `TRUST_FORWARDED_FOR=heroku` before deploying it, or all
+clients share one limit (the proxy logs a warning at startup when it finds
+Heroku's `DYNO` variable without it).
 
 From 0.2.1 the landing and consent pages no longer say "LocalThought"
 unless told to: set `OPERATOR_NAME=LocalThought` and

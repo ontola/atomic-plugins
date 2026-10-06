@@ -36,8 +36,42 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `used_challenges` (`consent-key-check:<csrf>:<n>`, ten minutes), so no
   schema change. The cap bounds one consent page, not a client:
   `GET /connect` needs no signature, so a script can open new consent pages
-  and make 5 checks with each. There is no per-client or per-IP rate limit
-  yet.
+  and make 5 checks with each; the per-network limit below bounds that.
+- Security (Decision Inbox Q-097): key checks are also limited per client
+  network and platform, across consent pages: at most
+  `KEY_CHECK_LIMIT_PER_HOUR` (default 20, `0` turns it off) in any hour, as
+  a sliding window held in PostgreSQL (new table `key_check_limits`, created
+  at startup; one row per slot, so the limit holds across instances and for
+  concurrent requests). A network is an IPv4 address or an IPv6 /64; the row
+  key is an HMAC-SHA256 of the platform and network under `ENCRYPTION_KEY`,
+  never the address. The limit is taken after input validation and before
+  the consent's own key-check attempt; over it the answer is `429` "Too many
+  key checks from your network for <Platform>; try again later" with
+  `Retry-After`, with no upstream call and the consent not spent. The log
+  line names the hashed bucket and the platform only. The client address is
+  the TCP peer unless the new `TRUST_FORWARDED_FOR=heroku` (synonym
+  `rightmost`) says to read the right-most `X-Forwarded-For` entry, the one
+  Heroku's router or one reverse proxy appends; nothing to its left is read.
+  **Deploying:** localthought.io must set `TRUST_FORWARDED_FOR=heroku`, or
+  every client shares the router's limit (a startup warning says so when
+  Heroku's `DYNO` is set without it); a self-hosted proxy behind Caddy or
+  nginx sets `rightmost` (SELF_HOSTING.md). `serve` now records peer
+  addresses (`into_make_service_with_connect_info`); a wrapper that serves
+  `build_app` itself should too, or, under `none`, every client shares one
+  limit. `Config` gains two public fields, `key_check_limit_per_hour` and
+  `trust_forwarded_for` (new `TrustForwardedFor`,
+  `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`), which breaks code that builds
+  `Config` with a struct literal, as 0.2.1's `operator_*` fields did;
+  `Config::from_env` callers are unaffected. **At release this needs a
+  deliberate version choice:** under Cargo's 0.x semver rules a breaking
+  change to a public type calls for 0.3.0, not 0.2.6, unless the
+  struct-literal break is accepted as in 0.2.1. New dependency: `hmac` 0.12.
+  Review fixes before merge: the limit is taken only when a key check will
+  reach the provider (a declared `keyCheck`, and not a cookie API key);
+  under `heroku` the header is split on bytes, and a missing or unparseable
+  right-most entry counts against one fixed bucket, never the router's peer
+  address; `KEY_CHECK_LIMIT_PER_HOUR` above 10,000 is refused at startup;
+  the bucket HMAC uses a subkey derived from `ENCRYPTION_KEY`.
 - Security: a new API key, bearer token or Basic credential records the
   security scheme it was entered for (and, for Basic, the declared layout
   without its field label; for an API key, the scheme's `in` and `name`),

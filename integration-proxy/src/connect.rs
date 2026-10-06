@@ -21,7 +21,7 @@ use crate::{
 };
 use axum::{
     body::Bytes,
-    extract::{Form, OriginalUri, Query, State},
+    extract::{ConnectInfo, Form, OriginalUri, Query, State},
     http::{header, HeaderMap, Method, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     Json,
@@ -591,6 +591,55 @@ async fn take_key_check(
     Err(Box::new(too_many_key_checks(security, jar, csrf).await))
 }
 
+/// Takes one of the client network's key checks for `platform`
+/// (`KEY_CHECK_LIMIT_PER_HOUR`), before the consent's own
+/// [`take_key_check`]. [`MAX_KEY_CHECKS`] bounds one consent page, but
+/// `GET /connect` needs no signature, so without this a script could open
+/// consent pages and test keys against the provider without end. When the
+/// network has none left the answer is `429` and nothing else happens: no
+/// key check, and the consent is not spent. Only the hashed bucket (and the
+/// platform) is logged, never the address.
+async fn take_network_key_check(
+    state: &AppState,
+    security: &Security,
+    headers: &HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+    platform: &str,
+) -> Result<(), Box<Response>> {
+    if state.key_check_limit == 0 {
+        return Ok(());
+    }
+    let network = crate::client_addr::client_network(state.trust_forwarded_for, headers, peer);
+    let bucket = security.key_check_bucket(platform, &network);
+    if network == crate::client_addr::UNKNOWN || network == crate::client_addr::UNPARSEABLE {
+        tracing::warn!(
+            %bucket,
+            "key check without a usable client address; every such check shares one limit"
+        );
+    }
+    match security
+        .take_key_check_allowance(&bucket, state.key_check_limit, state.key_check_window)
+        .await
+    {
+        Ok(None) => Ok(()),
+        Ok(Some(retry_after)) => {
+            tracing::warn!(%bucket, platform, "key check limit reached");
+            let mut response = protected((
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Too many key checks from your network for {}; try again later",
+                    templates::platform_label(platform)
+                ),
+            ));
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, retry_after.into());
+            Err(Box::new(response))
+        }
+        Err(_) => Err(Box::new(error("Connections are unavailable"))),
+    }
+}
+
 /// Spends the consent and says there were too many attempts.
 async fn too_many_key_checks(security: &Security, jar: PrivateCookieJar, csrf: &str) -> Response {
     if security
@@ -610,6 +659,7 @@ async fn too_many_key_checks(security: &Security, jar: PrivateCookieJar, csrf: &
 /// `POST /connect/authorize`: the consent form's submission.
 pub async fn authorize(
     State(state): State<AppState>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     jar: PrivateCookieJar,
     headers: HeaderMap,
     Form(approval): Form<Approval>,
@@ -646,6 +696,7 @@ pub async fn authorize(
     let Some(security) = &state.security else {
         return error("Connections are unavailable");
     };
+    let peer = peer.map(|ConnectInfo(peer)| peer);
     let mut jar = jar;
     // Refuse an unusable API key before the consent is spent, so correcting
     // it and approving again works. That includes a key the platform's key
@@ -660,6 +711,19 @@ pub async fn authorize(
         let Some(key) = valid_api_key(&approval) else {
             return error("Enter a valid API key");
         };
+        // Only a check that will reach the provider counts against the
+        // network: none without a declared key check, and none for a
+        // cookie key, which is never checked (`check_api_key`).
+        let checks_upstream = api_key.key_check.is_some()
+            && !matches!(api_key.location, crate::providers::ApiKeyLocation::Cookie);
+        if checks_upstream {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
+        }
         let last = match take_key_check(security, jar, &consent.csrf).await {
             Ok((taken, last)) => {
                 jar = taken;
@@ -702,6 +766,16 @@ pub async fn authorize(
             Ok(credential) => credential,
             Err(message) => return error(message),
         };
+        // Only a check that will reach the provider counts against the
+        // network (`check_http_credential`).
+        if http.key_check.is_some() {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
+        }
         let last = match take_key_check(security, jar, &consent.csrf).await {
             Ok((taken, last)) => {
                 jar = taken;
@@ -1156,6 +1230,7 @@ mod tests {
         ] {
             let response = authorize(
                 State(s.clone()),
+                None,
                 jar,
                 HeaderMap::new(),
                 Form(Approval {
@@ -1303,6 +1378,7 @@ mod tests {
         let jar = PrivateCookieJar::new(s.key.clone());
         let result = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
@@ -1333,6 +1409,7 @@ mod tests {
             }
             let result = authorize(
                 State(s.clone()),
+                None,
                 jar.clone(),
                 headers,
                 Form(Approval {
@@ -1414,6 +1491,7 @@ mod tests {
         // page can approve again with a corrected key.
         let blank = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
@@ -1427,6 +1505,7 @@ mod tests {
         assert_eq!(body_text(blank).await, "Enter a valid API key");
         let response = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
@@ -1452,6 +1531,7 @@ mod tests {
         // why.
         let again = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
@@ -1770,6 +1850,7 @@ mod tests {
         let approve = |key: &str| {
             authorize(
                 State(s.clone()),
+                None,
                 jar.clone(),
                 HeaderMap::new(),
                 Form(Approval {
@@ -2177,6 +2258,7 @@ mod tests {
             let approve = |token: &str, username: Option<&str>| {
                 authorize(
                     State(s.clone()),
+                    None,
                     jar.clone(),
                     HeaderMap::new(),
                     Form(Approval {
@@ -2347,6 +2429,7 @@ mod tests {
             let submit = |s: &AppState, jar: &PrivateCookieJar, csrf: &str, key: &str| {
                 authorize(
                     State(s.clone()),
+                    None,
                     jar.clone(),
                     HeaderMap::new(),
                     Form(Approval {
@@ -2398,6 +2481,395 @@ mod tests {
             }
             assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
             server.abort();
+        }
+    }
+
+    /// A client network this test run has not used, so rows left by earlier
+    /// runs (kept for an hour) do not count.
+    fn fresh_ip() -> std::net::IpAddr {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::from(rand::random::<u32>()))
+    }
+
+    fn peer_at(ip: std::net::IpAddr) -> Option<ConnectInfo<std::net::SocketAddr>> {
+        Some(ConnectInfo(std::net::SocketAddr::new(ip, 40_000)))
+    }
+
+    fn forwarded_for(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", value.parse().unwrap());
+        headers
+    }
+
+    /// A state whose only platform, `platform`, takes an API key checked by
+    /// `upstream`, with the key-check limit set to `limit`.
+    fn limited_state(
+        security: &Security,
+        upstream: &str,
+        platform: &str,
+        document: serde_json::Value,
+        limit: u32,
+    ) -> AppState {
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream.to_owned());
+        s.catalog =
+            crate::catalog::Catalog::from_test_document(platform, document, serde_json::json!({}));
+        s.key_check_limit = limit;
+        s
+    }
+
+    /// Submits `key` on a consent page of its own, as a script that opens a
+    /// new consent page for every attempt would. Returns the response and
+    /// the consent's CSRF token.
+    async fn submit_on_new_consent(
+        s: &AppState,
+        peer: Option<ConnectInfo<std::net::SocketAddr>>,
+        headers: HeaderMap,
+        key: &str,
+    ) -> (Response, String) {
+        let platform = s.catalog.names()[0].clone();
+        let consent = Consent {
+            request: Request {
+                redirect_uri: format!(
+                    "https://hub.example/app/integrations?integration_state=state&platform={platform}"
+                ),
+                platform,
+                ..api_key_request()
+            },
+            csrf: random(),
+            expires: crate::now_secs() + 600,
+        };
+        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+            CONSENT_COOKIE,
+            serde_json::to_string(&consent).unwrap(),
+        ));
+        let response = authorize(
+            State(s.clone()),
+            peer,
+            jar,
+            headers,
+            Form(Approval {
+                csrf: consent.csrf.clone(),
+                ..token_approval(key, None)
+            }),
+        )
+        .await;
+        (response, consent.csrf)
+    }
+
+    /// Q-097: key checks are limited per client network and platform, across
+    /// consent pages, before any upstream call, without spending the
+    /// consent; other networks and platforms are unaffected; checks free up
+    /// when their window has passed; `X-Forwarded-For` is read only as
+    /// `TRUST_FORWARDED_FOR` says; `0` turns the limit off; and a concurrent
+    /// burst makes no more checks than the limit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_key_checks_are_limited_per_network_and_platform() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (upstream, server) = key_check_upstream_counting(checks.clone()).await;
+        let document = key_check_document("header");
+        let s = limited_state(&security, &upstream, "clockify", document.clone(), 3);
+        let other_platform =
+            limited_state(&security, &upstream, "clockify-other", document.clone(), 3);
+        let ip = fresh_ip();
+        let asked_again = "did not accept that API key";
+
+        // Malformed keys are refused before the limit and cost nothing.
+        for _ in 0..5 {
+            let (response, _) = submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), " ").await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(checks.load(SeqCst), 0);
+        // Three checks from one network, each on a new consent page.
+        for attempt in 1..=3 {
+            let (response, _) =
+                submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+            assert_eq!(response.status(), StatusCode::OK, "{attempt}");
+            assert!(body_text(response).await.contains(asked_again));
+        }
+        assert_eq!(checks.load(SeqCst), 3);
+        // The fourth, even with a good key: 429, no upstream call, and the
+        // consent is neither spent nor charged a key check.
+        let (limited, csrf) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-key").await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = limited.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=3600).contains(&retry_after), "{retry_after}");
+        assert_eq!(limited.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(set_cookie(&limited, CONSENT_COOKIE).is_none());
+        assert_eq!(
+            body_text(limited).await,
+            "Too many key checks from your network for Clockify; try again later"
+        );
+        assert_eq!(checks.load(SeqCst), 3);
+        assert!(!security
+            .nonce_used(&format!("consent:{csrf}"))
+            .await
+            .unwrap());
+        assert!(!security
+            .nonce_used(&key_check_slot(&csrf, 1))
+            .await
+            .unwrap());
+        // Malformed input is still refused as such, and costs nothing.
+        let (malformed, _) = submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), " ").await;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        // Another platform from the same network, and the same platform from
+        // another network, are unaffected.
+        let (response, _) =
+            submit_on_new_consent(&other_platform, peer_at(ip), HeaderMap::new(), "wrong-key")
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(fresh_ip()), HeaderMap::new(), "good-key").await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // X-Forwarded-For does not get around it. Without trust, it is
+        // ignored: the peer is the limited network.
+        let spoofed = forwarded_for(&fresh_ip().to_string());
+        let (response, _) = submit_on_new_consent(&s, peer_at(ip), spoofed, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Behind Heroku's router, only the entry the router appended counts:
+        // a client-supplied entry to its left changes nothing, and neither
+        // does which router address the request came from.
+        let mut heroku = s.clone();
+        heroku.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+        let router = peer_at(fresh_ip());
+        let spoofed = forwarded_for(&format!("{}, {ip}", fresh_ip()));
+        let (response, _) = submit_on_new_consent(&heroku, router, spoofed, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Nor does a non-UTF-8 byte the client put before the router's
+        // entry: that does not move it to the router's (peer's) bucket.
+        let mut binary = HeaderMap::new();
+        let mut line = b"\x80, ".to_vec();
+        line.extend_from_slice(ip.to_string().as_bytes());
+        binary.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_bytes(&line).unwrap(),
+        );
+        let (response, _) =
+            submit_on_new_consent(&heroku, peer_at(fresh_ip()), binary, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // A client that sends its own X-Forwarded-For to a proxy that does
+        // not trust it is counted by its own address.
+        let (response, _) = submit_on_new_consent(
+            &s,
+            peer_at(ip),
+            forwarded_for(&format!("{ip}, {}", fresh_ip())),
+            "good-key",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // A platform that declares no key check makes no upstream call, so
+        // connecting it from the limited network uses no allowance and is
+        // not refused.
+        let mut unchecked_document = document.clone();
+        unchecked_document["components"]["securitySchemes"]["serviceKey"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        let unchecked = limited_state(
+            &security,
+            &upstream,
+            &format!("p-{:x}", rand::random::<u64>()),
+            unchecked_document,
+            1,
+        );
+        for _ in 0..3 {
+            let (response, _) =
+                submit_on_new_consent(&unchecked, peer_at(ip), HeaderMap::new(), "any-key").await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        }
+        let bucket = security.key_check_bucket(
+            &unchecked.catalog.names()[0],
+            &crate::client_addr::network(ip),
+        );
+        assert_eq!(
+            security
+                .take_key_check_allowance(&bucket, 1, std::time::Duration::from_secs(3600))
+                .await
+                .unwrap(),
+            None,
+            "no slot was taken"
+        );
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // 0 turns the limit off.
+        let mut unlimited = s.clone();
+        unlimited.key_check_limit = 0;
+        for _ in 0..2 {
+            let (response, _) =
+                submit_on_new_consent(&unlimited, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(checks.load(SeqCst), 7);
+
+        // Without any client address, every such check shares one limit.
+        let mut nowhere = limited_state(
+            &security,
+            &upstream,
+            &format!("p-{:x}", rand::random::<u64>()),
+            document.clone(),
+            1,
+        );
+        nowhere.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+        let (response, _) =
+            submit_on_new_consent(&nowhere, None, HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&nowhere, None, HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 8);
+
+        // A check frees up once its window has passed.
+        let mut short = s.clone();
+        short.key_check_limit = 1;
+        short.key_check_window = std::time::Duration::from_secs(2);
+        let network = fresh_ip();
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                <= 2
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(2_200)).await;
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(checks.load(SeqCst), 10);
+
+        // Thirty concurrent submissions from one network, each on its own
+        // consent page, with a limit of five: exactly five checks.
+        checks.store(0, SeqCst);
+        let mut burst = s.clone();
+        burst.key_check_limit = 5;
+        let network = fresh_ip();
+        let tasks: Vec<_> = (0..30)
+            .map(|_| {
+                let burst = burst.clone();
+                tokio::spawn(async move {
+                    submit_on_new_consent(&burst, peer_at(network), HeaderMap::new(), "wrong-key")
+                        .await
+                        .0
+                        .status()
+                })
+            })
+            .collect();
+        let mut statuses = Vec::new();
+        for task in tasks {
+            statuses.push(task.await.unwrap());
+        }
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 5);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
+                .count(),
+            25
+        );
+        assert_eq!(checks.load(SeqCst), 5);
+        server.abort();
+    }
+
+    /// The limit covers `http` bearer and basic tokens as it covers API keys.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_http_token_checks_share_the_network_limit() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (upstream, server) = http_key_check_upstream_counting(checks.clone()).await;
+        let s = limited_state(&security, &upstream, "clockify", http_document(bearer()), 2);
+        let ip = fresh_ip();
+        for _ in 0..2 {
+            let (response, _) =
+                submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-token").await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-token").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 2);
+        server.abort();
+    }
+
+    /// A limited key check logs that it was limited, with the hashed bucket,
+    /// and neither the client address nor the key. Run in a child process,
+    /// like [`postgres_no_http_token_reaches_the_logs`].
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_limited_key_check_logs_no_address() {
+        const CHILD: &str = "INTEGRATION_PROXY_LOG_CAPTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "connect::tests::postgres_a_limited_key_check_logs_no_address",
+                    "--include-ignored",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let logs = LogBuffer::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let security = crate::test_support::security().await;
+        let (upstream, server) = key_check_upstream().await;
+        let s = limited_state(
+            &security,
+            &upstream,
+            "clockify",
+            key_check_document("header"),
+            1,
+        );
+        let ip = fresh_ip();
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        server.abort();
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let bucket = security.key_check_bucket("clockify", &ip.to_string());
+        assert_eq!(bucket.len(), 64);
+        assert!(logs.contains("key check limit reached"), "{logs}");
+        assert!(logs.contains(&bucket), "{logs}");
+        for secret in [ip.to_string(), "wrong-key".into(), "good-key".into()] {
+            assert!(!logs.contains(&secret), "{secret} in logs:\n{logs}");
         }
     }
 
@@ -2479,6 +2951,7 @@ mod tests {
         ));
         let accepted = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
@@ -2626,6 +3099,7 @@ mod tests {
         // A key sent anyway is ignored, not stored.
         let response = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
@@ -2783,6 +3257,7 @@ mod tests {
         ));
         let response = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
@@ -2826,6 +3301,7 @@ mod tests {
         ));
         let response = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {

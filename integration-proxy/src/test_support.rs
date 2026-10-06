@@ -20,6 +20,11 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
             None,
             &crate::config::public_host(BASE_URL),
         ),
+        // Off, so tests that make many key checks are not limited by
+        // earlier runs; the limit's own tests turn it on.
+        key_check_limit: 0,
+        key_check_window: crate::KEY_CHECK_WINDOW,
+        trust_forwarded_for: crate::config::TrustForwardedFor::None,
         test_upstream: None,
     }
 }
