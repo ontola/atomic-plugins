@@ -1049,7 +1049,16 @@ export type Outcome =
   | { status: 'stale'; title: string }
   /** The call threw: Google may or may not have the change. */
   | { status: 'uncertain'; title: string; message: string }
-  | { status: 'failed'; title: string; message: string }
+  | {
+      status: 'failed';
+      title: string;
+      message: string;
+      /**
+       * Google confirmed the PATCH, and what failed came after it: saving the
+       * row's new baseline here. The next preview reads the event back.
+       */
+      written?: boolean;
+    }
   /** Not attempted, because an earlier write's outcome was unknown. */
   | { status: 'not-sent'; title: string };
 
@@ -1085,6 +1094,8 @@ export async function send(
     }
 
     progress?.(outcomes.length);
+    /** Google confirmed the PATCH; a failure after this is not "refused". */
+    let written = false;
 
     try {
       const event = await applyEdit(
@@ -1093,6 +1104,7 @@ export async function send(
         pending.edit,
         pending.etag,
       );
+      written = true;
       const projection = project(event);
 
       if (pending.edit.subject && projection) {
@@ -1127,6 +1139,7 @@ export async function send(
           status: 'failed',
           title,
           message: error instanceof Error ? error.message : String(error),
+          ...(written ? { written: true } : {}),
         });
     }
 

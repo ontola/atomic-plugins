@@ -106,6 +106,15 @@ export type ViewState =
       /** The relay has no usable connection left: offer Connect. */
       reconnect: boolean;
       problem: Problem;
+      /** When it failed, for the sync-status card's "Sync failed 4 min ago". */
+      failedAt: Date;
+      /**
+       * What failed: a read (listing calendars, a refresh, the setup writes
+       * around them), or the send of reviewed edits. The card shows a failed
+       * read as the last sync, and a failed send as a problem over the last
+       * good sync.
+       */
+      phase: 'read' | 'send';
       outcomes?: Outcome[];
       /** The last good result; its rows stay on screen under the banner. */
       summary?: ImportSummary;
@@ -474,7 +483,11 @@ export function createController(
     }
   }
 
-  const fail = (error: unknown, outcomes?: Outcome[]) => {
+  const fail = (
+    error: unknown,
+    outcomes?: Outcome[],
+    phase: 'read' | 'send' = 'read',
+  ) => {
     const problem = classify(error);
     report('error', message(error), {
       problem: problem.kind,
@@ -489,6 +502,8 @@ export function createController(
         (error as { reconnect?: boolean }).reconnect === true ||
         spent(error),
       problem,
+      failedAt: new Date(),
+      phase,
       ...(outcomes ? { outcomes } : {}),
       ...(last ? { summary: last.summary, at: last.at } : {}),
     });
@@ -806,7 +821,7 @@ export function createController(
       } catch (error) {
         await reload().catch(() => {});
 
-        return fail(error);
+        return fail(error, undefined, 'send');
       }
 
       // The reviewed plan is used up either way: whatever was not sent is
@@ -815,7 +830,7 @@ export function createController(
       await reload();
       const uncertain = outcomes.find(o => o.status === 'uncertain');
       if (uncertain && uncertain.status === 'uncertain')
-        return fail(new Error(uncertain.message), outcomes);
+        return fail(new Error(uncertain.message), outcomes, 'send');
       set({ kind: 'ready', at, summary: last.summary, outcomes });
     },
 

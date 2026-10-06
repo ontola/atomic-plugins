@@ -88,6 +88,11 @@ export interface WriteQueue {
    * lists each with its reason.
    */
   notWritten?: number;
+  /**
+   * What the app calls its review of sends, named after `notWritten`: "see
+   * Changes to send for why" (the default), "see Review for why".
+   */
+  reviewName?: string;
   /** Where the pending changes are reviewed, when that is elsewhere. */
   review?: Action;
 }
@@ -417,7 +422,7 @@ export function renderSyncStatus(
           'li',
           { 'data-key': 'not-written' },
           el(doc, 'b', {}, plural(writes.notWritten, CHANGE)),
-          ` not written to ${status.provider}: see Changes to send for why.`,
+          ` not written to ${status.provider}: see ${writes.reviewName ?? 'Changes to send'} for why.`,
         ),
       );
   }

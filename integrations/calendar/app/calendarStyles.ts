@@ -7,6 +7,8 @@
  */
 export const CALENDAR_CSS = `
 .shell { flex: 1; min-height: 0; display: flex; position: relative; }
+/* The shared sync-status card (../../sync-status/card.css), first in the main landmark. */
+.pl-main > .ss { flex: none; margin: 10px 12px 0; --pl-hair: var(--pl-border); --pl-radius: 8px; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .view { flex: 1; min-height: 0; overflow: auto; }
 
@@ -64,7 +66,6 @@ export const CALENDAR_CSS = `
 .cals label:hover { background: var(--pl-surface); }
 .cals input { accent-color: var(--pl-accent); margin: 0; }
 .cals span.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.note p { margin: 0; font-size: 12.5px; color: var(--pl-muted); }
 
 /* toolbar */
 .tb { display: flex; align-items: center; gap: 8px; padding: 10px 14px; flex-wrap: wrap; }
@@ -143,11 +144,6 @@ export const CALENDAR_CSS = `
 .tagline { font-size: 11px; font-weight: 650; letter-spacing: 0.02em; }
 .tagline.accent { color: var(--pl-accent); }
 .tagline.warn { color: var(--pl-warn); }
-.incomplete { margin: 0 14px 6px; padding: 8px 10px; border: 1px solid var(--pl-border); border-radius: 8px; font-size: 12.5px; }
-.incomplete p { margin: 0 0 4px; color: var(--pl-muted); }
-.incomplete ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.incomplete li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 28px; }
-.ag-note { margin: 4px 12px 16px; padding-top: 10px; border-top: 1px solid var(--pl-border); font-size: 12.5px; color: var(--pl-muted); }
 .ag-none { padding: 6px 12px 10px 66px; color: var(--pl-muted); font-size: 12.5px; margin: 0; }
 
 /* drawer */
