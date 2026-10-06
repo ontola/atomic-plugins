@@ -50,9 +50,9 @@ describe('the automatic retry', () => {
   });
 
   it('a rate limit: at GitHub’s time, never sooner than 60 s, never later than an hour', () => {
-    expect(planRetry(limited(NOW + 35 * MIN), false, freshLadder(), NOW)).toEqual(
-      { kind: 'arm', at: NOW + 35 * MIN, limited: true },
-    );
+    expect(
+      planRetry(limited(NOW + 35 * MIN), false, freshLadder(), NOW),
+    ).toEqual({ kind: 'arm', at: NOW + 35 * MIN, limited: true });
     expect(planRetry(limited(NOW + 5_000), false, freshLadder(), NOW)).toEqual({
       kind: 'arm',
       at: NOW + RATE_RETRY_FIRST * 1000,
@@ -73,7 +73,12 @@ describe('the automatic retry', () => {
     ladder = climbed(ladder, true);
     const fired = NOW + 30 * MIN;
     expect(
-      planRetry(limited(NOW + 30 * MIN, { busy: 'syncing' }), false, ladder, fired),
+      planRetry(
+        limited(NOW + 30 * MIN, { busy: 'syncing' }),
+        false,
+        ladder,
+        fired,
+      ),
     ).toEqual({ kind: 'keep' });
     // The pass ends rate-limited again, 45 min further: the plan is for that
     // time, whether or not something was armed meanwhile.
@@ -106,12 +111,12 @@ describe('the automatic retry', () => {
         NOW,
       ),
     ).toEqual({ kind: 'clear', reset: false });
-    expect(planRetry({ kind: 'not-connected' }, true, freshLadder(), NOW)).toEqual(
-      { kind: 'clear', reset: false },
-    );
+    expect(
+      planRetry({ kind: 'not-connected' }, true, freshLadder(), NOW),
+    ).toEqual({ kind: 'clear', reset: false });
     // Busy without a problem: leave it alone until the pass ends.
-    expect(planRetry(ready({ busy: 'sending' }), false, freshLadder(), NOW)).toEqual(
-      { kind: 'keep' },
-    );
+    expect(
+      planRetry(ready({ busy: 'sending' }), false, freshLadder(), NOW),
+    ).toEqual({ kind: 'keep' });
   });
 });

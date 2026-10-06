@@ -224,7 +224,7 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 175,816 bytes for
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 177,467 bytes for
 0.4.0) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
 per table**: the app's own table, and each other Issue table it was asked

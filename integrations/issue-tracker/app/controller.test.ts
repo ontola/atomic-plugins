@@ -787,14 +787,14 @@ group('issue-tracker controller: GitHub rate limits', () => {
     store.status = undefined;
     const held = ready(await controller.sync());
     expect(held.problem).toBeUndefined();
-    // Held for review again. The Bridge resumed a saved operation whose
-    // last attempt threw (the 502), so it is flagged to check GitHub first,
-    // as after any interrupted send; nothing was sent.
+    // Held for review again, as a plain pending change: the refused write
+    // left no saved operation behind, and the 502 stopped the next pass
+    // before it planned one. Nothing was sent.
     expect(held.last!.result.held).toHaveLength(1);
-    expect(describeHeld(held.last!.result.held[0])).toMatch(
-      /^Update #1: status Todo → Done \(close it\)/,
+    expect(describeHeld(held.last!.result.held[0])).toBe(
+      'Update #1: status Todo → Done (close it)',
     );
-    expect(held.last!.result.held[0].unconfirmed).toBe(true);
+    expect(held.last!.result.held[0].unconfirmed).toBeUndefined();
     expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
       'open',
     );
@@ -808,7 +808,9 @@ group('issue-tracker controller: GitHub rate limits', () => {
     limit(store);
     const failed = ready(await controller.send());
     expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
-    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(before);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(
+      before,
+    );
 
     // Another row, same title and body, made while the limit lasts: its
     // create has the same proposal key, but nobody reviewed it.
@@ -816,11 +818,12 @@ group('issue-tracker controller: GitHub rate limits', () => {
     const after = ready(await controller.sync());
     expect(after.problem).toBeUndefined();
     const issues = store.github.snapshot(SEEDED_REPOSITORY).issues;
-    expect(issues.filter((i: { title: string }) => i.title === 'Dup')).toHaveLength(
-      1,
-    );
+    expect(
+      issues.filter((i: { title: string }) => i.title === 'Dup'),
+    ).toHaveLength(1);
     expect(after.last!.result.held).toHaveLength(1);
-    expect(after.last!.result.held[0].subject).toBe(second);
+    // `local` is the row; `subject` is the Bridge's own record id.
+    expect(after.last!.result.held[0].local).toBe(second);
     expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
   });
 

@@ -397,7 +397,9 @@ export function createController(
       overlay: new Map(),
     };
     prefs = { ...state.state.view };
-    const stamped = provisioned.sync.get(provisioned.tracker.properties.lastSync);
+    const stamped = provisioned.sync.get(
+      provisioned.tracker.properties.lastSync,
+    );
     const at = typeof stamped === 'string' ? Date.parse(stamped) : NaN;
     syncedAt = Number.isFinite(at) ? at : undefined;
 

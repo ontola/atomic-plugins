@@ -376,7 +376,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.4.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-KREqWqERPdnZdOemWqkxqBGiFlINxusjFYUU09NQCfNBHzAN9AHKupFqcBRHJyGA"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-beavJ4WKsENbxiEM+eCQa4C2GkvOqx7qEIAyMa1lvYhjFe68IveQMm5JK5TA6zaf"
   },
   {
     "https://atomicdata.dev/properties/localId": "open-cloud-mesh",
