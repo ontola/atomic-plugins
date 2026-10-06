@@ -4,12 +4,18 @@
 runs it on Heroku through a small wrapper crate in a separate repository,
 `localthought/integration-proxy` (template:
 [`integration-proxy/examples/heroku-wrapper/`](../../integration-proxy/examples/heroku-wrapper/)).
-On 2026-10-06 localthought.io was verified running proxy 0.2.5, deployed
+On 2026-10-06 localthought.io was verified running proxy 0.3.0, deployed
 through wrapper PR
-[localthought/integration-proxy#82](https://github.com/localthought/integration-proxy/pull/82)
-(merge commit `625948c`) as Heroku release v86. `CATALOG_PATH` was then
-switched to the auth-profiles catalog in release v87, the current one. Before
-that, 0.2.4 ran as v84, with the dated catalog selected in v85.
+[localthought/integration-proxy#83](https://github.com/localthought/integration-proxy/pull/83)
+(merge commit `72c827a`, which pins `=0.3.0`) as Heroku release v89, the
+current one. Release v88 set `TRUST_FORWARDED_FOR=heroku` just before that
+deploy, while 0.2.5 was still running; `CATALOG_PATH` stayed on the
+auth-profiles catalog. After the deploy the startup log had no
+`DYNO`/`TRUST_FORWARDED_FOR` warning, `/healthz` answered 200, `/catalog`
+listed the same nine platforms, and there were no crashes or 5xx responses.
+Before that, 0.2.5 ran as v86 (wrapper #82, `625948c`) with the
+auth-profiles catalog selected in v87, and 0.2.4 ran as v84 with the dated
+catalog selected in v85.
 
 **Publishing a crate version and deploying to Heroku each need Michiel's OK,
 per release** (#227 rule 10). The PRs leading up to them don't.
@@ -30,10 +36,11 @@ per release** (#227 rule 10). The PRs leading up to them don't.
    Publishing (OIDC; no token is stored). A crates.io version is permanent.
 3. **Wrapper PR** in `localthought/integration-proxy`: bump the crate in its
    `Cargo.toml` and `Cargo.lock`. Merge it.
-   **The first release with the key-check limit (#340, Q-097)** also needs
-   `TRUST_FORWARDED_FOR=heroku` on the app before or with that deploy
+   **The first release with the key-check limit (#340, Q-097)**, 0.3.0, also
+   needed `TRUST_FORWARDED_FOR=heroku` on the app before or with that deploy
    (`heroku config:set TRUST_FORWARDED_FOR=heroku -a integration-proxy`,
-   Michiel's OK). Without it every client shares the router's limit of 20
+   Michiel's OK; done as v88 on 2026-10-06, and it stays set for every
+   later release). Without it every client shares the router's limit of 20
    key checks per platform per hour; the proxy logs a warning at startup
    when Heroku's `DYNO` is set without it. Check for that line in
    `heroku logs` after the deploy.
