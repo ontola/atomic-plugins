@@ -3,6 +3,29 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+- HTTP bearer and basic tokens (Decision Inbox Q-086): a security scheme of
+  `type: http` with `scheme: bearer` or `scheme: basic` is a user credential.
+  The consent page asks for an API token (and, for one Basic layout, a
+  username), calls the scheme's `x-api-key-details.keyCheck` with the
+  `Authorization` header the proxied requests will carry, and seals the
+  credential like an API key; a `401`/`403` asks again without spending the
+  consent. Requests carry `Authorization: Bearer <token>` or
+  `Authorization: Basic base64(username:password)`, only while the platform
+  still resolves to an `http` scheme of the same kind (else
+  `401 credential_refresh_failed`). A Basic scheme must declare where the
+  token goes, in the new `x-api-key-details.basicCredentials`
+  (`openapi-extensions/spec/api-key-details` 0.2.0-draft); one without it is
+  not offered, and no layout asks for a password other than the token.
+  Without an authentication profile an `http` scheme counts only when the
+  document declares no `oauth2` and no `apiKey` scheme, so documents that
+  resolved before resolve as before; a new `selection.httpSecurityScheme`
+  picks one of several bearer/basic schemes, and an authentication profile
+  may name one. No platform of the default catalog declares such a scheme
+  as its credential, so none changes. Stored credentials now `Debug`-print
+  without their secrets. No version set yet.
+
 ## 0.2.5 (2026-10-05)
 
 Published to crates.io on 2026-10-05 (tag `integration-proxy-v0.2.5`) and

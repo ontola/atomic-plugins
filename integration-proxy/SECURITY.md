@@ -68,7 +68,7 @@ user's key. A wrong verifier does not burn the handoff; concurrent second
 redemptions fail. Responses are `no-store`.
 
 The consent page's CSP allows form submissions only to the proxy itself (and,
-for an API-key or no-credential platform, to the return address's origin,
+for an API-key, http-token or no-credential platform, to the return address's origin,
 where approval redirects), and one inline script identified by its SHA-256 hash; nothing
 else runs. An OAuth approval answers with a page that continues to the
 provider's authorization URL by `<meta>` refresh and button, sent with
@@ -83,6 +83,68 @@ spent CSRF token) so that approving again says so; it grants nothing.
 
 For an API-key platform the key is typed into the proxy's own consent page
 and sealed like an OAuth token; it is never returned to the hub.
+
+## HTTP bearer and basic tokens (Q-086, unreleased)
+
+A `type: http` security scheme with `scheme: bearer` or `scheme: basic` is a
+user credential of its own kind (README, "HTTP tokens"). Without an
+authentication profile it is used only in a document that declares no
+`oauth2` and no `apiKey` scheme, so every document that resolved to OAuth or
+an API key before still does, and no `http` scheme is ever combined with
+another credential. It reuses the API
+key's controls: the token is typed into the proxy's consent page, never into
+the hub or a plugin frame; the declared key check is called once before
+anything is stored (`401`/`403` asks again without spending the consent,
+anything else stores nothing); the credential is sealed in the same
+XChaCha20-Poly1305 envelope bound to its connection row, and no response
+returns it. On a proxied request the proxy builds the `Authorization` header
+itself (reqwest marks it sensitive), only for a catalog-allowlisted
+operation (and, with a profile, only a covered one), and only while the
+platform still resolves to an `http` scheme of the same kind; otherwise it
+answers `401 credential_refresh_failed`. The caller's `Authorization` is
+never forwarded: anything but `Capability …` is refused with
+`401 unsupported_authorization`, and a capability is consumed by the proxy.
+Upstream cookies and credentials are not passed back. `StoredCredential`'s
+`Debug` output names only the kind and platform; the crate's own logging
+records neither, and `tower-http`'s `TraceLayer` is used with its default,
+which does not record headers. A test records every `tracing` event at
+`TRACE` during a Basic consent, key check, redeem and proxied request and
+finds neither half of the credential nor its base64 form; `log`-crate records
+of dependencies are not part of that capture.
+
+Risks that remain, and what the proxy does about them:
+
+- **Account-wide tokens.** Personal access tokens are usually not scoped:
+  one token can act as the person on their whole account, including
+  operations the catalog does not list. The catalog allowlist (methods and
+  paths, and a profile's coverage) limits what *this proxy* sends, not what
+  the token could do elsewhere if it leaked from the proxy's database and
+  `ENCRYPTION_KEY` together. The consent page says the token is stored
+  encrypted on this proxy; it does not say how much the token can do,
+  because the proxy cannot know. Revoking it is the person's job, at the
+  provider; deleting the connection deletes the proxy's copy only.
+- **No expiry or refresh.** Like an API key, a token stays usable until the
+  provider revokes it or the connection is deleted (or idles out, by default after 90
+  days without an authenticated request).
+- **Basic with a password.** HTTP Basic sends a password-shaped secret on
+  every request. If that is the person's real account password, the proxy
+  holds a credential that can usually also log in, change the password and
+  bypass the provider's second factor. The proxy therefore only offers a
+  Basic scheme whose `x-api-key-details.basicCredentials` declares where
+  the **API token** goes: as the username with a fixed password (for example
+  `token:api_token` or `sk_…:`), or as the password with a fixed or typed
+  username (an email address next to an API token). No layout asks the
+  person for a password other than the token, and a Basic scheme without the
+  declaration is not offered at all. This is a declaration by the overlay
+  author, checked against the provider's documentation, not something the
+  proxy can verify: an overlay that declared a provider's account password
+  as `token` would make the consent page ask for it under the label "API
+  token". Overlays are trusted as much as they already are to name the
+  API's server. Prefer a bearer personal access token wherever the provider
+  offers one.
+- **Typed usernames.** A username typed next to the token (an email
+  address) is sealed with the token; it is not treated as a secret on the
+  page (a plain text field) and it is not returned.
 
 A platform whose composed document declares top-level `security: []`, no
 security scheme, and no operation that requires one (0.2.3 and later)
