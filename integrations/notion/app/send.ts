@@ -57,8 +57,12 @@ export type SendOutcome = { subject: string; name: string } & (
   | { status: 'changed'; notion: Record<string, JSONValue | undefined> }
   /** Archived, in trash, or no longer shared with the integration. */
   | { status: 'gone' }
-  /** Not sent: the value cannot be written, or Notion refused it. */
-  | { status: 'refused'; message: string }
+  /**
+   * Not sent: the value cannot be written, or Notion refused it. With
+   * `written`, the opposite: Notion applied the PATCH, but the row here
+   * could not be updated from its answer; the next sync reads it back.
+   */
+  | { status: 'refused'; message: string; written?: true }
   /** Not sent, and the batch stopped (connection, rate limit, no answer). */
   | { status: 'failed'; message: string }
   /** The PATCH got no answer: Notion may or may not have applied it. */
@@ -271,6 +275,7 @@ export async function sendChanges({
       report({
         ...who,
         status: 'refused',
+        written: true,
         message: `Sent to Notion, but this row could not be updated here: ${message(error)}. The next sync reads it back.`,
       });
       continue;

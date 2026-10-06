@@ -62,7 +62,7 @@ const VERSIONS = {
   calendar: 'usertest-11',
   'issue-tracker': 'usertest-8',
   money: 'usertest-4',
-  notion: 'usertest-8',
+  notion: 'usertest-9',
   timesheets: 'usertest-10',
 };
 const APPS = {

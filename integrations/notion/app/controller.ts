@@ -67,17 +67,20 @@ export type ViewState =
   | ({ kind: 'importing'; progress: SyncProgress[] } & Connected)
   /** Connected, but Notion shares no database with the integration. */
   | ({ kind: 'no-databases' } & Connected)
-  | ({ kind: 'reauth'; technical?: string } & Connected)
+  /** The three failure states carry `at`: when the sync that found them ended. */
+  | ({ kind: 'reauth'; at: number; technical?: string } & Connected)
   /** No connection for this app, but rows from an earlier one are kept. */
   | ({ kind: 'disconnected' } & Connected)
   | ({
       kind: 'rate-limited';
+      at: number;
       retryAt: number;
       pagesRead: number;
       technical: string;
     } & Connected)
   | ({
       kind: 'failed';
+      at: number;
       title: string;
       message: string;
       technical: string;
@@ -438,9 +441,10 @@ export function createController(
           return set({
             ...after,
             ...failure,
+            at: now(),
             pagesRead: progress.reduce((n, p) => n + p.pages, 0),
           });
-        if (failure) return set({ ...after, ...failure });
+        if (failure) return set({ ...after, ...failure, at: now() });
         if (result && result.dataSources === 0)
           return set({ kind: 'no-databases', ...after });
 

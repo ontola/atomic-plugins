@@ -67,13 +67,15 @@ named with the failure ("Last good sync 3 days ago.").
 
 ### Mapping a syncables client's `pendingWrites()`
 
-For an app whose writes go through `syncables/browser` (Pets, Notion) rather
+For an app whose writes go through `syncables/browser` (Pets; not Notion,
+whose reads use syncables but whose writes are its own `send.ts`) rather
 than its own client, `writes` is: `pending` the entries with `state:
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app: Notion, calendar, issue-tracker and money adopt the card in
-follow-ups.
+done for any app. Notion adopted the card in 0.5.0 from its own review list
+and send outcomes, as Clockify did (`notion/app/view/status.ts`); calendar,
+issue-tracker and money adopt it in follow-ups.
 
 ## What is verified
 

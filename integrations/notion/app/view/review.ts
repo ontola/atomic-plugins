@@ -181,6 +181,15 @@ export function renderReview(
       ).map(o => [o.id, o]),
     );
 
+  // A PATCH that stood but could not be confirmed here says so itself
+  // ("Sent to Notion, but …"); "Not sent" would be wrong for it.
+  const outcomeText = (outcome: SendOutcome) =>
+    !('message' in outcome)
+      ? OUTCOME[outcome.status]
+      : outcome.status === 'refused' && outcome.written
+        ? outcome.message
+        : `${OUTCOME[outcome.status]}: ${outcome.message}`;
+
   const outcomeLine = (outcome: SendOutcome | undefined) =>
     outcome &&
     h(
@@ -191,9 +200,7 @@ export function renderReview(
         'data-outcome': outcome.status,
       },
       icon(doc, outcome.status === 'sent' ? 'check' : 'alert', 'sm'),
-      'message' in outcome
-        ? `${OUTCOME[outcome.status]}: ${outcome.message}`
-        : OUTCOME[outcome.status],
+      outcomeText(outcome),
     );
 
   const items = changes.map(change =>

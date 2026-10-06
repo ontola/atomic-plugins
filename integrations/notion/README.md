@@ -46,9 +46,23 @@ proxy. No credential ever reaches the frame.
   the database count, "Sync details" and a menu (Choose pages in Notion,
   Open data table, Disconnect Notion…); the state's banner; the "N changes
   not sent to Notion yet" strip with its Review sheet (`view/review.ts`);
-  and one card (`view/parts.ts`, `renderStatus`) listing the databases the
-  table syncs with and their row counts, the last sync (when, duration,
-  created/updated/unchanged), the row total and an "Open table" button.
+  then, since 0.5.0, the shared sync-status card first
+  (`integrations/sync-status/`, Q-084; the mapping is `view/status.ts`,
+  pure, one unit test per state in `view/status.test.ts`): when the last
+  sync ran and how it went (a failed sync names the last good one), its
+  added/updated/unchanged counts, the row total, whether edits go back
+  ("Edits here are sent to Notion after you review them.", or read-only
+  with the reason when there is no connection or no proxy), the write queue
+  (changes waiting, held back by a conflict or a refused value, the last
+  Send's failures with their reasons, a PATCH that stood but could not be
+  confirmed here, sends without an answer, sends that wrote nothing), the
+  record's warnings and a "N notes from the last sync" line that opens Sync
+  details; and right below it the databases block (`view/parts.ts`,
+  `renderDatabases`): the databases the table syncs with and their row
+  counts, when the last sync ran and how long it took, and an "Open table"
+  button. Notion's writes do not go through syncables' `pendingWrites()`,
+  so the card is fed from the review list and the send outcomes, as in
+  Clockify.
   People browse and edit the rows with the host's own table and views; the
   app renders no rows. The #89 browsing views of 0.1.0–0.2.0 (table, board,
   list, database chips, side peek, search, sort; `design/DESIGN.md`,
@@ -79,9 +93,11 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 115,818 bytes for
-  0.4.2 (113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
-  document, syncables' read path and devonian's Atomic Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 124,966 bytes for
+  0.5.0 (115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
+  document, syncables' read path, devonian's Atomic Data API and the shared
+  sync-status card with its `card.css` (through `cssRawPlugin` from
+  `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
 - Dependencies: `syncables@0.19.0` and `devonian@0.6.1` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
@@ -235,8 +251,11 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:
 an install from the catalog's Drive apps section (the committed
 `apps/notion/<version>/ui.js`, served by the lane's dev-server), then Connect, the
-host's consent bar and the mock proxy's consent page, then the status card
-(the database, "3 rows in this table", no table in the frame), the 3 rows in
+host's consent bar and the mock proxy's consent page, then the shared
+sync-status card ("Synced", "3 rows in this table", "Edits here are sent to
+Notion after you review them."; later "Sync failed" with the last good sync
+and, after Disconnect, "Read-only: edits here stay in Atomic.") and the
+databases block (the database, no table in the frame), the 3 rows in
 the host's table with their Status and Tags shown by option name (0.4.0),
 and the columns' datatypes and select-column shape. It then walks the app's states
 against the fixture's scenarios (`setScenario`, `renameOption` drivers): a
