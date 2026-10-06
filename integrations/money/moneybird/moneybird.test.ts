@@ -21,6 +21,7 @@ import {
   APP,
   fakeStore,
   OTHER_TABLE,
+  OWN_SHARED_TABLE,
   RENDERS_PROPERTY,
   ROW_EXTRAS_PROPERTY,
   TABLE,
@@ -35,6 +36,7 @@ import {
 import { BANK, BANK_TRANSACTION, mutationOf } from './mutations.js';
 import { adopt, ensureTables, TABLE_NAMES } from './own.js';
 import {
+  civilYear,
   halves,
   nextLink,
   readAdministrations,
@@ -83,11 +85,11 @@ const shortnameOf = (store: Store) => {
   return byShortname;
 };
 
-/** The app's own table of `klass`, once `ensureTables` made it. */
-const tableOf = (store: Store, klass: string) =>
+/** The app's own table of `klass`, if `ensureTables` made one. */
+const tableOf = (store: Store, klass: string): string | undefined =>
   [...store.resources.entries()].find(
     ([, p]) => p[PARENT] === APP && p[CLASSTYPE] === klass,
-  )![0];
+  )?.[0];
 
 const none = { added: 0, updated: 0, unchanged: 0, skipped: 0 };
 
@@ -143,12 +145,20 @@ describe('reading', () => {
     expect(read.map(m => m.id).sort()).toEqual(
       financialMutations[A].map(m => m.id).sort(),
     );
-    expect(store.fixture.mutationFilters).toEqual([
-      `period:${YEAR}0101..${YEAR}1231`,
-    ]);
+    // Moneybird's own period first, the same the hours read uses.
+    expect(store.fixture.mutationFilters).toEqual(['period:this_year']);
     expect(store.calls[0].path).toBe(
-      `/api/v2/${A}/financial_mutations.json?filter=${encodeURIComponent(`period:${YEAR}0101..${YEAR}1231`)}`,
+      `/api/v2/${A}/financial_mutations.json?filter=${encodeURIComponent('period:this_year')}`,
     );
+  });
+
+  it('takes the civil year from a time zone, Europe/Amsterdam by default', () => {
+    // 2026-12-31T23:30Z is already 2027 in Amsterdam, still 2026 in UTC.
+    const newYear = new Date('2026-12-31T23:30:00Z');
+    expect(civilYear('Europe/Amsterdam', newYear)).toBe(2027);
+    expect(civilYear('UTC', newYear)).toBe(2026);
+    expect(civilYear(undefined, newYear)).toBe(2027);
+    expect(civilYear()).toBe(YEAR);
   });
 
   it('halves a window that comes back at the limit, down to single days', async () => {
@@ -162,11 +172,12 @@ describe('reading', () => {
       financialMutations[A].map(m => m.id).sort(),
     );
     const filters = store.fixture.mutationFilters;
-    expect(filters[0]).toBe(`period:${YEAR}0101..${YEAR}1231`);
-    expect(filters.length).toBeGreaterThan(2);
+    expect(filters[0]).toBe('period:this_year');
+    expect(filters[1]).toBe(`period:${YEAR}0101..${YEAR}0702`);
+    expect(filters.length).toBeGreaterThan(3);
     expect(filters.length).toBeLessThan(40);
-    // Every window is within the year, and no day is asked twice.
-    for (const filter of filters)
+    // Every later window is within the year, and no day is asked twice.
+    for (const filter of filters.slice(1))
       expect(filter).toMatch(
         new RegExp(`^period:${YEAR}\\d{4}\\.\\.${YEAR}\\d{4}$`),
       );
@@ -337,7 +348,8 @@ describe('mapping', () => {
       accounts,
     )!;
     expect(bare.name).toBe(`Mutation ${fee.id}`);
-    expect(bare.account).toBe('999');
+    // Prefixed: a Moneybird id is not a bank's account id.
+    expect(bare.account).toBe('moneybird:999');
     expect(bare.description).toBeUndefined();
     // Not exact: skipped, never approximated.
     expect(mutationOf({ ...fee, amount: -0.35 }, A, accounts)).toBeUndefined();
@@ -803,8 +815,29 @@ describe('controller on a table the app is a view of (#177 item 14)', () => {
     expect(rows(store, OTHER_TABLE)).toHaveLength(4);
     expect(rows(store, tableOf(store, WORK_PROJECT))).toHaveLength(2);
     expect(rows(store, tableOf(store, WORK_PERSON))).toHaveLength(2);
-    // No own hours table was filled.
-    expect(rows(store, tableOf(store, TIME_ENTRY))).toHaveLength(0);
+    // Only the link tables were made: no own hours or mutations table.
+    expect(tableOf(store, TIME_ENTRY)).toBeUndefined();
+    expect(tableOf(store, BANK_TRANSACTION)).toBeUndefined();
+  });
+
+  it('makes no own table at all for a bank-transaction-v1 table it is a view of', async () => {
+    const store = fakeStore({
+      outage: false,
+      foreign: { rowClass: BANK_TRANSACTION, name: 'Bank' },
+    });
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.syncTable();
+    await controller.select(A);
+    expect(controller.state().kind).toBe('synced');
+    expect(rows(store, OTHER_TABLE)).toHaveLength(6);
+    for (const klass of [
+      TIME_ENTRY,
+      WORK_PROJECT,
+      WORK_PERSON,
+      BANK_TRANSACTION,
+    ])
+      expect(tableOf(store, klass)).toBeUndefined();
   });
 
   it('leaves the table unsynced on "Not now", and pauses when the grant lapses', async () => {
@@ -868,5 +901,110 @@ describe('controller on a table the app is a view of (#177 item 14)', () => {
       kind: 'unsynced',
       message: expect.stringMatching(/host can’t/),
     });
+  });
+});
+
+describe('controller on the app’s own shared-class tables', () => {
+  it('opened on its own hours table, syncs only hours into it and never treats it as the contacts table', async () => {
+    const store = fakeStore({
+      outage: false,
+      ownShared: { rowClass: TIME_ENTRY, name: 'Moneybird hours' },
+    });
+    // The published class is not a resource the fake knows; a contacts sync
+    // would try to write RECOMMENDS and "Contact" onto it and rename the
+    // table, which this placement must never do.
+    const controller = createController(store, () => {});
+    await controller.load();
+    const choosing = controller.state();
+    if (choosing.kind !== 'choosing') throw new Error(choosing.kind);
+    expect(choosing.selectable).toBe(false);
+    expect(choosing.collections).toEqual(['hours']);
+    expect(choosing.table).toBe('Moneybird hours');
+
+    await controller.select(A, ['contacts', 'hours', 'mutations']);
+    const synced = controller.state();
+    if (synced.kind !== 'synced') throw new Error(synced.kind);
+    expect(Object.keys(synced.results)).toEqual(['hours']);
+    expect(synced.results.hours).toEqual({ ...none, total: 4, added: 4 });
+    expect(rows(store, OWN_SHARED_TABLE)).toHaveLength(4);
+    for (const [, row] of rows(store, OWN_SHARED_TABLE))
+      expect(row[IS_A]).toEqual([TIME_ENTRY]);
+    expect(store.resources.get(OWN_SHARED_TABLE)![NAME]).toBe(
+      'Moneybird hours',
+    );
+    expect(store.resources.has(TIME_ENTRY)).toBe(false);
+    expect(rows(store)).toHaveLength(0);
+    // The link tables were made, no second hours table and no mutations table.
+    expect(rows(store, tableOf(store, WORK_PROJECT))).toHaveLength(2);
+    expect(rows(store, tableOf(store, WORK_PERSON))).toHaveLength(2);
+    expect(tableOf(store, BANK_TRANSACTION)).toBeUndefined();
+    // The administration went on the App (its own table needs no binding).
+    const shortnames = shortnameOf(store);
+    expect(
+      store.resources.get(APP)![shortnames.get('moneybird-administration')!],
+    ).toBe(A);
+    expect(
+      [...store.resources.values()].some(
+        p => p[shortnames.get('moneybird-synced-table')!] === OWN_SHARED_TABLE,
+      ),
+    ).toBe(false);
+  });
+
+  it('opened on its own mutations table, syncs only mutations into it', async () => {
+    const store = fakeStore({
+      outage: false,
+      ownShared: { rowClass: BANK_TRANSACTION, name: 'Moneybird mutations' },
+    });
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.select(A);
+    const synced = controller.state();
+    if (synced.kind !== 'synced') throw new Error(synced.kind);
+    expect(Object.keys(synced.results)).toEqual(['mutations']);
+    expect(rows(store, OWN_SHARED_TABLE)).toHaveLength(6);
+    expect(store.resources.get(OWN_SHARED_TABLE)![NAME]).toBe(
+      'Moneybird mutations',
+    );
+    expect(rows(store)).toHaveLength(0);
+    for (const klass of [TIME_ENTRY, WORK_PROJECT, WORK_PERSON])
+      expect(tableOf(store, klass)).toBeUndefined();
+  });
+
+  it('refuses its own projects and people tables with a note', async () => {
+    for (const [rowClass, word] of [
+      [WORK_PROJECT, 'projects'],
+      [WORK_PERSON, 'people'],
+    ] as const) {
+      const store = fakeStore({
+        ownShared: { rowClass, name: `Moneybird ${word}` },
+      });
+      const controller = createController(store, () => {});
+      await controller.load();
+      expect(controller.state().kind).toBe('unsupported');
+      expect(say(controller.state())).toMatch(
+        new RegExp(`own ${word} table.*hours table`),
+      );
+    }
+  });
+
+  it('on the contacts table, makes only the own tables the chosen collections write', async () => {
+    const store = fakeStore({ outage: false });
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.select(A, ['mutations']);
+    expect(controller.state().kind).toBe('synced');
+    expect(rows(store, tableOf(store, BANK_TRANSACTION))).toHaveLength(6);
+    for (const klass of [TIME_ENTRY, WORK_PROJECT, WORK_PERSON])
+      expect(tableOf(store, klass)).toBeUndefined();
+
+    const hoursOnly = fakeStore({ outage: false });
+    const second = createController(hoursOnly, () => {});
+    await second.load();
+    await second.select(A, ['hours']);
+    expect(second.state().kind).toBe('synced');
+    expect(rows(hoursOnly, tableOf(hoursOnly, TIME_ENTRY))).toHaveLength(4);
+    expect(tableOf(hoursOnly, WORK_PROJECT)).toBeDefined();
+    expect(tableOf(hoursOnly, WORK_PERSON)).toBeDefined();
+    expect(tableOf(hoursOnly, BANK_TRANSACTION)).toBeUndefined();
   });
 });

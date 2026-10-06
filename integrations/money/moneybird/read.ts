@@ -295,8 +295,26 @@ export function halves(range: DayRange): [DayRange, DayRange] | undefined {
 export const periodFilter = (range: DayRange) =>
   `period:${range.from}..${range.to}`;
 
+/** The first mutations window: Moneybird's own `this_year`, the same period the hours read uses. */
+export const MUTATIONS_FILTER = 'period:this_year';
+
+/**
+ * The civil year in a time zone, Europe/Amsterdam by default: Moneybird's
+ * `this_year` runs on the administration's clock, which this app does not
+ * read, so the halving windows use the Dutch civil year. The two agree
+ * except, around New Year, for an administration in another time zone.
+ */
+export function civilYear(
+  timeZone = 'Europe/Amsterdam',
+  now: Date = new Date(),
+): number {
+  return Number(
+    new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric' }).format(now),
+  );
+}
+
 export interface MutationOptions {
-  /** The civil year to import; this UTC year by default. */
+  /** The civil year the halving windows cover; `civilYear()` by default. */
   year?: number;
   /** The provider's per-answer limit; the fixture lowers it for tests. */
   cap?: number;
@@ -304,21 +322,22 @@ export interface MutationOptions {
 }
 
 /**
- * One civil year of financial mutations of one administration.
+ * This year's financial mutations of one administration.
  *
  * `financial_mutations.json` answers at most `cap` (100) records and has no
- * page parameter in the pinned document, so the year is asked as one
- * `period:YYYYMMDD..YYYYMMDD` window first. A window that comes back with
- * `cap` records or more may be cut short, so it is asked again as two
- * halves, down to single days. A single day at the cap cannot be completed
- * this way and is an error: the import then writes nothing rather than a
- * silently incomplete ledger. Every window is read before returning.
+ * page parameter in the pinned document, so the year is asked first with
+ * Moneybird's own `period:this_year`, as the hours read is. An answer with
+ * `cap` records or more may be cut short, so the civil year (`year`) is then
+ * asked as `period:YYYYMMDD..YYYYMMDD` halves, down to single days. A single
+ * day at the cap cannot be completed this way and is an error: the import
+ * then writes nothing rather than a silently incomplete ledger. Every window
+ * is read before returning.
  */
 export async function readFinancialMutations(
   get: MoneybirdGet,
   administrationId: string,
   {
-    year = new Date().getUTCFullYear(),
+    year = civilYear(),
     cap = MUTATIONS_CAP,
     maxRequests = MAX_MUTATION_REQUESTS,
   }: MutationOptions = {},
@@ -327,24 +346,24 @@ export async function readFinancialMutations(
   const byId = new Map<string, FinancialMutation>();
   let requests = 0;
 
-  const read = async (range: DayRange): Promise<void> => {
+  /** `range` undefined: the first, `this_year` window. */
+  const read = async (range?: DayRange): Promise<void> => {
     if (++requests > maxRequests)
       throw new MoneybirdError(
         `Stopped after ${maxRequests} requests for financial mutations; the administration has more than this import handles.`,
       );
-    const label = `financial mutations ${range.from}..${range.to}`;
+    const filter = range ? periodFilter(range) : MUTATIONS_FILTER;
+    const label = `financial mutations ${range ? `${range.from}..${range.to}` : 'this year'}`;
     const body = ok(
-      await get(
-        `${collection}?filter=${encodeURIComponent(periodFilter(range))}`,
-      ),
+      await get(`${collection}?filter=${encodeURIComponent(filter)}`),
       label,
     );
 
     if (body.length >= cap) {
-      const split = halves(range);
+      const split = halves(range ?? yearRange(year));
       if (!split)
         throw new MoneybirdError(
-          `Moneybird sent ${body.length} financial mutations for ${range.from}, its limit for one answer, so this import cannot tell whether that day has more. Nothing was written.`,
+          `Moneybird sent ${body.length} financial mutations for ${range!.from}, its limit for one answer, so this import cannot tell whether that day has more. Nothing was written.`,
         );
       await read(split[0]);
       await read(split[1]);
@@ -355,7 +374,7 @@ export async function readFinancialMutations(
     keep(body, byId);
   };
 
-  await read(yearRange(year));
+  await read();
 
   return [...byId.values()];
 }

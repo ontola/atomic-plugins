@@ -19,6 +19,7 @@
  *   written, and a row is never deleted. Hours synced into such a table
  *   still link to the app's own Projects and People tables.
  */
+import { classes } from '../../../ontology-kit/terms.mjs';
 import { TIME_ENTRY } from './hours.js';
 import { BANK_TRANSACTION } from './mutations.js';
 import { SYNCED_TABLE, type Adopted } from './own.js';
@@ -57,12 +58,35 @@ export function parseCollections(value: JSONValue): Collection[] {
 export const formatCollections = (collections: readonly Collection[]) =>
   COLLECTIONS.filter(c => collections.includes(c)).join(',');
 
+/** A published shared class of ontology-kit (any of them, not only the two this app syncs into). */
+export const isSharedClass = (rowClass: string) =>
+  Object.values(classes).some(klass => klass.subject === rowClass);
+
+/**
+ * Where this view is, decided by the table's class and parent, never by the
+ * parent alone (the app's own hours, projects, people and mutations tables
+ * are children of the App too, and `renders` offers the app on them):
+ *
+ * - `contacts`: the install's table, under the App, with a drive-local row
+ *   class (not a shared one). The place for the contacts import and the
+ *   collections choice.
+ * - `own`: the app's own hours or mutations table, under the App; the one
+ *   collection its class holds is synced into it, with the App's settings
+ *   and no grant.
+ * - `view`: a table of `time-entry-v1` or `bank-transaction-v1` the app did
+ *   not make, reached through Add view: "Sync this table" and a grant.
+ * - `other`: a table this app cannot sync into (its own projects or people
+ *   tables, or any other class).
+ */
+export type Placement = 'contacts' | 'own' | 'view' | 'other';
+
 export interface Layout {
   app: string;
   table: string;
   rowClass: string;
-  /** The table is the app's own (the install's), not one it is a view of. */
-  own: boolean;
+  placement: Placement;
+  /** The one collection a `view` or `own` table holds. */
+  collection?: Collection;
   /** The table's name, for messages. */
   name: string;
 }
@@ -74,12 +98,24 @@ export async function layout(store: PluginStore): Promise<Layout> {
   const app = await store.getApp();
   const table = await store.getResource(data.table);
   const name = table.get(NAME);
+  const underApp = table.get(PARENT) === app;
+  const collection = collectionOf(data.rowClass);
+  const placement: Placement = underApp
+    ? !isSharedClass(data.rowClass)
+      ? 'contacts'
+      : collection
+        ? 'own'
+        : 'other'
+    : collection
+      ? 'view'
+      : 'other';
 
   return {
     app,
     table: data.table,
     rowClass: data.rowClass,
-    own: table.get(PARENT) === app,
+    placement,
+    ...(collection && placement !== 'contacts' ? { collection } : {}),
     name: typeof name === 'string' && name ? name : 'this table',
   };
 }
@@ -94,7 +130,7 @@ export async function findHome(
   where: Layout,
   adopted: Adopted,
 ): Promise<string | undefined> {
-  if (where.own) return where.app;
+  if (where.placement !== 'view') return where.app;
   const property = adopted.properties.get(SYNCED_TABLE.shortname)!;
 
   for (const subject of await store.query({ property, value: where.table })) {
@@ -134,7 +170,7 @@ export async function unbindTable(
   where: Layout,
   adopted: Adopted,
 ): Promise<boolean> {
-  if (where.own) return false;
+  if (where.placement !== 'view') return false;
   const home = await findHome(store, where, adopted);
   if (!home) return false;
   const binding = await store.getResource(home);
@@ -147,7 +183,7 @@ export async function unbindTable(
 
 /**
  * Whether the person's grant on the table the app is a view of covers its
- * columns and every row extra. Always true on the app's own table. Read
+ * columns and every row extra. Always true on the app's own tables. Read
  * fresh each time: the grant lapses when the view is removed, the person who
  * gave it loses write access, the app's key changes or someone takes it back
  * in the tab menu.
@@ -157,7 +193,7 @@ export async function hasRowAccess(
   where: Layout,
   adopted: Adopted,
 ): Promise<boolean> {
-  if (where.own) return true;
+  if (where.placement !== 'view') return true;
   if (typeof store.rowAccess !== 'function') return false;
   const access = await store.rowAccess();
   if (access.status !== 'granted') return false;

@@ -437,7 +437,18 @@ bundle above and does not touch the Bank statements importer's table.
   (both offer themselves on any table of their class; that these two views
   render Moneybird's rows is declared from their READMEs, not checked by an
   e2e here). The App's `renders` lists both shared classes and its
-  `row-extras` the six extras below.
+  `row-extras` the six extras below. Where a view is, is decided by the
+  table's class and parent (`moneybird/binding.ts` `layout`), never by the
+  parent alone, since the hours and mutations tables are children of the App
+  too: the install's table (a drive-local class) is the contacts table and
+  carries the collections choice; opened on its own hours or mutations table
+  (Add view offers it there as well), the app syncs only that table's
+  collection into it, with the App's administration and no grant; its
+  projects and people tables are refused with a note. Only the own tables a
+  sync writes are made: the contacts table's view makes the hours (with
+  projects and people) and mutations tables it imports into; a view on a
+  shared-class table makes only the projects and people tables hours link
+  to, never an empty mutations table.
 - **Syncing a table the app didn't make** ([the pattern](../README.md#syncing-a-table-the-app-didnt-make)):
   added through "+ Add view" on a `time-entry-v1` or `bank-transaction-v1`
   table of the person's own, the app shows "Not synced with Moneybird" and
@@ -468,14 +479,19 @@ bundle above and does not touch the Bank statements importer's table.
   `Link: <…>; rel="next"` only within their collection, for at most 200
   pages. Financial mutations: `GET /{administration_id}/financial_accounts.json`
   once (for the accounts' IBANs), then
-  `GET /{administration_id}/financial_mutations.json?filter=period:YYYYMMDD..YYYYMMDD`
-  for this civil year. That list has **no pagination**: the pinned OpenAPI
-  document gives it only `filter` and says it is "limited to 100 financial
-  mutations" (developer.moneybird.com says the same and points at a
-  synchronization API the read-only document does not carry). So a window
-  that comes back with 100 records or more is asked again as two halves,
-  down to single days, and a single day at the limit is an error ("Nothing
-  was written") rather than a silently incomplete ledger. At most 200
+  `GET /{administration_id}/financial_mutations.json?filter=period:this_year`,
+  Moneybird's own period, the same the hours read uses. That list has **no
+  pagination**: the pinned OpenAPI document gives it only `filter` and says
+  it is "limited to 100 financial mutations" (developer.moneybird.com says
+  the same and points at a synchronization API the read-only document does
+  not carry). So an answer with 100 records or more is asked again as the
+  two halves of the civil year (`filter=period:YYYYMMDD..YYYYMMDD`), down to
+  single days, and a single day at the limit is an error ("Nothing was
+  written") rather than a silently incomplete ledger. The halving windows
+  take the civil year in Europe/Amsterdam (`civilYear()`): Moneybird's
+  `this_year` runs on the administration's clock, which the app does not
+  read, so the two agree except, around New Year, for an administration in
+  another time zone. At most 200
   mutation requests per import (`MAX_MUTATION_REQUESTS`); an administration
   with a few hundred mutations a year needs about a dozen. No overlay was
   added for this: a `pageNumber` declaration would claim something Moneybird
@@ -503,7 +519,9 @@ bundle above and does not touch the Bank statements importer's table.
   Start–End span includes paused time, the class has no field for it). An
   entry without a readable `started_at` is counted as skipped, not written.
   **Mutations** (`bank-transaction-v1`): `bank-account` = the financial
-  account's `identifier` (an IBAN when the bank gives one) else its id,
+  account's `identifier` (an IBAN when the bank gives one); when Moneybird
+  lists no such account, `moneybird:<financial_account_id>`, prefixed because
+  a Moneybird id is not a bank's account id, which the class asks for;
   `bank-currency`, `bank-amount` = Moneybird's `amount` **as the exact
   decimal string it sent** (never parsed to a float; a value that is not
   `-?\d+(\.\d{1,5})?` is skipped, never approximated), `bank-value-date` =
@@ -515,9 +533,9 @@ bundle above and does not touch the Bank statements importer's table.
   (Moneybird gives one date); `money-category` and `money-note` are never
   written. Not imported: the entry's contact and sales invoice; a mutation's
   payments, ledger account bookings, SEPA fields and settlement state.
-- **Period.** Both hours and mutations cover this civil year (Moneybird's own
-  default period). Earlier years are not imported; a stored choice of period
-  is not built (a product question).
+- **Period.** Both hours and mutations ask Moneybird for `period:this_year`,
+  its own default period, by the administration's clock. Earlier years are
+  not imported; a stored choice of period is not built (a product question).
 
 | What                                                                      | Fixture (synthetic)                                                                         | Real Moneybird                                                             |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -536,8 +554,8 @@ bundle above and does not touch the Bank statements importer's table.
 `fixtures/moneybird/synthetic.mjs` is hand-written from the pinned read-only
 OpenAPI document (localthought/openapi-directory@85a61052) and its examples.
 It has invented names, amounts and identifiers; its time entries and
-mutations are dated in the current UTC year, because the app imports this
-year's. `scenario.mjs` serves it to the mock proxy (registered as `moneybird`
+mutations are dated in the current civil year in Europe/Amsterdam, because
+the app imports this year's. `scenario.mjs` serves it to the mock proxy (registered as `moneybird`
 in `localthought/fixtures/index.mjs`). It pages contacts and time entries by
 2 whatever `per_page` asks, fails every second read of an administration's
 contacts on page 2 with 503, and answers at most 100 mutations per period

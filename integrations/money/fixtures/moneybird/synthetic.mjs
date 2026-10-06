@@ -140,8 +140,16 @@ export const contacts = {
   ],
 };
 
-/** The civil year the dated records fall in: the one the app imports. */
-export const YEAR = new Date().getUTCFullYear();
+/**
+ * The civil year the dated records fall in, in Europe/Amsterdam (the clock
+ * the app's halving windows use; `this_year` here means this year too).
+ */
+export const YEAR = Number(
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Amsterdam',
+    year: 'numeric',
+  }).format(new Date()),
+);
 const pad = n => String(n).padStart(2, '0');
 
 /** `YYYY-MM-DD` in YEAR. */

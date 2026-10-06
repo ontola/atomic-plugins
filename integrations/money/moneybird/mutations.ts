@@ -6,8 +6,10 @@
  * ledger, or any other view of that class, shows them.
  *
  * Shared fields, by their published subjects: `bank-account` (the financial
- * account's `identifier`, an IBAN when the bank gives one, else its Moneybird
- * id), `bank-currency`, `bank-amount` (Moneybird's `amount`, the exact
+ * account's `identifier`, an IBAN when the bank gives one; when Moneybird
+ * lists no such account, `moneybird:<financial_account_id>`, prefixed so a
+ * Moneybird id is never mistaken for a bank's account id, which the class
+ * asks for), `bank-currency`, `bank-amount` (Moneybird's `amount`, the exact
  * signed decimal string it sent, never parsed to a float), `bank-value-date`
  * (Moneybird's `date`), `bank-description` (`message`, verbatim),
  * `bank-reference` (`account_servicer_transaction_id`, else
@@ -118,7 +120,7 @@ export function mutationOf(
   const row: MutationRow = {
     identity: mutationSourceId(administrationId, mutation.id),
     name: contraName ?? message.trim() ?? '',
-    account: accounts.get(accountId)?.identifier ?? accountId,
+    account: accounts.get(accountId)?.identifier ?? `moneybird:${accountId}`,
     currency,
     amount,
     valueDate: date,

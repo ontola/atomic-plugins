@@ -89,6 +89,14 @@ export interface OwnTables extends HourTables {
   mutations: string;
 }
 
+export type OwnTableKind = keyof OwnTables;
+export const OWN_TABLES: readonly OwnTableKind[] = [
+  'hours',
+  'projects',
+  'people',
+  'mutations',
+];
+
 /** A child table of `app` whose `classtype` is `klass`, if any. */
 export async function ownTable(
   store: PluginStore,
@@ -106,47 +114,69 @@ export async function ownTable(
   return undefined;
 }
 
-/** The app's own shared-class tables, made under the App where missing. */
+const OWN_TABLE_SPECS: Record<
+  OwnTableKind,
+  { klass: string; name: string; description: string }
+> = {
+  hours: {
+    klass: TIME_ENTRY,
+    name: TABLE_NAMES.hours,
+    description:
+      'This year’s Moneybird time entries, imported read-only by the Moneybird app; rows link to its Projects and People tables.',
+  },
+  projects: {
+    klass: WORK_PROJECT,
+    name: TABLE_NAMES.projects,
+    description:
+      'The Moneybird projects this year’s time entries belong to, named as Moneybird names them.',
+  },
+  people: {
+    klass: WORK_PERSON,
+    name: TABLE_NAMES.people,
+    description:
+      'The Moneybird users who logged this year’s time entries, named as Moneybird names them.',
+  },
+  mutations: {
+    klass: BANK_TRANSACTION,
+    name: TABLE_NAMES.mutations,
+    description:
+      'This year’s Moneybird financial mutations, imported read-only by the Moneybird app.',
+  },
+};
+
+/**
+ * The app's own shared-class tables named in `wanted`, made under the App
+ * where missing. A sync asks only for the tables it writes (hours plus the
+ * two link tables, or mutations, or only the link tables when hours go to a
+ * table the app is a view of), so an open never leaves an empty table it
+ * does not use.
+ */
 export async function ensureTables(
   store: PluginStore,
   app: string,
-): Promise<OwnTables> {
-  const ensure = async (klass: string, name: string, description: string) =>
-    (await ownTable(store, app, klass)) ??
-    (
-      await store.newResource({
-        parent: app,
-        isA: [TABLE_CLASS],
-        propVals: {
-          [NAME]: name,
-          [CLASSTYPE]: klass,
-          [DESCRIPTION]: description,
-        },
-      })
-    ).subject;
+  wanted: readonly OwnTableKind[] = OWN_TABLES,
+): Promise<Partial<OwnTables>> {
+  const tables: Partial<OwnTables> = {};
 
-  return {
-    hours: await ensure(
-      TIME_ENTRY,
-      TABLE_NAMES.hours,
-      'This year’s Moneybird time entries, imported read-only by the Moneybird app; rows link to its Projects and People tables.',
-    ),
-    projects: await ensure(
-      WORK_PROJECT,
-      TABLE_NAMES.projects,
-      'The Moneybird projects this year’s time entries belong to, named as Moneybird names them.',
-    ),
-    people: await ensure(
-      WORK_PERSON,
-      TABLE_NAMES.people,
-      'The Moneybird users who logged this year’s time entries, named as Moneybird names them.',
-    ),
-    mutations: await ensure(
-      BANK_TRANSACTION,
-      TABLE_NAMES.mutations,
-      'This year’s Moneybird financial mutations, imported read-only by the Moneybird app.',
-    ),
-  };
+  for (const kind of OWN_TABLES) {
+    if (!wanted.includes(kind)) continue;
+    const spec = OWN_TABLE_SPECS[kind];
+    tables[kind] =
+      (await ownTable(store, app, spec.klass)) ??
+      (
+        await store.newResource({
+          parent: app,
+          isA: [TABLE_CLASS],
+          propVals: {
+            [NAME]: spec.name,
+            [CLASSTYPE]: spec.klass,
+            [DESCRIPTION]: spec.description,
+          },
+        })
+      ).subject;
+  }
+
+  return tables;
 }
 
 /** The App properties named `shortnames`, from the App class's `recommends`/`requires`. */

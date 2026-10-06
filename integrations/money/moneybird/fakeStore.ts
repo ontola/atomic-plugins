@@ -43,6 +43,8 @@ export const ROW_CLASS = 'did:ad:class-item';
 export const TABLE = 'did:ad:table-items';
 /** A table the person made, of a shared class, which the app is a view of. */
 export const OTHER_TABLE = 'did:ad:table-other';
+/** The app's own table of a shared class (its hours table, say), under the App. */
+export const OWN_SHARED_TABLE = 'did:ad:table-own-shared';
 
 export interface FakeStore extends PluginStore {
   readonly resources: Map<string, Record<string, JSONValue>>;
@@ -60,6 +62,12 @@ export interface FakeOptions {
   mutationCap?: number;
   /** Show the app on OTHER_TABLE, a table of this class, instead of its own. */
   foreign?: { rowClass: string; name?: string };
+  /**
+   * Show the app on OWN_SHARED_TABLE, a table of this class under the App
+   * (as its own hours, projects, people or mutations table is), instead of
+   * the install's contacts table.
+   */
+  ownShared?: { rowClass: string; name?: string };
   /** What the person answers when asked for "Allow editing". */
   ask?: 'allow' | 'deny';
   /** Whether the host has `rowAccess` and `requestRowAccess`. */
@@ -72,6 +80,7 @@ export function fakeStore({
   outage = true,
   mutationCap,
   foreign,
+  ownShared,
   ask = 'allow',
   grants = true,
 }: FakeOptions = {}): FakeStore {
@@ -100,6 +109,12 @@ export function fakeStore({
       [PARENT]: DRIVE,
       [NAME]: foreign.name ?? 'Team table',
       [CLASSTYPE]: foreign.rowClass,
+    });
+  if (ownShared)
+    resources.set(OWN_SHARED_TABLE, {
+      [PARENT]: APP,
+      [NAME]: ownShared.name ?? 'Moneybird hours',
+      [CLASSTYPE]: ownShared.rowClass,
     });
   const writes: FakeStore['writes'] = [];
   const calls: HostProxyRequest[] = [];
@@ -189,7 +204,9 @@ export function fakeStore({
     getData: async () =>
       foreign
         ? { table: OTHER_TABLE, rowClass: foreign.rowClass }
-        : { table: TABLE, rowClass: ROW_CLASS },
+        : ownShared
+          ? { table: OWN_SHARED_TABLE, rowClass: ownShared.rowClass }
+          : { table: TABLE, rowClass: ROW_CLASS },
     async getResource(subject) {
       const stored = resources.get(subject);
       if (!stored) throw new Error(`No resource ${subject}`);

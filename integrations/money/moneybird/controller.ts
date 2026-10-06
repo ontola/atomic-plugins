@@ -9,7 +9,6 @@
  */
 import {
   bindTable,
-  collectionOf,
   COLLECTION_LABELS,
   COLLECTIONS,
   ensureRowAccess,
@@ -22,6 +21,7 @@ import {
   type Collection,
   type Layout,
 } from './binding.js';
+import { WORK_PERSON, WORK_PROJECT } from './hours.js';
 import { adopt, COLLECTIONS_TERM, ensureTables, type Adopted } from './own.js';
 import { readAdministrations, type Administration } from './read.js';
 import {
@@ -171,11 +171,12 @@ export function createController(
   };
 
   const term = (shortname: string) => adopted!.properties.get(shortname)!;
-  const tableName = () => (where?.own ? undefined : where?.name);
+  /** The table's name, on every table but the contacts one (the install's). */
+  const tableName = () =>
+    where && where.placement !== 'contacts' ? where.name : undefined;
 
-  /** The one collection a table the app is a view of can hold. */
-  const fixed = (): Collection | undefined =>
-    where && !where.own ? collectionOf(where.rowClass) : undefined;
+  /** The one collection a shared-class table (a view, or the app's own) holds. */
+  const fixed = (): Collection | undefined => where?.collection;
 
   const settings = async () => {
     const resource = await store.getResource(home!);
@@ -265,18 +266,20 @@ export function createController(
         where = await layout(store);
         adopted = await adopt(store);
 
-        if (!where.own) {
-          const collection = collectionOf(where.rowClass);
+        if (where.placement === 'other') {
+          set({
+            kind: 'unsupported',
+            message:
+              where.rowClass === WORK_PROJECT || where.rowClass === WORK_PERSON
+                ? `“${where.name}” is this app’s own ${where.rowClass === WORK_PROJECT ? 'projects' : 'people'} table, filled from the hours it imports; open the app on its hours table or its contacts table instead.`
+                : `“${where.name}” is not a table this app can sync: its rows are neither time entries (time-entry-v1) nor bank transactions (bank-transaction-v1).`,
+          });
 
-          if (!collection) {
-            set({
-              kind: 'unsupported',
-              message: `“${where.name}” is not a table this app can sync: its rows are neither time entries (time-entry-v1) nor bank transactions (bank-transaction-v1).`,
-            });
+          return {};
+        }
 
-            return {};
-          }
-
+        if (where.placement === 'view') {
+          const collection = where.collection!;
           home = await findHome(store, where, adopted);
 
           if (!home) {
@@ -307,9 +310,8 @@ export function createController(
      * the host's grant, makes the binding, then goes on as on an open.
      */
     async syncTable(): Promise<void> {
-      if (!where || !adopted || where.own) return;
-      const collection = collectionOf(where.rowClass);
-      if (!collection) return;
+      if (!where || !adopted || where.placement !== 'view') return;
+      const collection = where.collection!;
 
       try {
         const answer = await ensureRowAccess(store, where, adopted);
@@ -431,21 +433,37 @@ export function createController(
       const get = relayGet(proxy, connection);
       const results: Results = {};
 
+      // Only the own tables this view needs are made: the contacts table's
+      // view makes the hours (plus projects and people) and mutations tables
+      // it imports into; a view on a shared-class table makes only the
+      // projects and people tables hours link to.
       for (const collection of collections) {
         try {
-          if (collection === 'contacts')
+          if (collection === 'contacts') {
+            if (where.placement !== 'contacts')
+              throw new Error(
+                'Contacts are imported from the app’s own contacts table.',
+              );
             results.contacts = await syncContacts(store, get, administration);
-          else if (collection === 'hours') {
-            const own = await ensureTables(store, where.app);
+          } else if (collection === 'hours') {
+            const own = await ensureTables(
+              store,
+              where.app,
+              chosen === 'hours'
+                ? ['projects', 'people']
+                : ['hours', 'projects', 'people'],
+            );
             results.hours = await syncHours(store, get, administration, {
-              ...own,
-              hours: chosen === 'hours' ? where.table : own.hours,
+              hours: chosen === 'hours' ? where.table : own.hours!,
+              projects: own.projects!,
+              people: own.people!,
             });
           } else {
             const table =
               chosen === 'mutations'
                 ? where.table
-                : (await ensureTables(store, where.app)).mutations;
+                : (await ensureTables(store, where.app, ['mutations']))
+                    .mutations!;
             results.mutations = await syncMutations(
               store,
               get,
