@@ -55,6 +55,10 @@ pub(crate) enum StoredCredential {
         key: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheme: Option<String>,
+        /// The scheme's `in` and `name` when the key was entered; while
+        /// present, the key is sent only to that same place.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<crate::providers::ApiKeyPlacement>,
     },
     /// A token for an `http` `bearer` scheme, sent as
     /// `Authorization: Bearer <token>`. `scheme` binds it as for an API key.
@@ -468,19 +472,26 @@ async fn forward_inner(
             CredentialInjection::Bearer(access_token.clone())
         }
         StoredCredential::ApiKey {
-            key, scheme: bound, ..
+            key,
+            scheme: bound,
+            placement,
+            ..
         } => {
             let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
                 state.catalog.security_scheme(platform)
             else {
                 return Err(ApiError::Internal);
             };
-            // A key entered for one apiKey scheme is not sent under another
-            // (rows written before the binding have none, and are sent
+            // A key entered for one apiKey scheme is not sent under another,
+            // nor to another header or query parameter than it was entered
+            // for (rows written before the binding have none, and are sent
             // as before).
             if bound
                 .as_ref()
                 .is_some_and(|bound| *bound != scheme.scheme_name)
+                || placement
+                    .as_ref()
+                    .is_some_and(|placement| *placement != scheme.placement())
             {
                 return Err(ApiError::CredentialRefreshFailed);
             }
@@ -991,6 +1002,7 @@ mod tests {
                 password: "pat-secret".into(),
             },
             StoredCredential::ApiKey {
+                placement: None,
                 scheme: None,
                 provider: "service".into(),
                 key: "pat-secret".into(),
@@ -1260,9 +1272,20 @@ mod tests {
             password: "api_token".into(),
         };
         let api_key = |scheme: Option<&str>| StoredCredential::ApiKey {
+            placement: None,
             provider: "clockify".into(),
             key: "clockify-secret".into(),
             scheme: scheme.map(str::to_owned),
+        };
+        // Bound to the right scheme, and to where the key goes.
+        let placed = |location: &str, name: &str| StoredCredential::ApiKey {
+            placement: Some(crate::providers::ApiKeyPlacement {
+                location: location.into(),
+                name: name.into(),
+            }),
+            provider: "clockify".into(),
+            key: "clockify-secret".into(),
+            scheme: Some("serviceToken".into()),
         };
         let api_key_scheme = || json!({"type": "apiKey", "in": "header", "name": "X-Api-Key"});
 
@@ -1277,6 +1300,8 @@ mod tests {
             (basic_scheme(), basic(None, None)),
             (api_key_scheme(), api_key(Some("serviceToken"))),
             (api_key_scheme(), api_key(None)),
+            // Header names compare case-insensitively.
+            (api_key_scheme(), placed("header", "x-api-key")),
         ] {
             let (status, _) = status(scheme.clone(), credential).await;
             assert_eq!(status, StatusCode::OK, "{scheme}");
@@ -1295,6 +1320,8 @@ mod tests {
             (bearer_scheme(), bearer(Some("otherToken"))),
             (basic_scheme(), basic(Some("otherToken"), Some(declared()))),
             (api_key_scheme(), api_key(Some("otherKey"))),
+            (api_key_scheme(), placed("query", "X-Api-Key")),
+            (api_key_scheme(), placed("header", "x-other-key")),
         ];
         for layout in other_layouts {
             refused.push((basic_scheme(), basic(Some("serviceToken"), Some(layout))));
@@ -1398,6 +1425,7 @@ mod tests {
 
     fn api_key_credential() -> Vec<u8> {
         serde_json::to_vec(&StoredCredential::ApiKey {
+            placement: None,
             scheme: None,
             provider: "clockify".into(),
             key: "clockify-secret".into(),
@@ -1550,6 +1578,7 @@ mod tests {
         })
         .await;
         let bot = connect(StoredCredential::ApiKey {
+            placement: None,
             scheme: None,
             provider: "mixed".into(),
             key: "Bot bot-token".into(),

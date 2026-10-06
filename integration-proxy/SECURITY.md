@@ -95,22 +95,28 @@ another credential. It reuses the API
 key's controls: the token is typed into the proxy's consent page, never into
 the hub or a plugin frame; the declared key check is called once before
 anything is stored (`401`/`403` asks again without spending the consent,
-anything else stores nothing); one consent makes at most 5 key checks, for
-API keys and tokens alike, so a consent page cannot be used to try keys or
-username and token pairs against the provider without limit (the fifth
-rejection spends the consent; the attempt records are single-use rows in
-`used_challenges`, so the cap holds across instances); the credential is sealed in the same
+anything else stores nothing); one consent page makes at most 5 key checks,
+for API keys and tokens alike (the fifth rejection spends the consent; the
+attempt records are single-use rows in `used_challenges`, so the cap holds
+across instances and concurrent submissions). The cap bounds one consent
+page, not a client: `GET /connect` needs no signature, so a script can open
+new consent pages and make 5 checks with each. The proxy has no per-client
+or per-IP rate limit yet, so it does not bound how many keys or username
+and token pairs one client can try against a provider through it. The
+credential is sealed in the same
 XChaCha20-Poly1305 envelope bound to its connection row, and no response
 returns it. On a proxied request the proxy builds the `Authorization` header
 itself (reqwest marks it sensitive), only for a catalog-allowlisted
 operation (and, with a profile, only a covered one), and only while the
 platform still resolves to an `http` scheme of the same kind and, for a
 credential stored with a binding (every new API key, bearer token and Basic
-credential), the same scheme name and declared Basic layout it was entered
-for; otherwise it answers `401 credential_refresh_failed`. A catalog change
-that moves a platform to another scheme, or changes which half of a Basic
-credential is the token or a fixed half, therefore does not send an old
-credential where it was not entered. Credentials stored before the binding
+credential), the same scheme name it was entered for, and the same declared
+Basic layout or, for an API key, the same `in` and `name` (header names
+compared case-insensitively); otherwise it answers
+`401 credential_refresh_failed`. A catalog change that moves a platform to
+another scheme, moves an API key to another header or query parameter, or
+changes which half of a Basic credential is the token or a fixed half,
+therefore does not send an old credential where it was not entered. Credentials stored before the binding
 existed have none and are checked by kind only. The caller's `Authorization` is
 never forwarded: anything but `Capability …` is refused with
 `401 unsupported_authorization`, and a capability is consumed by the proxy.

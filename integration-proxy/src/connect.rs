@@ -757,6 +757,7 @@ pub async fn authorize(
             let credential = crate::proxy::StoredCredential::ApiKey {
                 provider: consent.request.platform.clone(),
                 key: key.to_owned(),
+                placement: Some(api_key.placement()),
                 scheme: Some(api_key.scheme_name),
             };
             let code =
@@ -1484,10 +1485,25 @@ mod tests {
         assert_eq!(record.owner, owner.id());
         let credential: crate::proxy::StoredCredential =
             serde_json::from_slice(&record.credential).unwrap();
-        assert!(matches!(
-            credential,
-            crate::proxy::StoredCredential::ApiKey { ref key, .. } if key == "clockify-secret"
-        ));
+        let crate::proxy::StoredCredential::ApiKey {
+            key,
+            scheme,
+            placement,
+            ..
+        } = &credential
+        else {
+            panic!("{credential:?}");
+        };
+        assert_eq!(key, "clockify-secret");
+        // Bound to the scheme it was entered for, and to where it goes.
+        assert_eq!(scheme.as_deref(), Some("clockifyApiKey"));
+        assert_eq!(
+            *placement,
+            Some(crate::providers::ApiKeyPlacement {
+                location: "header".into(),
+                name: "x-api-key".into(),
+            })
+        );
         // Single use.
         let reused = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
         assert_eq!(reused.status(), StatusCode::BAD_REQUEST);
@@ -1517,6 +1533,25 @@ mod tests {
     /// A stand-in provider for the key check: `/api/v1/user` answers by the
     /// key it gets, in the `X-Api-Key` header or the query.
     async fn key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        key_check_upstream_counting(Default::default()).await
+    }
+
+    /// Wraps a stand-in provider so `counter` counts the requests it gets.
+    fn counting(
+        app: axum::Router,
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> axum::Router {
+        app.layer(tower::util::MapRequestLayer::new(
+            move |request: axum::http::Request<axum::body::Body>| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                request
+            },
+        ))
+    }
+
+    async fn key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = axum::Router::new().route(
@@ -1558,6 +1593,7 @@ mod tests {
                 },
             ),
         );
+        let app = counting(app, counter);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (format!("http://{address}"), server)
     }
@@ -1854,6 +1890,12 @@ mod tests {
     /// A stand-in provider for an `http` scheme's key check: `/api/v1/user`
     /// answers by the `Authorization` header it gets.
     async fn http_key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        http_key_check_upstream_counting(Default::default()).await
+    }
+
+    async fn http_key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let accepted = [
@@ -1884,6 +1926,7 @@ mod tests {
                 }
             }),
         );
+        let app = counting(app, counter);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (format!("http://{address}"), server)
     }
@@ -2252,15 +2295,20 @@ mod tests {
     /// One consent makes at most [`MAX_KEY_CHECKS`] key checks: the last
     /// rejection spends it and says so, and nothing is checked after that,
     /// for an API key and for an `http` token alike.
-    #[tokio::test]
+    ///
+    /// The cap is per consent page, not per client: anyone can open another
+    /// consent page (SECURITY.md).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn postgres_a_consent_allows_at_most_five_key_checks() {
+        use std::sync::atomic::Ordering::SeqCst;
         let security = crate::test_support::security().await;
         for http in [false, true] {
+            let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let (upstream, server) = if http {
-                http_key_check_upstream().await
+                http_key_check_upstream_counting(checks.clone()).await
             } else {
-                key_check_upstream().await
+                key_check_upstream_counting(checks.clone()).await
             };
             let (document, wrong, good, asked_again) = if http {
                 (
@@ -2284,26 +2332,31 @@ mod tests {
                 document,
                 serde_json::json!({}),
             );
-            let consent = Consent {
-                request: api_key_request(),
-                csrf: random(),
-                expires: crate::now_secs() + 600,
+            let new_consent = || {
+                let consent = Consent {
+                    request: api_key_request(),
+                    csrf: random(),
+                    expires: crate::now_secs() + 600,
+                };
+                let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                    CONSENT_COOKIE,
+                    serde_json::to_string(&consent).unwrap(),
+                ));
+                (consent, jar)
             };
-            let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
-                CONSENT_COOKIE,
-                serde_json::to_string(&consent).unwrap(),
-            ));
-            let approve = |key: &str| {
+            let submit = |s: &AppState, jar: &PrivateCookieJar, csrf: &str, key: &str| {
                 authorize(
                     State(s.clone()),
                     jar.clone(),
                     HeaderMap::new(),
                     Form(Approval {
-                        csrf: consent.csrf.clone(),
+                        csrf: csrf.to_owned(),
                         ..token_approval(key, None)
                     }),
                 )
             };
+            let (consent, jar) = new_consent();
+            let approve = |key: &str| submit(&s, &jar, &consent.csrf, key);
             // A malformed key is refused before any check and costs nothing.
             assert_eq!(approve("  ").await.status(), StatusCode::BAD_REQUEST);
             for attempt in 1..MAX_KEY_CHECKS {
@@ -2319,12 +2372,32 @@ mod tests {
                 .nonce_used(&format!("consent:{}", consent.csrf))
                 .await
                 .unwrap());
-            // Even a good key is not checked or accepted now. With the
-            // provider gone, a check would answer "could not check".
-            server.abort();
+            // Even a good key is not checked or accepted now.
             let after = approve(good).await;
             assert_eq!(after.status(), StatusCode::BAD_REQUEST);
             assert_eq!(body_text(after).await, TOO_MANY_KEY_CHECKS);
+            // The provider was asked exactly five times.
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+
+            // Thirty concurrent submissions of one fresh consent: still
+            // exactly five checks, and none is accepted.
+            checks.store(0, SeqCst);
+            let (consent, jar) = new_consent();
+            let tasks: Vec<_> = (0..30)
+                .map(|_| {
+                    let request = submit(&s, &jar, &consent.csrf, wrong);
+                    tokio::spawn(async move { request.await.status() })
+                })
+                .collect();
+            for task in tasks {
+                let status = task.await.unwrap();
+                assert!(
+                    matches!(status, StatusCode::OK | StatusCode::BAD_REQUEST),
+                    "{status}"
+                );
+            }
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+            server.abort();
         }
     }
 
@@ -2601,6 +2674,7 @@ mod tests {
         let security = crate::test_support::security().await;
         let s = state(Some(security.clone()));
         let credential = crate::proxy::StoredCredential::ApiKey {
+            placement: None,
             scheme: None,
             provider: "github-issues".into(),
             key: "k".into(),
@@ -2674,6 +2748,7 @@ mod tests {
             &security,
             &request(),
             crate::proxy::StoredCredential::ApiKey {
+                placement: None,
                 scheme: None,
                 provider: "github-issues".into(),
                 key: "k".into(),

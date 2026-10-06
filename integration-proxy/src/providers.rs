@@ -58,6 +58,30 @@ pub enum ApiKeyLocation {
     Cookie,
 }
 
+/// Where a stored API key was declared to go when it was entered: the
+/// scheme's `in` and `name` (a header name lower-cased, since header names
+/// are case-insensitive). A stored key is bound to it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ApiKeyPlacement {
+    #[serde(rename = "in")]
+    pub location: String,
+    pub name: String,
+}
+
+impl ApiKeyScheme {
+    pub fn placement(&self) -> ApiKeyPlacement {
+        let (location, name) = match self.location {
+            ApiKeyLocation::Header => ("header", self.name.to_ascii_lowercase()),
+            ApiKeyLocation::Query => ("query", self.name.clone()),
+            ApiKeyLocation::Cookie => ("cookie", self.name.clone()),
+        };
+        ApiKeyPlacement {
+            location: location.into(),
+            name,
+        }
+    }
+}
+
 impl ApiKeyScheme {
     /// Read API-key capabilities from the composed document, never from platform names.
     pub fn from_document(document: &Value, selected_scheme: Option<&str>) -> Result<Self, String> {

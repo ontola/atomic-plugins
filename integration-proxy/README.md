@@ -101,10 +101,12 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   document's own `https` server, no redirects, 10-second timeout. A `401`
   or `403` answers the consent page again (`200`) saying the key was not
   accepted, without spending the consent; any other non-2xx, a redirect or
-  no answer is a `400` and nothing is stored. One consent makes at most 5
-  key checks (unreleased): the fifth rejection spends it and answers `400`
-  "Too many attempts to enter a key for this connection; start again from
-  your hub", and nothing is checked for it after that. A 2xx may give a label (at most
+  no answer is a `400` and nothing is stored. One consent page makes at
+  most 5 key checks (unreleased): the fifth rejection spends it and answers
+  `400` "Too many attempts to enter a key for this connection; start again
+  from your hub", and nothing is checked for it after that. This bounds one
+  consent page, not a client: anyone can open a new one, and there is no
+  per-client or per-IP rate limit yet (SECURITY.md). A 2xx may give a label (at most
   200 characters, sealed with the connection). A platform whose scheme is
   `type: http` with `scheme: bearer` or `scheme: basic` (unreleased; see
   "HTTP tokens" below) works the same way: the page asks for an API token
@@ -422,7 +424,8 @@ like an `apiKey` scheme: a personal access token pasted on the consent page.
   and, for credentials stored by the unreleased version, with the same
   scheme name and (Basic) the same declared layout (its fixed halves and
   which half is the token; not the username field's label). API keys stored
-  by it are bound to their scheme name the same way. Otherwise it answers
+  by it are bound to their scheme name and to the scheme's `in` and `name`
+  (header names case-insensitive) the same way. Otherwise it answers
   `401 credential_refresh_failed` (connect again). Credentials stored
   before carry no binding and are sent as before.
   The caller's own `Authorization` is never forwarded (above).
