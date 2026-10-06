@@ -38,15 +38,7 @@ import {
   type Ui,
 } from './views.js';
 
-const RETRY_FIRST = 4 * 60;
-const RETRY_MAX = 60 * 60;
-/**
- * After a GitHub rate limit (`rateLimit.ts`): the retry runs at GitHub's
- * `until`, but never sooner than this after the failure, doubled per
- * consecutive rate-limited failure up to `RETRY_MAX`, so a limit without a
- * usable header cannot make the app knock once a minute for hours.
- */
-const RATE_RETRY_FIRST = 60;
+import { climbed, freshLadder, planRetry } from './retry.js';
 
 const freshDrafts = (): Drafts => ({
   tab: 'preview',
@@ -84,7 +76,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   /** Set once the view's first sync has settled; later problems are alerts. */
   let settled = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let retryDelay = RETRY_FIRST;
+  let ladder = freshLadder();
   let retryAt: number | undefined;
   let prefsTimer: ReturnType<typeof setTimeout> | undefined;
   let previous: Map<string, string> | undefined;
@@ -159,43 +151,30 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     if (key) byKey(key)?.focus();
   };
 
-  let rateRetryDelay = RATE_RETRY_FIRST;
-
+  /** The automatic retry after a failure or a rate limit (`retry.ts`). */
   const scheduleRetry = (state: ViewState) => {
-    const problem = state.kind === 'ready' ? state.problem : undefined;
-    const failed = problem?.kind === 'failed';
-    const limited = problem?.kind === 'rate-limited';
+    const plan = planRetry(state, retryTimer !== undefined, ladder, Date.now());
+    if (plan.kind === 'keep') return;
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = undefined;
+    retryAt = undefined;
 
-    if (!failed && !limited) {
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = undefined;
-      retryAt = undefined;
-
-      if (state.kind === 'ready' && !state.problem && !state.busy) {
-        retryDelay = RETRY_FIRST;
-        rateRetryDelay = RATE_RETRY_FIRST;
-      }
+    if (plan.kind === 'clear') {
+      if (plan.reset) ladder = freshLadder();
 
       return;
     }
 
-    if (retryTimer) return;
-    const now = Date.now();
-    // GitHub's own time wins over the ladder, within the same ceiling.
-    const delay = limited
-      ? Math.min(
-          RETRY_MAX,
-          Math.max(rateRetryDelay, Math.ceil((problem.until - now) / 1000)),
-        )
-      : retryDelay;
-    retryAt = now + delay * 1000;
-    retryTimer = setTimeout(() => {
-      retryTimer = undefined;
-      retryAt = undefined;
-      if (limited) rateRetryDelay = Math.min(RETRY_MAX, rateRetryDelay * 2);
-      else retryDelay = Math.min(RETRY_MAX, retryDelay * 2);
-      void controller.sync();
-    }, delay * 1000);
+    retryAt = plan.at;
+    retryTimer = setTimeout(
+      () => {
+        retryTimer = undefined;
+        retryAt = undefined;
+        ladder = climbed(ladder, plan.limited);
+        void controller.sync();
+      },
+      Math.max(0, plan.at - Date.now()),
+    );
   };
 
   /** Rows whose content changed since the last result, for the 1.5 s highlight. */

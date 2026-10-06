@@ -135,10 +135,15 @@ describe('what counts as a GitHub rate limit', () => {
 
   it('reads retry-after as seconds or an HTTP date, and never waits less than a second or more than an hour', () => {
     expect(retryAfterMs('120', NOW)).toBe(120_000);
+    // An IMF-fixdate (`toUTCString` writes one); nothing else is a date.
     expect(retryAfterMs(new Date(NOW + 90_000).toUTCString(), NOW)).toBe(
       90_000,
     );
+    expect(retryAfterMs('Mon, 06 Oct 2026 11:00:00 GMT', NOW)).toBe(0);
     expect(retryAfterMs('soon', NOW)).toBeUndefined();
+    expect(retryAfterMs('2026-10-06T12:01:30Z', NOW)).toBeUndefined();
+    expect(retryAfterMs('90.5', NOW)).toBeUndefined();
+    expect(retryAfterMs('-5', NOW)).toBeUndefined();
     expect(
       rateLimitOf({ status: 429, headers: { 'retry-after': '0' } }, NOW)!.until,
     ).toBe(NOW + MIN_WAIT_MS);

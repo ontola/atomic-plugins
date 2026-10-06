@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import { endpoint } from '../devonian/github-issues/adapter.js';
+import { approvalKey } from '../devonian/github-issues/review.mjs';
 import { frameStore } from './frameStore.js';
 import { SyncState, type ViewPrefs } from './state.js';
 import type { Overlay } from './frameStore.js';
@@ -137,6 +138,12 @@ export type ViewState =
       problem?: Problem;
       /** When `problem` was raised, for "Sync failed 4 min ago". */
       failedAt?: number;
+      /**
+       * When a pass last completed, from the sync resource's
+       * `github-last-sync` (so it survives a reload); `last.at` once a pass
+       * completed in this view.
+       */
+      syncedAt?: number;
       /**
        * While a pass waits out a short GitHub rate limit before repeating
        * a request (`rateLimit.ts`): until when, for the card.
@@ -349,12 +356,16 @@ export function createController(
   /** Optimistic changes per touched row, re-applied until a pass has seen it. */
   const changes = new Map<string, (row: IssueRow) => IssueRow>();
   /**
-   * Review approvals a rate-limited send could not use (`rateLimit.ts`):
-   * the next pass, on the retry timer or "Sync now", sends them without a
+   * Review approvals a rate-limited send could not use (`rateLimit.ts`), as
+   * `approvalKey(subject, key)`: the next pass, on the retry timer or "Sync
+   * now", sends exactly those rows with exactly that content, without a
    * second review. Any other outcome clears them; a change edited since has
-   * another key and is held again.
+   * another key and is held again, and a second row with the same content
+   * is another subject, so it is held too.
    */
   let carried: Set<string> | undefined;
+  /** The sync resource's `github-last-sync`, read on open, set per pass. */
+  let syncedAt: number | undefined;
 
   const set = (next: ViewState) => {
     current = next;
@@ -386,6 +397,9 @@ export function createController(
       overlay: new Map(),
     };
     prefs = { ...state.state.view };
+    const stamped = provisioned.sync.get(provisioned.tracker.properties.lastSync);
+    const at = typeof stamped === 'string' ? Date.parse(stamped) : NaN;
+    syncedAt = Number.isFinite(at) ? at : undefined;
 
     // A table made by 0.1.x: its rows become issue-v1 rows in place, once,
     // through the same frame store the passes use (#177 §5). The sync
@@ -465,6 +479,7 @@ export function createController(
     overlay: s.overlay,
     onImported: showImported,
     rateLimits: { now, onLimit: showLimit },
+    lastSyncProperty: s.tracker.properties.lastSync,
   });
 
   /** A short GitHub rate limit the running pass is waiting out, for the card. */
@@ -570,16 +585,19 @@ export function createController(
         for (const subject of changes.keys())
           if (!touched.includes(subject)) changes.delete(subject);
 
+        if (result) syncedAt = now();
+
         return set({
           kind: 'ready',
           connectionId: ready.connectionId,
           repository: ready.repository,
           ...(result
-            ? { last: { at: now(), result: withChanges(result) } }
+            ? { last: { at: syncedAt!, result: withChanges(result) } }
             : after.last
               ? { last: after.last }
               : {}),
           ...(touched.length ? { touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
         });
       } catch (error) {
         // A row write refused because the grant lapsed during the pass.
@@ -615,6 +633,7 @@ export function createController(
           repository: ready.repository,
           ...(last ? { last } : {}),
           ...(after.touched?.length ? { touched: after.touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
           problem,
           failedAt: now(),
         });
@@ -740,6 +759,7 @@ export function createController(
         kind: 'ready',
         connectionId: connection.connectionId,
         repository,
+        ...(syncedAt ? { syncedAt } : {}),
       });
     },
 
@@ -897,7 +917,9 @@ export function createController(
 
     send() {
       const held = current.kind === 'ready' ? current.last?.result.held : [];
-      const approved = new Set((held ?? []).map(h => h.key));
+      const approved = new Set(
+        (held ?? []).map(h => approvalKey(h.subject, h.key)),
+      );
       carried = approved;
 
       return run('sending', (s, ready) =>

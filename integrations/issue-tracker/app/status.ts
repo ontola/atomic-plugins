@@ -120,22 +120,34 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
 
   const result = state.last?.result;
   const rows = result?.rows ?? [];
-  const synced = state.last?.at ? state.last.at : undefined;
+  // A pass that completed in this view, else the stamp a reload read back.
+  const synced = state.last?.at || state.syncedAt || undefined;
+  // `issues` counts bound records only once a pass completed; the rows a
+  // reload read back (`at: 0`) come without that count.
+  const completed = !!state.last?.at && !!result;
   const status: SyncStatus = {
     provider: PROVIDER,
     writeBack: 'after-review',
     rowNoun: ['issue', 'issues'],
     rows: rows.length,
-    rowsScope: `in this table, ${result?.issues ?? 0} synced with ${state.repository}`,
+    rowsScope: completed
+      ? `in this table, ${result.issues} synced with ${state.repository}`
+      : 'in this table',
   };
 
-  if (state.problem?.kind === 'reconnect')
-    status.writeBackNote =
-      'GitHub no longer accepts this connection, so nothing is read or sent until you reconnect.';
-
-  // The last sync: the problem that stopped it, or the pass that completed.
   const p = state.problem;
 
+  if (p?.kind === 'reconnect')
+    status.writeBackNote =
+      'GitHub no longer accepts this connection, so nothing is read or sent until you reconnect.';
+  else if (p?.kind === 'conflict')
+    status.writeBackNote =
+      'Sending is paused until the conflict below is settled.';
+  else if (p?.kind === 'paused')
+    status.writeBackNote =
+      'Sending is paused until the problem below is looked at; nothing is resent on its own.';
+
+  // The last sync: the problem that stopped it, or the pass that completed.
   if (p && state.failedAt !== undefined) {
     status.last = {
       ok: false,
@@ -144,12 +156,12 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
       nextStep: nextStep(p, input),
       ...(synced ? { lastGood: synced } : {}),
     };
-  } else if (synced && result) {
+  } else if (completed) {
     const { addedHere, updatedHere, issues, comments } = result;
 
     status.last = {
       ok: true,
-      at: synced,
+      at: synced!,
       counts: {
         added: addedHere,
         updated: updatedHere,
@@ -159,6 +171,10 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
         unchanged: Math.max(0, issues + comments - addedHere - updatedHere),
       },
     };
+  } else if (synced) {
+    // Before this view's first pass: when a pass last completed, without
+    // counts (the stamp has none).
+    status.last = { ok: true, at: synced };
   }
 
   if (state.busy === 'syncing')
@@ -171,10 +187,12 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
   else if (state.busy === 'resolving') status.busy = 'Settling the conflict…';
 
   // The write queue: changes held for review, edits a pass has not seen
-  // yet, and what really may have reached GitHub.
+  // yet, and what really may have reached GitHub. A held write that was let
+  // through once and got no answer is uncertain, not pending: it is counted
+  // once.
   const held = result?.held ?? [];
   const unconfirmed = held.filter(h => h.unconfirmed).length;
-  const pending = held.length + (state.touched?.length ?? 0);
+  const pending = held.length - unconfirmed + (state.touched?.length ?? 0);
   const uncertain = unconfirmed + (result?.uncertain.length ?? 0);
   status.writes = {
     pending,

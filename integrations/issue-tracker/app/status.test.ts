@@ -165,9 +165,7 @@ describe('the ready state: edits are sent after review', () => {
     const fresh = ready({ last: undefined });
     expect(syncStatusFor({ state: fresh, now: NOW }).last).toBeUndefined();
     expect(lines(fresh).headline).toBe('Not synced yet');
-    expect(lines(fresh).rows).toBe(
-      '0 issues in this table, 0 synced with octo/repo',
-    );
+    expect(lines(fresh).rows).toBe('0 issues in this table');
     expect(lines(ready({ last: undefined, busy: 'syncing' })).headline).toBe(
       'Importing…',
     );
@@ -180,10 +178,35 @@ describe('the ready state: edits are sent after review', () => {
         }),
       ).headline,
     ).toBe('Importing… 40 issues so far');
-    // A reload into rows read without a pass (`at: 0`): no "Synced".
-    expect(lines(ready({ last: { at: 0, result: result() } })).headline).toBe(
-      'Not synced yet',
-    );
+    // A reload into rows read without a pass (`at: 0`): no "Synced", and
+    // no "synced with" count from the empty seed result.
+    const reloaded = ready({ last: { at: 0, result: result() } });
+    expect(lines(reloaded).headline).toBe('Not synced yet');
+    expect(lines(reloaded).rows).toBe('2 issues in this table');
+  });
+
+  it('names the last pass a reload read back from github-last-sync, without counts', () => {
+    const state = ready({
+      last: { at: 0, result: result() },
+      syncedAt: NOW - 2 * 24 * 60 * MIN,
+    });
+    const status = syncStatusFor({ state, now: NOW });
+    expect(status.last).toEqual({ ok: true, at: NOW - 2 * 24 * 60 * MIN });
+    expect(lines(state).headline).toBe('Synced 2 days ago');
+    expect(lines(state).counts).toBeUndefined();
+
+    // Its first failed pass keeps that as the last good sync.
+    const failed = ready({
+      last: { at: 0, result: result() },
+      syncedAt: NOW - 2 * 24 * 60 * MIN,
+      problem: { kind: 'failed', message: '502' },
+      failedAt: NOW,
+    });
+    expect(syncStatusFor({ state: failed, now: NOW }).last).toMatchObject({
+      ok: false,
+      at: NOW,
+      lastGood: NOW - 2 * 24 * 60 * MIN,
+    });
   });
 
   it('says what runs now', () => {
@@ -219,9 +242,10 @@ describe('the ready state: edits are sent after review', () => {
       now: NOW,
       onReview: () => opened.push('review'),
     });
-    // 2 held + 1 touched; only the unconfirmed one and the unanswered
-    // create may have been applied.
-    expect(status.writes).toMatchObject({ pending: 3, uncertain: 2 });
+    // 1 held for review + 1 touched; the unconfirmed held write and the
+    // unanswered create may have been applied, so they are uncertain, and
+    // counted once.
+    expect(status.writes).toMatchObject({ pending: 2, uncertain: 2 });
     expect(status.writes?.review?.label).toBe('Review and send');
     status.writes?.review?.onClick();
     expect(opened).toEqual(['review']);
@@ -239,7 +263,7 @@ describe('the ready state: edits are sent after review', () => {
       now: NOW,
       onReview: () => {},
     });
-    expect(status.writes).toEqual({ pending: 1, uncertain: 1 });
+    expect(status.writes).toEqual({ pending: 0, uncertain: 1 });
   });
 
   it('groups the rows the sync leaves out, by reason, and names them', () => {
@@ -338,6 +362,11 @@ describe('problems keep the gap visible', () => {
         'Sync paused: title changed both here and on GitHub since the last sync.',
       nextStep: 'Review the conflict below.',
     });
+    // Still after review, but not now: the note says so.
+    expect(conflict.writeBack).toBe('after-review');
+    expect(conflict.writeBackNote).toBe(
+      'Sending is paused until the conflict below is settled.',
+    );
 
     const reconnect = syncStatusFor({
       state: failed({ kind: 'reconnect', message: '401' }),
@@ -362,6 +391,7 @@ describe('problems keep the gap visible', () => {
         'Sync paused: a change was sent to GitHub, but no answer came back.',
       nextStep: 'Check GitHub, then sync again; nothing is resent on its own.',
     });
+    expect(uncertain.writeBackNote).toMatch(/^Sending is paused until/);
 
     const rejected = syncStatusFor({
       state: failed({

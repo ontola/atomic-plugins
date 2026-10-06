@@ -51,6 +51,8 @@ export class Bridge {
     this.records = copy(snapshot?.records ?? {});
     /** Writes a port held for review in the last pass, by subject. See review.mjs. */
     this.held = new Map();
+    /** The record whose saved operation `attempt` is finishing, for the review gate's `subjectOf`. */
+    this.publishing = undefined;
   }
 
   scope(side, entity) {
@@ -160,10 +162,23 @@ export class Bridge {
    */
   async attempt(subject, record, resumed = false) {
     try {
+      this.publishing = subject;
       await this.finish(subject, record);
       delete record.unconfirmed;
       this.held.delete(subject);
     } catch (error) {
+      // The request was refused before it was applied (`notSent`: the
+      // provider's rate limit, a host refusal before sending), so there is
+      // nothing to confirm: drop the saved operation. The next pass plans
+      // the write again from both sides, held for review like a new one,
+      // instead of resuming it as one that may have reached the provider.
+      if (error?.notSent) {
+        delete record.pending;
+        delete record.unconfirmed;
+        await this.checkpoint();
+        throw error;
+      }
+
       if (error?.name !== 'ReviewRequired') throw error;
       record.pending.held = true;
       if (resumed) record.unconfirmed = true;
@@ -177,6 +192,8 @@ export class Bridge {
         key: error.proposal?.key,
         ...(record.unconfirmed ? { unconfirmed: true } : {}),
       });
+    } finally {
+      this.publishing = undefined;
     }
   }
 

@@ -601,8 +601,17 @@ export interface PassOptions {
   repository: string;
   tracker: Tracker;
   state: SyncState;
-  /** Proposal keys a person approved in this view. */
+  /**
+   * Writes a person approved in this view, as `approvalKey(subject, key)`
+   * (review.mjs): the row and the exact content, so an approval kept for a
+   * retry never lets a second row with the same content through.
+   */
   approved?: Set<string>;
+  /**
+   * The sync resource's `github-last-sync` property: stamped with the time a
+   * pass completes, so a reload still names the last good sync.
+   */
+  lastSyncProperty?: string;
   /** The app's own saves, corrected for on read; lives as long as the view. */
   overlay?: Overlay;
   /** Tests inject the relay directly. */
@@ -774,7 +783,13 @@ function bridgeFor(options: PassOptions) {
     imported,
     devonian,
     local,
-    remote: reviewGate(counted(remote, sent), options.approved ?? new Set()),
+    remote: reviewGate(
+      counted(remote, sent),
+      options.approved ?? new Set(),
+      // The Bridge is constructed right here; the gate asks only while it
+      // finishes a record's saved operation.
+      () => (bridge as { publishing?: string } | undefined)?.publishing,
+    ),
     base: BRIDGE_BASE,
     snapshot: state.state.snapshot,
     save: saveSnapshot,
@@ -967,6 +982,8 @@ export async function runPass(options: PassOptions): Promise<PassResult> {
   const publish = options.state.state.publish ?? [];
   const left = publish.filter(id => !local.bound('issue', id));
   if (left.length !== publish.length) options.state.state.publish = left;
+  if (options.lastSyncProperty)
+    options.state.stamp(options.lastSyncProperty, new Date().toISOString());
   await options.state.flush();
 
   return summary(bridge, atomicStore, sent, local, options);

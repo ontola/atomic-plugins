@@ -7,12 +7,16 @@
  * REST API"): the primary limit as 403 or 429 with `x-ratelimit-remaining:
  * 0` and `x-ratelimit-reset` (an epoch second, up to an hour away), and a
  * secondary limit as 403 or 429 with a `retry-after` header (seconds) or,
- * without one, a message asking to wait a minute. At the pin the host's
- * frame client relays only `link`, `retry-after`, `etag` and `content-type`
- * (`view-client.js` `PROXY_HEADERS`), so `x-ratelimit-*` reaches this app
- * only on a host that relays more; the body's `message` is read as well,
- * so a secondary-limit 403 without `retry-after` is still recognised, and a
- * 429 always is.
+ * without one, a message asking to wait a minute. Neither `x-ratelimit-*`
+ * header reaches this app today: the integration proxy forwards only
+ * `content-type`, `link`, `retry-after`, `etag`, `x-total-count` and
+ * `x-next-page` (`integration-proxy/src/proxy.rs`
+ * `upstream_response_headers`), and the host's frame client then relays
+ * only `link`, `retry-after`, `etag` and `content-type` (`view-client.js`
+ * `PROXY_HEADERS` at the pin). So a primary-limit 403 is known by the
+ * body's `message` alone, a secondary one by `retry-after` or its message,
+ * and a 429 always counts. The `x-ratelimit-*` reading below is for a proxy
+ * and host that forward them.
  *
  * What happens then (`throughRateLimits`):
  * - a short wait (at most `INLINE_MAX_MS`) is slept out and the same
@@ -80,7 +84,14 @@ const messageOf = (body: unknown): string | undefined => {
   return typeof message === 'string' ? message : undefined;
 };
 
-/** `retry-after` as milliseconds from `now` (delay-seconds or an HTTP date). */
+/** RFC 9110 IMF-fixdate: `Mon, 06 Oct 2026 12:01:30 GMT`. */
+const IMF_FIXDATE =
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * `retry-after` as milliseconds from `now`: delay-seconds (digits only) or
+ * an IMF-fixdate (RFC 9110 §10.2.3), nothing else.
+ */
 export function retryAfterMs(
   header: string | undefined,
   now: number,
@@ -88,6 +99,7 @@ export function retryAfterMs(
   if (!header) return undefined;
   const trimmed = header.trim();
   if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (!IMF_FIXDATE.test(trimmed)) return undefined;
   const at = Date.parse(trimmed);
 
   return Number.isFinite(at) ? Math.max(0, at - now) : undefined;

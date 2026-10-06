@@ -800,6 +800,78 @@ group('issue-tracker controller: GitHub rate limits', () => {
     );
   });
 
+  it('a carried approval is for its row only: a second row with the same content is held, not sent', async () => {
+    const { store, controller } = await bound();
+    const before = store.github.snapshot(SEEDED_REPOSITORY).issues.length;
+    const input = { title: 'Dup', body: 'same words', status: 'Todo' as const };
+    await controller.create(input);
+    limit(store);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(before);
+
+    // Another row, same title and body, made while the limit lasts: its
+    // create has the same proposal key, but nobody reviewed it.
+    const { subject: second } = await controller.create(input);
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    const issues = store.github.snapshot(SEEDED_REPOSITORY).issues;
+    expect(issues.filter((i: { title: string }) => i.title === 'Dup')).toHaveLength(
+      1,
+    );
+    expect(after.last!.result.held).toHaveLength(1);
+    expect(after.last!.result.held[0].subject).toBe(second);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+  });
+
+  it('after a reload, a write GitHub refused is held again as plain pending, never as uncertain, and nothing is sent unreviewed', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+
+    // A reload: the carried approval is gone with the view.
+    const again = createController(store);
+    const loaded = ready(await again.load());
+    // The last completed pass is read back from github-last-sync.
+    expect(loaded.syncedAt).toBeGreaterThan(0);
+    const synced = ready(await again.sync());
+    expect(synced.problem).toBeUndefined();
+    expect(synced.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: status Todo → Done (close it)',
+    ]);
+    expect(synced.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(synced.last!.result.uncertain).toEqual([]);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+
+    // Reviewed again, it goes.
+    ready(await again.send());
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('an edit made while GitHub rate-limits is held for review, not stuck on a saved operation', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    // The edit's own sync runs while the limit lasts; a plain sync follows.
+    store.rateLimit = undefined;
+    const edited = ready(await controller.edit(subject, { title: 'Renamed' }));
+    expect(edited.problem).toBeUndefined();
+    expect(edited.last!.result.held).toHaveLength(1);
+    expect(edited.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(describeHeld(edited.last!.result.held[0])).toMatch(/Renamed|Done/);
+  });
+
   it('describes the rate limit with its retry time', () => {
     const until = Date.UTC(2026, 9, 6, 14, 5);
     expect(

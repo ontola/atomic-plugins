@@ -233,24 +233,36 @@ connect and repository screens, which are setup steps with no table data.
 **GitHub rate limits (0.4.0, `app/rateLimit.ts`).** GitHub signals its
 primary limit as 403 or 429 with `x-ratelimit-remaining: 0` and
 `x-ratelimit-reset`, and its secondary limit as 403 or 429 with `retry-after`
-or, without one, a message asking to wait. At the pin the host relays only
-`link`, `retry-after`, `etag` and `content-type` (`view-client.js`
-`PROXY_HEADERS`), so the app also reads the body's `message`; a 429 always
-counts. The wait is `retry-after` (seconds or an HTTP date), else
-`x-ratelimit-reset`, else 60 s; never under 1 s, never over 60 min. A wait of
+or, without one, a message asking to wait. Neither `x-ratelimit-*` header
+reaches the app today: the integration proxy forwards only `content-type`,
+`link`, `retry-after`, `etag`, `x-total-count` and `x-next-page`
+(`integration-proxy/src/proxy.rs` `upstream_response_headers`), and the
+host's frame client relays only `link`, `retry-after`, `etag` and
+`content-type` (`view-client.js` `PROXY_HEADERS` at the pin). So a
+primary-limit 403 is recognised by the body's `message` alone, a secondary
+one by `retry-after` or its message, and a 429 always counts; the
+`x-ratelimit-*` reading is there for a proxy and host that forward them. The
+wait is `retry-after` (digits, or an RFC 9110 IMF-fixdate; nothing else),
+else `x-ratelimit-reset`, else 60 s; never under 1 s, never over 60 min. A wait of
 at most 20 s is slept out inside the pass and the same request repeated, at
 most twice per request, each wait at least 1 s doubled per attempt, while the
 card says "GitHub is rate-limiting; retrying at HH:MM". A longer wait, or
 the retries used up, throws a `RateLimitError` with `notSent: true`: the
 pass stops, the card shows the problem with the retry time, and `main.ts`
 retries at GitHub's time (never sooner than 60 s after the failure, doubled
-per consecutive rate-limited failure, up to 60 min). A write GitHub refused
-this way wrote nothing, so `proxyTransport` drops its journal entry instead
-of leaving it uncertain, the Bridge keeps the operation planned, and the
-controller keeps the review approval, so the retry sends it without a second
-review; any other outcome drops that approval and the change is held again
-(flagged to check GitHub first, as after any interrupted send, since the
-Bridge cannot tell where that later attempt stopped).
+per consecutive rate-limited failure, up to 60 min; a pass that ends
+rate-limited always re-arms the timer at the fresh time, `app/retry.ts`). A
+write GitHub refused this way wrote nothing: `proxyTransport` drops its
+journal entry instead of leaving it uncertain, and the Bridge drops the saved
+operation (`bridge.mjs` `attempt`, on `notSent`), so the change is planned
+again next pass from both sides' current state, held for review like a new
+one, and never shows as "may already be there" after a reload. In the same
+view the controller keeps the review approval for that retry, keyed by the
+row's subject and its exact content (`review.mjs` `approvalKey`), so the
+retry sends exactly the reviewed rows without a second review and a second
+row with the same content is held; a reload, or any other outcome, drops the
+approval and the change is reviewed again. An edit made while the limit
+lasts is simply held with the rest.
 Unit-tested with fake transports (`app/rateLimit.test.ts`,
 `app/controller.test.ts`): 429, a secondary-limit 403, `retry-after` as
 seconds and as a date, `x-ratelimit-reset`, the cap, the bounded retries,
@@ -258,6 +270,13 @@ and a write that survives a long limit. Never seen from real GitHub, so this
 is declared, not verified, and the message match for a header-less 403 is
 brittle by nature: a wording change at GitHub makes such a 403 a plain
 "Sync failed", retried on the 4-minute ladder.
+
+**The last sync, across reloads (0.4.0).** Each completed pass stamps the
+sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
+date and time, as Todoist's `todoist-last-sync` does), so after a reload the
+card still says "Synced 2 days ago" before the first pass, names that as the
+last good sync when the first pass fails, and does not claim "0 synced with
+…" from the rows it read back without a pass.
 
 **What it writes, and where.** Everything goes into the app's own subtree
 (the only place a drive app may write without a row grant). Since 0.2.0 the
@@ -279,7 +298,8 @@ its published GitHub Pages subject:
   carries its own baseline;
 - one Message per comment (`about` its row) in a "GitHub comments" folder
   under the app;
-- one sync resource holding the bound repository and the sync state as JSON
+- one sync resource holding the bound repository, the time of the last
+  completed pass (`github-last-sync`, 0.4.0) and the sync state as JSON
   text: the Bridge's snapshot without the per-record baselines, the
   transport's write journal, rows waiting to be published and the view
   preferences.
