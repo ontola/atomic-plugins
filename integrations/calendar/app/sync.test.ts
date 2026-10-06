@@ -24,6 +24,7 @@ import {
   NAME,
   NOTES,
   PARENT,
+  parseLastSync,
   RECOMMENDS,
 } from './sync.js';
 
@@ -544,5 +545,54 @@ suite('Calendar drive app: supported path', () => {
     expect(
       store.calls.filter(c => c.path.endsWith('/calendarList')),
     ).toHaveLength(1);
+  });
+});
+
+suite('google-last-sync (0.3.2)', () => {
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+
+  it('reads only the strict ISO 8601 UTC shape it writes', () => {
+    expect(parseLastSync('2026-10-06T11:58:00.000Z', NOW)).toEqual(
+      new Date('2026-10-06T11:58:00.000Z'),
+    );
+    expect(parseLastSync('2026-10-06T11:58:00Z', NOW)).toEqual(
+      new Date('2026-10-06T11:58:00Z'),
+    );
+    for (const raw of [
+      '2026-10-06T11:58:00+02:00', // an offset, not UTC
+      '2026-10-06T11:58Z', // no seconds
+      '2026-10-06', // a date only
+      'Tue, 06 Oct 2026 11:58:00 GMT',
+      '1759751880000',
+      '2026-13-40T11:58:00Z', // the shape, not an instant
+      '',
+      1759751880000,
+      null,
+    ])
+      expect(parseLastSync(raw as never, NOW), String(raw)).toBeUndefined();
+  });
+
+  it('ignores a stored time later than now (a clock that ran ahead)', () => {
+    expect(parseLastSync('2026-10-06T12:00:00.000Z', NOW)).toEqual(
+      new Date(NOW),
+    );
+    expect(parseLastSync('2026-10-06T12:00:00.001Z', NOW)).toBeUndefined();
+    expect(parseLastSync('2027-01-01T00:00:00Z', NOW)).toBeUndefined();
+  });
+
+  it('a stored future time is not named as the last good sync', async () => {
+    const { store } = await imported();
+    const table = store.resources.get(TABLE)!;
+    const at = prop(store, 'google-last-sync');
+    expect(typeof table[at]).toBe('string');
+    store.resources.set(TABLE, { ...table, [at]: '2099-01-01T00:00:00Z' });
+    // Opened again, with the first read failing: no last good sync to name.
+    store.throwNext('Failed to fetch');
+    const reopened = createController(store, () => {});
+    await (
+      await reopened.load()
+    ).refreshing;
+    expect(reopened.state()).toMatchObject({ kind: 'error', phase: 'read' });
+    expect(reopened.snapshot().lastSync).toBeUndefined();
   });
 });

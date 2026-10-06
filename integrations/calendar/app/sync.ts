@@ -433,14 +433,32 @@ export async function chosenCalendar(
   const metaProp = found.get('google-calendar-meta');
   const meta = metaProp ? parseMeta(binding.get(metaProp)) : undefined;
   const lastProp = found.get('google-last-sync');
-  const raw = lastProp ? binding.get(lastProp) : undefined;
-  const at = typeof raw === 'string' ? Date.parse(raw) : NaN;
+  const lastSync = lastProp
+    ? parseLastSync(binding.get(lastProp), Date.now())
+    : undefined;
 
   return {
     id,
     ...(meta ? { meta } : {}),
-    ...(Number.isFinite(at) ? { lastSync: new Date(at) } : {}),
+    ...(lastSync ? { lastSync } : {}),
   };
+}
+
+/** `saveLastSync`'s shape: `2026-10-06T12:00:00.000Z`, seconds required, UTC only. */
+const LAST_SYNC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+/**
+ * A stored `google-last-sync`, or undefined when it is not the strict ISO
+ * 8601 UTC shape `saveLastSync` writes, not a real instant, or later than
+ * `now`: a time written by a device whose clock ran ahead would otherwise
+ * read as "Synced just now" for as long as it stays in the future.
+ */
+export function parseLastSync(raw: JSONValue, now: number): Date | undefined {
+  if (typeof raw !== 'string' || !LAST_SYNC.test(raw)) return undefined;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at) || at > now) return undefined;
+
+  return new Date(at);
 }
 
 /** Binds the table to one calendar. A table never switches calendars. */
