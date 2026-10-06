@@ -1,7 +1,8 @@
 // @wc-ignore-file
 /**
  * The Moneybird live check (integrations/LIVE_TESTING.md, "The live-check
- * kit"): the read-only contacts drive app's own controller and sync code, run
+ * kit"): the read-only drive app's own controller and sync code (its contacts
+ * collection; hours and mutations are not covered here), run
  * from Node against one real, disposable Moneybird administration through a
  * relay stand-in. The app only reads, so the kit's driver does the seeding,
  * the remote edit and the cleanup, under the same guard rails as the apps that
@@ -109,6 +110,7 @@ export function allowFor(
 }
 
 export const NOT_COVERED = [
+  'Hours (time entries) and financial mutations: this check imports the contacts collection only; the other two collections are exercised against the synthetic fixture.',
   'More than 100 contacts: a next page announced by a Link header (the app follows it, within the contacts collection) is exercised only by the offline fake, never against Moneybird.',
   'Archived contacts (the API has no archive call this run uses; the app reads them with include_archived=true, which the preflight uses too), custom fields, contact people, notes, SEPA and tax fields, and every other collection.',
   'Several administrations and the picker’s choice among them: the preflight reads the list but the run does not create a second administration.',
@@ -211,14 +213,20 @@ export async function runMoneybirdCheck(
   const controller = createController(store, () => {});
   const appRequests = () => provider.requests.filter(r => r.who === 'app');
 
+  /** The contacts summary of a synced view (this check imports contacts only). */
   const synced = () => {
     const state = controller.state();
     if (state.kind !== 'synced')
       throw new Error(
         `Expected a synced view, got ${state.kind}${'message' in state ? `: ${state.message}` : ''}`,
       );
+    const summary = state.results.contacts;
+    if (!summary || 'error' in summary)
+      throw new Error(
+        `Expected a contacts summary, got ${summary ? summary.error : 'nothing'}`,
+      );
 
-    return state;
+    return { summary };
   };
 
   /** The imported rows by contact id, each with its values by shortname. */
@@ -339,7 +347,7 @@ export async function runMoneybirdCheck(
           ],
           ['choosing', true],
         );
-        await controller.select(administration);
+        await controller.select(administration, ['contacts']);
         const state = synced();
         equal(
           'three contacts were added, none updated',

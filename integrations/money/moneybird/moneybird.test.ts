@@ -212,6 +212,7 @@ describe('reading', () => {
     await readFinancialAccounts(get(store), A);
     await readFinancialMutations(get(store), A, { year: YEAR });
     expect(store.calls.length).toBeGreaterThan(4);
+
     for (const call of store.calls) {
       expect(call.path).toMatch(/^\/api\/v2\//);
       expect(call.method).toBe('GET');
@@ -436,11 +437,13 @@ describe('importing', () => {
     expect(summary).toEqual({ ...none, total: 4, added: 4 });
     const hours = rows(store, tables.hours);
     expect(hours).toHaveLength(4);
+
     for (const [, row] of hours) {
       expect(row[IS_A]).toEqual([TIME_ENTRY]);
       expect(typeof row[WORK.start]).toBe('number');
       expect(typeof row[WORK.end]).toBe('number');
     }
+
     const projects = rows(store, tables.projects);
     const people = rows(store, tables.people);
     expect(projects.map(([, p]) => p[NAME]).sort()).toEqual([
@@ -523,6 +526,7 @@ describe('importing', () => {
     expect(amounts).toEqual(
       ['1210.0', '-120.5', '-45.99', '-45.99', '2500.0', '-0.35'].sort(),
     );
+
     for (const [, row] of mutations) {
       expect(row[IS_A]).toEqual([BANK_TRANSACTION]);
       expect(row[BANK.account]).toBe('NL00TEST0000000099');
@@ -532,6 +536,7 @@ describe('importing', () => {
       );
       expect(typeof row[BANK.amount]).toBe('string');
     }
+
     const properties = shortnameOf(store);
     const hosting = mutations.find(([, p]) => p[NAME] === 'Nep Hosting')![1];
     expect(hosting[properties.get('moneybird-state')!]).toBe('processed');
