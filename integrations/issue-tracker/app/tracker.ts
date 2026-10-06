@@ -107,6 +107,8 @@ export interface Tracker {
     syncState: string;
     /** On a binding: the table, not the app's own, it syncs. */
     syncedTable: string;
+    /** When the last pass completed (ISO 8601), so a reload still names it. */
+    lastSync: string;
   };
   tags: Record<Status, string>;
   commentsFolder: string;
@@ -174,6 +176,14 @@ const PROPERTY_SPECS: PropertySpec[] = [
     datatype: datatypes.string,
     description:
       'JSON text: the sync checkpoint and write journal of the GitHub issues app. Edit it and sync can no longer tell what was already sent.',
+  },
+  {
+    key: 'lastSync',
+    shortname: 'github-last-sync',
+    name: 'GitHub last sync',
+    datatype: datatypes.string,
+    description:
+      'When the GitHub issues app last completed a sync pass for this table (ISO 8601), written by the app; the sync-status card names it after a reload or a failed sync.',
   },
 ];
 

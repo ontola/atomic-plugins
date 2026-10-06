@@ -224,8 +224,8 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 162,541 bytes for
-0.3.1) whose `view({ root, store })` runs in the host's null-origin frame. It
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 178,137 bytes for
+0.4.0) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
 per table**: the app's own table, and each other Issue table it was asked
 to sync (since 0.3.0, see [Syncing a table the app didn't
@@ -251,12 +251,102 @@ Board/List choice (`B`) that wins at every width; search and a label filter
 shared by both; an issue panel (docked at 1000 px and wider, a drawer from
 600 px, a full-screen sheet below) with the title, status, read-only labels,
 the description (Write / Preview, a safe Markdown preview) and comments;
-"New issue" (`N`); the sync pill and connection bar; one banner per problem;
-and `?` for the keyboard shortcuts. Cards move by drag, by `1`/`2`/`3`/`4` on a
+"New issue" (`N`); the sync pill and connection bar; the shared sync-status
+card (below) first in every view of a table; one banner per problem; and
+`?` for the keyboard shortcuts. Cards move by drag, by `1`/`2`/`3`/`4` on a
 focused card or by their "Move to…" menu. The shared chrome (the `--pl-*`
 aliases of the host's `--t-*` theme variables, pill, banner, empty state,
 buttons) is in `app/ui/`, separate from the issue views, so it can move to a
 shared package later. Layout and filters persist on the app's sync resource.
+
+**The sync-status card (0.4.0, Q-084).** The shared card from
+[`integrations/sync-status/`](../sync-status/README.md), mapped in
+`app/status.ts` (pure; `app/status.test.ts` covers every `ViewState`) and
+rendered first in the board, the list, the "other table" screen and the
+no-proxy screen. It says when the last sync ran and how it went ("Synced 4
+min ago", "Sync failed 2 min ago" with the reason, the next step and the last
+good sync), what it did (rows and Messages added and updated here, the rest
+unchanged), how many issues the table has and how many are synced with the
+repository, and whether edits go back: **"Edits here are sent to GitHub after
+you review them."** in the `ready` state, where that is true, and
+**"Read-only: edits here stay in Atomic."** with the reason everywhere nothing
+is sent (no host relay, a table that isn't synced or whose sync is paused, no
+connection or repository yet). Its write queue counts the changes held for
+review plus edits no pass has seen, with "Review and send"; `uncertain` is
+only what really may have reached GitHub (a held write let through once
+without an answer, a create GitHub never answered). Rows the sync leaves out
+are grouped by reason, named under "Which": local-only rows, rows whose
+status is outside the four tags, incomplete rows (with "Open row"). A GitHub
+rate limit is a problem with its retry time (next paragraph). The card is not
+a live region; the header's pill stays the one `role="status"`, and the
+connection bar's line now only says what runs ("Checking GitHub for
+changes…"), since the last sync and the changes waiting are the card's. The
+card's CSS comes through `cssRawPlugin` from `integrations/sync-status/build.mjs`
+(the app's own `?raw` plugin before 0.4.0) and is appended to the one
+`<style>` element after the kit's and the app's rules. Not shown on the
+connect and repository screens, which are setup steps with no table data.
+
+**GitHub rate limits (0.4.0, `app/rateLimit.ts`).** GitHub signals its
+primary limit as 403 or 429 with `x-ratelimit-remaining: 0` and
+`x-ratelimit-reset`, and its secondary limit as 403 or 429 with `retry-after`
+or, without one, a message asking to wait. Neither `x-ratelimit-*` header
+reaches the app today: the integration proxy forwards only `content-type`,
+`link`, `retry-after`, `etag`, `x-total-count` and `x-next-page`
+(`integration-proxy/src/proxy.rs` `upstream_response_headers`), and the
+host's frame client relays only `link`, `retry-after`, `etag` and
+`content-type` (`view-client.js` `PROXY_HEADERS` at the pin). So a
+primary-limit 403 is recognised by the body's `message` alone, a secondary
+one by `retry-after` or its message, and a 429 always counts; the
+`x-ratelimit-*` reading is there for a proxy and host that forward them. The
+wait is `retry-after` (digits, or an RFC 9110 IMF-fixdate; nothing else),
+else `x-ratelimit-reset`, else 60 s; never under 1 s, never over 60 min. A wait of
+at most 20 s is slept out inside the pass and the same request repeated, at
+most twice per request, each wait at least 1 s doubled per attempt, while the
+card says "GitHub is rate-limiting; retrying at HH:MM". A longer wait, or
+the retries used up, throws a `RateLimitError` with `notSent: true`: the
+pass stops, the card shows the problem with the retry time, and `main.ts`
+retries at GitHub's time (never sooner than 60 s after the failure, doubled
+per consecutive rate-limited failure, up to 60 min; a pass that ends
+rate-limited always re-arms the timer at the fresh time, `app/retry.ts`). A
+write GitHub refused this way wrote nothing: `proxyTransport` drops its
+journal entry instead of leaving it uncertain, and the Bridge drops the saved
+operation (`bridge.mjs` `attempt`, on `notSent`), so what is still missing is
+planned again next pass from both sides' current state, held for review like
+a new write, and never shows as "may already be there" after a reload. An
+operation may have been applied in part before the refused request (a create
+with status Doing or Blocked is an issue POST and then a label POST; an
+update is a fields PATCH and then label calls): a create whose issue POST got
+its receipt is first bound to the issue it made, with the create's values as
+the baseline (`Bridge.bindCreated`, as "It landed" does), so the next pass
+finds the row bound and plans the missing label as a plain status update
+instead of importing the issue as a second row; an applied PATCH simply
+shows as the remote side agreeing with the edit. In the same view the
+controller keeps the review approval for that retry, keyed by the row's
+subject, the entity and its exact content (`review.mjs` `approvalKey`; the
+provider id is left out, so the rest of a half-made create passes as the
+update of the issue it made), so the retry sends exactly the reviewed rows
+without a second review and a second row with the same content is held; a
+reload, or any other outcome, drops the approval and the remaining change is
+reviewed again ("Update #3: status Todo → Doing"), with the issue already on
+GitHub without its label until then. An edit made while the limit lasts is
+simply held with the rest. Not covered: an update that changed both text and
+status and was interrupted after its PATCH reconciles the text as agreed and
+holds the status; a multi-write operation interrupted by anything other than
+a refusal (a lost answer) resumes as before, flagged to check GitHub.
+Unit-tested with fake transports (`app/rateLimit.test.ts`,
+`app/controller.test.ts`): 429, a secondary-limit 403, `retry-after` as
+seconds and as a date, `x-ratelimit-reset`, the cap, the bounded retries,
+and a write that survives a long limit. Never seen from real GitHub, so this
+is declared, not verified, and the message match for a header-less 403 is
+brittle by nature: a wording change at GitHub makes such a 403 a plain
+"Sync failed", retried on the 4-minute ladder.
+
+**The last sync, across reloads (0.4.0).** Each completed pass stamps the
+sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
+date and time, as Todoist's `todoist-last-sync` does), so after a reload the
+card still says "Synced 2 days ago" before the first pass, names that as the
+last good sync when the first pass fails, and does not claim "0 synced with
+…" from the rows it read back without a pass.
 
 **What it writes, and where.** Everything goes into the app's own subtree
 (the only place a drive app may write without a row grant). Since 0.2.0 the
@@ -278,7 +368,8 @@ its published GitHub Pages subject:
   carries its own baseline;
 - one Message per comment (`about` its row) in a "GitHub comments" folder
   under the app;
-- one sync resource holding the bound repository and the sync state as JSON
+- one sync resource holding the bound repository, the time of the last
+  completed pass (`github-last-sync`, 0.4.0) and the sync state as JSON
   text: the Bridge's snapshot without the per-record baselines, the
   transport's write journal, rows waiting to be published and the view
   preferences.
@@ -424,9 +515,13 @@ replace them.
   comment Messages here (`app/sync.ts`, `AtomicIdentityMap.unbind` from
   devonian 0.8.0). Neither sends anything to GitHub.
 - Atomic Server refusing a write: a banner with "Try again".
-- Anything else (network, 5xx, rate limit) shows on the pill only, with
-  "Retry now", and is retried on a timer while the view is open. While sync
-  is paused or failed the board still shows the table's rows.
+- GitHub rate-limiting: the card says "GitHub is rate-limiting; retrying at
+  HH:MM", the pill "GitHub rate limit"; the pass is retried then, approved
+  changes included (see "GitHub rate limits" above).
+- Anything else (network, 5xx) shows on the pill, with "Retry now", and in
+  the card's "Sync failed" line with the retry time, and is retried on a
+  timer while the view is open. While sync is paused or failed the board
+  still shows the table's rows.
 
 **Host behaviour it relies on or works around** (atomic-server `bae5cdbe3`,
 not re-read at the current pin `a12b74a`; read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
