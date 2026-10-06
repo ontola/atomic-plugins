@@ -632,7 +632,7 @@ different proxy does not move them: users connect again on the new one.
   ones. That is optional and irreversible.
 - **Rolling back** to an older binary against a database a newer one has
   used has not been tested. Take a backup before upgrading.
-- **The release after 0.2.5** limits key checks per client network. Behind
+- **0.3.0** limits key checks per client network. Behind
   a reverse proxy, set `TRUST_FORWARDED_FOR=rightmost` (on Heroku,
   `heroku`) with the upgrade, or all clients share one limit; see
   [Key-check limit and client addresses](#key-check-limit-and-client-addresses).
