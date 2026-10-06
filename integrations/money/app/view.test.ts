@@ -53,6 +53,147 @@ describe('Money view: first run', () => {
   });
 });
 
+describe('Money view: the shared class (#177)', () => {
+  beforeEach(() => document.head.replaceChildren());
+
+  const mt940Text =
+    ':20:SYNTHETIC\n:25:NL42BUNQ0123456789\n:28C:31/1\n:60F:C260901EUR100,00\n:61:2609020902D12,34NTRFNONREF//TEST-1\n:86:Fixture lunch\n:61:2609030903C20,00NTRFNONREF//TEST-2\n:86:Fixture refund\n:62F:C260903EUR107,66\n';
+
+  const choose = async (root: HTMLElement, name: string, body: string) => {
+    const input = root.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File([body], name)],
+    });
+    input.dispatchEvent(new Event('change'));
+    for (let i = 0; i < 10; i++) await settle();
+  };
+
+  it('offers the file on its own empty table after an install, and imports it there', async () => {
+    const store = fakeStore({ data: 'own' });
+    const root = await open(store);
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Bring in your bank transactions',
+    );
+    await choose(root, 'bunq.sta', mt940Text);
+    const dialog = root.querySelector('[role="dialog"]')!;
+    const apply = [...dialog.querySelectorAll('button')].find(b =>
+      text(b).startsWith('Import 2'),
+    )!;
+    expect(apply.disabled).toBe(false);
+    expect(apply.getAttribute('aria-describedby')).toBeNull();
+    apply.click();
+    for (let i = 0; i < 10; i++) await settle();
+    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    expect(store.accessRequests).toBe(0);
+    expect(root.querySelectorAll('[data-row]')).toHaveLength(2);
+    expect(text(root.querySelector('.pl-pill'))).toContain('Imported 2');
+    // The statement the app stored: its closing balance in the strip.
+    expect(text(root.querySelector('.m-seg .m-net'))).toMatch(/^€107\.66on/);
+    // Its own rows need no "Allow editing".
+    [...root.querySelectorAll<HTMLElement>('[data-row]')][0].click();
+    expect(root.querySelector('[data-key="allow-editing"]')).toBeNull();
+    expect(text(root.querySelector('.pl-panel'))).not.toContain(
+      'allow it to edit them',
+    );
+  });
+
+  it('says why it cannot import on a host without an App ontology', async () => {
+    const root = await open(fakeStore({ data: 'own', host: 'legacy' }));
+    await choose(root, 'bunq.sta', mt940Text);
+    const note = root.querySelector('#money-apply-note')!;
+    expect(text(note)).toContain('no ontology of its own');
+    expect(
+      [...root.querySelectorAll<HTMLButtonElement>('.m-dialog button')].find(
+        b => text(b).startsWith('Import 2'),
+      )!.disabled,
+    ).toBe(true);
+  });
+
+  it('shows "Not a valid amount" for an amount that is not one, and sums the rest', async () => {
+    const root = await open(
+      fakeStore({
+        data: 'own',
+        rows: [
+          seedRow('-1.50', '2026-09-22'),
+          seedRow('twelve', '2026-09-22'),
+          seedRow('0.123456', '2026-09-22'),
+        ],
+      }),
+    );
+    const table = root.querySelector('table.m-ledger')!;
+    const invalid = [...table.querySelectorAll('.m-amt[data-dir="invalid"]')];
+    expect(invalid.map(text)).toEqual([
+      'Not a valid amount',
+      'Not a valid amount',
+    ]);
+    expect(invalid[0].getAttribute('aria-label')).toMatch(
+      /^Not a valid amount: /,
+    );
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€1.50net');
+  });
+});
+
+describe('Money view: incomplete rows (#177)', () => {
+  it('lists a row missing its amount above the ledger, with Open row, and leaves it out of the strip', async () => {
+    const store = fakeStore({
+      data: 'shared',
+      rows: [
+        seedRow('-1.50', '2026-09-22'),
+        {
+          ...seedRow('-9', '2026-09-22'),
+          'bank-amount': '',
+          'bank-description': 'Forgot the amount',
+        },
+      ],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is incomplete');
+    const item = region.querySelector('li')!;
+    expect(text(item)).toContain('Forgot the amount');
+    expect(text(item)).toContain('22 Sept');
+    expect(text(item)).toContain('Incomplete: missing Amount');
+    // The ledger and the strip hold the complete row only.
+    expect(root.querySelectorAll('.m-row')).toHaveLength(1);
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€1.50net');
+    expect(
+      text(root.querySelector('[role="tab"][aria-selected="true"]')),
+    ).toMatch(/^Transactions\s*1$/);
+    const button = item.querySelector<HTMLButtonElement>('button')!;
+    expect(text(button)).toBe('Open row');
+    expect(button.getAttribute('aria-label')).toBe(
+      'Open row Forgot the amount',
+    );
+    button.click();
+    await settle();
+    expect(store.opened).toEqual([item.getAttribute('data-incomplete')]);
+  });
+
+  it('with only incomplete rows, lists them above the first-run invitation; no Open row without openResource', async () => {
+    const root = await open(
+      fakeStore({
+        data: 'shared',
+        host: 'legacy',
+        rows: [{ ...seedRow('-9', '2026-09-22'), 'bank-currency': '' }],
+      }),
+    );
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('Incomplete: missing Currency');
+    expect(region.querySelector('button')).toBeNull();
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Bring in your bank transactions',
+    );
+    expect(text(root.querySelector('[role="status"]'))).toBe(
+      'No transactions yet',
+    );
+  });
+});
+
 describe('Money view: ledger', () => {
   it('renders a captioned table with day row groups and spoken amounts at ≥560px', async () => {
     const root = await open(fakeStore({ rows: sampleRows() }));

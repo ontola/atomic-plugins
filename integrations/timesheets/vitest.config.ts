@@ -21,8 +21,15 @@ export default {
     },
   },
   test: {
-    include: ['*.test.ts', 'app/**/*.test.ts', 'devonian/**/*.test.ts'],
-    // app/ui/theme.ts imports theme.css?raw; without this Vitest stubs CSS.
-    css: { include: [/theme\.css/] },
+    include: [
+      '*.test.ts',
+      'app/**/*.test.ts',
+      'devonian/**/*.test.ts',
+      // The live check's offline tests (the mock Clockify); never the live run.
+      'live/*.test.ts',
+    ],
+    // app/ui/theme.ts imports theme.css?raw and the shared sync-status
+    // card's card.css?raw; without this Vitest stubs CSS.
+    css: { include: [/theme\.css/, /card\.css/] },
   },
 };

@@ -26,17 +26,27 @@
  * `POST /fixture/notion/setScenario` with `["<name>"]`:
  * - `default`: the one data source above;
  * - `two-sources`: also a "Reading list" data source whose "Status" has
- *   another property id, plus a people and a date property (not projected);
+ *   another property id, a "Format" select, plus a people and a date property
+ *   (not projected);
  * - `empty`: the search shares no data source;
  * - `unauthorized`: every request answers 401 (the connection was revoked);
  * - `rate-limited`: the search works, every query answers 429 with
  *   `retry-after: 120`;
  * - `bad-gateway`: every request answers 502.
+ * `reset()` puts everything back as a new instance has it: the seeded pages
+ * and options, the starting scenario and no recorded requests. A spec calls
+ * it first, because the mock proxy outlives a test attempt.
  * `renameOption(id, name)` renames a select/status/multi-select option in
  * every schema, as a rename in Notion does; pages keep the option's id.
  * `editPage(id, properties)` changes a page as someone editing it in Notion
  * would (the same `properties` a PATCH body carries), `getPage(id)` reads
  * one whatever the scenario, and `archivePage(id)` moves it to the trash.
+ *
+ * For the live-check kit's offline tests (notion/live/fakeNotion.ts), not
+ * the mock proxy: `notionFixture({ blank: true })` starts with no pages, and
+ * `createPage(properties)` adds one to the first data source the way a
+ * `POST /v1/pages` would (the HTTP route stays a 403 here). Neither is in
+ * `drivers`, so neither is reachable over the mock proxy.
  */
 import { readFileSync } from 'node:fs';
 
@@ -204,6 +214,13 @@ const FINISHED = option(
   'green',
 );
 
+const BOOK = option('e4a8d6f5-0004-4000-8000-000000000001', 'Book', 'orange');
+const ARTICLE = option(
+  'e4a8d6f5-0004-4000-8000-000000000002',
+  'Article',
+  'blue',
+);
+
 /** Another database's "Status": same name and type, another property id. */
 const schema2 = {
   Title: { id: 'title', name: 'Title', type: 'title', title: {} },
@@ -212,6 +229,13 @@ const schema2 = {
     name: 'Status',
     type: 'status',
     status: { options: [TO_READ, READING, FINISHED], groups: [] },
+  },
+  // A plain select next to the status, so both option kinds are served.
+  Format: {
+    id: 'fm%3Ak',
+    name: 'Format',
+    type: 'select',
+    select: { options: [BOOK, ARTICLE] },
   },
   Author: { id: 'au%3Bx', name: 'Author', type: 'rich_text', rich_text: {} },
   Link: { id: 'lk%7Dq', name: 'Link', type: 'url', url: {} },
@@ -233,7 +257,7 @@ export const dataSource2 = {
   url: `https://www.notion.so/${DATABASE_2.replaceAll('-', '')}`,
 };
 
-function page2(id, { title, status, author, link, edited }) {
+function page2(id, { title, status, format, author, link, edited }) {
   const value = (key, content) => ({
     id: schema2[key].id,
     type: schema2[key].type,
@@ -259,6 +283,7 @@ function page2(id, { title, status, author, link, edited }) {
     properties: {
       Title: value('Title', [text(title)]),
       Status: value('Status', status),
+      Format: value('Format', format),
       Author: value('Author', [text(author)]),
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
@@ -273,6 +298,7 @@ export const pages2 = [
   page2('2b3c4d5e-0000-4000-8000-000000000001', {
     title: 'Thinking in Systems',
     status: READING,
+    format: BOOK,
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
     edited: '2026-09-02T09:30:00.000Z',
@@ -280,6 +306,7 @@ export const pages2 = [
   page2('2b3c4d5e-0000-4000-8000-000000000002', {
     title: 'Local-first software',
     status: FINISHED,
+    format: ARTICLE,
     author: 'Kleppmann et al.',
     link: null,
     edited: '2026-08-28T15:00:00.000Z',
@@ -404,16 +431,23 @@ function patchPage(target, schemaOf, properties) {
   return { status: 200, body: target };
 }
 
-export function notionFixture({ scenario = 'default' } = {}) {
+export function notionFixture({ scenario = 'default', blank = false } = {}) {
   const requests = [];
+
   // Per instance, so a rename in one test or lane never leaks into another.
-  const data = structuredClone({
-    sources: [
+  const seed = () => {
+    const sources = structuredClone([
       { source: dataSource, pages },
       { source: dataSource2, pages: pages2 },
-    ],
-  });
+    ]);
+    if (blank) for (const entry of sources) entry.pages = [];
+
+    return sources;
+  };
+
+  const data = { sources: seed() };
   let current = scenario;
+  let created = 0;
 
   // Any page, whatever the scenario shares, with the data source it is in.
   const locate = id => {
@@ -434,6 +468,21 @@ export function notionFixture({ scenario = 'default' } = {}) {
 
   return {
     requests,
+    /**
+     * Back to a fresh fixture: the seeded pages and options (undoing an
+     * `editPage`, `renameOption`, `archivePage` or `createPage`), the
+     * scenario the instance started with and no recorded requests. The mock
+     * proxy outlives a test attempt, so a spec calls it first and a
+     * Playwright retry starts from the same state as the first attempt.
+     */
+    reset() {
+      data.sources = seed();
+      current = scenario;
+      created = 0;
+      requests.length = 0;
+
+      return { reset: true, scenario: current };
+    },
     setScenario(name) {
       if (!SCENARIOS.includes(name))
         throw new Error(`Unknown notion scenario ${name}`);
@@ -475,6 +524,24 @@ export function notionFixture({ scenario = 'default' } = {}) {
       if (result.status !== 200) throw new Error(result.body.message);
 
       return { last_edited_time: found.page.last_edited_time };
+    },
+    createPage(properties) {
+      const id = `9f000000-0000-4000-8000-${String(++created).padStart(12, '0')}`;
+      const entry = data.sources[0];
+      const made = page(id, {
+        name: 'Untitled',
+        status: null,
+        done: false,
+        points: null,
+        tags: [],
+        notes: [],
+      });
+      const result = patchPage(made, entry.source.properties, properties);
+      if (result.status !== 200) return result;
+      made.created_time = made.last_edited_time = new Date().toISOString();
+      entry.pages.push(made);
+
+      return { status: 200, body: structuredClone(made) };
     },
     getPage(id) {
       const found = locate(id);
@@ -587,6 +654,7 @@ export default {
   jsonBody: true,
   create: () => notionFixture(),
   drivers: [
+    'reset',
     'setScenario',
     'renameOption',
     'editPage',

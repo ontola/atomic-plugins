@@ -11,8 +11,15 @@ import type { FetchedRecord, Term } from './types.js';
 export interface NotionColumn {
   shortname: string;
   name: string;
+  /** The lens's datatype: what the lens store holds (option ids for options). */
   datatype: Datatype;
   description: string;
+  /**
+   * Set for a select or status (`single`) or multi-select (`multiple`)
+   * property. The lens holds option ids; the host column is the host's own
+   * select column, holding one Tag per option (`app/options.ts`).
+   */
+  options?: 'single' | 'multiple';
 }
 
 /** Columns every Notion row gets, besides one per projected Notion property. */
@@ -48,9 +55,22 @@ const object = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+/**
+ * The path prefix of the terms `notionProjection` makes, one per Notion
+ * property. The platform's own terms (syncables derives one per field of the
+ * Page schema: `object`, `id`, `properties`, `url`, …, at
+ * `<document title>/property/<field>`) are not columns: the lens never
+ * writes them, and the Page fields a row needs are the fixed columns.
+ */
+export const NOTION_PROPERTY_TERM = 'urn:atomic:notion:property:';
+
+/** Whether a term is one the projection made for a Notion property. */
+export const isNotionPropertyTerm = (term: Term): boolean =>
+  term.kind === 'property' && term.path.startsWith(NOTION_PROPERTY_TERM);
+
 /** The Notion property id of a projection term (`urn:atomic:notion:property:<id>`). */
 export function notionPropertyId(term: Term): string {
-  return decodeURIComponent(term.path.slice(term.path.lastIndexOf(':') + 1));
+  return decodeURIComponent(term.path.slice(NOTION_PROPERTY_TERM.length));
 }
 
 /**
@@ -93,7 +113,8 @@ export function notionDataSourceTitles(
 
 /**
  * The fixed columns, then one per projected Notion property term, named after
- * the Notion property (or its id when no page carried a name for it).
+ * the Notion property (or its id when no page carried a name for it). Any
+ * other term (the platform's own Page fields) is not a column.
  */
 export function notionColumns(
   terms: readonly Term[],
@@ -101,17 +122,22 @@ export function notionColumns(
 ): NotionColumn[] {
   return [
     ...NOTION_FIXED_COLUMNS,
-    ...terms
-      .filter(term => term.kind === 'property')
-      .map(term => {
-        const id = notionPropertyId(term);
+    ...terms.filter(isNotionPropertyTerm).map(term => {
+      const id = notionPropertyId(term);
+      const options: NotionColumn['options'] =
+        term.notionType === 'multi_select'
+          ? 'multiple'
+          : term.notionType === 'select' || term.notionType === 'status'
+            ? 'single'
+            : undefined;
 
-        return {
-          shortname: term.shortname,
-          name: names.get(id) ?? id,
-          datatype: term.datatype,
-          description: term.description,
-        };
-      }),
+      return {
+        shortname: term.shortname,
+        name: names.get(id) ?? id,
+        datatype: term.datatype,
+        description: term.description,
+        ...(options ? { options } : {}),
+      };
+    }),
   ];
 }

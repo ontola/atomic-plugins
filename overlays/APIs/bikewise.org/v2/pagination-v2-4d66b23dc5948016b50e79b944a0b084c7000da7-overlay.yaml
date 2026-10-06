@@ -1,0 +1,27 @@
+# Revision of pagination-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml.
+# The pinned OpenAPI 3 OAD has no `components` member, so this revision adds
+# it from the root (overlays/README.md, "Documents without components");
+# operation targets are unchanged. Composition is checked against the pinned
+# OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/bikewise.org/v2/openapi.yaml
+info:
+  title: BikeWise API Pagination Schemes
+  version: 2.0.0
+actions:
+- target: "$"
+  update:
+    components:
+      paginationSchemes:
+        pageNumber:
+          type: pageNumber
+          request:
+            queryParameters:
+              page:
+                role: page
+              per_page:
+                role: pageSize
+- target: "$.paths['/v2/incidents'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber

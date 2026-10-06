@@ -18,7 +18,7 @@ import type { Ctx } from './context.js';
 import {
   banner as bannerCopy,
   createController,
-  LOCAL_NOTE,
+  describe,
   pill as pillModel,
   reviewCount,
   syncedAgo,
@@ -27,7 +27,13 @@ import {
   type ViewState,
 } from './controller.js';
 import { detail, editor } from './drawer.js';
-import { busyDays, latestEvent, nextEvent, type CalEvent } from './events.js';
+import {
+  busyDays,
+  drawn,
+  latestEvent,
+  nextEvent,
+  type CalEvent,
+} from './events.js';
 import { firstRun, importing, noRelay, picker } from './screens.js';
 import { conflicts, review, shortcuts } from './sheets.js';
 import { reportUncaught } from './report.js';
@@ -371,7 +377,17 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
           tone: 'info',
           role: 'status',
           title: 'Not synced with Google Calendar.',
-          body: LOCAL_NOTE,
+          // The note, then the offer or the reason it stopped.
+          body: describe(state),
+          ...(state.canSync && !state.asking
+            ? {
+                action: {
+                  label: 'Sync this table',
+                  name: 'Sync this table to Google Calendar',
+                  onClick: () => void controller.syncTable(),
+                },
+              }
+            : {}),
         }),
       );
 
@@ -573,12 +589,15 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
           : undefined,
       );
 
+    const incomplete = incompleteRows(snap, events);
+
     return h(
       doc,
       'div',
       { class: 'main' },
       toolbar(narrow, from, days, snap.can.openResource),
       ui.view === 'agenda' ? dayStrip(c, events, ui.anchor) : null,
+      incomplete ?? null,
       ui.view === 'week' && !(empty && snap.summary)
         ? body
         : h(doc, 'div', { class: 'view', 'data-scroll': 'view' }, body),
@@ -637,7 +656,63 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       ...(event.link && snap.can.openExternal
         ? { onOpenLink: () => void controller.openLink(event) }
         : {}),
+      ...(event.incomplete && snap.can.openResource
+        ? { onOpenRow: () => void controller.openInHost(event.subject) }
+        : {}),
     });
+  }
+
+  /**
+   * The rows missing a required `event-v1` field (#177; ontology-kit's
+   * rule: shown as incomplete, not skipped), with a way to the row in the
+   * host. One missing a Day is drawn on no day, so this list is the only
+   * place it appears.
+   */
+  function incompleteRows(
+    snap: Snapshot,
+    events: CalEvent[],
+  ): HTMLElement | undefined {
+    const rows = events.filter(e => e.incomplete);
+    if (!rows.length) return undefined;
+
+    return h(
+      doc,
+      'section',
+      { class: 'incomplete', 'aria-label': 'Incomplete rows' },
+      h(
+        doc,
+        'p',
+        {},
+        `${rows.length === 1 ? '1 row is' : `${rows.length} rows are`} incomplete and not sent to Google. A row without a Day is not drawn on any day.`,
+      ),
+      h(
+        doc,
+        'ul',
+        {},
+        ...rows.map(e =>
+          h(
+            doc,
+            'li',
+            { 'data-subject': e.subject },
+            h(doc, 'b', {}, e.title || '(untitled)'),
+            h(doc, 'span', { class: 'tagline warn' }, e.incomplete!),
+            drawn(e) ? null : h(doc, 'span', { class: 'fine' }, 'not drawn'),
+            snap.can.openResource
+              ? h(
+                  doc,
+                  'button',
+                  {
+                    class: 'btn btn-ghost btn-sm',
+                    'data-key': `open-row-${e.subject}`,
+                    onclick: () => void controller.openInHost(e.subject),
+                  },
+                  'Open row',
+                )
+              : null,
+          ),
+        ),
+      ),
+    );
   }
 
   function sheetFor(snap: Snapshot, c: Ctx): HTMLElement | undefined {
@@ -694,10 +769,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
               schedule();
             }),
         onKeep: conflict => void controller.keepAsLocal(conflict),
-        onRemove: conflict => {
-          ui.confirming = undefined;
-          void controller.removeLocal(conflict);
-        },
+        ...(snap.own
+          ? {
+              onRemove: (conflict: Conflict) => {
+                ui.confirming = undefined;
+                void controller.removeLocal(conflict);
+              },
+            }
+          : {}),
         onConfirm: conflict => set({ confirming: conflict }),
         ...(snap.can.openResource
           ? {
@@ -729,6 +808,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
               connecting: state.kind === 'connecting',
               onConnect: () => void controller.connect(),
               onCancel: () => controller.cancelConnect(),
+              ...(snap.own
+                ? {}
+                : {
+                    table: snap.table ?? 'this table',
+                    onNotNow: () => void controller.notNow(),
+                  }),
             }),
           ),
         ];
@@ -750,6 +835,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
             picker(doc, {
               calendars: state.calendars,
               onImport: id => void controller.choose(id),
+              ...(snap.own
+                ? {}
+                : {
+                    table: snap.table ?? 'this table',
+                    onNotNow: () => void controller.notNow(),
+                  }),
             }),
           ),
         ];

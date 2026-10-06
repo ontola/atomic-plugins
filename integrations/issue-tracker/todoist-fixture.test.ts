@@ -1,12 +1,14 @@
 // @wc-ignore-file
 /**
- * Checks the recorded todoist mock-proxy fixture (fixtures/todoist/) against
- * the adapter that consumes it, ./todoist.ts. Per PARALLEL_LANES.md §4 a
- * recording that drops a field the adapter reads must fail here, not in e2e.
+ * Checks the todoist mock-proxy fixture (fixtures/todoist/) against the
+ * adapter that consumes it, ./todoist.ts. Per PARALLEL_LANES.md §4 a source
+ * that drops a field the adapter reads must fail here, not in e2e.
  *
- * The api/-dependent tests skip until fixtures/todoist/record.mjs has been
- * run against a live account (see its header for the command). Run with the
- * AGENTS.md atomic-server layout:
+ * The fixture serves the recorded api/ when fixtures/todoist/record.mjs has
+ * been run against a live account (#46), and the SYNTHETIC rows of
+ * synthetic.mjs until then. Most checks run against either source; the
+ * recorded-only and synthetic-only ones say so. Run with the AGENTS.md
+ * atomic-server layout:
  *
  *   browser/node_modules/.bin/vitest run \
  *     --config integrations/issue-tracker/vitest.config.ts todoist-fixture
@@ -17,7 +19,12 @@ import { Datatype } from '../../browser/lib/src/index';
 import type { JSONValue } from '../../browser/lib/src/value';
 import { fixtures } from '../localthought/fixtures/index.mjs';
 import { redactor } from './fixtures/todoist/record.mjs';
-import scenario, { recorded } from './fixtures/todoist/scenario.mjs';
+import scenario, {
+  recorded,
+  source,
+  todoistFixture,
+} from './fixtures/todoist/scenario.mjs';
+import { SYNTHETIC } from './fixtures/todoist/synthetic.mjs';
 import type { FetchedPlatform, FetchedRecord } from '../localthought/schema';
 import { todoistFields as fields, todoistProjection } from './todoist';
 
@@ -29,6 +36,35 @@ type Page = {
 const isRecorded: boolean = recorded();
 const DAY = /^\d{4}-\d{2}-\d{2}/;
 
+const api = () => {
+  const fixture = todoistFixture();
+  const get = (path: string, method = 'GET') =>
+    fixture.request(
+      method,
+      new URL(`http://mock/proxy/todoist/api/v1${path}`),
+    ) as Page & { body: Row & { results: Row[] } };
+
+  return { fixture, get };
+};
+
+/** Every row the fixture pages out for a collection, following cursors. */
+function paged(
+  get: ReturnType<typeof api>['get'],
+  collection: 'projects' | 'tasks',
+): Row[] {
+  const seen: Row[] = [];
+  let res = get(`/${collection}?limit=3`);
+
+  for (;;) {
+    expect(res.status).toBe(200);
+    seen.push(...res.body.results);
+    if (!res.body.next_cursor) break;
+    res = get(`/${collection}?cursor=${res.body.next_cursor}`);
+  }
+
+  return seen;
+}
+
 describe('todoist fixture: always-on checks', () => {
   it('has the catalog document recorded from the real proxy', () => {
     const document = readFileSync(scenario.documentFile, 'utf8');
@@ -37,6 +73,18 @@ describe('todoist fixture: always-on checks', () => {
     expect(document).toMatch(/^ {2}\/projects:$/m);
     // Read-only, like the real catalog: no write operations are declared.
     expect(document).not.toMatch(/^ {4}(post|put|patch|delete):$/m);
+  });
+
+  it('is registered with the mock proxy, with its drivers', () => {
+    expect(fixtures.todoist).toBe(scenario);
+    expect(scenario.drivers).toEqual([
+      'completeTask',
+      'reopenTask',
+      'deleteTask',
+      'removeTask',
+      'failNext',
+      'snapshot',
+    ]);
   });
 
   it('redacts every string it does not know to be safe, consistently', () => {
@@ -90,25 +138,18 @@ describe('todoist fixture: always-on checks', () => {
   });
 });
 
-describe.skipIf(!isRecorded)('todoist fixture: recorded api/', () => {
-  const pages = isRecorded
-    ? scenario.create().pages
-    : { projects: [], tasks: [] };
-  const rows = (c: 'projects' | 'tasks'): Row[] =>
-    (pages[c] as Page[]).flatMap(p => p.body.results);
+describe(`todoist fixture: the ${isRecorded ? 'recorded' : 'synthetic'} source`, () => {
+  const rows = source();
 
-  it('is registered with the mock proxy', () => {
-    expect(fixtures.todoist).toBe(scenario);
-  });
+  it('has every field todoist.ts reads, with the type it expects', () => {
+    expect(rows.tasks.length).toBeGreaterThan(0);
 
-  it('records every field todoist.ts reads, with the type it expects', () => {
-    const tasks = rows('tasks');
-    expect(tasks.length).toBeGreaterThan(0);
-
-    for (const task of tasks) {
+    for (const task of rows.tasks as Row[]) {
+      expect(typeof task.id).toBe('string');
       expect(typeof task.content).toBe('string');
       expect(String(task.content).trim()).not.toBe('');
       expect(typeof task.checked).toBe('boolean');
+      expect(typeof task.description).toBe('string');
       expect([1, 2, 3, 4]).toContain(task.priority);
 
       if (task.due !== null) {
@@ -118,18 +159,14 @@ describe.skipIf(!isRecorded)('todoist fixture: recorded api/', () => {
       }
     }
 
-    expect(tasks.some(t => t.due !== null)).toBe(true);
+    expect(rows.tasks.some((t: Row) => t.due !== null)).toBe(true);
+    expect(rows.tasks.some((t: Row) => t.due === null)).toBe(true);
   });
 
-  it('keeps ids redacted and project references intact', () => {
-    const projectIds = new Set(rows('projects').map(p => p.id));
-
-    for (const p of rows('projects')) expect(p.id).toMatch(/^project-\d+$/);
-
-    for (const t of rows('tasks')) {
-      expect(t.id).toMatch(/^task-\d+$/);
+  it('keeps project references intact', () => {
+    const projectIds = new Set(rows.projects.map((p: Row) => p.id));
+    for (const t of rows.tasks as Row[])
       expect(projectIds).toContain(t.project_id);
-    }
   });
 
   it('projects through todoistProjection', () => {
@@ -160,8 +197,8 @@ describe.skipIf(!isRecorded)('todoist fixture: recorded api/', () => {
         terms: [term('task', 'class'), term('project', 'class')],
       },
       records: [
-        ...rows('tasks').map(r => record('task', r)),
-        ...rows('projects').map(r => record('project', r)),
+        ...(rows.tasks as Row[]).map(r => record('task', r)),
+        ...(rows.projects as Row[]).map(r => record('project', r)),
       ],
     };
     const projected = todoistProjection(fetched).records.filter(
@@ -178,31 +215,81 @@ describe.skipIf(!isRecorded)('todoist fixture: recorded api/', () => {
   });
 
   it('replays pages by cursor, reads by id, and refuses writes', () => {
-    const api = scenario.create();
-    const get = (path: string, method = 'GET') =>
-      api.request(method, new URL(`http://mock/proxy/todoist/api/v1${path}`));
+    const { fixture, get } = api();
 
-    for (const collection of ['projects', 'tasks'] as const) {
-      const seen: Row[] = [];
-      let res = get(`/${collection}?limit=3`);
-
-      for (;;) {
-        expect(res.status).toBe(200);
-        seen.push(...res.body.results);
-        if (!res.body.next_cursor) break;
-        res = get(`/${collection}?cursor=${res.body.next_cursor}`);
-      }
-
-      expect(seen).toEqual(rows(collection));
-    }
+    for (const collection of ['projects', 'tasks'] as const)
+      expect(paged(get, collection)).toEqual(rows[collection]);
 
     // At least one collection spans two pages, so cursor paging is exercised.
+    const pages = fixture.pages as Record<string, Page[]>;
     expect(pages.projects.length + pages.tasks.length).toBeGreaterThan(2);
+    expect(get('/tasks?cursor=page-99').status).toBe(400);
 
-    const task = rows('tasks')[0];
+    const task = rows.tasks[0] as Row;
     expect(get(`/tasks/${task.id}`).body).toEqual(task);
-    expect(get('/tasks/task-0').status).toBe(404);
+    expect(get('/tasks/no-such-task').status).toBe(404);
     expect(get('/tasks', 'POST').status).toBe(403);
     expect(get('/access_tokens').status).toBe(404);
+  });
+
+  it('shows the app what someone did in Todoist, and only by id once gone', () => {
+    const { fixture, get } = api();
+    const [first, second, third] = rows.tasks as Row[];
+    const ids = () => paged(get, 'tasks').map(t => t.id);
+
+    fixture.completeTask(first.id as string);
+    expect(ids()).not.toContain(first.id);
+    expect(get(`/tasks/${first.id}`).body).toMatchObject({
+      id: first.id,
+      checked: true,
+    });
+
+    fixture.deleteTask(second.id as string);
+    expect(ids()).not.toContain(second.id);
+    expect(get(`/tasks/${second.id}`).body).toMatchObject({
+      is_deleted: true,
+    });
+
+    fixture.removeTask(third.id as string);
+    expect(ids()).not.toContain(third.id);
+    expect(get(`/tasks/${third.id}`).status).toBe(404);
+
+    fixture.reopenTask(first.id as string);
+    expect(ids()).toContain(first.id);
+    expect(get(`/tasks/${first.id}`).body).toMatchObject({ checked: false });
+
+    expect(fixture.snapshot()).toMatchObject({ unreachable: [third.id] });
+
+    // Failures: the next matching request only.
+    fixture.failNext(1, 503, 'lookup');
+    expect(get('/tasks').status).toBe(200);
+    expect(get(`/tasks/${first.id}`).status).toBe(503);
+    expect(get(`/tasks/${first.id}`).status).toBe(200);
+    fixture.failNext(1, 401);
+    expect(get('/projects').status).toBe(401);
+    expect(get('/projects').status).toBe(200);
+    expect(() => fixture.failNext(1, 503, 'sometimes')).toThrow();
+  });
+});
+
+describe.skipIf(isRecorded)('todoist fixture: synthetic only', () => {
+  it('says it is synthetic, in its flag and its ids', () => {
+    expect(SYNTHETIC).toBe(true);
+    const rows = source();
+    expect(rows.synthetic).toBe(true);
+    for (const t of rows.tasks as Row[]) expect(t.id).toMatch(/^synthetic-/);
+    for (const p of rows.projects as Row[]) expect(p.id).toMatch(/^synthetic-/);
+    // Five tasks at three per page: two pages.
+    expect(rows.tasks).toHaveLength(5);
+    expect(rows.pageSize).toBe(3);
+  });
+});
+
+describe.skipIf(!isRecorded)('todoist fixture: recorded only', () => {
+  it('keeps ids redacted', () => {
+    const rows = source();
+    for (const p of rows.projects as Row[])
+      expect(p.id).toMatch(/^project-\d+$/);
+    for (const t of rows.tasks as Row[]) expect(t.id).toMatch(/^task-\d+$/);
   });
 });

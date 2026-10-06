@@ -12,7 +12,7 @@ import {
   ROW_EXTRAS_PROPERTY,
   TABLE,
 } from './fakeStore.js';
-import { EVENT } from './fields.js';
+import { EVENT, SHARED } from './fields.js';
 import { listCalendars } from './relay.js';
 import {
   ALL_DAY,
@@ -467,10 +467,11 @@ suite('Calendar drive app: supported path', () => {
 
   it('rows made here and invalid local edits are reported, not sent', async () => {
     const { store, controller } = await imported();
+    // A row made in the host table gets the table's class, event-v1.
     await store.newResource({
       parent: TABLE,
-      isA: [ROW_CLASS],
-      propVals: { [NAME]: 'Made here' },
+      isA: [EVENT],
+      propVals: { [NAME]: 'Made here', [SHARED.day]: '2026-09-24' },
     });
     editRow(store, 'timed', { [NAME]: '  ' });
     store.google.editRemote('timed', { location: 'Room 7' });
@@ -484,6 +485,33 @@ suite('Calendar drive app: supported path', () => {
     // Held back entirely: the Google edit does not overwrite the row either.
     expect(rows(store).get('timed')!.location).toBe('Room 4');
     expect(describe(state)).toContain('creating events isn’t supported');
+  });
+
+  it('a row missing a required event-v1 field is held back whole, marked incomplete, never sent (#177)', async () => {
+    const { store, controller } = await imported();
+    // The host table's Day column cleared on a synced row.
+    const subject = rows(store).get('timed')!.subject as string;
+    const { [prop(store, DAY_FIELD)]: _day, ...rest } =
+      store.resources.get(subject)!;
+    store.resources.set(subject, { ...rest, [NAME]: 'Renamed here' });
+    store.google.editRemote('timed', { location: 'Room 7' });
+    await controller.refresh();
+    const state = ready(controller.state());
+    expect(state.summary.invalid).toEqual([
+      { title: 'Renamed here', reason: 'Incomplete: missing Day' },
+    ]);
+    expect(state.summary.review).toEqual([]);
+    expect(state.summary.conflicts).toEqual([]);
+    // Held back entirely: neither side moves, and nothing is pending.
+    expect(rows(store).get('timed')!.location).toBe('Room 4');
+    expect(store.google.state().writes).toEqual([]);
+    const event = controller
+      .snapshot()
+      .events.find(e => e.subject === subject)!;
+    expect(event.incomplete).toBe('Incomplete: missing Day');
+    expect(event.pending).toBe(false);
+    // The other rows are unaffected.
+    expect(controller.snapshot().events.length).toBe(rows(store).size);
   });
 
   it('the import is bounded: past the page cap it fails and writes nothing', async () => {

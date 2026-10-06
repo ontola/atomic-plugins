@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadOpenApiDocument } from '../../../src/openapi/load.js';
-import { createMockServer, type MockServer } from '../../../src/mock-server/server.js';
+import {
+  createMockServer,
+  type MockServer,
+} from '../../../src/mock-server/server.js';
 import {
   createApiClient,
   type ApiClient,
@@ -12,7 +15,10 @@ import {
 } from '../../../src/client/storage.js';
 import { petsDocument } from '../../fixtures/pets.js';
 
-function countingStorage(): { storage: StorageAdapter; putCount: () => number } {
+function countingStorage(): {
+  storage: StorageAdapter;
+  putCount: () => number;
+} {
   const inner = new InMemoryStorageAdapter();
   let puts = 0;
   const storage: StorageAdapter = {
@@ -551,6 +557,9 @@ describe('createApiClient local-first writes', () => {
     server = createMockServer(document);
     const info = await server.listen();
     baseUrl = info.url;
+    // Seed before any POST: an unseeded collection created by POST and then
+    // emptied by DELETE would leave later tests without an item to edit.
+    await fetch(`${baseUrl}/pets`);
   });
 
   afterAll(() => server.close());
@@ -573,7 +582,13 @@ describe('createApiClient local-first writes', () => {
     const created = await client.create('/pets', { name: 'Milo', tag: 'cat' });
     expect(await client.get('/pets', created['id'] as string)).toEqual(created);
     expect(client.pendingWrites('/pets')).toEqual([
-      { resource: '/pets', id: created['id'], type: 'create', attempts: 0 },
+      {
+        resource: '/pets',
+        id: created['id'],
+        type: 'create',
+        attempts: 0,
+        state: 'pending',
+      },
     ]);
 
     const id = created['id'] as string;
@@ -648,7 +663,10 @@ describe('createApiClient local-first writes', () => {
       fetch: reassigningFetch,
     });
 
-    const created = await client.create('/pets', { name: 'Reassigned', tag: 'cat' });
+    const created = await client.create('/pets', {
+      name: 'Reassigned',
+      tag: 'cat',
+    });
     const localId = created['id'] as string;
 
     await waitUntil(() => client.pendingWrites('/pets').length === 0);
@@ -787,10 +805,12 @@ describe('createApiClient local-first writes', () => {
 
       expect(client.pendingWrites('/pets')).toHaveLength(1);
       expect(client.pendingWrites('/pets')[0]?.resource).toBe('/pets');
-      expect(client.pendingWrites().map((w) => w.resource).sort()).toEqual([
-        '/pets',
-        '/toys',
-      ]);
+      expect(
+        client
+          .pendingWrites()
+          .map((w) => w.resource)
+          .sort(),
+      ).toEqual(['/pets', '/toys']);
 
       releaseRequests?.();
       await waitUntil(() => client.pendingWrites().length === 0);

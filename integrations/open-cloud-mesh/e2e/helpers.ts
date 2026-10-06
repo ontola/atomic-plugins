@@ -11,10 +11,13 @@ import { resolve } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import { Agent, signedRequestInit } from '@tomic/lib';
 import {
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 
 export const LEVEL = process.env.PLUGIN_ROUTES_LEVEL ?? '';
 export const ROUTES_ORIGIN = process.env.PLUGIN_ROUTES_ORIGIN ?? '';
@@ -54,6 +57,7 @@ export async function installReceiver(
   const reviewUrl = page.url();
   await dialog.getByRole('button', { name: 'Install', exact: true }).click();
   await expect(page).not.toHaveURL(reviewUrl, { timeout: 60_000 });
+  await waitForOutboxDrained(page);
   const installation = subjectOf(page.url());
   const host = `${routeSlug(installation)}.${new URL(ROUTES_ORIGIN).host}`;
   const base = `http://${host}`;
@@ -78,12 +82,7 @@ export async function installReceiver(
 
 /** A Folder for received shares, and a Plugin draft whose source is the bundle. */
 export async function createPluginAndFolder(page: Page) {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
 
   return page.evaluate(
     async ({ code, folderClass, nameProp, descriptionProp }) => {

@@ -14,9 +14,10 @@ describe('moneybird drive-app bundle', async () => {
       `data:text/javascript;base64,${Buffer.from(text).toString('base64')}`
     );
     expect(Object.keys(mod)).toEqual(['view']);
-    // Measured 9,866 bytes minified on 2026-10-01, at the a12b74a6783b
-    // pin; the limit is that plus about 10%, rounded up.
-    expect(bytes).toBeLessThan(11_000);
+    // Measured 33,020 bytes minified on 2026-10-06 (0.2.0, which bundles
+    // ontology-kit/terms.mjs), at the a12b74a6783b pin; the limit is that
+    // plus about 10%, rounded up.
+    expect(bytes).toBeLessThan(36_400);
   });
 
   it('carries no credential handling, network access or fixture data', () => {

@@ -10,8 +10,39 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+/**
+ * Which of some paths git ignores, so tests that walk the working tree can
+ * skip output a local run leaves behind (`playwright-report/`,
+ * `integrations/tooling/test-results/`) without a hand-kept list of names.
+ *
+ * Uses `git check-ignore`, which honours .gitignore, .git/info/exclude and
+ * the user's global excludes. A tracked file is never reported as ignored,
+ * even if a pattern matches it. Outside a git work tree (a source tarball)
+ * nothing is reported as ignored, so the caller scans everything, which is
+ * the safe direction for a guard test.
+ *
+ * @param {string[]} paths  relative to `cwd`, or absolute
+ * @param {string} cwd      a directory inside the work tree
+ * @returns {Set<string>}   the subset of `paths` git ignores
+ */
+export function gitIgnored(paths, cwd) {
+  if (paths.length === 0) return new Set();
+
+  const result = spawnSync('git', ['check-ignore', '--stdin', '-z'], {
+    cwd,
+    input: paths.join('\0') + '\0',
+    encoding: 'utf8',
+  });
+
+  // 0: some ignored, 1: none ignored, anything else (128): not a work tree.
+  if (result.error || result.status !== 0) return new Set();
+
+  return new Set(result.stdout.split('\0').filter(Boolean));
+}
 
 /** Directories under integrations/ that are not a plugin lane. */
 export const NON_LANE_DIRECTORIES = ['tooling'];
@@ -261,6 +292,11 @@ export const sharedPorts = config =>
  * which a plugin bundles) and `ontology` (its published term files, which a
  * plugin's e2e reads through the dev-server) are not npm packages, but a
  * plugin depends on them the same way (#177).
+ *
+ * `integrations/sync-status` (the shared sync-status card, Decision Inbox
+ * Q-084) is shared code under `integrations/` with a lane of its own for its
+ * typecheck and unit tiers; an app that bundles it lists it here too, so a
+ * card change runs that app's lane as well.
  */
 export const SHARED_PACKAGES = [
   'devonian',
@@ -268,6 +304,25 @@ export const SHARED_PACKAGES = [
   'reflector',
   'ontology',
   'ontology-kit',
+  'integrations/sync-status',
+];
+
+/**
+ * The e2e steps the plugin-routes lanes share (open a Plugin draft, wait for
+ * an install to reach the server) live in one tooling file that their specs
+ * import. A lane that imports it must list it in `paths`, so a change to it
+ * reruns those lanes; this is the only file under integrations/tooling/ a
+ * plugin lane may name.
+ */
+export const ROUTE_INSTALL_HELPER = 'integrations/tooling/e2e/route-install.ts';
+const ROUTE_INSTALL_LANES = [
+  'remotestorage',
+  'open-cloud-mesh',
+  'fediverse',
+  'solid',
+  'willow',
+  'atproto',
+  'willow-drop',
 ];
 
 // Reviewed exact build dependencies: reuse the existing WILLIAM3 primitive without
@@ -281,7 +336,14 @@ export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
     'integrations/willow-drop/william3.ts',
     'integrations/willow-drop/plugin.js',
     'integrations/willow-drop/fixtures/expected.json',
+    ROUTE_INSTALL_HELPER,
   ],
+  ...Object.fromEntries(
+    ROUTE_INSTALL_LANES.filter(id => id !== 'willow').map(id => [
+      id,
+      [ROUTE_INSTALL_HELPER],
+    ]),
+  ),
 });
 
 /**
@@ -312,10 +374,16 @@ export const activeLanes = lanes => lanes.filter(l => l.tiers.length > 0);
 export function unlanedDirectories(lanes, base = root) {
   const ids = new Set(lanes.map(l => l.id));
 
-  return readdirSync(resolve(base, 'integrations'), { withFileTypes: true })
+  const dir = resolve(base, 'integrations');
+  const candidates = readdirSync(dir, { withFileTypes: true })
     .filter(d => d.isDirectory() && !NON_LANE_DIRECTORIES.includes(d.name))
     .map(d => d.name)
     .filter(name => !ids.has(name));
+  // A local e2e run leaves gitignored output (`playwright-report/`) here. That
+  // is not a plugin, and CI's checkout never has it.
+  const ignored = gitIgnored(candidates, dir);
+
+  return candidates.filter(name => !ignored.has(name));
 }
 
 /** Lanes naming a directory that no longer exists. */

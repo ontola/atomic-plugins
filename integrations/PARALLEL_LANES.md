@@ -104,11 +104,16 @@ CI and the local runner read:
 The path filter for lane `<id>` is `integrations/<id>/**` by convention, so
 `changes` can generate its `filters:` from this file rather than restating it.
 A lane whose code imports a shared package from source adds an optional
-`paths` array of globs inside `devonian/`, `syncables/` or `reflector/`
-(`lanes.mjs` rejects anything else, in particular another plugin's folder),
-so a change there still runs it: issue-tracker lists `devonian/src/**`
-because `devonian/github-issues/` imports the `devonian` package. Those
-globs also join the `any` filter, since `build-server` is gated on it.
+`paths` array of globs inside `devonian/`, `syncables/`, `reflector/`,
+`ontology/`, `ontology-kit/` or `integrations/sync-status/` (the
+`SHARED_PACKAGES` list in `lanes.mjs`, which rejects anything else, in
+particular another plugin's folder), so a change there still runs it:
+issue-tracker lists `devonian/src/**` because `devonian/github-issues/`
+imports the `devonian` package; timesheets lists
+`integrations/sync-status/**` because its app bundles the shared sync-status
+card, which also has a lane of its own (`sync-status`, typecheck and unit)
+for the card's own tests. Those globs also join the `any` filter, since
+`build-server` is gated on it.
 Add a `lanes.test.mjs` case asserting every directory under `integrations/`
 that is not `tooling/` has a lane entry — that is the check that would have
 caught `calendar/`.
@@ -463,7 +468,7 @@ Rules that keep parallel worktrees from fighting:
   deleted in atomic-server `4bab16ee6` (in the pin), together with the UI
   they drove (#44). `integrations/timesheets/e2e/clockify.spec.ts` (#96)
   drives the timesheets drive app through `store.proxy` instead, with a
-  test-side install until #94. See
+  test-side install (at the pin the host installs from the catalog; #94, closed). See
   [`HANDOFF-e2e-split.md`](HANDOFF-e2e-split.md).
 - `integrations/money/` has one tier, `e2e` (#95): `money.spec.ts` drives
   the Bank statements importer through atomic-server's generic file entry

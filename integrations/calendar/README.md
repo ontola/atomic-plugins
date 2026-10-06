@@ -16,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   122,135 bytes for 0.2.0) from GitHub Pages and refuses it unless it
+   129,735 bytes for 0.3.1) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -122,9 +122,24 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
   `event-v1` table (one made with New table and the class URL pasted, #177
   S3), the app draws that table's events from their shared fields, read
   only, says "Not synced with Google Calendar", and makes no proxy request
-  and no write. "Sync this table to Google Calendar" (#177 §6.2 item 14) is
-  not built; it would need the row extras above, which the pin's row grant
-  now covers, plus a place for the calendar binding that isn't the table.
+  and no write to the table or its rows. From 0.3.0 it offers "Sync this
+  table to Google Calendar"; see
+  [Syncing a table the app didn't make](#syncing-a-table-the-app-didnt-make).
+- **Incomplete rows** (0.3.1; ontology-kit's rule for every shared-class
+  view: a row missing a required field is shown as incomplete, not skipped).
+  `event-v1` requires Name and Day. A row without one is read through the
+  resolver's `missing`, kept in the views, and listed in an "Incomplete rows"
+  section above the Agenda and Week with "Incomplete: missing Day" (or Name,
+  or both) and an "Open row" button (`store.openResource`) to fix it in the
+  table; the drawer says the same. A row without a Day is drawn on no day,
+  as the host's Calendar view draws it nowhere (the section is where it
+  appears); one without a Name is drawn as "(untitled)" with the tag. A
+  synced row that is incomplete is held back whole, like an invalid edit:
+  nothing of it is sent, Google's edits to it are not applied, it is never
+  "Not sent yet", and the review sheet lists it under "Not sent" with the
+  reason. Unit (`app/view.test.ts`, `app/sync.test.ts`) and the hand-made
+  table e2e below, which holds a row with an empty Name and checks the host
+  refuses one without a Day. At the pin the server refuses a commit that lacks a required property of the row's class (`lib/src/resources.rs` `check_required_props`, presence only), so on this host a required field can be absent only as an empty string (`name` is a string; the resolver counts `''` as missing), through a lens, or on a host that did not check; a required date or timestamp cannot be empty there.
 - **Gate.** The catalog entry stays `enabled: false` while the ontology base
   is on github.io (`ontology.mjs check`; card copy "Waits for the stable
   ontology domain."). Test-side installs (the e2e, the user-testing
@@ -135,6 +150,63 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
   per session; #177 S1). A browser that has never seen the class, while
   Pages is down, shows the table with no columns (#177 H1, not fixed at the
   pin).
+
+## Syncing a table the app didn't make
+
+From 0.3.0 (#177 §6.2 item 14; the pattern for other plugins is in
+[`../README.md`](../README.md#syncing-a-table-the-app-didnt-make)). On an
+`event-v1` table that isn't the app's own, the "Not synced" banner offers
+**Sync this table** ("Sync this table to Google Calendar"). Pressing it:
+
+1. **Allow editing.** The app compares `store.rowAccess()` with the four
+   row extras it declares (`google-event-id`, `google-etag`, `google-link`,
+   `sync-baseline`, see [Shared class](#shared-class-event-v1-177)). When
+   there is no grant, or one that doesn't cover them (for example "Allow
+   editing" chosen in Add view before the app had ever opened), it calls
+   `store.requestRowAccess()`: the host's own bar asks "Allow editing" or
+   "Not now", and says the app keeps data of its own on rows. "Not now"
+   leaves the table not synced, with the reason in the banner.
+2. **A binding under the App.** The pinned host's row grant never writes
+   the table itself (`app_row_grant.rs`), so the calendar choice can't be
+   kept on it as it is on the app's own table. The app makes a resource
+   under the App with `synced-table` (a Property of its own ontology,
+   datatype `atomicURL`, the table's subject) and, once chosen,
+   `google-calendar-id` and `google-calendar-meta`. It finds it with
+   `store.query` on `synced-table` and accepts only a result whose parent is
+   the App. One binding per table; a table never switches calendars.
+3. **Connect and choose**, as on the app's own table, with copy naming the
+   table ("Which calendar should Team events sync with?") and a "Not now"
+   that removes a binding that has no calendar yet.
+4. **The same sync.** Google's events become new rows of that table, with
+   the extras on each row; compare on open, review before send, `If-Match`,
+   and the conflict rules are those of the app's own table.
+
+What differs from the app's own table:
+
+- The table keeps its name; the app never writes it.
+- Rows that were in the table before stay local only, untouched, and are
+  counted as "made here" (#177 Q6, as on the app's own table). The first
+  import does not match them against Google's events.
+- **No deletes.** A grant never lets an app delete a row. For an event gone
+  from Google, the conflict sheet offers "Keep as local event" (which takes
+  the extras off the row, allowed) and says to delete the row in the table;
+  "Remove local copy" is not offered.
+- **A grant taken back** (the tab's menu, the view removed, the person who
+  gave it losing write access): the app checks the grant on every open and
+  before every sync, and then shows "Syncing with Google Calendar is
+  paused" with Sync this table, which asks again and goes on with the same
+  calendar. No request reaches the proxy while paused.
+- Nothing runs while the app is closed, as everywhere (#177 H6, H11).
+
+Not settled (questions for Michiel, see the PR): whether there should be a
+"Stop syncing" that removes the binding (and what it does to the rows'
+extras), whether rows already in the table should be offered for "Publish
+to Google Calendar", and whether the same calendar may be synced into two
+tables (nothing prevents it today; each table keeps its own baselines).
+
+Declared by `app/syncTable.test.ts` (the fake store enforces the pin's
+grant: columns plus declared extras, no table write, no delete) and one e2e
+(below). Not live-verified.
 
 ## Mapping
 
@@ -419,11 +491,16 @@ has not been checked here.
   Checked at pin `a12b74a` by a throwaway spike through the frame protocol
   and by the e2e. Pages must be reachable the first time the server or a
   browser uses a term (see [Shared class](#shared-class-event-v1-177)).
+- **Sync this table** (0.3.0): `store.rowAccess()` and
+  `store.requestRowAccess()` (atomic-server #1740), and a row grant that
+  covers the App's `row-extras` (#1849), both in pin `a12b74a`. Without
+  them the button is not offered and the table stays read only.
 - The `store` members the app calls are listed in `app/operations.ts`
   (`HOST_OPERATIONS`): `getApp`, `getData`, `getResource`, `query`, `newResource` and
   `proxy.request`/`.connections`/`.connect` on every host with the relay;
   `openExternal`, `openResource`, `getTheme`, `onThemeChange` and
-  `proxy.disconnect` feature-detected (pin 007869464). `app/operations.test.ts`
+  `proxy.disconnect` feature-detected (pin 007869464), and `rowAccess`
+  and `requestRowAccess` feature-detected (pin a12b74a). `app/operations.test.ts`
   runs the controller's whole flow and mounts the view against a recording
   store, and checks that exactly those members were touched.
 
@@ -464,7 +541,13 @@ node --test integrations/localthought/mock-proxy.test.mjs
   outside the app, found on open (see the table above). `app/adopt.test.ts`:
   the first-open move of a table as 0.1.4 left it onto `event-v1`, with an
   unsent edit kept, idempotence, `row-extras` skipped on a host without it,
-  and the read-only view of another `event-v1` table. `app/build.test.ts` checks that the
+  and the read-only view of another `event-v1` table.
+  `app/syncTable.test.ts`: Sync this table on another `event-v1` table
+  (the grant asked for once, an older grant without extras asked again,
+  Not now, the binding under the App, the table untouched, rows already
+  there kept local, a row edit sent with `If-Match`, a reopen without a
+  question, a revoked grant pausing without a proxy request, no delete).
+  `app/build.test.ts` checks that the
   bundle is one ES module exporting only `view`, with no storage, `fetch` or
   credential of its own. `app/operations.test.ts`: the declared scope (see
   [Proxy catalog](#proxy-catalog)) against the relay, the composed proxy
@@ -499,12 +582,24 @@ node --test integrations/localthought/mock-proxy.test.mjs
   Another (#177) makes an `event-v1` table as the signed-in user, with one
   row that has only a Day, adds the app to it through "+ Add view"
   (read-only), and checks the "Not synced" banner and the row drawn as an
-  all-day event, with no Edit.
+  all-day event, with no Edit. Another (#177 item 14) makes such a table
+  with one row, adds the app Read-only, presses "Sync this table to Google
+  Calendar", allows editing in the host's bar, connects, chooses the
+  primary calendar and imports; checks the three events are rows of that
+  table with the extras, the person's row untouched, the table's name and
+  class unchanged and the calendar id on the binding under the App; then
+  edits the three-day event's Notes as the signed-in user and checks the
+  review lists it and the fixture received a `PATCH` of only
+  `description`, with `If-Match`, and that the row's baseline moved.
   Screenshots are attached to the Playwright report. The first test ends by
   reading every request the mock proxy received from the frame
   (`POST /fixture/google-calendar/received`) and checking that each is one
   of the three declared operations, with its query and `If-Match`, and that
   all three were used.
+- **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+calendar --i-understand-this-writes-to <calendar id>` runs this app's
+  controller against one disposable Google calendar and writes evidence; see
+  [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
 - **Live: not verified.** No run against a real Google account exists for
   this path. Evidence from the retired LocalThought/Devonian flow does not
   count for it. To verify, with authorized credentials and a disposable

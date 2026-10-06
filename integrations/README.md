@@ -62,6 +62,17 @@ Not covered by the script:
   set `ATOMIC_SERVER_IMAGE` to run the published
   `ghcr.io/ontola/atomic-server-e2e:<pin>` image in Docker instead (AGENTS.md,
   "Shared pinned atomic-server build").
+- where the lanes listen. `serve.mjs` starts the local atomic-server binary
+  with `ATOMIC_IP=127.0.0.1` unless `ATOMIC_IP` is already set (then yours
+  wins), and the dev-server on `127.0.0.1` unless `DEV_SERVER_HOST` is set;
+  the mock proxy already defaulted to loopback. atomic-server's own default
+  is `::`, every interface, which on a host with a public address makes a
+  lane server "available" to anyone who can reach it. With
+  `ATOMIC_SERVER_IMAGE` the container still binds `0.0.0.0` and the port is
+  published on `127.0.0.1` only; the dev-server then listens on `0.0.0.0` so
+  the container can fetch it through `host.docker.internal` (the ontology
+  lane). A peer in Docker must reach the host on `127.0.0.1` too, so use
+  `--network host`, not `host.docker.internal`.
 - certify's `--layer sandbox` and `--layer all` (the default is `--layer js`). Both run
   `cargo test -p atomic-server` from this repo's root for the Rust tests
   named in each `package.json`'s `atomicCertification.sandboxTests`. That
@@ -174,8 +185,9 @@ since this repo is not the source of its published releases.
 A host is meant to read a package's `version` (directly, or via
 `catalog.json`) at install time to record which release an installation is
 pinned to, and later compare it against this repo's current `version` to
-offer an update. No host does this at the current pin
-([#94](https://github.com/ontola/atomic-plugins/issues/94)). Bump
+offer an update. For a sandbox plugin's `plugin.js` no host does this at the
+current pin. For a drive app the host does, from the `app-module` fields (see
+[Publishing a drive app](#publishing-a-drive-app); #94, closed). Bump
 `package.json` `version` (and the matching catalog entry) whenever an
 integration's shipped `plugin.js` changes.
 
@@ -227,8 +239,8 @@ enclosing plugin's `package.json` is not read for it.
 | `app-module-integrity`                | `sha384-…` (Subresource Integrity) of those bytes.                                                                                                      |
 | `app-row-name`, `app-row-name-plural` | Optional names for the app's table rows.                                                                                                                |
 
-The host (atomic-server#1689, in the current `.atomic-server-ref` pin, not
-yet merged upstream) lists these entries under **Drive apps** on the
+The host (atomic-server#1689, merged to `develop` in batch #1699 on
+2026-09-24, and in the current `.atomic-server-ref` pin) lists these entries under **Drive apps** on the
 Integrations page, with the same `enabled`/`experimental`/`requires-api-plugins`
 gates as other entries. **Install** downloads `app-module`, refuses it unless
 its bytes match `app-module-integrity`, and creates an ordinary app from it:
@@ -335,6 +347,79 @@ committed `apps/<id>/<version>/ui.js` files at `/apps/...` and points the
 served catalog's `app-module` there, leaving the integrity as committed. The
 host's check therefore still applies.
 
+## Syncing a table the app didn't make
+
+[#177](https://github.com/ontola/atomic-plugins/issues/177) §6.2 item 14:
+a drive app whose rows are a shared class (`event-v1`, `issue-v1`,
+`time-entry-v1`, ...) is offered by the host's "+ Add view" on any table of
+that class. On such a table it can offer "Sync this table to <provider>".
+Calendar 0.3.0 does this for Google Calendar
+([`calendar/README.md`](calendar/README.md#syncing-a-table-the-app-didnt-make)),
+and issue-tracker 0.3.0 for GitHub
+([`issue-tracker/README.md`](issue-tracker/README.md#syncing-a-table-the-app-didnt-make)),
+and timesheets 0.6.0 for Clockify, with that table's observation log under
+its binding
+([`timesheets/README.md`](timesheets/README.md#syncing-a-table-the-app-didnt-make)).
+What the pinned host (`a12b74a`) allows, read from `server/src/plugins/app_row_grant.rs`,
+`server/src/handlers/app_write.rs` and the page's `AppPage/hostStore.ts`,
+and checked by the calendar and issue-tracker e2es:
+
+| Write                                                                          | Allowed                                                                                                                                                     |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anything under the App (its own subtree)                                       | Always, no grant: create, save, remove, destroy                                                                                                             |
+| A row of the table: the row class's `requires` and `recommends`                | After "Allow editing" (a row grant, #1740), on rows whose parent is the table and whose `isA` includes the row class                                        |
+| A row of the table: the App's `row-extras` (#1849)                             | Only the extras the App declared **when the grant was given**, and only while it still declares them; each must be a Property not defined under another app |
+| A new row                                                                      | With a grant: parent the table, `isA` exactly `[row class]`, properties as above                                                                            |
+| Delete a row                                                                   | Never through a grant                                                                                                                                       |
+| The table itself (name, `classtype`, views), a row's `parent`, `isA` or rights | Never                                                                                                                                                       |
+
+The pattern, as calendar implements it:
+
+1. **Declare the extras first.** On every open, the app makes its provider
+   Properties in its own ontology and lists the ones it keeps on rows as the
+   App's `row-extras` (calendar: `adopt.ts`). A grant given before that
+   (for example "Allow editing" in Add view, before the app first opened)
+   covers none of them.
+2. **Offer, don't assume.** With no binding for the table, show its rows
+   read only and a "Sync this table to <provider>" button. Nothing is
+   written before the person presses it.
+3. **Ask with the host's own question.** Compare `store.rowAccess()`'s
+   `extras` with the subjects the app needs; when the grant is missing or
+   doesn't cover them, call `store.requestRowAccess()`. The host shows its
+   "Allow editing" bar and records a new grant for the list the App declares
+   now, superseding an older one. "Not now" leaves the table unsynced.
+4. **Keep the binding under the App.** The source choice (calendar id,
+   repository, workspace) can't go on the table, which a grant never writes.
+   Calendar makes a resource under the App with a `synced-table` Property
+   (an `atomicURL`, the table's subject) next to `google-calendar-id` and
+   `-meta`, and finds it with `store.query({ property, value: table })`,
+   accepting only a result whose parent is the App. Per-row bookkeeping
+   (provider id, ETag, baseline) goes on the rows, as decision 7 on #177
+   says.
+5. **Then run the same sync as on the app's own table**: compare on open,
+   review before send, the same conflict rules. Rows that were in the table
+   before are local only (Q6); a "Publish to <provider>" is a separate
+   step.
+6. **Check the grant on every open and every sync.** It lapses when the
+   view is removed, the person who gave it loses write access, the app's key
+   changes, or someone revokes it in the tab menu. Without it, say the sync
+   is paused and offer to allow editing again; don't fail on the first
+   write. A provider deletion can't delete the row: offer "keep as local"
+   and tell the person to delete the row in the table.
+7. **List everything the app writes on rows.** The grant checks every
+   property a row write sends, not only the provider's. Issue-tracker's
+   Bridge sets Atomic's `localId` on each row it imports (so a create a
+   reload interrupted is found again, not made twice), so issue-tracker
+   0.3.0 lists `localId` in `row-extras` too. A property under another app,
+   or on the never-list (`parent`, `isA`, rights, `classtype`), can't be one.
+
+What this does not give, at the pin: edits made while the app is closed are
+found only on its next open (the app can't read `/changes` or receive
+`afterCommit` from its frame, #177 H6), and nothing syncs in the background
+(H11). The table's owner sees and revokes the grant in the tab's menu. The
+binding is an ordinary resource under the App; what an uninstall does with
+it was not checked.
+
 ## Choosing a placement
 
 Before writing code, decide where each part of a package runs. The full
@@ -354,7 +439,8 @@ below is **planned**, with the atomic-server issue that would build it.
   runtime exists. At the pin, a file importer can be created as a draft
   from a published release and run from its plugin page's Import tab
   (atomic-server#1653), as `money/` is; publishing the bundle to a server
-  is still manual ([#94](https://github.com/ontola/atomic-plugins/issues/94)).
+  is still manual: the catalog's install path (#94, closed) covers drive apps
+  with `app-module`, not sandbox bundles.
   [READINESS.md](READINESS.md) has the per-plugin state.
 - **C. Sandbox route.** The same sandbox as B, invoked fresh for each
   inbound HTTP request from anyone. Planned and gated:

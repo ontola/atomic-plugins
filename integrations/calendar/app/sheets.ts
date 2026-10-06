@@ -354,7 +354,11 @@ export function conflicts(
     onChoose: (c: Conflict, field: keyof Projection, choice: Choice) => void;
     onResolve: (c: Conflict) => void;
     onKeep: (c: Conflict) => void;
-    onRemove: (c: Conflict) => void;
+    /**
+     * Absent on a table the app is a view of: a row grant never lets an app
+     * delete rows (atomic-server#1740), so the person deletes it in the table.
+     */
+    onRemove?: (c: Conflict) => void;
     onConfirm: (c: Conflict | undefined) => void;
     /** Present when the host can show a row or the table. */
     onOpenRow?: (c: Conflict) => void;
@@ -464,7 +468,7 @@ export function conflicts(
           { class: 'cf-lost' },
           'This event is no longer in Google Calendar — it was cancelled, became recurring, or you lost access. Your copy here was not deleted.',
         ),
-        confirming === c
+        confirming === c && onRemove
           ? h(
               doc,
               'div',
@@ -504,16 +508,23 @@ export function conflicts(
               doc,
               'div',
               { class: 'chg-ft' },
-              h(
-                doc,
-                'button',
-                {
-                  class: 'btn btn-sm',
-                  'data-key': `remove-${index}`,
-                  onclick: () => onConfirm(c),
-                },
-                'Remove local copy',
-              ),
+              onRemove
+                ? h(
+                    doc,
+                    'button',
+                    {
+                      class: 'btn btn-sm',
+                      'data-key': `remove-${index}`,
+                      onclick: () => onConfirm(c),
+                    },
+                    'Remove local copy',
+                  )
+                : h(
+                    doc,
+                    'span',
+                    { class: 'fine' },
+                    'To remove it, delete the row in the table.',
+                  ),
               h(
                 doc,
                 'button',

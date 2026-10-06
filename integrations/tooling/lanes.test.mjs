@@ -1,7 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   loadLanes,
   validateConfig,
@@ -21,6 +31,7 @@ import {
   sidecarImageEnv,
   root,
   PLUGIN_BUILD_DEPENDENCIES,
+  ROUTE_INSTALL_HELPER,
   SHARED_PACKAGES,
 } from './lanes.mjs';
 
@@ -34,6 +45,21 @@ test('every plugin directory has a lane', () => {
     [],
     'add these to integrations/lanes.json',
   );
+});
+
+test('unlanedDirectories skips gitignored output but reports a real unlaned plugin', () => {
+  const base = mkdtempSync(join(tmpdir(), 'lanes-'));
+
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: base });
+    writeFileSync(join(base, '.gitignore'), 'playwright-report/\n');
+    for (const d of ['pets', 'playwright-report', 'newplugin'])
+      mkdirSync(join(base, 'integrations', d), { recursive: true });
+
+    assert.deepEqual(unlanedDirectories([{ id: 'pets' }], base), ['newplugin']);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test('every lane names a directory that exists', () => {
@@ -109,10 +135,14 @@ test('a lane filter covers its own directory and only explicit sibling dependenc
 
     const [own, ...extra] = laneFilter(lane);
     assert.equal(own, `integrations/${lane.id}/**`);
+    // Under integrations/ a lane may claim only its declared build
+    // dependency or a shared package that lives there (sync-status, Q-084),
+    // never another plugin's folder.
     for (const path of extra)
       assert.ok(
         !path.startsWith('integrations/') ||
-          PLUGIN_BUILD_DEPENDENCIES[lane.id]?.includes(path),
+          PLUGIN_BUILD_DEPENDENCIES[lane.id]?.includes(path) ||
+          SHARED_PACKAGES.some(pkg => path.startsWith(`${pkg}/`)),
         `${lane.id} claims ${path}`,
       );
   }
@@ -183,6 +213,38 @@ test('lane paths are limited to shared packages', () => {
   assert.throws(
     () => validateConfig(cfg(lane({ paths: 'devonian/**' }))),
     /paths must be an array/,
+  );
+});
+
+test('the shared route-install e2e helper is listed by exactly the lanes that import it', () => {
+  const importers = config.lanes
+    .filter(l => laneFilter(l).includes(ROUTE_INSTALL_HELPER))
+    .map(l => l.id)
+    .sort();
+  const expected = [
+    'atproto',
+    'fediverse',
+    'open-cloud-mesh',
+    'remotestorage',
+    'solid',
+    'willow',
+    'willow-drop',
+  ];
+  assert.deepEqual(importers, expected);
+
+  for (const id of expected) {
+    const dir = resolve(root, `integrations/${id}/e2e`);
+    const text = readdirSync(dir)
+      .filter(f => f.endsWith('.ts'))
+      .map(f => readFileSync(resolve(dir, f), 'utf8'))
+      .join('\n');
+    assert.match(text, /tooling\/e2e\/route-install/, id);
+  }
+
+  assert.throws(
+    () =>
+      validateConfig(cfg(lane({ id: 'pets', paths: [ROUTE_INSTALL_HELPER] }))),
+    /not in a shared package/,
   );
 });
 

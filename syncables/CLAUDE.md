@@ -59,31 +59,17 @@ Data flows through four stages, each its own directory under `src/`:
    Everything downstream assumes refs are already resolved; `types.ts` holds
    the minimal OpenAPI type surface actually used (not a full spec typing).
 
-2. **`resources/discover.ts`** — turns `document.paths` into a list of
-   `ResourceRoute`s by pairing each collection path (`/pets`) with its direct
-   item-path child (`/pets/{petId}`). This pairing is the core concept the
-   rest of the codebase builds on: a "resource" only exists where that
-   pairing holds. Paths without a matching item path (health checks, one-off
-   actions) are not resources and are handled separately as raw
-   request/response passthroughs.
+2. **Resource discovery** — `read/model.ts` reads `components.crudResources`
+   for both the one-off reader and local replica: named collections, identity
+   fields, parent bindings and GET/POST list configuration. `read/collections.ts`
+   owns traversal and returns raw per-context collections with explicit
+   completion/error status. `read/read.ts` adds ontology/type projection.
 
-   Path parameters belonging to the *collection* itself (as opposed to the
-   item id) aren't substituted anywhere downstream: `client.ts`'s
-   `collectionUrl`/`itemUrl` only fill in `itemParam`, so a nested resource
-   like GitHub's `/repos/{owner}/{repo}/issues` would be requested with
-   `{owner}`/`{repo}` still literally in the URL; the mock server's
-   `ResourceStore` also keys collections by the raw path template, so every
-   `{owner}`/`{repo}` combination would collide into one shared collection.
-   The current model only really supports resources at a fixed,
-   parameter-free collection path.
-
-   A sibling spec, the [OpenAPI CRUD Causality Extension](../openapi-extensions/spec/crud-causality/README.md)
-   (`components.crudResources`, `x-crud`), formalizes a superset of this —
-   multiple collections per resource, server-added fields, and (via
-   `identity.bindings`) exactly the collection-path-parameter carryover
-   described above — and names this project as its intended reference
-   implementation. It isn't implemented here yet; `discoverResources`'s
-   pairing is a narrower, ad hoc stand-in for it.
+   For compatibility, the client opts into `resources/discover.ts` path-pair
+   discovery when CRUD metadata is absent. The mock server still uses that
+   legacy model. Legacy nested paths require `constants`; metadata-driven
+   parent collections supply bindings automatically. This implements a
+   subset of CRUD Causality, not all its request/patch/mint semantics.
 
 3. **`mock-server/`** — `server.ts` is the request handler; it uses
    `routing/router.ts` (`findRoute`) to match an incoming path against the
@@ -96,53 +82,164 @@ Data flows through four stages, each its own directory under `src/`:
    response verbatim. Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
 
-4. **`client/`** — `client.ts`'s `createApiClient` also runs `discoverResources`
-   against the same document to know what resources/routes exist, then talks
-   to a live server over `fetch`. Nothing in this package reads an OpenAPI
-   document's `security`/`securitySchemes` (not even present in `types.ts`'s
-   type surface) — there's no built-in notion of auth. `ApiClientOptions.fetch`
-   is the only extension point, so authenticating (a bearer token, an API
-   key from an env var, etc.) means passing a `fetch` wrapper that adds the
-   right header to every request. Reads are served from local storage
-   (`StorageAdapter`, `storage.ts`; `InMemoryStorageAdapter` is the default —
-   pass a custom adapter to persist elsewhere). `sync()` and the standalone
-   `paginate()` method both walk every page of a paginated GET operation
-   before returning (see below).
+4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
+   by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
+   the same `walkPages` as the reader, including POST-body cursors, next-link
+   checks and budgets. Failed/incomplete collections do not replace or prune
+   stored records. GET validators reuse raw cached response bodies.
 
-   `create`/`update`/`remove` are local-first: each writes to `storage`
-   immediately and returns without waiting on the network, then applies
-   itself against the server in the background via a per-record write
-   queue (keyed by `${resource}:${id}`, one write in flight at a time so
-   writes to the same record land in server order), retrying failures with
-   exponential backoff (`ApiClientOptions.retry`; unlimited attempts by
-   default). `create` generates a local id up front (`crypto.randomUUID()`,
-   or whatever `data.id` already is) so the record exists locally before
-   any request is sent; if the server assigns a different id, the record —
-   and anything still queued behind that create — is moved onto it once
-   the write settles (the mock server instead honors a client-supplied id
-   when present, which is common enough in real APIs that this rarely
-   triggers). `pendingWrites()` reports writes not yet confirmed by the
-   server, including the last error and attempt count for ones currently
-   failing. `update()` always sends a `PUT` (full replace) — there's no
-   `PATCH`/partial-update path on the client, even though the mock server's
-   `handleItemRequest` accepts both.
+   All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
+   over supplied/global fetch. `auth.ts` holds credentials and an injected
+   `authenticate(request, credentials)` adapter, plus API-key/bearer helpers.
+   `node.ts`, exported by the main entry, adds environment fallback through
+   `credentials.ts`: explicit fields override `SYNCABLES_*` values, with an
+   optional prefix or disable switch. OAuth token acquisition, consent and
+   persistence belong to the auth adapter. No environment loader is reachable
+   from the browser entry.
 
-   `sync()` is meant to be called repeatedly (`startPolling({ intervalMs })`
-   does this on an interval, skipping a tick if the previous sync is still
-   in flight) without re-doing work each time: for a non-paginated
-   collection it conditionally re-fetches, keyed by exact request URL,
-   sending `If-None-Match`/`If-Modified-Since` from the prior response's
-   `ETag`/`Last-Modified` and treating a `304` as "nothing to do" (reusing
-   the item list from the previous sync rather than re-parsing a body).
-   Even on a fresh `200`, or for a paginated collection (which can't be
-   conditionally short-circuited the same way, since pagination has to be
-   walked in full to know the current item set), it only touches storage
-   for items that actually changed — per-item change detection prefers a
-   handful of common "this changed" fields (`updatedAt`, `version`, `_rev`,
-   etc.) over deep-comparing the whole object, so it also works against
-   servers with no conditional-request support at all. `sync()`'s return
-   value and each `onSync` callback report which collection paths actually
-   changed.
+   `storage.ts` holds the record-only `StorageAdapter`. Confirmed remote state
+   and unresolved mutations are held separately in memory (the mutations also
+   in the durable outbox, below); refresh and older
+   acknowledgements replay remaining intent to derive the visible record.
+   Metadata collection names and bound context identify storage namespaces;
+   identical IDs in sibling parents stay separate. Legacy names remain paths.
+   Writes are serialized per scoped record and retry with exponential backoff
+   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   updates select declared PUT, otherwise PATCH, and currently send JSON
+   records rather than JSON Patch. Read-only operations fail before local edits.
+
+   `read/responses.ts` supplies an optional awaited `storeResponse` hook,
+   available on client reads, `readCollections`, `readPlatform` and standalone
+   pagination. It retains the original body text before interpretation and
+   relevant data headers, excluding auth/cookie headers. Capture is outside
+   the auth adapter so request URLs/bodies have not yet received credentials.
+   It captures data-read responses only, including 304/errors/429 attempts.
+   Hosts choose archival storage and retention; automatic replay is absent.
+
+   Pending updates record the confirmed values of the fields they change;
+   a refresh that shows another remote value for such a field records a
+   `WriteConflict` (on `pendingWrites()` and `onConflict`) while the local
+   value stays visible and is still sent. A create with no response, an
+   unusable 2xx body or a 5xx other than 503 becomes `uncertain` and is not
+   resent until `resolveWrite` (retry, discard, or confirm with the server
+   id), unless an `Idempotency-Key` header (declared on the create operation
+   or `idempotencyKeyHeader`) lets it retry with the same key. Errors
+   raised before the request reaches the transport (an `authenticate`
+   adapter throwing) keep the backoff retry. Non-2xx responses are
+   classified (`classify`, `defaultWriteFailureClass`, overridable with
+   `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
+   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
+   never below the backoff), `permanent` (other 4xx: failed
+   at once, through the same path as `retry.maxAttempts`), `satisfied` (a
+   delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
+   renewal before an accepted response, then `permanent`; `afterRenewal`
+   and `authEpoch` are captured after the in-flight store, just before
+   sending, and any response at the current epoch that `classify` does
+   not report `refused` clears `afterRenewal`; `refused` also covers a
+   response the classifier in use (`classOf`, called a second time with
+   `afterRenewal: false` for requests sent after a renewal) calls
+   `auth`). `onAuthFailure: 'retry'` turns `auth` into `retry` and drops a stored block on restore.
+   A create classified `auth` that `mayHaveApplied` (custom classifier on a
+   5xx) without a usable key goes the `retry` path, so it becomes
+   `uncertain`.
+   `auth` sets the client-wide
+   `authBlock` (stored in the outbox, `onAuthBlocked`, `authBlocked()`): the
+   write becomes `blocked` without counting an attempt, `drainQueue` sends
+   nothing while it is set (also re-checked after the in-flight store:
+   outcome `held`), `countRefreshMisses` does not count, `resolveWrite`
+   `discard` drops a blocked head, and
+   `authRenewed()` clears it, bumps `authEpoch` and restarts every queue. A
+   401/403 for a request sent before the latest renewal (older epoch) is
+   resent at once. A failed create (`retry.maxAttempts` or `permanent`) is
+   parked like an uncertain one; failed updates and deletes are kept per
+   record (`gaveUpWrites`), lose the fields a later
+   settled write sets, and are not dropped by new writes. Settled writes
+   rebase later queued updates' conflict bases and invalidate
+   `lastSyncedItems`. See the README's "Uncertain creates".
+
+   `outbox.ts` holds the durable outbox format: one versioned record
+   (`syncables:outbox`/`outbox`, `outboxNamespace`; off without a supplied
+   `storage`) in the same adapter with every unsettled write (queues, failed
+   writes, states, conflict bases, idempotency keys, the confirmed record per
+   written record, pending id-remap rebuilds). It is stored whole,
+   serialized, before the visible record on `create`/`update`/`remove`,
+   before each send (an in-flight mark) and after each outcome. A write whose
+   own first store has not succeeded is left out of other calls' stores.
+   `restore()` runs at construction (`ready()`; retried after a storage
+   error, not after a version refusal); a write found in flight counts as an
+   attempt (`retry.maxAttempts` applies), and a create without a key the
+   client can still send becomes `uncertain`. Restored updates wait
+   (`awaitingRefresh`) for a complete `sync()` of their scope before sending,
+   unless a create precedes them; a settle on the same record during the
+   read (`recordRevisions`) skips the release, three non-releasing syncs
+   fail it, and `resolveWrite` retries or discards it (the miss count is
+   stored). A complete read lacking a record with queued updates (restored
+   or in memory, PUT or PATCH) holds them (`holdMissing`: `awaitingRefresh`
+   on each update up to the first create, never on one with `sending`), at
+   once in `performSync` and again in `releaseRefreshed`. When the record's
+   queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
+   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   draft spec in `openapi-extensions/spec/collection-completeness/`), else
+   GETs the item through the sync's shared `Budget` (passed to
+   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
+   on the CRUD Resource Object, else, or when that one does not parse, the
+   item GET operation, a Tombstone Object of the deletion-feeds draft; not
+   stored itself, though with a feed the end-of-sync feed read may store a
+   feed tombstone for the failed record) `deleted`, other 2xx
+   with the record `filtered`, else `unknown`; budget spent (`BudgetExhausted`,
+   `RetryBeyondDeadline`, a 429 handed back) means unchecked (held, a miss).
+   For a collection with a deletion feed (`x-deletion-feed`,
+   `declaredDeletionFeed`, draft spec in
+   `openapi-extensions/spec/deletion-feeds/`), a record with a tombstone
+   stored from an earlier feed read (`feedTombstones`, in the outbox, only
+   for records with unsettled writes; dropped when a read or a `filtered`
+   GET returns the record, a write to it settles with a 2xx, or a later
+   item is not a tombstone; not stored by a feed read for a record a write
+   settled on during the sync, or whose stored tombstone a read dropped
+   earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
+   `stored`
+   and no GET; unchecked and `unknown` GET answers go there too.
+   `finishFeeds`, after every collection's checks, reads each feed once
+   (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
+   `feedCursors`, items counted per read against `maxRecords`;
+   an incomplete or malformed read gives no tombstones and keeps the
+   cursor, apart from a declared expired status) and settles them: a
+   tombstone, or a stored one this complete read does not supersede with a
+   later non-tombstone item, fails the heads as `deleted` (`source: 'feed'`,
+   `failMissing`); else `unknown` fails as before, and unchecked or
+   superseded stays held. Not read under
+   `absent: deleted` or `missingRecordChecks: 'none'`.
+   The declaration is dropped for a collection a `selection` narrows past its
+   `x-list-query`, and an operation-level one counts only without a fixed
+   query or body. An update in flight when `holdMissing` ran gets
+   `holdIfQueued` (not stored) and is held if its outcome leaves it queued;
+   a later complete read that returns the record, or `resolveWrite` `retry`
+   on the record, clears the flag.
+   `failWrite` and the waiting-path `discard` wake a removed head's drain.
+   `deleted`/`unknown` fail the head and each following held update
+   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
+   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   checked) and releases. A record settled on during the check (up to the
+   end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
+   `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   `update()` holds a new edit of a record whose failed writes carry
+   `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
+   confirmed copy (`setLastKnown` on every refresh and settled response;
+   update responses are merged over
+   the record that was sent); updates, retries and `update()` seeding use
+   it, never the visible record. It is stored once per record entry, and
+   only when `confirmed` is absent, so the outbox grows by the changes per
+   write, not by the record. Only head writes fail or count
+   misses: a failed write must never be newer than a queued one of the same
+   record (`seq`, stored, lets the tests check this; `expectFailedOlder` in
+   the tests). Writes not
+   yet durable are skipped by `rebuild`. Unknown versions are refused, not
+   overwritten. The README's "Durable outbox and restarts" has the
+   stop-between-steps table; keep it in step with the code. Not stored:
+   `lastSyncedItems`, the conditional cache and confirmed records without
+   writes. A fully paginated list is not necessarily a consistent snapshot;
+   the existing absence/pruning rule still depends on provider behavior.
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
@@ -207,13 +304,13 @@ qualifies, but falls back to today's single-request behavior otherwise.
 ### Browser read path (`src/read/`, `src/browser.ts`)
 
 `package.json` exports a second entry, `syncables/browser` (`src/browser.ts`).
-It holds the read path only, for browser and iframe plugins. `read/model.ts`
+It holds the reader and local-first core for browser and iframe plugins. `read/model.ts`
 discovers collections from `components.crudResources`, a read-only port of
 reflector's `discoverResourceModel`. `read/pages.ts` walks the pages of one
 operation with the `pagination/` modules above, including request-body
 cursors for POST lists. `read/ontology.ts` derives terms typed with Atomic
-Data datatypes. `read/read.ts` combines these into `readPlatform` and
-`paginate`. All requests go through an injected `Transport`
+Data datatypes. `read/collections.ts` owns shared raw traversal; `read/read.ts` adds
+`readPlatform` and `paginate`. All requests go through an injected `Transport`
 (`read/transport.ts`).
 
 Nothing reachable from `src/browser.ts` may import a Node built-in or
@@ -222,11 +319,42 @@ and `openapi/overlay.ts` only adds the file-reading `loadOverlay` on top of
 it. `__tests__/unit/browser/bundle.test.ts` enforces the rule by bundling the
 entry with esbuild `platform: 'browser'`. Keep `fs`/`http`/`node:crypto` in
 `openapi/load.ts`, `openapi/overlay.ts` and `mock-server/`. `index.ts`
-re-exports the read path too, with `paginate` renamed `paginateOperation`.
+re-exports the shared APIs with the Node constructor/environment adapter, with `paginate` renamed `paginateOperation`.
 
 Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 `unit/client/client.test.ts`, `unit/mock-server/server.test.ts`,
 `unit/pagination/*.test.ts`), plus:
+- `unit/client/unified.test.ts` covers custom transports, scoped metadata
+  collections, POST paging, response capture, auth configuration and local
+  intent across refresh/acknowledgement races.
+- `unit/client/pending-writes.test.ts` covers #260 gaps 1 and 2: same-field
+  conflicts during refresh, uncertain creates (lost responses, unusable 2xx,
+  5xx), their `resolveWrite` resolutions and idempotency-key retries.
+- `unit/client/durable-outbox.test.ts` covers restart recovery: a second
+  client on a copy of the first one's storage taken mid-flight (resume order,
+  in-flight creates/updates/deletes, failed/uncertain/conflict state, format
+  versions and outbox store failures), plus the stored auth block and
+  failure statuses.
+- `unit/client/failure-classes.test.ts` covers write failure classes: the
+  default table, permanent 4xx, satisfied deletes, `Retry-After`, the auth
+  block and `authRenewed()`, and `classifyWriteFailure`.
+- `unit/client/missing-records.test.ts` covers records a complete refresh no
+  longer returns: the in-flight-head ordering case, PUT and PATCH, the
+  evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
+  the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
+  for records the GET left undecided (on the collection or list operation,
+  `idField`, no `tombstone` field, a restore after a tombstone), stored
+  tombstones across a restart, the cursor advancing and surviving a restart,
+  paginated feeds, the budget (two collections, a new client per sync, the
+  shared `maxRecords`), malformed and expired reads, and precedence against
+  `x-completeness` and the GET.
+- `unit/client/read-tombstones.test.ts` covers `x-read-tombstone`: a 2xx
+  GET with and without the marker, PUT and PATCH, the placements (CRUD
+  Resource Object, item GET operation, ignored on a collection, legacy
+  documents), malformed declarations, the in-flight head and the budget,
+  no storing, restarts, and precedence against `x-completeness` and stored
+  and feed tombstones.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

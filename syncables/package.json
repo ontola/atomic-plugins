@@ -1,6 +1,6 @@
 {
   "name": "syncables",
-  "version": "0.18.0",
+  "version": "0.20.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ontola/atomic-plugins.git",

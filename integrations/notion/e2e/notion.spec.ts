@@ -11,9 +11,14 @@
  * own key (atomic-server#1697, in the pin). This spec
  * replaces the old one, which drove the `[data-integration=notion]` card that
  * atomic-server 4bab16ee6 removed (#68). Since 0.2.0 the spec covers
- * two-way edits again (#8): an edit made in the host's table is found when
- * the app opens, reviewed and sent as a page PATCH, and a field changed on
- * both sides waits for "Keep mine" or "Use Notion's".
+ * two-way edits (#8): an edit made in the host's table is found when the
+ * app opens, reviewed and sent as a page PATCH, and a field changed on both
+ * sides waits for "Keep mine" or "Use Notion's". Since 0.3.0 the app is a
+ * sync-status view (#177 Q9): the rows are read and edited in the host's
+ * table (`setRowField`, a user's commit), never through the app. Since 0.4.0
+ * select, status and multi-select columns are the host's own select columns
+ * (one Tag per Notion option, `app/options.ts`), so the host's table shows
+ * option names, and a status edit sets the option's Tag (`setRowOption`).
  *
  * The app is installed from the catalog, as in the pets spec: the
  * Integrations page's Drive apps section, with the lane's dev-server serving
@@ -28,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.4.2';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -43,7 +48,10 @@ test.describe('notion drive plugin', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(300_000);
-    await driver('setScenario', ['default']);
+    // The mock proxy outlives an attempt: a retry starts from the seeded
+    // pages, options and scenario again, not from what the first one did
+    // (Points 9, the renamed option).
+    await driver('reset', []);
     await installFromCatalog(page);
 
     const app = page.frameLocator(APP_FRAME);
@@ -64,17 +72,19 @@ test.describe('notion drive plugin', () => {
       .click();
     await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
 
-    // Back on the app, which finds its connection and imports on open
-    // (#89: the rows show in the app, and warnings are in Sync details).
+    // Back on the app, which finds its connection and imports on open. The
+    // app is a sync-status view (#177 Q9): it names the databases and counts
+    // the rows; the rows themselves are in the host's table, below.
     await expect(app.getByRole('status')).toContainText('Synced', {
       timeout: 60_000,
     });
     const appUrl = page.url();
-    const imported = app.getByRole('table');
-    for (const title of ['Launch plan', 'Write changelog', 'Retrospective'])
-      await expect(
-        imported.getByRole('cell', { name: title, exact: true }),
-      ).toBeVisible();
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card.getByRole('list', { name: 'Databases' })).toContainText(
+      'Roadmap',
+    );
+    await expect(card).toContainText('3 rows in this table');
+    await expect(app.getByRole('table')).toHaveCount(0);
     await app.getByRole('button', { name: 'Sync details' }).click();
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
@@ -104,8 +114,17 @@ test.describe('notion drive plugin', () => {
         main.getByText(title, { exact: true }).first(),
       ).toBeVisible();
 
+    // Status and Tags cells show the option names (the Tags' chips), not
+    // Notion's option ids (0.4.0, app/options.ts).
+    for (const option of ['In progress', 'Not started', 'release', 'docs'])
+      await expect(
+        main.getByText(option, { exact: true }).first(),
+      ).toBeVisible();
+    await expect(main.getByText(DONE_OPTION)).toHaveCount(0);
+
     // Columns are named after the Notion properties and keep the lens's
-    // datatypes rather than becoming JSON.
+    // datatypes rather than becoming JSON; the option columns are the host's
+    // select columns (`resourceArray` of Tags, `allowsOnly` = the options).
     const datatypes = await page.evaluate(async () => {
       const store = window.store!;
       const table = await store.getResource(
@@ -114,9 +133,11 @@ test.describe('notion drive plugin', () => {
       const klass = await store.getResource(
         table.get('https://atomicdata.dev/properties/classtype') as string,
       );
-      const fields = klass.get(
-        'https://atomicdata.dev/properties/recommends',
-      ) as string[];
+      // Without the host's own `name`, which `createApp` recommends on every
+      // row class and which the app never touches.
+      const fields = (
+        klass.get('https://atomicdata.dev/properties/recommends') as string[]
+      ).filter(s => s !== 'https://atomicdata.dev/properties/name');
       const properties = await Promise.all(
         fields.map((s: string) => store.getResource(s)),
       );
@@ -124,18 +145,54 @@ test.describe('notion drive plugin', () => {
       return Object.fromEntries(
         properties.map(p => [
           p.get('https://atomicdata.dev/properties/name'),
-          p.get('https://atomicdata.dev/properties/datatype'),
+          {
+            datatype: p.get('https://atomicdata.dev/properties/datatype'),
+            isA: p.getClasses(),
+            allowsOnly: (
+              (p.get('https://atomicdata.dev/properties/allowsOnly') as
+                | string[]
+                | undefined) ?? []
+            ).length,
+          },
         ]),
       );
     });
+    const RESOURCE_ARRAY = 'https://atomicdata.dev/datatypes/resourceArray';
+    const SELECT = 'https://atomicdata.dev/classes/SelectProperty';
     expect(datatypes).toMatchObject({
-      Done: 'https://atomicdata.dev/datatypes/boolean',
-      Points: 'https://atomicdata.dev/datatypes/float',
-      Status: 'https://atomicdata.dev/datatypes/string',
-      'Last edited in Notion': 'https://atomicdata.dev/datatypes/timestamp',
+      Done: { datatype: 'https://atomicdata.dev/datatypes/boolean' },
+      Points: { datatype: 'https://atomicdata.dev/datatypes/float' },
+      Status: {
+        datatype: RESOURCE_ARRAY,
+        isA: expect.arrayContaining([SELECT]),
+        allowsOnly: 3,
+      },
+      Tags: { datatype: RESOURCE_ARRAY, allowsOnly: 2 },
+      'Last edited in Notion': {
+        datatype: 'https://atomicdata.dev/datatypes/timestamp',
+      },
     });
+    // No column of the platform's own Page fields (`object`, `id`, `url`, …,
+    // which 0.4.0 added, named by their raw term path; #303): exactly the
+    // fixed columns and one per Notion property.
+    expect(Object.keys(datatypes).sort()).toEqual(
+      [
+        'Notion page id',
+        'Data source',
+        'Notion URL',
+        'Last edited in Notion',
+        'Name',
+        'Status',
+        'Done',
+        'Points',
+        'Tags',
+        'Notes',
+      ].sort(),
+    );
+    for (const name of Object.keys(datatypes))
+      expect(name).not.toMatch(/\/property\//);
 
-    // Back to the app for each state of #89's design, against the fixture's
+    // Back to the app for each of its states, against the fixture's
     // scenarios. One connection serves them all.
     await page.goto(appUrl);
     await statesTour(page, testInfo);
@@ -159,24 +216,50 @@ const DONE_OPTION = 'b1f5a3c2-0001-4000-8000-000000000003';
 const LAUNCH_PAGE = '1a2b3c4d-0000-4000-8000-000000000001';
 /** The column of the fixture's "Points" (property id `n%3D1`, hex-encoded). */
 const POINTS = 'notion-6e25334431';
+/** The column of the fixture's "Status" (property id `%3AUPp`, hex-encoded). */
+const STATUS = 'notion-253341555070';
 
 /**
  * Sets one column (by shortname) of the row named `title` from the host
- * page: a commit by the user, as an edit in the host's table is.
+ * page: a commit by the user, as an edit in the host's table is. This is
+ * how rows are edited since 0.3.0; the app has no cells of its own. With
+ * `option` set, `value` is a Notion option id and the cell gets that
+ * option's Tag, as picking it in the host's select cell would (0.4.0).
  */
 async function setRowField(
   page: Page,
   title: string,
   shortname: string,
   value: string | number | boolean,
+  option = false,
 ) {
   await page.evaluate(
-    async ([rowTitle, short, newValue]) => {
+    async ([rowTitle, short, newValue, asOption]) => {
       const store = window.store!;
       const NAME = 'https://atomicdata.dev/properties/name';
+      const SHORTNAME = 'https://atomicdata.dev/properties/shortname';
+      const ALLOWS_ONLY = 'https://atomicdata.dev/properties/allowsOnly';
       const app = await store.getResource(
         new URL(location.href).searchParams.get('subject')!,
       );
+
+      /** The Tag of a Notion option among a select column's `allowsOnly`. */
+      const tagOf = async (column: string, optionId: string) => {
+        const property = await store.getResource(column);
+        const allowed = (property.get(ALLOWS_ONLY) as string[]) ?? [];
+
+        for (const subject of allowed) {
+          const tag = await store.getResource(subject);
+
+          for (const [key, held] of Object.entries(tag.getPropVals())) {
+            if (held !== optionId) continue;
+            const found = (await store.getResource(key)).get(SHORTNAME);
+            if (found === 'notion-option-id') return subject;
+          }
+        }
+
+        throw new Error(`no tag for option ${optionId} in ${column}`);
+      };
 
       for (const candidate of Object.values(app.getPropVals())) {
         if (typeof candidate !== 'string' || !candidate.includes(':')) continue;
@@ -192,11 +275,12 @@ async function setRowField(
           if (row.get(NAME) !== rowTitle) continue;
 
           for (const property of Object.keys(row.getPropVals())) {
-            const found = (await store.getResource(property)).get(
-              'https://atomicdata.dev/properties/shortname',
-            );
+            const found = (await store.getResource(property)).get(SHORTNAME);
             if (found !== short) continue;
-            await row.set(property, newValue);
+            await row.set(
+              property,
+              asOption ? [await tagOf(property, String(newValue))] : newValue,
+            );
             await row.save();
 
             return;
@@ -208,82 +292,51 @@ async function setRowField(
 
       throw new Error(`no row named ${rowTitle}`);
     },
-    [title, shortname, value] as const,
+    [title, shortname, value, option] as const,
   );
 }
 
 /**
- * DESIGN.md §6 states S6–S13 in the real frame: text and roles, not pixels.
+ * The app's states in the real frame: text and roles, not pixels.
  * Screenshots go to the test's output folder as artefacts.
  */
 async function statesTour(page: Page, testInfo: TestInfo) {
   const app = page.frameLocator(APP_FRAME);
   const status = app.getByRole('status');
   const banner = app.locator('.pl-banner');
+  const card = app.getByRole('region', { name: 'Sync status' });
+  const databases = card.getByRole('list', { name: 'Databases' });
+  const strip = app.locator('.nt-changes');
+  const review = app.getByRole('region', {
+    name: 'Changes to send to Notion',
+  });
   const shot = (name: string) =>
     page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
 
+  /** Presses "Sync now" and waits for the sync to end, in whatever state. */
   const syncNow = async () => {
     await expect(app.getByRole('button', { name: 'Sync now' })).toBeEnabled({
       timeout: 60_000,
     });
     await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(status).not.toContainText('Syncing', { timeout: 60_000 });
   };
 
   try {
-    // S6, N6: a second database; its "Status" has another property id.
+    // S6, N6: a second database, whose "Status" has another property id,
+    // shows on the card after a sync, with its own row count.
     await driver('setScenario', ['two-sources']);
     await expect(status).toContainText('Synced', { timeout: 60_000 });
     await syncNow();
-    const chips = app.getByRole('group', { name: 'Databases' });
     await expect(
-      chips.getByRole('button', { name: /Reading list/ }),
-    ).toBeVisible({
-      timeout: 60_000,
-    });
-    await chips.getByRole('button', { name: /Roadmap/ }).click();
-    const table = app.getByRole('table');
-    await expect(table.getByRole('columnheader')).toHaveText([
-      'Name',
-      'Status',
-      'Done',
-      'Points',
-      'Tags',
-      'Notes',
-      'Last edited in Notion',
-    ]);
-    // N7: option names, not ids.
-    await expect(table.getByRole('row', { name: /Launch plan/ })).toContainText(
-      'In progress',
-    );
-    await shot('s6-table');
-
-    // S7: side peek, Esc closes.
-    await table.getByRole('cell', { name: 'Launch plan', exact: true }).click();
-    const peek = app.getByRole('complementary', { name: 'Row details' });
-    await expect(peek).toContainText('Launch plan');
-    await expect(peek).toContainText('Review changes');
-    await shot('s7-peek');
-    // "Open in Notion" goes through store.openExternal: the host names the
-    // destination and asks first. Cancel, so the test opens no tab.
-    await peek.getByRole('button', { name: 'Open in Notion' }).click();
-    const linkBar = page.getByRole('group', { name: 'Open a link' });
-    await expect(linkBar).toContainText('www.notion.so');
-    await shot('s7-open-link');
-    await linkBar.getByRole('button', { name: 'Cancel' }).click();
-    await expect(linkBar).toBeHidden();
-    await expect(app.locator('.pl-copy')).toHaveCount(0);
-    // Focus went to the host's bar; Esc from inside the peek closes it.
-    await peek.getByRole('button', { name: 'Open in Notion' }).press('Escape');
-    await expect(peek).toBeHidden();
-
-    // S8: board by status.
-    await app.getByRole('button', { name: 'Board', exact: true }).click();
+      databases.getByRole('listitem').filter({ hasText: 'Reading list' }),
+    ).toContainText('2 rows', { timeout: 60_000 });
     await expect(
-      app.getByRole('list', { name: 'Grouped by Status' }),
-    ).toContainText('In progress');
-    await shot('s8-board');
-    await app.getByRole('button', { name: 'Table', exact: true }).click();
+      databases.getByRole('listitem').filter({ hasText: 'Roadmap' }),
+    ).toContainText('3 rows');
+    await expect(card).toContainText('5 rows in this table');
+    await expect(app.locator('.pl-connbar')).toContainText('2 databases');
+    await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
     await app.getByRole('button', { name: 'Sync details' }).click();
@@ -292,28 +345,54 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(details).toContainText('Recommended by people');
     await shot('s10-details');
     await page.keyboard.press('Escape');
+    await expect(details).toBeHidden();
 
-    // N7: a rename in Notion shows after one sync, rows untouched.
+    // N7: a rename in Notion shows after one sync, rows untouched: the
+    // option's Tag is renamed, so the host's table shows "Shipped" where it
+    // showed "Done" (0.4.0). Then set the row's Status to that option in
+    // the host's table and read it back in the review: before → after by
+    // name. Then discard, which puts Notion's value back.
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
-    await expect(
-      table.getByRole('row', { name: /Write changelog/ }),
-    ).toContainText('Shipped', { timeout: 60_000 });
+    const statusAppUrl = page.url();
+    await card.getByRole('button', { name: 'Open table' }).click();
+    const shipped = page
+      .getByRole('main')
+      .getByText('Shipped', { exact: true })
+      .first();
+    await expect(shipped).toBeVisible({ timeout: 30_000 });
+    // The chip is in a column to the right of the first screen.
+    await shipped.scrollIntoViewIfNeeded();
+    await shot('n7-table-renamed');
+    await page.goto(statusAppUrl);
+    await setRowField(page, 'Launch plan', STATUS, DONE_OPTION, true);
+    await page.reload();
+    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+      timeout: 60_000,
+    });
+    await strip.getByRole('button', { name: 'Review changes' }).click();
+    await expect(review).toContainText('Status');
+    await expect(review.locator('.nt-r-before')).toHaveText('In progress');
+    await expect(review.locator('.nt-r-after')).toHaveText('Shipped');
+    await shot('n7-renamed-option');
+    await review.getByRole('button', { name: 'Discard' }).click();
+    await expect(review).toContainText('Nothing left to send', {
+      timeout: 30_000,
+    });
+    await review.getByRole('button', { name: 'Close' }).click();
+    await expect(strip).toHaveCount(0);
+    await expect(card).toBeVisible();
 
     // S15 (#8): compare on open. An edit made in the host's table (a user's
     // commit, as a table edit is) is found when the app opens again, with no
     // request to Notion, and sent only after review.
     await setRowField(page, 'Launch plan', POINTS, 5);
     await page.reload();
-    const strip = app.locator('.nt-changes');
     await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
       timeout: 60_000,
     });
     await shot('s15-pending');
     await strip.getByRole('button', { name: 'Review changes' }).click();
-    const review = app.getByRole('region', {
-      name: 'Changes to send to Notion',
-    });
     await expect(review).toContainText('Launch plan');
     await expect(review.locator('.nt-r-before')).toHaveText('3');
     await expect(review.locator('.nt-r-after')).toHaveText('5');
@@ -372,15 +451,13 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await expect(status).toHaveText('Sync failed');
     await shot('s13-failed');
 
-    // S5 over kept rows: nothing shared any more.
+    // S5 over kept rows: nothing shared any more; the card still counts them.
     await driver('setScenario', ['empty']);
     await banner.getByRole('button', { name: 'Try again' }).click();
     await expect(banner).toContainText('no longer shares any databases', {
       timeout: 60_000,
     });
-    await expect(
-      table.getByRole('cell', { name: 'Launch plan', exact: true }),
-    ).toBeVisible();
+    await expect(card).toContainText('5 rows in this table');
 
     // S11: Notion revoked access; rows are kept.
     await driver('setScenario', ['unauthorized']);
@@ -393,11 +470,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     ).toBeVisible();
     await shot('s11-reauth');
 
-    // "Open data table" (store.openResource) shows the table in the host.
+    // "Open table" (store.openResource) shows the table in the host, where
+    // the rows are browsed and edited.
     await driver('setScenario', ['default']);
     const appUrl = page.url();
-    await app.getByRole('button', { name: 'More' }).click();
-    await app.getByRole('menuitem', { name: 'Open data table' }).click();
+    await card.getByRole('button', { name: 'Open table' }).click();
     await expect(page).not.toHaveURL(appUrl);
     await expect(
       page.getByRole('main').getByText('Launch plan', { exact: true }).first(),
@@ -418,13 +495,12 @@ async function statesTour(page: Page, testInfo: TestInfo) {
       timeout: 30_000,
     });
     await expect(status).toHaveText('Not connected');
-    await expect(
-      table.getByRole('cell', { name: 'Launch plan', exact: true }),
-    ).toBeVisible();
+    await expect(card).toContainText('5 rows in this table');
     await shot('disconnected');
   } finally {
-    await driver('setScenario', ['default']);
-    await driver('renameOption', [DONE_OPTION, 'Done']).catch(() => {});
+    // Leaves the fixture as it found it for any later test; a retry resets
+    // it first as well, so this is not what the retry relies on.
+    await driver('reset', []);
   }
 }
 

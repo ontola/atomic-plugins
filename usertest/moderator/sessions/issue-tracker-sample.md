@@ -29,10 +29,12 @@ What success looks like, never to be said:
 - Task 2: they install "GitHub issues (sample data)", choose `acme-studio/website` and read what the app will do on GitHub. Then a board appears with Todo, Doing and Done.
 - Tasks 3–6: the change appears on the board at once, but it is held as "Waiting to send" until they open "Review and send". The main question of this session is whether they find and understand that step.
 - Task 3: moves the issue to Doing, which adds an `atomic:doing` label.
+- Task 6: an issue made with the app's own "New issue" form is published after the same review. An issue added any other way (the table, another view) stays "Local" until "Publish to GitHub" in its panel.
 - Task 7: the label filter or the search.
 
 Known limits (only new detail about them is a finding):
 
+- From 0.3.1 an issue row without a title shows as "(no title)" with "Incomplete: missing Name" and "Open row", and nothing of it is sent. "Sync this table to GitHub" (0.3.0, for an Issue table the app did not make) is not a task here; see `issue-tracker.md`.
 - Labels and assignees are read-only in the app.
 - Jira and Todoist appear in the source picker, disabled.
 - Nothing syncs while the app is closed.

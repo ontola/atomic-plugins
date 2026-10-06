@@ -218,11 +218,17 @@ export function verifyRequest(headers, method, url, body, nowMs = Date.now()) {
   if (!verifyBy(agent, message, signature))
     throw new ProxyRefusal('bad_signature');
 
-  return {
-    agent,
-    replayKey: `${REQUEST_DOMAIN}:${sha256Hex(Buffer.from(message))}`,
-  };
+  return { agent, replayKey: replayKey(agent, message) };
 }
+
+/**
+ * `signature::replay_key`: per canonical agent and signed message, so two
+ * agents signing the same request in one millisecond do not collide. The
+ * real proxy also refuses a live agentless key from an older instance during
+ * a rolling deploy; the mock has no older instances, so it skips that.
+ */
+export const replayKey = (agent, message) =>
+  `${REQUEST_DOMAIN}-agent:${sha256Hex(Buffer.from(`${agent}\n${message}`))}`;
 
 const CLAIMS = ['v', 'connection_id', 'platform', 'aud', 'app', 'cnf', 'exp'];
 
@@ -284,6 +290,21 @@ export function verifyCapability(parsed, owner, audience, nowSecs) {
 /** PKCS#8 DER prefix of a raw 32-byte Ed25519 seed. */
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+/**
+ * The proxy spends each signed request once, keyed by a hash of the signer,
+ * method, URL, timestamp (ms) and body (`replayKey`). Two identical requests
+ * from one signer in the same millisecond would be one request, and the second
+ * would answer 401 `replayed`. So the default timestamp never repeats; it is
+ * kept unique across every signer in the process, which costs nothing.
+ */
+let lastTimestamp = 0;
+
+function nextTimestamp() {
+  lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
+
+  return lastTimestamp;
+}
+
 /** An agent that signs like @tomic/lib does, from a 32-byte seed. */
 export function testSigner(seed) {
   const privateKey = createPrivateKey({
@@ -299,8 +320,8 @@ export function testSigner(seed) {
     agent,
     publicKey,
     sign,
-    /** v2 headers for one request; `timestamp` defaults to now. */
-    headers(method, url, body = '', timestamp = Date.now()) {
+    /** v2 headers for one request; `timestamp` defaults to now, never repeating. */
+    headers(method, url, body = '', timestamp = nextTimestamp()) {
       return {
         [AGENT_HEADER]: agent,
         [PUBLIC_KEY_HEADER]: publicKey,

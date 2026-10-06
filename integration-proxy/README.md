@@ -1,6 +1,6 @@
 # integration-proxy
 
-A Rust web server that holds OAuth grants and pasted API keys for third-party
+A Rust web server that holds OAuth grants and pasted API keys and tokens for third-party
 platforms, and forwards catalog-allowlisted requests to them on behalf of
 [Atomic](https://github.com/ontola/atomic-server) agents.
 
@@ -101,8 +101,22 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   document's own `https` server, no redirects, 10-second timeout. A `401`
   or `403` answers the consent page again (`200`) saying the key was not
   accepted, without spending the consent; any other non-2xx, a redirect or
-  no answer is a `400` and nothing is stored. A 2xx may give a label (at most
-  200 characters, sealed with the connection). For a platform whose
+  no answer is a `400` and nothing is stored. One consent page makes at
+  most 5 key checks (unreleased): the fifth rejection spends it and answers
+  `400` "Too many attempts to enter a key for this connection; start again
+  from your hub", and nothing is checked for it after that. This bounds one
+  consent page, not a client: anyone can open a new one. Across consent
+  pages, one client network makes at most `KEY_CHECK_LIMIT_PER_HOUR` (default
+  20) key checks per platform in any hour (unreleased); over that, the
+  answer is `429` "Too many key checks from your network for <Platform>; try
+  again later" with `Retry-After`, before any key check and without spending
+  the consent (SECURITY.md). A 2xx may give a label (at most
+  200 characters, sealed with the connection). A platform whose scheme is
+  `type: http` with `scheme: bearer` or `scheme: basic` (unreleased; see
+  "HTTP tokens" below) works the same way: the page asks for an API token
+  (and, for some Basic layouts, a username), the key check is sent the
+  `Authorization` header a proxied request would carry, and a rejected token
+  is asked for again with "did not accept that API token". For a platform whose
   composed document declares top-level `security: []` and no security scheme
   (0.2.3 and later), the consent page asks for nothing, and this hands off a
   connection that holds no credential and redirects (`303`) to
@@ -125,7 +139,10 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   a frame capability (below). The proxy attaches the provider credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
-  `Authorization` and `x-atomic-*` headers are never forwarded. `Link`,
+  `Authorization` and `x-atomic-*` headers are never forwarded: an
+  `Authorization` other than `Capability …` is refused with
+  `401 unsupported_authorization`, and a capability is consumed by the proxy.
+  `Link`,
   `Retry-After`, `ETag`, `X-Total-Count` and `X-Next-Page` come back unchanged.
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
@@ -222,13 +239,15 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `BASE_URL` | no | Public URL of the proxy, e.g. `https://localthought.io`. Defaults to `http://localhost:8080`. Used for OAuth callback URLs, as the prefix of every signed URL, and (its origin) as a capability's `aud`. Must be exactly what clients use. |
 | `PORT` | no | Port to listen on. Defaults to `8080`. |
 | `SESSION_SECRET` | no; set it in production | Secret for the short-lived consent and OAuth-binding cookies. If unset, a random key is generated at startup (with a warning in the log), and a consent screen open during a restart must be started again. Instances behind one name must share it. |
-| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`, this repository's `overlays/catalog/2026-10-02.json` as GitHub Pages publishes it from `main`. |
+| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`, this repository's `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
 | `DATABASE_URL` | yes | PostgreSQL connection URL. See the TLS note below. |
 | `ENCRYPTION_KEY` | yes | Base64url-encoded, random 32-byte key for sealed provider credentials. Changing it makes every stored connection unreadable. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids (any accepted spelling) the default access policy refuses. |
 | `ALLOWED_AGENTS` | no | When set, comma-separated agent ids; the default access policy admits only these owners. |
 | `OPERATOR_NAME` | no | Who runs this proxy, as the landing and consent pages name them. Defaults to `this integration proxy`, and the pages then name no one. The consent page also shows the host of `BASE_URL`. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
+| `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
+| `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
 
 OAuth credentials are provider-specific. For a catalog platform named
@@ -261,9 +280,15 @@ localthought.io deployment's `BASE_URL`.
 
 Discord uses `OAUTH_DISCORD_CLIENT_ID` and `OAUTH_DISCORD_CLIENT_SECRET`,
 with callback `https://localthought.io/oauth/discord/callback` on localthought.io.
-Register an OAuth application in the Discord Developer Portal. The initial
-read-only integration uses `identify` and `guilds` to read your profile and
-import server memberships; it does not import messages or require a bot token.
+Register an OAuth application in the Discord Developer Portal. The catalog
+composes Discord's full OAD, which declares a bot token and OAuth together,
+and selects its `discordUser` authentication profile (see "Authentication
+profiles" below): the read-only integration uses `identify` and `guilds` to
+read your profile and import server memberships, and every other Discord
+operation, including all bot-token operations, is refused. It does not
+import messages or require a bot token. This is declared from Discord's
+documentation and composition tests; no live Discord connection has been
+verified with the profile.
 The guild import requests `limit=200`, covering Discord's documented maximum
 number of guilds for a user. The profile endpoint is available as a read
 operation, not an imported collection.
@@ -291,11 +316,11 @@ scope). The initial integration imports contacts; supply the administration ID
 from the Moneybird account when connecting. OAuth tokens without `expires_in`
 remain usable until revoked; tokens with an expiry use the normal refresh flow.
 
-[`overlays/catalog/2026-10-02.json`](../overlays/catalog/2026-10-02.json) in this repository
+[`overlays/catalog/2026-10-02-auth-profiles.json`](../overlays/catalog/2026-10-02-auth-profiles.json) in this repository
 (migrated from the former `localthought/overlays` repository) is the source of
 the integration catalog. GitHub Pages publishes `overlays/` from `main` at
 `https://ontola.github.io/atomic-plugins/overlays/`, and the proxy defaults to
-the `catalog/2026-10-02.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
+the `catalog/2026-10-02-auth-profiles.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
 local fixture for development. Each platform names one pinned OpenAPI document
 (in `localthought/` or `ontola/openapi-directory`, at a commit) and zero or more Overlay
 Specification documents, each served from that same Pages folder. At startup
@@ -318,8 +343,98 @@ default. The proxy passes those choices through.
 **selection.oauthSecurityScheme** is trusted server configuration: when a
 document contains multiple OAuth authorization-code Security Schemes, it names
 the one the proxy uses. The value must be a string naming a declared scheme.
+**selection.authenticationProfile** is trusted server configuration too: it
+names one of the document's `components.x-authentication-profiles`
+(see "Authentication profiles" below), and excludes
+`oauthSecurityScheme`, `apiKeySecurityScheme` and `httpSecurityScheme`.
+**selection.apiKeySecurityScheme** and **selection.httpSecurityScheme** do the
+same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
+or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
+
+### Authentication profiles
+
+A document that declares more than one kind of security scheme (OAuth and an
+API key, say) is refused unless the catalog entry selects an authentication
+profile ([`x-authentication-profiles`](../openapi-extensions/spec/authentication-profiles/README.md),
+0.1.0-draft). A profile names one security scheme. With
+`selection.authenticationProfile` set, the proxy:
+
+- connects with that scheme only: `oauth2` with an authorization-code flow,
+  `apiKey`, or a bearer or basic `http` scheme (the last two with their
+  `x-api-key-details` help link and key check, as for any API-key or token
+  platform);
+- asks for the scopes of the operations the profile covers, and of no other:
+  an operation is covered when its effective `security` has a requirement
+  whose only member is the profile's scheme;
+- answers `404 method or path is not in the catalog` for every operation the
+  profile does not cover, without sending any credential upstream, including
+  operations that accept only anonymous access, only another scheme, or the
+  scheme only combined with another;
+- refuses an unknown profile, an undeclared or unsupported scheme, a profile
+  that covers no operation, or a selection that also names a scheme, instead
+  of falling back to anything else;
+- sends a stored OAuth token only while the platform still resolves to an
+  OAuth scheme, so a selection moved to an API-key profile does not send a
+  user's token to that profile's operations (the person connects again). A
+  stored bearer or basic token is likewise sent only while the platform
+  resolves to an `http` scheme of the same kind.
+
+Declaring profiles in a document changes nothing until a catalog selects
+one. The served document (`GET /catalog/{platform}.yaml`) is the whole
+composed document; a client reads which operations its connection reaches
+from their `security`. Without a profile selection the proxy behaves as
+before.
+
+### HTTP tokens (bearer and basic)
+
+Unreleased (Decision Inbox Q-086). A security scheme of `type: http` with
+`scheme: bearer` or `scheme: basic` (case-insensitive) is a user credential,
+like an `apiKey` scheme: a personal access token pasted on the consent page.
+
+- **Which documents.** Without an authentication profile, an `http` scheme
+  counts only when the document declares no `oauth2` and no `apiKey` scheme.
+  A document that has one of those resolves exactly as before, whatever
+  `http` schemes it also declares (OAuth documents often declare `http`
+  `basic` for client authentication at their token endpoint). With several
+  bearer/basic schemes, `selection.httpSecurityScheme` names one. A profile
+  may name a bearer or basic scheme of any document. Other `http` schemes
+  (`digest`, ...) are not supported.
+- **Bearer.** The page asks for one token. After trimming it must be 4 to
+  512 bytes of RFC 6750 `b64token` (`[A-Za-z0-9-._~+/]+=*`), where `:` is
+  also allowed before the padding, for Asana-style personal access tokens
+  (`2/<id>/<id>:<secret>`, as Asana documents them; not checked with a live
+  token). Requests carry `Authorization: Bearer <token>`.
+- **Basic.** The scheme must declare how the token fills the credential, as
+  `x-api-key-details.basicCredentials`
+  ([`api-key-details`](../openapi-extensions/spec/api-key-details/README.md)
+  0.2.0-draft, section 4.3); a basic scheme without it is not offered
+  ("This platform is not available for connection"). The three layouts:
+  `{token: username, password: <fixed, may be empty>}` (one field),
+  `{token: password, username: <fixed>}` (one field), and
+  `{token: password, usernameLabel: <label>}` (a text field with that label
+  for the username, then the token field). There is no layout in which the
+  person types a password other than the token. The token must be 4 to 512
+  bytes without control characters; as a username it may not contain `:`.
+  A typed username must be 1 to 256 characters without control characters
+  or `:`. Requests carry `Authorization: Basic base64(username:password)`.
+- **Key check, help and sealing.** `x-api-key-details` `helpUrl` and
+  `keyCheck` work as for an API key; the check is sent the same
+  `Authorization` header the proxied requests will carry. The connection
+  seals the token (and, for Basic, both halves as they were checked) in the
+  same per-row envelope as an API key or OAuth token, and the handoff, redeem
+  and listing never return them.
+- **Requests.** The proxy sends a stored bearer or basic credential only
+  while the platform still resolves to an `http` scheme of that same kind
+  and, for credentials stored by the unreleased version, with the same
+  scheme name and (Basic) the same declared layout (its fixed halves and
+  which half is the token; not the username field's label). API keys stored
+  by it are bound to their scheme name and to the scheme's `in` and `name`
+  (header names case-insensitive) the same way. Otherwise it answers
+  `401 credential_refresh_failed` (connect again). Credentials stored
+  before carry no binding and are sent as before.
+  The caller's own `Authorization` is never forwarded (above).
 
 Overlay URLs use immutable OAD-revision filenames. Publish new overlay
 filenames and a new dated catalog together, then explicitly switch
@@ -374,7 +489,8 @@ private and may change in any release:
 | `build_app_with_access(&Config, Arc<dyn AccessPolicy>)` | The same, admitting connection owners through a custom policy (e.g. a SaaS account and tier lookup). |
 | `AccessPolicy`, `Access`, `AllowAll`, `EnvAccessPolicy` | The admission check asked about every owner; `AllowAll` for a self-hosted proxy. |
 | `AgentId`, `parse_agent_id` | A parsed agent id; `as_str()` is the canonical `atomic:agent:` form. |
-| `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve. |
+| `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve, recording each request's peer address (`into_make_service_with_connect_info::<SocketAddr>()`) for the key-check limit. A caller that serves `build_app`'s router itself should do the same; without it, and without a trusted `X-Forwarded-For`, all clients share one limit. |
+| `TrustForwardedFor`, `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR` | `Config::trust_forwarded_for` and the default of `Config::key_check_limit_per_hour`. Unreleased. |
 | `run() -> ExitCode` | What the binary does: init `tracing` from `RUST_LOG` (default `info`), `Config::from_env`, `serve`, print any `Error` to stderr. |
 | `Error` | Startup/serve failure; `Display` is the one-line message the binary prints. |
 
@@ -434,6 +550,12 @@ git commit -am "Deploy atomic-integration-proxy <version> from crates.io"
 
 Merging that to its `main` deploys. Do not copy this source tree there: the
 wrapper is the whole repository now.
+
+0.3.0 limits key checks per client network
+(`KEY_CHECK_LIMIT_PER_HOUR`). On Heroku every request's peer address is the
+router's, so set `TRUST_FORWARDED_FOR=heroku` before deploying it, or all
+clients share one limit (the proxy logs a warning at startup when it finds
+Heroku's `DYNO` variable without it).
 
 From 0.2.1 the landing and consent pages no longer say "LocalThought"
 unless told to: set `OPERATOR_NAME=LocalThought` and
@@ -519,7 +641,9 @@ from the composed OpenAPI catalog. A platform with one OAuth
 authorization-code Security Scheme uses it directly. A platform with multiple
 such schemes must set the catalog's trusted
 **selection.oauthSecurityScheme**; missing, non-string, or unknown selections
-fail closed. Requests cannot select a scheme or supply endpoints. Scopes are
+fail closed. A mixed-kind platform uses the scheme of its selected
+authentication profile instead (see "Authentication profiles"). Requests
+cannot select a scheme, a profile or supply endpoints. Scopes are
 taken from operation security requirements (falling back to root
 requirements), not every scope supported by the server. Public operations
 require no scopes; unsupported authentication combinations fail closed.

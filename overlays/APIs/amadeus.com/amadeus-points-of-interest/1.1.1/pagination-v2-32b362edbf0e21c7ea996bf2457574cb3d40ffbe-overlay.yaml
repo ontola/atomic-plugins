@@ -1,0 +1,67 @@
+# Swagger 2.0 revision of pagination-32b362edbf0e21c7ea996bf2457574cb3d40ffbe-overlay.yaml.
+# The pinned OAD has no `components`, so the paginationSchemes map is the root
+# `x-paginationSchemes` vendor extension (overlays/README.md, "Swagger 2.0 documents");
+# operation targets are unchanged. Composition is checked against the pinned
+# OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32b362edbf0e21c7ea996bf2457574cb3d40ffbe/APIs/amadeus.com/amadeus-points-of-interest/1.1.1/swagger.yaml
+info:
+  title: Amadeus Points of Interest API Pagination Schemes
+  version: 2.0.0
+actions:
+  - target: "$"
+    update:
+      x-paginationSchemes:
+        pageOffset:
+          type: offset
+          description: >
+            The Amadeus Points of Interest API uses JSON:API-style offset
+            pagination. Pass `page[limit]` to control the page size and
+            `page[offset]` to skip results. Responses include a `meta` object
+            with `count` (total items available) and a `links` object containing
+            `self`, `first`, `last`, `next`, and `previous` URIs for navigating
+            between pages. When `meta.links.next` is absent, you have reached
+            the last page of results.
+          request:
+            queryParameters:
+              page[limit]:
+                role: pageSize
+                description: >
+                  The maximum number of items to return per page. Defaults to
+                  10. Controls how many Points of Interest are included in each
+                  response.
+              page[offset]:
+                role: offset
+                description: >
+                  The start index of the requested page (zero-based). Defaults
+                  to 0. Set to a multiple of page[limit] to retrieve subsequent
+                  pages.
+          response:
+            bodyFields:
+              meta.count:
+                role: totalCount
+                description: >
+                  The total number of Points of Interest available for the
+                  query across all pages.
+              meta.links.next:
+                role: nextLink
+                description: >
+                  The URL of the next page of results. Absent when the current
+                  page is the last page.
+              meta.links.previous:
+                role: prevLink
+                description: >
+                  The URL of the previous page of results. Absent when the
+                  current page is the first page.
+              meta.links.first:
+                role: firstLink
+                description: >
+                  The URL of the first page of results.
+              meta.links.last:
+                role: lastLink
+                description: >
+                  The URL of the last page of results.
+              meta.links.self:
+                role: selfLink
+                description: >
+                  The URL of the current page of results.

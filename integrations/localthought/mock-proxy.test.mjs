@@ -13,6 +13,7 @@ import { mockProxy } from './mock-proxy.mjs';
 import {
   MAX_CAPABILITY_SECS,
   ProxyRefusal,
+  TIMESTAMP_HEADER,
   agentFromPublicKey,
   mintCapability,
   parseAgent,
@@ -274,6 +275,45 @@ test("atomic-server's capability vector verifies here", () => {
   );
 });
 
+test('a test signer never repeats a default timestamp, so identical requests in one millisecond are not replays', async t => {
+  // CI flake (PR #288, run 37043172495): the same DELETE twice in a row was
+  // signed in the same millisecond, so it hashed to the same replay key and
+  // the second answered 401 `replayed` instead of GitHub's 404. The key does
+  // not name the signer, so two signers asking for one URL collide as well.
+  const fixed = Date.now();
+  t.mock.method(Date, 'now', () => fixed);
+  const url = 'http://localhost/proxy/x/github-issues/a';
+  const headers = [owner, app, owner, app, frame].map(signer =>
+    signer.headers('GET', url),
+  );
+  const stamps = headers.map(h => Number(h[TIMESTAMP_HEADER]));
+  assert.ok(
+    stamps.every((stamp, i) => i === 0 || stamp > stamps[i - 1]),
+    stamps.join(),
+  );
+  const keys = headers.map(
+    (h, i) => verifyRequest(h, 'GET', url, '', stamps[i]).replayKey,
+  );
+  assert.equal(new Set(keys).size, headers.length);
+
+  // End to end, with the clock frozen: the same frame request twice is two
+  // requests (GitHub's 404 for the second delete), not a replay.
+  const { base, close } = await start({ platforms: 'github-issues' });
+
+  try {
+    const call = frameClient(
+      base,
+      await connect(base, 'github-issues'),
+      'github-issues',
+    );
+    const path = '/repos/atomic-fixture/tracker/issues/1/labels/nope';
+    assert.equal((await call('DELETE', path)).status, 404);
+    assert.equal((await call('DELETE', path)).status, 404);
+  } finally {
+    await close();
+  }
+});
+
 test('agent ids: both prefixes and alphabets, one canonical form', () => {
   const key = owner.publicKey;
   const standard = Buffer.from(key, 'base64url').toString('base64');
@@ -305,6 +345,7 @@ test('connect: consent without login, signed redeem makes the owner, delegation,
       'moneybird',
       'notion',
       'pets',
+      'todoist',
     ]);
 
     // The retired flow's parameters, a foreign return address, an unknown
@@ -565,6 +606,18 @@ test('every refusal on a proxied request has the real proxy’s code', async () 
     const once = owner.headers('GET', url);
     assert.equal((await fetch(url, { headers: once })).status, 200);
     await expectError(await fetch(url, { headers: once }), 401, 'replayed');
+    // The replay key names the agent, like the real proxy's: another agent's
+    // valid signature over the same method, URL, millisecond and body neither
+    // collides with the owner's request nor spends it in advance.
+    const at = Date.now();
+    const first = await fetch(url, {
+      headers: stranger.headers('GET', url, '', at),
+    });
+    assert.equal(first.status, 403);
+    assert.notEqual((await errorOf(first))[1], 'replayed');
+    const same = owner.headers('GET', url, '', at);
+    assert.equal((await fetch(url, { headers: same })).status, 200);
+    await expectError(await fetch(url, { headers: same }), 401, 'replayed');
 
     const capabilityCases = [
       [{}, frame, 200],
@@ -736,7 +789,7 @@ test('MOCK_PROXY_PLATFORMS restricts the catalog, consent and catalog documents'
   const warn = console.warn;
   const warnings = [];
   console.warn = message => warnings.push(message);
-  const server = mockProxy({ platforms: 'pets,todoist,pets' });
+  const server = mockProxy({ platforms: 'pets,nonesuch,pets' });
   console.warn = warn;
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -744,7 +797,7 @@ test('MOCK_PROXY_PLATFORMS restricts the catalog, consent and catalog documents'
   try {
     assert.deepEqual(await (await fetch(`${base}/catalog`)).json(), ['pets']);
     assert.deepEqual(warnings, [
-      'mock-proxy: no fixture for todoist; not served',
+      'mock-proxy: no fixture for nonesuch; not served',
     ]);
     assert.equal((await fetch(`${base}/catalog/pets.yaml`)).status, 200);
     assert.equal((await fetch(`${base}/catalog/clockify.yaml`)).status, 404);
@@ -770,6 +823,7 @@ test('an empty platform list serves every fixture', async () => {
       'moneybird',
       'notion',
       'pets',
+      'todoist',
     ])
       assert.equal((await fetch(`${base}/catalog/${id}.yaml`)).status, 200);
     assert.ok(server.github.createIssue);

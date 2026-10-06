@@ -15,6 +15,7 @@
       "index": 16,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": [
         "integrations/open-cloud-mesh/plugin.test.mjs",
         "integrations/open-cloud-mesh/peer.test.mjs"
@@ -44,6 +45,7 @@
       "index": 10,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "pluginRoutes": "read-write",
       "nodeTests": ["integrations/remotestorage/plugin.test.mjs"],
       "e2e": [
@@ -63,16 +65,21 @@
         "devonian/package.json",
         "devonian/pnpm-lock.yaml",
         "ontology/**",
-        "ontology-kit/**"
+        "ontology-kit/**",
+        "integrations/sync-status/**"
       ],
-      "note": "paths: the app bundles ontology-kit/terms.mjs and resolver.mjs and its rows are of the shared issue-v1 class (#177 item 6), so an ontology change runs this lane too; the e2e reads issue-v1 from its published GitHub Pages subject (checked first with ontology-kit/served.mjs), so it needs network access to ontola.github.io. devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. The e2e installs the GitHub issues drive app (app/, npm devonian from app/package.json) from the catalog's Drive apps section, as the committed apps/issue-tracker/<version>/ui.js, and drives it through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository.",
-      "e2e": ["integrations/issue-tracker/e2e/issue-tracker.spec.ts"]
+      "note": "paths: both apps bundle ontology-kit/terms.mjs and resolver.mjs and their rows are of the shared issue-v1 class (#177 item 6), so an ontology change runs this lane too; the e2es read issue-v1 from its published GitHub Pages subject (checked first with ontology-kit/served.mjs), so they need network access to ontola.github.io. devonian/github-issues/ imports the devonian package from source (vitest.config.ts aliases it to devonian/src/main.ts), so a devonian change runs this lane too. Its tests ran in devonian CI before the lens moved here. issue-tracker.spec.ts installs the GitHub issues drive app (app/, npm devonian from app/package.json) from the catalog's Drive apps section, as the committed apps/issue-tracker/<version>/ui.js, and drives it through the host's proxy relay (atomic-server#1657, in the pin) against the mock proxy's seeded atomic-fixture/tracker repository. todoist.spec.ts installs the read-only Todoist drive app (todoist-app/, #99's host journey) the same way, as apps/todoist/<version>/ui.js (apps.mjs APP_FOLDERS maps it there), against the SYNTHETIC todoist fixture in fixtures/todoist/ (hand-written from Todoist's API documentation; the recording is #46's), and uses its drivers to complete and hide tasks in Todoist.",
+      "e2e": [
+        "integrations/issue-tracker/e2e/issue-tracker.spec.ts",
+        "integrations/issue-tracker/e2e/todoist.spec.ts"
+      ]
     },
     {
       "id": "solid",
       "index": 11,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": [
         "integrations/solid/plugin.test.mjs",
         "integrations/solid/turtle.test.mjs"
@@ -95,9 +102,10 @@
       "index": 12,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": ["integrations/atproto/plugin.test.mjs"],
       "pluginRoutes": "read-only",
-      "note": "Node: QuickJS handle-to-DID and did:web document route checks and a reproducible bundle. e2e: publishes plugin.mjs to atomic-server built with the plugin-routes feature at --plugin-routes read-only, binds two invented host names to the test drive, installs with a did:web identity and resolves /.well-known/atproto-did and /.well-known/did.json on the handle host over HTTP with a Host header (no TLS, DNS or network). Where the host reports hostFeatures.pluginRoutes.requestHost (atomic-server claude/plugin-atproto-host), the other host name must answer 404; otherwise the spec records that every host name of the drive answers. No independent resolver library or live Bluesky verification.",
+      "note": "Node: QuickJS handle-to-DID and did:web document route checks and a reproducible bundle. e2e: publishes plugin.mjs to atomic-server built with the plugin-routes feature at --plugin-routes read-only, binds two invented host names to the test drive, installs with a did:web identity and resolves /.well-known/atproto-did and /.well-known/did.json on the handle host over HTTP with a Host header (no TLS, DNS or network). Where the host reports hostFeatures.pluginRoutes.requestHost (atomic-server claude/plugin-atproto-host), the other host name must answer 404; otherwise the spec records that every host name of the drive answers. The same e2e resolves the identity with Bluesky's reference code (@atproto/identity, @atproto/did, @atproto/crypto, @atproto/syntax, pinned in integrations/atproto/e2e/package.json) over TLS from a throwaway test CA on the loopback: handle, did:web document, bidirectional check, secp256k1 and P-256 keys verifying signatures. ATPROTO_PDS_E2E=1 adds the reference PDS in Docker (ghcr.io/bluesky-social/pds, XRPC on 127.0.0.1 only), which takes the identity through an account migration. No DNS TXT, public TLS or live Bluesky verification.",
       "e2e": ["integrations/atproto/e2e/atproto.spec.ts"]
     },
     {
@@ -105,7 +113,8 @@
       "index": 3,
       "platforms": ["moneybird"],
       "tiers": ["e2e"],
-      "note": "e2e drives the Bank statements importer through the host's generic file entry point (atomic-server#1653: manifest accepts/destination, PluginPage Import tab): publish, discover, set up, MT940 and camt.053 import, reload, reimport, local edit, conflict and refused files. A second test installs the Money drive app (integrations/money/app/) test-side as an app rendering the Bank transaction class, adds it through the table's Add view as a read-only view, imports an MT940 from inside the app through the host's review (store.importer.run, atomic-server#1774), and saves a category after the host's Allow editing (atomic-server#1788). The pin includes that change (atomic-server#1691); against an older host, publishing the bundle fails on the unknown manifest field. Host bug atomic-server#1846, fixed at pin 1432e244a (atomic-server#1847, atomic-plugins #179): at pin 2567fc30b Add view read the drive's apps once on mount, so when the app's save synced in after navigating, 'New app' never appeared and the second test failed. No typecheck/unit tier: money has an atomicCertification block, so the unsharded certification step in shared-checks already runs exactly its typecheck (tsconfig.json) and unit (vitest.config.ts) on every integrations/** change, plus bundle reproducibility. moneybird.spec.ts installs the read-only Moneybird contacts drive app (integrations/money/moneybird/, #102) from the catalog's Drive apps section, as the committed apps/moneybird/<version>/ui.js (apps.mjs APP_FOLDERS maps it there), and drives it through the host relay against the SYNTHETIC moneybird fixture in integrations/money/fixtures/moneybird/ (hand-written from the public OpenAPI document; not a recording, which needs a Moneybird account).",
+      "paths": ["ontology/**", "ontology-kit/**"],
+      "note": "paths: the Money app bundles ontology-kit/terms.mjs and resolver.mjs and writes rows of the shared bank-transaction-v1 class (#177 item 8), so an ontology change runs this lane too. e2e drives the Bank statements importer through the host's generic file entry point (atomic-server#1653: manifest accepts/destination, PluginPage Import tab): publish, discover, set up, MT940 and camt.053 import, reload, reimport, local edit, conflict and refused files. A second test installs the Money drive app (integrations/money/app/) from the catalog's Drive apps section (the committed apps/money/<version>/ui.js) and imports an MT940 and a camt.053 into the table that install gave it, which the app's first open made a bank-transaction-v1 table: the app writes the rows itself at the published GitHub Pages subjects, which the server and browser fetch themselves, so the e2e needs network access to ontola.github.io and first checks Pages serves the class and its properties with the committed bytes (ontology-kit/served.mjs). A third test adds that app through the importer's table's Add view (the app's first open listed the importer's class in its renders) as a read-only view, imports an MT940 from inside the app through the host's review (store.importer.run, atomic-server#1774), and saves a category after the host's Allow editing (atomic-server#1788). The pin includes that change (atomic-server#1691); against an older host, publishing the bundle fails on the unknown manifest field. Host bug atomic-server#1846, fixed at pin 1432e244a (atomic-server#1847, atomic-plugins #179): at pin 2567fc30b Add view read the drive's apps once on mount, so when the app's save synced in after navigating, 'New app' never appeared and the second test failed. No typecheck/unit tier: money has an atomicCertification block, so the unsharded certification step in shared-checks already runs exactly its typecheck (tsconfig.json) and unit (vitest.config.ts) on every integrations/** change, plus bundle reproducibility. moneybird.spec.ts installs the read-only Moneybird contacts drive app (integrations/money/moneybird/, #102) from the catalog's Drive apps section, as the committed apps/moneybird/<version>/ui.js (apps.mjs APP_FOLDERS maps it there), and drives it through the host relay against the SYNTHETIC moneybird fixture in integrations/money/fixtures/moneybird/ (hand-written from the public OpenAPI document; not a recording, which needs a Moneybird account). From 0.2.0 that spec also imports hours into a time-entry-v1 table and financial mutations into a bank-transaction-v1 table under the App, and syncs a hand-made bank-transaction-v1 table through Add view after Allow editing, so it too needs ontola.github.io (ontology-kit/served.mjs) and this lane's paths include ontology-kit/**.",
       "e2e": [
         "integrations/money/e2e/money.spec.ts",
         "integrations/money/e2e/moneybird.spec.ts"
@@ -116,14 +125,19 @@
       "index": 13,
       "platforms": [],
       "tiers": ["node", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "nodeTests": ["integrations/fediverse/plugin.test.mjs"],
       "pluginRoutes": "read-write",
       "serverEnv": {
         "ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS": "true",
         "ATOMIC_PLUGIN_E2E_PEER_CA": "integrations/fediverse/e2e/.peer/ca.pem"
       },
-      "e2e": ["integrations/fediverse/e2e/fediverse.spec.ts"],
-      "note": "node: the handler's decisions against an in-memory host (projection, WebFinger, NodeInfo, publish, Follow/Accept, Undo, replies, Delete) and bundle reproducibility. e2e: the bundle on atomic-server built with plugin-routes at read-write, federating with the ActivityPub peer fixture in integrations/fediverse/e2e/peer.ts (HTTPS on loopback, self-signed): WebFinger and NodeInfo through /.well-known/, a host-verified signed Follow answered by a signed Accept from the host delivery queue, a publish over auth: atomic delivered as a signed Create, a reply stored as an Atomic Message, and Undo. The e2e needs atomic-server branch claude/plugin-fediverse-host (auth: atomic, request.caller.actor, WebFinger rels, and the debug-build ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS and ATOMIC_PLUGIN_E2E_PEER_CA seams that serverEnv turns on: loopback peers, with the peer's throwaway test CA as the only trusted root there); at a pin without it, the e2e tier fails."
+      "e2e": [
+        "integrations/fediverse/e2e/fediverse.spec.ts",
+        "integrations/fediverse/e2e/mastodon.spec.ts",
+        "integrations/fediverse/e2e/akkoma.spec.ts"
+      ],
+      "note": "node: the handler's decisions against an in-memory host (projection, WebFinger, NodeInfo, publish, Follow/Accept, Undo, replies, Delete) and bundle reproducibility. e2e: the bundle on atomic-server built with plugin-routes at read-write, federating with the ActivityPub peer fixture in integrations/fediverse/e2e/peer.ts (HTTPS on loopback, self-signed): WebFinger and NodeInfo through /.well-known/, a host-verified signed Follow answered by a signed Accept from the host delivery queue, a publish over auth: atomic delivered as a signed Create, a reply stored as an Atomic Message, and Undo. mastodon.spec.ts (opt-in, skipped unless FEDIVERSE_MASTODON_E2E=1; needs Docker) has a real Mastodon 4.7.3 (official image, host network, listeners on 127.0.0.1 only, behind a TLS proxy on 127.0.0.1:19943 that also fronts atomic-server) follow the actor, receive a published Note, reply and unfollow, through its own client API; it passed at the pin a12b74a on 2026-10-02. akkoma.spec.ts (opt-in, skipped unless FEDIVERSE_AKKOMA_E2E=1; needs Docker and network access for the release) runs the same round trip against Akkoma 3.20.1 (its official OTP release on alpine:3.22 with postgres:17-alpine, host network, loopback only, behind the same kind of TLS proxy on 127.0.0.1:19953); it passed at the pin a12b74a on 2026-10-02. The e2e needs atomic-server branch claude/plugin-fediverse-host (auth: atomic, request.caller.actor, WebFinger rels, and the debug-build ATOMIC_PLUGIN_E2E_LOOPBACK_PEERS and ATOMIC_PLUGIN_E2E_PEER_CA seams that serverEnv turns on: loopback peers, with the peer's throwaway test CA as the only trusted root there); at a pin without it, the e2e tier fails."
     },
     {
       "id": "notion",
@@ -149,7 +163,8 @@
       "paths": [
         "integrations/willow-drop/william3.ts",
         "integrations/willow-drop/plugin.js",
-        "integrations/willow-drop/fixtures/expected.json"
+        "integrations/willow-drop/fixtures/expected.json",
+        "integrations/tooling/e2e/route-install.ts"
       ],
       "note": "Willow25 Entry codecs, unsigned signing-candidate job, and the drop route: `GET /_routes/<slug>/willow.drop` answers selected public resources as a Willow drop whose entries the host signs with the installation's Ed25519 subspace key (communal namespace, no delegations). The node tier decodes our drops with the willow-drop importer bundle, which verifies every signature and WILLIAM3 digest. The e2e tier runs at --plugin-routes read-write and needs atomic-server's Willow key bindings, ctx.willow and bodyBase64 (branch claude/plugin-willow-host, in pin candidate17 7dbd054a, where it passes); it fails on a host without them. No WGPS, owned namespaces, delegations or live peer.",
       "e2e": ["integrations/willow/e2e/willow.spec.ts"]
@@ -181,10 +196,11 @@
       "paths": [
         "ontology/**",
         "ontology-kit/**",
+        "integrations/sync-status/**",
         "devonian/src/lenses/**",
         "devonian/package.json"
       ],
-      "note": "The provider-local lens algebra prototype imports devonian/lenses from source in unit tests; changes to that entry rerun this lane. paths: the app bundles ontology-kit/terms.mjs and resolver.mjs and syncs into the shared time-entry-v1, work-project-v1 and work-person-v1 classes (#177), so an ontology change runs this lane too. The rows use the published GitHub Pages subjects, which the server and browser fetch themselves, so the e2e needs network access to ontola.github.io; it first checks Pages serves the three classes and their properties with the committed bytes (ontology-kit/served.mjs). One test adds the app as a view of a hand-made time-entry-v1 table through Add view. The e2e installs the timesheets drive app from the catalog (Integrations, Drive apps; the committed apps/timesheets/<version>/ui.js) and drives it in its plugin iframe: connect through the host's consent bar and the mock proxy, set up workspace and look-back in the frame, then import, reload, refresh and recover from a proxy failure through the host relay (atomic-server#1657; the pin has it). Provider changes and failures go through the mock proxy's local-only fixture driver (POST /__fixture/clockify). It also checks an M2 conflict and not-loaded time in the #89 views. The old upstream Clockify tests were deleted in atomic-server 4bab16ee6 with the UI they drove (#44).",
+      "note": "The provider-local lens algebra prototype imports devonian/lenses from source in unit tests; changes to that entry rerun this lane. paths: the app bundles the shared sync-status card (integrations/sync-status/, Q-084; 0.7.0) and ontology-kit/terms.mjs and resolver.mjs and syncs into the shared time-entry-v1, work-project-v1 and work-person-v1 classes (#177), so an ontology change runs this lane too. The rows use the published GitHub Pages subjects, which the server and browser fetch themselves, so the e2e needs network access to ontola.github.io; it first checks Pages serves the three classes and their properties with the committed bytes (ontology-kit/served.mjs). One test adds the app as a view of a hand-made time-entry-v1 table through Add view. The e2e installs the timesheets drive app from the catalog (Integrations, Drive apps; the committed apps/timesheets/<version>/ui.js) and drives it in its plugin iframe: connect through the host's consent bar and the mock proxy, set up workspace and look-back in the frame, then import, reload, refresh and recover from a proxy failure through the host relay (atomic-server#1657; the pin has it). Provider changes and failures go through the mock proxy's local-only fixture driver (POST /__fixture/clockify). It also checks an M2 conflict and not-loaded time in the #89 views. The old upstream Clockify tests were deleted in atomic-server 4bab16ee6 with the UI they drove (#44).",
       "e2e": ["integrations/timesheets/e2e/clockify.spec.ts"]
     },
     {
@@ -192,6 +208,7 @@
       "index": 7,
       "platforms": [],
       "tiers": ["typecheck", "unit", "e2e"],
+      "paths": ["integrations/tooling/e2e/route-install.ts"],
       "note": "Willow drop importer (#139), a sandbox job like money: no provider, so no mock proxy (platforms is empty). typecheck and unit are lane tiers rather than certify.mjs's, because certification requires named atomic-server sandbox tests that do not exist for this package; the unit tier also checks that the committed plugin.js is a fresh esbuild bundle. The e2e publishes the bundle and imports fixture drops through the host's generic file entry point (atomic-server#1653, in the pin), so the QuickJS sandbox runs the Ed25519 and WILLIAM3 code and a binary file crosses the text-only hand-over. The fixtures come from willow25 (fixtures/generate/), which CI does not run.",
       "e2e": ["integrations/willow-drop/e2e/willow-drop.spec.ts"]
     },
@@ -233,6 +250,13 @@
       ],
       "note": "A tooling lane (#177), not a plugin: it runs only when the shared ontology (ontology/, ontology-kit/), the dev-server that serves it, or the pin changes. Its node tests (ontology-kit/*.test.mjs) run in shared-checks. The e2e checks that the pinned host reads a generated class (event-v1) from the dev-server's /ontology/ path, which serves the committed term files with their subjects moved to its own origin and GitHub Pages' headers, and that atomic-server accepts a hand-made table of that class and a row with one of its properties. With ATOMIC_SERVER_IMAGE set the spec uses host.docker.internal, so the server in Docker fetches the same URL as the browser.",
       "e2e": ["integrations/tooling/e2e/ontology.spec.ts"]
+    },
+    {
+      "id": "sync-status",
+      "index": 18,
+      "platforms": [],
+      "tiers": ["typecheck", "unit"],
+      "note": "Shared code, not a plugin (Decision Inbox Q-084, status-only): the sync-status card every drive app may put above its data (integrations/sync-status/card.ts, card.css), which the apps' esbuild builds inline like ontology-kit's resolver. It has no package.json, catalog entry or provider, so certify.mjs ignores it and there is no mock proxy. A lane rather than a top-level kit folder because CI's lint, format and lane matrix then cover it with no workflow edit. Each adopting app's lane lists integrations/sync-status/** in its paths, so a card change also runs that app's tiers; timesheets (0.7.0) is the first."
     }
   ]
 }

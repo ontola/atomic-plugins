@@ -6,17 +6,7 @@ import type { SyncRecord } from './record.js';
 import type { Row } from './rows.js';
 import type { DataSourceReport, SchemaProperty } from './sync.js';
 import { createApp, type App } from './view/app.js';
-import {
-  ALL,
-  columnsFor,
-  groupRows,
-  nextSort,
-  notes,
-  pill,
-  searchRows,
-  sortRows,
-  sources,
-} from './view/model.js';
+import { notes, pill, sources } from './view/model.js';
 
 const NOW = Date.parse('2026-09-24T10:16:00Z');
 const o = (id: string, name: string, color: string) => ({ id, name, color });
@@ -127,97 +117,26 @@ const rows: Row[] = [
 const ready: ViewState = { kind: 'ready', connectionId: 'c', rows, last };
 
 describe('view model', () => {
-  it('shows a database’s own columns in Notion order, without skipped types', () => {
-    const cols = columnsFor('Roadmap', sources(rows, last));
-    expect(cols.map(c => c.name)).toEqual([
-      'Name',
-      'Status',
-      'Points',
-      'Done',
-      'Last edited in Notion',
-    ]);
-  });
-
-  it('shows in "All" only the columns every database has by name and type', () => {
-    const cols = columnsFor(ALL, sources(rows, last));
-    expect(cols.map(c => c.name)).toEqual([
-      'Name',
-      'Database',
-      'Status',
-      'Last edited in Notion',
-    ]);
-    // The two "Status" properties have different ids, merged for display.
-    expect(cols[2]!.shortnames).toEqual(['notion-st', 'notion-st2']);
-  });
-
-  it('counts rows per database for the chips', () => {
+  it('counts rows per database, the record’s databases first', () => {
     expect(sources(rows, last).map(s => [s.title, s.count])).toEqual([
       ['Roadmap', 4],
       ['Reading list', 1],
     ]);
-  });
-
-  it('searches titles and option names, not option ids', () => {
-    const cols = columnsFor(ALL, sources(rows, last));
-    expect(searchRows(rows, cols, 'progress').map(r => r.name)).toEqual([
-      'Launch plan',
-    ]);
-    expect(searchRows(rows, cols, 's2')).toEqual([]);
-    expect(searchRows(rows, cols, 'THINKING').map(r => r.name)).toEqual([
-      'Thinking in Systems',
-    ]);
-  });
-
-  it('sorts ascending, descending, then off; options in Notion order; empties last', () => {
-    const cols = columnsFor('Roadmap', sources(rows, last));
-    expect(nextSort(null, 'notion-pt')).toEqual({
-      key: 'notion-pt',
-      dir: 'asc',
-    });
-    expect(nextSort({ key: 'notion-pt', dir: 'asc' }, 'notion-pt')).toEqual({
-      key: 'notion-pt',
-      dir: 'desc',
-    });
-    expect(nextSort({ key: 'notion-pt', dir: 'desc' }, 'notion-pt')).toBeNull();
-    const roadmapRows = rows.filter(r => r.dataSource === 'Roadmap');
+    // A database the record does not list (deleted from Notion, rows kept)
+    // still counts, after the record's.
     expect(
-      sortRows(roadmapRows, cols, { key: 'notion-pt', dir: 'desc' }).map(
-        r => r.name,
-      ),
+      sources(rows, { ...last, dataSources: [reading] }).map(s => [
+        s.title,
+        s.count,
+      ]),
     ).toEqual([
-      'Launch plan',
-      'Write changelog',
-      'Retrospective',
-      'Untitled draft',
+      ['Reading list', 1],
+      ['Roadmap', 4],
     ]);
-    expect(
-      sortRows(roadmapRows, cols, { key: 'notion-st', dir: 'asc' }).map(
-        r => r.name,
-      ),
-    ).toEqual([
-      'Launch plan',
-      'Write changelog',
-      'Retrospective',
-      'Untitled draft',
-    ]);
-    expect(
-      sortRows(roadmapRows, cols, { key: 'edited', dir: 'desc' })[0]!.name,
-    ).toBe('Launch plan');
-  });
-
-  it('groups a board in Notion’s option order, unknown options after, "No value" last', () => {
-    const cols = columnsFor('Roadmap', sources(rows, last));
-    const status = cols.find(c => c.name === 'Status')!;
-    const groups = groupRows(
-      rows.filter(r => r.dataSource === 'Roadmap'),
-      status,
-    );
-    expect(groups.map(g => [g.option?.name ?? g.key, g.rows.length])).toEqual([
-      ['Not started', 0],
-      ['In progress', 1],
-      ['Done', 1],
-      ['gone-option', 1],
-      ['', 1],
+    // Without a record, in the rows' order.
+    expect(sources(rows).map(s => [s.title, s.count])).toEqual([
+      ['Roadmap', 4],
+      ['Reading list', 1],
     ]);
   });
 
@@ -286,6 +205,9 @@ describe('view model', () => {
         NOW,
       )?.text,
     ).toBe('Sync failed');
+    expect(pill({ ...ready, last: undefined }, NOW)?.text).toBe(
+      'Not synced yet',
+    );
     expect(pill({ kind: 'not-connected' }, NOW)).toBeUndefined();
   });
 
@@ -312,20 +234,19 @@ describe('view model', () => {
 describe('view (DOM)', () => {
   let app: App;
   let root: HTMLElement;
-  let width = 1200;
-  const actions = { sync: vi.fn(), connect: vi.fn() };
+  const actions = {
+    sync: vi.fn(),
+    connect: vi.fn(),
+    send: vi.fn(),
+    discard: vi.fn(),
+    resolve: vi.fn(),
+  };
 
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = document.getElementById('root')!;
-    width = 1200;
-    actions.sync.mockReset();
-    actions.connect.mockReset();
-    app = createApp(root, actions, {
-      now: () => NOW,
-      locale: 'en-GB',
-      width: () => width,
-    });
+    for (const f of Object.values(actions)) f.mockReset();
+    app = createApp(root, actions, { now: () => NOW, locale: 'en-GB' });
   });
 
   afterEach(() => {
@@ -339,8 +260,6 @@ describe('view (DOM)', () => {
     ...root.querySelectorAll<HTMLElement>(selector),
   ];
   const buttons = () => all('button').map(b => b.textContent?.trim());
-  const key = (el: Element, k: string) =>
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
 
   it('S1: a host without the relay explains and offers no action', () => {
     app.render({ kind: 'no-proxy' });
@@ -385,6 +304,7 @@ describe('view (DOM)', () => {
     ]);
     expect(q('[role=status]')?.textContent).toBe('Importing 2 of 2 databases');
     expect(q<HTMLButtonElement>('[data-key=sync-now]')!.disabled).toBe(true);
+    expect(q('.nt-summary')).toBeNull();
   });
 
   it('S5: nothing shared offers "Choose pages in Notion"', () => {
@@ -399,41 +319,40 @@ describe('view (DOM)', () => {
     expect(actions.connect).toHaveBeenCalledOnce();
   });
 
-  it('S6: a real table with scoped headers, sort state and typed cells', () => {
+  it('status card (#177 Q9): databases with row counts, last sync, row total; no rows rendered', () => {
     app.render(ready);
-    q<HTMLButtonElement>('[data-key="chip:Roadmap"]')!.click();
-    expect(all('th').map(th => th.getAttribute('scope'))).toEqual(
-      Array(5).fill('col'),
-    );
-    expect(all('th').map(th => th.textContent)).toEqual([
-      'Name',
-      'Status',
-      'Points',
-      'Done',
-      'Last edited in Notion',
+    const card = q('[aria-label="Sync status"]')!;
+    expect(all('.nt-s-dbs li').map(li => li.textContent)).toEqual([
+      'Roadmap4 rows',
+      'Reading list1 row',
     ]);
-    expect(q('th[aria-sort]')?.textContent).toBe('Last edited in Notion');
-    expect(q('th[aria-sort]')?.getAttribute('aria-sort')).toBe('descending');
-    const first = all('tbody tr')[0]!;
-    const cells = [...first.querySelectorAll('td')];
-    expect(cells[0]!.textContent).toBe('Launch plan');
-    expect(cells[1]!.textContent).toBe('In progress');
-    expect(cells[1]!.querySelector('.nt-tag.nt-status.c-blue')).toBeTruthy();
-    expect(cells[2]!.className).toBe('num');
-    expect(
-      cells[3]!.querySelector('[role=img]')?.getAttribute('aria-label'),
-    ).toBe('No');
-    expect(cells[4]!.textContent).toMatch(/^Today, /);
-    // An option id the schema does not know is not shown as an id.
-    const retro = all('tbody tr').find(tr =>
-      tr.textContent?.startsWith('Retrospective'),
-    )!;
-    expect(retro.textContent).toContain('Unknown option');
-    expect(retro.textContent).not.toContain('gone-option');
-    // Header clicks: ascending, descending, off.
-    q<HTMLButtonElement>('[data-key="th:notion-pt"]')!.click();
-    expect(q('th[aria-sort]')?.textContent).toBe('Points');
-    expect(q('th[aria-sort]')?.getAttribute('aria-sort')).toBe('ascending');
+    expect(q('[data-key=last-sync]')?.textContent).toMatch(
+      /^Today, \d\d:\d\d · took 3 s · 5 new$/,
+    );
+    expect(card.textContent).toContain('5 rows in this table');
+    expect(card.textContent).toContain('Browse and edit the rows in the table');
+    // The host's table shows the rows; the app no longer does.
+    expect(q('table')).toBeNull();
+    expect(root.textContent).not.toContain('Launch plan');
+    expect(q('.pl-connbar')?.textContent).toContain('2 databases');
+    expect(q('.pl-connbar')?.textContent).toContain('Edits sent after review');
+    // Without `openResource` on the host there is no "Open table".
+    expect(q('[data-key=open-table]')).toBeNull();
+    q<HTMLButtonElement>('[data-key=sync-now]')!.click();
+    expect(actions.sync).toHaveBeenCalledOnce();
+  });
+
+  it('says when the shared databases have no pages, and before the first sync', () => {
+    app.render({ ...ready, rows: [] });
+    expect(q('.nt-summary')?.textContent).toContain(
+      'None yet: the shared databases have no pages',
+    );
+    // Connected, nothing stored yet: the import placeholder, not the card.
+    app.render({ kind: 'ready', connectionId: 'c', rows: [] });
+    expect(q('.nt-summary')).toBeNull();
+    expect(q('.nt-import')?.textContent).toContain(
+      'Asking Notion which databases it shares',
+    );
   });
 
   it('keeps the one role=status element across renders', () => {
@@ -443,75 +362,11 @@ describe('view (DOM)', () => {
     expect(q('[role=status]')).toBe(status);
     expect(status?.textContent).toBe('Syncing…');
     expect(all('[role=status]')).toHaveLength(1);
+    // The card stays while a sync runs over existing rows.
+    expect(q('.nt-summary')).toBeTruthy();
   });
 
-  it('filters with search after a 150 ms pause', () => {
-    vi.useFakeTimers();
-    app.render(ready);
-    const input = q<HTMLInputElement>('input[type=search]')!;
-    input.value = 'changelog';
-    input.dispatchEvent(new Event('input'));
-    expect(all('tbody tr')).toHaveLength(5);
-    vi.advanceTimersByTime(150);
-    expect(
-      all('tbody tr').map(tr => tr.querySelector('td')!.textContent),
-    ).toEqual(['Write changelog']);
-    expect(q('.nt-count')?.textContent).toBe('1 of 5 rows');
-    // The input is the same node, so typing is not interrupted.
-    expect(q('input[type=search]')).toBe(input);
-  });
-
-  it('S7: Enter opens the side peek, arrows move, Esc closes and returns focus', () => {
-    app.render(ready);
-    const tr = all('tbody tr')[0]!;
-    tr.focus();
-    key(tr, 'Enter');
-    const peek = q('aside[aria-label="Row details"]')!;
-    expect(peek.querySelector('h3')?.textContent).toBe('Launch plan');
-    expect(peek.textContent).toContain('Not copied from this page');
-    expect(peek.textContent).toContain('Owner');
-    expect(peek.textContent).toContain('has formatting');
-    expect(peek.textContent).toContain('Review changes');
-    key(peek, 'ArrowDown');
-    expect(q('aside h3')?.textContent).toBe('Thinking in Systems');
-    key(q('aside')!, 'Escape');
-    expect(q('aside')).toBeNull();
-    expect(document.activeElement?.getAttribute('data-key')).toBe('row:row4');
-  });
-
-  it('S14: below 640px the list is the default and the peek is a modal sheet', () => {
-    width = 360;
-    app.destroy();
-    app = createApp(root, actions, { now: () => NOW, width: () => width });
-    app.render(ready);
-    expect(q('.nt-list')).toBeTruthy();
-    expect(q('table')).toBeNull();
-    expect(q('.pl-select select')).toBeTruthy();
-    q<HTMLButtonElement>('.nt-li')!.click();
-    const dialog = q<HTMLDialogElement>('dialog')!;
-    expect(dialog.hasAttribute('open')).toBe(true);
-    expect(dialog.getAttribute('aria-labelledby')).toBe('nt-peek-title');
-    dialog.dispatchEvent(new Event('cancel'));
-    expect(q('dialog')).toBeNull();
-  });
-
-  it('S8: board is off on "All" and groups one database by status', () => {
-    app.render(ready);
-    expect(q<HTMLButtonElement>('[data-key="view:board"]')!.disabled).toBe(
-      true,
-    );
-    q<HTMLButtonElement>('[data-key="chip:Roadmap"]')!.click();
-    q<HTMLButtonElement>('[data-key="view:board"]')!.click();
-    expect(all('.nt-col h3').map(h => h.textContent)).toEqual([
-      'Not started0',
-      'In progress1',
-      'Done1',
-      'Unknown option1',
-      'No value1',
-    ]);
-  });
-
-  it('S10: sync details group warnings per database', () => {
+  it('S10: sync details group warnings per database; Esc closes', () => {
     app.render(ready);
     q<HTMLButtonElement>('[data-key=details-toggle]')!.click();
     const details = q('[role=dialog][aria-label="Sync details"]')!;
@@ -521,6 +376,13 @@ describe('view (DOM)', () => {
     );
     expect(details.querySelector('details summary')?.textContent).toBe(
       'Technical details',
+    );
+    details.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    expect(q('[role=dialog]')).toBeNull();
+    expect(document.activeElement?.getAttribute('data-key')).toBe(
+      'details-toggle',
     );
   });
 
@@ -532,6 +394,7 @@ describe('view (DOM)', () => {
       'Reconnect Notion',
     ]);
     expect(q('[data-key=sync-now]')).toBeNull();
+    expect(q('.pl-connbar')?.textContent).toContain('Access revoked');
 
     app.render({ ...ready, kind: 'syncing', progress: [] });
     app.render({
@@ -568,25 +431,7 @@ describe('view (DOM)', () => {
     expect(actions.sync).toHaveBeenCalledOnce();
   });
 
-  it('falls back to a copyable URL on a host without openExternal', () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    app.render(ready);
-    q<HTMLButtonElement>('[data-key="chip:Reading list"]')!.click();
-    const link = all('a.nt-link')[0]!;
-    link.click();
-    expect(open).toHaveBeenCalledWith('https://example.org/book', '_blank');
-    expect(q('.pl-copy code')?.textContent).toBe('https://example.org/book');
-    open.mockRestore();
-  });
-
   describe('S15/S16: changes to send and conflicts (#8)', () => {
-    const two = {
-      sync: vi.fn(),
-      connect: vi.fn(),
-      send: vi.fn(),
-      discard: vi.fn(),
-      resolve: vi.fn(),
-    };
     const changes = [
       {
         subject: 'row1',
@@ -626,49 +471,47 @@ describe('view (DOM)', () => {
       },
     ];
 
-    beforeEach(() => {
-      app.destroy();
-      for (const f of Object.values(two)) f.mockClear();
-      app = createApp(root, two, {
-        now: () => NOW,
-        locale: 'en-GB',
-        width: () => width,
-      });
-    });
-
-    it('counts unsent changes in a strip and says edits are sent after review', () => {
+    it('counts unsent changes in a strip above the status card', () => {
       app.render({ ...ready, changes: [] });
       expect(q('.nt-changes')).toBeNull();
-      expect(q('.pl-connbar')?.textContent ?? root.textContent).toContain(
-        'Edits sent after review',
-      );
       app.render({ ...ready, changes });
       expect(q('.nt-changes')?.textContent).toContain(
         '2 changes in 2 rows not sent to Notion yet · 1 row also changed in Notion',
       );
+      expect(q('.nt-summary')).toBeTruthy();
     });
 
     it('reviews before → after with option names, sends only what can be sent', () => {
       app.render({ ...ready, changes });
       q<HTMLButtonElement>('[data-key="review-open"]')!.click();
       const review = q('.nt-review')!;
-      // The review stands in for the rows.
-      expect(q('.nt-tablewrap')).toBeNull();
+      // The review stands in for the status card.
+      expect(q('.nt-summary')).toBeNull();
+      expect(document.activeElement).toBe(review);
       const [first, second] = all('.nt-r-list > li');
       expect(first!.querySelector('.nt-r-before')?.textContent).toBe(
         'In progress',
       );
       expect(first!.querySelector('.nt-r-after')?.textContent).toBe('Done');
+      expect(first!.querySelector('.nt-r-after .nt-tag')?.className).toContain(
+        'c-green',
+      );
       expect(second!.textContent).toContain('Also changed in Notion, to 5');
       const send = q<HTMLButtonElement>('[data-key="review-send"]')!;
       expect(send.textContent).toBe('Send 1 change');
       expect(review.textContent).toContain('1 row held back until resolved');
       send.click();
-      expect(two.send).toHaveBeenCalledTimes(1);
+      expect(actions.send).toHaveBeenCalledTimes(1);
       q<HTMLButtonElement>('[data-key="use-notion:row2:notion-pt"]')!.click();
-      expect(two.resolve).toHaveBeenCalledWith('row2', 'notion-pt', 'notion');
+      expect(actions.resolve).toHaveBeenCalledWith(
+        'row2',
+        'notion-pt',
+        'notion',
+      );
+      q<HTMLButtonElement>('[data-key="keep-mine:row2:notion-pt"]')!.click();
+      expect(actions.resolve).toHaveBeenCalledWith('row2', 'notion-pt', 'mine');
       q<HTMLButtonElement>('[data-key="discard:row1"]')!.click();
-      expect(two.discard).toHaveBeenCalledWith('row1');
+      expect(actions.discard).toHaveBeenCalledWith('row1');
     });
 
     it('shows each row’s outcome, and disables Send while sending', () => {
@@ -703,78 +546,35 @@ describe('view (DOM)', () => {
       );
       q<HTMLButtonElement>('[data-key="review-close"]')!.click();
       expect(q('.nt-review')).toBeNull();
+      expect(q('.nt-summary')).toBeTruthy();
       expect(q('.nt-changes')?.textContent).toContain('Show results');
-    });
-
-    it('stays read-only in wording when the app has no send action', () => {
-      app.destroy();
-      app = createApp(root, actions, { now: () => NOW, width: () => width });
-      app.render({ ...ready, changes });
-      expect(q('.nt-changes')).toBeNull();
-      expect(root.textContent).toContain('Read-only');
     });
   });
 
   describe('host operations since atomic-server 007869464', () => {
     const host = {
-      sync: vi.fn(),
-      connect: vi.fn(),
-      openExternal: vi.fn(async (_url: string) => true),
+      ...actions,
       openTable: vi.fn(),
       disconnect: vi.fn(),
     };
-    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
     beforeEach(() => {
       app.destroy();
       for (const f of Object.values(host)) f.mockClear();
-      host.openExternal.mockImplementation(async () => true);
-      app = createApp(root, host, {
-        now: () => NOW,
-        locale: 'en-GB',
-        width: () => width,
-      });
+      app = createApp(root, host, { now: () => NOW, locale: 'en-GB' });
     });
 
-    it('opens "Open in Notion" and link cells through openExternal, no copy box', async () => {
-      const open = vi.spyOn(window, 'open');
+    it('offers "Open table" on the card and in the menu', () => {
       app.render(ready);
-      q<HTMLButtonElement>('[data-key="chip:Reading list"]')!.click();
-      all('a.nt-link')[0]!.click();
-      await flush();
-      expect(host.openExternal).toHaveBeenCalledWith(
-        'https://example.org/book',
-      );
-      q<HTMLElement>('tbody tr')!.click();
-      q<HTMLButtonElement>('[data-key="peek:open"]')!.click();
-      await flush();
-      expect(host.openExternal).toHaveBeenLastCalledWith(
-        'https://www.notion.so/row4',
-      );
-      expect(open).not.toHaveBeenCalled();
-      expect(q('.pl-copy')).toBeNull();
-      open.mockRestore();
-    });
-
-    it('shows the URL to copy only when openExternal fails', async () => {
-      host.openExternal.mockImplementation(async () => {
-        throw new Error('Only http(s) links');
-      });
-      app.render(ready);
-      q<HTMLButtonElement>('[data-key="chip:Reading list"]')!.click();
-      all('a.nt-link')[0]!.click();
-      await flush();
-      expect(q('.pl-copy code')?.textContent).toBe('https://example.org/book');
-    });
-
-    it('offers "Open data table" in the menu', () => {
-      app.render(ready);
+      q<HTMLButtonElement>('[data-key=open-table]')!.click();
+      expect(host.openTable).toHaveBeenCalledOnce();
       q<HTMLButtonElement>('[data-key="menu:More"]')!.click();
       const item = all('[role=menuitem]').find(
         b => b.textContent === 'Open data table',
       )!;
       item.click();
-      expect(host.openTable).toHaveBeenCalledOnce();
+      expect(host.openTable).toHaveBeenCalledTimes(2);
+      expect(q('[role=menu]')).toBeNull();
     });
 
     it('asks before disconnecting, in place of the state banner; Cancel does nothing', () => {
@@ -802,7 +602,7 @@ describe('view (DOM)', () => {
       expect(host.disconnect).toHaveBeenCalledOnce();
     });
 
-    it('shows a disconnected app with its rows and one Connect action', () => {
+    it('shows a disconnected app with its row count and one Connect action', () => {
       app.render({ kind: 'disconnected', rows, last });
       expect(q('[role=status]')?.textContent).toBe('Not connected');
       expect(q('.pl-banner')?.textContent).toContain(
@@ -812,7 +612,13 @@ describe('view (DOM)', () => {
         'Connect Notion',
       ]);
       expect(q('[data-key=sync-now]')).toBeNull();
-      expect(all('tbody tr')).toHaveLength(5);
+      expect(q('.nt-summary')?.textContent).toContain('5 rows in this table');
+      // No connection: no "Choose pages in Notion", no Disconnect.
+      q<HTMLButtonElement>('[data-key="menu:More"]')!.click();
+      expect(all('[role=menuitem]').map(b => b.textContent)).toEqual([
+        'Sync details',
+        'Open data table',
+      ]);
       q<HTMLButtonElement>('[data-key=reconnect]')!.click();
       expect(host.connect).toHaveBeenCalledOnce();
     });

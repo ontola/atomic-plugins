@@ -69,9 +69,17 @@ in [`integrations/READINESS.md`](integrations/READINESS.md).
    paging, and optionally a lens from the npm `devonian` package for the
    mapping. `pets/app/` (syncables), `notion/app/` (syncables plus a
    Devonian `AtomicLens`) and `timesheets/app/` (its own Clockify client)
-   are this shape. No host UI installs a drive app from the catalog yet
-   ([#94](https://github.com/ontola/atomic-plugins/issues/94)); their E2Es
-   install test-side.
+   are this shape. A drive app may head its view with the shared sync-status
+   card in `integrations/sync-status/` (Decision Inbox Q-084, status-only;
+   `timesheets/app/` does, from 0.7.0), which its build inlines like the
+   ontology resolver. At the pin, Integrations → Drive apps installs a drive app
+   from a catalog entry that has `app-module` (atomic-server#1689;
+   [#94](https://github.com/ontola/atomic-plugins/issues/94), closed), and the
+   lane e2es install through that UI with the lane's dev-server standing in
+   for GitHub Pages. Only the `pets` entry is `enabled: true`, so the
+   published catalog offers Pets alone; the other app entries are
+   `enabled: false` and are not listed. The design of that UI is tracked in
+   [#89](https://github.com/ontola/atomic-plugins/issues/89).
 2. **Server-executed sandbox plugins** — a bundled `plugin.js` with a
    `manifest` and a `run(ctx)`, executed server-side in a QuickJS/WASM
    sandbox against scoped `ctx.query`/`ctx.read`/`ctx.http`/`ctx.config`.
@@ -189,9 +197,10 @@ standalone `localthought/overlays` repo, full commit history included via
 `git subtree`. GitHub Pages publishes this repository's `main` from its root
 (the root `.nojekyll` keeps files byte-for-byte), so `overlays/<path>` is
 served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
-`catalog/2026-10-02.json` references its overlays by those URLs, and
-`integration-proxy`'s default `CATALOG_PATH` is that folder's
-`catalog/2026-10-02.json`. Dated catalogs and OAD-revision overlay filenames
+the dated catalogs under `catalog/` reference their overlays by those URLs,
+and `integration-proxy`'s default `CATALOG_PATH` is one of them
+(`catalog/2026-10-02-auth-profiles.json` since #258; 0.2.4 and
+localthought.io use `catalog/2026-10-02.json`). Dated catalogs and OAD-revision overlay filenames
 are immutable; a new overlay does not change an existing catalog selection.
 The unversioned catalog was removed after the verified localthought.io switch
 on 2026-10-02. See
@@ -221,7 +230,8 @@ commit history included via `git subtree` (#115). These are the extensions
 the rest of this repo implements: `overlays/` declares them for real
 providers, `syncables/` reads Pagination Schemes and CRUD Causality, and
 `integration-proxy/` reads `x-oauth-authentication-details` (the OAuth
-Authentication Scheme Details draft) and `x-api-key-details` (API Key
+Authentication Scheme Details draft), `x-authentication-profiles`
+(Authentication Profiles, #258) and `x-api-key-details` (API Key
 Details, #121). The Authenticated Principal operations
 in `overlays/` were for the tenant-identity login #54 removed; the proxy no
 longer reads them. A new extension, or a change to
@@ -347,6 +357,13 @@ below and #227 disagree, #227 is newer.
   approved by Michiel on #177: shared-class terms, subject constants, the
   field resolver and class-to-class lenses belong there, while a plugin's
   provider-specific terms and code stay in its own folder.
+  `integrations/sync-status/` is the other approved shared code (Decision
+  Inbox Q-084, status-only): the sync-status card a drive app renders above
+  its data (`card.ts`, `card.css`, with their tests and the `sync-status`
+  lane), and nothing wider: no UI kit, no fake host. An app maps its own
+  state onto the card's `SyncStatus` in its own folder
+  (`timesheets/app/ui/status.ts`) and lists `integrations/sync-status/**`
+  in its lane's `paths`.
 - Never merge ontola/atomic-server PRs; they are reviewed by its
   maintainer. Pin `.atomic-server-ref` to a commit SHA instead, which may be
   on an unmerged branch.
@@ -382,6 +399,12 @@ it, apart from `pnpm install` in `browser/`. `run-lane.mjs` and `serve.mjs`
 read the same `ATOMIC_SERVER_CHECKOUT`, so keep it exported while you run
 lanes.
 
+- Lane servers listen on loopback. `serve.mjs` sets `ATOMIC_IP=127.0.0.1` for
+  the local binary unless `ATOMIC_IP` is already set (it wins), and starts
+  the dev-server on `127.0.0.1` (`DEV_SERVER_HOST` overrides). Don't rely on
+  a firewall, and don't make a lane peer in Docker reach the host through
+  `host.docker.internal`: use `--network host`. The image route is
+  unchanged (`0.0.0.0` inside, published on `127.0.0.1`).
 - Treat `$DIR` as read-only once it's built. Never commit in it or change
   its checkout, because other sessions may be using it at the same moment.
 - If you need atomic-server changes, make them in a separate worktree on a
@@ -497,7 +520,11 @@ In order, it:
 - exports `ATOMIC_SERVER_CHECKOUT=$HOME/.cache/atomic-plugins/atomic-server`
   and, because cloud containers have no IPv6, `ATOMIC_IP=0.0.0.0` through
   `$CLAUDE_ENV_FILE`. Without that, atomic-server exits with "Cannot bind to
-  endpoint :::<port>: Address family not supported by protocol";
+  endpoint :::<port>: Address family not supported by protocol.
+  Since `serve.mjs` now defaults to `127.0.0.1` this export is no longer
+  needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
+  in the cloud). The hook still sets it, so cloud lane servers bind
+  `0.0.0.0`; changing that is left to a session that can test in the cloud;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks

@@ -6,6 +6,13 @@ import {
   type SetupOptions,
 } from './clockifyApi.js';
 import { adopt } from './adopt.js';
+import {
+  bindTable,
+  canAskRowAccess,
+  ensureRowAccess,
+  hasRowAccess,
+  unbindTable,
+} from './binding.js';
 import { readSettings, type Settings } from './config.js';
 import { timesheetFromRows } from './model/rows.js';
 import { projectOf, timesheetFromMirror } from './model/source.js';
@@ -22,6 +29,7 @@ import {
   loadIntents,
   openIntents,
   recordIntent,
+  settledUnder,
   targetLabel,
   toSupersede,
   type IntentConflict,
@@ -60,6 +68,7 @@ import {
   planChange,
   readRowState,
   requestDelete,
+  ROW_KEPT,
   sendChanges,
   setRowValues,
   sortChanges,
@@ -78,11 +87,22 @@ export type ViewState =
   | { kind: 'loading' }
   /**
    * Shown as the view of a table that isn't this app's own (any
-   * `time-entry-v1` table, through the host's "+ Add view"): its rows are
-   * shown, read only, and nothing is synced. "Sync this table" (#177 §6.2
-   * item 14) is not built.
+   * `time-entry-v1` table, through the host's "+ Add view") and isn't
+   * synced: its rows are shown, read only. "Sync this table to Clockify"
+   * (#177 §6.2 item 14) is offered when the host can ask for "Allow
+   * editing" and reach the proxy (`canSync`).
    */
-  | { kind: 'local'; tableName: string }
+  | {
+      kind: 'local';
+      tableName: string;
+      canSync: boolean;
+      /** Waiting for the person to answer the host's "Allow editing" bar. */
+      asking?: boolean;
+      /** The table has a binding but the grant no longer covers it. */
+      paused?: boolean;
+      /** Why the last "Sync this table" stopped. */
+      reason?: string;
+    }
   /** The host has no proxy relay (atomic-server#1624 not in this build). */
   | { kind: 'no-proxy' }
   | { kind: 'not-connected' }
@@ -95,6 +115,10 @@ export type ViewState =
       options?: SetupOptions;
       busy?: 'options' | 'saving';
       error?: string;
+      /** The last sync of this page load, kept while the settings sheet is
+       * open over the data, so the view (the sync-status card) still shows
+       * its failure; restored to `ready` on cancel. */
+      last?: SyncOutcome;
     }
   | {
       kind: 'ready';
@@ -225,11 +249,31 @@ export interface Controller {
   ): Promise<boolean>;
   /** Sends the listed changes that can be sent, one at a time. */
   send(): Promise<ViewState>;
+  /**
+   * "Sync this table to Clockify" on a table that isn't the app's own:
+   * asks for "Allow editing" (with the row extras) when the grant doesn't
+   * cover them, keeps a binding under the App, then goes on as on the
+   * app's own table: connect, choose a workspace, sync.
+   */
+  syncTable(): Promise<ViewState>;
+  /** The table that isn't the app's own this view syncs, if it is one;
+   * `canUndo` while "Not now" can still drop its binding. */
+  syncedTable(): { name: string; canUndo: boolean } | undefined;
+  /** "Not now", before a workspace was chosen: back to not synced. */
+  notNow(): Promise<ViewState>;
 }
 
 /** What the `local` state says, in the banner and to screen readers. */
 export const LOCAL_NOTE =
-  'This table isn’t synced with Clockify: the app syncs only its own table. Its time entries are shown here, read only.';
+  'This table isn’t synced with Clockify. Its time entries are shown here, read only.';
+
+/** The `local` state's offer, when the host can do it (`canSync`). */
+export const SYNC_NOTE =
+  'Sync it to keep it and one Clockify workspace in step: Clockify’s entries are added as rows, and edits made to them here are sent after you review them. Rows already here stay here only. The app asks you to allow it to edit this table’s rows and to keep each entry’s Clockify id and sync baseline on its row; it never deletes a row.';
+
+/** The `local` state on a table that is bound but whose grant lapsed. */
+export const PAUSED_NOTE =
+  'Syncing with Clockify is paused: this app may no longer edit this table’s rows, or keep its Clockify ids on them. Allow editing again to go on.';
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -254,6 +298,12 @@ export function createController(
   let input: SheetInput | undefined;
   /** As the view of another table: what its rows hold (`local`). */
   let rowsSheet: Timesheet | undefined;
+  /** The name of the table, when it isn't the app's own (#177 item 14). */
+  let foreign: string | undefined;
+  /** Whether that table's binding has no settings yet ("Not now"). */
+  let fresh = false;
+  /** The binding this page subscribed to, for settings saved elsewhere. */
+  let watched: string | undefined;
   let changes: ChangesState = { review: [], providerWon: [], recovered: [] };
   /** Range edits (#123 M5), as last read, and the ones written here. */
   let intents: StoredIntent[] = [];
@@ -301,19 +351,61 @@ export function createController(
   const loadOptions = async (
     connection: ConnectionReference,
     draft: Partial<Settings>,
+    last?: SyncOutcome,
   ) => {
     const proxy = store.proxy!;
-    set({ kind: 'setup', connection, draft, busy: 'options' });
+    const keep = last ? { last } : {};
+    set({ kind: 'setup', connection, draft, busy: 'options', ...keep });
 
     try {
       const options = await fetchSetupOptions(
         relayTransport(proxy, connection),
       );
 
-      return set({ kind: 'setup', connection, draft, options });
+      return set({ kind: 'setup', connection, draft, options, ...keep });
     } catch (error) {
-      return set({ kind: 'setup', connection, draft, error: message(error) });
+      return set({
+        kind: 'setup',
+        connection,
+        draft,
+        error: message(error),
+        ...keep,
+      });
     }
+  };
+
+  /** The `local` state: the table's rows, read only, with the offer to sync. */
+  const showLocal = async (
+    extra: { paused?: boolean; reason?: string } = {},
+  ) => {
+    const data = await store.getData();
+    rowsSheet = await timesheetFromRows(store, data!.table, timeZone);
+    input = undefined;
+    changes = { review: [], providerWon: [], recovered: [] };
+
+    return set({
+      kind: 'local',
+      tableName: foreign ?? 'Time entries',
+      canSync: !!store.proxy && canAskRowAccess(store),
+      ...extra,
+    });
+  };
+
+  /** False, after showing the paused state, when the grant lapsed. */
+  const granted = async () => {
+    if (!foreign) return true;
+    if (await hasRowAccess(store).catch(() => false)) return true;
+    await showLocal({ paused: true });
+
+    return false;
+  };
+
+  /** Where the settings are: the App, or the table's binding. */
+  const readHome = async () => {
+    const schema = await findSchema(store);
+    if (!schema.home) throw new Error('This table isn’t synced with Clockify.');
+
+    return { schema, resource: await store.getResource(schema.home) };
   };
 
   const controller: Controller = {
@@ -328,13 +420,18 @@ export function createController(
           const data = await store.getData();
           const table = await store.getResource(data!.table);
           const name = table.get(atomic.name);
-          rowsSheet = await timesheetFromRows(store, data!.table, timeZone);
-          set({
-            kind: 'local',
-            tableName: typeof name === 'string' && name ? name : 'Time entries',
-          });
+          foreign = typeof name === 'string' && name ? name : 'Time entries';
+          const schema = await findSchema(store);
 
-          return {};
+          // Not synced until "Sync this table" made a binding; paused when
+          // the grant no longer covers the rows and the app's extras.
+          if (!schema.home) return (await showLocal(), {});
+          if (!(await granted())) return {};
+
+          if (watched !== schema.home) {
+            watched = schema.home;
+            store.subscribe(schema.home, () => void controller.appChanged());
+          }
         }
       } catch (error) {
         set({ kind: 'failed', message: message(error) });
@@ -361,9 +458,9 @@ export function createController(
           return {};
         }
 
-        const schema = await findSchema(store);
-        const app = await store.getResource(await store.getApp());
-        const read = readSettings(p => app.get(p), schema);
+        const { schema, resource } = await readHome();
+        const read = readSettings(p => resource.get(p), schema);
+        fresh = !!foreign && !read.ok && !Object.keys(read.partial).length;
 
         if (!read.ok) {
           await loadOptions(connection, read.partial);
@@ -392,10 +489,10 @@ export function createController(
       const { connection } = current;
 
       try {
-        const schema = await findSchema(store);
-        const app = await store.getResource(await store.getApp());
-        const read = readSettings(p => app.get(p), schema);
+        const { schema, resource } = await readHome();
+        const read = readSettings(p => resource.get(p), schema);
         if (!read.ok || current.kind !== 'setup' || current.busy) return {};
+        fresh = false;
         set({ kind: 'ready', connection, settings: read.settings });
 
         return { syncing: controller.sync() };
@@ -429,7 +526,7 @@ export function createController(
       if (current.kind !== 'ready' && current.kind !== 'setup') return current;
       const draft = current.kind === 'ready' ? current.settings : current.draft;
 
-      return loadOptions(current.connection, draft);
+      return loadOptions(current.connection, draft, current.last);
     },
 
     async saveSettings(choice) {
@@ -442,11 +539,12 @@ export function createController(
         if (!options.workspaces.some(w => w.id === choice.workspaceId))
           throw new Error('Choose one of the listed workspaces');
         const schema = await ensureSchema(store);
-        const app = await store.getResource(await store.getApp());
-        app.set(schema.settings.workspaceId, choice.workspaceId);
-        app.set(schema.settings.userId, options.user.id);
-        app.set(schema.settings.lookbackDays, choice.lookbackDays);
-        await app.save();
+        const home = await store.getResource(schema.home);
+        home.set(schema.settings.workspaceId, choice.workspaceId);
+        home.set(schema.settings.userId, options.user.id);
+        home.set(schema.settings.lookbackDays, choice.lookbackDays);
+        await home.save();
+        fresh = false;
       } catch (error) {
         return set({
           kind: 'setup',
@@ -454,6 +552,7 @@ export function createController(
           draft,
           options,
           error: message(error),
+          ...(current.last ? { last: current.last } : {}),
         });
       }
 
@@ -464,6 +563,9 @@ export function createController(
 
     async sync() {
       if (current.kind !== 'ready' || !store.proxy || running) return current;
+      // A grant taken back since the view opened: say so instead of
+      // failing on the first write.
+      if (!(await granted())) return current;
       running = true;
       const { connection, settings } = current;
       set({ kind: 'syncing', connection, settings });
@@ -499,11 +601,23 @@ export function createController(
           },
         );
         await refreshIntents(schema);
+        // The last send's outcomes stay listed, except those this read
+        // settled: an uncertain send is now in `recovered`, as applied or
+        // not (`syncRow`; a still-requested delete of an entry that still
+        // exists is not applied, and is listed again), and a `not-sent`
+        // change is back in `review`. Left in, they would
+        // say "checked on the next sync" after that sync, and name another
+        // copy's lease long after its turn ended.
+        const settled = (changes.outcomes?.results ?? []).filter(
+          o => o.status !== 'uncertain' && o.status !== 'not-sent',
+        );
         changes = {
           review: result.review,
           providerWon: result.providerWon,
           recovered: result.recovered,
-          ...(changes.outcomes ? { outcomes: changes.outcomes } : {}),
+          ...(changes.outcomes && settled.length
+            ? { outcomes: { ...changes.outcomes, results: settled } }
+            : {}),
         };
         input = {
           mirror: result.mirror,
@@ -554,7 +668,12 @@ export function createController(
       const settings = readComplete(current.draft);
       if (!settings) return current;
 
-      return set({ kind: 'ready', connection: current.connection, settings });
+      return set({
+        kind: 'ready',
+        connection: current.connection,
+        settings,
+        ...(current.last ? { last: current.last } : {}),
+      });
     },
 
     async setLookback(days) {
@@ -564,9 +683,9 @@ export function createController(
 
       try {
         const schema = await ensureSchema(store);
-        const app = await store.getResource(await store.getApp());
-        app.set(schema.settings.lookbackDays, days);
-        await app.save();
+        const home = await store.getResource(schema.home);
+        home.set(schema.settings.lookbackDays, days);
+        await home.save();
       } catch (error) {
         return set({
           ...current,
@@ -774,6 +893,9 @@ export function createController(
           review: changes.review.filter(c => c.entryId !== entryId),
         };
         delete changes.error;
+        // A row grant never deletes: the new row stays, as the person's.
+        if (change && !schema.own)
+          changes = { ...changes, error: `Not sent. ${ROW_KEPT}` };
       } catch (error) {
         changes = { ...changes, error: message(error) };
       }
@@ -839,10 +961,8 @@ export function createController(
         );
         // Range edits not sent yet over this range are replaced (#123 S22),
         // unless one reaches outside it.
-        const { replace, outside } = toSupersede(
-          openIntents(intents, new Set(review.map(c => c.subject))),
-          { from, to },
-        );
+        const open = openIntents(intents, new Set(review.map(c => c.subject)));
+        const { replace, outside } = toSupersede(open, { from, to });
         if (outside.length)
           throw new Error(
             `A range edit not sent yet (${outside.map(i => spanText(i, input!.timeZone ?? timeZone)).join('; ')}) reaches outside this range. Send or discard it first, or edit a range that covers all of it.`,
@@ -888,7 +1008,11 @@ export function createController(
           to,
           target: request.target,
           rows,
-          supersedes: replace.map(i => i.id),
+          // And the settled ones it edits over, so they stay closed (#279).
+          supersedes: [
+            ...replace,
+            ...settledUnder(intents, open, { from, to }, rows),
+          ].map(i => i.id),
         };
         const subject = await recordIntent(store, schema, intent);
         written.add(subject);
@@ -923,6 +1047,7 @@ export function createController(
         .changes()
         .review.filter(c => !c.blockers.length);
       if (!sendable.length) return current;
+      if (!(await granted())) return current;
       running = true;
       const { connection, settings } = current;
       changes = {
@@ -977,6 +1102,56 @@ export function createController(
       }
 
       return set(current);
+    },
+
+    async syncTable() {
+      if (current.kind !== 'local' || current.asking || !current.canSync)
+        return current;
+      const before = current;
+      set({ ...before, asking: true });
+      let answer: Awaited<ReturnType<typeof ensureRowAccess>>;
+
+      try {
+        answer = await ensureRowAccess(store);
+      } catch (error) {
+        answer = { status: 'denied', reason: message(error) };
+      }
+
+      if (answer.status !== 'granted')
+        return set({
+          ...before,
+          reason: `Not synced: ${answer.reason.replace(/\.?$/, '.')}`,
+        });
+
+      try {
+        await bindTable(store);
+      } catch (error) {
+        return set({ kind: 'failed', message: message(error) });
+      }
+
+      await controller.load();
+
+      return current;
+    },
+
+    syncedTable: () =>
+      foreign && current.kind !== 'local'
+        ? { name: foreign, canUndo: fresh }
+        : undefined,
+
+    async notNow() {
+      if (!foreign || !fresh || running) return current;
+
+      try {
+        await unbindTable(store);
+      } catch (error) {
+        return set({ kind: 'failed', message: message(error) });
+      }
+
+      fresh = false;
+      await controller.load();
+
+      return current;
     },
   };
 
@@ -1177,7 +1352,12 @@ export function describe(state: ViewState): string {
     case 'loading':
       return 'Loading…';
     case 'local':
-      return LOCAL_NOTE;
+      if (state.asking)
+        return `${LOCAL_NOTE} Waiting for you to allow editing…`;
+      if (state.paused) return `${LOCAL_NOTE} ${PAUSED_NOTE}`;
+      if (state.reason) return `${LOCAL_NOTE} ${state.reason}`;
+
+      return state.canSync ? `${LOCAL_NOTE} ${SYNC_NOTE}` : LOCAL_NOTE;
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot import. Nothing was fetched.';
     case 'not-connected':
@@ -1211,6 +1391,9 @@ export function describe(state: ViewState): string {
         `${created} created, ${updated} updated, ${unchanged} unchanged, ` +
         `last ${state.settings.lookbackDays} days.` +
         (removed ? ` ${removed} removed (deleted in Clockify).` : '') +
+        (state.last.result.kept
+          ? ` ${state.last.result.kept} deleted in Clockify: kept in this table as rows of their own, no longer synced (the app may not delete its rows). Delete them there.`
+          : '') +
         (log.candidates
           ? ` ${log.candidates} missing from Clockify's list, re-checked on the next sync.`
           : '') +

@@ -13,7 +13,9 @@ apart, two devices compacting the log); all are mock-tested only, so those
 capabilities are declared, not verified. Since 0.5.0 its rows are the
 shared `time-entry-v1` class, linked to rows of its own Projects and People
 tables (#177 item 7, below), which keeps its catalog entry disabled until
-the ontology moves to a stable domain. The first sections describe the Clockify
+the ontology moves to a stable domain. Since 0.6.0 it can also sync a
+`time-entry-v1` table it didn't make ("Sync this table to Clockify", #177
+item 14, [below](#syncing-a-table-the-app-didnt-make)), mock-tested only. The first sections describe the Clockify
 lens and the LocalThought extension flow it was written for; the pinned host
 no longer has that flow.
 
@@ -63,7 +65,7 @@ Live account data must never be checked into fixtures.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 161 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 178 KB, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -82,6 +84,43 @@ into the view root.
   candidates. View, week and open entry live in memory only.
   `app/ui/preview.ts` renders every frame from the mockup's sample data
   for the DOM tests and the e2e's screenshot and axe pass.
+
+- **Sync-status card** (0.7.0; Decision Inbox Q-084). Every data view
+  starts with the shared card from
+  [`integrations/sync-status/`](../sync-status/README.md), a
+  `region` named "Sync status", filled by `app/ui/status.ts` from the
+  controller's state, the `Timesheet` and the "Changes to send" list: the
+  last sync ("Synced 4 min ago", "Sync failed just now" with the error and
+  the next step by problem kind, "Not synced yet", or "Syncing…"), the
+  entries in the window and the last sync's added, updated, unchanged and
+  removed counts; "Edits here are sent to Clockify after you review them."
+  or, as the view of a table that isn't synced, "Read-only: edits here stay
+  in Atomic."; changes waiting to send (and how many are held back),
+  changes Clockify refused or that errored, and sends without an answer;
+  what is left out or not editable (incomplete rows with "Open row",
+  running timers, breaks, locked entries, entries with custom fields); and
+  time in the window no complete read covers, as a problem with "Sync now".
+  The connection bar no longer repeats the last sync or the entry count.
+  The "Not loaded" note over a week now says what to do ("Clockify has not
+  been read for this time … Sync now to load it.") and, once this page load
+  has synced successfully (or while it syncs), leaves out the tail since the
+  last complete read, which the card's "Synced … ago" already covers
+  (`unknownIn`, `status.ts` `hidesTail`; usertest-findings #14). After a
+  failed sync, or before any, the tail is shown, and the failed card line
+  names the last good sync ("Last good sync 3 days ago."). Without a proxy
+  relay (frame K) the card is read-only, with the reason. A `not-sent`
+  outcome stays a pending change (never "uncertain"); when another copy holds
+  the send lease, the card says so once, and (0.7.1) only until that lease's
+  turn ends; a successful sync drops the "uncertain" and "not-sent" outcomes
+  it settled (`recovered` and the review take over), so "checked on the next
+  sync" never outlives that sync. A `failed` send whose Clockify write stood
+  (the verification read found the entry no longer complete, or saving the
+  row threw afterwards) carries `written: true` (`SendOutcome`) and is
+  worded as written, not as "nothing was written". The settings sheet over
+  the data keeps the last sync (`setup.last`), so a failure stays on the
+  card there. The wording is a default
+  taken for usertest-findings #6, #7 and #14 and has not been seen by a
+  tester yet.
 
 - **Connecting.** "Connect Clockify" calls
   `store.proxy.connect({ platform: 'clockify' })`. The host, not the frame,
@@ -157,10 +196,31 @@ into the view root.
     host's "+ Add view" offers the app on any table of it, including one
     made by hand (New Table → use an existing class → paste the class URL
     above; its search does not find Pages classes, #177 H10). There the
-    app shows that table's completed rows in its week, entries and
-    projects views, read only, with "Not synced with Clockify", and syncs
-    nothing: there is no observation log for that table, so no window,
-    coverage or conflicts. "Sync this table to Clockify" (#177 §6.2 item 14) is not built.
+    the app shows that table's completed rows in its week, entries and
+    projects views, read only, with "Not synced with Clockify": there is
+    no observation log for that table yet, so no window, coverage or
+    conflicts. From 0.6.0 it offers "Sync this table to Clockify"; see
+    [Syncing a table the app didn't make](#syncing-a-table-the-app-didnt-make).
+  - _Incomplete rows_ (0.6.2): `time-entry-v1` requires Start. A row without
+    one (or whose Start is not a timestamp) is read through the resolver's
+    `missing` and listed above the Week and Entries views under "N rows are
+    incomplete" with "Incomplete: missing Start" (or "Start is not a time")
+    and an "Open row" button (`store.openResource`) to fill the column in
+    the table: ontology-kit's rule for every shared-class view, shown as
+    incomplete rather than skipped (before 0.6.2 such a row was counted as a
+    running timer). It is not an entry, so it has no place in the week or
+    the totals, and nothing of it is sent. A row with a Start but no End is
+    still a running timer. In a synced table the same rule holds for the
+    rows the app does not own; a synced row whose Start is cleared in the
+    table gets Clockify's values back at the next sync (Clockify owns bound
+    rows' values, `writeBack.ts` `syncRow`), and `listChanges` lists nothing
+    for it meanwhile. Unit (`app/adopt.test.ts`, `app/ui/ui.test.ts`) only:
+    at the pin the server refuses a commit that lacks a required property
+    of the row's class (`lib/src/resources.rs` `check_required_props`), and
+    a timestamp cannot be empty, so no `time-entry-v1` row on this host can
+    lack a Start; the hand-made table e2e checks that refusal. The view's
+    handling is for a lens, another host, or a class the server could not
+    check.
   - _Not verified:_ the published terms are fetched from GitHub Pages by
     the server and the browser (the e2e needs ontola.github.io); a cold
     browser or server during a Pages outage fails as #177 spike S1 found
@@ -210,7 +270,8 @@ into the view root.
     entries through the one Clockify lens (`devonian/clockify/`; running
     timers and breaks skipped), by `clockify-entry-id` among the table's
     children, linked to their project and person rows. A row whose entry Clockify
-    confirmed deleted is removed. Since 0.2.0 an edit made in the table is
+    confirmed deleted is removed (on a table the app didn't make: kept, see
+    below). Since 0.2.0 an edit made in the table is
     kept and listed to send (write-back, below), no longer overwritten
     (#177 Q5 reverses #97 answer 2); the table's description says so.
   - **Status line.** Created/updated/unchanged as before, plus rows
@@ -356,7 +417,12 @@ into the view root.
     and the intents it replaces. Written once, never edited, so two
     devices never overwrite each other's intents even where their row
     edits collide. Status is derived: replaced when a later intent names
-    it, open while one of its rows still has a change to send.
+    it, open while one of its rows still has a change to send. A range
+    edit also names the closed intents (sent or discarded) that it
+    overlaps or whose rows it stages, so a sent edit does not count as
+    open again when a later one changes its rows (#279, 0.6.1; before,
+    "did not work" over an entry a sent "worked on" had just made was
+    held as a conflict between your edits).
   - _S22:_ a range edit made where open range edits overlap it replaces
     them: their staged changes are put back first, then the new plan is
     staged. One that reaches outside the new range is not cut in two:
@@ -411,8 +477,10 @@ into the view root.
     hooks from it: `unknown` (the window's unknown spans) and `conflicts`
     (`app/timeline/types.ts` `TimelineConflict`: the views' `Conflict` plus
     kind, span, entries and candidates). `app/ui/coverage.ts` renders them
-    as a "Not loaded" note and a "Conflicts in Clockify" list, whose
-    resolve buttons (M4, above) appear once connected and synced.
+    as a "Not loaded yet" note (with "Sync now"; the tail since the last
+    complete read is left to the sync-status card, 0.7.0) and a "Conflicts
+    in Clockify" list, whose resolve buttons (M4, above) appear once
+    connected and synced.
 - **Errors.** If the window's first page fails, the pass fails and rows
   are not touched ("Import failed: …. Rows already in the table are
   kept."). If a later page fails, what was read is kept as an incomplete
@@ -443,6 +511,84 @@ node integrations/tooling/run-lane.mjs timesheets --tier e2e    # real host + mo
 node integrations/timesheets/app/build.mjs                      # -> app/dist/ui.js (git-ignored)
 ```
 
+### Syncing a table the app didn't make
+
+#177 §6.2 item 14, 0.6.0. Mock-tested only: unit tests through the
+in-memory store and one host e2e against the mock proxy; declared, not
+verified. The calendar app does the same for Google Calendar (#272); this
+is how it fits the observation log.
+
+- **What it means here.** #177 §3.3 already set the design for timesheets:
+  the per-row bookkeeping goes on that table's rows, and the observation
+  log stays under the app, keyed by that table. Since 0.2.0 an edit made in
+  the table is listed to send (#177 Q5 reversed #97 answer 2, which made
+  rows a read-only projection), so the other table's rows are the same
+  kind of projection target as the app's own, with the same review before
+  send. The other way, declining the feature, was not needed: nothing in
+  the log, the lease or the range edits depends on which table the rows
+  are in.
+- **The binding** (`app/binding.ts`). "Sync this table to Clockify" makes
+  a resource under the App ("Clockify sync of <table>"), whose
+  `clockify-synced-table` (an `atomicURL` Property of the app's ontology)
+  names the table. It is found with `store.query` and accepted only when
+  its parent is the App. It holds what the App holds for the app's own
+  table: `clockify-workspace`, `clockify-account`,
+  `clockify-lookback-days` and `clockify-observation-log`. The log head,
+  its snapshots and incrementals, the range edits (intents) and the send
+  lease are children of the log head under the binding, so each synced
+  table has its own log, window, coverage, conflicts and lease
+  (`schema.home` is the App or the binding). The Projects and People
+  tables stay the app's own two, shared by every table it syncs: their
+  rows are keyed by Clockify's ids, and the other table's rows link to
+  them.
+- **Asking.** Nothing is written to the table, its rows or the binding
+  before the button is pressed. The button first compares
+  `store.rowAccess().extras` with the five row extras the App declares
+  (`row-extras`, set on every open: `clockify-entry-id`,
+  `clockify-sync-baseline`, `clockify-outbox`, `clockify-delete`,
+  `clockify-create`) and calls `store.requestRowAccess()` when the grant
+  is missing or doesn't cover them; the host shows its own "Allow
+  editing" bar. A grant given in Add view before the app first opened
+  covers none of the extras, so the app asks again. "Not now" in that bar
+  leaves the table not synced, with no binding. Then the app goes on as
+  on its own table: connect (if no connection is delegated yet), choose a
+  workspace and a look-back (stored on the binding), sync. "Not now" in
+  the app, before a workspace was chosen, removes the empty binding.
+- **What it writes on that table**, under the grant: new rows with `isA`
+  exactly `[time-entry-v1]`, the shared fields (name, start, end,
+  billable, project and person links) and the extras; on existing synced
+  rows the same properties. Never the table itself: its name, class and
+  description are left as they are (the app's own table gets a
+  description; this one doesn't).
+- **Rows already in the table** have no `clockify-entry-id`, so they are
+  local only (#177 Q6 and §3.2's default): not matched against Clockify,
+  not uploaded, not shown in the app's views (which read the log), and
+  left untouched. Clockify's entries are added as new rows.
+- **Rows are never deleted** there: a grant never allows `destroy`. Where
+  the app would destroy a row of its own table (Clockify confirmed the
+  entry deleted, a sent delete, an entry found gone at send time, or
+  Discard of a new row a range edit staged), it removes its own extras
+  from the row instead (`writeBack.ts` `retireRow`), leaving an ordinary
+  row of the person's with its values, and says so ("kept in this table as
+  rows of their own … Delete them there", or the same with a send's
+  outcome). Such a row is then local only, like a hand-made one.
+- **A lapsed grant pauses the sync.** On every open, sync and send the
+  app reads `rowAccess()` again; when the grant is gone or no longer
+  covers the extras (the view was removed, the person who gave it lost
+  write access, the app's key changed, or someone took it back in the
+  tab's menu), it shows the table read only with "Sync paused" and "Allow
+  editing again", and makes no proxy request and no write.
+- **Not built, or not checked:** "Stop syncing" (removing a binding that
+  has settings or a log); "Publish to Clockify" for the table's own rows;
+  two tables synced to the same workspace coordinate only through
+  Clockify (each send re-reads the entry and refuses a both-sides change,
+  and a create is refused where Clockify already has time), not through a
+  shared lease; what an uninstall does with the binding; edits made while
+  the app is closed are found only on its next open (#177 H6), and nothing
+  syncs in the background (H11). The e2e makes the table and its row as
+  the signed-in person, as Add view's own test does, and does not try a
+  table owned by someone else.
+
 ### What is verified, and how
 
 - **Unit** (`app/*.test.ts`, mock fixture `fixtures/clockify/scenario.mjs`
@@ -452,7 +598,17 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   project and person links and a Projects row per active project
   (`app/sync.test.ts`), the first open moving a 0.4.0 table in place with
   an unsent edit kept, and the app as a read-only view of another
-  `time-entry-v1` table (`app/adopt.test.ts`). The observation log's #123 scenarios S1–S5, S8 and S27
+  `time-entry-v1` table (`app/adopt.test.ts`). "Sync this table to
+  Clockify" (#177 item 14, `app/syncTable.test.ts`, through a fake store
+  that refuses what the pin's row grant refuses): nothing written before
+  the button, the host asked again when a grant from Add view lacks the
+  extras, "Not now" in the host bar and in the app, the binding and its
+  log under the App, rows of exactly `time-entry-v1` with the extras, the
+  person's row and the table untouched, a table edit listed and sent as a
+  `PUT` after review, a row kept without the extras after a Clockify
+  deletion, after a sent delete and after Discard of a new row, and a
+  revoked grant pausing and resuming; plus the button and set-up in the
+  DOM (`app/ui/ui.test.ts`). The observation log's #123 scenarios S1–S5, S8 and S27
   (`app/observationLog.test.ts`), and fold property tests over 40 seeded
   random observation sets (`app/observations.test.ts`): appending equals
   refolding, any permutation folds the same, snapshot + tail equals the
@@ -483,7 +639,9 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   the range form through to a send in the DOM (`app/ui/ui.test.ts`).
   Two open copies (#123 M5): S21 (the same range, and the same entry,
   edited apart; held on both devices; resolved), equal edits made apart,
-  S22 and its refusal, and the send lease (refused while held, sent once
+  S22 and its refusal, a range edit over the rows of a sent one (#279:
+  no conflict, and a later edit does not put back its change; two
+  devices doing so apart still conflict), and the send lease (refused while held, sent once
   expired, kept through a batch longer than 60 s, lost mid-batch, a sync
   leaving another copy's unconfirmed create alone) in
   `app/multiDevice.test.ts`; S28 (two devices compacting at once, and one
@@ -521,7 +679,16 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   links to its "Atomic plugins" project row and "Test Person" person row;
   a fourth makes a `time-entry-v1` table by hand, adds the app to it under
   Add view (read only) and sees its entry and linked project, with
-  nothing written to that table.
+  nothing written to that table. A fifth (0.6.0, #177 item 14) makes such
+  a table with one row, adds the app read only, presses "Sync this table
+  to Clockify", allows editing in the host's own bar, connects, chooses
+  the workspace, and checks the two entries are rows of that table with
+  `isA` exactly `time-entry-v1` and the app's extras, the person's row
+  without them, the table's name and class unchanged and the binding
+  under the App with the workspace and the log; then renames an entry in
+  the table as the signed-in person, sees it under "Changes to send"
+  after "Sync now", with nothing written to Clockify, and sends it as one
+  `PUT`.
   Provider changes
   and failures are driven through the mock proxy's local-only
   `POST /__fixture/clockify`.
@@ -551,6 +718,11 @@ node integrations/timesheets/app/build.mjs                      # -> app/dist/ui
   The project list has a second active project and an archived one, so a
   project change and its refusal are testable.
 
+- **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+timesheets --i-understand-this-writes-to <workspace id>` runs this app's
+  controller against one dedicated Clockify test workspace, including the #123
+  POST, split-copy and `billable` checks, and writes evidence; see
+  [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
 - **Not verified:** a real integration proxy or a real Clockify account.
   The `/api/v1/...` paths match the mock fixture, not a recorded live
   response. No live evidence is recorded, so every capability here is

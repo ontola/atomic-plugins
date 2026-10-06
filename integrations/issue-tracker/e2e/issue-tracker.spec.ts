@@ -26,6 +26,12 @@
  *    existing connection", with no reload: the app syncs again by itself
  *    (#196 user test; it used to stop at an unsynced board).
  *
+ * A second test (#177 item 14, since 0.3.0): an `issue-v1` table the person
+ * made by hand, "+ Add view" → GitHub issues (Read-only), "Sync this table
+ * to GitHub", the host's "Allow editing" bar, connect, choose a repository
+ * of its own (seeded with the fixture's `createIssue` driver), import into
+ * that table, and a status edit made in the table sent after review.
+ *
  * The rows are of the shared class at its published GitHub Pages subject,
  * which the pinned server and the browser fetch from Pages themselves, as
  * in production (ontology-kit/README.md, "Plugin e2e tests and the
@@ -48,8 +54,10 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.1';
 const REPOSITORY = 'atomic-fixture/tracker';
+/** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
+const TEAM_REPOSITORY = 'atomic-fixture/team-board';
 const NAME = 'https://atomicdata.dev/properties/name';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const PARENT = 'https://atomicdata.dev/properties/parent';
@@ -80,6 +88,8 @@ test.describe('GitHub issues drive app', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    // The mock proxy outlives an attempt: a retry starts from the seed again.
+    await fixture('reset', [REPOSITORY]);
     const writes = appWrites(page);
     await installFromCatalog(page);
 
@@ -351,9 +361,13 @@ test.describe('GitHub issues drive app', () => {
 
     // The connection lives at the proxy, owned by the signed-in user and
     // delegated to this app; the page keeps nothing credential-like.
-    const connections = await proxyConnections('github-issues');
+    // Only this test's agent's: the other test connects its own, in parallel.
+    const me = await signedInAgent(page);
+    const mine = async () =>
+      (await proxyConnections('github-issues')).filter(c => c.owner === me);
+    const connections = await mine();
     expect(connections).toHaveLength(1);
-    expect(connections[0].owner).toBe(await signedInAgent(page));
+    expect(connections[0].owner).toBe(me);
     expect(connections[0].delegations).toHaveLength(1);
     expect(await page.evaluate(() => Object.keys(localStorage))).not.toEqual(
       expect.arrayContaining([
@@ -368,9 +382,7 @@ test.describe('GitHub issues drive app', () => {
     await app.getByRole('button', { name: 'Connection menu' }).click();
     await app.getByRole('menuitem', { name: 'Disconnect GitHub' }).click();
     await expect(status).toContainText('Not connected', { timeout: 30_000 });
-    expect((await proxyConnections('github-issues'))[0].delegations).toEqual(
-      [],
-    );
+    expect((await mine())[0].delegations).toEqual([]);
     await app.getByRole('button', { name: 'Connect GitHub' }).click();
     await consent
       .getByRole('button', { name: 'Use existing connection' })
@@ -389,9 +401,227 @@ test.describe('GitHub issues drive app', () => {
     );
     await expect(status).toContainText('Synced');
     expect(page.url()).toBe(appUrl);
-    const again = await proxyConnections('github-issues');
+    const again = await mine();
     expect(again).toHaveLength(1);
     expect(again[0].delegations).toHaveLength(1);
+  });
+
+  test('syncs a hand-made issue-v1 table with GitHub after Allow editing, and sends a reviewed status edit (#177 item 14)', async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY ||
+        !process.env.INTEGRATION_PROXY_URL,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(300_000);
+    const issueV1 = (
+      (await import('../../../ontology-kit/terms.mjs' as string)) as {
+        classes: Record<string, { subject: string }>;
+      }
+    ).classes['issue-v1'].subject;
+    // A repository of its own, so the other test's edits can't race this one,
+    // emptied first because a retry runs after an earlier attempt filled it.
+    await fixture('reset', [TEAM_REPOSITORY]);
+    for (const title of ['Book the venue', 'Write the agenda'])
+      await fixture('createIssue', [TEAM_REPOSITORY, { title, body: '' }]);
+
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    await expect(app.getByRole('status')).toContainText('Not connected', {
+      timeout: 45_000,
+    });
+    const appSubject = new URL(page.url()).searchParams.get('subject')!;
+    // The first open makes the App a view of issue-v1, before connecting.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            async ({ subject, wanted }) => {
+              const store = window.store!;
+              const resource = await store.fetchResourceFromServer(subject, {
+                noWebSocket: true,
+              });
+
+              return Object.values(resource.getPropVals()).some(
+                v => Array.isArray(v) && v.includes(wanted),
+              );
+            },
+            { subject: appSubject, wanted: issueV1 },
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    // A table the person made, of the shared class, with one row of theirs.
+    const table = await page.evaluate(
+      async ({ klass, name, classtype, task }) => {
+        const store = window.store!;
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team issues', [classtype]: klass },
+        });
+        await made.save();
+        const row = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: {
+            [name]: 'Plan the offsite',
+            [`${task}/status`]: [`${task}/todo`],
+          },
+        });
+        await row.save();
+        // A row missing the class's required Name (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped, never synced). The
+        // server refuses a commit without the property (lib/src/resources.rs
+        // check_required_props), so the incomplete row this host can hold
+        // has an empty Name.
+        const nameless = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: '', [`${task}/status`]: [`${task}/doing`] },
+        });
+        await nameless.save();
+
+        return made.subject;
+      },
+      { klass: issueV1, name: NAME, classtype: CLASSTYPE, task: TASK },
+    );
+    await page.goto(
+      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
+    );
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'GitHub issues' })
+      .click({ timeout: 60_000 });
+    // Read-only first: the sync asks for itself.
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(
+      app.getByText('Team issues isn’t synced with GitHub.'),
+    ).toBeVisible({ timeout: 45_000 });
+    await app
+      .getByRole('button', { name: 'Sync this table to GitHub' })
+      .click();
+    // The host's own bar asks, outside the frame.
+    const ask = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(ask).toBeVisible({ timeout: 30_000 });
+    await ask.getByRole('button', { name: 'Allow editing' }).click();
+
+    // No connection yet: connect as on the app's own page. Coming back from
+    // the proxy reloads the page, and the app goes on.
+    await expect(
+      app.getByRole('heading', { name: 'Sync Team issues with GitHub' }),
+    ).toBeVisible({ timeout: 45_000 });
+    await app.getByRole('button', { name: 'Connect GitHub' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page
+      .getByRole('button', {
+        name: 'Use LocalThought to sync GitHub Issues with this destination',
+        exact: true,
+      })
+      .click();
+    await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
+    await expect(
+      app.getByRole('heading', {
+        name: 'Which repository should Team issues sync with?',
+      }),
+    ).toBeVisible({ timeout: 45_000 });
+    await app.getByRole('radio', { name: new RegExp(TEAM_REPOSITORY) }).check();
+    await app
+      .getByRole('button', { name: `Import ${TEAM_REPOSITORY}` })
+      .click();
+    const bar = app.locator('.pl-conn');
+    await expect(bar).toHaveAttribute(
+      'title',
+      /2 issues and 0 comments in sync with atomic-fixture\/team-board/,
+      { timeout: 60_000 },
+    );
+
+    // GitHub's issues are rows of that table now, with the app's extras; the
+    // person's own row is as it was; the table kept its name and class.
+    const issueRows = async () =>
+      (await rowsUnder(page, table)).filter(r =>
+        (r[IS_A] as unknown[] | undefined)?.includes(issueV1),
+      );
+    const rows = await issueRows();
+    expect(rows).toHaveLength(4);
+    expect(rows.map(r => r['github-issue-number']).sort()).toEqual([
+      1,
+      2,
+      undefined,
+      undefined,
+    ]);
+
+    for (const row of rows.filter(
+      r => r['github-issue-number'] !== undefined,
+    )) {
+      expect(row[IS_A]).toEqual([issueV1]);
+      expect(row['github-sync-baseline']).toEqual(expect.any(String));
+    }
+
+    // The incomplete row stayed as it was: not sent, and on the board as
+    // "(no title)" with its tag (the board shows only once the table is
+    // synced; before that the app shows the "isn't synced" offer alone).
+    const nameless = rows.find(
+      r => r[NAME] === '' && r['github-issue-number'] === undefined,
+    )!;
+    expect(nameless).not.toHaveProperty('github-sync-baseline');
+    await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
+    await expect(app.getByText('(no title)')).toBeVisible();
+
+    expect(rows.find(r => r[NAME] === 'Plan the offsite')).not.toHaveProperty(
+      'github-issue-number',
+    );
+    const after = await page.evaluate(
+      async ({ subject, name, classtype }) => {
+        const t = await window.store!.fetchResourceFromServer(subject, {
+          noWebSocket: true,
+        });
+
+        return { name: t.get(name), classtype: t.get(classtype) };
+      },
+      { subject: table, name: NAME, classtype: CLASSTYPE },
+    );
+    expect(after).toEqual({ name: 'Team issues', classtype: issueV1 });
+    // The repository choice is kept under the App, naming the table.
+    expect(await bindingFor(page, appSubject, table)).toBe(TEAM_REPOSITORY);
+
+    // A status edit made in the table, as the signed-in person, is reviewed
+    // and then sent.
+    const first = rows.find(r => r['github-issue-number'] === 1)!
+      .subject as string;
+    await setStatus(page, first, 'done');
+    await app.getByRole('button', { name: 'Sync now' }).click();
+    await app
+      .getByRole('button', { name: 'Review and send' })
+      .click({ timeout: 30_000 });
+    const review = app.getByRole('region', {
+      name: 'Changes to send to GitHub',
+    });
+    await expect(review).toContainText(
+      'Update #1: status Todo → Done (close it)',
+    );
+    expect((await teamIssue(1)).state).toBe('open');
+    await app.getByRole('button', { name: 'Send 1 change to GitHub' }).click();
+    await expect(bar).toHaveAttribute('title', /1 sent to GitHub/, {
+      timeout: 30_000,
+    });
+    expect((await teamIssue(1)).state).toBe('closed');
+    await expect
+      .poll(async () => {
+        const row = (await issueRows()).find(r => r.subject === first);
+
+        return JSON.parse(String(row?.['github-sync-baseline'] ?? '{}')).status;
+      })
+      .toBe('Done');
   });
 });
 
@@ -463,6 +693,94 @@ async function github(
   if (!issue) throw new Error(`No issue #${number}`);
 
   return issue;
+}
+
+/** An issue of `TEAM_REPOSITORY`, as the mock's github-issues fixture has it. */
+async function teamIssue(number: number): Promise<Record<string, unknown>> {
+  const { issues } = (await fixture('snapshot', [TEAM_REPOSITORY])) as {
+    issues: { number: number }[];
+  };
+  const issue = issues.find(i => i.number === number);
+  if (!issue) throw new Error(`No issue #${number}`);
+
+  return issue;
+}
+
+/**
+ * The resources under `table`, read from the server, with `subject`. The
+ * app's own properties are keyed by shortname; atomicdata.dev terms keep
+ * their URL.
+ */
+async function rowsUnder(
+  page: Page,
+  table: string,
+): Promise<Record<string, unknown>[]> {
+  return page.evaluate(async (subject: string) => {
+    const store = window.store!;
+    const collection = await (
+      await store.getResource(subject)
+    ).getChildrenCollection(500);
+    const out: Record<string, unknown>[] = [];
+
+    for (const member of await collection.getAllMembers()) {
+      const row = await store.fetchResourceFromServer(member, {
+        noWebSocket: true,
+      });
+      const named: Record<string, unknown> = { subject: member };
+
+      for (const [property, value] of Object.entries(row.getPropVals())) {
+        const shortname = property.startsWith('https://atomicdata.dev/')
+          ? undefined
+          : (await store.getResource(property)).get(
+              'https://atomicdata.dev/properties/shortname',
+            );
+        named[typeof shortname === 'string' ? shortname : property] = value;
+      }
+
+      out.push(named);
+    }
+
+    return out;
+  }, table);
+}
+
+/**
+ * The repository on the App's binding for `table`: a child of the App whose
+ * `synced-table` names it.
+ */
+async function bindingFor(
+  page: Page,
+  app: string,
+  table: string,
+): Promise<unknown> {
+  return page.evaluate(
+    async ({ appSubject, tableSubject }) => {
+      const store = window.store!;
+      const children = await (
+        await store.getResource(appSubject)
+      ).getChildrenCollection(500);
+
+      for (const member of await children.getAllMembers()) {
+        const child = await store.fetchResourceFromServer(member, {
+          noWebSocket: true,
+        });
+        const named: Record<string, unknown> = {};
+
+        for (const [property, value] of Object.entries(child.getPropVals())) {
+          const shortname = (await store.getResource(property)).get(
+            'https://atomicdata.dev/properties/shortname',
+          );
+          named[String(shortname)] = value;
+        }
+
+        if (named['synced-table'] === tableSubject)
+          return named['github-repository'];
+      }
+
+      return undefined;
+    },
+    { appSubject: app, tableSubject: table },
+  );
 }
 
 /** One github-issues fixture driver on the mock proxy. */

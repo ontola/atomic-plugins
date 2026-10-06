@@ -11,7 +11,10 @@ This folder also holds the plugin's other issue sources:
   bridge (moved from the `devonian` package; see its README).
 - `todoist.ts`: the read-only LocalThought projection of Todoist tasks onto
   an issue list (moved from `integrations/localthought/`), with
-  `todoist.test.ts` and the recorded-fixture check `todoist-fixture.test.ts`.
+  `todoist.test.ts` and the fixture check `todoist-fixture.test.ts`.
+- `todoist-app/`: the **Todoist drive app**, the host for `todoist.ts`
+  (#99's host journey). See [Todoist drive app](#todoist-drive-app-todoist-app)
+  below.
 
 ## Mapping
 
@@ -71,22 +74,163 @@ check) is:
 `GET /tasks/{id}` with `checked: true`, rather than a 404, is not verified:
 there is no recorded fixture yet (#46) and no credentials here. If it
 answers 404, completed tasks will show as `unavailable`, which is still
-not a false "completed". The cases above are covered by synthetic fixture
-tests in `todoist.test.ts`. **No host calls `reconcileTodoistTasks` yet.**
-Nothing in atomic-server at the pin (`bae5cdbe3`) imports `todoist.ts` at
-all, neither the projection nor this check (searched `browser/` and
-`server/src`), so the `devonian-todoist` catalog entry describes a flow no
-host runs today. The host journey that runs the check, and exercises these
-states end to end, is still to be built.
+not a false "completed". The cases above are covered by synthetic tests in
+`todoist.test.ts`, and the host that runs them is the Todoist drive app
+below: `todoist-app/sync.ts` calls `absentTodoistTasks`, looks the absent
+tasks up through the host's proxy client, and calls
+`reconcileTodoistTasks`. `fixtures/todoist/` serves SYNTHETIC rows
+(`synthetic.mjs`, hand-written from Todoist's API documentation) until #46
+records `api/`; its drivers model `completeTask` as "gone from `/tasks`,
+`checked: true` by id", which is this fixture's assumption, not Todoist's
+verified behaviour.
+
+## Todoist drive app (`todoist-app/`)
+
+An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,912
+bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+folder and publishes it as `apps/todoist/<version>/ui.js`) whose
+`view({ root, store })` runs in the host's null-origin frame. It imports the
+connected account's **active tasks** into its own table, nothing more; the
+catalog entry `todoist` (`enabled: false`) installs it.
+
+**Flow.** "Connect Todoist" asks the host for a connection
+(`store.proxy.connect`, the host's consent bar, platform `todoist`). With a
+connection, every open of the view and every "Sync now" runs one pass
+(`sync.ts`): `GET /api/v1/projects` and `GET /api/v1/tasks` through
+`store.proxy.request`, paged by `cursor` at `limit=200`, at most 50 pages
+(past that the read is reported partial); then `GET /api/v1/tasks/{id}` for
+each previously imported task that a complete read no longer lists; then
+`reconcileTodoistTasks` from `../todoist.ts`, whose table above says what
+each row becomes. All reads happen before any write, so a failed read
+leaves the table as it was. The view puts the shared sync-status card first
+(below), then the connect and sync buttons, then the table's tasks with
+their status, presence, due day, priority, project and last-seen.
+
+**Rows** are of the shared class `issue-v1` (#177), like the GitHub issues
+app's: on first open the app adds the class to its App's `renders`, its
+extras to `row-extras`, and sets its table's `classtype` (`drive.ts`;
+shown on another Issue table it says so and imports nothing). Shared fields
+go through `ontology-kit`'s strict resolver: `name` (the task's `content`),
+task/v1 `status` (`done` only when Todoist returned `checked: true`, else
+`todo`), `body` (the task's `description`) and `due-date` (the due day).
+The provider extras, created once under the app's own ontology:
+`todoist-task-id` (the row's identity), `todoist-presence`,
+`todoist-last-seen`, `todoist-priority`, `todoist-project` and
+`todoist-source` (the task as Todoist last sent it, JSON text). A pass that
+finds nothing changed writes no row: `last-seen` is kept off active rows
+(an active task's last sighting is the App's `todoist-last-sync`, one write
+per complete read), and only a task no longer in the active list carries
+its own `todoist-last-seen`.
+
+**Local edits.** Todoist owns the imported columns: a local change to one
+of them is overwritten at the next pass (#97's policy question; this plugin's
+choice, the same as Moneybird's), and nothing is sent to Todoist. A row
+made in the table by hand, with no Todoist task behind it, is left alone;
+since 0.1.1 the view lists it too, with presence `local`.
+
+**An incomplete row (0.1.1).** `issue-v1` requires Name. A row without one
+is read through the resolver's `missing` and listed as "(no name)" with
+"Incomplete: missing Name" and, where the host has `store.openResource`, an
+"Open row" button to fill the column in the table (ontology-kit's rule for
+every shared-class view: shown as incomplete, not skipped). Nothing is ever
+sent to Todoist, so there is nothing to hold back; an imported row whose
+Name was cleared in the table gets Todoist's `content` back at the next
+pass, a hand-made one is completed in the table. Unit
+(`todoist-app/sync.test.ts`) and the e2e's step 5 (a row with an empty
+Name; the server refuses a commit without the property, see the GitHub
+issues app's note on incomplete rows).
+
+**The sync-status card (0.2.0).** The shared card of
+[`integrations/sync-status/`](../sync-status/README.md) (Decision Inbox
+Q-084) heads the view; `todoist-app/status.ts` maps the controller's state
+onto it, pure, and `main.ts` renders it on every state change. It says, in
+every state: "Read-only: edits here stay in Atomic. Nothing is sent to
+Todoist. An edit here to an imported column (Name, Status, Description, Due
+date) is overwritten at the next sync; a row added here is kept." (On a host
+without the proxy client the note says instead that nothing is read or
+overwritten until it can connect apps to Todoist. On another app's Issue
+table, which this app never syncs and whose own app may send edits back, no
+card is rendered at all: the view shows only the plain notice that it imports
+into its own table.) Then the
+last sync ("Synced 4 min ago", its added, updated and unchanged counts, "5
+tasks from Todoist"), or a failed one with the plain next step (401/403
+"Reconnect Todoist."; 5xx "try again in a moment") and when the last
+complete read was ("Last good sync 2 days ago", from the App's
+`todoist-last-sync`), so a gap is never hidden. The #99 results are counted
+groups naming the tasks under "Which": completed in Todoist (closed here),
+deleted, no longer reachable (kept open, not closed), could not be checked
+(checked again next time); rows added here and incomplete rows (with "Open
+row" on a single one) are listed the same way. A partial read is a warning
+over an otherwise good sync that names the last complete read. A load that
+fails (the host cannot answer which connection the app has) is a visible
+error state, never "Loading…" for good. The card is not a live region: the one
+`role="status"` line is kept, visually hidden, with the summary sentence
+the e2e waits on. `build.mjs` bundles the card through
+`cssRawPlugin` from `../../sync-status/build.mjs` (its CSS minified), and the
+`issue-tracker` lane lists `integrations/sync-status/**` in its `paths`.
+
+**Rate limits (0.2.0).** Todoist answers 429 with `Retry-After`
+(delay-seconds or an IMF-fixdate, "Tue, 06 Oct 2026 12:00:00 GMT"), which
+the host relays; any other shape counts as no header, and a wait is clamped
+to a day. `read.ts`'s `rateLimited` wraps every GET of a pass: a
+`Retry-After` of at most 10 s is waited out and the same request retried, at
+most twice per request (so at most 20 s per request); a longer one, one retry
+too many, or no usable header (60 s is assumed) throws `TodoistRateLimited`
+with the time to try again, before any row is written. A 429 on a by-id check stops the pass the same way
+rather than marking the task unconfirmed. The controller then retries the
+whole (idempotent) pass by itself at that time when it is within 15 min, at
+most 3 times in a row, and the card says "Todoist is rate-limiting; retrying
+at 14:05."; otherwise, or after the third, it says "Todoist is rate-limiting;
+the sync stopped." with "Try again after 14:05." "Sync now" cancels a waiting
+retry and starts the count afresh. Every wait honours `Retry-After`; none is
+unbounded. `dispose()` cancels a waiting retry and keeps a sync in flight
+from scheduling one; the host has no teardown hook for a view yet, so only
+tests call it. The same pattern as the calendar, Notion and Clockify apps, with
+no shared code: it lives in this folder. Tested against fake transports only
+(`read.test.ts`, `sync.test.ts`); Todoist's real limits and header form are
+not verified (#46).
+
+**Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
+and the fixture: provisioning, import, a refresh that writes no row, every
+#99 case, a rate limit waited out or stopping the pass, and the controller's
+automatic retry, its cap and its cancellation, with a scripted clock and
+timer), `todoist-app/read.test.ts` (`parseRetryAfter` and `rateLimited`
+against fake transports), `todoist-app/status.test.ts` (every state on the
+card, and the words it then says), `todoist-app/build.test.ts` (the bundle,
+its size limit and a typecheck), `todoist-fixture.test.ts` (the fixture
+against `todoist.ts`), and the lane's `e2e/todoist.spec.ts`: install from
+the catalog, connect, import five tasks as `issue-v1` rows, a reload that
+leaves every row's properties byte-for-byte the same, a task completed in
+Todoist that turns up `completed` and done, and one made unreachable that
+turns up `unavailable` and still open, with the card's words at each step
+(no 429 end to end). Run them with:
+
+```sh
+browser/node_modules/.bin/vitest run --config integrations/issue-tracker/vitest.config.ts todoist
+node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
+```
+
+**Not verified:** anything against a live Todoist account or the real
+integration proxy (#46).
+
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+todoist --i-understand-this-writes-to <project id>` runs this app's
+controller against one disposable Todoist project (the driver seeds and
+cleans up; the app stays read-only) and records what `GET /tasks/{id}`
+answers for a completed task; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
 
 ## Drive app (`app/`)
 
 An iframe drive app, the same shape as `pets/app/` and `notion/app/`: one
-ES module (`app/build.mjs` -> `dist/ui.js`, minified, 154,931 bytes for
-0.2.0) whose `view({ root, store })` runs in the host's null-origin frame. It
+ES module (`app/build.mjs` -> `dist/ui.js`, minified, 162,541 bytes for
+0.3.1) whose `view({ root, store })` runs in the host's null-origin frame. It
 hosts the Devonian bridge from `devonian/github-issues/` for **one repository
-per app install**, two-way for issue title, body (Markdown),
-Todo/Doing/Blocked/Done status and comments.
+per table**: the app's own table, and each other Issue table it was asked
+to sync (since 0.3.0, see [Syncing a table the app didn't
+make](#syncing-a-table-the-app-didnt-make)), two-way for issue title, body
+(Markdown), Todo/Doing/Blocked/Done status and comments.
 
 **Flow.** The first screen offers GitHub Issues (Jira and Todoist are shown
 as not available). "Connect" asks the host for a connection
@@ -128,7 +272,10 @@ its published GitHub Pages subject:
   issue number, GitHub source (JSON: url, author, labels, assignees,
   timestamps) and GitHub sync baseline (JSON: the title, body and status the
   app last agreed with GitHub). They are declared as the App's `row-extras`
-  (atomic-server #1849). A comment's Message carries its own baseline;
+  (atomic-server #1849), and so is Atomic's `localId` (since 0.3.0), which
+  the Bridge sets on each row it imports so that a create a reload
+  interrupted is found again instead of made twice. A comment's Message
+  carries its own baseline;
 - one Message per comment (`about` its row) in a "GitHub comments" folder
   under the app;
 - one sync resource holding the bound repository and the sync state as JSON
@@ -137,13 +284,13 @@ its published GitHub Pages subject:
   preferences.
 
 **The shared class.** On first open the app adds `issue-v1` to its App's
-`renders` (so the host's "+ Add view" offers it on any table of that class)
-and sets its own table's `classtype` to `issue-v1`, through the frame store
-(#177 spike S2; a catalog Install cannot do this yet, #177 H2). The table is
-then an ordinary `issue-v1` table that other views of the class can read.
-Opened as a view on an Issue table it did not make, the app shows a notice
-and writes nothing: syncing an existing table ("Sync this table to GitHub",
-#177 item 14) is not built.
+`renders` (so the host's "+ Add view" offers it on any table of that class),
+lists its row extras in `row-extras`, and sets its own table's `classtype`
+to `issue-v1`, through the frame store (#177 spike S2; a catalog Install
+cannot do this yet, #177 H2). Since 0.3.0 that happens on the first open
+itself, before a repository is chosen; 0.2.0 did it only once one was. The
+table is then an ordinary `issue-v1` table that other views of the class can
+read.
 
 **Baselines on the rows (#177 decision 7).** The Bridge still keeps a
 baseline per record in memory. At each checkpoint, a baseline that differs
@@ -174,6 +321,22 @@ four task/v1 tags (another tag, or several) is shown as it is ("Status
 here: …, not synced with GitHub") instead of failing the pass. For the sync
 it keeps the status it last agreed with GitHub, so nothing is sent for it;
 if GitHub's status changes, GitHub's value replaces it.
+
+**An incomplete row (0.3.1).** `issue-v1` requires Name. A row without one
+(or with a blank one) is read through the resolver's `missing` and shown as
+"(no title)" with the tag "Incomplete: missing Name" on its card and list
+row, with the same note in its panel and an "Open row" button
+(`store.openResource`) to fill the column in the table; typing a title in the
+panel completes it too. This is ontology-kit's rule for every shared-class
+view: an incomplete row is shown, not skipped. Nothing of it is sent: a row
+bound to a GitHub issue shows the Bridge what both sides last agreed on (so
+no local change exists, and GitHub's own changes still come in and fill the
+Name), a row not bound stays out of the Bridge, "Publish to GitHub" is
+disabled for it, and a publish asked for earlier waits until it is complete.
+The review panel lists such rows under "Not synced until complete". Before
+0.3.1 a bound nameless row failed the whole pass ("Invalid Atomic issue").
+Unit (`app/sync.test.ts`, `app/views.test.ts`) and the hand-made table e2e
+(a row with an empty Name). At the pin the server refuses a commit that lacks a required property of the row's class (`lib/src/resources.rs` `check_required_props`, presence only), so on this host a required field can be absent only as an empty string (`name` is a string; the resolver counts `''` as missing), through a lens, or on a host that did not check; a required date or timestamp cannot be empty there.
 
 **From 0.1.x.** An update from 0.1.x over an existing install (the host's
 Update on the Integrations page keeps rows and schema) rewrites the table's
@@ -266,7 +429,7 @@ replace them.
   is paused or failed the board still shows the table's rows.
 
 **Host behaviour it relies on or works around** (atomic-server `bae5cdbe3`,
-read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
+not re-read at the current pin `a12b74a`; read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
 `app/frameStore.ts` has the detail):
 
 - No credential reaches the app's code: the bridge's `proxyTransport` runs
@@ -284,6 +447,11 @@ read in `hostStore.ts`, `proxyConnections.ts`, `collection.ts`;
   resources; subjects the app has seen are remembered in its sync state.
 - No IndexedDB, localStorage or Web Locks in the frame, so
   `background.mjs` is not used and nothing runs while the app is closed.
+
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+issue-tracker --i-understand-this-writes-to <owner/name>` runs the GitHub
+issues drive app's controller against one disposable repository and writes
+evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
 
 **Not verified, or not supported:**
 
@@ -341,6 +509,55 @@ folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
 syncables would only add size.
 
+### Syncing a table the app didn't make
+
+Since 0.3.0 (#177 §6.2 item 14), on the pattern calendar 0.3.0 set for
+Google Calendar (#272). Opened as a view on an Issue table it did not make,
+the app shows that the table isn't synced and offers **Sync this table to
+GitHub**. Nothing is written before that is pressed. Pressing it:
+
+1. makes sure the App declares its row extras (number, source, baseline and
+   `localId`), then compares `store.rowAccess()`'s `extras` with them. When
+   there is no grant, or it doesn't cover them (for example "Allow editing"
+   chosen in Add view before the app ever declared its extras), it calls
+   `store.requestRowAccess()`, and the host shows its own "Allow editing" /
+   "Not now" bar. "Not now" leaves the table unsynced and says why;
+2. makes a **binding** under the App: a resource of the app's sync class
+   with `synced-table` (a new app Property, an `atomicURL`, the table's
+   subject) and `localId` `github-issues:sync <table>`, so AtomicServer keeps
+   one per table. The app finds it with `store.query` on `synced-table` and
+   accepts only one whose parent is the App;
+3. goes on as on the app's own table: connect (if needed), choose the
+   repository, import. The repository, the sync state and a "GitHub
+   comments" folder for that table's comments are kept on and under the
+   binding. "Not now" on those two screens removes a binding that has no
+   repository yet.
+
+From then on it is the same sync as on the app's own table: compare on
+open and on "Sync now", every change bound for GitHub held for review, the
+same conflict rules, the baselines and issue numbers on the rows. Rows that
+were in the table before stay local until "Publish to GitHub" on each
+(#177 Q6). What differs from the app's own table:
+
+- the table itself is never written: no rename after the repository, no
+  `classtype` change. A row grant never covers the table;
+- rows are never deleted: a grant doesn't cover `destroy`, so for an issue
+  gone from GitHub only "Keep here only" is offered, and the banner says to
+  delete the row in the table;
+- the grant is checked on every open, before every pass and before every
+  edit made in the app. Once it lapses (the view removed, the person who
+  gave it loses write access, the app's key changes, or someone revokes it
+  in the tab's menu), the app says syncing is paused and offers "Allow
+  editing again"; it sends nothing to GitHub and writes nothing meanwhile.
+  A row write the host refuses mid-pass for that reason shows the same
+  pause;
+- the binding keeps its repository for good, like the app's own sync
+  resource: the table can't switch repositories.
+
+Not verified: what an uninstall does with a binding; two tabs syncing the
+same table (not guarded, as on the app's own table). Edits made in the
+table while the app is closed are found only on its next open (#177 H6).
+
 ## Mock data for user testing
 
 The mock proxy's github-issues fixture has a second, opt-in scenario for
@@ -366,7 +583,10 @@ Drivers for changes on the GitHub side mid-session, as
 `updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
 `commentAs` (`[repo, number, login, body]`, a comment by someone else) and
 `failNext` (`[status, count]`: the next `count` proxied requests answer 503,
-429/403 as a rate limit, or 401).
+429/403 as a rate limit, or 401). `reset` (`[repo]`) forgets one repository's
+edits, so the next request reseeds it, and drops any pending `failNext`
+failures; a spec calls it first, so a Playwright retry starts from the same
+state as the first attempt.
 
 For live GitHub, `fixtures/github-issues/seed-live-repo.mjs --repo
 <owner>/<name> [--yes]` puts the same `acme-studio/website` issues, labels
@@ -412,12 +632,22 @@ local until "Publish to GitHub", its reviewed create, and moving it to
 Blocked, which adds `atomic:blocked` on GitHub; then Disconnect GitHub and
 connecting again through the host's "Use existing connection" with no
 reload, after which the app syncs by itself (the unit tests also cover the
-repository-picker case). The e2e reads `issue-v1` from its published GitHub
+repository-picker case). A second e2e test (0.3.0) makes an `issue-v1`
+table by hand with one row, adds GitHub issues to it as a Read-only view,
+presses "Sync this table to GitHub", allows editing in the host's bar,
+connects, imports a repository of its own (seeded through the mock's
+`createIssue` driver), checks the rows, the untouched table and the binding
+under the App, and sends a status edit made in the table after review. The
+e2e reads `issue-v1` from its published GitHub
 Pages subject, so it needs network access to `ontola.github.io`; its
 `beforeAll` checks Pages serves the class first
 (`node ontology-kit/served.mjs classes/issue-v1`). The 0.1.x in-place
-rewrite, a status shown as it is and the "other table" notice are unit-tested
-only (`app/controller.test.ts`).
+rewrite and a status shown as it is are unit-tested only
+(`app/controller.test.ts`), and so are, for another table
+(`app/syncTable.test.ts`, against a fake host that enforces the pinned
+row-grant scope): "Not now" in the host's bar, a grant from before the
+extras were declared, Publish to GitHub, reopening, a revoked grant and
+"Allow editing again", "Not now" before a repository, and no row deletion.
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and

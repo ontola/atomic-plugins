@@ -90,6 +90,9 @@ function row(ctx: Ctx, segment: Segment): HTMLElement {
         ? h(doc, 'span', { class: 'tagline accent' }, 'Not sent yet')
         : null,
       e.conflict ? h(doc, 'span', { class: 'tagline warn' }, 'Conflict') : null,
+      e.incomplete
+        ? h(doc, 'span', { class: 'tagline warn' }, e.incomplete)
+        : null,
     ),
   );
 

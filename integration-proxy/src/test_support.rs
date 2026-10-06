@@ -20,6 +20,11 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
             None,
             &crate::config::public_host(BASE_URL),
         ),
+        // Off, so tests that make many key checks are not limited by
+        // earlier runs; the limit's own tests turn it on.
+        key_check_limit: 0,
+        key_check_window: crate::KEY_CHECK_WINDOW,
+        trust_forwarded_for: crate::config::TrustForwardedFor::None,
         test_upstream: None,
     }
 }
@@ -129,4 +134,51 @@ pub async fn body_json(response: axum::response::Response) -> serde_json::Value 
         .unwrap();
     serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| panic!("not JSON: {}", String::from_utf8_lossy(&bytes)))
+}
+
+/// A synthetic document that declares two credential kinds, the way a bot
+/// platform with OAuth user consent does (atomic-plugins#258), with the
+/// authentication profiles of
+/// openapi-extensions/spec/authentication-profiles. Invented data only.
+///
+/// - `GET /users/@me`: either credential (`identify` for the user);
+/// - `GET /users/@me/guilds`: the user only (`guilds`);
+/// - `GET /channels/{id}/messages`: the bot only;
+/// - `POST /channels/{id}/messages`: anonymous or the bot;
+/// - `GET /public`: anonymous only;
+/// - `GET /combined`: bot and user together (unsupported);
+/// - `GET /implicit`: an implicit-flow scheme only.
+pub fn mixed_profiles_document(server: &str) -> serde_json::Value {
+    serde_json::json!({
+        "servers": [{"url": server}],
+        "components": {
+            "securitySchemes": {
+                "botToken": {"type": "apiKey", "in": "header", "name": "Authorization"},
+                "userOAuth": {"type": "oauth2", "flows": {"authorizationCode": {
+                    "authorizationUrl": "https://auth.example/authorize",
+                    "tokenUrl": "https://auth.example/token",
+                    "scopes": {"identify": "Profile", "guilds": "Guilds", "unused": "Unused"}
+                }}},
+                "implicitOAuth": {"type": "oauth2", "flows": {"implicit": {
+                    "authorizationUrl": "https://auth.example/authorize",
+                    "scopes": {"everything": "Everything"}
+                }}}
+            },
+            "x-authentication-profiles": {
+                "user": {"securityScheme": "userOAuth", "description": "The person."},
+                "bot": {"securityScheme": "botToken"}
+            }
+        },
+        "paths": {
+            "/users/@me": {"get": {"security": [{"botToken": []}, {"userOAuth": ["identify"]}]}},
+            "/users/@me/guilds": {"get": {"security": [{"userOAuth": ["guilds"]}]}},
+            "/channels/{id}/messages": {
+                "get": {"security": [{"botToken": []}]},
+                "post": {"security": [{}, {"botToken": []}]}
+            },
+            "/public": {"get": {"security": [{}]}},
+            "/combined": {"get": {"security": [{"botToken": [], "userOAuth": ["unused"]}]}},
+            "/implicit": {"get": {"security": [{"implicitOAuth": ["everything"]}]}}
+        }
+    })
 }

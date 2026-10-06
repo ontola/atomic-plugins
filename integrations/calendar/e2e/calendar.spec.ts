@@ -42,7 +42,7 @@ import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.1';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -84,6 +84,7 @@ test.describe('calendar drive app', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
 
     const app = page.frameLocator(APP_FRAME);
@@ -331,6 +332,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await page.emulateMedia({ colorScheme: 'light' });
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
@@ -393,6 +395,7 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
@@ -400,8 +403,8 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
 
     // C8: the host asks before opening Google's page for the event.
     await app.getByRole('button', { name: 'Agenda', exact: true }).click();
-    // The mock's fixture is shared by the lane's tests, so the timed event
-    // may carry an earlier test's title; it is the one with a room.
+    // The mock's fixture is reset above; the timed event is the one with a
+    // room.
     await app
       .getByRole('button', { name: /, Room \d+, Synthetic calendar/ })
       .click();
@@ -447,13 +450,14 @@ test.describe('calendar drive app: responsive and theme (#89 C13)', () => {
       'Run with the documented mock integration-proxy server configuration',
     );
     test.setTimeout(240_000);
+    await resetFixture();
     await installFromCatalog(page);
     const app = page.frameLocator(APP_FRAME);
     await connectThroughHost(page, app);
     await importPrimary(app);
     const table = await tableOf(page);
-    // The mock's fixture is shared by the lane's tests, so the timed event
-    // may carry an earlier test's title; it is the one with a room.
+    // The mock's fixture is reset above; the timed event is the one with a
+    // room.
     const rows = await rowsOf(page);
     const timed = rows.find(r => /^Room \d+$/.test(String(r[LOCATION])))!;
     const trip = rows.find(r => r.name === 'Calendar three-day fixture')!;
@@ -538,6 +542,20 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
           propVals: { [name]: 'Planning day', [day]: today },
         });
         await row.save();
+        // A row missing the class's required Name (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped): the server refuses a
+        // commit without the property (lib/src/resources.rs
+        // check_required_props; "Property … atomic-calendar-day missing. Is
+        // required in class … event-v1", seen in this lane on 2026-10-02),
+        // and the page then keeps the refused row in its local outbox, so
+        // the spec does not try one. The incomplete row this host can hold
+        // has an empty Name.
+        const retro = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: '', [day]: today },
+        });
+        await retro.save();
 
         return made.subject;
       },
@@ -581,8 +599,293 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
     await expect(
       app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
     ).toHaveCount(0);
+    // The row with an empty Name is listed as incomplete, with a way to the
+    // row, and drawn as "(untitled)" with the tag; the rest is unaffected.
+    const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
+    await expect(incomplete).toContainText('1 row is incomplete');
+    await expect(incomplete).toContainText('(untitled)');
+    await expect(incomplete).toContainText('Incomplete: missing Name');
+    await expect(
+      incomplete.getByRole('button', { name: 'Open row' }),
+    ).toBeVisible();
+    await expect(
+      app.getByRole('button', {
+        name: /^\(untitled\), All day, .*incomplete: missing name$/,
+      }),
+    ).toBeVisible();
+  });
+
+  test('syncs a hand-made event-v1 table to Google Calendar after Allow editing, and sends a reviewed row edit (#177 item 14)', async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY ||
+        !process.env.INTEGRATION_PROXY_URL,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(300_000);
+    await resetFixture();
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    // The first open declares the row extras and renders event-v1.
+    await expect(
+      app.getByRole('button', { name: 'Connect Google Calendar' }),
+    ).toBeVisible({ timeout: 45_000 });
+    await expect
+      .poll(async () => (await classesOf(page)).renders, { timeout: 30_000 })
+      .toBe(true);
+    const appSubject = new URL(page.url()).searchParams.get('subject')!;
+
+    // A table the person made, of the shared class, with one row of theirs.
+    const table = await page.evaluate(
+      async ({ klass, day, name, classtype }) => {
+        const store = window.store!;
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team events', [classtype]: klass },
+        });
+        await made.save();
+        const row = await store.newResource({
+          parent: made.subject,
+          isA: [klass],
+          propVals: { [name]: 'Planning day', [day]: '2026-01-05' },
+        });
+        await row.save();
+
+        return made.subject;
+      },
+      { klass: EVENT, day: DAY_PROPERTY, name: NAME, classtype: CLASSTYPE },
+    );
+    const tableUrl = `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`;
+    await page.goto(tableUrl);
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Google Calendar' })
+      .click({ timeout: 60_000 });
+    // Read-only first: the sync asks for itself.
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(app.getByText('Not synced with Google Calendar.')).toBeVisible(
+      { timeout: 45_000 },
+    );
+    await app
+      .getByRole('button', { name: 'Sync this table to Google Calendar' })
+      .click();
+    // The host's own bar asks, outside the frame.
+    const ask = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(ask).toBeVisible({ timeout: 30_000 });
+    await ask.getByRole('button', { name: 'Allow editing' }).click();
+
+    // No connection yet: connect as on the app's own page. Coming back from
+    // the proxy reloads the page on the same tab, and the app goes on.
+    await expect(
+      app.getByRole('heading', {
+        name: 'Sync Team events with Google Calendar',
+      }),
+    ).toBeVisible({ timeout: 45_000 });
+    await connectThroughHost(page, app);
+    await expect(
+      app.getByRole('heading', {
+        name: 'Which calendar should Team events sync with?',
+      }),
+    ).toBeVisible({ timeout: 45_000 });
+    await importPrimary(app);
+
+    // Google's events are rows of that table now, with the app's extras;
+    // the person's own row is as it was; the table kept its name and class.
+    // (The mock proxy's fixture is shared with the lane's other tests, which
+    // run in parallel and rename the timed event: match by Google id.)
+    // The table's children are its Views too; the rows are the event-v1 ones.
+    const eventRows = async () =>
+      (await rowsUnder(page, table)).filter(r =>
+        (r[IS_A] as unknown[] | undefined)?.includes(EVENT),
+      );
+    const rows = await eventRows();
+    expect(rows).toHaveLength(4);
+    expect(rows.map(r => r['google-event-id']).sort()).toEqual([
+      'all-day',
+      'timed',
+      'trip',
+      undefined,
+    ]);
+
+    for (const row of rows.filter(r => r.name !== 'Planning day')) {
+      expect(row[IS_A]).toEqual([EVENT]);
+      expect(row['google-event-id']).toEqual(expect.any(String));
+      expect(row['sync-baseline']).toEqual(expect.any(String));
+    }
+
+    expect(rows.find(r => r.name === 'Planning day')).not.toHaveProperty(
+      'google-event-id',
+    );
+    const after = await page.evaluate(
+      async ({ subject, name, classtype }) => {
+        const t = await window.store!.fetchResourceFromServer(subject, {
+          noWebSocket: true,
+        });
+
+        return { name: t.get(name), classtype: t.get(classtype) };
+      },
+      { subject: table, name: NAME, classtype: CLASSTYPE },
+    );
+    expect(after).toEqual({ name: 'Team events', classtype: EVENT });
+    // The calendar choice is kept under the App, naming the table.
+    expect(await bindingFor(page, appSubject, table)).toBe(
+      'synthetic@example.com',
+    );
+
+    // An edit made in the table, as the signed-in person, is reviewed and
+    // then sent with If-Match. The three-day event's Notes: no other test
+    // edits or checks them.
+    await setRowValueIn(
+      page,
+      table,
+      'Calendar three-day fixture',
+      properties['atomic-calendar-notes'].subject,
+      'Bring the team plan',
+    );
+    await app.getByRole('button', { name: 'Sync now', exact: true }).click();
+    await app.getByRole('button', { name: 'Review 1 change' }).click();
+    const sheet = app.getByRole('dialog');
+    await expect(sheet).toContainText(
+      /Description[^→]*→\s*becomes\s*Bring the team plan/,
+    );
+    const ours = async () =>
+      (
+        (await driver('state', [])).writes as Array<Record<string, unknown>>
+      ).filter(w => w.id === 'trip');
+    expect(await ours()).toEqual([]);
+    await sheet
+      .getByRole('button', { name: 'Send 1 change to Google' })
+      .click();
+    await expect(sheet).toContainText('Calendar three-day fixture: Sent');
+    expect(await ours()).toEqual([
+      expect.objectContaining({
+        patch: { description: 'Bring the team plan' },
+        ifMatch: expect.stringMatching(/^"v\d+"$/),
+      }),
+    ]);
+    await expect
+      .poll(async () => {
+        const row = (await eventRows()).find(
+          r => r['google-event-id'] === 'trip',
+        );
+
+        return JSON.parse(String(row?.['sync-baseline'] ?? '{}')).description;
+      })
+      .toBe('Bring the team plan');
   });
 });
+
+/** The rows under `table`, keyed by property shortname, from the server. */
+async function rowsUnder(
+  page: Page,
+  table: string,
+): Promise<Record<string, unknown>[]> {
+  return page.evaluate(async (subject: string) => {
+    const store = window.store!;
+    const collection = await (
+      await store.getResource(subject)
+    ).getChildrenCollection(500);
+    const out: Record<string, unknown>[] = [];
+
+    for (const member of await collection.getAllMembers()) {
+      const row = await store.fetchResourceFromServer(member, {
+        noWebSocket: true,
+      });
+      const named: Record<string, unknown> = {};
+
+      for (const [property, value] of Object.entries(row.getPropVals())) {
+        const shortname = (await store.getResource(property)).get(
+          'https://atomicdata.dev/properties/shortname',
+        );
+        named[
+          typeof shortname === 'string' &&
+          !property.startsWith('https://atomicdata.dev/properties/isA')
+            ? shortname
+            : property
+        ] = value;
+      }
+
+      out.push(named);
+    }
+
+    return out;
+  }, table);
+}
+
+/** Sets one property of the row of `table` named `title`: a commit by the signed-in person, as a table edit is. */
+async function setRowValueIn(
+  page: Page,
+  table: string,
+  title: string,
+  property: string,
+  value: string,
+) {
+  await page.evaluate(
+    async ([subject, rowTitle, prop, newValue, name]) => {
+      const store = window.store!;
+      const collection = await (
+        await store.getResource(subject)
+      ).getChildrenCollection(500);
+
+      for (const member of await collection.getAllMembers()) {
+        const row = await store.getResource(member);
+        if (row.get(name) !== rowTitle) continue;
+        await row.set(prop, newValue);
+        await row.save();
+
+        return;
+      }
+
+      throw new Error(`no row named ${rowTitle}`);
+    },
+    [table, title, property, value, NAME] as const,
+  );
+}
+
+/**
+ * The calendar id on the App's binding for `table`: a child of the App whose
+ * `synced-table` names it.
+ */
+async function bindingFor(
+  page: Page,
+  app: string,
+  table: string,
+): Promise<unknown> {
+  return page.evaluate(
+    async ({ appSubject, tableSubject }) => {
+      const store = window.store!;
+      const shortnameOf = async (property: string) =>
+        (await store.getResource(property)).get(
+          'https://atomicdata.dev/properties/shortname',
+        );
+      const children = await (
+        await store.getResource(appSubject)
+      ).getChildrenCollection(500);
+
+      for (const member of await children.getAllMembers()) {
+        const child = await store.fetchResourceFromServer(member, {
+          noWebSocket: true,
+        });
+        const named: Record<string, unknown> = {};
+        for (const [property, value] of Object.entries(child.getPropVals()))
+          named[String(await shortnameOf(property))] = value;
+        if (named['synced-table'] === tableSubject)
+          return named['google-calendar-id'];
+      }
+
+      return undefined;
+    },
+    { appSubject: app, tableSubject: table },
+  );
+}
 
 /** The app's table's class, its rows' classes, and whether the App renders event-v1. */
 async function classesOf(
@@ -692,6 +995,31 @@ async function driver(name: string, args: unknown[]) {
   if (!response.ok) throw new Error(`driver ${name}: HTTP ${response.status}`);
 
   return response.json();
+}
+
+/**
+ * Puts the mock's calendar back as a new lane has it, dated today in the
+ * browser's time zone: the initial events and ETags, no recorded requests or writes. The mock proxy outlives a test
+ * attempt and its fixture is shared by the file's tests, so each test that
+ * reads or edits it calls this first, and a Playwright retry starts from the
+ * same state as the first attempt.
+ */
+async function resetFixture() {
+  await driver('reset', [todayInBrowserZone()]);
+}
+
+/**
+ * Today as the app sees it: the date in the Playwright project's
+ * `timezoneId` (Europe/Amsterdam, from the pinned host's config), not the
+ * mock's UTC date, which is the day before for two hours each evening. The
+ * en-CA locale formats as `YYYY-MM-DD`.
+ */
+function todayInBrowserZone(): string {
+  const { timezoneId } = test.info().project.use;
+
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezoneId,
+  }).format(new Date());
 }
 
 /** The app's table rows, keyed by property shortname, via window.store. */

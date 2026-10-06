@@ -24,7 +24,7 @@ prefix; the moderator refuses to start when a plan has none.
 | `issue-tracker-seeded` | GitHub issues drive app, team tasks in a prepared repository | a GitHub account with write access to a test repository prepared before the session (below) |
 | `timesheets`           | Clockify drive app                                           | a Clockify account with recent entries                                                      |
 | `notion`               | Notion drive app                                             | a Notion account with a database                                                            |
-| `money`                | Bank statements (Money) drive app                            | nothing: sample statements on the session page (their own export is optional)               |
+| `money`                | Bank statements (Money) drive app, installed from Drive apps | nothing: sample statements on the session page (their own export is optional)               |
 | `calendar-sample`      | Google Calendar drive app, on sample data                    | nothing                                                                                     |
 | `issue-tracker-sample` | GitHub issues drive app, on sample data                      | nothing                                                                                     |
 | `timesheets-sample`    | Clockify drive app, on sample data                           | nothing                                                                                     |
@@ -48,6 +48,27 @@ moderator lists them with the plan (`GET /plans`), and the session page
 links them from `https://catalog.<base-domain>/samples/<app>/<file>`, where
 `../../catalog.mjs` puts them. The moderator can't speak a URL; the plan
 tells it to say "on the session page, under Sample files".
+
+## Not covered by a task: syncing a table the app did not make
+
+Calendar 0.3.0, GitHub issues 0.3.0 and Clockify 0.6.0 offer "Sync this
+table to Google Calendar / GitHub / Clockify" on a table of the shared class
+(event, issue, time entry) that the app did not create. Reaching it means
+making that table by hand, with New Table and the class address pasted in,
+then Add view. That is not something a non-technical tester finds, so no
+plan has a task for it; each plan's "For the moderator only" says what it
+does, for a tester who already has such a table or asks. A plan that tests
+it needs a prepared drive with the table already made and a written
+invitation, which does not exist yet (question for Michiel, in the PR).
+
+## Todoist
+
+The Todoist drive app (`integrations/issue-tracker/todoist-app/`, 0.2.0)
+has no plan: it is not in `../../catalog.mjs`, so the test catalog cannot
+install it, it imports active tasks only (read-only, nothing to send), and
+its synthetic fixture has five tasks. A plan would need a `-sample` entry
+(`../../sample-data/todoist.mjs`, a `SAMPLES` and `VERSIONS` entry, a
+sample-data test) and a deploy.
 
 ## Preparing `issue-tracker-seeded`
 

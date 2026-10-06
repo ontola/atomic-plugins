@@ -21,7 +21,7 @@ use crate::{
 };
 use axum::{
     body::Bytes,
-    extract::{Form, OriginalUri, Query, State},
+    extract::{ConnectInfo, Form, OriginalUri, Query, State},
     http::{header, HeaderMap, Method, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     Json,
@@ -98,7 +98,7 @@ enum KeyCheck {
 }
 
 /// Calls the scheme's `x-api-key-details.keyCheck` once with `key`
-/// (openapi-extensions/spec/api-key-details, section 4.3). The shared client
+/// (openapi-extensions/spec/api-key-details, section 4.4). The shared client
 /// follows no redirects; this call also gets a 10-second timeout. Nothing
 /// here logs, and no error carries the key or the request URL.
 async fn check_api_key(
@@ -109,21 +109,65 @@ async fn check_api_key(
     let Some(check) = &scheme.key_check else {
         return KeyCheck::Accepted(None);
     };
+    let injection = match scheme.location {
+        crate::providers::ApiKeyLocation::Header => crate::proxy::CredentialInjection::Header {
+            name: scheme.name.clone(),
+            value: key.to_owned(),
+        },
+        crate::providers::ApiKeyLocation::Query => {
+            return run_key_check(state, check, Some((&scheme.name, key)), None).await
+        }
+        crate::providers::ApiKeyLocation::Cookie => return KeyCheck::Undetermined,
+    };
+    run_key_check(state, check, None, Some(injection)).await
+}
+
+/// The same key check for an `http` scheme's credential: the scheme's
+/// `x-api-key-details.keyCheck`, called once with exactly the
+/// `Authorization` header a proxied request would carry.
+async fn check_http_credential(
+    state: &AppState,
+    scheme: &crate::providers::HttpScheme,
+    credential: &crate::proxy::StoredCredential,
+) -> KeyCheck {
+    let Some(check) = &scheme.key_check else {
+        return KeyCheck::Accepted(None);
+    };
+    let injection = match credential {
+        crate::proxy::StoredCredential::HttpBearer { token, .. } => {
+            crate::proxy::CredentialInjection::Bearer(token.clone())
+        }
+        crate::proxy::StoredCredential::HttpBasic {
+            username, password, ..
+        } => crate::proxy::CredentialInjection::Basic {
+            username: username.clone(),
+            password: password.clone(),
+        },
+        _ => return KeyCheck::Undetermined,
+    };
+    run_key_check(state, check, None, Some(injection)).await
+}
+
+/// Calls `check` once, with the credential in `query` (a query parameter)
+/// or `injection` (a header), and reads the answer as section 4.4 of
+/// openapi-extensions/spec/api-key-details says.
+async fn run_key_check(
+    state: &AppState,
+    check: &crate::providers::KeyCheck,
+    query: Option<(&str, &str)>,
+    injection: Option<crate::proxy::CredentialInjection>,
+) -> KeyCheck {
     let mut url = check.url.clone();
     #[cfg(test)]
     if let Some(upstream) = &state.test_upstream {
         url = Url::parse(&format!("{}{}", upstream.trim_end_matches('/'), url.path())).unwrap();
     }
-    let request = match scheme.location {
-        crate::providers::ApiKeyLocation::Header => {
-            state.http_client.get(url).header(scheme.name.as_str(), key)
-        }
-        crate::providers::ApiKeyLocation::Query => {
-            url.query_pairs_mut().append_pair(&scheme.name, key);
-            state.http_client.get(url)
-        }
-        crate::providers::ApiKeyLocation::Cookie => return KeyCheck::Undetermined,
-    };
+    if let Some((name, value)) = query {
+        url.query_pairs_mut().append_pair(name, value);
+    }
+    let request = injection
+        .unwrap_or(crate::proxy::CredentialInjection::None)
+        .apply(state.http_client.get(url));
     let Ok(response) = request
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -340,6 +384,23 @@ fn consent_page(
                         description: scheme.description.as_deref(),
                         help_url: scheme.help_url.as_deref(),
                         problem,
+                        ..templates::ApiKeyHelp::default()
+                    })
+                }
+                crate::providers::SecurityScheme::Http(scheme) => {
+                    templates::ConnectKind::ApiKey(templates::ApiKeyHelp {
+                        description: scheme.description.as_deref(),
+                        help_url: scheme.help_url.as_deref(),
+                        problem,
+                        secret: templates::SecretName::ApiToken,
+                        username_label: match &scheme.auth {
+                            crate::providers::HttpAuth::Basic(
+                                crate::providers::BasicCredentials::PasswordTokenAskingUsername {
+                                    label,
+                                },
+                            ) => Some(label.as_str()),
+                            _ => None,
+                        },
                     })
                 }
                 crate::providers::SecurityScheme::NoCredential => {
@@ -371,6 +432,7 @@ fn consent_page(
             format!("{base}; script-src {script}; form-action 'self'")
         }
         crate::providers::SecurityScheme::ApiKey(_)
+        | crate::providers::SecurityScheme::Http(_)
         | crate::providers::SecurityScheme::NoCredential => format!(
             "{base}; script-src {script}; form-action 'self' {}",
             form_action_source(target)
@@ -385,8 +447,13 @@ fn consent_page(
 #[derive(Deserialize)]
 pub struct Approval {
     csrf: String,
+    /// The pasted secret: an API key, or an `http` scheme's token.
     #[serde(default)]
     api_key: Option<String>,
+    /// The username an `http` `basic` scheme asks for
+    /// (`basicCredentials.usernameLabel`); ignored for every other kind.
+    #[serde(default)]
+    username: Option<String>,
 }
 
 fn valid_api_key(approval: &Approval) -> Option<&str> {
@@ -397,9 +464,202 @@ fn valid_api_key(approval: &Approval) -> Option<&str> {
         .filter(|key| (4..=512).contains(&key.len()))
 }
 
+/// Whether `token` may be sent as `Authorization: Bearer <token>`: RFC 6750's
+/// `b64token` (`[A-Za-z0-9-._~+/]+=*`), except that `:` is also allowed
+/// before the padding. Asana's personal access tokens, as its documentation
+/// shows them (`2/<user id>/<token id>:<secret>`), contain `:`; that format
+/// is taken from its documentation, not checked against a live token. A `:`
+/// cannot end or split the header value, so it widens nothing else.
+fn bearer_token(token: &str) -> bool {
+    let body = token.trim_end_matches('=');
+    !body.is_empty()
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._~+/:".contains(&b))
+}
+
+/// The credential an `http` scheme's consent form submitted, laid out as
+/// the scheme says, or why it cannot be used. A bearer token must be a
+/// [`bearer_token`]; a Basic half may be any text without control
+/// characters, and the username half may not contain `:` (RFC 7617).
+fn http_credential(
+    platform: &str,
+    scheme: &crate::providers::HttpScheme,
+    approval: &Approval,
+) -> Result<crate::proxy::StoredCredential, &'static str> {
+    use crate::providers::{BasicCredentials, HttpAuth};
+    use crate::proxy::StoredCredential;
+    let token = valid_api_key(approval).ok_or("Enter a valid API token")?;
+    let printable = |text: &str| !text.chars().any(char::is_control);
+    let provider = platform.to_owned();
+    match &scheme.auth {
+        HttpAuth::Bearer => {
+            if !bearer_token(token) {
+                return Err("Enter a valid API token");
+            }
+            Ok(StoredCredential::HttpBearer {
+                provider,
+                token: token.to_owned(),
+                scheme: Some(scheme.name.clone()),
+            })
+        }
+        HttpAuth::Basic(layout) => {
+            if !printable(token) {
+                return Err("Enter a valid API token");
+            }
+            let (username, password) = match layout {
+                BasicCredentials::UsernameToken { password } => {
+                    if token.contains(':') {
+                        return Err("Enter a valid API token");
+                    }
+                    (token.to_owned(), password.clone())
+                }
+                BasicCredentials::PasswordToken { username } => {
+                    (username.clone(), token.to_owned())
+                }
+                BasicCredentials::PasswordTokenAskingUsername { .. } => {
+                    let username = approval
+                        .username
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| {
+                            (1..=256).contains(&name.chars().count())
+                                && printable(name)
+                                && !name.contains(':')
+                        })
+                        .ok_or("Enter a valid username and API token")?;
+                    (username.to_owned(), token.to_owned())
+                }
+            };
+            Ok(StoredCredential::HttpBasic {
+                provider,
+                username,
+                password,
+                scheme: Some(scheme.name.clone()),
+                layout: Some(layout.layout()),
+            })
+        }
+    }
+}
+
+/// The most key checks one consent may make. A rejected key shows the
+/// consent page again without spending the consent, so without a cap one
+/// consent would let its holder try keys (or username and token pairs)
+/// against the provider without limit.
+const MAX_KEY_CHECKS: u32 = 5;
+const TOO_MANY_KEY_CHECKS: &str =
+    "Too many attempts to enter a key for this connection; start again from your hub";
+
+fn key_check_slot(csrf: &str, n: u32) -> String {
+    format!("consent-key-check:{csrf}:{n}")
+}
+
+/// Takes one of the consent's [`MAX_KEY_CHECKS`] key-check attempts before
+/// a key check is called. The attempts are single-use records next to the
+/// consent's own (`consent:<csrf>`, kept ten minutes, as long as a consent
+/// lives), so they hold across instances and concurrent submissions. When
+/// none is left the consent is spent, its cookie removed, and the answer is
+/// "too many attempts"; an already spent consent answers as approved. On
+/// success it also says whether this was the last attempt, so a rejection
+/// then ends the consent instead of asking again.
+async fn take_key_check(
+    security: &Security,
+    jar: PrivateCookieJar,
+    csrf: &str,
+) -> Result<(PrivateCookieJar, bool), Box<Response>> {
+    let unavailable = || error("Connections are unavailable");
+    match security
+        .nonce_used(&key_check_slot(csrf, MAX_KEY_CHECKS))
+        .await
+    {
+        Ok(true) => return Err(Box::new(too_many_key_checks(security, jar, csrf).await)),
+        Ok(false) => {}
+        Err(_) => return Err(Box::new(unavailable())),
+    }
+    match security.nonce_used(&format!("consent:{csrf}")).await {
+        Ok(true) => return Err(Box::new(error(ALREADY_APPROVED))),
+        Ok(false) => {}
+        Err(_) => return Err(Box::new(unavailable())),
+    }
+    for n in 1..=MAX_KEY_CHECKS {
+        match security.consume_nonce(&key_check_slot(csrf, n)).await {
+            Ok(true) => return Ok((jar, n == MAX_KEY_CHECKS)),
+            Ok(false) => {}
+            Err(_) => return Err(Box::new(unavailable())),
+        }
+    }
+    Err(Box::new(too_many_key_checks(security, jar, csrf).await))
+}
+
+/// Takes one of the client network's key checks for `platform`
+/// (`KEY_CHECK_LIMIT_PER_HOUR`), before the consent's own
+/// [`take_key_check`]. [`MAX_KEY_CHECKS`] bounds one consent page, but
+/// `GET /connect` needs no signature, so without this a script could open
+/// consent pages and test keys against the provider without end. When the
+/// network has none left the answer is `429` and nothing else happens: no
+/// key check, and the consent is not spent. Only the hashed bucket (and the
+/// platform) is logged, never the address.
+async fn take_network_key_check(
+    state: &AppState,
+    security: &Security,
+    headers: &HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+    platform: &str,
+) -> Result<(), Box<Response>> {
+    if state.key_check_limit == 0 {
+        return Ok(());
+    }
+    let network = crate::client_addr::client_network(state.trust_forwarded_for, headers, peer);
+    let bucket = security.key_check_bucket(platform, &network);
+    if network == crate::client_addr::UNKNOWN || network == crate::client_addr::UNPARSEABLE {
+        tracing::warn!(
+            %bucket,
+            "key check without a usable client address; every such check shares one limit"
+        );
+    }
+    match security
+        .take_key_check_allowance(&bucket, state.key_check_limit, state.key_check_window)
+        .await
+    {
+        Ok(None) => Ok(()),
+        Ok(Some(retry_after)) => {
+            tracing::warn!(%bucket, platform, "key check limit reached");
+            let mut response = protected((
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Too many key checks from your network for {}; try again later",
+                    templates::platform_label(platform)
+                ),
+            ));
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, retry_after.into());
+            Err(Box::new(response))
+        }
+        Err(_) => Err(Box::new(error("Connections are unavailable"))),
+    }
+}
+
+/// Spends the consent and says there were too many attempts.
+async fn too_many_key_checks(security: &Security, jar: PrivateCookieJar, csrf: &str) -> Response {
+    if security
+        .consume_nonce(&format!("consent:{csrf}"))
+        .await
+        .is_err()
+    {
+        return error("Connections are unavailable");
+    }
+    protected((
+        StatusCode::BAD_REQUEST,
+        jar.remove(Cookie::build(CONSENT_COOKIE).path("/").build()),
+        TOO_MANY_KEY_CHECKS,
+    ))
+}
+
 /// `POST /connect/authorize`: the consent form's submission.
 pub async fn authorize(
     State(state): State<AppState>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     jar: PrivateCookieJar,
     headers: HeaderMap,
     Form(approval): Form<Approval>,
@@ -436,6 +696,8 @@ pub async fn authorize(
     let Some(security) = &state.security else {
         return error("Connections are unavailable");
     };
+    let peer = peer.map(|ConnectInfo(peer)| peer);
+    let mut jar = jar;
     // Refuse an unusable API key before the consent is spent, so correcting
     // it and approving again works. That includes a key the platform's key
     // check (`x-api-key-details.keyCheck`) rejects: the page asks again.
@@ -449,8 +711,31 @@ pub async fn authorize(
         let Some(key) = valid_api_key(&approval) else {
             return error("Enter a valid API key");
         };
+        // Only a check that will reach the provider counts against the
+        // network: none without a declared key check, and none for a
+        // cookie key, which is never checked (`check_api_key`).
+        let checks_upstream = api_key.key_check.is_some()
+            && !matches!(api_key.location, crate::providers::ApiKeyLocation::Cookie);
+        if checks_upstream {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
+        }
+        let last = match take_key_check(security, jar, &consent.csrf).await {
+            Ok((taken, last)) => {
+                jar = taken;
+                last
+            }
+            Err(response) => return *response,
+        };
         match check_api_key(&state, api_key, key).await {
             KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected if last => {
+                return too_many_key_checks(security, jar, &consent.csrf).await
+            }
             KeyCheck::Rejected => {
                 let Ok(target) = consent.request.validate() else {
                     return error("Connection request expired or invalid; start again from your hub");
@@ -467,6 +752,59 @@ pub async fn authorize(
                 )
             }
         }
+    }
+    // The same for an `http` scheme's token: built and checked before the
+    // consent is spent, and handed off below as it was checked.
+    let mut http_credential_checked = None;
+    if let Ok(scheme @ crate::providers::SecurityScheme::Http(_)) =
+        state.catalog.security_scheme(&consent.request.platform)
+    {
+        let crate::providers::SecurityScheme::Http(http) = &scheme else {
+            unreachable!("matched as Http above");
+        };
+        let credential = match http_credential(&consent.request.platform, http, &approval) {
+            Ok(credential) => credential,
+            Err(message) => return error(message),
+        };
+        // Only a check that will reach the provider counts against the
+        // network (`check_http_credential`).
+        if http.key_check.is_some() {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
+        }
+        let last = match take_key_check(security, jar, &consent.csrf).await {
+            Ok((taken, last)) => {
+                jar = taken;
+                last
+            }
+            Err(response) => return *response,
+        };
+        match check_http_credential(&state, http, &credential).await {
+            KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected if last => {
+                return too_many_key_checks(security, jar, &consent.csrf).await
+            }
+            KeyCheck::Rejected => {
+                let Ok(target) = consent.request.validate() else {
+                    return error("Connection request expired or invalid; start again from your hub");
+                };
+                let problem = format!(
+                    "{} did not accept that API token. Check it and enter it again.",
+                    templates::platform_label(&consent.request.platform)
+                );
+                return consent_page(&state, jar, &consent, &target, &scheme, Some(&problem));
+            }
+            KeyCheck::Undetermined => {
+                return error(
+                    "Could not check the API token with the platform; nothing was stored. Try again later",
+                )
+            }
+        }
+        http_credential_checked = Some(credential);
     }
     match security
         .consume_nonce(&format!("consent:{}", consent.csrf))
@@ -486,13 +824,26 @@ pub async fn authorize(
     // no-credential platform needs nothing, so both complete the handoff
     // directly (decision 11).
     match state.catalog.security_scheme(&consent.request.platform) {
-        Ok(crate::providers::SecurityScheme::ApiKey(_)) => {
+        Ok(crate::providers::SecurityScheme::ApiKey(api_key)) => {
             let Some(key) = valid_api_key(&approval) else {
                 return error("Enter a valid API key");
             };
             let credential = crate::proxy::StoredCredential::ApiKey {
                 provider: consent.request.platform.clone(),
                 key: key.to_owned(),
+                placement: Some(api_key.placement()),
+                scheme: Some(api_key.scheme_name),
+            };
+            let code =
+                match labelled_handoff(security, &consent.request, credential, key_label).await {
+                    Ok(code) => code,
+                    Err(()) => return error("Could not complete connection"),
+                };
+            finish_with_connection_code(jar, &consent.request.redirect_uri, &code)
+        }
+        Ok(crate::providers::SecurityScheme::Http(_)) => {
+            let Some(credential) = http_credential_checked else {
+                return error("Enter a valid API token");
             };
             let code =
                 match labelled_handoff(security, &consent.request, credential, key_label).await {
@@ -879,11 +1230,13 @@ mod tests {
         ] {
             let response = authorize(
                 State(s.clone()),
+                None,
                 jar,
                 HeaderMap::new(),
                 Form(Approval {
                     csrf: csrf.into(),
                     api_key: None,
+                    username: None,
                 }),
             )
             .await;
@@ -1025,11 +1378,13 @@ mod tests {
         let jar = PrivateCookieJar::new(s.key.clone());
         let result = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
                 csrf: "wrong".into(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;
@@ -1054,11 +1409,13 @@ mod tests {
             }
             let result = authorize(
                 State(s.clone()),
+                None,
                 jar.clone(),
                 headers,
                 Form(Approval {
                     csrf: csrf.into(),
                     api_key: None,
+                    username: None,
                 }),
             )
             .await;
@@ -1134,11 +1491,13 @@ mod tests {
         // page can approve again with a corrected key.
         let blank = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("  ".into()),
+                username: None,
             }),
         )
         .await;
@@ -1146,11 +1505,13 @@ mod tests {
         assert_eq!(body_text(blank).await, "Enter a valid API key");
         let response = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("clockify-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1170,11 +1531,13 @@ mod tests {
         // why.
         let again = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("clockify-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1202,10 +1565,25 @@ mod tests {
         assert_eq!(record.owner, owner.id());
         let credential: crate::proxy::StoredCredential =
             serde_json::from_slice(&record.credential).unwrap();
-        assert!(matches!(
-            credential,
-            crate::proxy::StoredCredential::ApiKey { ref key, .. } if key == "clockify-secret"
-        ));
+        let crate::proxy::StoredCredential::ApiKey {
+            key,
+            scheme,
+            placement,
+            ..
+        } = &credential
+        else {
+            panic!("{credential:?}");
+        };
+        assert_eq!(key, "clockify-secret");
+        // Bound to the scheme it was entered for, and to where it goes.
+        assert_eq!(scheme.as_deref(), Some("clockifyApiKey"));
+        assert_eq!(
+            *placement,
+            Some(crate::providers::ApiKeyPlacement {
+                location: "header".into(),
+                name: "x-api-key".into(),
+            })
+        );
         // Single use.
         let reused = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
         assert_eq!(reused.status(), StatusCode::BAD_REQUEST);
@@ -1235,6 +1613,25 @@ mod tests {
     /// A stand-in provider for the key check: `/api/v1/user` answers by the
     /// key it gets, in the `X-Api-Key` header or the query.
     async fn key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        key_check_upstream_counting(Default::default()).await
+    }
+
+    /// Wraps a stand-in provider so `counter` counts the requests it gets.
+    fn counting(
+        app: axum::Router,
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> axum::Router {
+        app.layer(tower::util::MapRequestLayer::new(
+            move |request: axum::http::Request<axum::body::Body>| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                request
+            },
+        ))
+    }
+
+    async fn key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = axum::Router::new().route(
@@ -1276,6 +1673,7 @@ mod tests {
                 },
             ),
         );
+        let app = counting(app, counter);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (format!("http://{address}"), server)
     }
@@ -1366,6 +1764,68 @@ mod tests {
         ));
     }
 
+    /// atomic-plugins#258: an API-key authentication profile of a document
+    /// that also declares OAuth keeps its help link and key check; without a
+    /// profile selection the mixed document is not offered at all.
+    #[tokio::test]
+    async fn an_api_key_profile_of_a_mixed_document_keeps_its_help_link_and_key_check() {
+        let mut document = key_check_document("header");
+        document["components"]["securitySchemes"]["userOAuth"] = serde_json::json!({
+            "type": "oauth2", "flows": {"authorizationCode": {
+                "authorizationUrl": "https://auth.service.example/authorize",
+                "tokenUrl": "https://auth.service.example/token",
+                "scopes": {"profile": "Profile"}
+            }}
+        });
+        document["paths"]["/v1/me"] =
+            serde_json::json!({"get": {"security": [{"userOAuth": ["profile"]}]}});
+        document["components"]["x-authentication-profiles"] = serde_json::json!({
+            "key": {"securityScheme": "serviceKey"},
+            "user": {"securityScheme": "userOAuth"}
+        });
+        let page = |selection: serde_json::Value| {
+            let mut s = state(None);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document.clone(),
+                selection,
+            );
+            let uri = connect_uri(&api_key_request());
+            async move { get_body(s, &uri).await }
+        };
+
+        let (status, html) = page(serde_json::json!({"authenticationProfile": "key"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("A personal key, made under Preferences, Advanced."));
+        assert!(html.contains(
+            r#"<a href="https://service.example/help/api-keys" target="_blank" rel="noopener noreferrer">Where to find your Clockify API key</a>"#
+        ));
+        let catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            document.clone(),
+            serde_json::json!({"authenticationProfile": "key"}),
+        );
+        let crate::providers::SecurityScheme::ApiKey(scheme) =
+            catalog.security_scheme("clockify").unwrap()
+        else {
+            panic!("the key profile must resolve to an apiKey scheme");
+        };
+        let check = scheme.key_check.unwrap();
+        assert_eq!(
+            check.url.as_str(),
+            "https://api.service.example/api/v1/user"
+        );
+        assert_eq!(check.label_pointer.as_deref(), Some("/email"));
+
+        for selection in [
+            serde_json::json!({}),
+            serde_json::json!({"apiKeySecurityScheme": "serviceKey"}),
+        ] {
+            let (_, html) = page(selection).await;
+            assert!(html.contains("This platform is not available for connection"));
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn postgres_a_rejected_key_is_asked_again_and_an_accepted_one_keeps_its_label() {
@@ -1390,11 +1850,13 @@ mod tests {
         let approve = |key: &str| {
             authorize(
                 State(s.clone()),
+                None,
                 jar.clone(),
                 HeaderMap::new(),
                 Form(Approval {
                     csrf: consent.csrf.clone(),
                     api_key: Some(key.into()),
+                    username: None,
                 }),
             )
         };
@@ -1445,11 +1907,1123 @@ mod tests {
             .unwrap();
         assert_eq!(listed.status(), StatusCode::OK);
         let listed = body_json(listed).await;
-        assert_eq!(listed["connections"][0]["label"], "ada@example.test");
-        assert_eq!(
-            listed["connections"][0]["connection_id"],
-            body["connection_id"]
+        // Scoped to this test's own connection: the database may also hold
+        // rows an earlier run left for the same agent seed.
+        let mine = listed["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["connection_id"] == body["connection_id"])
+            .expect("the new connection is listed");
+        assert_eq!(mine["label"], "ada@example.test");
+    }
+
+    /// A document whose one scheme is the `http` scheme `scheme`, with a
+    /// help link and a key check (openapi-extensions/spec/api-key-details).
+    fn http_document(scheme: serde_json::Value) -> serde_json::Value {
+        let mut scheme = scheme;
+        scheme["description"] = "A personal access token, made under Settings, Tokens.".into();
+        scheme["x-api-key-details"]["helpUrl"] = "https://service.example/help/tokens".into();
+        scheme["x-api-key-details"]["keyCheck"] =
+            serde_json::json!({"operationId": "getMe", "label": "$response.body#/email"});
+        serde_json::json!({
+            "servers": [{"url": "https://api.service.example/api"}],
+            "components": {"securitySchemes": {"serviceToken": scheme}},
+            "security": [{"serviceToken": []}],
+            "paths": {
+                "/v1/user": {"get": {"operationId": "getMe"}},
+                "/v1/workspaces": {"get": {}}
+            }
+        })
+    }
+
+    fn bearer() -> serde_json::Value {
+        serde_json::json!({"type": "http", "scheme": "bearer"})
+    }
+
+    fn basic(layout: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"type": "http", "scheme": "basic",
+            "x-api-key-details": {"basicCredentials": layout}})
+    }
+
+    fn basic_header(username: &str, password: &str) -> String {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+        )
+    }
+
+    fn http_scheme(document: serde_json::Value) -> crate::providers::HttpScheme {
+        match crate::providers::SecurityScheme::from_document(&document, None, None, None) {
+            Ok(crate::providers::SecurityScheme::Http(scheme)) => scheme,
+            other => panic!("expected an http scheme, got {other:?}"),
+        }
+    }
+
+    fn token_approval(token: &str, username: Option<&str>) -> Approval {
+        Approval {
+            csrf: String::new(),
+            api_key: Some(token.into()),
+            username: username.map(str::to_owned),
+        }
+    }
+
+    /// A stand-in provider for an `http` scheme's key check: `/api/v1/user`
+    /// answers by the `Authorization` header it gets.
+    async fn http_key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        http_key_check_upstream_counting(Default::default()).await
+    }
+
+    async fn http_key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = [
+            "Bearer good-token".to_owned(),
+            basic_header("good-token", "api_token"),
+            basic_header("ada@example.test", "good-token"),
+            basic_header("api", "good-token"),
+        ];
+        let app = axum::Router::new().route(
+            "/api/v1/user",
+            axum::routing::get(move |headers: HeaderMap| {
+                let accepted = accepted.clone();
+                async move {
+                    let authorization = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
+                    if accepted.iter().any(|a| a == authorization) {
+                        (StatusCode::OK, r#"{"id":"u1","email":"ada@example.test"}"#)
+                            .into_response()
+                    } else if authorization == "Bearer forbidden-token" {
+                        StatusCode::FORBIDDEN.into_response()
+                    } else if authorization == "Bearer broken-token" {
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }
+            }),
         );
+        let app = counting(app, counter);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}"), server)
+    }
+
+    #[test]
+    fn http_tokens_are_laid_out_as_declared_and_validated() {
+        use crate::proxy::StoredCredential;
+        let bearer_scheme = http_scheme(http_document(bearer()));
+        let bearer_token = |token: &str, username: Option<&str>| match http_credential(
+            "service",
+            &bearer_scheme,
+            &token_approval(token, username),
+        ) {
+            Ok(StoredCredential::HttpBearer {
+                provider, token, ..
+            }) => {
+                assert_eq!(provider, "service");
+                Ok(token)
+            }
+            Ok(other) => panic!("{other:?}"),
+            Err(message) => Err(message),
+        };
+        assert_eq!(bearer_token(" good-token ", None), Ok("good-token".into()));
+        // A typed username is ignored for a bearer token.
+        assert_eq!(
+            bearer_token("good-token", Some("someone")),
+            Ok("good-token".into())
+        );
+        // Asana-style tokens with '/' and ':' are visible ASCII.
+        assert_eq!(bearer_token("2/12/34:ab", None), Ok("2/12/34:ab".into()));
+        for bad in ["abc", "has space", "tok\u{e9}n-1", "line\nbreak", ""] {
+            assert_eq!(
+                bearer_token(bad, None),
+                Err("Enter a valid API token"),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            bearer_token(&"x".repeat(513), None),
+            Err("Enter a valid API token")
+        );
+
+        let halves = |layout: serde_json::Value, token: &str, username: Option<&str>| {
+            let scheme = http_scheme(http_document(basic(layout)));
+            match http_credential("service", &scheme, &token_approval(token, username)) {
+                Ok(StoredCredential::HttpBasic {
+                    username, password, ..
+                }) => Ok((username, password)),
+                Ok(other) => panic!("{other:?}"),
+                Err(message) => Err(message),
+            }
+        };
+        let as_username = serde_json::json!({"token": "username", "password": "api_token"});
+        assert_eq!(
+            halves(as_username.clone(), "good-token", Some("ignored")),
+            Ok(("good-token".into(), "api_token".into()))
+        );
+        // RFC 7617: a user-id cannot contain ':'.
+        assert_eq!(
+            halves(as_username, "good:token", None),
+            Err("Enter a valid API token")
+        );
+        assert_eq!(
+            halves(
+                serde_json::json!({"token": "password", "username": "api"}),
+                "pass:with:colons",
+                Some("ignored")
+            ),
+            Ok(("api".into(), "pass:with:colons".into()))
+        );
+        let asking = serde_json::json!({"token": "password", "usernameLabel": "Email"});
+        assert_eq!(
+            halves(asking.clone(), "good-token", Some(" ada@example.test ")),
+            Ok(("ada@example.test".into(), "good-token".into()))
+        );
+        for username in [None, Some(""), Some("  "), Some("a:b"), Some("a\u{7}b")] {
+            assert_eq!(
+                halves(asking.clone(), "good-token", username),
+                Err("Enter a valid username and API token"),
+                "{username:?}"
+            );
+        }
+        assert_eq!(
+            halves(asking.clone(), "good-token", Some(&"u".repeat(257))),
+            Err("Enter a valid username and API token")
+        );
+        assert_eq!(
+            halves(asking, "tok\u{0}en", Some("ada@example.test")),
+            Err("Enter a valid API token")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_http_key_check_sends_the_authorization_a_request_would_carry() {
+        let (upstream, server) = http_key_check_upstream().await;
+        let mut s = state(None);
+        s.test_upstream = Some(upstream);
+        let check = |layout: Option<serde_json::Value>, token: &str, username: Option<&str>| {
+            let scheme = http_scheme(http_document(layout.map_or_else(bearer, basic)));
+            let credential =
+                http_credential("service", &scheme, &token_approval(token, username)).unwrap();
+            let s = s.clone();
+            async move { check_http_credential(&s, &scheme, &credential).await }
+        };
+        let accepted = KeyCheck::Accepted(Some("ada@example.test".into()));
+        assert_eq!(check(None, "good-token", None).await, accepted);
+        assert_eq!(check(None, "wrong-token", None).await, KeyCheck::Rejected);
+        assert_eq!(
+            check(None, "forbidden-token", None).await,
+            KeyCheck::Rejected
+        );
+        assert_eq!(
+            check(None, "broken-token", None).await,
+            KeyCheck::Undetermined
+        );
+        for (layout, username) in [
+            (
+                serde_json::json!({"token": "username", "password": "api_token"}),
+                None,
+            ),
+            (
+                serde_json::json!({"token": "password", "usernameLabel": "Email"}),
+                Some("ada@example.test"),
+            ),
+            (
+                serde_json::json!({"token": "password", "username": "api"}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                check(Some(layout.clone()), "good-token", username).await,
+                accepted,
+                "{layout}"
+            );
+            assert_eq!(
+                check(Some(layout.clone()), "wrong-token", username).await,
+                KeyCheck::Rejected,
+                "{layout}"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_http_consent_page_asks_for_a_token_and_a_declared_username() {
+        let page = |document: serde_json::Value| {
+            let mut s = state(None);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document,
+                serde_json::json!({}),
+            );
+            let uri = connect_uri(&api_key_request());
+            let router = crate::router(s);
+            async move {
+                router
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .uri(uri)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        let response = page(http_document(bearer())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // Approval redirects to the destination, as for an API key.
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .ends_with("form-action 'self' https://hub.example"));
+        let html = body_text(response).await;
+        assert!(html.contains("A personal access token, made under Settings, Tokens."));
+        assert!(html.contains(
+            r#"<a href="https://service.example/help/tokens" target="_blank" rel="noopener noreferrer">Where to find your Clockify API token</a>"#
+        ));
+        assert!(html.contains(
+            r#"type="password" name="api_key" autocomplete="off" placeholder="API token""#
+        ));
+        assert!(!html.contains(r#"name="username""#));
+
+        let html = body_text(
+            page(http_document(basic(
+                serde_json::json!({"token": "password", "usernameLabel": "Email <work>"}),
+            )))
+            .await,
+        )
+        .await;
+        assert!(html.contains(
+            r#"type="text" name="username" autocomplete="off" placeholder="Email &lt;work&gt;" aria-label="Email &lt;work&gt;" required"#
+        ));
+        assert!(html.contains(r#"name="api_key""#));
+        // A fixed username is not asked for.
+        let html = body_text(
+            page(http_document(basic(
+                serde_json::json!({"token": "username", "password": "api_token"}),
+            )))
+            .await,
+        )
+        .await;
+        assert!(!html.contains(r#"name="username""#));
+        assert!(!html.contains("api_token"));
+        // A basic scheme without a declared token layout is not offered.
+        let mut undeclared = http_document(basic(serde_json::json!({})));
+        undeclared["components"]["securitySchemes"]["serviceToken"]["x-api-key-details"]
+            .as_object_mut()
+            .unwrap()
+            .remove("basicCredentials");
+        let html = body_text(page(undeclared).await).await;
+        assert!(html.contains("This platform is not available for connection"));
+    }
+
+    /// Q-086, end to end for both kinds: a rejected token asks again
+    /// without spending the consent, an undetermined check stores nothing,
+    /// and an accepted token is sealed as checked, redeemed by the signer,
+    /// and never returned.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_http_tokens_are_checked_then_sealed_and_never_returned() {
+        let (upstream, server) = http_key_check_upstream().await;
+        let security = crate::test_support::security().await;
+        for (seed, scheme, username) in [
+            (70u8, bearer(), None),
+            (
+                71,
+                basic(serde_json::json!({"token": "password", "usernameLabel": "Email"})),
+                Some("ada@example.test"),
+            ),
+        ] {
+            let mut s = state(Some(security.clone()));
+            s.test_upstream = Some(upstream.clone());
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                http_document(scheme),
+                serde_json::json!({}),
+            );
+            let consent = Consent {
+                request: api_key_request(),
+                csrf: random(),
+                expires: crate::now_secs() + 600,
+            };
+            let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                CONSENT_COOKIE,
+                serde_json::to_string(&consent).unwrap(),
+            ));
+            let approve = |token: &str, username: Option<&str>| {
+                authorize(
+                    State(s.clone()),
+                    None,
+                    jar.clone(),
+                    HeaderMap::new(),
+                    Form(Approval {
+                        csrf: consent.csrf.clone(),
+                        ..token_approval(token, username)
+                    }),
+                )
+            };
+            // Malformed: refused before any check, nothing spent.
+            let blank = approve("  ", username).await;
+            assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
+            assert!(body_text(blank).await.starts_with("Enter a valid"));
+            // Rejected: the page again, with the reason and not the token.
+            let rejected = approve("wrong-token", username).await;
+            assert_eq!(rejected.status(), StatusCode::OK);
+            let html = body_text(rejected).await;
+            assert!(html.contains("Clockify did not accept that API token."));
+            assert!(html.contains(&consent.csrf));
+            assert!(!html.contains("wrong-token"));
+            // Undetermined (only reachable for the bearer token here).
+            if username.is_none() {
+                let broken = approve("broken-token", None).await;
+                assert_eq!(broken.status(), StatusCode::BAD_REQUEST);
+                let text = body_text(broken).await;
+                assert!(text.starts_with("Could not check the API token"));
+                assert!(!text.contains("broken-token"));
+            }
+            // Accepted: the same consent still works.
+            let accepted = approve("good-token", username).await;
+            assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+            let location =
+                Url::parse(accepted.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+            assert!(!location.as_str().contains("good-token"));
+            let code = location
+                .query_pairs()
+                .find(|(k, _)| k == "connection_code")
+                .unwrap()
+                .1
+                .into_owned();
+            let owner = Agent::new(seed);
+            let ok = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
+            assert_eq!(ok.status(), StatusCode::OK);
+            let body = body_json(ok).await;
+            assert_eq!(body["owner"], owner.id());
+            assert_eq!(body["label"], "ada@example.test");
+            assert!(!body.to_string().contains("good-token"));
+            let record = security
+                .load_connection(body["connection_id"].as_str().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let credential: crate::proxy::StoredCredential =
+                serde_json::from_slice(&record.credential).unwrap();
+            match (username, credential) {
+                (None, crate::proxy::StoredCredential::HttpBearer { token, scheme, .. }) => {
+                    assert_eq!(token, "good-token");
+                    // Bound to the scheme it was entered for.
+                    assert_eq!(scheme.as_deref(), Some("serviceToken"));
+                }
+                (
+                    Some(expected),
+                    crate::proxy::StoredCredential::HttpBasic {
+                        username,
+                        password,
+                        scheme,
+                        layout,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(
+                        (username.as_str(), password.as_str()),
+                        (expected, "good-token")
+                    );
+                    assert_eq!(scheme.as_deref(), Some("serviceToken"));
+                    assert_eq!(
+                        layout,
+                        Some(crate::providers::BasicLayout::Password { username: None })
+                    );
+                }
+                (_, other) => panic!("{other:?}"),
+            }
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn a_bearer_token_is_a_b64token_or_an_asana_style_token() {
+        for good in [
+            "good-token",
+            "ghp_AbC123",
+            "a.b_c~d+e/f",
+            "dG9rZW4=",
+            "dG9r==",
+            "2/1234/5678:abcdef",
+        ] {
+            assert!(bearer_token(good), "{good}");
+        }
+        for bad in [
+            "",
+            "==",
+            "a=b",
+            "has space",
+            "quote\"d",
+            "semi;colon",
+            "comma,",
+            "tok\u{e9}n",
+            "back\\slash",
+            "a\tb",
+            "<tag>",
+            "50%",
+        ] {
+            assert!(!bearer_token(bad), "{bad:?}");
+        }
+    }
+
+    /// One consent makes at most [`MAX_KEY_CHECKS`] key checks: the last
+    /// rejection spends it and says so, and nothing is checked after that,
+    /// for an API key and for an `http` token alike.
+    ///
+    /// The cap is per consent page, not per client: anyone can open another
+    /// consent page (SECURITY.md).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_consent_allows_at_most_five_key_checks() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        for http in [false, true] {
+            let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (upstream, server) = if http {
+                http_key_check_upstream_counting(checks.clone()).await
+            } else {
+                key_check_upstream_counting(checks.clone()).await
+            };
+            let (document, wrong, good, asked_again) = if http {
+                (
+                    http_document(bearer()),
+                    "wrong-token",
+                    "good-token",
+                    "did not accept that API token",
+                )
+            } else {
+                (
+                    key_check_document("header"),
+                    "wrong-key",
+                    "good-key",
+                    "did not accept that API key",
+                )
+            };
+            let mut s = state(Some(security.clone()));
+            s.test_upstream = Some(upstream);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document,
+                serde_json::json!({}),
+            );
+            let new_consent = || {
+                let consent = Consent {
+                    request: api_key_request(),
+                    csrf: random(),
+                    expires: crate::now_secs() + 600,
+                };
+                let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                    CONSENT_COOKIE,
+                    serde_json::to_string(&consent).unwrap(),
+                ));
+                (consent, jar)
+            };
+            let submit = |s: &AppState, jar: &PrivateCookieJar, csrf: &str, key: &str| {
+                authorize(
+                    State(s.clone()),
+                    None,
+                    jar.clone(),
+                    HeaderMap::new(),
+                    Form(Approval {
+                        csrf: csrf.to_owned(),
+                        ..token_approval(key, None)
+                    }),
+                )
+            };
+            let (consent, jar) = new_consent();
+            let approve = |key: &str| submit(&s, &jar, &consent.csrf, key);
+            // A malformed key is refused before any check and costs nothing.
+            assert_eq!(approve("  ").await.status(), StatusCode::BAD_REQUEST);
+            for attempt in 1..MAX_KEY_CHECKS {
+                let response = approve(wrong).await;
+                assert_eq!(response.status(), StatusCode::OK, "{http} {attempt}");
+                assert!(body_text(response).await.contains(asked_again));
+            }
+            // The last allowed check is rejected too: the consent is spent.
+            let last = approve(wrong).await;
+            assert_eq!(last.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_text(last).await, TOO_MANY_KEY_CHECKS);
+            assert!(security
+                .nonce_used(&format!("consent:{}", consent.csrf))
+                .await
+                .unwrap());
+            // Even a good key is not checked or accepted now.
+            let after = approve(good).await;
+            assert_eq!(after.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_text(after).await, TOO_MANY_KEY_CHECKS);
+            // The provider was asked exactly five times.
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+
+            // Thirty concurrent submissions of one fresh consent: still
+            // exactly five checks, and none is accepted.
+            checks.store(0, SeqCst);
+            let (consent, jar) = new_consent();
+            let tasks: Vec<_> = (0..30)
+                .map(|_| {
+                    let request = submit(&s, &jar, &consent.csrf, wrong);
+                    tokio::spawn(async move { request.await.status() })
+                })
+                .collect();
+            for task in tasks {
+                let status = task.await.unwrap();
+                assert!(
+                    matches!(status, StatusCode::OK | StatusCode::BAD_REQUEST),
+                    "{status}"
+                );
+            }
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+            server.abort();
+        }
+    }
+
+    /// A client network this test run has not used, so rows left by earlier
+    /// runs (kept for an hour) do not count.
+    fn fresh_ip() -> std::net::IpAddr {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::from(rand::random::<u32>()))
+    }
+
+    fn peer_at(ip: std::net::IpAddr) -> Option<ConnectInfo<std::net::SocketAddr>> {
+        Some(ConnectInfo(std::net::SocketAddr::new(ip, 40_000)))
+    }
+
+    fn forwarded_for(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", value.parse().unwrap());
+        headers
+    }
+
+    /// A state whose only platform, `platform`, takes an API key checked by
+    /// `upstream`, with the key-check limit set to `limit`.
+    fn limited_state(
+        security: &Security,
+        upstream: &str,
+        platform: &str,
+        document: serde_json::Value,
+        limit: u32,
+    ) -> AppState {
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream.to_owned());
+        s.catalog =
+            crate::catalog::Catalog::from_test_document(platform, document, serde_json::json!({}));
+        s.key_check_limit = limit;
+        s
+    }
+
+    /// Submits `key` on a consent page of its own, as a script that opens a
+    /// new consent page for every attempt would. Returns the response and
+    /// the consent's CSRF token.
+    async fn submit_on_new_consent(
+        s: &AppState,
+        peer: Option<ConnectInfo<std::net::SocketAddr>>,
+        headers: HeaderMap,
+        key: &str,
+    ) -> (Response, String) {
+        let platform = s.catalog.names()[0].clone();
+        let consent = Consent {
+            request: Request {
+                redirect_uri: format!(
+                    "https://hub.example/app/integrations?integration_state=state&platform={platform}"
+                ),
+                platform,
+                ..api_key_request()
+            },
+            csrf: random(),
+            expires: crate::now_secs() + 600,
+        };
+        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+            CONSENT_COOKIE,
+            serde_json::to_string(&consent).unwrap(),
+        ));
+        let response = authorize(
+            State(s.clone()),
+            peer,
+            jar,
+            headers,
+            Form(Approval {
+                csrf: consent.csrf.clone(),
+                ..token_approval(key, None)
+            }),
+        )
+        .await;
+        (response, consent.csrf)
+    }
+
+    /// Q-097: key checks are limited per client network and platform, across
+    /// consent pages, before any upstream call, without spending the
+    /// consent; other networks and platforms are unaffected; checks free up
+    /// when their window has passed; `X-Forwarded-For` is read only as
+    /// `TRUST_FORWARDED_FOR` says; `0` turns the limit off; and a concurrent
+    /// burst makes no more checks than the limit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_key_checks_are_limited_per_network_and_platform() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (upstream, server) = key_check_upstream_counting(checks.clone()).await;
+        let document = key_check_document("header");
+        let s = limited_state(&security, &upstream, "clockify", document.clone(), 3);
+        let other_platform =
+            limited_state(&security, &upstream, "clockify-other", document.clone(), 3);
+        let ip = fresh_ip();
+        let asked_again = "did not accept that API key";
+
+        // Malformed keys are refused before the limit and cost nothing.
+        for _ in 0..5 {
+            let (response, _) = submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), " ").await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(checks.load(SeqCst), 0);
+        // Three checks from one network, each on a new consent page.
+        for attempt in 1..=3 {
+            let (response, _) =
+                submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+            assert_eq!(response.status(), StatusCode::OK, "{attempt}");
+            assert!(body_text(response).await.contains(asked_again));
+        }
+        assert_eq!(checks.load(SeqCst), 3);
+        // The fourth, even with a good key: 429, no upstream call, and the
+        // consent is neither spent nor charged a key check.
+        let (limited, csrf) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-key").await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = limited.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=3600).contains(&retry_after), "{retry_after}");
+        assert_eq!(limited.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(set_cookie(&limited, CONSENT_COOKIE).is_none());
+        assert_eq!(
+            body_text(limited).await,
+            "Too many key checks from your network for Clockify; try again later"
+        );
+        assert_eq!(checks.load(SeqCst), 3);
+        assert!(!security
+            .nonce_used(&format!("consent:{csrf}"))
+            .await
+            .unwrap());
+        assert!(!security
+            .nonce_used(&key_check_slot(&csrf, 1))
+            .await
+            .unwrap());
+        // Malformed input is still refused as such, and costs nothing.
+        let (malformed, _) = submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), " ").await;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        // Another platform from the same network, and the same platform from
+        // another network, are unaffected.
+        let (response, _) =
+            submit_on_new_consent(&other_platform, peer_at(ip), HeaderMap::new(), "wrong-key")
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(fresh_ip()), HeaderMap::new(), "good-key").await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // X-Forwarded-For does not get around it. Without trust, it is
+        // ignored: the peer is the limited network.
+        let spoofed = forwarded_for(&fresh_ip().to_string());
+        let (response, _) = submit_on_new_consent(&s, peer_at(ip), spoofed, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Behind Heroku's router, only the entry the router appended counts:
+        // a client-supplied entry to its left changes nothing, and neither
+        // does which router address the request came from.
+        let mut heroku = s.clone();
+        heroku.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+        let router = peer_at(fresh_ip());
+        let spoofed = forwarded_for(&format!("{}, {ip}", fresh_ip()));
+        let (response, _) = submit_on_new_consent(&heroku, router, spoofed, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Nor does a non-UTF-8 byte the client put before the router's
+        // entry: that does not move it to the router's (peer's) bucket.
+        let mut binary = HeaderMap::new();
+        let mut line = b"\x80, ".to_vec();
+        line.extend_from_slice(ip.to_string().as_bytes());
+        binary.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_bytes(&line).unwrap(),
+        );
+        let (response, _) =
+            submit_on_new_consent(&heroku, peer_at(fresh_ip()), binary, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // A client that sends its own X-Forwarded-For to a proxy that does
+        // not trust it is counted by its own address.
+        let (response, _) = submit_on_new_consent(
+            &s,
+            peer_at(ip),
+            forwarded_for(&format!("{ip}, {}", fresh_ip())),
+            "good-key",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // A platform that declares no key check makes no upstream call, so
+        // connecting it from the limited network uses no allowance and is
+        // not refused.
+        let mut unchecked_document = document.clone();
+        unchecked_document["components"]["securitySchemes"]["serviceKey"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        let unchecked = limited_state(
+            &security,
+            &upstream,
+            &format!("p-{:x}", rand::random::<u64>()),
+            unchecked_document,
+            1,
+        );
+        for _ in 0..3 {
+            let (response, _) =
+                submit_on_new_consent(&unchecked, peer_at(ip), HeaderMap::new(), "any-key").await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        }
+        let bucket = security.key_check_bucket(
+            &unchecked.catalog.names()[0],
+            &crate::client_addr::network(ip),
+        );
+        assert_eq!(
+            security
+                .take_key_check_allowance(&bucket, 1, std::time::Duration::from_secs(3600))
+                .await
+                .unwrap(),
+            None,
+            "no slot was taken"
+        );
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // 0 turns the limit off.
+        let mut unlimited = s.clone();
+        unlimited.key_check_limit = 0;
+        for _ in 0..2 {
+            let (response, _) =
+                submit_on_new_consent(&unlimited, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(checks.load(SeqCst), 7);
+
+        // Without any client address, every such check shares one limit.
+        let mut nowhere = limited_state(
+            &security,
+            &upstream,
+            &format!("p-{:x}", rand::random::<u64>()),
+            document.clone(),
+            1,
+        );
+        nowhere.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+        let (response, _) =
+            submit_on_new_consent(&nowhere, None, HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&nowhere, None, HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 8);
+
+        // A check frees up once its window has passed.
+        let mut short = s.clone();
+        short.key_check_limit = 1;
+        short.key_check_window = std::time::Duration::from_secs(2);
+        let network = fresh_ip();
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                <= 2
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(2_200)).await;
+        let (response, _) =
+            submit_on_new_consent(&short, peer_at(network), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(checks.load(SeqCst), 10);
+
+        // Thirty concurrent submissions from one network, each on its own
+        // consent page, with a limit of five: exactly five checks.
+        checks.store(0, SeqCst);
+        let mut burst = s.clone();
+        burst.key_check_limit = 5;
+        let network = fresh_ip();
+        let tasks: Vec<_> = (0..30)
+            .map(|_| {
+                let burst = burst.clone();
+                tokio::spawn(async move {
+                    submit_on_new_consent(&burst, peer_at(network), HeaderMap::new(), "wrong-key")
+                        .await
+                        .0
+                        .status()
+                })
+            })
+            .collect();
+        let mut statuses = Vec::new();
+        for task in tasks {
+            statuses.push(task.await.unwrap());
+        }
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 5);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
+                .count(),
+            25
+        );
+        assert_eq!(checks.load(SeqCst), 5);
+        server.abort();
+    }
+
+    /// The limit covers `http` bearer and basic tokens as it covers API keys.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_http_token_checks_share_the_network_limit() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (upstream, server) = http_key_check_upstream_counting(checks.clone()).await;
+        let s = limited_state(&security, &upstream, "clockify", http_document(bearer()), 2);
+        let ip = fresh_ip();
+        for _ in 0..2 {
+            let (response, _) =
+                submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-token").await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-token").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 2);
+        server.abort();
+    }
+
+    /// A limited key check logs that it was limited, with the hashed bucket,
+    /// and neither the client address nor the key. Run in a child process,
+    /// like [`postgres_no_http_token_reaches_the_logs`].
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_limited_key_check_logs_no_address() {
+        const CHILD: &str = "INTEGRATION_PROXY_LOG_CAPTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "connect::tests::postgres_a_limited_key_check_logs_no_address",
+                    "--include-ignored",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let logs = LogBuffer::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let security = crate::test_support::security().await;
+        let (upstream, server) = key_check_upstream().await;
+        let s = limited_state(
+            &security,
+            &upstream,
+            "clockify",
+            key_check_document("header"),
+            1,
+        );
+        let ip = fresh_ip();
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "wrong-key").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (response, _) =
+            submit_on_new_consent(&s, peer_at(ip), HeaderMap::new(), "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        server.abort();
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let bucket = security.key_check_bucket("clockify", &ip.to_string());
+        assert_eq!(bucket.len(), 64);
+        assert!(logs.contains("key check limit reached"), "{logs}");
+        assert!(logs.contains(&bucket), "{logs}");
+        for secret in [ip.to_string(), "wrong-key".into(), "good-key".into()] {
+            assert!(!logs.contains(&secret), "{secret} in logs:\n{logs}");
+        }
+    }
+
+    /// Collects everything a `tracing` subscriber writes.
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Q-086: with every `tracing` event recorded at TRACE level, a Basic
+    /// connection's consent, key check, redeem and proxied request (through
+    /// the router and its `TraceLayer`) log neither half of the credential
+    /// nor its base64 form. `log`-crate records of dependencies are not
+    /// captured here.
+    ///
+    /// `tracing` caches per-callsite interest process-wide, so a thread-local
+    /// subscriber misses events while other tests run in parallel. The test
+    /// therefore runs itself alone in a child process of the same test
+    /// binary.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_no_http_token_reaches_the_logs() {
+        const CHILD: &str = "INTEGRATION_PROXY_LOG_CAPTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "connect::tests::postgres_no_http_token_reaches_the_logs",
+                    "--include-ignored",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let logs = LogBuffer::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::info!("log capture started");
+
+        let (upstream, key_server) = http_key_check_upstream().await;
+        let security = crate::test_support::security().await;
+        let layout = serde_json::json!({"token": "password", "usernameLabel": "Email"});
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream);
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            http_document(basic(layout.clone())),
+            serde_json::json!({}),
+        );
+        let consent = Consent {
+            request: api_key_request(),
+            csrf: random(),
+            expires: crate::now_secs() + 600,
+        };
+        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+            CONSENT_COOKIE,
+            serde_json::to_string(&consent).unwrap(),
+        ));
+        let accepted = authorize(
+            State(s.clone()),
+            None,
+            jar,
+            HeaderMap::new(),
+            Form(Approval {
+                csrf: consent.csrf.clone(),
+                ..token_approval("good-token", Some("ada@example.test"))
+            }),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+        key_server.abort();
+        let location = Url::parse(accepted.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = location
+            .query_pairs()
+            .find(|(k, _)| k == "connection_code")
+            .unwrap()
+            .1
+            .into_owned();
+        let owner = Agent::new(72);
+        let redeemed = body_json(redeem_as(&s, &owner, &code, &"a".repeat(43)).await).await;
+        let connection_id = redeemed["connection_id"].as_str().unwrap();
+
+        // A proxied request to a provider that answers anything.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/v1/workspaces",
+            axum::routing::get(|| async { axum::Json(serde_json::json!([])) }),
+        );
+        let provider = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut document = http_document(basic(layout));
+        document["servers"] = serde_json::json!([{"url": format!("http://{address}/api")}]);
+        // The key check needs an https server; the proxied request does not.
+        document["components"]["securitySchemes"]["serviceToken"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        document["components"]["securitySchemes"]["serviceToken"]["x-api-key-details"] = serde_json::json!({"basicCredentials": {"token": "password", "usernameLabel": "Email"}});
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            document,
+            serde_json::json!({}),
+        );
+        let response = crate::router(s.clone())
+            .oneshot(signed_request(
+                &s,
+                &owner,
+                "GET",
+                &format!("/proxy/{connection_id}/clockify/api/v1/workspaces"),
+                Vec::new(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        provider.abort();
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        // The capture works, and the router's TraceLayer reached it.
+        assert!(logs.contains("log capture started"), "{logs}");
+        assert!(
+            logs.contains("tower_http") && logs.contains("/proxy/"),
+            "{logs}"
+        );
+        // ... and so did the HTTP client's, for the key check and upstream.
+        assert!(logs.contains("hyper_util"), "{logs}");
+        let encoded = basic_header("ada@example.test", "good-token");
+        for secret in [
+            "good-token",
+            encoded.trim_start_matches("Basic "),
+            "ada@example.test",
+        ] {
+            assert!(!logs.contains(secret), "{secret} in logs:\n{logs}");
+        }
     }
 
     fn no_credential_catalog() -> crate::catalog::Catalog {
@@ -1525,11 +3099,13 @@ mod tests {
         // A key sent anyway is ignored, not stored.
         let response = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: Some("unexpected-secret".into()),
+                username: None,
             }),
         )
         .await;
@@ -1572,6 +3148,8 @@ mod tests {
         let security = crate::test_support::security().await;
         let s = state(Some(security.clone()));
         let credential = crate::proxy::StoredCredential::ApiKey {
+            placement: None,
+            scheme: None,
             provider: "github-issues".into(),
             key: "k".into(),
         };
@@ -1644,6 +3222,8 @@ mod tests {
             &security,
             &request(),
             crate::proxy::StoredCredential::ApiKey {
+                placement: None,
+                scheme: None,
                 provider: "github-issues".into(),
                 key: "k".into(),
             },
@@ -1677,11 +3257,13 @@ mod tests {
         ));
         let response = authorize(
             State(s.clone()),
+            None,
             jar.clone(),
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;
@@ -1719,11 +3301,13 @@ mod tests {
         ));
         let response = authorize(
             State(s.clone()),
+            None,
             jar,
             HeaderMap::new(),
             Form(Approval {
                 csrf: consent.csrf.clone(),
                 api_key: None,
+                username: None,
             }),
         )
         .await;

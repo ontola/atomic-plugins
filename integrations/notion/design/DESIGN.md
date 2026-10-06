@@ -1,5 +1,20 @@
 # Notion drive plugin: frontend design
 
+> **Superseded in part (2026-10-02, notion 0.3.0).** Michiel decided on
+> [#177](https://github.com/ontola/atomic-plugins/issues/177) (Q9,
+> 2026-09-25) that Notion gets **no custom browsing view, only a small
+> sync-status view**. The browsing parts of this design (§5's scope chips,
+> toolbar, table, board, list and side peek; S6–S8 and S14 in §6; search,
+> sort and row navigation in §7; the row-level parts of §9 and §10) were
+> built for 0.1.0–0.2.0 and removed in 0.3.0. People browse and edit the rows
+> with the host's own table and views. What stays from this design: the
+> shell and tokens (§4, §8), the controller states and their banners and
+> empty states (S1–S5, S9–S13), sync details (S10), the first-import
+> progress (S4), the two-way strip, review and conflicts (S15, S16), and the
+> menu (§5). The status view itself is described in
+> [`../README.md`](../README.md). The rest of this file is kept as the
+> record of what was built and why.
+
 Issue #89. This is the design for the **drive plugin** in `../app/` (the
 read-only iframe app on `syncables/browser`), not for the sandbox pilot in
 `../plugin.ts`, which has no UI entry point. Mockups of every state are in
@@ -7,8 +22,8 @@ read-only iframe app on `syncables/browser`), not for the sandbox pilot in
 dependencies). The implementation work is split into
 [`issues.md`](issues.md).
 
-Everything below is a proposal. Nothing in it has been built, and nothing in
-it has been tried with users.
+Everything below was a proposal when written. The browsing views were built
+and then removed (see above); nothing in it has been tried with users.
 
 ## 1. Where we start from
 
@@ -51,7 +66,9 @@ What the data looks like after `syncNotion` (`app/sync.ts`):
   `title`) share a column; two "Status" properties with different ids become
   two columns both named "Status".
 - Select, status and multi-select cells hold Notion **option ids**, not
-  names or colours. Rendering them as-is would show UUIDs.
+  names or colours. Rendering them as-is would show UUIDs. (Superseded in
+  0.4.0: those columns are the host's own select columns, one Tag per
+  option, so the host's table shows names and colours; `app/options.ts`.)
 - Projected types: title/plain text, number, checkbox, url, email, phone,
   select/status/multi-select option ids. Date, people, relation, formula,
   rollup, files, and formatted rich text are not projected.
@@ -318,7 +335,8 @@ inside the app; background sync (#10).
 Gaps the implementation must close (each is an issue in `issues.md`):
 
 1. Rows are never shown in the app (N4, N5, N8).
-2. Option ids, not names and colours, are stored (N7).
+2. Option ids, not names and colours, are stored (N7). (Closed in 0.4.0 by
+   the host's select columns and Tags, `app/options.ts`.)
 3. Columns of different databases merge by property id; same-named columns
    are indistinguishable (N6).
 4. Every error is one string; there is no reauth, rate-limit or

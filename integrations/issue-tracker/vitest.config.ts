@@ -49,8 +49,13 @@ export default {
     include: [
       '*.test.ts',
       'app/**/*.test.ts',
+      'todoist-app/**/*.test.ts',
       'devonian/**/*.test.{ts,mjs}',
       'fixtures/**/*.test.ts',
+      // The live check's offline tests (the mock GitHub); never the live run.
+      'live/*.test.ts',
+      // The Todoist live check's offline tests (the mock Todoist fixture).
+      'live/todoist/*.test.ts',
     ],
   },
 };

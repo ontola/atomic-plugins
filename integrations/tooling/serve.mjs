@@ -86,6 +86,26 @@ export function serverEnv(ports, store) {
 }
 
 /**
+ * The address a lane's host-side atomic-server binds: ATOMIC_IP when the
+ * caller set it (it wins, e.g. the cloud hook's `0.0.0.0`), else loopback.
+ * Without it atomic-server binds `::`, every interface, and announces
+ * "Anyone who can reach this node can create a Drive" on a machine with a
+ * public address. Only for the local binary: inside the image the server must
+ * bind `0.0.0.0` (the Dockerfile's ENV), and dockerRunArgs publishes the port
+ * on 127.0.0.1 only.
+ */
+export const bindAddress = (env = process.env) => env.ATOMIC_IP || '127.0.0.1';
+
+/**
+ * The dev-server's bind address: DEV_SERVER_HOST when set, else loopback. With
+ * the image, the server in the container fetches the dev-server through
+ * `host.docker.internal` (the ontology lane), which is the host's bridge
+ * address, not loopback, so it listens on all interfaces then.
+ */
+export const devServerHost = (env = process.env) =>
+  env.DEV_SERVER_HOST || (env.ATOMIC_SERVER_IMAGE ? '0.0.0.0' : '127.0.0.1');
+
+/**
  * The origin plugin routes would be served under (`--routes-origin`): a
  * `*.localhost` name, which atomic-server#1726 accepts over plain http when
  * the API is on localhost, on the lane's own atomic-server port. It must not
@@ -476,6 +496,7 @@ export async function bringUp({
     );
   } else {
     start('atomic-server', binary, routeArgs, {
+      ATOMIC_IP: bindAddress(),
       ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
       ...laneServerEnv(laneEnv, ports),
     });
@@ -505,6 +526,7 @@ export async function bringUp({
     ['integrations/tooling/dev-server.mjs'],
     {
       DEV_SERVER_PORT: String(ports.devServer),
+      DEV_SERVER_HOST: devServerHost(),
       // Serve every drive app entry enabled, so an e2e can install an app
       // the published catalog still keeps disabled until its launch
       // (dev-server.mjs enableAppEntries).

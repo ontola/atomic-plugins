@@ -16,5 +16,14 @@ export default {
         .pathname,
     },
   },
-  test: { include: ['*.test.ts', 'app/*.test.ts', 'devonian/**/*.test.ts'] },
+  test: {
+    include: [
+      '*.test.ts',
+      'app/*.test.ts',
+      'devonian/**/*.test.ts',
+      'fixtures/**/*.test.ts',
+      // The live check's offline tests (an in-memory Google); never the live run.
+      'live/*.test.ts',
+    ],
+  },
 };

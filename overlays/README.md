@@ -16,9 +16,11 @@ any file `overlays/<path>` is served at:
 https://ontola.github.io/atomic-plugins/overlays/<path>
 ```
 
-`catalog/2026-10-02.json` lists each platform's overlays by those URLs, and the
-integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. Before this
+Each dated catalog under `catalog/` lists each platform's overlays by those
+URLs. The integration proxy's default `CATALOG_PATH` is
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`
+since #258 (unreleased); proxy 0.2.4, and localthought.io's explicit
+`CATALOG_PATH`, use `catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit
 on `raw.githubusercontent.com`. Pages URLs are not Git-commit URLs, but
 CI preserves published dated catalogs and OAD-revision overlay files
@@ -38,9 +40,21 @@ Dated catalogs and their selected revision files are immutable once on
 `main`; publish a new dated catalog and update the proxy's default or its
 `CATALOG_PATH` to opt in. New overlays do not change an existing catalog.
 The 2026-10-02 catalog selects the full Discord OAD and its existing two-read
-CRUD metadata. The proxy currently refuses the OAD's mixed OAuth/bot-token
-security schemes, so Discord connection support awaits a separate auth
-[follow-up #258](https://github.com/ontola/atomic-plugins/issues/258); successful composition does not certify that connection flow.
+CRUD metadata. Proxy 0.2.4 refuses the OAD's mixed OAuth/bot-token security
+schemes, so that catalog's Discord entry composes but cannot connect.
+`catalog/2026-10-02-auth-profiles.json` is the same catalog except for
+Discord ([#258](https://github.com/ontola/atomic-plugins/issues/258)): it
+lists `APIs/discord.com/10/auth-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+instead of the v1 auth overlay, and selects
+`{"authenticationProfile": "discordUser"}`. The v2 overlay adds
+[authentication profiles](../openapi-extensions/spec/authentication-profiles/README.md)
+to v1's content: `discordUser` (the `discordOAuth` authorization-code
+scheme, which covers `GET /users/@me` and `GET /users/@me/guilds` with
+`identify` and `guilds`) and `discordBot` (the OAD's `BotToken`, every
+operation that accepts it on its own; declared, selected by no catalog). A
+proxy that supports profiles connects Discord with the user profile and
+refuses every other Discord operation. Composition tests cover this; no live
+Discord connection has been made with it.
 
 ## Directory layout and OAD revisions
 
@@ -93,7 +107,9 @@ python3 overlays/scripts/validate_oad_pins.py --directory /path/to/openapi-direc
 ```
 
 Add `--fetch-missing` to fetch historical pins absent from current upstream
-`main` (historical Discord and Clockify revisions remain published).
+`main` (historical Discord and Clockify revisions remain published). A
+blobless clone (`git clone --filter=blob:none --no-checkout`, as CI makes)
+is enough: the script fetches the pinned documents' blobs in batches.
 
 The history check accepts old revisions but rejects a pin at a commit that
 did not change the OAD. For an audit requiring every overlay to target the
@@ -101,7 +117,36 @@ latest OAD at a particular ref, add `--latest-ref origin/main`. That audit
 will intentionally fail once historical and current revisions coexist.
 These checks establish target provenance, not live-provider compatibility.
 
-Overlays are applied in the order `catalog/2026-10-02.json` lists them, and an action
+With `--directory`, the script also reads every pinned OAD and applies each
+overlay the way the proxy's loader does (its `parse_target` grammar, a deep
+merge of objects, every action an `update`): an action whose target does not
+exist is an error, so the mismatch of
+[#264](https://github.com/ontola/atomic-plugins/issues/264) cannot come
+back. Overlays a dated catalog selects are applied in that catalog's order, so
+a path an earlier overlay adds counts. Overlays no catalog selects are
+composed per pin with their sibling overlays in whichever order resolves,
+because a historical catalog's order is not recorded here (Clockify's
+`dc7b2bdb` auth and pagination overlays target paths its `crud-causality`
+sibling adds). A revision that a higher `-vN-` file of the same kind and pin
+supersedes is not checked on its own, since it usually exists because the
+old one does not compose; a catalog that still selects it is told. Three
+pinned OADs do not parse with libyaml ([#307](https://github.com/ontola/atomic-plugins/issues/307)):
+bunq.com 1.0 at `dec74da7` has two U+2028 (line separator) characters inside
+a block scalar on line 1141, which libyaml
+treats as YAML 1.1 line breaks, so the text after them is dedented out of the scalar
+("did not find expected key", libyaml line 1143); codat.io accounting 2.1.0
+at `41b90944` has a line holding only a tab inside two `|-` block scalars
+(lines 43982 and 44484); sendgrid.com 1.0.0 at `bdea260b` has raw C1
+control characters (U+0090, U+0091, U+009C, U+009F) in three example `city`
+strings (lines 13002, 13169 and 27059). The proxy's serde_yaml 0.9.34
+(unsafe-libyaml) refuses all three with the same errors, so the proxy cannot
+load them either. No later revision parses: each pin is the last upstream
+change to its file (checked against `ontola/openapi-directory` `main` at
+`845f81fffbea9a2c4b49fb7364cce967eea3203a`), so these overlays cannot be
+re-pinned until the documents are fixed upstream. The script warns and
+cannot check their overlays.
+
+Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
 `crud-causality-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml` is listed first because it defines the
 projects/users paths its auth and pagination overlays target, and the
@@ -146,7 +191,9 @@ place.
 Checks:
 
 - `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
-  filenames and `extends` commits pass the full-history check; every catalog overlay URL, and
+  filenames and `extends` commits pass the full-history check, and every
+  action target exists in its pinned OAD or in the catalog composition up to
+  it; every catalog overlay URL, and
   every OAD URL under the Pages base, maps to a file in this folder, and the
   tests below pass (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
@@ -154,23 +201,35 @@ Checks:
   Pages serves it.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
-  overlays from this folder.
+  overlays from this folder. Its
+  `swagger2_overlay_revisions_compose_without_components` test composes every
+  Swagger 2.0 overlay here on its own, downloading the 21 pinned documents.
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
-## Reviewed standalone pagination variants
+## Reviewed standalone pagination overlays
 
-These replacements use explicit operation selections and locate the returned
-item arrays through per-operation `response.envelope.itemsField` overrides.
-They add new `pagination-v2` filenames for the same pinned OADs; old files and
-dated catalog selections are unchanged. Select a v2 file instead of its v1
-variant when composing that provider's document.
+These overlays use explicit operation selections and locate the returned
+item arrays through `response.envelope.itemsField`. Replacements use new
+`pagination-v2` filenames for the same pinned OADs; first overlays for a new
+OAD revision use `pagination`. Old files and dated catalog selections are
+unchanged. Select a v2 file instead of its v1 variant when composing that
+provider's document; the new services can be composed with their pinned OAD
+directly.
 
 | Variant | Declared coverage | Sources |
 | --- | --- | --- |
 | [Slack v2](APIs/slack.com/1.7.0/pagination-v2-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml) | Four cursor reads: conversations list/members and users conversations/list. `channels` or `members` envelopes. | [Pagination](https://docs.slack.dev/apis/web-api/pagination/), [users.conversations](https://docs.slack.dev/reference/methods/users.conversations/) |
 | [DigitalOcean v2](APIs/digitalocean.com/2.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 39 collections declaring a next link and item array in the pinned OAD. Includes droplets, projects, and repository listings. | [Links and pagination](https://docs.digitalocean.com/reference/api/reference/public-apis/) |
+| [Notion v2](APIs/notion.com/2026-03-11/pagination-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Three list operations: POST search/data-source query and GET views. `results` envelopes, with distinct body and query cursor fields. | [Pagination](https://developers.notion.com/reference/intro#pagination), [Search](https://developers.notion.com/reference/post-search) |
+| [Spotify v2](APIs/spotify.com/1.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 19 single-collection reads, including nested albums/artists/categories/playlists and top-level items. | [API calls](https://developer.spotify.com/documentation/web-api/concepts/api-calls), [Categories](https://developer.spotify.com/documentation/web-api/reference/get-categories), [Followed artists](https://developer.spotify.com/documentation/web-api/reference/get-followed), [Recently played](https://developer.spotify.com/documentation/web-api/reference/get-recently-played) |
+| [Intercom](APIs/intercom.com/2.16/pagination-4a302a4352fcb52ab0735f4781376c28913d8028-overlay.yaml) | Eight cursor operations: five GET lists and POST contacts/conversations/tickets searches. Explicit `data`, `conversations`, `events` or `tickets` envelopes. | [Pagination](https://developers.intercom.com/docs/build-an-integration/learn-more/rest-apis/pagination), [2.16 changelog](https://developers.intercom.com/docs/references/changelog) |
+| [Mailchimp](APIs/mailchimp.com/3.0.91/pagination-b6b0af39fa9d35f81fbea6b7962cc6dea857e889-overlay.yaml) | 56 GET collections with declared `count`, `offset`, `total_items` and a single item array. Includes lists/members, campaigns, reports and commerce. | [Pagination and partial responses](https://mailchimp.com/developer/marketing/docs/methods-parameters/#pagination), [Lists](https://mailchimp.com/developer/marketing/api/lists/get-lists-info/) |
+| [HubSpot owners](APIs/hubspot.com/crm-owners/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | One owner collection at the pinned OAD's `/crm/owners/2026-03`, using `paging.next.after` and `results`. | [Owner pagination migration](https://developers.hubspot.com/changelog/sunset-v2-owners-api), [Pinned request and response schemas](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/crm-owners/2026-03/openapi.yaml) |
+| [Confluence v2](APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml) | 67 GET collections with declared cursor/limit, `Link` response header and `results` array, including pages, spaces, attachments, comments and tasks. | [Pagination](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
+| [Figma](APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml) | 13 GET collections: versions, reactions, webhooks, three team libraries, six library analytics and daily AI usage. | [Team libraries](https://developers.figma.com/docs/rest-api/component-endpoints/), [Version history](https://developers.figma.com/docs/rest-api/version-history-endpoints/), [Library analytics](https://developers.figma.com/docs/rest-api/library-analytics-endpoints/), [AI usage](https://developers.figma.com/docs/rest-api/ai-usage-endpoints/) |
+| [ClickUp v3](APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml) | Nine GET collections: channels, followers, members, messages, reactions, replies, tagged users, attachments and Docs. `data` or `docs` envelopes. | [Chat messages](https://developer.clickup.com/reference/getchatmessages), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/88ea4994e816563201c2069526252475d77e853f/APIs/clickup.com/v3/version/openapi.yaml) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -188,8 +247,71 @@ Garbage-collection listings likewise have no declared next link in this OAD
 and remain outside this variant. The 39 selected operations have their item
 arrays and continuation fields checked against the pinned response schemas.
 
-These are documentation and composition checks as of 2026-10-02, not live
-provider certification. The metadata follows the
+Notion's variant locates every list under `results`. Its two POST operations
+use a new optional request-body schema declaring `start_cursor` and an integer
+`page_size` from 1 to 100. The existing generic JSON object is retained through
+`allOf`, so filters, sorts and other body members remain permitted. GET views
+keeps its existing query parameters. Page creation and individual reads are
+outside the pagination selection.
+
+Spotify's variant follows returned `next` URLs for both offset and cursor
+collections. Separate schemes locate `items`, `albums.items`, `artists.items`,
+`categories.items` and `playlists.items`, with matching continuation fields.
+Nested schemes do not inherit nonexistent root `next` fields. The pinned
+`PagedCategories` response lacks an item array; a local specialization adds
+the documented `CategoryObject` array without changing the shared
+`PagingObject` schema. Search is excluded because its response can contain
+seven independently paged collections; recommendations have no next link.
+The variant targets the pinned 2022-11-15 OAD, and current Spotify access modes
+and deprecated endpoints still need separate live evidence.
+
+Intercom separates query cursors from the search body's nested
+`pagination.starting_after` and `pagination.per_page` fields. Both schemes
+read `pages.next.starting_after` and stop when the next cursor is absent.
+The pinned contacts GET omits pagination query parameters, so it is excluded;
+company reads and activity-log searches have different request shapes.
+No request/response schema repair is made in this overlay.
+
+Mailchimp uses zero-based offsets and `total_items`, rather than a next URL.
+The item envelope varies by collection. Keep that array and `total_items`
+when using `fields` or `exclude_fields`; filtering these out prevents correct
+traversal. Mailchimp's original OAD fails standard OpenAPI validation because
+it declares a boolean default for a string field (`notify_on_subscribe`).
+The regression checks the unchanged source error and preserves its entire
+standard contract; the overlay adds only pagination metadata. The audience
+contacts endpoint uses a cursor and is excluded; activity-feed lacks a total count, and landing pages lacks an offset. A single
+abuse-report read declares count/offset but has no item array and is excluded.
+HubSpot owner reads keep their email and archived filters when returning the
+opaque `paging.next.after` token as `after`. The individual owner read is
+outside the selection; the overlay preserves the OAD's versioned path.
+
+Confluence v2 follows `rel="next"` in the declared `Link` response header,
+with the top-level `results` envelope. Those RFC 8288 targets can be relative;
+consumers must resolve them against the request URL, as syncables does. The
+body's `_links.next` is also relative and is not duplicated as a second
+continuation source. Individual pages with nested included collections and
+ancestor reads without a declared `Link` header are excluded.
+
+Figma uses different schemes for numeric `meta.cursor.after` tokens in team
+libraries, string cursors in analytics and AI usage, and `pagination.next_page`
+URLs in versions, reactions and webhooks. Numeric tokens remain opaque and
+are returned through `after`; backward `before` pagination is not selected.
+Analytics responses declare their cursor absent when `next_page` is false.
+Their `rows` arrays can be selected by `oneOf`; the regression checks every
+declared alternative. Activity logs omit a cursor request parameter in the
+pinned OAD, so that endpoint remains outside the selection.
+
+ClickUp v3 returns `next_cursor` through the `cursor` query parameter, keeping
+filters and content-format settings. Docs uses `docs`; the other eight
+collections use `data`. The deprecated Docs request parameter `next_cursor`
+is not selected. ClickUp v2 task reads start `page` at zero and use a
+`last_page` flag, while comment pagination derives two continuation values
+from the last item. Neither is described by this v3 cursor overlay.
+
+These are documentation and composition checks as of 2026-10-02 (Slack,
+DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
+and 2026-10-06 (Confluence, Figma and ClickUp), not live provider certification.
+The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
 
@@ -197,10 +319,57 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the two pinned OADs. CI uses the same full-history
-checkout as the pin validator. Every declared query field must exist, every
+Omit `--directory` to download the ten pinned OADs. CI uses the same full-history
+checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
-the tests also preserve all request parameters, operations and security.
+the tests also preserve unrelated request parameters, operations and security.
+Nested request body fields are checked segment by segment. Use the pinned
+`requirements-identity-tests.txt` dependencies: openapi-spec-validator 0.7.2
+fixes the older validator's rejection of required properties defined inside
+`oneOf`, as used by Intercom's data-attribute schema.
+Notion body-schema cases check optional first-page requests, preserved extra
+fields, page-size bounds, and opaque cursor types.
+
+## Swagger 2.0 documents
+
+The 2026-10-02 collection audit behind
+[#264](https://github.com/ontola/atomic-plugins/issues/264) found 21
+overlays, for 18 providers, pinned to a `swagger.yaml` whose first action
+targets `$.components`. A Swagger 2.0 document has `definitions`,
+`parameters`, `responses` and `securityDefinitions` but no `components`, so
+the proxy's strict `merge_at_target` refused the whole composition
+(`overlay target "$.components" does not exist`). `openapi-directory`'s
+`main` holds only `swagger.yaml` in those 18 folders, so there is no
+OpenAPI 3 document to re-pin to. Each of the 21 has a new
+`<kind>-v2-<oad-commit>-overlay.yaml` revision for the same pin that targets
+`$` and adds the map as a root vendor extension instead: `x-paginationSchemes`
+for the 18 pagination overlays, `x-crudResources` for the adafruit.com,
+cenit.io and getsandbox.com CRUD overlays. Swagger 2.0 allows `x-` members on
+its root object, while `definitions` may hold only Schema Objects, so neither
+map can go there. The operation-level actions (`x-pagination` and `x-crud`
+on `$.paths[...]`) are unchanged, and their paths exist in the pinned
+documents. The old files stay published and unchanged, and nothing selects
+them: a `-v2-` revision supersedes its `-v1` for the validator above.
+
+The same check found four overlays pinned to OpenAPI 3 documents that have
+no `components` member at all (bikewise.org v2, braze.com 1.0.0,
+hetzner.cloud 1.0.0 and notion.com 1.0.0, the latter a historical pin).
+Their `-v2-` revisions target `$` and add `components.paginationSchemes`
+from the root, which is ordinary OpenAPI 3.
+
+What this establishes: the 25 revisions compose with the proxy's loader,
+checked against the pinned documents by the validator and, for the 21
+Swagger 2.0 ones, by integration-proxy's
+`swagger2_overlay_revisions_compose_without_components` test. What it does
+not: no dated catalog selects any of these 22 providers, so no catalog
+changed, and no runtime here reads a Swagger 2.0 document yet. The proxy
+resolves requests through `servers`, which Swagger 2.0 lacks (`host`,
+`basePath`, `schemes`), and syncables and reflector read
+`components.paginationSchemes` and `components.crudResources`, not the root
+vendor extensions. Selecting one of these providers needs that support
+first; the placement is a documented convention (noted in
+`openapi-extensions/spec/pagination-schemes/` and `crud-causality/`), not a
+verified capability.
 
 ## Authenticated principal overlays
 

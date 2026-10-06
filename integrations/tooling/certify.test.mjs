@@ -236,6 +236,9 @@ test('bundles are reproducible with CI browser and integration symlinks', () => 
   try {
     symlinkSync(join(root, 'browser'), join(base, 'browser'));
     symlinkSync(join(root, 'integrations'), join(base, 'integrations'));
+    // Bundles that use the shared ontology (#177) import it from beside
+    // integrations/, as they do in this repository's CI checkout.
+    symlinkSync(join(root, 'ontology-kit'), join(base, 'ontology-kit'));
 
     for (const provider of discover()) {
       const generated = execFileSync(

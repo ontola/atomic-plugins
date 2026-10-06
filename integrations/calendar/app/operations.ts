@@ -101,15 +101,23 @@ export const SCOPES: readonly string[] = [
 
 /**
  * The members of the host's `store` the app calls (`store.ts`). The first
- * group every host with `store.proxy` has; the second arrived at pin
- * 007869464 and is feature-detected, so an older host lacks the controls
- * that need it (README.md, "Design decisions").
+ * group every host with `store.proxy` has; the second is feature-detected,
+ * so an older host lacks the controls that need it (README.md, "Design
+ * decisions"): the hand-offs and theme of pin 007869464, and `rowAccess` /
+ * `requestRowAccess` (atomic-server#1740), which "Sync this table" needs.
  */
 export const HOST_OPERATIONS = {
   store: ['getApp', 'getData', 'getResource', 'query', 'newResource'],
   proxy: ['request', 'connections', 'connect'],
   optional: {
-    store: ['openExternal', 'openResource', 'getTheme', 'onThemeChange'],
+    store: [
+      'openExternal',
+      'openResource',
+      'getTheme',
+      'onThemeChange',
+      'rowAccess',
+      'requestRowAccess',
+    ],
     proxy: ['disconnect'],
   },
 } as const;

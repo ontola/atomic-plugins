@@ -209,11 +209,13 @@ RUST_LOG=info
 | `BASE_URL` | yes in production | The exact public origin, e.g. `https://proxy.example.org`. Defaults to `http://localhost:8080`. |
 | `SESSION_SECRET` | strongly recommended | Any long random string; keys the consent and OAuth cookies. |
 | `PORT` | no | Listening port, default `8080`. The proxy always binds `0.0.0.0`. |
-| `CATALOG_PATH` | no | Catalog location. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json`. |
+| `CATALOG_PATH` | no | Catalog location. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json` (0.2.4: `catalog/2026-10-02.json`). |
 | `ALLOWED_AGENTS` | no | Comma-separated agent ids. When set, only these agents may own connections. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids that may not own connections. |
 | `OPERATOR_NAME` | no, recommended | Who runs this proxy, as the landing page and the consent page name them ("Use Example Org to sync …", "run by Example Org"). The consent page also shows the host of `BASE_URL`. Defaults to `this integration proxy`, and the pages then name no one. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Link for `OPERATOR_NAME` on those pages: an absolute `http(s)` URL without credentials. Anything else stops the proxy at startup. 0.2.1 and later. |
+| `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit, at most `10000`. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
+| `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Same section. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `_CLIENT_SECRET`, `_CLIENT_AUTH_METHOD` | per OAuth platform | See [Registering OAuth apps](#registering-oauth-apps). |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
@@ -309,7 +311,7 @@ to a commit and serve it locally:
 
 ```sh
 SHA=<an ontola/atomic-plugins commit>
-curl -fsSL "https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/catalog/2026-10-02.json" \
+curl -fsSL "https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/catalog/2026-10-02-auth-profiles.json" \
   | sed "s#https://ontola.github.io/atomic-plugins/overlays/#https://raw.githubusercontent.com/ontola/atomic-plugins/$SHA/overlays/#g" \
   > /etc/integration-proxy/catalog.json
 # then: CATALOG_PATH=/etc/integration-proxy/catalog.json
@@ -346,6 +348,50 @@ A refused agent gets `403 access_denied`. The unauthenticated routes (`/`,
 anyone; the list only stops anyone else from redeeming or using a
 connection.
 
+### Key-check limit and client addresses
+
+Unreleased (after 0.2.5). When someone pastes an API key or token on the
+consent page, the proxy checks it with the provider from your server's
+address. To stop a script from using your proxy to test keys, each client
+network may make at most `KEY_CHECK_LIMIT_PER_HOUR` checks (default 20) per
+platform in any hour; over that it gets `429` "Too many key checks from your
+network for <Platform>; try again later" and nothing is sent to the
+provider. Only platforms whose scheme declares a key check count (an API
+key sent in a cookie is never checked, so it does not count either). A
+network is an IPv4 address or an IPv6 /64. The count lives in
+PostgreSQL (`key_check_limits`, created at startup), keyed by an HMAC of the
+platform and network under a subkey derived from `ENCRYPTION_KEY`, never
+the address itself, and
+rows are deleted an hour after use. OAuth connections are not counted.
+
+Which address counts depends on what is in front of the proxy:
+
+| Setup | `TRUST_FORWARDED_FOR` |
+| --- | --- |
+| Nothing: clients connect to the proxy's port directly | `none` (the default). `X-Forwarded-For` is ignored, so a client cannot pick its own address. |
+| Exactly one reverse proxy that appends the client's address to `X-Forwarded-For` (Caddy's `reverse_proxy` does by default; nginx with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, as in the snippet [below](#tls-and-a-reverse-proxy)) | `rightmost`. Only the last entry, the one your reverse proxy wrote, is read. |
+| Heroku | `heroku` (the same as `rightmost`; Heroku's router appends the address). localthought.io uses this. |
+| Several proxies in a chain (a CDN in front of nginx) | Not supported: the right-most entry is then the inner proxy's view, the CDN's address. Use `none` and accept one shared limit, raise the limit, or set it to `0`. |
+
+Get this right in both directions. With a reverse proxy and `none`, every
+client appears to come from `127.0.0.1` and they all share one limit of 20
+per platform per hour. With `rightmost` and **no** proxy in front, a client
+writes the last `X-Forwarded-For` entry itself and can choose a new bucket
+for every check, which turns the limit off for it; it can also write
+someone else's address and use up that network's checks, locking the
+people there out of connecting that platform by key for an hour.
+`KEY_CHECK_LIMIT_PER_HOUR` above 10,000 stops the proxy at startup; use `0`
+to turn the limit off.
+
+People who share one public address (an office, a university, a mobile
+carrier's NAT, a VPN) share one limit per platform. Someone connecting a
+platform makes one to three key checks, so 20 per hour leaves room for
+several people; raise it if many of your users sit behind one address. If
+you serve the router from `build_app` yourself instead of `run()`/`serve()`,
+serve it with `into_make_service_with_connect_info::<std::net::SocketAddr>()`,
+or under `none` the proxy cannot tell any client apart and all of them
+share one limit (with a warning in the log for each check).
+
 ## TLS and a reverse proxy
 
 The proxy speaks plain HTTP. Put a TLS-terminating reverse proxy in front of
@@ -377,6 +423,8 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
+        # For TRUST_FORWARDED_FOR=rightmost (key-check limit).
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 60s;
     }
 }
@@ -584,6 +632,11 @@ different proxy does not move them: users connect again on the new one.
   ones. That is optional and irreversible.
 - **Rolling back** to an older binary against a database a newer one has
   used has not been tested. Take a backup before upgrading.
+- **0.3.0** limits key checks per client network. Behind
+  a reverse proxy, set `TRUST_FORWARDED_FOR=rightmost` (on Heroku,
+  `heroku`) with the upgrade, or all clients share one limit; see
+  [Key-check limit and client addresses](#key-check-limit-and-client-addresses).
+  Its `key_check_limits` table is ignored by older versions.
 - **Clients:** 0.2 accepts only Atomic v2 signatures. Atomic Server and data
   browser builds from before the v2 work cannot use it.
 
@@ -635,9 +688,12 @@ again. Delegations made after the backup are lost.
 These are properties of 0.2.0 (0.2.1 where noted) that affect whether
 self-hosting fits your needs:
 
-- **No rate limiting.** One agent can send as many requests as the provider
-  allows. `ALLOWED_AGENTS` is the only way to limit who can use the proxy at
-  all.
+- **No rate limiting of requests.** One agent can send as many requests as
+  the provider allows. `ALLOWED_AGENTS` is the only way to limit who can use
+  the proxy at all. Only the consent page's key checks are limited (5 per
+  consent page, and, unreleased, `KEY_CHECK_LIMIT_PER_HOUR` per client
+  network and platform; see
+  [above](#key-check-limit-and-client-addresses)).
 - **Anyone can start a connect flow.** The consent page and OAuth callback
   need no login. `ALLOWED_AGENTS` stops strangers from redeeming or using a
   connection, not from seeing your consent page.
@@ -666,7 +722,8 @@ self-hosting fits your needs:
   pinned-catalog procedure, and `/healthz` during a database pause and
   restart. That is all.
 - **Not tried:** running the systemd unit (only `systemd-analyze verify`
-  was run on it), the Caddy and nginx configurations, a
+  was run on it), the Caddy and nginx configurations (including what they
+  put in `X-Forwarded-For` for `TRUST_FORWARDED_FOR=rightmost`), a
   PostgreSQL other than 16, a PostgreSQL behind TLS, and a private CA.
 - **No provider connection was made** against a self-hosted proxy for this
   guide. The per-platform registration steps are *declared* from the catalog

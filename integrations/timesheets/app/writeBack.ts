@@ -213,6 +213,14 @@ export interface SendOutcome {
   message?: string;
   /** For `adjusted` and `conflict`: the fields concerned. */
   fields?: EntryField[];
+  /**
+   * For `failed`: the provider write itself succeeded, and what failed came
+   * after it (the verification read found the entry no longer complete, or
+   * saving the row threw). Absent: nothing was written.
+   */
+  written?: true;
+  /** For a lease `not-sent`: when the other copy's turn ends, ISO 8601. */
+  until?: string;
 }
 
 const text = (value: JSONValue) =>
@@ -713,11 +721,17 @@ export async function syncRow(
   return {
     valuesChanged,
     ...(notice ? { notice } : {}),
+    // An unconfirmed send, settled by this read. A delete that is still
+    // requested cannot have arrived: the entry is here, being synced. (Its
+    // values match the row's, so the value check alone would say it had.)
     ...(state.outbox
       ? {
-          recovered: same(ordered(state.local), ordered(remote))
-            ? ('applied' as const)
-            : ('not-applied' as const),
+          recovered:
+            same(ordered(state.local), ordered(remote)) &&
+            !state.deleteRequested &&
+            state.outbox.op !== 'delete'
+              ? ('applied' as const)
+              : ('not-applied' as const),
         }
       : {}),
     state: { ...state, local: result.values, baseline: result.baseline },
@@ -733,13 +747,62 @@ export async function requestDelete(
   if (setBookkeeping(row, schema, { delete: wanted })) await row.save();
 }
 
+/** What a send says when a row of a table the app is a view of stays. */
+export const ROW_KEPT =
+  'The row stays in the table as a row of its own, no longer synced: the app may edit that table’s rows but not delete them. Delete it there.';
+
+/**
+ * Takes a row out of the sync once its entry is gone from Clockify, or a
+ * new row is discarded before it was sent. On the app's own table the row
+ * is destroyed. On a table the app is a view of (#177 item 14) the row
+ * grant never deletes a row, so only the app's own extras are removed: the
+ * row stays as one of the person's, local only, with its values. Returns
+ * whether it was destroyed.
+ */
+export async function retireRow(
+  row: PluginResource,
+  schema: CompleteSchema,
+): Promise<boolean> {
+  if (schema.own) {
+    await row.destroy();
+
+    return true;
+  }
+
+  let changed = false;
+
+  for (const property of [schema.row.entryId, ...Object.values(schema.sync)])
+    if (row.get(property) !== undefined) {
+      row.remove(property);
+      changed = true;
+    }
+
+  if (changed) await row.save();
+
+  return false;
+}
+
+/** `message`, with `ROW_KEPT` after it when the row was kept. */
+const kept = (destroyed: boolean, message?: string) =>
+  destroyed
+    ? message
+      ? { message }
+      : {}
+    : { message: message ? `${message} ${ROW_KEPT}` : ROW_KEPT };
+
 /** Puts the row back to its baseline and drops a requested deletion; a
- * new row not yet created in Clockify is removed. */
+ * new row not yet created in Clockify is removed (on a
+ * table the app is a view of: kept as a row of its own, `retireRow`). */
 export async function discardChange(
   row: PluginResource,
   schema: CompleteSchema,
 ): Promise<void> {
-  if (await readCreateState(row, schema)) return row.destroy();
+  if (await readCreateState(row, schema)) {
+    await retireRow(row, schema);
+
+    return;
+  }
+
   const state = await readRowState(row, schema);
   if (!state?.baseline) return;
   const changed = await setRowValues(row, schema, state.baseline);
@@ -1111,7 +1174,24 @@ const bodyMessage = (body: unknown) =>
 class Uncertain extends Error {}
 class Stop extends Error {}
 /** Another copy holds the lease now: the rest waits for it. */
-class LeaseLost extends Stop {}
+class LeaseLost extends Stop {
+  constructor(
+    reason: string,
+    /** When the other copy's turn ends at the latest, ISO 8601. */
+    readonly until: string,
+  ) {
+    super(reason);
+  }
+}
+
+/**
+ * Set by `sendOne`/`sendCreate` once the provider write succeeded, so a
+ * failure after it (saving the row, say) is reported as `written`, not as
+ * "nothing was written".
+ */
+interface WriteTrack {
+  written: boolean;
+}
 
 /**
  * Sends reviewed changes, one entry at a time, in the order given. An
@@ -1126,7 +1206,7 @@ export async function sendChanges(
   let stopped = false;
   let lease: SendLease | undefined;
   const lost = (holder: LeaseState) =>
-    new LeaseLost(heldMessage(holder, context.timeZone));
+    new LeaseLost(heldMessage(holder, context.timeZone), holder.until);
 
   if (context.lease) {
     const taken = await SendLease.take(
@@ -1144,6 +1224,7 @@ export async function sendChanges(
         kind: change.kind,
         status: 'not-sent',
         message: reason,
+        until: taken.heldBy.until,
       }));
     }
 
@@ -1174,6 +1255,8 @@ export async function sendChanges(
         continue;
       }
 
+      const track: WriteTrack = { written: false };
+
       try {
         await sending.renew?.();
         outcomes.push({
@@ -1181,6 +1264,7 @@ export async function sendChanges(
           ...(await (change.kind === 'create' ? sendCreate : sendOne)(
             sending,
             change,
+            track,
           )),
         });
       } catch (error) {
@@ -1196,6 +1280,7 @@ export async function sendChanges(
             ...base,
             status: 'not-sent',
             message: error.message,
+            until: error.until,
           });
           stopped = true;
         } else if (error instanceof Stop) {
@@ -1206,6 +1291,8 @@ export async function sendChanges(
             ...base,
             status: 'failed',
             message: message(error),
+            // The write stood; saving the row or the log afterwards threw.
+            ...(track.written ? { written: true } : {}),
           });
       }
     }
@@ -1225,6 +1312,7 @@ type Result = Omit<SendOutcome, 'entryId' | 'title' | 'kind'>;
 async function sendOne(
   context: SendContext,
   change: PendingChange,
+  track: WriteTrack = { written: false },
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
@@ -1245,13 +1333,14 @@ async function sendOne(
   const fresh = await readEntry(context, change.entryId);
 
   if (!fresh) {
-    await row.destroy();
+    const destroyed = await retireRow(row, schema);
 
     return {
       status: change.kind === 'delete' ? 'sent' : 'gone',
-      ...(change.kind === 'delete'
-        ? { message: 'Already deleted in Clockify.' }
-        : {}),
+      ...kept(
+        destroyed,
+        change.kind === 'delete' ? 'Already deleted in Clockify.' : undefined,
+      ),
     };
   }
 
@@ -1356,7 +1445,13 @@ async function sendOne(
       status: 'failed',
       message: `Clockify answered ${response.status}${detail ? `: ${detail}` : ''}.`,
     };
-  } else if (change.kind === 'update' && response.body) {
+  }
+
+  // A delete answered 404 wrote nothing: the entry was already gone.
+  if (!(response.status === 404 && change.kind === 'delete'))
+    track.written = true;
+
+  if (change.kind === 'update' && response.body) {
     await log.append({
       id: context.read.newId(),
       device: context.read.device,
@@ -1392,24 +1487,28 @@ async function sendOne(
       };
     }
 
-    await row.destroy();
-
-    return { status: 'sent' };
+    return { status: 'sent', ...kept(await retireRow(row, schema)) };
   }
 
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
-        ? { message: 'Clockify no longer lists it as a completed entry.' }
+        ? {
+            message: 'Clockify no longer lists it as a completed entry.',
+            written: true,
+          }
         : {}),
     };
   }
@@ -1440,6 +1539,7 @@ async function sendOne(
 async function sendCreate(
   context: SendContext,
   change: PendingChange,
+  track: WriteTrack = { written: false },
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
@@ -1547,6 +1647,7 @@ async function sendCreate(
     };
   }
 
+  track.written = true;
   const made = response.body as RawTimeEntry | null;
   if (!made || typeof made.id !== 'string')
     throw new Uncertain(
@@ -1584,16 +1685,22 @@ async function sendCreate(
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
-        ? { message: 'Clockify does not list it as a completed entry.' }
+        ? {
+            message: 'Clockify does not list it as a completed entry.',
+            written: true,
+          }
         : {}),
     };
   }

@@ -56,3 +56,15 @@ export declare function createResolver(options: {
   classes: readonly SharedClass[];
   lenses?: readonly Lens[];
 }): Resolver;
+
+/**
+ * `"Incomplete: missing Name and Day"` for a `Reading`'s `missing`, with
+ * `labels` naming properties as their column headings read (a property
+ * without one is named by its shortname); `undefined` when nothing is
+ * missing. A view shows it on the row and never syncs the row until it is
+ * complete (README.md).
+ */
+export declare function incompleteNote(
+  missing: readonly string[],
+  labels?: Readonly<Record<string, string>>,
+): string | undefined;

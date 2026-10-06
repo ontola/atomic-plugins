@@ -39,6 +39,74 @@ pub struct Config {
     /// `OPERATOR_URL`: optional absolute http(s) link for the operator's
     /// name on those pages.
     pub operator_url: Option<String>,
+    /// `KEY_CHECK_LIMIT_PER_HOUR`: the most API key or token checks the
+    /// consent form makes for one client network and platform in any hour.
+    /// Defaults to [`DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`]; `0` turns the limit
+    /// off.
+    pub key_check_limit_per_hour: u32,
+    /// `TRUST_FORWARDED_FOR`: where the client address of that limit comes
+    /// from. Defaults to [`TrustForwardedFor::None`].
+    pub trust_forwarded_for: TrustForwardedFor,
+}
+
+/// The key checks one client network may make per platform and hour when
+/// `KEY_CHECK_LIMIT_PER_HOUR` is unset. A person entering a key makes one to
+/// three.
+pub const DEFAULT_KEY_CHECK_LIMIT_PER_HOUR: u32 = 20;
+
+/// Which client address the key-check limit counts against
+/// (`TRUST_FORWARDED_FOR`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrustForwardedFor {
+    /// `none`: the TCP peer address; every `X-Forwarded-For` is ignored.
+    /// Right when nothing sits in front of the proxy, and the default.
+    #[default]
+    None,
+    /// `heroku`, or its synonym `rightmost`: the right-most
+    /// `X-Forwarded-For` entry, the one the proxy in front appended (Heroku's
+    /// router does; so do Caddy and nginx with
+    /// `$proxy_add_x_forwarded_for`); everything to its left came from the
+    /// client and is ignored. Only right when every request reaches the
+    /// proxy through exactly one such proxy: without it a client can write
+    /// that entry itself.
+    RightMost,
+}
+
+impl std::str::FromStr for TrustForwardedFor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "" | "none" => Ok(Self::None),
+            "heroku" | "rightmost" => Ok(Self::RightMost),
+            _ => Err("TRUST_FORWARDED_FOR must be `none`, `heroku` or `rightmost`".into()),
+        }
+    }
+}
+
+/// The highest `KEY_CHECK_LIMIT_PER_HOUR` accepted. Each check may scan the
+/// network's slots, so a huge limit makes every key check slow (2,000,000
+/// took 640 ms per insert); `0` is the way to turn the limit off.
+pub const MAX_KEY_CHECK_LIMIT_PER_HOUR: u32 = 10_000;
+
+/// `KEY_CHECK_LIMIT_PER_HOUR`: unset or blank means
+/// [`DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`], `0` means no limit; anything but a
+/// whole number from 0 to [`MAX_KEY_CHECK_LIMIT_PER_HOUR`] is refused at
+/// startup.
+pub(crate) fn key_check_limit(value: Option<&str>) -> Result<u32, String> {
+    let invalid = || {
+        format!(
+            "KEY_CHECK_LIMIT_PER_HOUR must be a whole number from 0 (no limit) to {MAX_KEY_CHECK_LIMIT_PER_HOUR}"
+        )
+    };
+    match value.map(str::trim) {
+        None | Some("") => Ok(DEFAULT_KEY_CHECK_LIMIT_PER_HOUR),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if limit <= MAX_KEY_CHECK_LIMIT_PER_HOUR => Ok(limit),
+            _ => Err(invalid()),
+        },
+    }
 }
 
 /// The operator name when `OPERATOR_NAME` is unset: neutral, because the
@@ -46,17 +114,24 @@ pub struct Config {
 pub const DEFAULT_OPERATOR_NAME: &str = "this integration proxy";
 
 /// Where GitHub Pages serves this repository's `overlays/` folder. Every
-/// overlay URL in `overlays/catalog/2026-10-02.json` starts with this prefix.
+/// overlay URL in the dated catalogs under `overlays/catalog/` starts with
+/// this prefix.
 pub const OVERLAYS_PAGES_BASE: &str = "https://ontola.github.io/atomic-plugins/overlays/";
 
-/// `overlays/catalog/2026-10-02.json` as GitHub Pages publishes it from this
+/// The default dated catalog's path under `overlays/`, for tests that read
+/// the checked-in copy; `default_catalog_is_the_published_checked_in_catalog`
+/// keeps it equal to [`DEFAULT_CATALOG_PATH`]'s.
+#[cfg(test)]
+pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-02-auth-profiles.json";
+
+/// `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from this
 /// repository's `main`, used when `CATALOG_PATH` is not set. Unlike the
 /// unversioned catalog this replaced, its dated file and selected overlay
 /// revisions are immutable; the proxy reads it once, at startup. Shared with
 /// tests that need to validate the exact catalog the application would load
 /// by default (they read the checked-in copy; see `Catalog::load_checked_in`).
 pub const DEFAULT_CATALOG_PATH: &str =
-    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json";
+    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json";
 
 /// Reads a required environment variable and rejects it if unset or blank,
 /// so a blank `.env` value fails configuration explicitly instead of being
@@ -164,6 +239,11 @@ impl Config {
             .map(|value| list(&value));
         let operator_name = operator_name(env::var("OPERATOR_NAME").ok().as_deref());
         let operator_url = validate_operator_url(env::var("OPERATOR_URL").ok().as_deref())?;
+        let key_check_limit_per_hour =
+            key_check_limit(env::var("KEY_CHECK_LIMIT_PER_HOUR").ok().as_deref())?;
+        let trust_forwarded_for = env::var("TRUST_FORWARDED_FOR")
+            .unwrap_or_default()
+            .parse()?;
 
         Ok(Self {
             base_url,
@@ -176,6 +256,8 @@ impl Config {
             allowed_agents,
             operator_name,
             operator_url,
+            key_check_limit_per_hour,
+            trust_forwarded_for,
         })
     }
 
@@ -268,6 +350,8 @@ mod tests {
             allowed_agents: None,
             operator_name: DEFAULT_OPERATOR_NAME.into(),
             operator_url: None,
+            key_check_limit_per_hour: 0,
+            trust_forwarded_for: TrustForwardedFor::None,
         };
         assert_eq!(config.public_origin(), "https://proxy.example:8443");
         assert_eq!(config.public_host(), "proxy.example:8443");
@@ -297,6 +381,33 @@ mod tests {
             "https://u:p@atomic.place",
         ] {
             assert!(validate_operator_url(Some(invalid)).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn the_key_check_limit_defaults_to_twenty_and_zero_turns_it_off() {
+        assert_eq!(key_check_limit(None).unwrap(), 20);
+        assert_eq!(key_check_limit(Some(" ")).unwrap(), 20);
+        assert_eq!(key_check_limit(Some("0")).unwrap(), 0);
+        assert_eq!(key_check_limit(Some(" 50 ")).unwrap(), 50);
+        assert_eq!(key_check_limit(Some("10000")).unwrap(), 10_000);
+        for invalid in ["-1", "twenty", "1.5", "10001", "2000000", "99999999999"] {
+            let error = key_check_limit(Some(invalid)).unwrap_err();
+            assert!(
+                error.contains("0 (no limit) to 10000"),
+                "{invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_for_is_trusted_only_when_named() {
+        assert_eq!("".parse(), Ok(TrustForwardedFor::None));
+        assert_eq!("none".parse(), Ok(TrustForwardedFor::None));
+        assert_eq!(" heroku ".parse(), Ok(TrustForwardedFor::RightMost));
+        assert_eq!("rightmost".parse(), Ok(TrustForwardedFor::RightMost));
+        for invalid in ["Heroku", "true", "all", "x-forwarded-for"] {
+            assert!(invalid.parse::<TrustForwardedFor>().is_err(), "{invalid}");
         }
     }
 

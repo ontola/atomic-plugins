@@ -116,6 +116,13 @@ export function sha256(text) {
 
 export const AS = 'https://www.w3.org/ns/activitystreams';
 export const SECURITY = 'https://w3id.org/security/v1';
+/**
+ * FEP-2c59: the actor names its own WebFinger handle (`webfinger`), which
+ * Mastodon reads instead of deriving `preferredUsername@<host>` from the
+ * actor id. The host it derives drops the port, so without this an actor
+ * on a non-default port cannot be verified.
+ */
+export const WEBFINGER_CONTEXT = 'https://purl.archive.org/socialweb/webfinger';
 export const PUBLIC = `${AS}#Public`;
 export const P = Object.freeze({
   isA: 'https://atomicdata.dev/properties/isA',
@@ -146,7 +153,7 @@ const LD = `application/ld+json; profile="${AS}"`;
 const JRD = 'application/jrd+json';
 const SCHEMA = 'http://nodeinfo.diaspora.software/ns/schema/2.1';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 
 /** Limits, all exact. */
 export const LIMITS = Object.freeze({
@@ -547,10 +554,11 @@ function actorDocument(ctx, c, source) {
   const key = ctx.keys.publicKey(KEY, { keyId: c.keyId });
 
   return {
-    '@context': [AS, SECURITY],
+    '@context': [AS, SECURITY, WEBFINGER_CONTEXT],
     id: c.actor,
     type: 'Service',
     preferredUsername: c.username,
+    webfinger: c.account.slice('acct:'.length),
     name: source[P.name],
     summary: validText(source[P.description])
       ? html(source[P.description])

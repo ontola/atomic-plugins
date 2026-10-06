@@ -92,6 +92,34 @@ describe('github-issues fixture drivers', () => {
     });
   });
 
+  it("reset forgets a repository's edits, so the seeded one reseeds", () => {
+    const tracker = githubTracker();
+    const repository = 'atomic-fixture/tracker';
+    const before = tracker.snapshot(repository);
+    tracker.createIssue(repository, { title: 'Extra' });
+    tracker.createComment(repository, 1, { body: 'Extra' });
+    tracker.reset(repository);
+    const after = tracker.snapshot(repository);
+
+    expect(after.issues.map(i => i.title)).toEqual(
+      before.issues.map(i => i.title),
+    );
+    expect(after.comments).toHaveLength(before.comments.length);
+    tracker.createIssue('atomic-fixture/other', { title: 'One' });
+    tracker.reset('atomic-fixture/other');
+    expect(tracker.snapshot('atomic-fixture/other').issues).toEqual([]);
+  });
+
+  it('reset also drops the failures failNext left pending', () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(503, 2);
+    tracker.reset('atomic-fixture/other');
+
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      200,
+    );
+  });
+
   it('failNext answers the next requests with an error, then recovers', () => {
     const tracker = githubTracker({ scenario: 'user-testing' });
     tracker.failNext(503, 2);

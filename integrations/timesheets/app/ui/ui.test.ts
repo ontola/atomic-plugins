@@ -13,7 +13,8 @@ import {
   USER,
   WORKSPACE,
 } from '../../fixtures/clockify/scenario.mjs';
-import { APP, fakeStore } from '../fakeStore.js';
+import { APP, fakeStore, IS_A, OTHER_TABLE, PARENT } from '../fakeStore.js';
+import { SHARED, TIME_ENTRY } from '../fields.js';
 import { fixtureProxy } from '../fixtureProxy.js';
 import { view } from '../main.js';
 import { ensureSchema } from '../schema.js';
@@ -21,7 +22,8 @@ import type { ColorScheme, PluginStore } from '../store.js';
 import { FRAMES, renderFrame, type FrameId } from './preview.js';
 import type { Shell } from './shell.js';
 import { css } from './theme.js';
-import { unknownIn } from './coverage.js';
+import { renderUnknown, unknownIn } from './coverage.js';
+import { builder } from './dom.js';
 
 const { JSDOM } = createRequire(
   new URL('../../../../browser/data-browser/package.json', import.meta.url),
@@ -244,6 +246,104 @@ describe('frames', () => {
     expect(buttons(root, 'Import 30 days instead')).toHaveLength(1);
   });
 
+  it('the sync-status card (Q-084) heads every data view: last sync, counts, write-back, what is left out', () => {
+    const { root } = frame('a');
+    const cards = root.querySelectorAll('section[aria-label="Sync status"]');
+    expect(cards).toHaveLength(1);
+    const card = cards[0];
+    expect(card.getAttribute('data-tone')).toBe('warn');
+    expect(text(card.querySelector('[data-key="headline"]'))).toBe(
+      'Synced 4 min ago',
+    );
+    // 61 entries in the sample, 52 of them inside the 30-day window.
+    expect(text(card.querySelector('[data-key="rows"]'))).toBe(
+      '52 entries in the last 30 days',
+    );
+    expect(text(card.querySelector('[data-key="counts"]'))).toBe(
+      'Last sync: 0 added, 0 updated, 61 unchanged',
+    );
+    expect(text(card.querySelector('[data-key="mode"]'))).toBe(
+      'Edits here are sent to Clockify after you review them.',
+    );
+    expect(text(card.querySelector('[data-key="ignored"]'))).toBe(
+      '1 entry is a running timer: counted, and shown once stopped in Clockify.',
+    );
+    // The card is the one place for the last sync: the connection bar
+    // keeps the account, the window and Settings.
+    expect(text(root.querySelector('.conn'))).not.toContain('Last synced');
+    expect(text(root.querySelector('.conn'))).not.toContain('61 entries');
+    // Only the app's live region announces; the card is a named region.
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(card.querySelector('h2')!.className).toBe('ss-sr');
+  });
+
+  it('the card shows a failed sync with its next step, and the pending changes', () => {
+    const j = frame('j').root.querySelector(
+      'section[aria-label="Sync status"]',
+    )!;
+    expect(j.getAttribute('data-tone')).toBe('neg');
+    expect(text(j.querySelector('[data-key="headline"]'))).toBe(
+      'Sync failed 2 h ago',
+    );
+    expect(text(j.querySelector('.ss-problem b'))).toBe('Reconnect Clockify.');
+    const n1 = frame('n1').root.querySelector(
+      'section[aria-label="Sync status"]',
+    )!;
+    expect(text(n1.querySelector('[data-key="pending"]'))).toBe(
+      '2 changes waiting to send to Clockify; 1 held back until it is fixed.',
+    );
+    // N1's send outcome is "Sent": nothing failed, so no failed item.
+    expect(n1.querySelector('[data-key="failed"]')).toBeNull();
+    expect(n1.getAttribute('data-tone')).toBe('warn');
+  });
+
+  it('the "Not loaded" note says what to do, with Sync now when the app can sync', () => {
+    const { doc } = frame('a');
+    const h = builder(doc);
+    const sheet = { timeZone: 'UTC' } as Parameters<typeof renderUnknown>[1];
+    const span = { from: 0, to: 1e12 };
+    const gap = [
+      { from: Date.UTC(2026, 8, 16), to: Date.UTC(2026, 8, 16, 14) },
+    ];
+    let synced = 0;
+    const note = renderUnknown(h, sheet, span, gap, () => synced++)!;
+    expect(note.getAttribute('aria-label')).toBe('Not loaded');
+    expect(text(note.querySelector('p'))).toBe(
+      'Not loaded yet: 16 Sep 00:00 – 14:00. Clockify has not been read for this time, so entries there may be missing; it is not shown as “did not work”. Sync now to load it.',
+    );
+    expect(buttons(note, 'Sync now')).toHaveLength(1);
+    buttons(note, 'Sync now')[0].click();
+    expect(synced).toBe(1);
+    const plain = renderUnknown(h, sheet, span, gap)!;
+    expect(text(plain)).not.toContain('Sync now');
+    expect(plain.querySelector('button')).toBeNull();
+  });
+
+  it('the tail since the last complete read is not "Not loaded"; an older gap is', () => {
+    const checked = 1_000_000_000;
+    const sheet = {
+      lastChecked: new Date(checked).toISOString(),
+      window: { from: 0, to: checked + 5 * 60_000 },
+      unknown: [
+        // Since the last read, up to now: the card's "Synced 5 min ago".
+        { from: checked - 10_000, to: checked + 5 * 60_000 },
+        // A span the last read left uncovered: still reported.
+        { from: checked - 3 * 60_000, to: checked - 60_000 },
+        // A vanished timer's span, from before the read to now: reported.
+        { from: checked - 60 * 60_000, to: checked + 5 * 60_000 },
+      ],
+    };
+    expect(
+      unknownIn(sheet as unknown as Parameters<typeof unknownIn>[0], {
+        from: 0,
+        to: 1e12,
+      }),
+    ).toEqual([
+      { from: checked - 3 * 60_000, to: checked - 60_000 },
+      { from: checked - 60 * 60_000, to: checked + 5 * 60_000 },
+    ]);
+  });
+
   it.each([
     [
       'j',
@@ -312,6 +412,16 @@ describe('frames', () => {
       "This Atomic Server can't connect apps to Clockify yet.",
     );
     expect(root.querySelectorAll('.entry').length).toBeGreaterThan(0);
+    // The card agrees: nothing can be sent from here.
+    expect(
+      text(
+        root.querySelector(
+          'section[aria-label="Sync status"] [data-key="mode"]',
+        ),
+      ),
+    ).toBe(
+      'Read-only: edits here stay in Atomic. This Atomic Server cannot connect apps to Clockify, so nothing is read or sent until it can.',
+    );
   });
 
   it('L: days before the window are hatched and named so; the band says why', () => {
@@ -425,6 +535,94 @@ describe('view() against the fake store and the Clockify mock', () => {
 
     return { root, store, proxy };
   }
+
+  it('on a table that is not its own, lists a row missing its Start as incomplete, with Open row (#177)', async () => {
+    const proxy = fixtureProxy(NOW);
+    const shown: string[] = [];
+    const store = Object.assign(
+      fakeStore({ proxy: proxy.request, view: 'other' }),
+      {
+        openResource: async (subject: string) => {
+          shown.push(subject);
+
+          return { status: 'opened' as const, subject };
+        },
+      },
+    );
+    const NAME = 'https://atomicdata.dev/properties/name';
+    const { start, end } = SHARED;
+    // Rows the person made (the app may not write to this table).
+    const whole = 'did:ad:drive/team-hours/whole';
+    const partial = 'did:ad:drive/team-hours/partial';
+    store.resources.set(whole, {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Pairing',
+      [start]: NOW - 3 * HOUR,
+      [end]: NOW - HOUR,
+    });
+    store.resources.set(partial, {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [TIME_ENTRY],
+      [NAME]: 'Forgot the start',
+      [end]: NOW - HOUR,
+    });
+    const dom = new JSDOM('<!doctype html><body><div id="root"></div></body>');
+    const root = dom.window.document.getElementById('root')!;
+    await view({ root, store });
+
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Not synced with Clockify.',
+    );
+    const note = root.querySelector('[aria-label="Incomplete rows"]')!;
+    expect(text(note)).toContain('1 row is incomplete');
+    expect(text(note)).toContain('Forgot the start');
+    expect(text(note)).toContain('Incomplete: missing Start');
+    expect(note.querySelector(`[data-incomplete="${partial}"]`)).not.toBeNull();
+    expect(note.querySelector(`[data-incomplete="${whole}"]`)).toBeNull();
+    // The complete row is an entry as usual (the Entries tab lists it).
+    [...root.querySelectorAll<HTMLElement>('[role="tab"]')]
+      .find(tab => text(tab) === 'Entries')!
+      .click();
+    expect(root.querySelectorAll('.entry')).toHaveLength(1);
+    expect(text(root.querySelector('.entry'))).toContain('Pairing');
+    expect(
+      text(root.querySelector('[aria-label="Incomplete rows"]')),
+    ).toContain('Forgot the start');
+    buttons(root, 'Open row Forgot the start')[0].click();
+    expect(shown).toEqual([partial]);
+  });
+
+  it('on a table that is not its own, offers Sync this table, then sets up and syncs into it (#177 item 14)', async () => {
+    const proxy = fixtureProxy(NOW);
+    const store = fakeStore({ proxy: proxy.request, view: 'other' });
+    const dom = new JSDOM('<!doctype html><body><div id="root"></div></body>');
+    const root = dom.window.document.getElementById('root')!;
+    await view({ root, store });
+
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Not synced with Clockify.',
+    );
+    expect(text(root.querySelector('.hdr'))).toContain('Not synced');
+    buttons(root, 'Sync this table to Clockify')[0].click();
+
+    // The fake host grants at once; the binding is made and set-up starts.
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('Choose the workspace');
+    expect(text(root.querySelector('.banner'))).toContain(
+      'Syncing “Team hours” with Clockify.',
+    );
+    expect(buttons(root, 'Not now')).toHaveLength(1);
+    expect(store.asked).toBe(1);
+    buttons(root, 'Last 7 days')[0].click();
+    buttons(root, 'Import entries')[0].click();
+
+    await expect
+      .poll(() => text(root.querySelector('[role="status"]')))
+      .toContain('2 created, 0 updated, 0 unchanged, last 7 days.');
+    expect(buttons(root, 'Not now')).toHaveLength(0);
+  });
 
   it('asks for a workspace first, then imports and shows the entries', async () => {
     const { root } = await mount(false);

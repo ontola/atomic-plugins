@@ -1,12 +1,12 @@
 {
   "name": "@atomic-integration/notion",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.2",
   "type": "module",
   "description": "Sandboxed two-way Notion data-source pilot",
   "dependencies": {
     "devonian": "0.6.1",
-    "syncables": "0.18.0"
+    "syncables": "0.19.0"
   },
   "atomicCertification": {
     "owner": "Ontola",

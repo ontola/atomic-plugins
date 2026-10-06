@@ -22,14 +22,17 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Agent, signedRequestInit } from '@tomic/lib';
 import {
   before,
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 // Playwright loads this spec as CommonJS (no package.json above it).
@@ -90,9 +93,32 @@ test.describe('willow export route', () => {
     const dialog = await openReview(page, releaseId);
     await expect(dialog).toContainText('Signing key: willow (ed25519)');
     await expect(dialog).toContainText('Willow subspace key');
+    // The review's config editor starts at `{}` (the manifest has a
+    // configSchema with four required keys and no defaultConfig), and its
+    // schema linter disables Install about 750 ms after the editor mounts.
+    // A click that raced that linter either waited out its 10 s on a
+    // disabled button or landed as it was disabled and did nothing (#227,
+    // `willow.spec.ts:95`). So give the review a config the schema accepts
+    // and click once Install is enabled for it. The sources are set below,
+    // once the notes exist.
+    const install = dialog.getByRole('button', {
+      name: 'Install',
+      exact: true,
+    });
+    await fillConfig(
+      dialog,
+      JSON.stringify({
+        subjects: [],
+        properties: [NAME],
+        namespace: NAMESPACE,
+        pathPrefix: [ATOMIC],
+      }),
+    );
+    await expect(install).toBeEnabled({ timeout: 30_000 });
     const reviewUrl = page.url();
-    await dialog.getByRole('button', { name: 'Install', exact: true }).click();
+    await install.click();
     await leftReview(page, reviewUrl);
+    await waitForOutboxDrained(page);
     const installation = subjectOf(page.url());
     const slug = routeSlug(installation);
 
@@ -213,12 +239,8 @@ test.describe('willow export route', () => {
 
 /** A Plugin draft whose source is the bundle, as plugin-routes.spec.ts makes one. */
 async function createDraft(page: Page) {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  // No warm-up here, as before this was shared.
+  await openNewPluginDraft(page, { warm: false });
 
   return page.evaluate(
     async ({ code, title }) => {
@@ -292,6 +314,26 @@ async function openReview(page: Page, releaseId: string) {
   await expect(dialog).toBeVisible({ timeout: 30_000 });
 
   return dialog;
+}
+
+/**
+ * Replaces the review's config (a CodeMirror editor) with `json`, and checks
+ * that the editor holds exactly that. Playwright's `fill` selects the old
+ * text through the DOM, which CodeMirror only reads on a later
+ * `selectionchange`; under `ATOMIC_TEST_CPU_THROTTLE=4` the insert once
+ * arrived first and landed in front of the old `{}`, leaving invalid JSON.
+ * Selecting with CodeMirror's own select-all key avoids that, and the
+ * retry covers a keystroke that reaches the editor before it is focused.
+ */
+async function fillConfig(dialog: Locator, json: string) {
+  const editor = dialog.getByLabel('Config', { exact: true });
+  const page = dialog.page();
+  await expect(async () => {
+    await editor.focus();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.insertText(json);
+    await expect(editor).toHaveText(json, { timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
 }
 
 /**

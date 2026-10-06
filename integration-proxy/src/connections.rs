@@ -541,4 +541,71 @@ mod tests {
         assert_eq!(body_json(response).await["error"], "replayed");
         assert!(!security.is_delegated(&id, &attacker.id()).await.unwrap());
     }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_two_agents_may_sign_the_same_request_in_the_same_millisecond() {
+        // The replay record names the agent: the same method, URL, timestamp
+        // and body from two agents are two requests, and one agent cannot
+        // spend the other's in advance. The same agent sending it twice is
+        // still a replay.
+        let security = security().await;
+        let s = state(Some(security.clone()));
+        let one = Agent::new(58);
+        let two = Agent::new(59);
+        let now = crate::now_ms();
+        let request = |agent: &Agent| {
+            crate::test_support::signed_request_at(&s, agent, "GET", "/connections", vec![], now)
+        };
+        let first = request(&one);
+        let replay = crate::test_support::clone_request(&first);
+        for signed in [first, request(&two)] {
+            let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = crate::router(s.clone()).oneshot(replay).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["error"], "replayed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_request_spent_under_the_old_key_format_is_still_refused() {
+        // Rolling deploy: an instance on the previous release recorded the
+        // request under its agentless key. This release must not accept it
+        // again while that row lives, and must not write such rows itself.
+        let security = security().await;
+        let s = state(Some(security.clone()));
+        let agent = Agent::new(60);
+        let url = crate::signature::signed_url(&s.base_url, "/connections");
+        let legacy_key = |timestamp_ms: u64| {
+            crate::signature::legacy_replay_key(&crate::signature::message(
+                "GET",
+                &url,
+                &timestamp_ms.to_string(),
+                b"",
+            ))
+        };
+        let now = crate::now_ms();
+        let signed =
+            crate::test_support::signed_request_at(&s, &agent, "GET", "/connections", vec![], now);
+        assert!(security.consume_nonce(&legacy_key(now)).await.unwrap());
+        let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["error"], "replayed");
+
+        // A fresh request is accepted and leaves no old-format row behind.
+        let later = now + 1;
+        let signed = crate::test_support::signed_request_at(
+            &s,
+            &agent,
+            "GET",
+            "/connections",
+            vec![],
+            later,
+        );
+        let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(security.consume_nonce(&legacy_key(later)).await.unwrap());
+    }
 }

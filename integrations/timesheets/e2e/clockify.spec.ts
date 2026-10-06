@@ -43,7 +43,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.5.0';
+const VERSION = '0.7.1';
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;
@@ -157,6 +157,19 @@ test.describe('timesheets drive app', () => {
         timeout: 60_000,
       },
     );
+    // The shared sync-status card (Q-084): what the sync did, what is left
+    // out, and that edits reach Clockify only after a review
+    // (usertest-findings #6 and #7).
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card).toContainText('Synced just now');
+    await expect(card).toContainText('2 entries in the last 7 days');
+    await expect(card).toContainText(
+      'Last sync: 2 added, 0 updated, 0 unchanged',
+    );
+    await expect(card).toContainText(
+      'Edits here are sent to Clockify after you review them.',
+    );
+    await expect(card).toContainText('1 entry is a running timer');
 
     // #89 views, read from the observation log's mirror (not the rows).
     await expect(
@@ -210,10 +223,16 @@ test.describe('timesheets drive app', () => {
 
     // The drive holds settings, never the connection or the key.
     // The connection lives at the proxy, owned by the signed-in user and
-    // delegated to this app; the page keeps nothing credential-like.
-    const connections = await proxyConnections('clockify');
+    // delegated to this app; the page keeps nothing credential-like. The
+    // lane's one mock proxy outlives a test attempt, so a retry also sees the
+    // connection an earlier attempt's agent made: only this attempt's agent's
+    // connections count.
+    const me = await signedInAgent(page);
+    const mine = async () =>
+      (await proxyConnections('clockify')).filter(c => c.owner === me);
+    const connections = await mine();
     expect(connections).toHaveLength(1);
-    expect(connections[0].owner).toBe(await signedInAgent(page));
+    expect(connections[0].owner).toBe(me);
     expect(connections[0].delegations).toHaveLength(1);
     expect(await page.evaluate(() => Object.keys(localStorage))).not.toEqual(
       expect.arrayContaining([
@@ -364,7 +383,11 @@ test.describe('timesheets drive app', () => {
     );
     await expect(
       app.getByRole('note', { name: 'Not loaded' }).first(),
-    ).toContainText('Not loaded: ');
+    ).toContainText('Not loaded yet: ');
+    // The sync-status card names the gap and the next step (Q-084).
+    await expect(
+      app.getByRole('region', { name: 'Sync status' }),
+    ).toContainText('not loaded yet. Clockify has not been read for that time');
     await expect(
       app.getByRole('region', { name: 'Conflicts in Clockify' }),
     ).toHaveCount(0);
@@ -379,7 +402,7 @@ test.describe('timesheets drive app', () => {
       .getByRole('button', { name: 'Disconnect', exact: true })
       .click();
     await expect(status).toContainText('Not connected', { timeout: 30_000 });
-    expect((await proxyConnections('clockify'))[0].delegations).toHaveLength(0);
+    expect((await mine())[0].delegations).toHaveLength(0);
     await expectRows(page, table);
   });
 
@@ -876,6 +899,14 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
           },
         });
         await row.save();
+        // A row missing the class's required Start (#177; ontology-kit's
+        // rule: shown as incomplete, never skipped) cannot be committed on
+        // this host: the server refuses it (lib/src/resources.rs
+        // check_required_props; "Property … work-start missing. Is required
+        // in class … time-entry-v1", seen in this lane on 2026-10-02), a
+        // timestamp cannot be empty, and the page keeps a refused row in
+        // its local outbox, so the spec does not try one. The app's
+        // handling of such a row is unit-tested only.
 
         return made.subject;
       },
@@ -923,19 +954,297 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
     await expect(app.getByText('Not synced with Clockify.')).toBeVisible({
       timeout: 45_000,
     });
+    // The sync-status card says so in the words the write-back case uses
+    // (Q-084; usertest-findings #6).
+    await expect(
+      app.getByRole('region', { name: 'Sync status' }),
+    ).toContainText('Read-only: edits here stay in Atomic.');
     await expect(
       app.getByRole('button', { name: 'Connect Clockify' }),
     ).toHaveCount(0);
     await expect(app.getByRole('button', { name: 'Sync now' })).toHaveCount(0);
     await app.getByRole('tab', { name: 'Entries' }).click();
+    // No incomplete row can be committed here (above), so none is listed,
+    // and the table's View (a child that is not a row) is not one either.
+    await expect(
+      app.getByRole('note', { name: 'Incomplete rows' }),
+    ).toHaveCount(0);
     await app.getByRole('button', { name: /Pairing on the parser/ }).click();
     const detail = app.getByRole('dialog', { name: 'Pairing on the parser' });
     await expect(detail).toContainText('Compiler');
     await expect(detail.getByRole('button', { name: 'Edit' })).toHaveCount(0);
-    // Nothing was written to the table or its row.
+    // Nothing was written to the table or its rows.
     expect(await entries()).toEqual(untouched);
   });
+
+  test('syncs a hand-made time-entry-v1 table to Clockify after Allow editing, and sends a reviewed table edit (#177 item 14)', async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY ||
+        !process.env.INTEGRATION_PROXY_URL,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(300_000);
+    await fixture({ action: 'reset' });
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    const status = app.getByRole('status');
+    // The first open declares the row extras and renders time-entry-v1.
+    await expect(
+      app.getByRole('button', { name: 'Connect Clockify' }),
+    ).toBeVisible({ timeout: 45_000 });
+    const own = await tableOf(page);
+    await expect
+      .poll(async () => (await sharedOf(page, own)).renders, {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    const appSubject = new URL(page.url()).searchParams.get('subject')!;
+
+    // A table the person made, of the shared class, with one row of theirs.
+    const table = await page.evaluate(
+      async ({ entry, work, name, classtype }) => {
+        const store = window.store!;
+        const start = Date.now() - 3 * 86_400_000;
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Team hours', [classtype]: entry },
+        });
+        await made.save();
+        const row = await store.newResource({
+          parent: made.subject,
+          isA: [entry],
+          propVals: {
+            [name]: 'Pairing on the parser',
+            [work.start]: start,
+            [work.end]: start + 3_600_000,
+          },
+        });
+        await row.save();
+
+        return made.subject;
+      },
+      { entry: TIME_ENTRY, work: WORK, name: NAME, classtype: CLASSTYPE },
+    );
+    await page.goto(
+      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(table)}`,
+    );
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Clockify' })
+      .click({ timeout: 60_000 });
+    // Read-only first: the sync asks for itself.
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(app.getByText('Not synced with Clockify.')).toBeVisible({
+      timeout: 45_000,
+    });
+    await app
+      .getByRole('button', { name: 'Sync this table to Clockify' })
+      .click();
+    // The host's own bar asks, outside the frame.
+    const ask = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(ask).toBeVisible({ timeout: 30_000 });
+    await ask.getByRole('button', { name: 'Allow editing' }).click();
+
+    // No connection yet: connect as on the app's own page. Coming back from
+    // the proxy reloads the page, and the app goes on with the binding.
+    await expect(
+      app.getByText('Syncing “Team hours” with Clockify.'),
+    ).toBeVisible({ timeout: 45_000 });
+    await app.getByRole('button', { name: 'Connect Clockify' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page.getByLabel('API key').fill('synthetic-clockify-key');
+    await page
+      .getByRole('button', { name: 'Connect Clockify', exact: true })
+      .click();
+    await expect(status).toContainText('Choose the workspace', {
+      timeout: 45_000,
+    });
+    await expect(
+      app.getByText('Syncing “Team hours” with Clockify.'),
+    ).toBeVisible();
+    await app.getByRole('radio', { name: 'Test workspace' }).check();
+    await app.getByRole('button', { name: 'Last 7 days' }).click();
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '2 created,',
+      { timeout: 60_000 },
+    );
+
+    // Clockify's entries are rows of that table now, of exactly its class,
+    // with the app's extras; the person's own row is as it was, and the
+    // table kept its name and class.
+    const entryRows = async () =>
+      (await rowsByShortname(page, table)).filter(r =>
+        (r[IS_A] as unknown[] | undefined)?.includes(TIME_ENTRY),
+      );
+    const rows = await entryRows();
+    expect(rows.map(r => r['clockify-entry-id']).sort()).toEqual([
+      'entry-1',
+      'entry-2',
+      undefined,
+    ]);
+
+    for (const row of rows.filter(r => r['clockify-entry-id'])) {
+      expect(row[IS_A]).toEqual([TIME_ENTRY]);
+      expect(row['clockify-sync-baseline']).toEqual(expect.any(String));
+    }
+
+    expect(
+      rows.find(r => r[NAME] === 'Pairing on the parser'),
+    ).not.toHaveProperty('clockify-sync-baseline');
+    const after = await page.evaluate(
+      async ({ subject, name, classtype }) => {
+        const t = await window.store!.fetchResourceFromServer(subject, {
+          noWebSocket: true,
+        });
+
+        return { name: t.get(name), classtype: t.get(classtype) };
+      },
+      { subject: table, name: NAME, classtype: CLASSTYPE },
+    );
+    expect(after).toEqual({ name: 'Team hours', classtype: TIME_ENTRY });
+    // The workspace choice and the log are kept under the App, naming the table.
+    expect(await bindingFor(page, appSubject, table)).toMatchObject({
+      'clockify-workspace': WORKSPACE_ID,
+      'clockify-lookback-days': 7,
+      'clockify-observation-log': expect.any(String),
+    });
+
+    // An edit made in the table, as the signed-in person, is listed after
+    // a sync and sent only from the review.
+    const text = 'Weekly sync (team hours table)';
+    await page.evaluate(
+      async ({ rows: subjects, name, newName }) => {
+        const store = window.store!;
+
+        for (const subject of subjects) {
+          const row = await store.getResource(subject);
+          if (row.get(name) !== 'Weekly sync') continue;
+          await row.set(name, newName);
+          await row.save();
+
+          return;
+        }
+
+        throw new Error('no Weekly sync row');
+      },
+      {
+        rows: (await entryRows())
+          .filter(r => r['clockify-entry-id'] === 'entry-2')
+          .map(r => String(r.subject)),
+        name: NAME,
+        newName: text,
+      },
+    );
+    const ours = async () =>
+      (
+        (await fixture({ action: 'requests' })) as {
+          writes: Array<{ method: string; body?: { description?: string } }>;
+        }
+      ).writes.filter(w => w.body?.description === text);
+    await app.getByRole('button', { name: 'Sync now', exact: true }).click();
+    const changes = app.getByRole('region', { name: 'Changes to send' });
+    await expect(changes).toContainText(`Description: Weekly sync → ${text}`, {
+      timeout: 60_000,
+    });
+    expect(await ours()).toEqual([]);
+    await changes.getByRole('button', { name: 'Send 1 to Clockify' }).click();
+    await expect(changes).toContainText('“Weekly sync”: Sent', {
+      timeout: 60_000,
+    });
+    expect(await ours()).toEqual([
+      expect.objectContaining({
+        method: 'PUT',
+        path: expect.stringContaining(
+          `/workspaces/${WORKSPACE_ID}/time-entries/entry-2`,
+        ),
+      }),
+    ]);
+  });
 });
+
+/** The rows under `table`, keyed by property shortname where one exists, from the server. */
+async function rowsByShortname(
+  page: Page,
+  table: string,
+): Promise<Record<string, unknown>[]> {
+  return page.evaluate(async (subject: string) => {
+    const store = window.store!;
+    const collection = await (
+      await store.getResource(subject)
+    ).getChildrenCollection(500);
+    const out: Record<string, unknown>[] = [];
+
+    for (const member of await collection.getAllMembers()) {
+      const row = await store.fetchResourceFromServer(member, {
+        noWebSocket: true,
+      });
+      const named: Record<string, unknown> = { subject: member };
+
+      for (const [property, value] of Object.entries(row.getPropVals())) {
+        const own = !property.startsWith('https://atomicdata.dev/');
+        const shortname = own
+          ? (await store.getResource(property)).get(
+              'https://atomicdata.dev/properties/shortname',
+            )
+          : undefined;
+        named[typeof shortname === 'string' ? shortname : property] = value;
+      }
+
+      out.push(named);
+    }
+
+    return out;
+  }, table);
+}
+
+/**
+ * The App's sync binding for `table`, by shortname: a child of the App
+ * whose `clockify-synced-table` names it.
+ */
+async function bindingFor(
+  page: Page,
+  app: string,
+  table: string,
+): Promise<Record<string, unknown> | undefined> {
+  return page.evaluate(
+    async ({ appSubject, tableSubject }) => {
+      const store = window.store!;
+      const children = await (
+        await store.getResource(appSubject)
+      ).getChildrenCollection(500);
+
+      for (const member of await children.getAllMembers()) {
+        const child = await store.fetchResourceFromServer(member, {
+          noWebSocket: true,
+        });
+        const named: Record<string, unknown> = {};
+
+        for (const [property, value] of Object.entries(child.getPropVals())) {
+          const shortname = (await store.getResource(property)).get(
+            'https://atomicdata.dev/properties/shortname',
+          );
+          named[String(shortname ?? property)] = value;
+        }
+
+        if (named['clockify-synced-table'] === tableSubject) return named;
+      }
+
+      return undefined;
+    },
+    { appSubject: app, tableSubject: table },
+  );
+}
 
 test.describe('timesheets views, frame by frame', () => {
   test('every design frame renders without axe violations', async ({

@@ -60,6 +60,21 @@ export function githubTracker({ scenario } = {}) {
   const now = () => new Date().toISOString();
   const api = {
     snapshot: name => structuredClone(repo(name)),
+    /**
+     * Forgets everything done to one repository, so the next request seeds it
+     * afresh (the seeded and user-testing repositories) or finds it empty. A
+     * test calls it first, so a Playwright retry starts from the same state
+     * as the first attempt: the mock proxy outlives an attempt. It also drops
+     * the failures `failNext` left pending: those are queued for the fixture,
+     * not for one repository, and a test that failed before using them up
+     * would otherwise hand them to its retry's first requests.
+     */
+    reset(name) {
+      repositories.delete(name);
+      failures.length = 0;
+
+      return { reset: name };
+    },
     createIssue(name, input) {
       const state = repo(name);
       const number = state.issues.length + 1;
@@ -333,6 +348,7 @@ export default {
   // editing on GitHub itself, and GitHub failing.
   drivers: [
     'snapshot',
+    'reset',
     'updateIssue',
     'createIssue',
     'createComment',

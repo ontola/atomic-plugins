@@ -1,6 +1,6 @@
 # Session plan: Notion drive app
 
-The tester connects their own Notion account and shares one or more databases with the app. The app only reads; it never changes anything in Notion.
+The tester connects their own Notion account and shares one or more databases with the app. The app brings the pages into a table in their Atomic drive, where they browse and edit them. Edits reach Notion only after the tester reviews them in the app and presses Send; nothing else changes anything in Notion.
 
 ## The session
 
@@ -11,7 +11,7 @@ The tester already agreed to the recording before this started; don't ask again.
 3. Task: "Find the items in that database that are in a particular state, for example in progress." Adapt the example to what their database holds, without naming personal content.
 4. Task: "Check whether everything from that database came across. Is anything missing?"
 5. Task: "Change something small in Notion, and get that change here."
-6. Task: "Open one of the items in Notion from here."
+6. Task: "Change something small here, and get that change into Notion." Ask them to pick a text or number field, not a status or tag.
 7. Task: "Stop syncing, but keep the data you already have."
 8. Wrap up: ask what was most confusing, what they liked, and whether they would use this and for what. Then thank them and say they can close the windows.
 
@@ -21,14 +21,15 @@ After the thank-you, end your final message with the exact token [END] on its ow
 
 What success looks like, never to be said:
 
-- Task 2: they install the Notion app from Integrations and connect. Notion's own page picker decides which pages and databases the app may read. Picking none leaves the app with "nothing shared", and that picker is the likely stumbling block. Every shared database goes into one table, with a Data source column and chips.
-- Task 3: the board (grouped by a status or select column) or the search. The board is disabled on "All".
-- Task 4: formatted text (bold, links), people, relations, rollups, formulas and files are not copied. "Sync details" lists what was skipped and why. The question is whether they find and understand it.
-- Task 5: "Sync now". The app also syncs by itself on open when the last sync is older than 15 minutes.
-- Task 6: "Open in Notion" in the side peek. The host asks them to confirm.
-- Task 7: More → Disconnect. The rows stay.
+- Task 2: they install the Notion app from Integrations and connect. Notion's own page picker decides which pages and databases the app may read. Picking none leaves the app with "nothing shared", and that picker is the likely stumbling block. Every shared database goes into one table, with a Data source column. The app itself shows only a status card: the databases and their row counts, the last sync, and an "Open table" button; the rows are in the table (also in the sidebar, under the app, as "Pages").
+- Task 3: the table's own views and filters, or its search. Status and select columns show the option names as coloured tags, and a filter on one works like any select column. Whether they find the table's filter is a finding.
+- Task 4: formatted text (bold, links), people, relations, rollups, formulas and files are not copied. "Sync details" in the app lists what was skipped and why. The question is whether they find and understand it.
+- Task 5: "Sync now" in the app. The app also syncs by itself on open when the last sync is older than 15 minutes.
+- Task 6: they edit a cell in the table, go back to the app, see "1 change in 1 row not sent to Notion yet", open "Review changes" (before → after), and press Send. Whether they expect the edit to reach Notion by itself, and whether they find the review, are the findings. A status or tag can be changed too, by picking another tag in the cell; the task asks for text or a number to keep it simple. If they pick a status, that is fine: it is reviewed and sent the same way.
+- Task 7: More (⋯) → Disconnect Notion…, then confirm. The rows stay.
 
 Known limits (only new detail about them is a finding):
 
-- Edits go back to Notion only from the data table, after "Review changes" → Send (atomic-plugins#8, notion 0.2.0). This plan has no editing task; if they edit anyway, whether they find the review is a finding.
+- The app has no browsing view of its own (atomic-plugins#177, Q9): no table, board, side peek or "Open in Notion" inside the app. A row's Notion link is the "Notion URL" column in the table.
+- Rows added in the table are not created in Notion, and nothing is deleted on either side (atomic-plugins#8).
 - Nothing has run against a real Notion account through the proxy yet. If connecting fails, that is a finding: note it, and go on to the wrap-up.

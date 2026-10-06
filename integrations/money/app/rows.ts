@@ -1,11 +1,30 @@
 // @wc-ignore-file
 /**
- * Reading the Bank transactions table. Rows carry their values under the
- * drive's own property subjects, which the importer's Set up created from
- * `bankingSchema()` (`../schema.ts`). The app finds them through the row
- * class the table names: its `requires` and `recommends` list the property
- * subjects, and each property carries its shortname.
+ * Reading a Bank transactions table. Two shapes reach this app:
+ *
+ * - A table of the shared class `bank-transaction-v1`
+ *   (ontola/atomic-plugins#177): the app's own table after a catalog install
+ *   (`adopt.ts`), or any table someone made with that class. Its shared
+ *   fields are read and written by their published subjects only, through
+ *   `ontology-kit`'s strict resolver: no lookup by shortname, name or
+ *   column. The import bookkeeping on such rows (`bank-source-id`,
+ *   `bank-fingerprint`, `bank-statement`, `bank-transaction-code`) is not
+ *   shared: the app mints those four Properties in its own ontology
+ *   (`own.ts`) and declares them as its `row-extras`.
+ * - The Bank statements importer's table, whose rows are of the drive-local
+ *   `bank-transaction` class the importer's Set up minted from
+ *   `bankingSchema()` (`../schema.ts`). That class reaches the same `Txn`
+ *   shape through a lens: its declared properties, found by the shortnames
+ *   the class lists, mapped onto the fields above. The lens is money's own
+ *   (its `from` is money's own class), so it lives here, not in
+ *   `ontology-kit/`. A table of any other class is not a bank transactions
+ *   table.
  */
+import {
+  createResolver,
+  incompleteNote,
+} from '../../../ontology-kit/resolver.mjs';
+import { classes, properties } from '../../../ontology-kit/terms.mjs';
 import {
   GET_MANY_MAX,
   type JSONValue,
@@ -13,18 +32,41 @@ import {
   type PluginStore,
 } from './store.js';
 
+/** The shared class this app renders, at its published subject. */
+export const BANK_TRANSACTION = classes['bank-transaction-v1'].subject;
+
+/** Strict: accepts exactly `bank-transaction-v1` (#177 decision 1). */
+export const resolver = createResolver({
+  classes: [classes['bank-transaction-v1']],
+});
+
 export const atomic = {
   parent: 'https://atomicdata.dev/properties/parent',
   isA: 'https://atomicdata.dev/properties/isA',
   shortname: 'https://atomicdata.dev/properties/shortname',
   name: 'https://atomicdata.dev/properties/name',
+  description: 'https://atomicdata.dev/properties/description',
+  datatype: 'https://atomicdata.dev/properties/datatype',
   requires: 'https://atomicdata.dev/properties/requires',
   recommends: 'https://atomicdata.dev/properties/recommends',
   classtype: 'https://atomicdata.dev/properties/classtype',
+  properties: 'https://atomicdata.dev/properties/properties',
+  classes: 'https://atomicdata.dev/properties/classes',
   propertyClass: 'https://atomicdata.dev/classes/Property',
+  classClass: 'https://atomicdata.dev/classes/Class',
+  tableClass: 'https://atomicdata.dev/classes/Table',
+  /** The App's own ontology, as the host's `createApp` sets it. */
+  defaultOntology:
+    'https://atomicdata.dev/ontology/server/property/default-ontology',
 } as const;
 
-/** Imported by `../plugin.ts`; never written by this app. */
+export const datatypes = {
+  string: 'https://atomicdata.dev/datatypes/string',
+  date: 'https://atomicdata.dev/datatypes/date',
+  atomicURL: 'https://atomicdata.dev/datatypes/atomicURL',
+} as const;
+
+/** The fields of a transaction row (`../plugin.ts` writes the same ones). */
 export const BANK_FIELDS = [
   'bank-account',
   'bank-currency',
@@ -39,7 +81,7 @@ export const BANK_FIELDS = [
   'bank-fingerprint',
 ] as const;
 
-/** On a Bank statement row (the importer's `statements` table). */
+/** On a Bank statement row (the importer's `statements` table, or the app's). */
 export const STATEMENT_ROW_FIELDS = [
   'bank-period-start',
   'bank-period-end',
@@ -58,6 +100,43 @@ export type NoteField = (typeof NOTE_FIELDS)[number];
 export type StatementField = (typeof STATEMENT_ROW_FIELDS)[number];
 export type Shortname = BankField | NoteField | StatementField;
 
+/**
+ * The shared class's fields, by the shortnames this app uses for them: the
+ * published subjects (`ontology-kit/terms.mjs`).
+ */
+export const SHARED = [
+  'bank-account',
+  'bank-currency',
+  'bank-amount',
+  'bank-value-date',
+  'bank-booking-date',
+  'bank-description',
+  'bank-reference',
+  'money-category',
+  'money-note',
+] as const satisfies readonly (BankField | NoteField)[];
+
+export type SharedField = (typeof SHARED)[number];
+
+export const SHARED_SUBJECT: Readonly<Record<SharedField, string>> =
+  Object.fromEntries(
+    SHARED.map(name => [name, properties[name].subject]),
+  ) as Record<SharedField, string>;
+
+/**
+ * Written on each transaction row beside the shared fields; not part of the
+ * shared class. On the app's own rows these are its `row-extras` (`own.ts`);
+ * on the importer's rows, Properties of the drive ontology.
+ */
+export const EXTRA_FIELDS = [
+  'bank-source-id',
+  'bank-fingerprint',
+  'bank-statement',
+  'bank-transaction-code',
+] as const satisfies readonly BankField[];
+
+export type ExtraField = (typeof EXTRA_FIELDS)[number];
+
 /** Property subject by shortname, for the ones the row class declares. */
 export type Fields = Partial<Record<Shortname, string>>;
 
@@ -65,6 +144,14 @@ export type StatementFormat = 'mt940' | 'camt053';
 
 export interface Txn {
   subject: string;
+  /**
+   * "Incomplete: missing Amount and Value date" when a required field of
+   * the class (`REQUIRED`) is absent or empty (#177; ontology-kit's rule:
+   * shown as incomplete, never skipped). Such a row is listed apart from
+   * the ledger, summed into no balance or total and compared with no
+   * import; the missing fields below are then `''`.
+   */
+  incomplete?: string;
   account: string;
   currency: string;
   /** Exact signed decimal string. */
@@ -90,7 +177,7 @@ const KNOWN = new Set<string>([
   ...STATEMENT_ROW_FIELDS,
 ]);
 
-/** One imported statement, as the importer stored it (atomic-server#1768). */
+/** One imported statement, as the importer or this app stored it. */
 export interface StoredStatement {
   subject: string;
   account: string;
@@ -104,11 +191,16 @@ export interface StoredStatement {
   entries: string;
   format?: StatementFormat;
   imported: string;
+  /** The importer's identity for the statement; `''` on an older row. */
+  sourceId: string;
+  /** The table the transactions went to (`money-table`), when stored. */
+  table?: string;
 }
 
 export function readStatement(
   resource: Pick<PluginResource, 'subject' | 'get'>,
   fields: Fields,
+  tableField?: string,
 ): StoredStatement | undefined {
   const text = (name: Shortname) => {
     const property = fields[name];
@@ -123,6 +215,7 @@ export function readStatement(
   const closing = text('bank-closing-balance');
   if (!account || !currency || !end || !closing) return undefined;
   const format = text('bank-format');
+  const table = tableField ? resource.get(tableField) : undefined;
 
   return {
     subject: resource.subject,
@@ -136,16 +229,22 @@ export function readStatement(
     entries: text('bank-entry-count'),
     format: format === 'mt940' || format === 'camt053' ? format : undefined,
     imported: text('bank-imported-date'),
+    sourceId: text('bank-source-id'),
+    ...(typeof table === 'string' ? { table } : {}),
   };
 }
 
-const list = (value: JSONValue): string[] =>
+export const list = (value: JSONValue): string[] =>
   Array.isArray(value)
     ? value.filter((v): v is string => typeof v === 'string')
     : [];
 
-/** Resolves the class's declared properties to the shortnames the app knows. */
-export async function resolveFields(
+/**
+ * The fields a class declares, by the shortnames this app knows: its
+ * `requires` and `recommends`, each Property read for its shortname. A shared
+ * property is recognised by its subject without reading it.
+ */
+export async function classFields(
   store: PluginStore,
   rowClass: string,
 ): Promise<Fields> {
@@ -157,22 +256,49 @@ export async function resolveFields(
     ]),
   ];
   const fields: Fields = {};
-  const properties = await Promise.all(
-    subjects.map(s => store.getResource(s).catch(() => undefined)),
+  const shared = new Map<string, Shortname>(
+    SHARED.map(name => [SHARED_SUBJECT[name], name]),
+  );
+  const unknown: string[] = [];
+
+  for (const subject of subjects) {
+    const name = shared.get(subject);
+    if (name) fields[name] ??= subject;
+    else unknown.push(subject);
+  }
+
+  const resources = await Promise.all(
+    unknown.map(s => store.getResource(s).catch(() => undefined)),
   );
 
-  for (const property of properties) {
+  for (const property of resources) {
     const shortname = property?.get(atomic.shortname);
     if (typeof shortname === 'string' && KNOWN.has(shortname))
       fields[shortname as Shortname] ??= property!.subject;
   }
 
-  // `bankingSchema()` leaves the fingerprint out of the class (the importer
-  // writes it; nobody fills it in by hand), so find it, and anything else
-  // missing, by shortname: preferably the one in the class's own ontology.
+  return fields;
+}
+
+/**
+ * The lens from the importer's drive-local `bank-transaction` class onto
+ * this app's fields: the class's declared properties by shortname, plus the
+ * bookkeeping `bankingSchema()` leaves off the class (the importer writes
+ * the fingerprint; nobody fills it in by hand), found by shortname and
+ * preferably in the class's own ontology. `undefined` when the class does
+ * not declare the four fields without which a row is not a bank
+ * transaction: then it is not the importer's class, and not a bank table.
+ */
+export async function importerLens(
+  store: PluginStore,
+  rowClass: string,
+): Promise<Fields | undefined> {
+  const klass = await store.getResource(rowClass);
+  const fields = await classFields(store, rowClass);
+  if (!REQUIRED.every(name => fields[name])) return undefined;
   const ontology = klass.get(atomic.parent);
 
-  for (const shortname of UNDECLARED) {
+  for (const shortname of EXTRA_FIELDS) {
     if (fields[shortname]) continue;
     const found = await store
       .query({ property: atomic.shortname, value: shortname })
@@ -190,10 +316,34 @@ export async function resolveFields(
   return fields;
 }
 
-/** Written by the importer but not listed on the row class. */
-const UNDECLARED: Shortname[] = ['bank-fingerprint', 'bank-source-id'];
+/**
+ * The fields of the table's rows, or `undefined` when `rowClass` is neither
+ * `bank-transaction-v1` nor the importer's class. For the shared class the
+ * shared fields are the published subjects and the bookkeeping is the app's
+ * own `extras` (`own.ts`), when it has them.
+ */
+export async function resolveFields(
+  store: PluginStore,
+  rowClass: string,
+  extras: Fields = {},
+): Promise<Fields | undefined> {
+  if (resolver.accepts(rowClass)) {
+    const fields: Fields = { ...SHARED_SUBJECT };
+    for (const name of EXTRA_FIELDS)
+      if (extras[name]) fields[name] = extras[name];
 
-/** The fields without which a row is not a bank transaction at all. */
+    return fields;
+  }
+
+  return importerLens(store, rowClass);
+}
+
+/**
+ * The fields `bank-transaction-v1` requires (`ontology-kit/source.json`),
+ * and the ones without which the importer's class is not a bank
+ * transactions class (`importerLens`). A row of either class that lacks one
+ * is read as incomplete (`readRow`), never skipped.
+ */
 export const REQUIRED: BankField[] = [
   'bank-account',
   'bank-currency',
@@ -201,8 +351,17 @@ export const REQUIRED: BankField[] = [
   'bank-value-date',
 ];
 
-export const isBankTable = (fields: Fields) =>
-  REQUIRED.every(name => fields[name]);
+/** The required fields as both classes head their columns. */
+export const REQUIRED_LABELS: Readonly<Record<string, string>> = {
+  'bank-account': 'Account',
+  'bank-currency': 'Currency',
+  'bank-amount': 'Amount',
+  'bank-value-date': 'Value date',
+};
+
+/** Present means neither undefined, null nor the empty string (resolver.mjs). */
+const present = (value: JSONValue) =>
+  value !== undefined && value !== null && value !== '';
 
 export const canAnnotate = (fields: Fields) =>
   Boolean(fields['money-category'] && fields['money-note']);
@@ -218,26 +377,49 @@ export function formatOf(sourceId: string): StatementFormat | undefined {
   }
 }
 
+/**
+ * One row as a `Txn`. With `rowClass`, a child of the table that is not of
+ * that class (a View, say) is `undefined`: not a row at all. A row missing a
+ * required field is returned with `incomplete` set, never dropped
+ * (ontology-kit's rule; at the pin the server refuses a commit that lacks a
+ * required property, so this arises from an empty string, a lensed row or
+ * another writer). The lens path (`importerLens`) reads the same
+ * `REQUIRED` fields, so both classes are judged alike.
+ */
 export function readRow(
   resource: Pick<PluginResource, 'subject' | 'get'>,
   fields: Fields,
+  rowClass?: string,
 ): Txn | undefined {
-  const text = (name: Shortname) => {
+  if (
+    rowClass !== undefined &&
+    !list(resource.get(atomic.isA)).includes(rowClass)
+  )
+    return undefined;
+
+  const raw = (name: Shortname) => {
     const property = fields[name];
-    const value = property ? resource.get(property) : undefined;
+
+    return property ? resource.get(property) : undefined;
+  };
+
+  const text = (name: Shortname) => {
+    const value = raw(name);
 
     return typeof value === 'string' ? value : '';
   };
 
+  const missing = REQUIRED.filter(name => !present(raw(name)));
+  const incomplete = incompleteNote(missing, REQUIRED_LABELS);
   const amount = text('bank-amount');
   const account = text('bank-account');
   const currency = text('bank-currency');
   const valueDate = text('bank-value-date');
-  if (!amount || !account || !currency || !valueDate) return undefined;
   const sourceId = text('bank-source-id');
 
   return {
     subject: resource.subject,
+    ...(incomplete ? { incomplete } : {}),
     account,
     currency,
     amount,
@@ -258,20 +440,22 @@ export function readRow(
 /**
  * Reads `subjects`, reporting progress. With the host's `getMany`, in
  * batches of `GET_MANY_MAX`, a few in flight; otherwise one `getResource`
- * each, `concurrency` in flight. Unreadable rows are skipped, not fatal: one
- * broken resource should not hide a ledger.
+ * each, `concurrency` in flight. Unreadable resources and children that are
+ * not of `rowClass` are skipped, not fatal: one broken resource should not
+ * hide a ledger. Incomplete rows are returned, marked (`Txn.incomplete`).
  */
 export async function readRows(
   store: PluginStore,
   subjects: string[],
   fields: Fields,
+  rowClass: string,
   onProgress?: (loaded: number) => void,
   concurrency = 16,
 ): Promise<Txn[]> {
   return readMany(
     store,
     subjects,
-    r => readRow(r, fields),
+    r => readRow(r, fields, rowClass),
     onProgress,
     concurrency,
   );

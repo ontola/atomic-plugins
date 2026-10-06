@@ -59,11 +59,11 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 
 /** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
 const VERSIONS = {
-  calendar: 'usertest-9',
-  'issue-tracker': 'usertest-6',
-  money: 'usertest-2',
-  notion: 'usertest-4',
-  timesheets: 'usertest-5',
+  calendar: 'usertest-11',
+  'issue-tracker': 'usertest-8',
+  money: 'usertest-4',
+  notion: 'usertest-8',
+  timesheets: 'usertest-10',
 };
 const APPS = {
   calendar: {
@@ -91,7 +91,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-const SAMPLE_VERSION = 'sample-1';
+const SAMPLE_VERSION = 'sample-2';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
