@@ -1,0 +1,21 @@
+{
+  // The Google Tasks drive app (app/). `allowJs` for ontology-kit's .mjs
+  // modules (read, not checked; resolver.mjs has a .d.mts). The lane's
+  // typecheck tier runs it:
+  //   node integrations/tooling/run-lane.mjs google-tasks --tier typecheck
+  "extends": "../../browser/tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "typeRoots": ["../../browser/node_modules/@types"],
+    "types": ["node"],
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "lib": ["ES2023", "DOM"]
+  },
+  // ../sync-status/css.d.ts declares the card's `card.css?raw` import.
+  "include": ["app/*.ts", "../sync-status/css.d.ts"],
+  "exclude": ["app/*.test.ts", "app/fakeStore.ts"]
+}
