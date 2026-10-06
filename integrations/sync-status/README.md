@@ -54,6 +54,13 @@ heading, never a live region: the app's one `role="status"` stays the only
 one. Its buttons are `type="button"` and carry `data-k` from their action's
 `key`, for apps that restore focus by key after a re-render.
 
+`writes` also takes `notWritten`, sends that wrote nothing for another
+reason (the provider changed the same field, the row changed after the
+review, the record is gone): one line pointing at the app's own review, so a
+clean "Synced" headline never sits over a send that did nothing. A failed
+`last` takes `lastGood`, when a sync last succeeded, so a days-long gap is
+named with the failure ("Last good sync 3 days ago.").
+
 ### Mapping a syncables client's `pendingWrites()`
 
 For an app whose writes go through `syncables/browser` (Pets, Notion) rather

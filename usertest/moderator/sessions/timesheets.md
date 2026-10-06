@@ -35,7 +35,6 @@ What success looks like, never to be said:
 Known limits (only new detail about them is a finding):
 
 - From 0.7.0 the card also says "Edits here are sent to Clockify after you review them." (or "Read-only: edits here stay in Atomic." on a table that isn't synced), lists changes waiting to send or refused, and shows time no read covers as "… not loaded yet. … Sync now to load it." (usertest-findings #6, #14). The wording has not been seen by a tester before; a tester who still expects a hand-typed row to reach Clockify, or still asks what "not loaded" means, is a finding.
-
 - Editable: an entry's description, project, billable flag, start and end, and deleting an entry; tags, tasks and custom fields are not. Running timers, breaks, locked entries and entries with custom fields can't be edited. Editing a time range ("Edit a time range…", for example marking an hour as not worked) is also there, but is not a task here: it is a stretch if the tester finds it, and its wording and result are a finding either way.
 - Tags, tasks and rates are not copied, and only the tester's own entries are.
 - "Sync this table to Clockify" (0.6.0) is for a time entry table the app did not make. It needs a table made by pasting the class address into New Table, so it is not a task for this session. Rows already in that table stay local, and the app can't delete rows there.

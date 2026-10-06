@@ -243,6 +243,41 @@ describe('renderSyncStatus', () => {
     );
   });
 
+  it('failed after a gap: the last good sync is named with the failure', () => {
+    const { card, key } = render({
+      ...base,
+      last: {
+        ok: false,
+        at: NOW,
+        error: 'HTTP 503',
+        nextStep: 'Try again.',
+        lastGood: NOW - 3 * 24 * 60 * MIN,
+      },
+    });
+    expect(text(key('last-good'))).toBe('Last good sync 3 days ago.');
+    expect(text(card.querySelector('.ss-list > li'))).toBe(
+      'HTTP 503 Try again. Last good sync 3 days ago.',
+    );
+    expect(
+      render({ ...base, last: { ok: false, at: NOW, error: 'x' } }).key(
+        'last-good',
+      ),
+    ).toBeNull();
+  });
+
+  it('sends that wrote nothing are one line pointing at the review, and a note', () => {
+    const { card, key } = render({
+      ...base,
+      last: { ok: true, at: NOW },
+      writes: { pending: 0, notWritten: 2 },
+    });
+    expect(text(key('not-written'))).toBe(
+      '2 changes not written to Clockify: see Changes to send for why.',
+    );
+    expect(key('pending')).toBeNull();
+    expect(card.getAttribute('data-tone')).toBe('warn');
+  });
+
   it('busy replaces the headline and pulses', () => {
     const { card, key } = render({
       ...base,

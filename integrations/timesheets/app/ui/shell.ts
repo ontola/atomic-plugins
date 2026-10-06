@@ -59,7 +59,7 @@ import {
   waiting,
   warningBanner,
 } from './states.js';
-import { syncStatusFor } from './status.js';
+import { hidesTail, syncStatusFor } from './status.js';
 import { duration, runningNote, weekFoot, weekTable } from './week.js';
 import { renderSyncStatus } from '../../../sync-status/card.js';
 
@@ -665,7 +665,7 @@ export function mountShell(
             h,
             sheet,
             span,
-            unknownIn(sheet, span),
+            unknownIn(sheet, span, { hideTail: hidesTail(state) }),
             state.kind === 'ready' ? sync : undefined,
           )
         : null;

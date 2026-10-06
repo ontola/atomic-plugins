@@ -113,18 +113,27 @@ export function renderConflicts(
 export const MIN_UNKNOWN_MS = 60_000;
 
 /**
- * `sheet.unknown` clipped to `span`, without sub-minute slivers, and without
- * the tail: the time between the last complete read (`sheet.lastChecked`)
- * and the end of the window is not loaded by definition, and the sync-status
- * card's "Synced 4 min ago" already says so. A tester read that tail as a
- * problem ("Not loaded: 13:07 – 13:08", usertest-findings #14). A gap that
- * starts before the last read (a span a shrunk or failed read left
- * uncovered, a vanished running timer's span) is still reported.
+ * `sheet.unknown` clipped to `span`, without sub-minute slivers, and, with
+ * `hideTail` (the default), without the tail: the time between the last
+ * complete read (`sheet.lastChecked`) and the end of the window is not
+ * loaded by definition, and after a successful sync the sync-status card's
+ * "Synced 4 min ago" already says so. A tester read that tail as a problem
+ * ("Not loaded: 13:07 – 13:08", usertest-findings #14). A gap that starts
+ * before the last read (a span a shrunk or failed read left uncovered, a
+ * vanished running timer's span) is still reported. Callers pass
+ * `hideTail: false` when the last sync of this page load failed, or none
+ * ran yet (`status.ts` `hidesTail`): then the tail may be days long and
+ * nothing else says it is unread.
  */
-export const unknownIn = (sheet: Timesheet, span: Interval): Interval[] => {
+export const unknownIn = (
+  sheet: Timesheet,
+  span: Interval,
+  { hideTail = true }: { hideTail?: boolean } = {},
+): Interval[] => {
   const checked = sheet.lastChecked ? Date.parse(sheet.lastChecked) : NaN;
   const end = sheet.window?.to;
   const isTail = (i: Interval) =>
+    hideTail &&
     Number.isFinite(checked) &&
     end !== undefined &&
     i.to >= end - MIN_UNKNOWN_MS &&

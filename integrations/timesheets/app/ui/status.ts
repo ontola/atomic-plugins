@@ -83,6 +83,8 @@ function lastSync(
       at: outcome.at,
       error: outcome.error,
       nextStep: NEXT_STEP[outcome.problem.kind],
+      // The gap since the last good read may be days: name it.
+      ...(sheet.lastChecked ? { lastGood: Date.parse(sheet.lastChecked) } : {}),
     };
 
   // Before this page load's first sync: when a complete read last confirmed
@@ -117,18 +119,38 @@ function incompleteGroups(
   }));
 }
 
+/**
+ * Whether the "Not loaded" views may leave out the tail since the last
+ * complete read (`coverage.ts` `unknownIn`): only once this page load has
+ * synced successfully, or while it is syncing, when the card's "Synced …
+ * ago" covers that tail. After a failed sync, or before any, the tail may
+ * be days long and is shown.
+ */
+export const hidesTail = (state: ViewState): boolean =>
+  state.kind === 'syncing' ||
+  (state.kind === 'ready' && state.last?.ok === true);
+
+/** The `no-proxy` state's write-back note (#89 frame K). */
+export const NO_PROXY_NOTE =
+  'This Atomic Server cannot connect apps to Clockify, so nothing is read or sent until it can.';
+
 export function syncStatusFor(
   input: StatusInput & { onOpenRow?: (id: string) => void },
 ): SyncStatus {
   const { state, sheet, changes } = input;
   const local = state.kind === 'local';
+  // Read-only on screen: a table that isn't synced, and a host without a
+  // proxy relay (frame K), where nothing can be sent. `setup` (the settings
+  // sheet over the data) stays write-back: the connection is there, and an
+  // edit made now is listed to send after the next sync.
+  const readOnly = local || state.kind === 'no-proxy';
   const settings =
     state.kind === 'ready' || state.kind === 'syncing'
       ? state.settings
       : undefined;
   const status: SyncStatus = {
     provider: 'Clockify',
-    writeBack: local ? 'read-only' : 'after-review',
+    writeBack: readOnly ? 'read-only' : 'after-review',
     rowNoun: ['entry', 'entries'],
     rows: inWindow(sheet),
     rowsScope: settings
@@ -138,6 +160,7 @@ export function syncStatusFor(
 
   if (local && state.paused)
     status.writeBackNote = 'Syncing with Clockify is paused.';
+  if (state.kind === 'no-proxy') status.writeBackNote = NO_PROXY_NOTE;
 
   const last = local ? undefined : lastSync(state, sheet);
   if (last) status.last = last;
@@ -145,6 +168,10 @@ export function syncStatusFor(
   if (state.kind === 'syncing') status.busy = 'Syncing…';
   else if (changes.sending)
     status.busy = `Sending ${Math.min(changes.sending.done + 1, changes.sending.total)} of ${changes.sending.total} to Clockify…`;
+
+  const problems: Problem[] = [];
+  /** A `not-sent` outcome with a message: another copy holds the lease. */
+  let leaseHeld: string | undefined;
 
   if (!local) {
     const held = changes.review.filter(c => c.blockers.length).length;
@@ -159,15 +186,34 @@ export function syncStatusFor(
             ? 'Clockify does not allow this change.'
             : 'Clockify answered with an error.'),
       }));
-    const uncertain = results.filter(
-      r => r.status === 'uncertain' || r.status === 'not-sent',
+    // Only `uncertain` is uncertain. `not-sent` is a change the send never
+    // attempted (the rest of a batch after an uncertain one, or every
+    // change while another copy holds the lease): it stays in the review,
+    // so it is already counted in `pending`.
+    const uncertain = results.filter(r => r.status === 'uncertain').length;
+    const notWritten = results.filter(
+      r =>
+        r.status === 'conflict' ||
+        r.status === 'changed' ||
+        r.status === 'gone',
     ).length;
+    leaseHeld = results.find(
+      r => r.status === 'not-sent' && r.message,
+    )?.message;
     status.writes = {
       pending: changes.review.length,
       ...(held ? { held } : {}),
       ...(failed.length ? { failed } : {}),
       ...(uncertain ? { uncertain } : {}),
+      ...(notWritten ? { notWritten } : {}),
     };
+
+    if (changes.error)
+      problems.push({
+        lead: 'The last edit or send could not be saved or started.',
+        text: changes.error,
+        tone: 'neg',
+      });
   }
 
   const ignored: IgnoredGroup[] = incompleteGroups(sheet, input.onOpenRow);
@@ -193,8 +239,9 @@ export function syncStatusFor(
     });
   if (ignored.length) status.ignored = ignored;
 
-  const problems: Problem[] = [];
-  const unknown = sheet.window ? unknownIn(sheet, sheet.window) : [];
+  const unknown = sheet.window
+    ? unknownIn(sheet, sheet.window, { hideTail: hidesTail(state) })
+    : [];
   const unknownMs = unknown.reduce((n, i) => n + (i.to - i.from), 0);
 
   if (unknownMs && !local)
@@ -213,14 +260,20 @@ export function syncStatusFor(
         : {}),
     });
 
-  if (
+  // Seen by the last sync (the lease on the log head), or by a send that
+  // found the lease held: one problem, not two.
+  const elsewhere =
     state.kind === 'ready' &&
     state.last?.ok &&
-    state.last.result.sendingElsewhereUntil
-  )
+    state.last.result.sendingElsewhereUntil;
+  if (elsewhere || leaseHeld)
     problems.push({
       lead: 'Another open copy of this app is sending changes to Clockify.',
-      text: 'Wait for it to finish before sending from here.',
+      // The lease message (`lease.ts` `heldMessage`) says until when; its
+      // first sentence repeats the lead, so it is dropped.
+      text: leaseHeld
+        ? leaseHeld.replace(/^Another open copy of this app[^.]*\.\s*/, '')
+        : 'Your changes stay listed; send them once it has finished.',
     });
 
   if (problems.length) status.problems = problems;

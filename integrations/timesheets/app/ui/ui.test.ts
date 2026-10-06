@@ -412,6 +412,16 @@ describe('frames', () => {
       "This Atomic Server can't connect apps to Clockify yet.",
     );
     expect(root.querySelectorAll('.entry').length).toBeGreaterThan(0);
+    // The card agrees: nothing can be sent from here.
+    expect(
+      text(
+        root.querySelector(
+          'section[aria-label="Sync status"] [data-key="mode"]',
+        ),
+      ),
+    ).toBe(
+      'Read-only: edits here stay in Atomic. This Atomic Server cannot connect apps to Clockify, so nothing is read or sent until it can.',
+    );
   });
 
   it('L: days before the window are hatched and named so; the band says why', () => {

@@ -17,7 +17,7 @@ describe('drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 177,854 bytes minified on 2026-10-06 (0.7.0; JS by esbuild,
+    // Measured 178,822 bytes minified on 2026-10-06 (0.7.0; JS by esbuild,
     // the stylesheets ui/theme.css and the shared sync-status card's
     // card.css by esbuild's CSS minifier); limit is that plus ~10%. It was
     // 168,270 bytes at 0.6.2, before the shared sync-status card

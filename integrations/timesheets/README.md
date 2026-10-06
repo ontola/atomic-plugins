@@ -102,9 +102,15 @@ into the view root.
   time in the window no complete read covers, as a problem with "Sync now".
   The connection bar no longer repeats the last sync or the entry count.
   The "Not loaded" note over a week now says what to do ("Clockify has not
-  been read for this time … Sync now to load it.") and leaves out the tail
-  since the last complete read, which the card's "Synced … ago" already
-  covers (`unknownIn`; usertest-findings #14). The wording is a default
+  been read for this time … Sync now to load it.") and, once this page load
+  has synced successfully (or while it syncs), leaves out the tail since the
+  last complete read, which the card's "Synced … ago" already covers
+  (`unknownIn`, `status.ts` `hidesTail`; usertest-findings #14). After a
+  failed sync, or before any, the tail is shown, and the failed card line
+  names the last good sync ("Last good sync 3 days ago."). Without a proxy
+  relay (frame K) the card is read-only, with the reason. A `not-sent`
+  outcome stays a pending change (never "uncertain"); when another copy holds
+  the send lease, the card says so once. The wording is a default
   taken for usertest-findings #6, #7 and #14 and has not been seen by a
   tester yet.
 

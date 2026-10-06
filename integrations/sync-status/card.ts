@@ -55,6 +55,8 @@ export type LastSync =
       error: string;
       /** The plain next step: "Reconnect Clockify.", "Try again." */
       nextStep?: string;
+      /** When a sync last succeeded, so a long gap is named with the failure. */
+      lastGood?: number;
     };
 
 export interface WriteFailure {
@@ -73,6 +75,13 @@ export interface WriteQueue {
   failed?: WriteFailure[];
   /** Sends with no answer: may or may not have been applied. */
   uncertain?: number;
+  /**
+   * Sends that wrote nothing for another reason (the provider changed the
+   * same field, the row changed after the review, the record is gone), so
+   * a clean "Synced" headline does not hide them; the app's own review
+   * lists each with its reason.
+   */
+  notWritten?: number;
   /** Where the pending changes are reviewed, when that is elsewhere. */
   review?: Action;
 }
@@ -174,6 +183,7 @@ export function statusLines(status: SyncStatus, now: number): StatusLines {
   const notes =
     (status.writes?.held ?? 0) > 0 ||
     (status.writes?.uncertain ?? 0) > 0 ||
+    (status.writes?.notWritten ?? 0) > 0 ||
     (status.ignored ?? []).some(g => g.count > 0) ||
     (status.problems?.length ?? 0) > 0;
 
@@ -301,6 +311,14 @@ export function renderSyncStatus(
         { class: 'ss-problem', 'data-tone': 'neg' },
         el(doc, 'span', {}, last.error),
         last.nextStep ? el(doc, 'b', {}, last.nextStep) : null,
+        last.lastGood !== undefined
+          ? el(
+              doc,
+              'span',
+              { class: 'ss-muted', 'data-key': 'last-good' },
+              `Last good sync ${ago(last.lastGood, options.now)}.`,
+            )
+          : null,
       ),
     );
 
@@ -357,6 +375,17 @@ export function renderSyncStatus(
           { 'data-key': 'uncertain' },
           el(doc, 'b', {}, plural(writes.uncertain, CHANGE)),
           ` sent without an answer from ${status.provider}: checked on the next sync.`,
+        ),
+      );
+
+    if (writes.notWritten)
+      items.push(
+        el(
+          doc,
+          'li',
+          { 'data-key': 'not-written' },
+          el(doc, 'b', {}, plural(writes.notWritten, CHANGE)),
+          ` not written to ${status.provider}: see Changes to send for why.`,
         ),
       );
   }

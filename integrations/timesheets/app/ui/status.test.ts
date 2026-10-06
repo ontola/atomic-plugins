@@ -8,7 +8,13 @@ import type { ChangesState, SyncOutcome, ViewState } from '../controller.js';
 import type { Timesheet } from '../model/types.js';
 import type { SyncResult } from '../sync.js';
 import type { SendOutcome } from '../writeBack.js';
-import { hours, NEXT_STEP, syncStatusFor } from './status.js';
+import {
+  hidesTail,
+  hours,
+  NEXT_STEP,
+  NO_PROXY_NOTE,
+  syncStatusFor,
+} from './status.js';
 
 const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -192,6 +198,8 @@ describe('syncStatusFor', () => {
         },
       },
     });
+    // `not-sent` (the rest of the batch after the uncertain one) is not
+    // uncertain: the change stays in the review, so it is in `pending`.
     expect(status.writes).toEqual({
       pending: 2,
       held: 1,
@@ -199,8 +207,158 @@ describe('syncStatusFor', () => {
         { title: 'Weekly sync', reason: 'HTTP 500' },
         { title: 'Standup', reason: 'Clockify does not allow this change.' },
       ],
-      uncertain: 2,
+      uncertain: 1,
     });
+    expect(status.problems).toBe(undefined);
+  });
+
+  it('the lease held by another copy: changes stay pending, one problem names it, nothing is "uncertain"', () => {
+    // As `lease.ts` `heldMessage` words it.
+    const held =
+      'Another open copy of this app (another device or tab) is sending changes to Clockify. Nothing was sent; try again after 12:05:00, when its turn ends at the latest.';
+    const outcome = (title: string) =>
+      ({
+        entryId: title,
+        title,
+        kind: 'update',
+        status: 'not-sent',
+        message: held,
+      }) as SendOutcome;
+    const change = (entryId: string) =>
+      ({
+        entryId,
+        blockers: [],
+        kind: 'update',
+        title: entryId,
+      }) as ChangesState['review'][number];
+    const status = syncStatusFor({
+      state: ready({
+        ok: true,
+        at: NOW,
+        result: result({
+          sendingElsewhereUntil: new Date(NOW + 60_000).toISOString(),
+        }),
+      }),
+      sheet: sheet(),
+      changes: {
+        ...NO_CHANGES,
+        review: [change('a'), change('b')],
+        outcomes: { at: NOW, results: [outcome('a'), outcome('b')] },
+      },
+    });
+    expect(status.writes).toEqual({ pending: 2 });
+    expect(status.problems).toEqual([
+      {
+        lead: 'Another open copy of this app is sending changes to Clockify.',
+        text: 'Nothing was sent; try again after 12:05:00, when its turn ends at the latest.',
+      },
+    ]);
+  });
+
+  it('sends that wrote nothing for another reason are counted, and a changes error is a problem', () => {
+    const outcome = (title: string, status: SendOutcome['status']) =>
+      ({ entryId: title, title, kind: 'update', status }) as SendOutcome;
+    const status = syncStatusFor({
+      state: ready(),
+      sheet: sheet(),
+      changes: {
+        ...NO_CHANGES,
+        error: 'Not sent. The row is kept as it is.',
+        outcomes: {
+          at: NOW,
+          results: [
+            outcome('a', 'conflict'),
+            outcome('b', 'changed'),
+            outcome('c', 'gone'),
+            outcome('d', 'adjusted'),
+            outcome('e', 'bound'),
+            outcome('f', 'sent'),
+          ],
+        },
+      },
+    });
+    expect(status.writes).toEqual({ pending: 0, notWritten: 3 });
+    expect(status.problems).toEqual([
+      {
+        lead: 'The last edit or send could not be saved or started.',
+        text: 'Not sent. The row is kept as it is.',
+        tone: 'neg',
+      },
+    ]);
+  });
+
+  it('without a proxy relay (frame K): read-only, with the reason', () => {
+    const status = syncStatusFor({
+      state: { kind: 'no-proxy' },
+      sheet: sheet({ lastChecked: new Date(NOW - HOUR).toISOString() }),
+      changes: NO_CHANGES,
+    });
+    expect(status.writeBack).toBe('read-only');
+    expect(status.writeBackNote).toBe(NO_PROXY_NOTE);
+    // What was read earlier is still shown, with when.
+    expect(status.last).toEqual({ ok: true, at: NOW - HOUR });
+    expect(status.writes).toEqual({ pending: 0 });
+    // The settings sheet over the data (`setup`) keeps write-back.
+    expect(
+      syncStatusFor({
+        state: { kind: 'setup', connection: CONNECTION, draft: {} },
+        sheet: sheet(),
+        changes: NO_CHANGES,
+      }).writeBack,
+    ).toBe('after-review');
+  });
+
+  it('a failed sync after a gap: the tail since the last good read is not loaded, and the last good sync is named', () => {
+    const checked = NOW - 3 * DAY;
+    const gap = [{ from: checked, to: NOW }];
+    const failed = ready({
+      ok: false,
+      at: NOW,
+      error: 'HTTP 503',
+      problem: { kind: 'other', detail: 'HTTP 503' },
+    });
+    const after = syncStatusFor({
+      state: failed,
+      sheet: sheet({
+        lastChecked: new Date(checked).toISOString(),
+        unknown: gap,
+      }),
+      changes: NO_CHANGES,
+    });
+    expect(after.last).toEqual({
+      ok: false,
+      at: NOW,
+      error: 'HTTP 503',
+      nextStep: 'Try again.',
+      lastGood: checked,
+    });
+    expect(after.problems![0].lead).toBe(
+      '72 h of the last 7 days not loaded yet.',
+    );
+    // The same tail after a successful sync: covered by "Synced just now".
+    const ok = syncStatusFor({
+      state: ready({ ok: true, at: NOW, result: result() }),
+      sheet: sheet({
+        lastChecked: new Date(checked).toISOString(),
+        unknown: gap,
+      }),
+      changes: NO_CHANGES,
+    });
+    expect(ok.problems).toBe(undefined);
+    // Before any sync of this page load the tail is shown too.
+    expect(hidesTail(ready())).toBe(false);
+    expect(hidesTail(failed)).toBe(false);
+    expect(hidesTail(ready({ ok: true, at: NOW, result: result() }))).toBe(
+      true,
+    );
+    expect(
+      hidesTail({
+        kind: 'syncing',
+        connection: CONNECTION,
+        settings: SETTINGS,
+      }),
+    ).toBe(true);
+    expect(hidesTail({ kind: 'no-proxy' })).toBe(false);
   });
 
   it('ignored: incomplete rows (with Open row for one), running timers, breaks, locked and custom-field entries', () => {
