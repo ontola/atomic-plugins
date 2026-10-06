@@ -2,6 +2,10 @@ export default {
   root: new URL('.', import.meta.url).pathname,
   resolve: {
     alias: {
+      'devonian/lenses': new URL(
+        '../../devonian/src/lenses/index.ts',
+        import.meta.url,
+      ).pathname,
       vitest: new URL(
         '../../browser/node_modules/vitest/dist/index.js',
         import.meta.url,
