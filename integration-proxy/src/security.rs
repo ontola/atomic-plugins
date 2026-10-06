@@ -260,6 +260,21 @@ impl Security {
         Ok(rows == 1)
     }
 
+    /// Whether `nonce` is recorded and not yet expired, without recording
+    /// it.
+    pub async fn nonce_used(&self, nonce: &str) -> Result<bool, String> {
+        let row = self
+            .client()
+            .await
+            .query_opt(
+                "SELECT 1 FROM used_challenges WHERE nonce = $1 AND expires_at > NOW()",
+                &[&nonce],
+            )
+            .await
+            .map_err(db_error)?;
+        Ok(row.is_some())
+    }
+
     /// Spends a signed request's replay key, as [`Self::consume_nonce`] does,
     /// but also refuses it while `legacy_key` is recorded: that is the same
     /// request's key in the earlier format, written by an older proxy

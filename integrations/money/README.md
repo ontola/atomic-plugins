@@ -409,87 +409,187 @@ check above was on the old host path), an Installation (as opposed to a
 draft), and the host's server-side size refusal through the browser (it has
 a Rust unit test in atomic-server, `uploads_need_a_declaration_and_respect_its_size`).
 
-## Moneybird: read-only contacts (`moneybird/`)
+## Moneybird: read-only contacts, hours and financial mutations (`moneybird/`)
 
 A second, independent thing in this folder (#102): a browser-only drive app,
 the same shape as `integrations/pets/app/`. It is not part of the sandbox
-bundle above and does not touch the Bank transactions table.
+bundle above and does not touch the Bank statements importer's table.
 
-- **Scope.** One collection, contacts, of one administration the person
-  chooses. Every call is a GET through `store.proxy.request`; the
-  connection lives at the integration proxy, owned by the user's agent and
-  delegated to the app's (#54 phase 2). The frame holds no credential and
-  makes no network call of its own (`moneybird/build.test.ts` checks the
-  bundle). Nothing is written to Moneybird.
-- **Deferred.** The catalog card used to advertise contacts, sales invoices,
-  purchase invoices, financial mutations "and the other collections". None of
-  those but contacts is imported. `financial_mutations.json` has no
-  pagination overlay (`overlays/APIs/moneybird.com/v2-readonly/pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`)
-  and needs a period `filter`, so it is the likely next collection, but it is
-  not attempted here.
+- **Scope.** Three collections of one administration the person chooses,
+  each ticked or not when the administration is chosen: **contacts** (as
+  0.1.x), **hours** (Moneybird time entries) and **financial mutations** (the
+  transactions on its financial accounts). Every call is a GET through
+  `store.proxy.request`; the connection lives at the integration proxy, owned
+  by the user's agent and delegated to the app's (#54 phase 2). The frame
+  holds no credential and makes no network call of its own
+  (`moneybird/build.test.ts` checks the bundle). Nothing is written to
+  Moneybird.
+- **Where the rows go.** Contacts fill the table the install made, with a
+  drive-local `Contact` class, as before. Hours and mutations are rows of the
+  shared classes of #177 (`ontology-kit/`), so the other apps' views work on
+  them: the first open makes, under the App, a "Moneybird hours" table
+  (`time-entry-v1`), "Moneybird projects" (`work-project-v1`), "Moneybird
+  people" (`work-person-v1`) and "Moneybird mutations"
+  (`bank-transaction-v1`), found again by `classtype` on later opens
+  (`moneybird/own.ts`). The Clockify timesheets app (0.6.x) can be added to
+  the hours table through "+ Add view" and shows the entries in its week
+  grid; the Money app to the mutations table and shows them in its ledger
+  (both offer themselves on any table of their class; that these two views
+  render Moneybird's rows is declared from their READMEs, not checked by an
+  e2e here). The App's `renders` lists both shared classes and its
+  `row-extras` the six extras below. Where a view is, is decided by the
+  table's class and parent (`moneybird/binding.ts` `layout`), never by the
+  parent alone, since the hours and mutations tables are children of the App
+  too: the install's table (a drive-local class) is the contacts table and
+  carries the collections choice; opened on its own hours or mutations table
+  (Add view offers it there as well), the app syncs only that table's
+  collection into it, with the App's administration and no grant; its
+  projects and people tables are refused with a note. Only the own tables a
+  sync writes are made: the contacts table's view makes the hours (with
+  projects and people) and mutations tables it imports into; a view on a
+  shared-class table makes only the projects and people tables hours link
+  to, never an empty mutations table.
+- **Syncing a table the app didn't make** ([the pattern](../README.md#syncing-a-table-the-app-didnt-make)):
+  added through "+ Add view" on a `time-entry-v1` or `bank-transaction-v1`
+  table of the person's own, the app shows "Not synced with Moneybird" and
+  writes nothing until "Sync this table to Moneybird" is pressed; that asks
+  the host's "Allow editing" (`store.requestRowAccess`), and the grant must
+  cover the row extras. The binding is a resource under the App whose
+  `moneybird-synced-table` names the table and which holds the
+  administration; the one collection that table's class can hold is synced
+  into it (hours there still link to the app's own Projects and People
+  tables). The table itself is never written and no row is ever deleted. A
+  lapsed grant pauses the sync ("Allow editing again"); a table of another
+  class is refused (`moneybird/binding.ts`).
 - **Flow.** Connect Moneybird (host consent bar, then the proxy's own
-  connect page), then choose an administration
-  (`GET /administrations.json`; the choice is
-  stored on the App resource as `moneybird-administration`), then import. It
-  reads `GET /{administration_id}/contacts.json?per_page=100&include_archived=true`
-  and follows `Link: <…>; rel="next"` only within that collection, for at
-  most 200 pages. It reads every page before writing, so a refresh that fails
-  part-way writes nothing and the rows imported earlier stay. The view syncs
-  once each time it opens, and on Sync now.
-- **Identity.** Each row carries `moneybird-source-id` =
-  `moneybird:<administration>:contact:<id>`. A repeated import with no change
-  writes nothing, and two administrations do not collide. A contact changed on
-  Moneybird overwrites the imported columns; local edits to them are not
-  preserved yet (the policy is #97's question). A contact that disappears is
-  kept.
-- **Columns.** `moneybird-id`, `-administration-id`, `-company-name`,
-  `-firstname`, `-lastname`, `-email`, `-city`, `-country`, `-customer-id`,
-  `-updated-at` (the exact ISO string Moneybird sent) as strings;
-  `moneybird-archived` as a boolean; `moneybird-version` as an integer. The
-  row name is the company, else the person, else the id. Null or absent
-  values are left unset.
+  connect page), then choose an administration (`GET /administrations.json`)
+  and the collections (stored on the App, or on the binding, as
+  `moneybird-administration` and `moneybird-collections`; an administration
+  stored by 0.1.x without collections means contacts), then import. The view
+  syncs once each time it opens, and on Sync now, each chosen collection on
+  its own: one that fails is reported next to the others ("contacts: refresh
+  failed: … Rows imported earlier are kept."). Every collection reads
+  everything before writing anything, so a refresh that fails part-way
+  writes nothing and the rows imported earlier stay.
+- **Reads.** Contacts:
+  `GET /{administration_id}/contacts.json?per_page=100&include_archived=true`;
+  hours: `GET /{administration_id}/time_entries.json?per_page=100&filter=period:this_year,state:all`
+  (passing any `filter` replaces Moneybird's defaults entirely, so both keys
+  are spelled out; running timers stay out, as by default). Both follow
+  `Link: <…>; rel="next"` only within their collection, for at most 200
+  pages. Financial mutations: `GET /{administration_id}/financial_accounts.json`
+  once (for the accounts' IBANs), then
+  `GET /{administration_id}/financial_mutations.json?filter=period:this_year`,
+  Moneybird's own period, the same the hours read uses. That list has **no
+  pagination**: the pinned OpenAPI document gives it only `filter` and says
+  it is "limited to 100 financial mutations" (developer.moneybird.com says
+  the same and points at a synchronization API the read-only document does
+  not carry). So an answer with 100 records or more is asked again as the
+  two halves of the civil year (`filter=period:YYYYMMDD..YYYYMMDD`), down to
+  single days, and a single day at the limit is an error ("Nothing was
+  written") rather than a silently incomplete ledger. The halving windows
+  take the civil year in Europe/Amsterdam (`civilYear()`): Moneybird's
+  `this_year` runs on the administration's clock, which the app does not
+  read, so the two agree except, around New Year, for an administration in
+  another time zone. At most 200
+  mutation requests per import (`MAX_MUTATION_REQUESTS`); an administration
+  with a few hundred mutations a year needs about a dozen. No overlay was
+  added for this: a `pageNumber` declaration would claim something Moneybird
+  does not do.
+- **Identity.** Each imported row carries `moneybird-source-id` =
+  `moneybird:<administration>:<collection>:<id>` (`contact`, `time_entry`,
+  `financial_mutation`, `project`, `user`). A repeated import with no change
+  writes nothing, and two administrations do not collide. A record changed
+  on Moneybird overwrites the imported columns, and a column Moneybird no
+  longer sends is removed; local edits to them are not preserved yet (the
+  policy is #97's question). A record that disappears is kept. Rows of the
+  table with another or no identity (the person's own) are left alone.
+- **Columns.** Contacts: `moneybird-id`, `-administration-id`,
+  `-company-name`, `-firstname`, `-lastname`, `-email`, `-city`, `-country`,
+  `-customer-id`, `-updated-at` (the exact ISO string Moneybird sent) as
+  strings; `moneybird-archived` as a boolean; `moneybird-version` as an
+  integer. The row name is the company, else the person, else the id.
+  **Hours** (`time-entry-v1`, by published subject): `name` = description
+  (else "Time entry <id>"), `work-start`/`work-end` = `started_at`/`ended_at`
+  as epoch milliseconds (the class's `timestamp`), `work-billable`,
+  `work-project` and `work-person` = links to the Projects and People rows
+  made from the `project` and `user` objects each entry embeds (named as
+  Moneybird names them; renamed there, renamed here); extras
+  `moneybird-source-id`, `-updated-at`, `-paused-duration` (seconds; the
+  Start–End span includes paused time, the class has no field for it). An
+  entry without a readable `started_at` is counted as skipped, not written.
+  **Mutations** (`bank-transaction-v1`): `bank-account` = the financial
+  account's `identifier` (an IBAN when the bank gives one); when Moneybird
+  lists no such account, `moneybird:<financial_account_id>`, prefixed because
+  a Moneybird id is not a bank's account id, which the class asks for;
+  `bank-currency`, `bank-amount` = Moneybird's `amount` **as the exact
+  decimal string it sent** (never parsed to a float; a value that is not
+  `-?\d+(\.\d{1,5})?` is skipped, never approximated), `bank-value-date` =
+  `date`, `bank-description` = `message` verbatim, `bank-reference` =
+  `account_servicer_transaction_id` else `batch_reference`, `name` = the
+  contra account's name, else the message, else "Mutation <id>"; extras
+  `moneybird-source-id`, `-version`, `-updated-at`, `-state` (unprocessed or
+  processed), `-contra-account`. `bank-booking-date` is not written
+  (Moneybird gives one date); `money-category` and `money-note` are never
+  written. Not imported: the entry's contact and sales invoice; a mutation's
+  payments, ledger account bookings, SEPA fields and settlement state.
+- **Period.** Both hours and mutations ask Moneybird for `period:this_year`,
+  its own default period, by the administration's clock. Earlier years are
+  not imported; a stored choice of period is not built (a product question).
 
-| What                                                  | Fixture (synthetic)                                | Real Moneybird                                                             |
-| ----------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------- |
-| `administrations.json` list and choice                | verified (unit, host E2E)                          | not verified                                                               |
-| contacts, the fields above, their datatypes           | verified (unit, host E2E)                          | not verified                                                               |
-| `Link` rel="next" pagination, `include_archived`      | verified against the fixture's own pages of 2      | not verified; the page size and headers are as documented, not as observed |
-| repeat import without duplicates, two administrations | verified (unit, host E2E)                          | not verified                                                               |
-| failed refresh keeps rows                             | verified (fixture's synthetic 503; unit, host E2E) | not verified                                                               |
-| 401/403 handling ("reconnect Moneybird")              | unit only                                          | not verified                                                               |
+| What                                                                      | Fixture (synthetic)                                                                         | Real Moneybird                                                             |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `administrations.json` list and choice                                    | verified (unit, host E2E)                                                                   | not verified                                                               |
+| contacts, the fields above, their datatypes                               | verified (unit, host E2E)                                                                   | not verified                                                               |
+| `Link` rel="next" pagination, `include_archived`, the time entries filter | verified against the fixture's own pages of 2                                               | not verified; the page size and headers are as documented, not as observed |
+| hours as `time-entry-v1` rows linked to project and person rows           | verified (unit, host E2E against the published Pages subjects)                              | not verified                                                               |
+| mutations as `bank-transaction-v1` rows, exact amount strings, IBANs      | verified (unit, host E2E against the published Pages subjects)                              | not verified                                                               |
+| the 100-record limit: halving windows, refusing a full day                | verified against the fixture's own lowered limit (unit)                                     | not verified; the limit is as documented, not as observed                  |
+| repeat import without duplicates, two administrations, removed columns    | verified (unit, host E2E)                                                                   | not verified                                                               |
+| one collection failing while the others go on; rows kept                  | verified (fixture's synthetic 503 on contacts; unit, host E2E)                              | not verified                                                               |
+| "Sync this table to Moneybird" after Allow editing, binding, pause        | verified (unit against the fake grant; host E2E on a hand-made `bank-transaction-v1` table) | not verified                                                               |
+| 401/403 handling ("reconnect Moneybird")                                  | unit only                                                                                   | not verified                                                               |
 
 **The fixture is synthetic, not recorded.**
 `fixtures/moneybird/synthetic.mjs` is hand-written from the pinned read-only
 OpenAPI document (localthought/openapi-directory@85a61052) and its examples.
-It has invented names and identifiers. `scenario.mjs` serves it to the mock
-proxy (registered as `moneybird` in `localthought/fixtures/index.mjs`). It
-pages by 2 whatever `per_page` asks, and fails every second read of an
-administration on page 2 with 503; both are test behaviour, not claims about
+It has invented names, amounts and identifiers; its time entries and
+mutations are dated in the current civil year in Europe/Amsterdam, because
+the app imports this year's. `scenario.mjs` serves it to the mock proxy (registered as `moneybird`
+in `localthought/fixtures/index.mjs`). It pages contacts and time entries by
+2 whatever `per_page` asks, fails every second read of an administration's
+contacts on page 2 with 503, and answers at most 100 mutations per period
+window (a test lowers that); all three are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
 administration and API token**; the steps are in `scenario.mjs`'s header.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).
-Version 0.1.1 is published at `apps/moneybird/0.1.1/ui.js` (0.1.0 relayed paths without the `/api/v2` base path, which the proxy refuses as not in the catalog; kept because a published file never changes); its version is
-recorded in `moneybird/package.json`, not in this folder's `package.json`
-(that one is the Bank statements importer's). `apps.mjs` finds the app here,
-not at `integrations/moneybird/app/`, through its `APP_FOLDERS` map. The
-`moneybird` catalog entry stays `enabled: false` until a real recording
-exists, so the published catalog does not list it; the lane's dev-server
-serves it enabled for `e2e/moneybird.spec.ts`, which installs it from the
-card. To release a new version, bump `moneybird/package.json` and the
-catalog entry's `version`, then run
-`node integrations/tooling/apps.mjs write moneybird`.
+Version 0.2.0 is published at `apps/moneybird/0.2.0/ui.js` (0.1.1 imported
+contacts only; 0.1.0 relayed paths without the `/api/v2` base path, which
+the proxy refuses as not in the catalog; both kept because a published file
+never changes); its version is recorded in `moneybird/package.json`, not in
+this folder's `package.json` (that one is the Bank statements importer's).
+`apps.mjs` finds the app here, not at `integrations/moneybird/app/`, through
+its `APP_FOLDERS` map. The `moneybird` catalog entry stays `enabled: false`:
+it bundles the github.io ontology base (`ontology-kit/README.md`, "Gate"),
+and no real recording exists; the lane's dev-server serves it enabled for
+`e2e/moneybird.spec.ts`, which installs it from the card. To release a new
+version, bump `moneybird/package.json` and the catalog entry's `version`,
+then run `node integrations/tooling/apps.mjs write moneybird`.
 
 Tests: the money vitest command above includes `moneybird/*.test.ts`. The
-host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It first
-passed on 2026-09-24 against atomic-server `2f403624e`, and again on
-2026-10-01 against the pin `a12b74a6783b`, after the connect page's button
-changed with the proxy's 0.2 protocol.
+host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier: the full
+journey with all three collections, and the Add view journey on a hand-made
+`bank-transaction-v1` table. It first passed on 2026-09-24 against
+atomic-server `2f403624e`, again on 2026-10-01 against the pin `a12b74a6783b`
+after the connect page's button changed with the proxy's 0.2 protocol, and
+with hours, mutations and the Add view journey on 2026-10-06 against the
+same pin.
 
 **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
 moneybird --i-understand-this-writes-to <administration id>` runs the Moneybird
 app's controller against one disposable administration (the driver seeds and
 cleans up; the app stays read-only) and checks the `/api/v2` base path (#274)
-against the real API; see [The live-check
-kit](../LIVE_TESTING.md#the-live-check-kit).
+against the real API; it imports the contacts collection only. See [The
+live-check kit](../LIVE_TESTING.md#the-live-check-kit).

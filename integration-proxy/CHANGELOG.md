@@ -25,6 +25,42 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   may name one. No platform of the default catalog declares such a scheme
   as its credential, so none changes. Stored credentials now `Debug`-print
   without their secrets. No version set yet.
+- Security (review of the above): one consent page makes at most 5 key
+  checks, for API keys and `http` tokens alike. The fifth rejection spends
+  the consent and answers `400` "Too many attempts to enter a key for this
+  connection; start again from your hub", and later submissions of that
+  consent are refused before any key check, also when submitted
+  concurrently. Before, a rejected key showed the page again without limit,
+  so one consent could try any number of keys or username and token pairs
+  against the provider. The attempts are single-use records in
+  `used_challenges` (`consent-key-check:<csrf>:<n>`, ten minutes), so no
+  schema change. The cap bounds one consent page, not a client:
+  `GET /connect` needs no signature, so a script can open new consent pages
+  and make 5 checks with each. There is no per-client or per-IP rate limit
+  yet.
+- Security: a new API key, bearer token or Basic credential records the
+  security scheme it was entered for (and, for Basic, the declared layout
+  without its field label; for an API key, the scheme's `in` and `name`),
+  and is sent only while the platform resolves to that same scheme and
+  layout or placement; otherwise `401 credential_refresh_failed`
+  (connect again). Rows written before carry no binding and are sent as
+  before (the kind check still applies).
+- A bearer token must now be RFC 6750 `b64token` (`[A-Za-z0-9-._~+/]+=*`),
+  with `:` also allowed before the padding for Asana-style personal access
+  tokens (`2/<id>/<id>:<secret>`, from Asana's documentation; not checked
+  with a live token). It was any visible ASCII.
+- **Rollback note.** Once a connection row of kind `http_bearer` or
+  `http_basic` exists, rolling back to 0.2.5 or earlier makes requests on
+  that connection fail with `500` (the older proxy cannot deserialize the
+  credential), and redeeming such a handoff issued in the five minutes
+  before the rollback answers `400 invalid_handoff`; `GET /connections` and
+  deletion do not deserialize
+  credentials and keep working. Delete those connections, or roll forward.
+  Rows of kind `api_key` with the new `scheme`/`placement` fields are still
+  read by 0.2.5 (serde ignores the unknown fields), so API-key connections
+  survive a rollback. An API-key handoff redeemed by 0.2.5 is re-serialized
+  without those fields, so that connection stays unbound after rolling
+  forward and is sent as before (harmless).
 
 ## 0.2.5 (2026-10-05)
 

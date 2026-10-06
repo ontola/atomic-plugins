@@ -35,7 +35,11 @@ Which app uses which class today: Google Calendar (`calendar` 0.3.1) writes
 `event-v1`; GitHub issues (`issue-tracker` 0.3.1) and Todoist (`todoist` 0.1.1)
 write `issue-v1`; Clockify (`timesheets` 0.7.1) writes `time-entry-v1`, linked
 to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
-writes `bank-transaction-v1`. Calendar, issue-tracker and timesheets also
+writes `bank-transaction-v1`; Moneybird (`moneybird` 0.2.0, in
+`integrations/money/moneybird/`) writes `time-entry-v1` (with
+`work-project-v1` and `work-person-v1` rows of its own) and
+`bank-transaction-v1`, read-only, into tables under its App or, through Add
+view, into a table of either class. Calendar, issue-tracker and timesheets also
 offer themselves as a view of a hand-made table of their class, and (from
 0.3.0, 0.3.0 and 0.6.0) can sync one. Each plugin's README is the authority
 for what it has checked.
