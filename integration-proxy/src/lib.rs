@@ -42,6 +42,7 @@ mod agent_id;
 mod api_error;
 mod capability;
 mod catalog;
+mod client_addr;
 mod config;
 mod connect;
 mod connections;
@@ -71,7 +72,10 @@ use tracing_subscriber::EnvFilter;
 
 pub use access::{Access, AccessPolicy, AllowAll, EnvAccessPolicy};
 pub use agent_id::{parse as parse_agent_id, AgentId};
-pub use config::{Config, DEFAULT_CATALOG_PATH, DEFAULT_OPERATOR_NAME};
+pub use config::{
+    Config, TrustForwardedFor, DEFAULT_CATALOG_PATH, DEFAULT_KEY_CHECK_LIMIT_PER_HOUR,
+    DEFAULT_OPERATOR_NAME,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -87,9 +91,18 @@ struct AppState {
     access: Arc<dyn AccessPolicy>,
     /// `OPERATOR_NAME`, `OPERATOR_URL` and the `BASE_URL` host, for the pages.
     operator: templates::Operator,
+    /// `KEY_CHECK_LIMIT_PER_HOUR` (0: off) and the window it counts over
+    /// (an hour; shorter only in tests).
+    key_check_limit: u32,
+    key_check_window: std::time::Duration,
+    /// `TRUST_FORWARDED_FOR`: where that limit finds the client address.
+    trust_forwarded_for: config::TrustForwardedFor,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
+
+/// The window [`AppState::key_check_limit`] counts over.
+const KEY_CHECK_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 
 impl FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
@@ -217,6 +230,16 @@ pub async fn build_app_with_access(
     let security = security::Security::connect(&config.database_url, &config.encryption_key)
         .await
         .map_err(Error::Security)?;
+    if config.key_check_limit_per_hour > 0
+        && config.trust_forwarded_for == config::TrustForwardedFor::None
+        && std::env::var_os("DYNO").is_some()
+    {
+        // Heroku sets `DYNO`. There every peer address is the router's, so
+        // without `TRUST_FORWARDED_FOR=heroku` all clients share one limit.
+        tracing::warn!(
+            "running on Heroku without TRUST_FORWARDED_FOR=heroku: the key-check limit counts the router's address, so all clients share it"
+        );
+    }
 
     let state = AppState {
         http_client,
@@ -227,6 +250,9 @@ pub async fn build_app_with_access(
         security: Some(security),
         access,
         operator: templates::Operator::from_config(config),
+        key_check_limit: config.key_check_limit_per_hour,
+        key_check_window: KEY_CHECK_WINDOW,
+        trust_forwarded_for: config.trust_forwarded_for,
         #[cfg(test)]
         test_upstream: None,
     };
@@ -235,7 +261,12 @@ pub async fn build_app_with_access(
 }
 
 /// Runs [`build_app`] and serves it on `0.0.0.0:{config.port}` until the
-/// server fails; under normal operation it does not return.
+/// server fails; under normal operation it does not return. Each request
+/// carries its peer address (`ConnectInfo<SocketAddr>`), which the key-check
+/// limit counts unless `TRUST_FORWARDED_FOR` says otherwise. A caller that
+/// serves [`build_app`]'s router itself should do the same
+/// (`into_make_service_with_connect_info::<SocketAddr>()`); without it, and
+/// without a trusted `X-Forwarded-For`, every client shares one limit.
 pub async fn serve(config: Config) -> Result<(), Error> {
     let app = build_app(&config).await?;
 
@@ -248,7 +279,12 @@ pub async fn serve(config: Config) -> Result<(), Error> {
             addr: addr.clone(),
             source,
         })?;
-    axum::serve(listener, app).await.map_err(Error::Serve)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(Error::Serve)
 }
 
 /// The bundled binary's entry point: installs a `tracing` subscriber

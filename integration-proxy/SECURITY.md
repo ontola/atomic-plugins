@@ -100,9 +100,8 @@ for API keys and tokens alike (the fifth rejection spends the consent; the
 attempt records are single-use rows in `used_challenges`, so the cap holds
 across instances and concurrent submissions). The cap bounds one consent
 page, not a client: `GET /connect` needs no signature, so a script can open
-new consent pages and make 5 checks with each. The proxy has no per-client
-or per-IP rate limit yet, so it does not bound how many keys or username
-and token pairs one client can try against a provider through it. The
+new consent pages and make 5 checks with each; the per-network limit
+(below, "Key checks per client network") bounds that. The
 credential is sealed in the same
 XChaCha20-Poly1305 envelope bound to its connection row, and no response
 returns it. On a proxied request the proxy builds the `Authorization` header
@@ -163,6 +162,75 @@ Risks that remain, and what the proxy does about them:
   address) is sealed with the token; it is not treated as a secret on the
   page (a plain text field) and it is not returned.
 
+## Key checks per client network (Q-097, unreleased)
+
+A key check sends whatever was typed on the consent page to the provider
+from the proxy's own address. The per-consent cap above does not stop a
+script from opening consent pages (`GET /connect` needs no signature) and
+using the proxy to test stolen or guessed API keys, tokens, or username and
+token pairs, with the proxy's address, not the script's, in the provider's
+logs and rate limits. So key checks (API keys and `http` bearer and basic
+tokens alike) are also limited per client network and platform:
+
+- **Limit.** At most `KEY_CHECK_LIMIT_PER_HOUR` (default 20; `0` turns it
+  off) in any hour, as a sliding window: each check takes one of that many
+  slots, a row `(bucket, slot)` in `key_check_limits` with the primary key on
+  both, which frees one hour after it was taken. Only one request can take
+  a slot, so the limit holds across instances and for concurrent requests;
+  a burst of 30 concurrent submissions with a limit of 5 makes exactly 5
+  checks (`connect::tests::postgres_key_checks_are_limited_per_network_and_platform`).
+  Expired rows are deleted on the next key check.
+- **Order.** The limit is taken after the input is validated (a malformed
+  key or token costs nothing) and before the consent's own key-check
+  attempt and any upstream call. Over the limit the answer is `429` "Too
+  many key checks from your network for <Platform>; try again later", with
+  `Retry-After` (seconds until a slot frees) and `no-store`; nothing is
+  sent to the provider, and the consent is neither spent nor charged an
+  attempt, so the same page works once the network is under the limit
+  again (within the consent's ten minutes). A slot is taken even when the
+  consent then turns out to be spent or out of attempts; that costs the
+  submitting network only.
+- **What is stored and logged.** The bucket is a hex HMAC-SHA256 under
+  `ENCRYPTION_KEY` of a fixed domain string, the platform and the network,
+  so a row reveals neither, and the IPv4 space cannot be hashed through to
+  find an address without the key. The proxy logs "key check limit reached"
+  with the bucket and the platform, never the address or anything typed.
+  Rows live at most an hour (the window), plus until the next key check
+  sweeps them.
+- **Network.** An IPv4 address, or an IPv6 address's /64 (a subscriber
+  usually gets a whole /64, so per-address counting would let one client
+  rotate addresses); an IPv4-mapped IPv6 address counts as its IPv4 address.
+- **Client address.** `TRUST_FORWARDED_FOR=none` (the default) counts the
+  TCP peer address and ignores `X-Forwarded-For`. `heroku` (synonym
+  `rightmost`) counts only the right-most `X-Forwarded-For` entry, the one
+  Heroku's router appends to whatever the client sent; entries to its left
+  are never read, and when that entry is missing or not an address the peer
+  address is used, never an entry further left. localthought.io runs on
+  Heroku and must set `heroku`: there the peer is always the router, and
+  without it every client shares one limit (the proxy warns at startup when
+  Heroku's `DYNO` variable is set without it). A self-hosted proxy with
+  nothing in front keeps `none`; behind exactly one reverse proxy that
+  appends the client address (SELF_HOSTING.md), `rightmost`. Setting
+  `heroku` or `rightmost` with nothing in front is a misconfiguration: a
+  client then writes the right-most entry itself and chooses its bucket. If
+  no address can be told at all (a wrapper that serves `build_app` without
+  connect info, under `none`), every such check shares one bucket, `unknown`,
+  and each one logs a warning: the limit then fails closed, for everyone.
+- **Shared addresses.** Everyone behind one address (an office, a
+  university, carrier-grade NAT on mobile networks, a VPN exit) shares one
+  limit per platform, so a busy shared address, or one abuser behind it,
+  can make honest people there wait up to an hour. 20 per hour is meant to
+  make that unlikely: a person connecting a platform makes one to three key
+  checks (a typo, a key copied from the wrong place), so 20 is several
+  people's worth per platform per hour, while a script testing keys gets 20
+  guesses per hour per address instead of 5 per consent page without end.
+  Other platforms are not affected. An operator with many users behind one
+  address can raise the limit; an attacker with many addresses (a botnet,
+  many IPv6 /64s) is slowed, not stopped.
+- **What it does not cover.** OAuth connections make no key check and are
+  not limited; proxied requests (which need a signed agent) are not rate
+  limited either.
+
 A platform whose composed document declares top-level `security: []`, no
 security scheme, and no operation that requires one (0.2.3 and later)
 connects on consent alone: the connection seals only the platform name and
@@ -202,6 +270,12 @@ implemented here.
   (issue #54); Safari's engine and Firefox are unconfirmed.
 - Other programs on the same machine can reach a loopback proxy; the
   signature requirement is the control, as decision 12 of #54 expects.
+- The key-check limit's `heroku` mode follows Heroku's documentation (the
+  router appends the connecting client's address to `X-Forwarded-For`); it
+  was tested with constructed headers, not behind Heroku's router, and not
+  with a request that carries several `X-Forwarded-For` lines through it.
+  The Caddy and nginx behaviour SELF_HOSTING.md relies on for `rightmost`
+  was likewise not tried.
 
 ## OAuth (#9)
 
@@ -257,5 +331,6 @@ from catalog platform names. Path-traversal rejection, upstream redirect
 disabling, and the bounded OAD request validation above are implemented.
 The remaining gate for #9 and #10 is provider registration, full JSON Schema
 body validation, further SSRF hardening (e.g. blocking requests to internal
-network ranges), rate limiting, and an external review of the token envelope
+network ranges), rate limiting of proxied requests (key checks are limited
+per client network, above), and an external review of the token envelope
 format before live credentials are handled.
