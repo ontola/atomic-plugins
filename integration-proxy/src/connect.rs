@@ -395,7 +395,7 @@ fn consent_page(
                         secret: templates::SecretName::ApiToken,
                         username_label: match &scheme.auth {
                             crate::providers::HttpAuth::Basic(
-                                crate::providers::BasicCredentials::TokenAsPasswordAskingUsername {
+                                crate::providers::BasicCredentials::PasswordTokenAskingUsername {
                                     label,
                                 },
                             ) => Some(label.as_str()),
@@ -494,16 +494,16 @@ fn http_credential(
                 return Err("Enter a valid API token");
             }
             let (username, password) = match layout {
-                BasicCredentials::TokenAsUsername { password } => {
+                BasicCredentials::UsernameToken { password } => {
                     if token.contains(':') {
                         return Err("Enter a valid API token");
                     }
                     (token.to_owned(), password.clone())
                 }
-                BasicCredentials::TokenAsPasswordWithUsername { username } => {
+                BasicCredentials::PasswordToken { username } => {
                     (username.clone(), token.to_owned())
                 }
-                BasicCredentials::TokenAsPasswordAskingUsername { .. } => {
+                BasicCredentials::PasswordTokenAskingUsername { .. } => {
                     let username = approval
                         .username
                         .as_deref()
@@ -1696,6 +1696,529 @@ mod tests {
             .find(|c| c["connection_id"] == body["connection_id"])
             .expect("the new connection is listed");
         assert_eq!(mine["label"], "ada@example.test");
+    }
+
+    /// A document whose one scheme is the `http` scheme `scheme`, with a
+    /// help link and a key check (openapi-extensions/spec/api-key-details).
+    fn http_document(scheme: serde_json::Value) -> serde_json::Value {
+        let mut scheme = scheme;
+        scheme["description"] = "A personal access token, made under Settings, Tokens.".into();
+        scheme["x-api-key-details"]["helpUrl"] = "https://service.example/help/tokens".into();
+        scheme["x-api-key-details"]["keyCheck"] =
+            serde_json::json!({"operationId": "getMe", "label": "$response.body#/email"});
+        serde_json::json!({
+            "servers": [{"url": "https://api.service.example/api"}],
+            "components": {"securitySchemes": {"serviceToken": scheme}},
+            "security": [{"serviceToken": []}],
+            "paths": {
+                "/v1/user": {"get": {"operationId": "getMe"}},
+                "/v1/workspaces": {"get": {}}
+            }
+        })
+    }
+
+    fn bearer() -> serde_json::Value {
+        serde_json::json!({"type": "http", "scheme": "bearer"})
+    }
+
+    fn basic(layout: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"type": "http", "scheme": "basic",
+            "x-api-key-details": {"basicCredentials": layout}})
+    }
+
+    fn basic_header(username: &str, password: &str) -> String {
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+        )
+    }
+
+    fn http_scheme(document: serde_json::Value) -> crate::providers::HttpScheme {
+        match crate::providers::SecurityScheme::from_document(&document, None, None, None) {
+            Ok(crate::providers::SecurityScheme::Http(scheme)) => scheme,
+            other => panic!("expected an http scheme, got {other:?}"),
+        }
+    }
+
+    fn token_approval(token: &str, username: Option<&str>) -> Approval {
+        Approval {
+            csrf: String::new(),
+            api_key: Some(token.into()),
+            username: username.map(str::to_owned),
+        }
+    }
+
+    /// A stand-in provider for an `http` scheme's key check: `/api/v1/user`
+    /// answers by the `Authorization` header it gets.
+    async fn http_key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = [
+            "Bearer good-token".to_owned(),
+            basic_header("good-token", "api_token"),
+            basic_header("ada@example.test", "good-token"),
+            basic_header("api", "good-token"),
+        ];
+        let app = axum::Router::new().route(
+            "/api/v1/user",
+            axum::routing::get(move |headers: HeaderMap| {
+                let accepted = accepted.clone();
+                async move {
+                    let authorization = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
+                    if accepted.iter().any(|a| a == authorization) {
+                        (StatusCode::OK, r#"{"id":"u1","email":"ada@example.test"}"#)
+                            .into_response()
+                    } else if authorization == "Bearer forbidden-token" {
+                        StatusCode::FORBIDDEN.into_response()
+                    } else if authorization == "Bearer broken-token" {
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}"), server)
+    }
+
+    #[test]
+    fn http_tokens_are_laid_out_as_declared_and_validated() {
+        use crate::proxy::StoredCredential;
+        let bearer_scheme = http_scheme(http_document(bearer()));
+        let bearer_token = |token: &str, username: Option<&str>| match http_credential(
+            "service",
+            &bearer_scheme,
+            &token_approval(token, username),
+        ) {
+            Ok(StoredCredential::HttpBearer { provider, token }) => {
+                assert_eq!(provider, "service");
+                Ok(token)
+            }
+            Ok(other) => panic!("{other:?}"),
+            Err(message) => Err(message),
+        };
+        assert_eq!(bearer_token(" good-token ", None), Ok("good-token".into()));
+        // A typed username is ignored for a bearer token.
+        assert_eq!(
+            bearer_token("good-token", Some("someone")),
+            Ok("good-token".into())
+        );
+        // Asana-style tokens with '/' and ':' are visible ASCII.
+        assert_eq!(bearer_token("2/12/34:ab", None), Ok("2/12/34:ab".into()));
+        for bad in ["abc", "has space", "tok\u{e9}n-1", "line\nbreak", ""] {
+            assert_eq!(
+                bearer_token(bad, None),
+                Err("Enter a valid API token"),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            bearer_token(&"x".repeat(513), None),
+            Err("Enter a valid API token")
+        );
+
+        let halves = |layout: serde_json::Value, token: &str, username: Option<&str>| {
+            let scheme = http_scheme(http_document(basic(layout)));
+            match http_credential("service", &scheme, &token_approval(token, username)) {
+                Ok(StoredCredential::HttpBasic {
+                    username, password, ..
+                }) => Ok((username, password)),
+                Ok(other) => panic!("{other:?}"),
+                Err(message) => Err(message),
+            }
+        };
+        let as_username = serde_json::json!({"token": "username", "password": "api_token"});
+        assert_eq!(
+            halves(as_username.clone(), "good-token", Some("ignored")),
+            Ok(("good-token".into(), "api_token".into()))
+        );
+        // RFC 7617: a user-id cannot contain ':'.
+        assert_eq!(
+            halves(as_username, "good:token", None),
+            Err("Enter a valid API token")
+        );
+        assert_eq!(
+            halves(
+                serde_json::json!({"token": "password", "username": "api"}),
+                "pass:with:colons",
+                Some("ignored")
+            ),
+            Ok(("api".into(), "pass:with:colons".into()))
+        );
+        let asking = serde_json::json!({"token": "password", "usernameLabel": "Email"});
+        assert_eq!(
+            halves(asking.clone(), "good-token", Some(" ada@example.test ")),
+            Ok(("ada@example.test".into(), "good-token".into()))
+        );
+        for username in [None, Some(""), Some("  "), Some("a:b"), Some("a\u{7}b")] {
+            assert_eq!(
+                halves(asking.clone(), "good-token", username),
+                Err("Enter a valid username and API token"),
+                "{username:?}"
+            );
+        }
+        assert_eq!(
+            halves(asking.clone(), "good-token", Some(&"u".repeat(257))),
+            Err("Enter a valid username and API token")
+        );
+        assert_eq!(
+            halves(asking, "tok\u{0}en", Some("ada@example.test")),
+            Err("Enter a valid API token")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_http_key_check_sends_the_authorization_a_request_would_carry() {
+        let (upstream, server) = http_key_check_upstream().await;
+        let mut s = state(None);
+        s.test_upstream = Some(upstream);
+        let check = |layout: Option<serde_json::Value>, token: &str, username: Option<&str>| {
+            let scheme = http_scheme(http_document(layout.map_or_else(bearer, basic)));
+            let credential =
+                http_credential("service", &scheme, &token_approval(token, username)).unwrap();
+            let s = s.clone();
+            async move { check_http_credential(&s, &scheme, &credential).await }
+        };
+        let accepted = KeyCheck::Accepted(Some("ada@example.test".into()));
+        assert_eq!(check(None, "good-token", None).await, accepted);
+        assert_eq!(check(None, "wrong-token", None).await, KeyCheck::Rejected);
+        assert_eq!(
+            check(None, "forbidden-token", None).await,
+            KeyCheck::Rejected
+        );
+        assert_eq!(
+            check(None, "broken-token", None).await,
+            KeyCheck::Undetermined
+        );
+        for (layout, username) in [
+            (
+                serde_json::json!({"token": "username", "password": "api_token"}),
+                None,
+            ),
+            (
+                serde_json::json!({"token": "password", "usernameLabel": "Email"}),
+                Some("ada@example.test"),
+            ),
+            (
+                serde_json::json!({"token": "password", "username": "api"}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                check(Some(layout.clone()), "good-token", username).await,
+                accepted,
+                "{layout}"
+            );
+            assert_eq!(
+                check(Some(layout.clone()), "wrong-token", username).await,
+                KeyCheck::Rejected,
+                "{layout}"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_http_consent_page_asks_for_a_token_and_a_declared_username() {
+        let page = |document: serde_json::Value| {
+            let mut s = state(None);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document,
+                serde_json::json!({}),
+            );
+            let uri = connect_uri(&api_key_request());
+            let router = crate::router(s);
+            async move {
+                router
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .uri(uri)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        let response = page(http_document(bearer())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // Approval redirects to the destination, as for an API key.
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .ends_with("form-action 'self' https://hub.example"));
+        let html = body_text(response).await;
+        assert!(html.contains("A personal access token, made under Settings, Tokens."));
+        assert!(html.contains(
+            r#"<a href="https://service.example/help/tokens" target="_blank" rel="noopener noreferrer">Where to find your Clockify API token</a>"#
+        ));
+        assert!(html.contains(
+            r#"type="password" name="api_key" autocomplete="off" placeholder="API token""#
+        ));
+        assert!(!html.contains(r#"name="username""#));
+
+        let html = body_text(
+            page(http_document(basic(
+                serde_json::json!({"token": "password", "usernameLabel": "Email <work>"}),
+            )))
+            .await,
+        )
+        .await;
+        assert!(html.contains(
+            r#"type="text" name="username" autocomplete="off" placeholder="Email &lt;work&gt;" aria-label="Email &lt;work&gt;" required"#
+        ));
+        assert!(html.contains(r#"name="api_key""#));
+        // A fixed username is not asked for.
+        let html = body_text(
+            page(http_document(basic(
+                serde_json::json!({"token": "username", "password": "api_token"}),
+            )))
+            .await,
+        )
+        .await;
+        assert!(!html.contains(r#"name="username""#));
+        assert!(!html.contains("api_token"));
+        // A basic scheme without a declared token layout is not offered.
+        let mut undeclared = http_document(basic(serde_json::json!({})));
+        undeclared["components"]["securitySchemes"]["serviceToken"]["x-api-key-details"]
+            .as_object_mut()
+            .unwrap()
+            .remove("basicCredentials");
+        let html = body_text(page(undeclared).await).await;
+        assert!(html.contains("This platform is not available for connection"));
+    }
+
+    /// Q-086, end to end for both kinds: a rejected token asks again
+    /// without spending the consent, an undetermined check stores nothing,
+    /// and an accepted token is sealed as checked, redeemed by the signer,
+    /// and never returned.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_http_tokens_are_checked_then_sealed_and_never_returned() {
+        let (upstream, server) = http_key_check_upstream().await;
+        let security = crate::test_support::security().await;
+        for (seed, scheme, username) in [
+            (23u8, bearer(), None),
+            (
+                24,
+                basic(serde_json::json!({"token": "password", "usernameLabel": "Email"})),
+                Some("ada@example.test"),
+            ),
+        ] {
+            let mut s = state(Some(security.clone()));
+            s.test_upstream = Some(upstream.clone());
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                http_document(scheme),
+                serde_json::json!({}),
+            );
+            let consent = Consent {
+                request: api_key_request(),
+                csrf: random(),
+                expires: crate::now_secs() + 600,
+            };
+            let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                CONSENT_COOKIE,
+                serde_json::to_string(&consent).unwrap(),
+            ));
+            let approve = |token: &str, username: Option<&str>| {
+                authorize(
+                    State(s.clone()),
+                    jar.clone(),
+                    HeaderMap::new(),
+                    Form(Approval {
+                        csrf: consent.csrf.clone(),
+                        ..token_approval(token, username)
+                    }),
+                )
+            };
+            // Malformed: refused before any check, nothing spent.
+            let blank = approve("  ", username).await;
+            assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
+            assert!(body_text(blank).await.starts_with("Enter a valid"));
+            // Rejected: the page again, with the reason and not the token.
+            let rejected = approve("wrong-token", username).await;
+            assert_eq!(rejected.status(), StatusCode::OK);
+            let html = body_text(rejected).await;
+            assert!(html.contains("Clockify did not accept that API token."));
+            assert!(html.contains(&consent.csrf));
+            assert!(!html.contains("wrong-token"));
+            // Undetermined (only reachable for the bearer token here).
+            if username.is_none() {
+                let broken = approve("broken-token", None).await;
+                assert_eq!(broken.status(), StatusCode::BAD_REQUEST);
+                let text = body_text(broken).await;
+                assert!(text.starts_with("Could not check the API token"));
+                assert!(!text.contains("broken-token"));
+            }
+            // Accepted: the same consent still works.
+            let accepted = approve("good-token", username).await;
+            assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+            let location =
+                Url::parse(accepted.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+            assert!(!location.as_str().contains("good-token"));
+            let code = location
+                .query_pairs()
+                .find(|(k, _)| k == "connection_code")
+                .unwrap()
+                .1
+                .into_owned();
+            let owner = Agent::new(seed);
+            let ok = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
+            assert_eq!(ok.status(), StatusCode::OK);
+            let body = body_json(ok).await;
+            assert_eq!(body["owner"], owner.id());
+            assert_eq!(body["label"], "ada@example.test");
+            assert!(!body.to_string().contains("good-token"));
+            let record = security
+                .load_connection(body["connection_id"].as_str().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let credential: crate::proxy::StoredCredential =
+                serde_json::from_slice(&record.credential).unwrap();
+            match (username, credential) {
+                (None, crate::proxy::StoredCredential::HttpBearer { token, .. }) => {
+                    assert_eq!(token, "good-token")
+                }
+                (
+                    Some(expected),
+                    crate::proxy::StoredCredential::HttpBasic {
+                        username, password, ..
+                    },
+                ) => assert_eq!(
+                    (username.as_str(), password.as_str()),
+                    (expected, "good-token")
+                ),
+                (_, other) => panic!("{other:?}"),
+            }
+        }
+        server.abort();
+    }
+
+    /// Collects everything a `tracing` subscriber writes.
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Q-086: with every `tracing` event recorded at TRACE level, a Basic
+    /// connection's consent, key check, redeem and proxied request (through
+    /// the router and its `TraceLayer`) log neither half of the credential
+    /// nor its base64 form. `log`-crate records of dependencies are not
+    /// captured here.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_no_http_token_reaches_the_logs() {
+        let logs = LogBuffer::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (upstream, key_server) = http_key_check_upstream().await;
+        let security = crate::test_support::security().await;
+        let layout = serde_json::json!({"token": "password", "usernameLabel": "Email"});
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream);
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            http_document(basic(layout.clone())),
+            serde_json::json!({}),
+        );
+        let consent = Consent {
+            request: api_key_request(),
+            csrf: random(),
+            expires: crate::now_secs() + 600,
+        };
+        let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+            CONSENT_COOKIE,
+            serde_json::to_string(&consent).unwrap(),
+        ));
+        let accepted = authorize(
+            State(s.clone()),
+            jar,
+            HeaderMap::new(),
+            Form(Approval {
+                csrf: consent.csrf.clone(),
+                ..token_approval("good-token", Some("ada@example.test"))
+            }),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::SEE_OTHER);
+        key_server.abort();
+        let location = Url::parse(accepted.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let code = location
+            .query_pairs()
+            .find(|(k, _)| k == "connection_code")
+            .unwrap()
+            .1
+            .into_owned();
+        let owner = Agent::new(25);
+        let redeemed = body_json(redeem_as(&s, &owner, &code, &"a".repeat(43)).await).await;
+        let connection_id = redeemed["connection_id"].as_str().unwrap();
+
+        // A proxied request to a provider that answers anything.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/v1/workspaces",
+            axum::routing::get(|| async { axum::Json(serde_json::json!([])) }),
+        );
+        let provider = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut document = http_document(basic(layout));
+        document["servers"] = serde_json::json!([{"url": format!("http://{address}/api")}]);
+        // The key check needs an https server; the proxied request does not.
+        document["components"]["securitySchemes"]["serviceToken"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        document["components"]["securitySchemes"]["serviceToken"]["x-api-key-details"] = serde_json::json!({"basicCredentials": {"token": "password", "usernameLabel": "Email"}});
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            document,
+            serde_json::json!({}),
+        );
+        let response = crate::router(s.clone())
+            .oneshot(signed_request(
+                &s,
+                &owner,
+                "GET",
+                &format!("/proxy/{connection_id}/clockify/api/v1/workspaces"),
+                Vec::new(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        provider.abort();
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        // The capture works: the router's TraceLayer recorded the request.
+        assert!(logs.contains("/proxy/"), "{logs}");
+        let encoded = basic_header("ada@example.test", "good-token");
+        for secret in [
+            "good-token",
+            encoded.trim_start_matches("Basic "),
+            "ada@example.test",
+        ] {
+            assert!(!logs.contains(secret), "{secret} in logs:\n{logs}");
+        }
     }
 
     fn no_credential_catalog() -> crate::catalog::Catalog {

@@ -858,6 +858,349 @@ mod tests {
         (server, catalog)
     }
 
+    fn basic(username: &str, password: &str) -> String {
+        use base64::Engine as _;
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+        )
+    }
+
+    #[tokio::test]
+    async fn http_credentials_are_sent_as_bearer_or_basic_authorization() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/workspaces",
+            axum::routing::get(|headers: HeaderMap| async move {
+                Json(json!({
+                    "authorization": headers.get_all(AUTHORIZATION).iter()
+                        .filter_map(|v| v.to_str().ok()).collect::<Vec<_>>(),
+                }))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = crate::build_http_client();
+        // A caller's own Authorization in the incoming headers is not copied.
+        let mut incoming = HeaderMap::new();
+        incoming.insert(AUTHORIZATION, HeaderValue::from_static("Capability x"));
+        for (injection, expected) in [
+            (
+                CredentialInjection::Bearer("pat-secret".into()),
+                "Bearer pat-secret".to_owned(),
+            ),
+            (
+                CredentialInjection::Basic {
+                    username: "pat-secret".into(),
+                    password: "api_token".into(),
+                },
+                basic("pat-secret", "api_token"),
+            ),
+            (
+                CredentialInjection::Basic {
+                    username: "sk_secret".into(),
+                    password: String::new(),
+                },
+                basic("sk_secret", ""),
+            ),
+        ] {
+            let response = upstream_request(
+                &client,
+                axum::http::Method::GET,
+                Url::parse(&format!("http://{address}/workspaces")).unwrap(),
+                injection,
+                &incoming,
+                &[],
+                Bytes::new(),
+            )
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+            assert_eq!(response["authorization"], json!([expected]));
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn a_stored_credential_debugs_without_its_secret() {
+        for credential in [
+            StoredCredential::HttpBearer {
+                provider: "service".into(),
+                token: "pat-secret".into(),
+            },
+            StoredCredential::HttpBasic {
+                provider: "service".into(),
+                username: "user-secret".into(),
+                password: "pat-secret".into(),
+            },
+            StoredCredential::ApiKey {
+                provider: "service".into(),
+                key: "pat-secret".into(),
+            },
+            StoredCredential::OAuth {
+                provider: "service".into(),
+                access_token: "pat-secret".into(),
+                refresh_token: Some("user-secret".into()),
+                expires_at: None,
+            },
+        ] {
+            let debug = format!("{credential:?}");
+            assert!(debug.contains("service"), "{debug}");
+            assert!(
+                !debug.contains("pat-secret") && !debug.contains("user-secret"),
+                "{debug}"
+            );
+        }
+    }
+
+    /// An upstream that echoes the `Authorization` it received, and a
+    /// catalog whose one scheme is `scheme` (an `http` scheme, say).
+    async fn http_upstream(
+        scheme: serde_json::Value,
+    ) -> (tokio::task::JoinHandle<()>, crate::catalog::Catalog) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/workspaces",
+            axum::routing::any(|headers: HeaderMap| async move {
+                axum::Json(json!({
+                    "authorization": headers.get_all(AUTHORIZATION).iter()
+                        .filter_map(|v| v.to_str().ok()).collect::<Vec<_>>(),
+                    "signature_forwarded": headers.contains_key("x-atomic-signature"),
+                }))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let catalog = crate::catalog::Catalog::from_test_document(
+            "clockify",
+            json!({
+                "servers": [{"url": format!("http://{address}")}],
+                "components": {"securitySchemes": {"serviceToken": scheme}},
+                "security": [{"serviceToken": []}],
+                "paths": {"/workspaces": {"get": {}}}
+            }),
+            json!({}),
+        );
+        (server, catalog)
+    }
+
+    fn bearer_scheme() -> serde_json::Value {
+        json!({"type": "http", "scheme": "bearer"})
+    }
+
+    fn basic_scheme() -> serde_json::Value {
+        json!({"type": "http", "scheme": "basic", "x-api-key-details": {
+            "basicCredentials": {"token": "username", "password": "api_token"}}})
+    }
+
+    /// Q-086: a bearer or basic token reaches the provider only as the
+    /// `Authorization` the platform's scheme declares; the caller's own
+    /// `Authorization` (a frame capability) never does, any other is
+    /// refused, and a token connected under one kind is not sent once the
+    /// platform resolves to another.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_http_tokens_reach_the_provider_only_as_declared() {
+        let security = security().await;
+        let bearer_credential = serde_json::to_vec(&StoredCredential::HttpBearer {
+            provider: "clockify".into(),
+            token: "pat-secret".into(),
+        })
+        .unwrap();
+        let basic_credential = serde_json::to_vec(&StoredCredential::HttpBasic {
+            provider: "clockify".into(),
+            username: "pat-secret".into(),
+            password: "api_token".into(),
+        })
+        .unwrap();
+        let owner = Agent::new(61);
+        let fixture = |scheme: serde_json::Value, credential: Vec<u8>| {
+            let security = security.clone();
+            let owner_id = owner.id();
+            async move {
+                let (server, catalog) = http_upstream(scheme).await;
+                let mut s = state(Some(security.clone()));
+                s.catalog = catalog;
+                let id = security
+                    .create_connection("clockify", &owner_id, &credential)
+                    .await
+                    .unwrap();
+                Fixture {
+                    state: s,
+                    security,
+                    owner: Agent::new(61),
+                    id,
+                    _server: server,
+                }
+            }
+        };
+
+        // Bearer, signed by the owner.
+        let f = fixture(bearer_scheme(), bearer_credential.clone()).await;
+        let response = f.get_as(&f.owner).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["authorization"], json!(["Bearer pat-secret"]));
+        assert_eq!(body["signature_forwarded"], false);
+        // Through a frame capability: the capability is consumed here, and
+        // only the connection's token goes upstream.
+        let app = Agent::new(62);
+        let frame = Agent::new(63);
+        f.security
+            .put_delegation(&f.id, &app.id(), None)
+            .await
+            .unwrap();
+        let token = mint(&f.owner, &f.claims(&app, &frame));
+        let response = f.frame_get(&token, &frame).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await["authorization"],
+            json!(["Bearer pat-secret"])
+        );
+        // Any other Authorization from the caller is refused, not forwarded.
+        for supplied in ["Bearer attacker-token", &basic("attacker", "x")] {
+            let mut request = signed_request(&f.state, &f.owner, "GET", &f.path(), vec![]);
+            request
+                .headers_mut()
+                .insert(AUTHORIZATION, HeaderValue::from_str(supplied).unwrap());
+            expect_error(
+                f.send(request).await,
+                StatusCode::UNAUTHORIZED,
+                "unsupported_authorization",
+            )
+            .await;
+        }
+        // The token is never echoed back to the caller.
+        let response = f.get_as(&f.owner).await;
+        assert!(!response
+            .headers()
+            .values()
+            .any(|v| v.to_str().is_ok_and(|v| v.contains("pat-secret"))));
+
+        // Basic: the declared layout, base64 of username:password.
+        let f = fixture(basic_scheme(), basic_credential.clone()).await;
+        let response = f.get_as(&f.owner).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await["authorization"],
+            json!([basic("pat-secret", "api_token")])
+        );
+
+        // A token connected under one kind is not sent under another.
+        for (scheme, credential) in [
+            (basic_scheme(), bearer_credential.clone()),
+            (bearer_scheme(), basic_credential.clone()),
+            (
+                json!({"type": "apiKey", "in": "header", "name": "X-Api-Key"}),
+                bearer_credential,
+            ),
+            (
+                json!({"type": "apiKey", "in": "header", "name": "X-Api-Key"}),
+                basic_credential,
+            ),
+        ] {
+            let f = fixture(scheme, credential).await;
+            expect_error(
+                f.get_as(&f.owner).await,
+                StatusCode::UNAUTHORIZED,
+                "credential_refresh_failed",
+            )
+            .await;
+        }
+    }
+
+    /// An `http` bearer scheme as an authentication profile's one scheme:
+    /// its token goes only to the operations the profile covers, and a
+    /// token connected under it is not sent once the selection names an
+    /// OAuth profile.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_an_http_profile_sends_its_token_only_where_the_profile_allows() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let echo = |headers: HeaderMap| async move {
+            Json(json!({
+                "authorization": headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()),
+            }))
+        };
+        let app = axum::Router::new()
+            .route("/v1/users/@me", axum::routing::any(echo))
+            .route("/v1/users/@me/guilds", axum::routing::any(echo))
+            .route("/v1/channels/1/messages", axum::routing::any(echo));
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let catalog = |selection| {
+            let mut document =
+                crate::test_support::mixed_profiles_document(&format!("http://{address}/v1"));
+            document["components"]["securitySchemes"]["pat"] = bearer_scheme();
+            document["components"]["x-authentication-profiles"]["pat"] =
+                json!({"securityScheme": "pat"});
+            document["paths"]["/users/@me"]["get"]["security"] =
+                json!([{"botToken": []}, {"userOAuth": ["identify"]}, {"pat": []}]);
+            crate::catalog::Catalog::from_test_document("mixed", document, selection)
+        };
+        let security = security().await;
+        let mut s = state(Some(security.clone()));
+        s.catalog = catalog(json!({"authenticationProfile": "pat"}));
+        let owner = Agent::new(64);
+        let id = security
+            .create_connection(
+                "mixed",
+                &owner.id(),
+                &serde_json::to_vec(&StoredCredential::HttpBearer {
+                    provider: "mixed".into(),
+                    token: "pat-secret".into(),
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let get = |s: &AppState, path: &str| {
+            let request = signed_request(
+                s,
+                &owner,
+                "GET",
+                &format!("/proxy/{id}/mixed{path}"),
+                vec![],
+            );
+            let router = crate::router(s.clone());
+            async move { router.oneshot(request).await.unwrap() }
+        };
+        let response = get(&s, "/v1/users/@me").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await["authorization"],
+            "Bearer pat-secret"
+        );
+        for path in ["/v1/users/@me/guilds", "/v1/channels/1/messages"] {
+            assert_eq!(
+                get(&s, path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+        // Under the user (OAuth) profile the same connection sends nothing.
+        let mut user = s.clone();
+        user.catalog = catalog(json!({"authenticationProfile": "user"}));
+        expect_error(
+            get(&user, "/v1/users/@me").await,
+            StatusCode::UNAUTHORIZED,
+            "credential_refresh_failed",
+        )
+        .await;
+        // Without a profile the mixed document is refused as before.
+        let mut unselected = s.clone();
+        unselected.catalog = catalog(json!({"httpSecurityScheme": "pat"}));
+        expect_error(
+            get(&unselected, "/v1/users/@me").await,
+            StatusCode::UNAUTHORIZED,
+            "credential_refresh_failed",
+        )
+        .await;
+    }
+
     fn api_key_credential() -> Vec<u8> {
         serde_json::to_vec(&StoredCredential::ApiKey {
             provider: "clockify".into(),
