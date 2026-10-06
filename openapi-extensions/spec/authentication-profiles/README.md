@@ -216,7 +216,10 @@ matches the selected profile's scheme, and ask for a new one.
 reads the extension when its catalog entry's `selection` names a profile
 (`authenticationProfile`; `src/providers.rs`, `src/catalog.rs`). It supports
 profiles whose scheme is `oauth2` with an authorization-code flow, or
-`apiKey`. Without a selection it keeps refusing documents that declare both
-kinds. `Catalog::allows` refuses an operation the selected profile does not
+`apiKey`, and (unreleased) `http` with `scheme: bearer` or `scheme: basic`.
+Without a selection it keeps refusing documents that declare both `oauth2`
+and `apiKey`, and uses an `http` scheme only in a document that declares
+neither. `Catalog::allows` refuses an operation the selected profile does not
 cover, and the proxy sends an OAuth token only while the platform still
-resolves to an OAuth profile.
+resolves to an OAuth profile, and a bearer or basic token only while it
+resolves to an `http` scheme of the same kind.

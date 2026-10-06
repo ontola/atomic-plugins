@@ -1,6 +1,6 @@
 # integration-proxy
 
-A Rust web server that holds OAuth grants and pasted API keys for third-party
+A Rust web server that holds OAuth grants and pasted API keys and tokens for third-party
 platforms, and forwards catalog-allowlisted requests to them on behalf of
 [Atomic](https://github.com/ontola/atomic-server) agents.
 
@@ -102,7 +102,12 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   or `403` answers the consent page again (`200`) saying the key was not
   accepted, without spending the consent; any other non-2xx, a redirect or
   no answer is a `400` and nothing is stored. A 2xx may give a label (at most
-  200 characters, sealed with the connection). For a platform whose
+  200 characters, sealed with the connection). A platform whose scheme is
+  `type: http` with `scheme: bearer` or `scheme: basic` (unreleased; see
+  "HTTP tokens" below) works the same way: the page asks for an API token
+  (and, for some Basic layouts, a username), the key check is sent the
+  `Authorization` header a proxied request would carry, and a rejected token
+  is asked for again with "did not accept that API token". For a platform whose
   composed document declares top-level `security: []` and no security scheme
   (0.2.3 and later), the consent page asks for nothing, and this hands off a
   connection that holds no credential and redirects (`303`) to
@@ -125,7 +130,10 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   a frame capability (below). The proxy attaches the provider credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
-  `Authorization` and `x-atomic-*` headers are never forwarded. `Link`,
+  `Authorization` and `x-atomic-*` headers are never forwarded: an
+  `Authorization` other than `Capability …` is refused with
+  `401 unsupported_authorization`, and a capability is consumed by the proxy.
+  `Link`,
   `Retry-After`, `ETag`, `X-Total-Count` and `X-Next-Page` come back unchanged.
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
@@ -327,7 +335,10 @@ the one the proxy uses. The value must be a string naming a declared scheme.
 **selection.authenticationProfile** is trusted server configuration too: it
 names one of the document's `components.x-authentication-profiles`
 (see "Authentication profiles" below), and excludes
-`oauthSecurityScheme` and `apiKeySecurityScheme`.
+`oauthSecurityScheme`, `apiKeySecurityScheme` and `httpSecurityScheme`.
+**selection.apiKeySecurityScheme** and **selection.httpSecurityScheme** do the
+same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
+or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
 
@@ -340,8 +351,9 @@ profile ([`x-authentication-profiles`](../openapi-extensions/spec/authentication
 `selection.authenticationProfile` set, the proxy:
 
 - connects with that scheme only: `oauth2` with an authorization-code flow,
-  or `apiKey` (with its `x-api-key-details` help link and key check, as for
-  any API-key platform);
+  `apiKey`, or a bearer or basic `http` scheme (the last two with their
+  `x-api-key-details` help link and key check, as for any API-key or token
+  platform);
 - asks for the scopes of the operations the profile covers, and of no other:
   an operation is covered when its effective `security` has a requirement
   whose only member is the profile's scheme;
@@ -354,13 +366,56 @@ profile ([`x-authentication-profiles`](../openapi-extensions/spec/authentication
   of falling back to anything else;
 - sends a stored OAuth token only while the platform still resolves to an
   OAuth scheme, so a selection moved to an API-key profile does not send a
-  user's token to that profile's operations (the person connects again).
+  user's token to that profile's operations (the person connects again). A
+  stored bearer or basic token is likewise sent only while the platform
+  resolves to an `http` scheme of the same kind.
 
 Declaring profiles in a document changes nothing until a catalog selects
 one. The served document (`GET /catalog/{platform}.yaml`) is the whole
 composed document; a client reads which operations its connection reaches
 from their `security`. Without a profile selection the proxy behaves as
 before.
+
+### HTTP tokens (bearer and basic)
+
+Unreleased (Decision Inbox Q-086). A security scheme of `type: http` with
+`scheme: bearer` or `scheme: basic` (case-insensitive) is a user credential,
+like an `apiKey` scheme: a personal access token pasted on the consent page.
+
+- **Which documents.** Without an authentication profile, an `http` scheme
+  counts only when the document declares no `oauth2` and no `apiKey` scheme.
+  A document that has one of those resolves exactly as before, whatever
+  `http` schemes it also declares (OAuth documents often declare `http`
+  `basic` for client authentication at their token endpoint). With several
+  bearer/basic schemes, `selection.httpSecurityScheme` names one. A profile
+  may name a bearer or basic scheme of any document. Other `http` schemes
+  (`digest`, ...) are not supported.
+- **Bearer.** The page asks for one token. It must be 4 to 512 bytes of
+  visible ASCII (`!` to `~`, so no spaces) after trimming. Requests carry
+  `Authorization: Bearer <token>`.
+- **Basic.** The scheme must declare how the token fills the credential, as
+  `x-api-key-details.basicCredentials`
+  ([`api-key-details`](../openapi-extensions/spec/api-key-details/README.md)
+  0.2.0-draft, section 4.3); a basic scheme without it is not offered
+  ("This platform is not available for connection"). The three layouts:
+  `{token: username, password: <fixed, may be empty>}` (one field),
+  `{token: password, username: <fixed>}` (one field), and
+  `{token: password, usernameLabel: <label>}` (a text field with that label
+  for the username, then the token field). There is no layout in which the
+  person types a password other than the token. The token must be 4 to 512
+  bytes without control characters; as a username it may not contain `:`.
+  A typed username must be 1 to 256 characters without control characters
+  or `:`. Requests carry `Authorization: Basic base64(username:password)`.
+- **Key check, help and sealing.** `x-api-key-details` `helpUrl` and
+  `keyCheck` work as for an API key; the check is sent the same
+  `Authorization` header the proxied requests will carry. The connection
+  seals the token (and, for Basic, both halves as they were checked) in the
+  same per-row envelope as an API key or OAuth token, and the handoff, redeem
+  and listing never return them.
+- **Requests.** The proxy sends a stored bearer or basic credential only
+  while the platform still resolves to an `http` scheme of that same kind;
+  otherwise it answers `401 credential_refresh_failed` (connect again).
+  The caller's own `Authorization` is never forwarded (above).
 
 Overlay URLs use immutable OAD-revision filenames. Publish new overlay
 filenames and a new dated catalog together, then explicitly switch

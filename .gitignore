@@ -8,6 +8,9 @@ node_modules
 playwright-report/
 /integrations/*/app/dist
 usertest/out/
+# Live-check kit output (integrations/tooling/live-check.mjs). Raw evidence
+# stays out of the repo; only redacted summary lines reach READMEs.
+/integrations/live-evidence/
 # Local Claude Code state stays out; the shared settings, the cloud-session
 # hook and the repo's skills are tracked.
 /.claude/*
