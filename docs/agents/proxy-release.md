@@ -30,6 +30,13 @@ per release** (#227 rule 10). The PRs leading up to them don't.
    Publishing (OIDC; no token is stored). A crates.io version is permanent.
 3. **Wrapper PR** in `localthought/integration-proxy`: bump the crate in its
    `Cargo.toml` and `Cargo.lock`. Merge it.
+   **The first release with the key-check limit (#340, Q-097)** also needs
+   `TRUST_FORWARDED_FOR=heroku` on the app before or with that deploy
+   (`heroku config:set TRUST_FORWARDED_FOR=heroku -a integration-proxy`,
+   Michiel's OK). Without it every client shares the router's limit of 20
+   key checks per platform per hour; the proxy logs a warning at startup
+   when Heroku's `DYNO` is set without it. Check for that line in
+   `heroku logs` after the deploy.
 4. **Deploy** (Michiel's OK). Merging the wrapper PR auto-deploys it: for
    0.2.5 the merge of #82 produced release v86 with no manual push. Check
    that a release exists for the merged commit (`heroku releases -a

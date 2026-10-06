@@ -201,6 +201,22 @@ fn db_error(error: tokio_postgres::Error) -> String {
 pub struct Security {
     database: Arc<RwLock<Arc<Client>>>,
     encryption_key: [u8; 32],
+    /// `HMAC-SHA256(ENCRYPTION_KEY, KEY_CHECK_SUBKEY_LABEL)`: the key of the
+    /// key-check buckets, so the encryption key itself is used only by
+    /// XChaCha20-Poly1305.
+    key_check_key: [u8; 32],
+}
+
+const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
+
+fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    let mut mac =
+        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    for part in parts {
+        mac.update(part);
+    }
+    mac.finalize().into_bytes().into()
 }
 
 impl Security {
@@ -236,6 +252,7 @@ impl Security {
         spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
         Ok(Self {
             database,
+            key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             encryption_key,
         })
     }
@@ -306,22 +323,19 @@ impl Security {
     }
 
     /// The `key_check_limits` bucket of one client network and platform: a
-    /// hex HMAC-SHA256 under `ENCRYPTION_KEY`, so neither the address nor
-    /// the platform can be read back from a row or a log line, and an
-    /// address cannot be found by hashing every IPv4 address either.
+    /// hex HMAC-SHA256 of both under a subkey derived from `ENCRYPTION_KEY`
+    /// (`HMAC(ENCRYPTION_KEY, "integration-proxy-key-check-limit-v1")`), so
+    /// the address cannot be read back from a row or a log line, nor found
+    /// by hashing every IPv4 address without the key. (The platform is
+    /// logged next to the bucket on purpose.)
     pub fn key_check_bucket(&self, platform: &str, network: &str) -> String {
-        use hmac::{Hmac, Mac};
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.encryption_key)
-            .expect("HMAC accepts any key length");
-        mac.update(b"integration-proxy-key-check-limit-v1\0");
-        mac.update(platform.as_bytes());
-        mac.update(b"\0");
-        mac.update(network.as_bytes());
-        mac.finalize()
-            .into_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        hmac_sha256(
+            &self.key_check_key,
+            &[platform.as_bytes(), b"\0", network.as_bytes()],
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
     }
 
     /// Takes one of `bucket`'s `limit` key checks. Each is a row
@@ -957,6 +971,49 @@ pub(crate) mod tests {
             .consume_nonce(&format!("post-reconnect-{tag}"))
             .await
             .expect("query after reconnect"));
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231() {
+        // RFC 4231, test case 2.
+        let mac = hmac_sha256(b"Jefe", &[b"what do ya want ", b"for nothing?"]);
+        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// The key-check buckets are keyed by a subkey derived from
+    /// `ENCRYPTION_KEY`, never by the encryption key itself.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn key_check_buckets_use_a_derived_subkey() {
+        let security = crate::test_support::security().await;
+        let subkey = hmac_sha256(&security.encryption_key, &[KEY_CHECK_SUBKEY_LABEL]);
+        assert_eq!(security.key_check_key, subkey);
+        assert_ne!(security.key_check_key, security.encryption_key);
+        let hex = |mac: [u8; 32]| mac.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let bucket = security.key_check_bucket("clockify", "198.51.100.7");
+        assert_eq!(
+            bucket,
+            hex(hmac_sha256(&subkey, &[b"clockify", b"\0", b"198.51.100.7"]))
+        );
+        assert_ne!(
+            bucket,
+            hex(hmac_sha256(
+                &security.encryption_key,
+                &[b"clockify", b"\0", b"198.51.100.7"]
+            ))
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify", "198.51.100.8")
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify-x", "198.51.100.7")
+        );
     }
 
     #[tokio::test]

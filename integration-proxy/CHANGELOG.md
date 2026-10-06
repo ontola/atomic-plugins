@@ -62,7 +62,16 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `trust_forwarded_for` (new `TrustForwardedFor`,
   `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`), which breaks code that builds
   `Config` with a struct literal, as 0.2.1's `operator_*` fields did;
-  `Config::from_env` callers are unaffected. New dependency: `hmac` 0.12.
+  `Config::from_env` callers are unaffected. **At release this needs a
+  deliberate version choice:** under Cargo's 0.x semver rules a breaking
+  change to a public type calls for 0.3.0, not 0.2.6, unless the
+  struct-literal break is accepted as in 0.2.1. New dependency: `hmac` 0.12.
+  Review fixes before merge: the limit is taken only when a key check will
+  reach the provider (a declared `keyCheck`, and not a cookie API key);
+  under `heroku` the header is split on bytes, and a missing or unparseable
+  right-most entry counts against one fixed bucket, never the router's peer
+  address; `KEY_CHECK_LIMIT_PER_HOUR` above 10,000 is refused at startup;
+  the bucket HMAC uses a subkey derived from `ENCRYPTION_KEY`.
 - Security: a new API key, bearer token or Basic credential records the
   security scheme it was entered for (and, for Basic, the declared layout
   without its field label; for an API key, the scheme's `in` and `name`),

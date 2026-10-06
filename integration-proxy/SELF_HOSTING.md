@@ -214,7 +214,7 @@ RUST_LOG=info
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids that may not own connections. |
 | `OPERATOR_NAME` | no, recommended | Who runs this proxy, as the landing page and the consent page name them ("Use Example Org to sync …", "run by Example Org"). The consent page also shows the host of `BASE_URL`. Defaults to `this integration proxy`, and the pages then name no one. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Link for `OPERATOR_NAME` on those pages: an absolute `http(s)` URL without credentials. Anything else stops the proxy at startup. 0.2.1 and later. |
-| `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
+| `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit, at most `10000`. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
 | `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Same section. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `_CLIENT_SECRET`, `_CLIENT_AUTH_METHOD` | per OAuth platform | See [Registering OAuth apps](#registering-oauth-apps). |
 | `RUST_LOG` | no | Log filter, default `info`. |
@@ -356,7 +356,8 @@ address. To stop a script from using your proxy to test keys, each client
 network may make at most `KEY_CHECK_LIMIT_PER_HOUR` checks (default 20) per
 platform in any hour; over that it gets `429` "Too many key checks from your
 network for <Platform>; try again later" and nothing is sent to the
-provider. A network is an IPv4 address or an IPv6 /64. The count lives in
+provider. Only platforms whose scheme declares a key check count. A
+network is an IPv4 address or an IPv6 /64. The count lives in
 PostgreSQL (`key_check_limits`, created at startup), keyed by an HMAC of the
 platform and network under `ENCRYPTION_KEY`, never the address itself, and
 rows are deleted an hour after use. OAuth connections are not counted.
@@ -374,7 +375,11 @@ Get this right in both directions. With a reverse proxy and `none`, every
 client appears to come from `127.0.0.1` and they all share one limit of 20
 per platform per hour. With `rightmost` and **no** proxy in front, a client
 writes the last `X-Forwarded-For` entry itself and can choose a new bucket
-for every check, which turns the limit off for it.
+for every check, which turns the limit off for it; it can also write
+someone else's address and use up that network's checks, locking the
+people there out of connecting that platform by key for an hour.
+`KEY_CHECK_LIMIT_PER_HOUR` above 10,000 stops the proxy at startup; use `0`
+to turn the limit off.
 
 People who share one public address (an office, a university, a mobile
 carrier's NAT, a VPN) share one limit per platform. Someone connecting a

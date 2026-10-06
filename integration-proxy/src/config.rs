@@ -85,15 +85,27 @@ impl std::str::FromStr for TrustForwardedFor {
     }
 }
 
+/// The highest `KEY_CHECK_LIMIT_PER_HOUR` accepted. Each check may scan the
+/// network's slots, so a huge limit makes every key check slow (2,000,000
+/// took 640 ms per insert); `0` is the way to turn the limit off.
+pub const MAX_KEY_CHECK_LIMIT_PER_HOUR: u32 = 10_000;
+
 /// `KEY_CHECK_LIMIT_PER_HOUR`: unset or blank means
 /// [`DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`], `0` means no limit; anything but a
-/// whole number is refused at startup.
+/// whole number from 0 to [`MAX_KEY_CHECK_LIMIT_PER_HOUR`] is refused at
+/// startup.
 pub(crate) fn key_check_limit(value: Option<&str>) -> Result<u32, String> {
+    let invalid = || {
+        format!(
+            "KEY_CHECK_LIMIT_PER_HOUR must be a whole number from 0 (no limit) to {MAX_KEY_CHECK_LIMIT_PER_HOUR}"
+        )
+    };
     match value.map(str::trim) {
         None | Some("") => Ok(DEFAULT_KEY_CHECK_LIMIT_PER_HOUR),
-        Some(value) => value
-            .parse()
-            .map_err(|_| "KEY_CHECK_LIMIT_PER_HOUR must be a whole number (0 turns it off)".into()),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if limit <= MAX_KEY_CHECK_LIMIT_PER_HOUR => Ok(limit),
+            _ => Err(invalid()),
+        },
     }
 }
 
@@ -378,8 +390,13 @@ mod tests {
         assert_eq!(key_check_limit(Some(" ")).unwrap(), 20);
         assert_eq!(key_check_limit(Some("0")).unwrap(), 0);
         assert_eq!(key_check_limit(Some(" 50 ")).unwrap(), 50);
-        for invalid in ["-1", "twenty", "1.5", "99999999999"] {
-            assert!(key_check_limit(Some(invalid)).is_err(), "{invalid}");
+        assert_eq!(key_check_limit(Some("10000")).unwrap(), 10_000);
+        for invalid in ["-1", "twenty", "1.5", "10001", "2000000", "99999999999"] {
+            let error = key_check_limit(Some(invalid)).unwrap_err();
+            assert!(
+                error.contains("0 (no limit) to 10000"),
+                "{invalid}: {error}"
+            );
         }
     }
 

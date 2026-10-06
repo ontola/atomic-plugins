@@ -609,12 +609,12 @@ async fn take_network_key_check(
     if state.key_check_limit == 0 {
         return Ok(());
     }
-    let ip = crate::client_addr::client_ip(state.trust_forwarded_for, headers, peer);
-    let bucket = security.key_check_bucket(platform, &crate::client_addr::network(ip));
-    if ip.is_none() {
+    let network = crate::client_addr::client_network(state.trust_forwarded_for, headers, peer);
+    let bucket = security.key_check_bucket(platform, &network);
+    if network == crate::client_addr::UNKNOWN || network == crate::client_addr::UNPARSEABLE {
         tracing::warn!(
             %bucket,
-            "key check from an unknown client address; every such check shares one limit"
+            "key check without a usable client address; every such check shares one limit"
         );
     }
     match security
@@ -711,11 +711,18 @@ pub async fn authorize(
         let Some(key) = valid_api_key(&approval) else {
             return error("Enter a valid API key");
         };
-        if let Err(response) =
-            take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
-                .await
-        {
-            return *response;
+        // Only a check that will reach the provider counts against the
+        // network: none without a declared key check, and none for a
+        // cookie key, which is never checked (`check_api_key`).
+        let checks_upstream = api_key.key_check.is_some()
+            && !matches!(api_key.location, crate::providers::ApiKeyLocation::Cookie);
+        if checks_upstream {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
         }
         let last = match take_key_check(security, jar, &consent.csrf).await {
             Ok((taken, last)) => {
@@ -759,11 +766,15 @@ pub async fn authorize(
             Ok(credential) => credential,
             Err(message) => return error(message),
         };
-        if let Err(response) =
-            take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
-                .await
-        {
-            return *response;
+        // Only a check that will reach the provider counts against the
+        // network (`check_http_credential`).
+        if http.key_check.is_some() {
+            if let Err(response) =
+                take_network_key_check(&state, security, &headers, peer, &consent.request.platform)
+                    .await
+            {
+                return *response;
+            }
         }
         let last = match take_key_check(security, jar, &consent.csrf).await {
             Ok((taken, last)) => {
@@ -2634,6 +2645,18 @@ mod tests {
         let spoofed = forwarded_for(&format!("{}, {ip}", fresh_ip()));
         let (response, _) = submit_on_new_consent(&heroku, router, spoofed, "good-key").await;
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Nor does a non-UTF-8 byte the client put before the router's
+        // entry: that does not move it to the router's (peer's) bucket.
+        let mut binary = HeaderMap::new();
+        let mut line = b"\x80, ".to_vec();
+        line.extend_from_slice(ip.to_string().as_bytes());
+        binary.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_bytes(&line).unwrap(),
+        );
+        let (response, _) =
+            submit_on_new_consent(&heroku, peer_at(fresh_ip()), binary, "good-key").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         // A client that sends its own X-Forwarded-For to a proxy that does
         // not trust it is counted by its own address.
         let (response, _) = submit_on_new_consent(
@@ -2644,6 +2667,40 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(checks.load(SeqCst), 5);
+
+        // A platform that declares no key check makes no upstream call, so
+        // connecting it from the limited network uses no allowance and is
+        // not refused.
+        let mut unchecked_document = document.clone();
+        unchecked_document["components"]["securitySchemes"]["serviceKey"]
+            .as_object_mut()
+            .unwrap()
+            .remove("x-api-key-details");
+        let unchecked = limited_state(
+            &security,
+            &upstream,
+            &format!("p-{:x}", rand::random::<u64>()),
+            unchecked_document,
+            1,
+        );
+        for _ in 0..3 {
+            let (response, _) =
+                submit_on_new_consent(&unchecked, peer_at(ip), HeaderMap::new(), "any-key").await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        }
+        let bucket = security.key_check_bucket(
+            &unchecked.catalog.names()[0],
+            &crate::client_addr::network(ip),
+        );
+        assert_eq!(
+            security
+                .take_key_check_allowance(&bucket, 1, std::time::Duration::from_secs(3600))
+                .await
+                .unwrap(),
+            None,
+            "no slot was taken"
+        );
         assert_eq!(checks.load(SeqCst), 5);
 
         // 0 turns the limit off.

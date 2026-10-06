@@ -173,15 +173,19 @@ logs and rate limits. So key checks (API keys and `http` bearer and basic
 tokens alike) are also limited per client network and platform:
 
 - **Limit.** At most `KEY_CHECK_LIMIT_PER_HOUR` (default 20; `0` turns it
-  off) in any hour, as a sliding window: each check takes one of that many
+  off; at most 10,000, larger values stop the proxy at startup, because each
+  check may scan the network's slots) in any hour, as a sliding window: each check takes one of that many
   slots, a row `(bucket, slot)` in `key_check_limits` with the primary key on
   both, which frees one hour after it was taken. Only one request can take
   a slot, so the limit holds across instances and for concurrent requests;
   a burst of 30 concurrent submissions with a limit of 5 makes exactly 5
   checks (`connect::tests::postgres_key_checks_are_limited_per_network_and_platform`).
   Expired rows are deleted on the next key check.
-- **Order.** The limit is taken after the input is validated (a malformed
-  key or token costs nothing) and before the consent's own key-check
+- **Order.** The limit is taken only when a key check will reach the
+  provider: the scheme declares `x-api-key-details.keyCheck`, and an API key
+  is not a cookie (which is never checked). Connecting a platform without a
+  key check uses no allowance. It is taken after the input is validated (a
+  malformed key or token costs nothing) and before the consent's own key-check
   attempt and any upstream call. Over the limit the answer is `429` "Too
   many key checks from your network for <Platform>; try again later", with
   `Retry-After` (seconds until a slot frees) and `no-store`; nothing is
@@ -190,10 +194,13 @@ tokens alike) are also limited per client network and platform:
   again (within the consent's ten minutes). A slot is taken even when the
   consent then turns out to be spent or out of attempts; that costs the
   submitting network only.
-- **What is stored and logged.** The bucket is a hex HMAC-SHA256 under
-  `ENCRYPTION_KEY` of a fixed domain string, the platform and the network,
-  so a row reveals neither, and the IPv4 space cannot be hashed through to
-  find an address without the key. The proxy logs "key check limit reached"
+- **What is stored and logged.** The bucket is a hex HMAC-SHA256 of the
+  platform and the network under a subkey derived from `ENCRYPTION_KEY`
+  (`HMAC-SHA256(ENCRYPTION_KEY, "integration-proxy-key-check-limit-v1")`, so
+  the encryption key itself serves only XChaCha20-Poly1305). A row or log
+  line does not reveal the address, and the IPv4 space cannot be hashed
+  through to find one without the key; the platform is logged next to the
+  bucket on purpose. The proxy logs "key check limit reached"
   with the bucket and the platform, never the address or anything typed.
   Rows live at most an hour (the window), plus until the next key check
   sweeps them.
@@ -204,15 +211,23 @@ tokens alike) are also limited per client network and platform:
   TCP peer address and ignores `X-Forwarded-For`. `heroku` (synonym
   `rightmost`) counts only the right-most `X-Forwarded-For` entry, the one
   Heroku's router appends to whatever the client sent; entries to its left
-  are never read, and when that entry is missing or not an address the peer
-  address is used, never an entry further left. localthought.io runs on
+  are never read. The header line is split on bytes and only that last
+  entry is decoded, so a non-UTF-8 byte the client sends earlier on the line
+  does not make it unreadable. When that entry is missing or not an address
+  (`ip`, `ip:port`, `[ipv6]`, `[ipv6]:port`; no zone index), the check
+  counts against one fixed shared bucket, `unparseable`: never the peer
+  address (on Heroku, a router address many clients share) and never an
+  entry further left. localthought.io runs on
   Heroku and must set `heroku`: there the peer is always the router, and
   without it every client shares one limit (the proxy warns at startup when
   Heroku's `DYNO` variable is set without it). A self-hosted proxy with
   nothing in front keeps `none`; behind exactly one reverse proxy that
   appends the client address (SELF_HOSTING.md), `rightmost`. Setting
   `heroku` or `rightmost` with nothing in front is a misconfiguration: a
-  client then writes the right-most entry itself and chooses its bucket. If
+  client then writes the right-most entry itself and chooses its bucket,
+  so it can take a new one for every check, and it can also write a
+  victim's address and use up that network's allowance, locking the
+  people there out of key checks for that platform for an hour. If
   no address can be told at all (a wrapper that serves `build_app` without
   connect info, under `none`), every such check shares one bucket, `unknown`,
   and each one logs a warning: the limit then fails closed, for everyone.
