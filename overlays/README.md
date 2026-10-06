@@ -230,18 +230,22 @@ directly.
 | [Confluence v2](APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml) | 67 GET collections with declared cursor/limit, `Link` response header and `results` array, including pages, spaces, attachments, comments and tasks. | [Pagination](https://developer.atlassian.com/cloud/confluence/rest/v2/intro/) |
 | [Figma](APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml) | 13 GET collections: versions, reactions, webhooks, three team libraries, six library analytics and daily AI usage. | [Team libraries](https://developers.figma.com/docs/rest-api/component-endpoints/), [Version history](https://developers.figma.com/docs/rest-api/version-history-endpoints/), [Library analytics](https://developers.figma.com/docs/rest-api/library-analytics-endpoints/), [AI usage](https://developers.figma.com/docs/rest-api/ai-usage-endpoints/) |
 | [ClickUp v3](APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml) | Nine GET collections: channels, followers, members, messages, reactions, replies, tagged users, attachments and Docs. `data` or `docs` envelopes. | [Chat messages](https://developer.clickup.com/reference/getchatmessages), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/88ea4994e816563201c2069526252475d77e853f/APIs/clickup.com/v3/version/openapi.yaml) |
-
 | [HubSpot Files](APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET searches for files and folders. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/files/files/search-files), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/files/2026-03/openapi.yaml) |
 | [HubSpot HubDB](APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Four GET collections: published/draft tables and published/draft table rows. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/cms/hubdb/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/hubdb/2026-03/openapi.yaml) |
 | [HubSpot blog posts](APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET collections: posts and individual post revisions. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/cms/blogs/posts/get-posts), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/posts/2026-03/openapi.yaml) |
 | [HubSpot Conversations](APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Five GET collections: channel accounts, channels, inboxes, threads and thread messages. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/conversations/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/conversations/v3/openapi.yaml) |
 | [HubSpot Lists](APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET membership collections in record and join order. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/crm/lists/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/lists/v3/openapi.yaml) |
-
 | [Asana](APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | 64 ordinary GET collections using opaque `next_page.offset` and `data`. | [Pagination documentation](https://developers.asana.com/docs/pagination) |
 | [Zendesk Support](APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml) | 14 GET collections in offset mode, following `next_page` URLs. | [Pagination documentation](https://developer.zendesk.com/documentation/api-basics/pagination/paginating-through-lists-using-offset-pagination/) |
 | [Square v2](APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml) | 69 GET/read-POST collections with query, body or integer merchant cursors. | [Pagination documentation](https://developer.squareup.com/docs/build-basics/common-api-patterns/pagination) |
 | [Zoom Meetings](APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml) | 29 GET collections using `next_page_token` and explicit item envelopes. | [Pagination documentation](https://developers.zoom.us/docs/api/meetings/) |
 | [Mastodon](APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml) | Six GET relationship/saved-status collections. Documented `Link` headers and root arrays. | [Pagination documentation](https://docs.joinmastodon.org/api/guidelines/#paginating-through-api-responses) |
+| [Google Drive v3](APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml) | Seven ordinary file/shared-drive collections, including comments, replies, labels, permissions and revisions. | [Provider documentation](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list) |
+| [Gmail v1](APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml) | Five mailbox/CSE collections with operation-specific envelopes and page-size inputs. | [Provider documentation](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list) |
+| [Google People v1](APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Five full-list contact and directory collections; sync checkpoints remain separate. | [Provider documentation](https://developers.google.com/people/api/rest/v1/people.connections/list) |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
+| [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -385,10 +389,59 @@ account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
 
+
+The six Google variants use opaque `nextPageToken` values as `pageToken`,
+with `pageSize` or `maxResults` only as declared on that operation. A short
+or empty page is not terminal while a token remains. Keep filters, masks,
+ordering, resource selection and page size fixed. When using `fields`, include
+both the continuation and the selected item envelope. No estimated count is
+used as a pagination total or terminal condition.
+
+Drive v3 selects files, shared drives, comments, replies, labels, permissions
+and revisions; its deprecated Team Drives, change feed and watch registration
+are excluded. Comments and replies require a `fields` query. For example,
+`fields=nextPageToken,comments(id,content)` preserves pagination metadata.
+`incompleteSearch` means the corpus search was incomplete; finishing its pages
+must not be presented as a complete corpus listing. The old Drive variant
+stays published; select this `pagination-v2` file explicitly.
+
+Gmail selects drafts, messages, threads and client-side-encryption identity/key
+pair lists. Their page-size names and item envelopes differ. Mailbox listings
+contain identifiers rather than complete message bodies, and
+`resultSizeEstimate` remains an estimate. History and watch are outside this
+ordinary collection variant.
+
+People selects full contact-group, other-contact, directory-list,
+directory-search and connection listings. Omit `syncToken` for these
+applications and retain `readMask`/`personFields` and source choices across
+pages. `nextSyncToken` belongs to a later incremental sync; it is never used
+as a page continuation. Tasks keeps each caller's existing completion,
+hidden/deleted and date filters; paging does not make a filtered list complete
+for all tasks.
+
+YouTube selects playlists, playlist items, subscriptions, comment threads,
+comment replies and search. Comment replies require `parentId`, and comment
+threads require `videoId` or `allThreadsRelatedToChannelId`: the provider
+rejects pagination with their `id` batch mode. Live-chat/member-update streams
+and other list modes remain excluded. Follow the forward token only; search's
+`pageInfo.totalResults` is approximate and does not control traversal.
+
+Cloud Storage selects buckets, objects, long-running operations and HMAC-key
+lists. The object application requires flat mode: omit `delimiter` and
+`includeFoldersAsPrefixes`; `prefixes` is a separate directory-mode collection.
+Folder and managed-folder methods remain unselected because their current
+[folder](https://docs.cloud.google.com/storage/docs/json_api/v1/folders/list)
+and [managed-folder](https://docs.cloud.google.com/storage/docs/json_api/v1/managedFolder/list)
+docs name `maxResults`, while the pinned OAD declares `pageSize`.
+[Cache-list docs](https://docs.cloud.google.com/storage/docs/json_api/v1/AnywhereCaches/list)
+omit the pagination inputs present in the pin, so that method also needs a
+separate review. Tokens preserve an ordering position, not a snapshot of
+concurrent changes.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
 and 2026-10-06 (Confluence, Figma, ClickUp, the five additional HubSpot OADs,
-Asana, Zendesk, Square, Zoom and Mastodon), not live provider certification.
+Asana, Zendesk, Square, Zoom, Mastodon and the six Google OADs), not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
@@ -397,7 +450,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the 20 pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 26 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
