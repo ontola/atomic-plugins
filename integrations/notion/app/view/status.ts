@@ -18,9 +18,8 @@ import type {
   SyncStatus,
   WriteFailure,
 } from '../../../sync-status/card.js';
-import type { RowChange } from '../changes.js';
-import { isConnected, type ViewState } from '../controller.js';
 import { sendable } from '../changes.js';
+import { isConnected, type ViewState } from '../controller.js';
 import { clock, plural } from '../ui/format.js';
 import { notes, type Source } from './model.js';
 
@@ -46,9 +45,6 @@ export const NOTE = {
   /** Connected, but `send()` is only offered from `ready` (`review.ts`). */
   waits: 'Sending waits until a sync succeeds.',
 } as const;
-
-const fields = (changes: readonly RowChange[]) =>
-  changes.reduce((n, c) => n + c.fields.length, 0);
 
 export function syncStatusFor(input: StatusInput): SyncStatus {
   const { state, sources, locale } = input;
@@ -136,15 +132,26 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
       : 'Sending to Notion…';
   }
 
-  // The write queue: edits found by compare-on-open, counted in fields as
-  // the strip and the Send button count them, and the last Send's outcomes
-  // (cleared by the next sync or Send, so none outlives what settled it).
-  const changes = state.changes ?? [];
-  const held = changes.reduce(
-    (n, c) => n + c.fields.filter(f => f.conflict || f.problem).length,
-    0,
-  );
+  // The write queue, in rows (a "change" here is a row's edit, as the review
+  // footer counts held rows and `send.ts` sends per row): edits found by
+  // compare-on-open, and the last Send's outcomes (cleared by the next sync
+  // or Send, so none outlives what settled it).
   const outcomes = state.outcomes ?? [];
+  // A row whose PATCH got no answer, or stood but could not be confirmed
+  // here, is still listed as a change (its baseline did not advance), yet
+  // it is not waiting to be sent: the next sync settles it. Counted once,
+  // under `uncertain` or `failed` (written), not under `pending`.
+  const settled = new Set(
+    outcomes
+      .filter(
+        o => o.status === 'unknown' || (o.status === 'refused' && o.written),
+      )
+      .map(o => o.subject),
+  );
+  const queued = (state.changes ?? []).filter(c => !settled.has(c.subject));
+  // Held: every row Send would skip (`sendable`: no conflict and no problem
+  // in any of its fields), so pending minus held is what Send sends.
+  const held = queued.filter(c => !sendable(c)).length;
   const failed: WriteFailure[] = outcomes.flatMap(o =>
     o.status === 'failed' || o.status === 'refused'
       ? [
@@ -165,7 +172,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     o => o.status === 'changed' || o.status === 'gone',
   ).length;
   status.writes = {
-    pending: fields(changes),
+    pending: queued.length,
     ...(held ? { held } : {}),
     ...(failed.length ? { failed } : {}),
     ...(uncertain ? { uncertain } : {}),

@@ -8,6 +8,7 @@
  * themselves are browsed and edited in the host's table (#177 Q9), not here.
  */
 import type { ConnectedState, ViewState } from '../controller.js';
+import type { SyncRecord } from '../record.js';
 import type { SyncProgress } from '../sync.js';
 import { h, icon, type Child } from '../ui/dom.js';
 import { clock, plural, when } from '../ui/format.js';
@@ -58,6 +59,22 @@ export const typeName = (type: string) =>
 
 // ---------------------------------------------------------------- databases
 
+/** The states in which the card's headline is a failure, not the record. */
+const afterFailure = (state: ConnectedState) =>
+  state.kind === 'failed' ||
+  state.kind === 'rate-limited' ||
+  state.kind === 'reauth';
+
+/** "5 new, 2 updated, 3 unchanged", or "nothing to read". */
+const recordCounts = (last: SyncRecord) => {
+  const parts: string[] = [];
+  if (last.created) parts.push(`${last.created} new`);
+  if (last.updated) parts.push(`${last.updated} updated`);
+  if (last.unchanged) parts.push(`${last.unchanged} unchanged`);
+
+  return parts.length ? parts.join(', ') : 'nothing to read';
+};
+
 /**
  * The Notion block right below the shared sync-status card (`status.ts`,
  * Q-084): the databases the table syncs with and their row counts, when the
@@ -98,19 +115,22 @@ export function renderDatabases(ctx: ViewContext): HTMLElement {
             ? 'Notion shares no database with Atomic any more.'
             : 'Known after the first sync.',
         ),
-    // When and how long: the card says how long ago and what it did.
+    // When and how long: the card says how long ago and what it did. The
+    // record is the last *good* sync, so after a failure it is labelled so,
+    // with its counts, which the card then no longer shows.
     last &&
       h(
         doc,
         'dl',
         { class: 'nt-s-facts' },
-        h(doc, 'dt', {}, 'Last sync'),
+        h(doc, 'dt', {}, afterFailure(state) ? 'Last good sync' : 'Last sync'),
         h(
           doc,
           'dd',
           { 'data-key': 'last-sync' },
           when(last.at, ctx.now, ctx.locale),
           ` · took ${Math.max(1, Math.round(last.durationMs / 1000))} s`,
+          afterFailure(state) ? ` · ${recordCounts(last)}` : '',
         ),
       ),
     h(

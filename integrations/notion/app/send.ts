@@ -21,8 +21,9 @@
  * one round trip; it is a declared limit, not handled.
  *
  * A relay call that throws on the PATCH may or may not have reached Notion:
- * that row is "unknown", and the batch stops. A refusal by the proxy or a
- * rate limit also stops the batch.
+ * that row is "unknown", and the batch stops. So is a 5xx answer (a gateway
+ * may answer 502 or 504 after Notion applied the PATCH). A refusal by the
+ * proxy or a rate limit also stops the batch; those wrote nothing.
  */
 import {
   notionFieldValue,
@@ -246,11 +247,22 @@ export async function sendChanges({
       break;
     }
 
-    if (answer.status === 429 || answer.status >= 500) {
+    if (answer.status === 429) {
       report({
         ...who,
         status: 'failed',
         message: notionMessage(answer.status, answer.body),
+      });
+      break;
+    }
+
+    // A 5xx may come from a gateway after Notion applied the PATCH (502,
+    // 504), so it is not "nothing was written": unknown, like a lost answer.
+    if (answer.status >= 500) {
+      report({
+        ...who,
+        status: 'unknown',
+        message: `Notion answered ${answer.status}, so it is unknown whether the change was applied: ${notionMessage(answer.status, answer.body)}`,
       });
       break;
     }

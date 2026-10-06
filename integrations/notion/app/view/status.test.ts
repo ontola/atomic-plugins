@@ -2,8 +2,10 @@
 /**
  * `syncStatusFor`: the controller's states on the shared sync-status card
  * (Q-084), one case per `ViewState.kind`, then the write queue and the
- * problems. Pure: no DOM. The card's own rendering is tested in
- * `integrations/sync-status/card.test.ts`; its words in `statusLines`.
+ * problems. Pure: no DOM, and no real clock (`NOW` is fixed and passed in).
+ * The card's own rendering is tested in `integrations/sync-status/
+ * card.test.ts`; its words in `statusLines`. The write queue is also driven
+ * through the real controller in `twoway.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
 import { statusLines } from '../../../sync-status/card.js';
@@ -66,6 +68,14 @@ const field = (extra: Partial<FieldChange> = {}): FieldChange => ({
   before: 3,
   after: 5,
   ...extra,
+});
+const done = (): FieldChange => ({
+  id: 'dn',
+  shortname: 'notion-dn',
+  name: 'Done',
+  type: 'checkbox',
+  before: false,
+  after: true,
 });
 const change = (
   subject: string,
@@ -322,12 +332,29 @@ describe('syncStatusFor: the write queue', () => {
     ]),
   ];
 
-  it('counts fields as the strip does, with held conflicts and problems', () => {
+  it('counts rows, as Send does; held is every row Send would skip', () => {
+    // 3 rows with edits; p2 (a conflict) and p3 (a refused value) are held,
+    // so pending minus held, 1, is what Send sends.
     expect(status({ ...ready, changes }).writes).toEqual({
-      pending: 4,
+      pending: 3,
       held: 2,
     });
     expect(lines({ ...ready, changes }).tone).toBe('warn');
+  });
+
+  it('a row with a clean field and a conflicting one is held as a whole', () => {
+    // Points conflicts, Done is clean: `sendable` skips the row, so Send
+    // makes no PATCH, and the card says so (1 waiting, 1 held).
+    const both = [
+      change('p1', 'Launch plan', [
+        field({ conflict: true, notion: 7 }),
+        done(),
+      ]),
+    ];
+    expect(status({ ...ready, changes: both }).writes).toEqual({
+      pending: 1,
+      held: 1,
+    });
   });
 
   it('while sending: busy with the position in the sendable changes', () => {
@@ -346,7 +373,7 @@ describe('syncStatusFor: the write queue', () => {
     expect(status({ ...ready, sending: true }).busy).toBe('Sending to Notion…');
   });
 
-  it('outcomes: failed and refused as failures, written apart; unknown uncertain; changed and gone not written', () => {
+  it('outcomes: failed and refused as failures, written apart; unknown uncertain; changed and gone not written; none counted twice', () => {
     const outcomes: SendOutcome[] = [
       { subject: 'p1', name: 'Launch plan', status: 'sent', fields: 1 },
       {
@@ -373,9 +400,18 @@ describe('syncStatusFor: the write queue', () => {
       { subject: 'p6', name: 'Offsite', status: 'gone' },
       { subject: '', name: '', status: 'failed', message: 'Relay refused.' },
     ];
-    const s = status({ ...ready, outcomes });
+    // After such a Send the controller still lists the rows whose baseline
+    // did not advance: the refused one (Notion wrote nothing; it can be
+    // sent again), the written one and the unknown one (the next sync
+    // settles them). Only the first waits.
+    const after = [
+      change('p2', 'Write changelog', [field()]),
+      change('p3', 'Retrospective', [field()]),
+      change('p4', 'Hiring', [field()]),
+    ];
+    const s = status({ ...ready, changes: after, outcomes });
     expect(s.writes).toEqual({
-      pending: 0,
+      pending: 1,
       failed: [
         {
           title: 'Write changelog',
@@ -392,7 +428,7 @@ describe('syncStatusFor: the write queue', () => {
       uncertain: 1,
       notWritten: 2,
     });
-    expect(lines({ ...ready, outcomes }).tone).toBe('neg');
+    expect(lines({ ...ready, changes: after, outcomes }).tone).toBe('neg');
   });
 
   it('a send with only sent outcomes leaves a clean card', () => {

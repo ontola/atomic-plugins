@@ -264,7 +264,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-EpU/CMfvVcP0DI2oRX0ZMLtVN6T1gafNBXnJ5XT/0hmiwaayhF2uWzCx4fSm5GbG"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-AXRB2ySigFI4qhsy252dE0XjP6WZCkTYEYxNmNKGCnOzgKFbZmagBlyIWkI93U4N"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",

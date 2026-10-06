@@ -443,6 +443,12 @@ describe('view (DOM)', () => {
     expect(q('.ss [data-key=last-good]')?.textContent).toBe(
       'Last good sync 4 min ago.',
     );
+    // The databases block agrees: the record is the last good sync, and it
+    // keeps that sync's counts, which the card no longer shows.
+    expect(q('.nt-s-facts dt')?.textContent).toBe('Last good sync');
+    expect(q('[data-key=last-sync]')?.textContent).toMatch(
+      /^Today, \d\d:\d\d · took 3 s · 5 new$/,
+    );
     expect(q('.ss [data-key=mode]')?.textContent).toBe(
       'Edits here are sent to Notion after you review them. Sending waits until a sync succeeds.',
     );
