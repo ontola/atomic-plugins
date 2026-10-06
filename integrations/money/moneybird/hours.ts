@@ -89,10 +89,29 @@ function linked(
   return { id, name };
 }
 
+/** The entry as the person knows it: its description, else "Time entry <id>". */
+export function hourLabel(entry: TimeEntry): string {
+  const description =
+    typeof entry.description === 'string' ? entry.description.trim() : '';
+
+  return description || `Time entry ${entry.id}`;
+}
+
+/**
+ * Why `hourOf` leaves an entry out, completing "<n> time entries …" on the
+ * sync-status card; `undefined` for one it imports.
+ */
+export function hourSkipReason(entry: TimeEntry): string | undefined {
+  return instant(entry.started_at) === undefined
+    ? 'without a readable start (started_at) in Moneybird: not imported.'
+    : undefined;
+}
+
 /**
  * The row for one time entry, or `undefined` for one without a readable
- * `started_at`: the class requires a start, and the host refuses a row
- * without one, so such an entry is counted as skipped, not written.
+ * `started_at` (`hourSkipReason`): the class requires a start, and the host
+ * refuses a row without one, so such an entry is counted as skipped, not
+ * written.
  */
 export function hourOf(
   entry: TimeEntry,
@@ -101,11 +120,9 @@ export function hourOf(
   const start = instant(entry.started_at);
   if (start === undefined) return undefined;
   const end = instant(entry.ended_at);
-  const description =
-    typeof entry.description === 'string' ? entry.description.trim() : '';
   const row: HourRow = {
     identity: hourSourceId(administrationId, entry.id),
-    name: description || `Time entry ${entry.id}`,
+    name: hourLabel(entry),
     start,
   };
   if (end !== undefined) row.end = end;

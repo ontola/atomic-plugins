@@ -4,12 +4,32 @@
  * financial mutations, atomic-plugins#102). The host's generated shell does
  * `const plugin = await import(js_url); await plugin.view({ root, store })`,
  * so this module exports `view` and does not render on import. One module,
- * no stylesheet, no network access of its own: every call goes through the
+ * one `<style>` element (the shared sync-status card's rules, embedded by
+ * `build.mjs`), no network access of its own: every call goes through the
  * host's proxy relay.
+ *
+ * The shared sync-status card (Q-084, `../../sync-status/card.ts`) comes
+ * first, under the heading, in every state but loading and an unsupported
+ * table: when the last sync ran and what each collection did, that the app
+ * is read-only and overwrites edits in the imported columns, the records it
+ * skipped and why, and a wait for Moneybird's rate limit. The `role="status"`
+ * line stays the one live region; while the card holds the same words
+ * (syncing, synced) it is visually hidden, not removed.
  */
+import { renderSyncStatus, syncStatusCss } from '../../sync-status/card.js';
 import { COLLECTION_LABELS, COLLECTIONS, type Collection } from './binding.js';
-import { createController, describe, type ViewState } from './controller.js';
+import {
+  createController,
+  describe,
+  type SyncRecord,
+  type ViewState,
+} from './controller.js';
+import { syncStatusFor } from './status.js';
 import type { ViewArgs } from './store.js';
+
+/** Visually hidden, still read out: the status line while the card shows the same. */
+const SR_ONLY =
+  '.mb-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}';
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
   const doc = root.ownerDocument;
@@ -21,7 +41,10 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     return node;
   };
 
+  const style = el('style', `${syncStatusCss}\n${SR_ONLY}`);
   const heading = el('h1', 'Moneybird');
+  /** Holds the sync-status card, or nothing. */
+  const card = el('div');
   const status = el('p');
   status.setAttribute('role', 'status');
   const connect = el('button', 'Connect Moneybird');
@@ -54,7 +77,9 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   root.style.fontFamily = 'system-ui, sans-serif';
   root.style.padding = '1rem';
   root.replaceChildren(
+    style,
     heading,
+    card,
     status,
     connect,
     chooser,
@@ -63,8 +88,17 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     change,
   );
 
-  const render = (state: ViewState) => {
+  const render = (state: ViewState, last: SyncRecord | undefined) => {
+    const now = Date.now();
+    const shown = syncStatusFor({ state, last, now });
+    card.replaceChildren(
+      ...(shown ? [renderSyncStatus(doc, shown, { now })] : []),
+    );
     status.textContent = describe(state);
+    status.classList.toggle(
+      'mb-sr',
+      state.kind === 'synced' || state.kind === 'syncing',
+    );
     connect.hidden = !(
       state.kind === 'disconnected' ||
       (state.kind === 'error' && !state.connection)
@@ -102,7 +136,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   };
 
   const controller = createController(store, render);
-  render(controller.state());
+  render(controller.state(), controller.last());
   connect.addEventListener('click', () => void controller.connect());
   importButton.addEventListener('click', () => {
     const chosen = [...boxes]

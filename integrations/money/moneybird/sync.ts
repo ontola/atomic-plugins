@@ -21,7 +21,9 @@ import {
   type ContactField,
 } from './contacts.js';
 import {
+  hourLabel,
   hourOf,
+  hourSkipReason,
   PAUSED_DURATION,
   personSourceId,
   projectSourceId,
@@ -35,7 +37,9 @@ import {
   BANK,
   BANK_TRANSACTION,
   CONTRA_ACCOUNT,
+  mutationLabel,
   mutationOf,
+  mutationSkipReason,
   STATE,
 } from './mutations.js';
 import {
@@ -103,6 +107,13 @@ export const ROW_EXTRAS: ContactField[] = [
   CONTRA_ACCOUNT,
 ];
 
+/** A record the mapping left out: as the person knows it, and why. */
+export interface SkippedRecord {
+  name: string;
+  /** Completes "<n> <rows> …" on the sync-status card (hours.ts, mutations.ts). */
+  reason: string;
+}
+
 export interface SyncSummary {
   total: number;
   added: number;
@@ -110,6 +121,8 @@ export interface SyncSummary {
   unchanged: number;
   /** Records the mapping could not make a complete row of (hours.ts, mutations.ts). */
   skipped: number;
+  /** Those records, named, with the reason each; present only when there are any. */
+  skippedRows?: SkippedRecord[];
 }
 
 /** The base path of UPSTREAM: what a relayed path starts with. */
@@ -401,12 +414,13 @@ export async function syncHours(
   ]);
   const source = properties.get(SOURCE_ID.shortname)!;
   const rows: HourRow[] = [];
-  let skipped = 0;
+  const skipped: SkippedRecord[] = [];
 
   for (const entry of entries) {
     const row = hourOf(entry, administrationId);
     if (row) rows.push(row);
-    else skipped++;
+    else
+      skipped.push({ name: hourLabel(entry), reason: hourSkipReason(entry)! });
   }
 
   const links = async (
@@ -470,8 +484,9 @@ export async function syncHours(
       incoming,
     })
   ).summary;
-  summary.total += skipped;
-  summary.skipped = skipped;
+  summary.total += skipped.length;
+  summary.skipped = skipped.length;
+  if (skipped.length) summary.skippedRows = skipped;
 
   return summary;
 }
@@ -500,13 +515,16 @@ export async function syncMutations(
   ]);
   const p = (field: ContactField) => properties.get(field.shortname)!;
   const incoming: Incoming[] = [];
-  let skipped = 0;
+  const skipped: SkippedRecord[] = [];
 
   for (const mutation of mutations) {
     const row = mutationOf(mutation, administrationId, accounts);
 
     if (!row) {
-      skipped++;
+      skipped.push({
+        name: mutationLabel(mutation),
+        reason: mutationSkipReason(mutation)!,
+      });
       continue;
     }
 
@@ -535,8 +553,9 @@ export async function syncMutations(
       incoming,
     })
   ).summary;
-  summary.total += skipped;
-  summary.skipped = skipped;
+  summary.total += skipped.length;
+  summary.skipped = skipped.length;
+  if (skipped.length) summary.skippedRows = skipped;
 
   return summary;
 }
