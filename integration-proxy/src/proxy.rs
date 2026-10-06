@@ -46,22 +46,45 @@ pub(crate) enum StoredCredential {
         refresh_token: Option<String>,
         expires_at: Option<u64>,
     },
+    /// `scheme` (unreleased; absent in rows written before) names the
+    /// `apiKey` security scheme the key was entered for; while it is
+    /// present the key is sent only under that scheme.
     #[serde(rename = "api_key")]
-    ApiKey { provider: String, key: String },
+    ApiKey {
+        provider: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+        /// The scheme's `in` and `name` when the key was entered; while
+        /// present, the key is sent only to that same place.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<crate::providers::ApiKeyPlacement>,
+    },
     /// A token for an `http` `bearer` scheme, sent as
-    /// `Authorization: Bearer <token>`.
+    /// `Authorization: Bearer <token>`. `scheme` binds it as for an API key.
     #[serde(rename = "http_bearer")]
-    HttpBearer { provider: String, token: String },
+    HttpBearer {
+        provider: String,
+        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+    },
     /// The two halves of an `http` `basic` credential, sent as
     /// `Authorization: Basic base64(username:password)`. One half is the
     /// pasted token; the other is fixed by the scheme's
     /// `x-api-key-details.basicCredentials` or, for a username only, typed
-    /// by the person.
+    /// by the person. `scheme` and `layout` (the declared layout it was
+    /// built from) bind it: while present, it is sent only under that
+    /// scheme with that layout.
     #[serde(rename = "http_basic")]
     HttpBasic {
         provider: String,
         username: String,
         password: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layout: Option<crate::providers::BasicLayout>,
     },
     /// A connection to a platform whose document requires no security
     /// (`SecurityScheme::NoCredential`): only the platform it is for.
@@ -448,12 +471,30 @@ async fn forward_inner(
             }
             CredentialInjection::Bearer(access_token.clone())
         }
-        StoredCredential::ApiKey { key, .. } => {
+        StoredCredential::ApiKey {
+            key,
+            scheme: bound,
+            placement,
+            ..
+        } => {
             let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
                 state.catalog.security_scheme(platform)
             else {
                 return Err(ApiError::Internal);
             };
+            // A key entered for one apiKey scheme is not sent under another,
+            // nor to another header or query parameter than it was entered
+            // for (rows written before the binding have none, and are sent
+            // as before).
+            if bound
+                .as_ref()
+                .is_some_and(|bound| *bound != scheme.scheme_name)
+                || placement
+                    .as_ref()
+                    .is_some_and(|placement| *placement != scheme.placement())
+            {
+                return Err(ApiError::CredentialRefreshFailed);
+            }
             match scheme.location {
                 crate::providers::ApiKeyLocation::Header => CredentialInjection::Header {
                     name: scheme.name,
@@ -472,27 +513,48 @@ async fn forward_inner(
                 }
             }
         }
-        StoredCredential::HttpBearer { token, .. } => {
-            // Only while the platform still resolves to a bearer scheme: a
-            // token connected for it is not sent under another kind.
+        StoredCredential::HttpBearer {
+            token,
+            scheme: bound,
+            ..
+        } => {
+            // Only while the platform still resolves to the bearer scheme
+            // the token was entered for: it is not sent under another kind
+            // or another scheme.
             match state.catalog.security_scheme(platform) {
                 Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                    name,
                     auth: crate::providers::HttpAuth::Bearer,
                     ..
-                })) => CredentialInjection::Bearer(token.clone()),
+                })) if bound.as_ref().is_none_or(|bound| *bound == name) => {
+                    CredentialInjection::Bearer(token.clone())
+                }
                 _ => return Err(ApiError::CredentialRefreshFailed),
             }
         }
         StoredCredential::HttpBasic {
-            username, password, ..
+            username,
+            password,
+            scheme: bound,
+            layout: bound_layout,
+            ..
         } => match state.catalog.security_scheme(platform) {
+            // The same for Basic, and the declared layout must still be the
+            // one the halves were built from.
             Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
-                auth: crate::providers::HttpAuth::Basic(_),
+                name,
+                auth: crate::providers::HttpAuth::Basic(layout),
                 ..
-            })) => CredentialInjection::Basic {
-                username: username.clone(),
-                password: password.clone(),
-            },
+            })) if bound.as_ref().is_none_or(|bound| *bound == name)
+                && bound_layout
+                    .as_ref()
+                    .is_none_or(|bound| *bound == layout.layout()) =>
+            {
+                CredentialInjection::Basic {
+                    username: username.clone(),
+                    password: password.clone(),
+                }
+            }
             _ => return Err(ApiError::CredentialRefreshFailed),
         },
         StoredCredential::NoCredential { .. } => {
@@ -928,15 +990,20 @@ mod tests {
     fn a_stored_credential_debugs_without_its_secret() {
         for credential in [
             StoredCredential::HttpBearer {
+                scheme: None,
                 provider: "service".into(),
                 token: "pat-secret".into(),
             },
             StoredCredential::HttpBasic {
+                scheme: None,
+                layout: None,
                 provider: "service".into(),
                 username: "user-secret".into(),
                 password: "pat-secret".into(),
             },
             StoredCredential::ApiKey {
+                placement: None,
+                scheme: None,
                 provider: "service".into(),
                 key: "pat-secret".into(),
             },
@@ -1006,11 +1073,14 @@ mod tests {
     async fn postgres_http_tokens_reach_the_provider_only_as_declared() {
         let security = security().await;
         let bearer_credential = serde_json::to_vec(&StoredCredential::HttpBearer {
+            scheme: None,
             provider: "clockify".into(),
             token: "pat-secret".into(),
         })
         .unwrap();
         let basic_credential = serde_json::to_vec(&StoredCredential::HttpBasic {
+            scheme: None,
+            layout: None,
             provider: "clockify".into(),
             username: "pat-secret".into(),
             password: "api_token".into(),
@@ -1112,6 +1182,157 @@ mod tests {
         }
     }
 
+    #[test]
+    fn credentials_without_a_binding_still_read_and_new_ones_carry_it() {
+        // Rows written before the binding have no `scheme` or `layout`.
+        for old in [
+            json!({"kind": "api_key", "provider": "p", "key": "k"}),
+            json!({"kind": "http_bearer", "provider": "p", "token": "t"}),
+            json!({"kind": "http_basic", "provider": "p", "username": "u", "password": "w"}),
+        ] {
+            let credential: StoredCredential = serde_json::from_value(old.clone()).unwrap();
+            // ... and are written back without them.
+            assert_eq!(serde_json::to_value(&credential).unwrap(), old);
+        }
+        let new = StoredCredential::HttpBasic {
+            provider: "p".into(),
+            username: "u".into(),
+            password: "w".into(),
+            scheme: Some("serviceToken".into()),
+            layout: Some(crate::providers::BasicLayout::Username {
+                password: "api_token".into(),
+            }),
+        };
+        let value = serde_json::to_value(&new).unwrap();
+        assert_eq!(value["scheme"], "serviceToken");
+        assert_eq!(
+            value["layout"],
+            json!({"token": "username", "password": "api_token"})
+        );
+        assert!(matches!(
+            serde_json::from_value::<StoredCredential>(value).unwrap(),
+            StoredCredential::HttpBasic {
+                scheme: Some(_),
+                layout: Some(_),
+                ..
+            }
+        ));
+    }
+
+    /// A credential is sent only under the security scheme (and, for Basic,
+    /// the declared layout) it was entered for; a credential without a
+    /// binding, from before it existed, is sent as before.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_credential_is_sent_only_under_the_scheme_it_was_entered_for() {
+        let security = security().await;
+        let status = |scheme: serde_json::Value, credential: StoredCredential| {
+            let security = security.clone();
+            let owner = Agent::new(77);
+            async move {
+                let (_server, catalog) = http_upstream(scheme).await;
+                let mut s = state(Some(security.clone()));
+                s.catalog = catalog;
+                let id = security
+                    .create_connection(
+                        "clockify",
+                        &owner.id(),
+                        &serde_json::to_vec(&credential).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let request = signed_request(
+                    &s,
+                    &owner,
+                    "GET",
+                    &format!("/proxy/{id}/clockify/workspaces"),
+                    vec![],
+                );
+                let response = crate::router(s).oneshot(request).await.unwrap();
+                let status = response.status();
+                let body = body_json(response).await;
+                (status, body)
+            }
+        };
+        let bearer = |scheme: Option<&str>| StoredCredential::HttpBearer {
+            provider: "clockify".into(),
+            token: "pat-secret".into(),
+            scheme: scheme.map(str::to_owned),
+        };
+        let basic = |scheme: Option<&str>, layout: Option<crate::providers::BasicLayout>| {
+            StoredCredential::HttpBasic {
+                provider: "clockify".into(),
+                username: "pat-secret".into(),
+                password: "api_token".into(),
+                scheme: scheme.map(str::to_owned),
+                layout,
+            }
+        };
+        let declared = || crate::providers::BasicLayout::Username {
+            password: "api_token".into(),
+        };
+        let api_key = |scheme: Option<&str>| StoredCredential::ApiKey {
+            placement: None,
+            provider: "clockify".into(),
+            key: "clockify-secret".into(),
+            scheme: scheme.map(str::to_owned),
+        };
+        // Bound to the right scheme, and to where the key goes.
+        let placed = |location: &str, name: &str| StoredCredential::ApiKey {
+            placement: Some(crate::providers::ApiKeyPlacement {
+                location: location.into(),
+                name: name.into(),
+            }),
+            provider: "clockify".into(),
+            key: "clockify-secret".into(),
+            scheme: Some("serviceToken".into()),
+        };
+        let api_key_scheme = || json!({"type": "apiKey", "in": "header", "name": "X-Api-Key"});
+
+        // Bound to the scheme it resolves to, or unbound: sent.
+        for (scheme, credential) in [
+            (bearer_scheme(), bearer(Some("serviceToken"))),
+            (bearer_scheme(), bearer(None)),
+            (
+                basic_scheme(),
+                basic(Some("serviceToken"), Some(declared())),
+            ),
+            (basic_scheme(), basic(None, None)),
+            (api_key_scheme(), api_key(Some("serviceToken"))),
+            (api_key_scheme(), api_key(None)),
+            // Header names compare case-insensitively.
+            (api_key_scheme(), placed("header", "x-api-key")),
+        ] {
+            let (status, _) = status(scheme.clone(), credential).await;
+            assert_eq!(status, StatusCode::OK, "{scheme}");
+        }
+        // Entered for another scheme, or another Basic layout: not sent.
+        let other_layouts = [
+            crate::providers::BasicLayout::Username {
+                password: String::new(),
+            },
+            crate::providers::BasicLayout::Password { username: None },
+            crate::providers::BasicLayout::Password {
+                username: Some("pat-secret".into()),
+            },
+        ];
+        let mut refused = vec![
+            (bearer_scheme(), bearer(Some("otherToken"))),
+            (basic_scheme(), basic(Some("otherToken"), Some(declared()))),
+            (api_key_scheme(), api_key(Some("otherKey"))),
+            (api_key_scheme(), placed("query", "X-Api-Key")),
+            (api_key_scheme(), placed("header", "x-other-key")),
+        ];
+        for layout in other_layouts {
+            refused.push((basic_scheme(), basic(Some("serviceToken"), Some(layout))));
+        }
+        for (scheme, credential) in refused {
+            let (status, body) = status(scheme.clone(), credential).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{scheme}");
+            assert_eq!(body["error"], "credential_refresh_failed");
+        }
+    }
+
     /// An `http` bearer scheme as an authentication profile's one scheme:
     /// its token goes only to the operations the profile covers, and a
     /// token connected under it is not sent once the selection names an
@@ -1150,6 +1371,7 @@ mod tests {
                 "mixed",
                 &owner.id(),
                 &serde_json::to_vec(&StoredCredential::HttpBearer {
+                    scheme: None,
                     provider: "mixed".into(),
                     token: "pat-secret".into(),
                 })
@@ -1203,6 +1425,8 @@ mod tests {
 
     fn api_key_credential() -> Vec<u8> {
         serde_json::to_vec(&StoredCredential::ApiKey {
+            placement: None,
+            scheme: None,
             provider: "clockify".into(),
             key: "clockify-secret".into(),
         })
@@ -1354,6 +1578,8 @@ mod tests {
         })
         .await;
         let bot = connect(StoredCredential::ApiKey {
+            placement: None,
+            scheme: None,
             provider: "mixed".into(),
             key: "Bot bot-token".into(),
         })
