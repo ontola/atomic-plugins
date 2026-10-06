@@ -64,9 +64,6 @@ export const PAUSED_SHORT = 'Syncing with Google Calendar is paused.';
 export const READ_ONLY_CALENDAR_NOTE =
   'Google gives you view-only access to this calendar, so its events can’t be edited here.';
 
-/** The name of the sheet "Review N changes" opens, for the card's pointer. */
-export const REVIEW_NAME = 'Review';
-
 const is = (n: number) => (n === 1 ? 'is' : 'are');
 const them = (n: number) => (n === 1 ? 'it' : 'them');
 const plural = (n: number, one: string, many = `${one}s`) =>
@@ -214,14 +211,25 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     // Only `uncertain` is uncertain: the relay threw after the PATCH was
     // sent. `stale` (a 412) and `failed` wrote nothing.
     const uncertain = outcomes.filter(o => o.status === 'uncertain').length;
-    const notWritten = outcomes.filter(o => o.status === 'stale').length;
+    const stale = outcomes.filter(o => o.status === 'stale').length;
+    const heldCount = Math.min(held.length, pending);
     status.writes = {
       pending,
-      ...(held.length ? { held: Math.min(held.length, pending) } : {}),
+      ...(heldCount ? { held: heldCount } : {}),
       ...(failed.length ? { failed } : {}),
       ...(uncertain ? { uncertain } : {}),
-      ...(notWritten ? { notWritten, reviewName: REVIEW_NAME } : {}),
     };
+
+    // A 412: Google changed the event after the review, so the send wrote
+    // nothing, and the row is reviewed again. Said here as a problem rather
+    // than the card's `notWritten` line, whose wording names Clockify's
+    // "Changes to send" sheet (a card change would re-publish every app that
+    // bundles it).
+    if (stale)
+      problems.push({
+        lead: `${plural(stale, 'change')} not written to Google Calendar.`,
+        text: `Changed in Google after you reviewed ${them(stale)}, so nothing was overwritten. Review again to see what Google has now.`,
+      });
 
     // A send that failed before any outcome was recorded (no connection
     // left, the proxy refused): the last good sync stands, so the card says

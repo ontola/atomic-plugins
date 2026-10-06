@@ -314,15 +314,6 @@ describe('renderSyncStatus', () => {
     );
     expect(key('pending')).toBeNull();
     expect(card.getAttribute('data-tone')).toBe('warn');
-    // An app names its own review (the calendar's "Review" sheet).
-    const named = render({
-      ...base,
-      last: { ok: true, at: NOW },
-      writes: { pending: 0, notWritten: 1, reviewName: 'Review' },
-    });
-    expect(text(named.key('not-written'))).toBe(
-      '1 change not written to Clockify: see Review for why.',
-    );
   });
 
   it('busy replaces the headline and pulses', () => {

@@ -55,10 +55,7 @@ import { focusKey, h, ICONS, restoreFocus, svg } from './ui/dom.js';
 import { syncStatusFor } from './ui/status.js';
 import { PLUGIN_CSS } from './ui/styles.js';
 import { installTheme } from './ui/theme.js';
-import {
-  renderSyncStatus,
-  syncStatusCss,
-} from '../../sync-status/card.js';
+import { renderSyncStatus, syncStatusCss } from '../../sync-status/card.js';
 import { dayCount, firstHour, ROW, week } from './week.js';
 
 type Sheet = 'review' | 'conflicts' | 'shortcuts';
