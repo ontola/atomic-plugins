@@ -33,7 +33,13 @@ import {
   WORK_PERSON,
   WORK_PROJECT,
 } from './hours.js';
-import { BANK, BANK_TRANSACTION, mutationOf } from './mutations.js';
+import {
+  BANK,
+  BANK_TRANSACTION,
+  mutationLabel,
+  mutationOf,
+  mutationSkipReason,
+} from './mutations.js';
 import { adopt, ensureTables, TABLE_NAMES } from './own.js';
 import {
   civilYear,
@@ -360,6 +366,21 @@ describe('mapping', () => {
     expect(
       mutationOf({ ...fee, date: '09-03-2026' }, A, accounts),
     ).toBeUndefined();
+    // The reason the card gives: the first failing requirement.
+    expect(mutationSkipReason({ ...fee, amount: -0.35 })).toMatch(
+      /not send as a decimal string: not imported, never approximated/,
+    );
+    expect(mutationSkipReason({ ...fee, date: '09-03-2026' })).toMatch(
+      /not YYYY-MM-DD/,
+    );
+    expect(mutationSkipReason({ ...fee, currency: '' })).toMatch(
+      /without a currency/,
+    );
+    expect(mutationSkipReason({ ...fee, financial_account_id: null })).toMatch(
+      /without a financial account/,
+    );
+    expect(mutationSkipReason(fee)).toBeUndefined();
+    expect(mutationLabel({ ...fee, message: '' })).toBe(`Mutation ${fee.id}`);
   });
 
   it('knows which shared class holds which collection', () => {
@@ -515,6 +536,14 @@ describe('importing', () => {
       total: 4,
       added: 3,
       skipped: 1,
+      // Named with its reason, for the sync-status card's ignored list.
+      skippedRows: [
+        {
+          name: 'Design review',
+          reason:
+            'without a readable start (started_at) in Moneybird: not imported.',
+        },
+      ],
     });
     expect(rows(store, tables.hours)).toHaveLength(3);
   });

@@ -73,7 +73,10 @@ than its own client, `writes` is: `pending` the entries with `state:
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
 done for any app: Notion, calendar, issue-tracker and money adopt the card in
-follow-ups.
+follow-ups. Moneybird (`integrations/money/moneybird/status.ts`, 0.3.0) has
+its own client and is read-only, so it sets no `writes`; its per-collection
+results go in `rowsScope`, a failed collection is a `neg` problem next to
+the ones that went on, and skipped records are `ignored` groups.
 
 ## What is verified
 
@@ -81,5 +84,9 @@ The card's own render states pass in jsdom (`card.test.ts`, 17 tests, 2026-10-06
 Clockify's mapping passes in `timesheets/app/ui/status.test.ts`, its DOM in
 `ui.test.ts`, and the `timesheets` e2e checks the card after the first
 import, after a vanished timer ("not loaded yet") and on a read-only table.
+Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
+`view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
+before any sync, after the import, after a failed contacts refresh and on an
+unsynced table.
 Nothing here has been seen by a user tester yet: the wording is a sensible
 default, not a verified fix for findings #6, #7 and #14.

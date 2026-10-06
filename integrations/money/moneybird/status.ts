@@ -53,12 +53,14 @@ export const NOUNS: Record<Collection, [string, string]> = {
 };
 
 /** The plain next step after a failed refresh, by its kind. */
-export const NEXT_STEP: Record<NonNullable<Failed['problem']> | 'other', string> =
-  {
-    'rate-limited': 'Wait a few minutes, then press Sync now.',
-    reauth: 'Reconnect Moneybird.',
-    other: 'Press Sync now to try again.',
-  };
+export const NEXT_STEP: Record<
+  NonNullable<Failed['problem']> | 'other',
+  string
+> = {
+  'rate-limited': 'Wait a few minutes, then press Sync now.',
+  reauth: 'Reconnect Moneybird.',
+  other: 'Press Sync now to try again.',
+};
 
 /** The write-back note in the states a sync can reach. */
 export const OVERWRITES_NOTE =
@@ -174,7 +176,10 @@ export function syncStatusFor({
           bad.length === 1
             ? (last.results[bad[0]] as Failed).error
             : bad
-                .map(c => `${COLLECTION_LABELS[c]}: ${(last.results[c] as Failed).error}`)
+                .map(
+                  c =>
+                    `${COLLECTION_LABELS[c]}: ${(last.results[c] as Failed).error}`,
+                )
                 .join(' '),
         nextStep: NEXT_STEP[problem ?? 'other'],
         ...(lastGood !== undefined ? { lastGood } : {}),
@@ -197,7 +202,10 @@ export function syncStatusFor({
     for (const c of ok) {
       const byReason = new Map<string, string[]>();
       for (const row of summary(last, c).skippedRows ?? [])
-        byReason.set(row.reason, [...(byReason.get(row.reason) ?? []), row.name]);
+        byReason.set(row.reason, [
+          ...(byReason.get(row.reason) ?? []),
+          row.name,
+        ]);
 
       for (const [reason, items] of byReason)
         ignored.push({

@@ -1,7 +1,7 @@
 {
   "name": "@atomic-integrations/moneybird-app",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Moneybird drive app (contacts, hours, financial mutations; read-only). Records only the version its catalog entry and apps/moneybird/<version>/ui.js carry (integrations/tooling/apps.mjs APP_FOLDERS); no npm dependencies. Its version is its own, not integrations/money/package.json's, which belongs to the Bank statements importer."
 }

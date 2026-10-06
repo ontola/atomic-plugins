@@ -424,6 +424,53 @@ bundle above and does not touch the Bank statements importer's table.
   holds no credential and makes no network call of its own
   (`moneybird/build.test.ts` checks the bundle). Nothing is written to
   Moneybird.
+- **The sync-status card (0.3.0).** The shared card of Decision Inbox Q-084
+  (`integrations/sync-status/`, adopted by Clockify first) comes first in the
+  view, under the heading, in every state but loading and a table the app
+  cannot sync. `moneybird/status.ts` maps the controller's state and its
+  latest sync onto it, pure, with a test per state (`status.test.ts`); the
+  DOM is checked in jsdom (`view.test.ts`). It says, in every state, that the
+  app is read-only: "Read-only: edits here stay in Atomic. Nothing is sent to
+  Moneybird, and the next sync overwrites edits made here in the columns it
+  imports." (the #97 policy as it stands); on a table that is not synced, or
+  whose sync is paused, that nothing here is overwritten either. After a
+  sync: "Synced 2 min ago", "15 rows imported: 5 contacts, 4 time entries,
+  6 mutations", "Last sync: 15 added, 0 updated, 0 unchanged". A collection
+  whose refresh failed is a problem next to the ones that went on
+  ("Contacts: refresh failed. Moneybird answered 503 for contacts page 2. The
+  contacts imported earlier are kept; they last refreshed 3 h ago. Press Sync
+  now to try again."); only when every chosen collection failed does the card
+  say "Sync failed", with the last good sync when this page load knows it
+  (the time is not stored, so a reload forgets it). Skipped records are listed
+  as ignored with their reason and names: a time entry "without a readable
+  start (started_at) in Moneybird: not imported.", a mutation "with an amount
+  Moneybird did not send as a decimal string: not imported, never
+  approximated." A wait for Moneybird's rate limit shows while it lasts (see
+  Rate limits). The `role="status"` line stays the one live region; while the
+  card holds the same words it is visually hidden, not removed. The card's
+  CSS is embedded by `cssRawPlugin` (`integrations/sync-status/build.mjs`)
+  in `moneybird/build.mjs`; the money lane's `paths` list
+  `integrations/sync-status/**`, so a card change runs this lane too.
+- **Rate limits (0.3.0).** Moneybird announces 150 requests per 300 s per
+  source IP (developer.moneybird.com, "Throttling";
+  `overlays/APIs/moneybird.com/v2-readonly/throttling-*-overlay.yaml`, window
+  algorithm unspecified). The source IP is the integration proxy's, shared by
+  everyone who connects Moneybird through it, so the app's pacing promises
+  nothing; it keeps one import from spending the whole quota at once.
+  `moneybird/throttle.ts` wraps the reader for the whole sync (the three
+  collections share one window): a sliding window of 120 requests per 300 s
+  before the next request waits (a small sync never waits; the period-halving
+  mutations read, up to 200 requests, does), and a `429` retried after
+  `Retry-After` (seconds or an HTTP-date) when Moneybird sends one, else
+  after a backoff of 2 s doubling per retry; one wait is capped at 60 s (a
+  longer `Retry-After` fails the read now, naming the asked wait), and one
+  request is retried at most 5 times, after which the collection fails with
+  "Wait a few minutes, then press Sync now." on the card. While a wait lasts
+  the card is busy with "Moneybird is limiting requests (429): retrying in
+  4 s…" or "Pacing requests under Moneybird's limit: next in 13 s…".
+  Verified with fake transports and a fake clock only (`throttle.test.ts`);
+  the synthetic fixture never answers 429, and nothing is observed against
+  Moneybird.
 - **Where the rows go.** Contacts fill the table the install made, with a
   drive-local `Contact` class, as before. Hours and mutations are rows of the
   shared classes of #177 (`ontology-kit/`), so the other apps' views work on
@@ -537,18 +584,20 @@ bundle above and does not touch the Bank statements importer's table.
   its own default period, by the administration's clock. Earlier years are
   not imported; a stored choice of period is not built (a product question).
 
-| What                                                                      | Fixture (synthetic)                                                                         | Real Moneybird                                                             |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `administrations.json` list and choice                                    | verified (unit, host E2E)                                                                   | not verified                                                               |
-| contacts, the fields above, their datatypes                               | verified (unit, host E2E)                                                                   | not verified                                                               |
-| `Link` rel="next" pagination, `include_archived`, the time entries filter | verified against the fixture's own pages of 2                                               | not verified; the page size and headers are as documented, not as observed |
-| hours as `time-entry-v1` rows linked to project and person rows           | verified (unit, host E2E against the published Pages subjects)                              | not verified                                                               |
-| mutations as `bank-transaction-v1` rows, exact amount strings, IBANs      | verified (unit, host E2E against the published Pages subjects)                              | not verified                                                               |
-| the 100-record limit: halving windows, refusing a full day                | verified against the fixture's own lowered limit (unit)                                     | not verified; the limit is as documented, not as observed                  |
-| repeat import without duplicates, two administrations, removed columns    | verified (unit, host E2E)                                                                   | not verified                                                               |
-| one collection failing while the others go on; rows kept                  | verified (fixture's synthetic 503 on contacts; unit, host E2E)                              | not verified                                                               |
-| "Sync this table to Moneybird" after Allow editing, binding, pause        | verified (unit against the fake grant; host E2E on a hand-made `bank-transaction-v1` table) | not verified                                                               |
-| 401/403 handling ("reconnect Moneybird")                                  | unit only                                                                                   | not verified                                                               |
+| What                                                                                                  | Fixture (synthetic)                                                                                  | Real Moneybird                                                             |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `administrations.json` list and choice                                                                | verified (unit, host E2E)                                                                            | not verified                                                               |
+| contacts, the fields above, their datatypes                                                           | verified (unit, host E2E)                                                                            | not verified                                                               |
+| `Link` rel="next" pagination, `include_archived`, the time entries filter                             | verified against the fixture's own pages of 2                                                        | not verified; the page size and headers are as documented, not as observed |
+| hours as `time-entry-v1` rows linked to project and person rows                                       | verified (unit, host E2E against the published Pages subjects)                                       | not verified                                                               |
+| mutations as `bank-transaction-v1` rows, exact amount strings, IBANs                                  | verified (unit, host E2E against the published Pages subjects)                                       | not verified                                                               |
+| the 100-record limit: halving windows, refusing a full day                                            | verified against the fixture's own lowered limit (unit)                                              | not verified; the limit is as documented, not as observed                  |
+| repeat import without duplicates, two administrations, removed columns                                | verified (unit, host E2E)                                                                            | not verified                                                               |
+| one collection failing while the others go on; rows kept                                              | verified (fixture's synthetic 503 on contacts; unit, host E2E)                                       | not verified                                                               |
+| "Sync this table to Moneybird" after Allow editing, binding, pause                                    | verified (unit against the fake grant; host E2E on a hand-made `bank-transaction-v1` table)          | not verified                                                               |
+| 401/403 handling ("reconnect Moneybird")                                                              | unit only                                                                                            | not verified                                                               |
+| the sync-status card: read-only wording, per-collection results, a failed collection, skipped records | verified (unit per state, jsdom; host E2E for the import, the failed refresh and the unsynced table) | not verified; the wording is a default, seen by no user tester yet         |
+| 429 with `Retry-After`, the 60 s cap, 5 retries, pacing under 150/300 s                               | unit only, fake transports and clock                                                                 | not verified; the limit and header are as documented, not as observed      |
 
 **The fixture is synthetic, not recorded.**
 `fixtures/moneybird/synthetic.mjs` is hand-written from the pinned read-only
@@ -565,10 +614,11 @@ administration and API token**; the steps are in `scenario.mjs`'s header.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).
-Version 0.2.0 is published at `apps/moneybird/0.2.0/ui.js` (0.1.1 imported
-contacts only; 0.1.0 relayed paths without the `/api/v2` base path, which
-the proxy refuses as not in the catalog; both kept because a published file
-never changes); its version is recorded in `moneybird/package.json`, not in
+Version 0.3.0 is published at `apps/moneybird/0.3.0/ui.js` (0.2.0 had no
+sync-status card and no rate-limit handling; 0.1.1 imported contacts only;
+0.1.0 relayed paths without the `/api/v2` base path, which the proxy refuses
+as not in the catalog; all kept because a published file never changes); its
+version is recorded in `moneybird/package.json`, not in
 this folder's `package.json` (that one is the Bank statements importer's).
 `apps.mjs` finds the app here, not at `integrations/moneybird/app/`, through
 its `APP_FOLDERS` map. The `moneybird` catalog entry stays `enabled: false`:
@@ -585,7 +635,8 @@ journey with all three collections, and the Add view journey on a hand-made
 atomic-server `2f403624e`, again on 2026-10-01 against the pin `a12b74a6783b`
 after the connect page's button changed with the proxy's 0.2 protocol, and
 with hours, mutations and the Add view journey on 2026-10-06 against the
-same pin.
+same pin; the 0.3.0 run with the sync-status card assertions is recorded in
+the PR that added them.
 
 **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
 moneybird --i-understand-this-writes-to <administration id>` runs the Moneybird

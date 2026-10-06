@@ -145,8 +145,7 @@ export function throttled(
           `Moneybird is limiting requests (429) and asks to wait ${seconds(asked)}, longer than this import waits (${seconds(maxWaitMs)}). Try again then.`,
           429,
         );
-      const ms =
-        asked ?? Math.min(backoffMs * 2 ** (attempt - 1), maxWaitMs);
+      const ms = asked ?? Math.min(backoffMs * 2 ** (attempt - 1), maxWaitMs);
       await wait({ ms, reason: 'rate-limited', attempt, path });
     }
   };
