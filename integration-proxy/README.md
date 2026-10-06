@@ -101,7 +101,10 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   document's own `https` server, no redirects, 10-second timeout. A `401`
   or `403` answers the consent page again (`200`) saying the key was not
   accepted, without spending the consent; any other non-2xx, a redirect or
-  no answer is a `400` and nothing is stored. A 2xx may give a label (at most
+  no answer is a `400` and nothing is stored. One consent makes at most 5
+  key checks (unreleased): the fifth rejection spends it and answers `400`
+  "Too many attempts to enter a key for this connection; start again from
+  your hub", and nothing is checked for it after that. A 2xx may give a label (at most
   200 characters, sealed with the connection). A platform whose scheme is
   `type: http` with `scheme: bearer` or `scheme: basic` (unreleased; see
   "HTTP tokens" below) works the same way: the page asks for an API token
@@ -390,9 +393,11 @@ like an `apiKey` scheme: a personal access token pasted on the consent page.
   bearer/basic schemes, `selection.httpSecurityScheme` names one. A profile
   may name a bearer or basic scheme of any document. Other `http` schemes
   (`digest`, ...) are not supported.
-- **Bearer.** The page asks for one token. It must be 4 to 512 bytes of
-  visible ASCII (`!` to `~`, so no spaces) after trimming. Requests carry
-  `Authorization: Bearer <token>`.
+- **Bearer.** The page asks for one token. After trimming it must be 4 to
+  512 bytes of RFC 6750 `b64token` (`[A-Za-z0-9-._~+/]+=*`), where `:` is
+  also allowed before the padding, for Asana-style personal access tokens
+  (`2/<id>/<id>:<secret>`, as Asana documents them; not checked with a live
+  token). Requests carry `Authorization: Bearer <token>`.
 - **Basic.** The scheme must declare how the token fills the credential, as
   `x-api-key-details.basicCredentials`
   ([`api-key-details`](../openapi-extensions/spec/api-key-details/README.md)
@@ -413,8 +418,13 @@ like an `apiKey` scheme: a personal access token pasted on the consent page.
   same per-row envelope as an API key or OAuth token, and the handoff, redeem
   and listing never return them.
 - **Requests.** The proxy sends a stored bearer or basic credential only
-  while the platform still resolves to an `http` scheme of that same kind;
-  otherwise it answers `401 credential_refresh_failed` (connect again).
+  while the platform still resolves to an `http` scheme of that same kind
+  and, for credentials stored by the unreleased version, with the same
+  scheme name and (Basic) the same declared layout (its fixed halves and
+  which half is the token; not the username field's label). API keys stored
+  by it are bound to their scheme name the same way. Otherwise it answers
+  `401 credential_refresh_failed` (connect again). Credentials stored
+  before carry no binding and are sent as before.
   The caller's own `Authorization` is never forwarded (above).
 
 Overlay URLs use immutable OAD-revision filenames. Publish new overlay

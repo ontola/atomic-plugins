@@ -26,6 +26,9 @@ struct TokenOperation {
 /// There is no scopes concept and nothing to exchange or refresh.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiKeyScheme {
+    /// The scheme's key in `components.securitySchemes`; a stored key is
+    /// bound to it.
+    pub scheme_name: String,
     pub name: String,
     pub location: ApiKeyLocation,
     /// The scheme's own `description`, shown as plain text next to the key
@@ -93,6 +96,7 @@ impl ApiKeyScheme {
         };
         let (help_url, key_check) = api_key_details(document, scheme_name, scheme, false)?;
         Ok(Self {
+            scheme_name: scheme_name.clone(),
             name: name.to_owned(),
             location,
             description: scheme
@@ -242,6 +246,9 @@ fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCh
 /// nothing to exchange or refresh.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpScheme {
+    /// The scheme's key in `components.securitySchemes`; a stored token is
+    /// bound to it.
+    pub name: String,
     pub auth: HttpAuth,
     /// The scheme's own `description`, shown as plain text next to the
     /// token field.
@@ -276,6 +283,34 @@ pub enum BasicCredentials {
     /// The token is the password; the person types the username (an email
     /// address, an account name) in a field with this label.
     PasswordTokenAskingUsername { label: String },
+}
+
+/// What a stored Basic credential is bound to: the declared layout without
+/// its display label, so relabelling the username field keeps connections
+/// working while any change to where the token goes, or to a fixed half,
+/// asks the person to connect again.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "token", rename_all = "snake_case")]
+pub enum BasicLayout {
+    /// The token is the username, with this fixed password.
+    Username { password: String },
+    /// The token is the password, with this fixed username, or with one the
+    /// person typed (`None`).
+    Password { username: Option<String> },
+}
+
+impl BasicCredentials {
+    pub fn layout(&self) -> BasicLayout {
+        match self {
+            Self::UsernameToken { password } => BasicLayout::Username {
+                password: password.clone(),
+            },
+            Self::PasswordToken { username } => BasicLayout::Password {
+                username: Some(username.clone()),
+            },
+            Self::PasswordTokenAskingUsername { .. } => BasicLayout::Password { username: None },
+        }
+    }
 }
 
 /// The longest declared username field label, in characters.
@@ -319,6 +354,7 @@ impl HttpScheme {
             HttpAuth::Bearer
         };
         Ok(Self {
+            name: scheme_name.clone(),
             auth,
             description: scheme
                 .get("description")
