@@ -16,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   138,713 bytes for 0.3.2) from GitHub Pages and refuses it unless it
+   139,633 bytes for 0.3.2) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -167,23 +167,35 @@ without a DOM. What it says here:
 - **Headline:** "Synced 4 min ago" with "Last sync: 1 added, 2 updated, 5
   unchanged" and "8 events from Work"; "Syncing… (page 3)" or "Sending 2 of
   3 to Google Calendar…" while that runs; "Sync failed 1 min ago" with the
-  banner's title, a plain next step and "Last good sync 2 h ago." A failed
-  send is not a failed sync: the last good read stands, and the send's
-  failure is a problem under it.
+  banner's title, a plain next step and "Last good sync 2 days ago." A
+  failed send is not a failed sync: the last good read stands, and the
+  send's failure is a problem under it. When a full read succeeds, its time
+  is kept next to the calendar id as `google-last-sync` (an ISO 8601 UTC
+  string, a Property of the app's ontology: on the app's own table, or on
+  the sync binding of a table it didn't make), so after a reload a failed
+  first read, or a paused table, still names the last good sync instead of
+  "just now" over days-old rows or "Not synced yet". A table last synced by
+  0.3.1 has no such time until its next successful read.
 - **Write-back:** "Edits here are sent to Google Calendar after you review
-  them." on a synced table, also on a calendar Google shares read only (a
-  change made in the table is still reviewed; a note says its events can't
-  be edited here). "Read-only: edits here stay in Atomic." on a table that
-  isn't synced, with "Syncing with Google Calendar is paused." while its
-  grant is taken back.
+  them." on a table bound to a calendar, also on a calendar Google shares
+  read only (a change made in the table is still reviewed; the note says
+  Google refuses edits sent from here, and Edit is not offered). "Read-only:
+  edits here stay in Atomic." on a table that isn't synced, while it is
+  being set up (Sync this table pressed, no calendar chosen yet, or that
+  step failed) and, with "Syncing with Google Calendar is paused.", while
+  its grant is taken back. Synced means bound to a calendar (the snapshot's
+  `calendarId`), never the placeholder details of the not-synced view.
 - **Write queue:** what "Review N changes" offers (the planned sends, or the
   rows edited here since the last preview), how many are held back because
-  the edit can't be sent, and the last send's outcomes until the next
-  refresh replaces them: "could not be sent; nothing was written" for a
-  refusal, "written to Google Calendar, but could not be finished here" when
-  the `PATCH` stood and saving the row's baseline failed (the `written`
-  flag on the outcome, 0.3.2), "sent without an answer" for exactly the one
-  uncertain send (a `412` and a refusal are not uncertain). A `412` is a
+  the edit can't be sent, and the last send's outcomes until a successful
+  refresh replaces them (a failed read keeps them): "could not be sent;
+  nothing was written" for a refusal, "written to Google Calendar, but could
+  not be finished here" when the `PATCH` stood and saving the row's baseline
+  failed (the `written` flag on the outcome, 0.3.2), "sent without an
+  answer" for exactly the one uncertain send (a `412` and a refusal are not
+  uncertain). The uncertain row and the written row are still edited (their
+  baselines did not move) and so still in what Review offers, but each has
+  its own line, so "waiting to send" leaves them out. A `412` is a
   problem below instead: "1 change not written to Google Calendar. Changed
   in Google after you reviewed it, so nothing was overwritten. Review again
   to see what Google has now." (the card's own `notWritten` line names
@@ -607,9 +619,13 @@ node --test integrations/localthought/mock-proxy.test.mjs
   there kept local, a row edit sent with `If-Match`, a reopen without a
   question, a revoked grant pausing without a proxy request, no delete).
   `app/ui/status.test.ts`: the sync-status card's mapping for every state
-  (not synced, paused, first import, synced, a read-only calendar, sending,
-  every send outcome, a failed read and a failed send, what is left out,
-  incomplete rows, conflicts and unmapped columns).
+  (not synced, paused, first import, a table being set up, synced, a
+  read-only calendar, sending, every send outcome, a failed read and a
+  failed send, what is left out, incomplete rows, conflicts and unmapped
+  columns), and, driven by the controller against the fake store: a lost
+  response on one of two edits counted once, a failed read keeping it, a
+  hand-made table whose set-up fails staying read-only, a view-only
+  calendar, the recorded last sync named after a reload and when paused.
   `app/build.test.ts` checks that the
   bundle is one ES module exporting only `view`, with no storage, `fetch` or
   credential of its own. `app/operations.test.ts`: the declared scope (see

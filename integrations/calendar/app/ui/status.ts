@@ -62,7 +62,7 @@ export const PAUSED_SHORT = 'Syncing with Google Calendar is paused.';
 
 /** The note for a calendar Google shares with you read only. */
 export const READ_ONLY_CALENDAR_NOTE =
-  'Google gives you view-only access to this calendar, so its events can’t be edited here.';
+  'Google gives you view-only access to this calendar, so it refuses edits sent from here; Edit is not offered.';
 
 const is = (n: number) => (n === 1 ? 'is' : 'are');
 const them = (n: number) => (n === 1 ? 'it' : 'them');
@@ -121,31 +121,37 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
   const now = input.now ?? Date.now();
   const { state, summary, meta, events } = snap;
   const local = state.kind === 'local';
-  const synced = !local && state.kind !== 'loading';
-  // Read-only on screen: a table that isn't synced (not bound, or bound with
-  // its grant taken back). A synced table sends reviewed edits, even on a
-  // calendar Google shares read only: a change made in the table is still
-  // reviewed, and Google answers the send.
+  // Synced: the table is bound to a calendar (`calendarId`), and not paused.
+  // Not `meta`: a table being set up (Sync this table pressed, no calendar
+  // chosen yet, or that step failed) keeps the placeholder `meta` of the
+  // not-synced view, with a `reader` role that says nothing about Google.
+  const synced = !local && !!snap.calendarId;
+  // Read-only on screen: a table that isn't synced. A synced table sends
+  // reviewed edits, even on a calendar Google shares read only: a change
+  // made in the table is still reviewed, and Google answers the send.
   const status: SyncStatus = {
     provider: PROVIDER,
-    writeBack: local ? 'read-only' : 'after-review',
+    writeBack: synced ? 'after-review' : 'read-only',
     rowNoun: ['event', 'events'],
   };
 
-  if (local) {
+  if (synced && summary) {
+    status.rows = summary.total;
+    if (meta) status.rowsScope = `from ${meta.summary}`;
+  } else if (state.kind !== 'loading') {
     status.rows = events.length;
     status.rowsScope = 'in this table';
-    if (state.reason)
-      status.writeBackNote =
-        state.reason === PAUSED_NOTE ? PAUSED_SHORT : state.reason;
-  } else {
-    if (summary) {
-      status.rows = summary.total;
-      if (meta) status.rowsScope = `from ${meta.summary}`;
-    }
-    if (meta && isReadOnly(meta.accessRole))
-      status.writeBackNote = READ_ONLY_CALENDAR_NOTE;
   }
+
+  if (local && state.reason)
+    status.writeBackNote =
+      state.reason === PAUSED_NOTE ? PAUSED_SHORT : state.reason;
+  if (synced && meta && isReadOnly(meta.accessRole))
+    status.writeBackNote = READ_ONLY_CALENDAR_NOTE;
+
+  // The last good read: this page load's, or the one the table or binding
+  // recorded (`google-last-sync`), which survives a reload and a pause.
+  const lastGood = snap.at ?? snap.lastSync;
 
   // The last sync: the failed read itself, or the last good read, which
   // stays while a new one runs, while a send runs and after a send failed.
@@ -156,7 +162,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
       // The banner's title, without a countdown: the banner keeps that.
       error: banner(state.problem, meta?.summary, 0).title,
       nextStep: NEXT_STEP[state.problem.kind],
-      ...(snap.at ? { lastGood: snap.at.getTime() } : {}),
+      ...(lastGood ? { lastGood: lastGood.getTime() } : {}),
     };
   else if (synced && snap.at && summary)
     status.last = {
@@ -168,6 +174,10 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
         unchanged: summary.unchanged,
       },
     };
+  // Before this page load's first read, or paused: when a read last
+  // succeeded, without counts; never "Not synced yet" for a table that was.
+  else if ((synced || local) && snap.lastSync)
+    status.last = { ok: true, at: snap.lastSync.getTime() };
 
   if (state.kind === 'loading') status.busy = 'Loading…';
   else if (state.kind === 'refreshing')
@@ -193,10 +203,6 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
       state.kind === 'ready' || state.kind === 'error'
         ? (state.outcomes ?? [])
         : [];
-    // What "Review N changes" offers: the planned sends of the last preview,
-    // or, after a local edit made it stale, the rows edited here and not
-    // sent. A `not-sent` outcome's row is still edited, so it is in here.
-    const pending = reviewCount(snap);
     const failed: WriteFailure[] = outcomes.flatMap(o =>
       o.status === 'failed'
         ? [
@@ -212,6 +218,17 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     // sent. `stale` (a 412) and `failed` wrote nothing.
     const uncertain = outcomes.filter(o => o.status === 'uncertain').length;
     const stale = outcomes.filter(o => o.status === 'stale').length;
+    // What "Review N changes" offers: the planned sends of the last preview,
+    // or, after a local edit made it stale, the rows edited here and not
+    // sent. A `not-sent` or `stale` outcome's row is still edited, so it is
+    // in there and stays counted. The uncertain row and a row whose PATCH
+    // stood but whose baseline could not be saved are in there too (their
+    // baselines did not move), but each is said by its own line, so they
+    // are not counted twice.
+    const pending = Math.max(
+      0,
+      reviewCount(snap) - uncertain - failed.filter(f => f.written).length,
+    );
     const heldCount = Math.min(held.length, pending);
     status.writes = {
       pending,
@@ -265,7 +282,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     if (s.unreadable)
       ignored.push({
         count: s.unreadable,
-        reason: `${s.unreadable === 1 ? 'has' : 'have'} dates this app can’t read: not imported.`,
+        reason: `${s.unreadable === 1 ? 'has' : 'have'} dates this app can’t read: not imported, and never treated as a deletion here.`,
         items: summary.unreadable.map(u => u.title.trim() || '(untitled)'),
       });
     if (summary.localOnly)

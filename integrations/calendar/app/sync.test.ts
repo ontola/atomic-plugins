@@ -235,8 +235,15 @@ suite('Calendar drive app: supported path', () => {
     const state = ready(controller.state());
     expect(state.summary).toMatchObject({ added: 0, updated: 1, unchanged: 2 });
     expect(rows(store).get('timed')!.location).toBe('Room 2');
-    // One save for the updated row; the unchanged row is not rewritten.
-    expect(store.writes.slice(saves).map(w => w.op)).toEqual(['save']);
+    // One save for the updated row; the unchanged row is not rewritten. The
+    // table itself records when the read succeeded (`google-last-sync`).
+    const after = store.writes.slice(saves);
+    expect(after.filter(w => w.subject !== TABLE).map(w => w.op)).toEqual([
+      'save',
+    ]);
+    expect(after.filter(w => w.subject === TABLE).map(w => w.op)).toEqual([
+      'save',
+    ]);
     await controller.refresh();
     expect(ready(controller.state()).summary).toMatchObject({
       updated: 0,

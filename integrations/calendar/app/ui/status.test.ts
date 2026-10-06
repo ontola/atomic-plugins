@@ -3,11 +3,26 @@
  * `status.ts`: the controller's snapshot mapped onto the shared sync-status
  * card's model (Q-084), for every `ViewState`, without a DOM.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PRIMARY, TEAM } from '../../fixtures/google-calendar/scenario.mjs';
 import { statusLines } from '../../../sync-status/card.js';
-import { PAUSED_NOTE, type Snapshot, type ViewState } from '../controller.js';
+import {
+  createController,
+  PAUSED_NOTE,
+  type Snapshot,
+  type ViewState,
+} from '../controller.js';
 import type { CalEvent } from '../events.js';
-import type { ImportSummary, Outcome, PendingEdit } from '../sync.js';
+import { fakeStore, field, OTHER_TABLE, TABLE } from '../fakeStore.js';
+import { EVENT, SHARED } from '../fields.js';
+import {
+  IS_A,
+  NAME,
+  PARENT,
+  type ImportSummary,
+  type Outcome,
+  type PendingEdit,
+} from '../sync.js';
 import {
   NEXT_STEP,
   PAUSED_SHORT,
@@ -17,6 +32,7 @@ import {
 
 const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 const AT = new Date(NOW - 4 * MINUTE);
 const META = {
   summary: 'Synthetic calendar',
@@ -24,6 +40,17 @@ const META = {
   accessRole: 'owner',
 };
 const CAN = { openExternal: true, openResource: true, disconnect: true };
+
+// The controller stamps `new Date()` on a read and a failure; pin the clock
+// (Date only) so "ago" is judged against the same NOW the mapping gets.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const summary = (over: Partial<ImportSummary> = {}): ImportSummary => ({
   calendarId: 'primary',
@@ -62,6 +89,7 @@ const pendingEdit = (title: string) => ({ title }) as PendingEdit;
 function snap(over: Partial<Snapshot> = {}): Snapshot {
   return {
     state: { kind: 'ready', at: AT, summary: summary(), outcomes: [] },
+    calendarId: PRIMARY,
     meta: META,
     events: [],
     summary: summary(),
@@ -99,6 +127,7 @@ describe('syncStatusFor: the states before a sync', () => {
     const status = syncStatusFor({
       snapshot: snap({
         state: { kind: 'loading' },
+        calendarId: undefined,
         summary: undefined,
         at: undefined,
         meta: undefined,
@@ -114,6 +143,7 @@ describe('syncStatusFor: the states before a sync', () => {
   it('a table that isn’t synced: read-only, its rows, not synced yet, no write queue', () => {
     const s = snap({
       state: { kind: 'local', canSync: true },
+      calendarId: undefined,
       meta: { summary: 'Team events', color: '#4986e7', accessRole: 'reader' },
       summary: undefined,
       at: undefined,
@@ -140,19 +170,26 @@ describe('syncStatusFor: the states before a sync', () => {
   it('paused (the grant taken back) and a refused "Sync this table" keep the reason', () => {
     const paused = snap({
       state: { kind: 'local', canSync: true, reason: PAUSED_NOTE },
+      calendarId: undefined,
       summary: undefined,
       at: undefined,
+      lastSync: new Date(NOW - 3 * 24 * HOUR),
       own: false,
     });
-    expect(lines(paused).mode).toBe(
-      `Read-only: edits here stay in Atomic. ${PAUSED_SHORT}`,
-    );
+    expect(lines(paused)).toMatchObject({
+      headline: 'Synced 3 days ago',
+      mode: `Read-only: edits here stay in Atomic. ${PAUSED_SHORT}`,
+    });
+    expect(
+      syncStatusFor({ snapshot: paused, now: NOW }).writes,
+    ).toBeUndefined();
     const refused = snap({
       state: {
         kind: 'local',
         canSync: true,
         reason: 'Not synced: The person said no.',
       },
+      calendarId: undefined,
       summary: undefined,
       at: undefined,
       own: false,
@@ -180,7 +217,8 @@ describe('syncStatusFor: the states before a sync', () => {
         now: NOW,
       }).busy,
     ).toBe('Syncing… (page 2)');
-    // The setup screens are not data views; the mapping still answers.
+    // The setup screens are not data views; the mapping still answers, and
+    // without a calendar nothing is synced.
     for (const state of [
       { kind: 'no-relay' },
       { kind: 'disconnected' },
@@ -190,6 +228,7 @@ describe('syncStatusFor: the states before a sync', () => {
       const status = syncStatusFor({
         snapshot: snap({
           state,
+          calendarId: undefined,
           meta: undefined,
           summary: undefined,
           at: undefined,
@@ -197,8 +236,60 @@ describe('syncStatusFor: the states before a sync', () => {
         now: NOW,
       });
       expect(status.last).toBeUndefined();
-      expect(status.writes).toEqual({ pending: 0 });
+      expect(status.writes).toBeUndefined();
+      expect(status.writeBack).toBe('read-only');
     }
+  });
+
+  it('a table being set up (bound, no calendar yet) is not synced, whatever its placeholder meta says', () => {
+    // After "Sync this table" the not-synced view's placeholder meta (the
+    // table's name, role `reader`) is still there while calendars are listed
+    // or that listing fails: the card must not read it as a view-only
+    // Google calendar with write-back.
+    const placeholder = {
+      summary: 'Team events',
+      color: '#4986e7',
+      accessRole: 'reader',
+    };
+    const listing = snap({
+      state: { kind: 'refreshing' },
+      calendarId: undefined,
+      meta: placeholder,
+      summary: undefined,
+      at: undefined,
+      own: false,
+      table: 'Team events',
+    });
+    expect(syncStatusFor({ snapshot: listing, now: NOW })).toMatchObject({
+      writeBack: 'read-only',
+      busy: 'Syncing…',
+    });
+    expect(
+      syncStatusFor({ snapshot: listing, now: NOW }).writeBackNote,
+    ).toBeUndefined();
+    const failed = snap({
+      state: error('network'),
+      calendarId: undefined,
+      meta: placeholder,
+      summary: undefined,
+      at: undefined,
+      events: [event({ subject: 'a' })],
+      own: false,
+      table: 'Team events',
+    });
+    const status = syncStatusFor({ snapshot: failed, now: NOW });
+    expect(status.writeBack).toBe('read-only');
+    expect(status.writeBackNote).toBeUndefined();
+    expect(status.writes).toBeUndefined();
+    expect(status.last).toMatchObject({
+      ok: false,
+      error: 'Couldn’t reach Google.',
+    });
+    expect(lines(failed)).toMatchObject({
+      headline: 'Sync failed 1 min ago',
+      rows: '1 event in this table',
+      mode: 'Read-only: edits here stay in Atomic.',
+    });
   });
 });
 
@@ -322,15 +413,17 @@ describe('syncStatusFor: synced', () => {
       },
       { status: 'not-sent', title: 'f' },
     ];
-    // Rows d, e and f are still edited: `pending` counts them.
+    // Rows c, d, e and f are still edited (their baselines did not move),
+    // so the controller's `pending` is 4. The uncertain row and the written
+    // row have lines of their own, so "waiting to send" counts 2: d and f.
     const s = snap({
       state: error('uncertain', { phase: 'send', outcomes }),
-      pending: 3,
+      pending: 4,
       stale: true,
     });
     const status = syncStatusFor({ snapshot: s, now: NOW });
     expect(status.writes).toEqual({
-      pending: 3,
+      pending: 2,
       failed: [
         { title: 'b', reason: 'Google Calendar returned 403' },
         { title: 'c', reason: 'The row could not be saved', written: true },
@@ -402,6 +495,29 @@ describe('syncStatusFor: synced', () => {
       rows: '3 events from Synthetic calendar',
     });
     expect(lines(s).counts).toBeUndefined();
+    // The recorded time stands in for this page load's when there is none:
+    // a reload, then a failed first read, still names the last good sync.
+    const reloaded = snap({
+      state: error('network'),
+      summary: undefined,
+      at: undefined,
+      lastSync: new Date(NOW - 2 * 24 * HOUR),
+    });
+    expect(syncStatusFor({ snapshot: reloaded, now: NOW }).last).toMatchObject({
+      ok: false,
+      lastGood: NOW - 2 * 24 * HOUR,
+    });
+    // And before that first read finishes, it is the last sync, uncounted.
+    const opening = snap({
+      state: { kind: 'refreshing' },
+      summary: undefined,
+      at: undefined,
+      lastSync: new Date(NOW - 2 * 24 * HOUR),
+    });
+    expect(syncStatusFor({ snapshot: opening, now: NOW }).last).toEqual({
+      ok: true,
+      at: NOW - 2 * 24 * HOUR,
+    });
     // Rate limited: the plain title; the banner keeps the countdown.
     expect(
       syncStatusFor({
@@ -453,7 +569,8 @@ describe('syncStatusFor: synced', () => {
       },
       {
         count: 1,
-        reason: 'has dates this app can’t read: not imported.',
+        reason:
+          'has dates this app can’t read: not imported, and never treated as a deletion here.',
         items: ['(untitled)'],
       },
       {
@@ -551,5 +668,177 @@ describe('syncStatusFor: synced', () => {
       text: 'Kept here only; 2 synced events fill it.',
     });
     expect(lines(s).tone).toBe('warn');
+  });
+});
+
+// ---------------------------------------------------------------- controller
+
+type Store = ReturnType<typeof fakeStore>;
+
+/** A row's subject by its Google event id. */
+function rowOf(store: Store, eventId: string): string {
+  const id = field(store, 'google-event-id');
+
+  return [...store.resources].find(([, p]) => p[id] === eventId)![0];
+}
+
+/** Edits a row the way the host table would. */
+function editRow(
+  store: Store,
+  eventId: string,
+  fields: Record<string, unknown>,
+) {
+  const subject = rowOf(store, eventId);
+  store.resources.set(subject, { ...store.resources.get(subject)!, ...fields });
+}
+
+async function imported(store = fakeStore()) {
+  const controller = createController(store, () => {});
+  await controller.load();
+  await controller.choose(PRIMARY);
+
+  return { store, controller };
+}
+
+const cardOf = (controller: ReturnType<typeof createController>) =>
+  syncStatusFor({ snapshot: controller.snapshot(), now: NOW });
+
+describe('syncStatusFor: driven by the controller', () => {
+  it('a lost response on one of two edits: one uncertain, one waiting, never both for the same row', async () => {
+    const { store, controller } = await imported();
+    editRow(store, 'all-day', { [NAME]: 'All-day here' });
+    editRow(store, 'timed', { [NAME]: 'Timed here' });
+    await controller.refresh();
+    expect(cardOf(controller).writes).toEqual({ pending: 2 });
+    store.loseNextWriteResponse();
+    await controller.send();
+    expect(controller.state().kind).toBe('error');
+    // Both rows are still edited (the uncertain row's baseline did not
+    // move), but the card says each once: 1 uncertain, 1 waiting.
+    expect(controller.snapshot().pending).toBe(2);
+    const card = cardOf(controller);
+    expect(card.writes).toEqual({ pending: 1, uncertain: 1 });
+    expect(card.last).toMatchObject({ ok: true });
+    expect(card.problems).toBeUndefined();
+
+    // A read that fails does not settle the send: the uncertain line stays.
+    store.throwNext('Failed to fetch');
+    await controller.refresh();
+    expect(controller.state()).toMatchObject({ kind: 'error', phase: 'read' });
+    const unsettled = cardOf(controller);
+    expect(unsettled.writes).toEqual({ pending: 1, uncertain: 1 });
+    expect(unsettled.last).toMatchObject({ ok: false, lastGood: NOW });
+
+    // The read that succeeds does: Google had applied it, so one is left.
+    await controller.refresh();
+    expect(cardOf(controller).writes).toEqual({ pending: 1 });
+  });
+
+  it('a hand-made table whose set-up fails after Allow editing stays read-only, without a view-only note', async () => {
+    const store = fakeStore({ view: 'other' });
+    store.resources.set('did:ad:hand-1', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Planning day',
+      [SHARED.day]: '2026-10-06',
+    });
+    const controller = createController(store, () => {});
+    await controller.load();
+    expect(cardOf(controller)).toMatchObject({
+      writeBack: 'read-only',
+      rows: 1,
+    });
+    // "Sync this table", editing allowed, then listing calendars fails: the
+    // binding exists, no calendar is chosen, the placeholder meta (role
+    // `reader`) is still there.
+    store.throwNext('Failed to fetch');
+    await controller.syncTable();
+    const snapshot = controller.snapshot();
+    expect(snapshot.state.kind).toBe('error');
+    expect(snapshot.meta?.accessRole).toBe('reader');
+    expect(snapshot.calendarId).toBeUndefined();
+    const card = cardOf(controller);
+    expect(card.writeBack).toBe('read-only');
+    expect(card.writeBackNote).toBeUndefined();
+    expect(card.writes).toBeUndefined();
+    expect(card.last).toMatchObject({
+      ok: false,
+      error: 'Couldn’t reach Google.',
+    });
+    expect(card.last).not.toHaveProperty('lastGood');
+    // Retried and chosen: synced, write-back after review.
+    await controller.listCalendars();
+    await controller.choose(PRIMARY);
+    expect(cardOf(controller)).toMatchObject({
+      writeBack: 'after-review',
+      rows: 3,
+      rowsScope: 'from Synthetic',
+    });
+  });
+
+  it('a view-only Google calendar is synced with write-back after review and the refusal note', async () => {
+    const store = fakeStore();
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.choose(TEAM);
+    expect(cardOf(controller)).toMatchObject({
+      writeBack: 'after-review',
+      writeBackNote: READ_ONLY_CALENDAR_NOTE,
+    });
+  });
+
+  it('the last good sync is kept on the table and named after a reload, when the read fails or the sync is paused', async () => {
+    const { store } = await imported();
+    const recorded =
+      store.resources.get(TABLE)![field(store, 'google-last-sync')];
+    expect(recorded).toBe(new Date(NOW).toISOString());
+
+    // Two days later the app opens again and its first read fails.
+    vi.setSystemTime(NOW + 2 * 24 * HOUR);
+    store.throwNext('Failed to fetch');
+    const reopened = createController(store, () => {});
+    await (
+      await reopened.load()
+    ).refreshing;
+    expect(reopened.state()).toMatchObject({ kind: 'error', phase: 'read' });
+    const later = NOW + 2 * 24 * HOUR;
+    const card = syncStatusFor({ snapshot: reopened.snapshot(), now: later });
+    expect(card.last).toEqual({
+      ok: false,
+      at: later,
+      error: 'Couldn’t reach Google.',
+      nextStep: NEXT_STEP.network,
+      lastGood: NOW,
+    });
+    expect(statusLines(card, later).headline).toBe('Sync failed just now');
+    expect(card.rows).toBe(3);
+  });
+
+  it('paused: a synced hand-made table whose grant is taken back names its last sync', async () => {
+    const store = fakeStore({ view: 'other' });
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.syncTable();
+    await controller.choose(PRIMARY);
+    expect(cardOf(controller)).toMatchObject({ writeBack: 'after-review' });
+    store.revokeGrant();
+    vi.setSystemTime(NOW + 3 * 24 * HOUR);
+    const reopened = createController(store, () => {});
+    await reopened.load();
+    expect(reopened.state()).toMatchObject({
+      kind: 'local',
+      reason: PAUSED_NOTE,
+    });
+    const card = syncStatusFor({
+      snapshot: reopened.snapshot(),
+      now: NOW + 3 * 24 * HOUR,
+    });
+    expect(card.writeBack).toBe('read-only');
+    expect(card.writeBackNote).toBe(PAUSED_SHORT);
+    expect(card.last).toEqual({ ok: true, at: NOW });
+    expect(statusLines(card, NOW + 3 * 24 * HOUR).headline).toBe(
+      'Synced 3 days ago',
+    );
+    expect(card.writes).toBeUndefined();
   });
 });
