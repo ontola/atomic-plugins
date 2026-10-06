@@ -54,7 +54,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 const REPOSITORY = 'atomic-fixture/tracker';
 /** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
 const TEAM_REPOSITORY = 'atomic-fixture/team-board';
@@ -131,6 +131,18 @@ test.describe('GitHub issues drive app', () => {
       { timeout: 60_000 },
     );
     await expect(status).toContainText('Synced');
+    // The shared sync-status card (Q-084) first in the board: the last sync
+    // and the write-back sentence this app must get right (reviewed sends).
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Synced /,
+    );
+    await expect(syncCard.locator('[data-key=mode]')).toHaveText(
+      'Edits here are sent to GitHub after you review them.',
+    );
+    await expect(syncCard.locator('[data-key=rows]')).toHaveText(
+      /^2 issues in this table, 2 synced with atomic-fixture\/tracker$/,
+    );
     // The frame's width decides board or list; this spec uses the board.
     await app.getByRole('button', { name: 'Board', exact: true }).click();
     await expect(card(app, '#1')).toContainText(
@@ -157,7 +169,8 @@ test.describe('GitHub issues drive app', () => {
     const first = await subjectOf(app, '#1');
     await setStatus(page, first, 'done');
     await app.getByRole('button', { name: 'Sync now' }).click();
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     const review = app.getByRole('region', {
@@ -187,6 +200,10 @@ test.describe('GitHub issues drive app', () => {
       { timeout: 30_000 },
     );
     await expect(status).toContainText('Sync paused');
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).toContainText('Review the conflict below.');
     await banner.getByRole('button', { name: 'Review conflict' }).click();
     const apply = app.getByRole('button', { name: 'Apply and resume sync' });
     await expect(apply).toBeDisabled();
@@ -208,7 +225,8 @@ test.describe('GitHub issues drive app', () => {
     await card(app, '#2').focus();
     await page.keyboard.press('4');
     await expect(column(app, 'Done')).toContainText('Export as CSV');
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     await expect(review).toContainText(
@@ -231,7 +249,8 @@ test.describe('GitHub issues drive app', () => {
     // Below 1000 px the panel is a modal drawer; close it first.
     await page.keyboard.press('Escape');
     await expect(detail).toBeHidden();
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     await expect(review).toContainText(
@@ -317,7 +336,8 @@ test.describe('GitHub issues drive app', () => {
     await card(app, 'Local').click();
     await detail.getByRole('button', { name: 'Publish to GitHub' }).click();
     await page.keyboard.press('Escape');
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     await expect(review).toContainText(
@@ -340,7 +360,8 @@ test.describe('GitHub issues drive app', () => {
     await card(app, '#3').focus();
     await page.keyboard.press('3');
     await expect(column(app, 'Blocked')).toContainText('Written in the table');
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     await expect(review).toContainText(
@@ -506,6 +527,12 @@ test.describe('GitHub issues drive app', () => {
     await expect(
       app.getByText('Team issues isn’t synced with GitHub.'),
     ).toBeVisible({ timeout: 45_000 });
+    // The sync-status card on a table that isn't synced: read-only, and why.
+    await expect(
+      app
+        .getByRole('region', { name: 'Sync status' })
+        .locator('[data-key=mode]'),
+    ).toHaveText(/^Read-only: edits here stay in Atomic\. .*isn’t synced/);
     await app
       .getByRole('button', { name: 'Sync this table to GitHub' })
       .click();
@@ -575,7 +602,10 @@ test.describe('GitHub issues drive app', () => {
     )!;
     expect(nameless).not.toHaveProperty('github-sync-baseline');
     await expect(app.getByText('Incomplete: missing Name')).toBeVisible();
-    await expect(app.getByText('(no title)')).toBeVisible();
+    // On its board card; the sync-status card names it under "Which" too.
+    await expect(
+      app.locator('.card-title', { hasText: '(no title)' }),
+    ).toBeVisible();
 
     expect(rows.find(r => r[NAME] === 'Plan the offsite')).not.toHaveProperty(
       'github-issue-number',
@@ -600,7 +630,8 @@ test.describe('GitHub issues drive app', () => {
       .subject as string;
     await setStatus(page, first, 'done');
     await app.getByRole('button', { name: 'Sync now' }).click();
-    await app
+    // The connection bar's button; the sync-status card offers the same.
+    await bar
       .getByRole('button', { name: 'Review and send' })
       .click({ timeout: 30_000 });
     const review = app.getByRole('region', {

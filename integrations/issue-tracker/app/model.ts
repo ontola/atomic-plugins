@@ -78,6 +78,8 @@ export function pillFor(state: ViewState, now: number): Pill | undefined {
         return { state: 'reauth', text: 'Reconnect needed' };
       if (p?.kind === 'conflict' || p?.kind === 'paused')
         return { state: 'paused', text: 'Sync paused' };
+      if (p?.kind === 'rate-limited')
+        return { state: 'paused', text: 'GitHub rate limit' };
       if (p?.kind === 'failed') return { state: 'error', text: 'Sync failed' };
       if (!state.last?.at) return { state: 'idle', text: 'Not synced yet' };
 
@@ -364,28 +366,18 @@ function uncertainBanner(u: Uncertain): BannerModel {
 }
 
 /** The connection bar's status line. */
+/**
+ * The connection bar's line: what runs now. The last sync, its time and
+ * the changes waiting to send are the sync-status card's (`status.ts`),
+ * not this bar's; idle, it names the repository.
+ */
 export function connectionLine(state: Ready): string {
-  const held = state.last?.result.held.length ?? 0;
-  const waiting = held
-    ? ` · ${plural(held, 'change')} waiting to send`
-    : state.touched?.length
-      ? ` · ${plural(state.touched.length, 'change')} saving`
-      : '';
   if (state.busy === 'syncing' && !state.last) return 'Importing…';
-  if (state.busy === 'syncing') return `Checking GitHub for changes${waiting}`;
-  if (state.busy === 'sending') return `Sending to GitHub${waiting}`;
+  if (state.busy === 'syncing') return 'Checking GitHub for changes…';
+  if (state.busy === 'sending') return 'Sending to GitHub…';
   if (state.busy === 'resolving') return 'Settling the conflict…';
-  const time = state.last?.at
-    ? new Date(state.last.at).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '';
-  if (state.problem?.kind === 'conflict' || state.problem?.kind === 'paused')
-    return `Paused${time ? ` at ${time}` : ''}${waiting}`;
-  if (!state.last?.at) return `Not synced yet${waiting}`;
 
-  return `Last sync ${time}${waiting}`;
+  return state.repository;
 }
 
 export type Marker = 'waiting' | 'sending' | 'conflict' | 'unconfirmed';

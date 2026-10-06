@@ -37,6 +37,8 @@ import {
   type Layout,
   type Marker,
 } from './model.js';
+import { renderSyncStatus } from '../../sync-status/card.js';
+import { syncStatusFor } from './status.js';
 import type { ConflictField, IssueRow, Side, Status } from './sync.js';
 import type { Repository } from './transport.js';
 import { h, icon, type Child } from './ui/dom.js';
@@ -112,6 +114,8 @@ export interface Ui {
   flash: Set<string>;
   /** Seconds until the automatic retry after a transient failure. */
   retryIn?: number;
+  /** When that retry runs (epoch ms), for the card's "retrying at HH:MM". */
+  retryAt?: number;
   now: number;
 }
 
@@ -284,8 +288,8 @@ function connBar(state: Ready, ui: Ui, actions: Actions): HTMLElement {
         ? h('span', { class: 'mono acct' }, state.repository)
         : h('span', { class: 'acct' }, 'GitHub'),
       // A phone-width bar keeps to the repository and its actions; the
-      // pill already says when it last synced.
-      ui.size === 's' && !held ? null : h('span', null, connectionLine(state)),
+      // line repeats the repository when idle, so only the busy words show.
+      ui.size === 's' && !busy ? null : h('span', null, connectionLine(state)),
     ],
     [
       held && !state.last?.result.held.some(x => x.unconfirmed)
@@ -2094,10 +2098,28 @@ export function page(
   actions: Actions,
 ): HTMLElement[] {
   const top = appHeader(state, ui, actions);
+  // The shared sync-status card (Q-084) first in every view of a table:
+  // the last sync and what it did, whether edits go back to GitHub, what
+  // waits or failed to send, what is left out, and a problem's next step.
+  const statusCard = () =>
+    renderSyncStatus(
+      top.ownerDocument,
+      syncStatusFor({
+        state,
+        now: ui.now,
+        ...(ui.retryAt ? { retryAt: ui.retryAt } : {}),
+        onReview: () => actions.open({ kind: 'review' }, 'ss-review'),
+        onSync: () => actions.sync(),
+        ...(actions.openRow
+          ? { onOpenRow: (subject: string) => actions.openRow!(subject) }
+          : {}),
+      }),
+      { now: ui.now, buttonClass: 'btn sm' },
+    );
 
-  if (state.kind === 'no-proxy') return [top, noProxy()];
+  if (state.kind === 'no-proxy') return [top, statusCard(), noProxy()];
   if (state.kind === 'other-table')
-    return [top, otherTable(state, ui, actions)];
+    return [top, statusCard(), otherTable(state, ui, actions)];
   if (state.kind === 'loading')
     return [
       top,
@@ -2115,6 +2137,7 @@ export function page(
   const main = h(
     'div',
     { class: 'split-main' },
+    statusCard(),
     bannerNode(state, ui, actions),
     toolbar(state, ui, layout, actions),
     emptyContent(state, ui, actions) ??

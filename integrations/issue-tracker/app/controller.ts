@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import { endpoint } from '../devonian/github-issues/adapter.js';
+import { approvalKey } from '../devonian/github-issues/review.mjs';
 import { frameStore } from './frameStore.js';
 import { SyncState, type ViewPrefs } from './state.js';
 import type { Overlay } from './frameStore.js';
@@ -42,6 +43,7 @@ import {
   unbindTable,
   type Tracker,
 } from './tracker.js';
+import { clock, isRateLimitError, type RateLimit } from './rateLimit.js';
 import { listRepositories, PLATFORM, type Repository } from './transport.js';
 
 /**
@@ -82,6 +84,12 @@ export type Problem =
         local?: string;
       };
     }
+  /**
+   * GitHub is rate-limiting (`rateLimit.ts`): the pass stopped so as not to
+   * hammer it; nothing was written by the refused request. `main.ts`
+   * retries at `until`; approved changes stay approved for that retry.
+   */
+  | { kind: 'rate-limited'; message: string; until: number }
   /** Anything else; "Sync now" retries. */
   | { kind: 'failed'; message: string };
 
@@ -128,6 +136,19 @@ export type ViewState =
       busy?: Busy;
       last?: { at: number; result: PassResult };
       problem?: Problem;
+      /** When `problem` was raised, for "Sync failed 4 min ago". */
+      failedAt?: number;
+      /**
+       * When a pass last completed, from the sync resource's
+       * `github-last-sync` (so it survives a reload); `last.at` once a pass
+       * completed in this view.
+       */
+      syncedAt?: number;
+      /**
+       * While a pass waits out a short GitHub rate limit before repeating
+       * a request (`rateLimit.ts`): until when, for the card.
+       */
+      limited?: { until: number };
       /**
        * Rows edited in this view that no pass has seen yet, so the view can
        * mark them "Waiting to send" before the pass that holds them returns.
@@ -263,6 +284,8 @@ const sentence = (text: string) => text.replace(/\.?$/, '.');
 export function classify(error: unknown): Problem {
   const e = error as PassError;
   const message = error instanceof Error ? error.message : String(error);
+  if (isRateLimitError(error))
+    return { kind: 'rate-limited', message, until: error.rateLimit.until };
   if (e?.subject && Array.isArray(e.fields))
     return {
       kind: 'conflict',
@@ -332,6 +355,17 @@ export function createController(
   let extras: string[] | undefined;
   /** Optimistic changes per touched row, re-applied until a pass has seen it. */
   const changes = new Map<string, (row: IssueRow) => IssueRow>();
+  /**
+   * Review approvals a rate-limited send could not use (`rateLimit.ts`), as
+   * `approvalKey(subject, key)`: the next pass, on the retry timer or "Sync
+   * now", sends exactly those rows with exactly that content, without a
+   * second review. Any other outcome clears them; a change edited since has
+   * another key and is held again, and a second row with the same content
+   * is another subject, so it is held too.
+   */
+  let carried: Set<string> | undefined;
+  /** The sync resource's `github-last-sync`, read on open, set per pass. */
+  let syncedAt: number | undefined;
 
   const set = (next: ViewState) => {
     current = next;
@@ -363,6 +397,11 @@ export function createController(
       overlay: new Map(),
     };
     prefs = { ...state.state.view };
+    const stamped = provisioned.sync.get(
+      provisioned.tracker.properties.lastSync,
+    );
+    const at = typeof stamped === 'string' ? Date.parse(stamped) : NaN;
+    syncedAt = Number.isFinite(at) ? at : undefined;
 
     // A table made by 0.1.x: its rows become issue-v1 rows in place, once,
     // through the same frame store the passes use (#177 §5). The sync
@@ -441,7 +480,16 @@ export function createController(
     state: s.state,
     overlay: s.overlay,
     onImported: showImported,
+    rateLimits: { now, onLimit: showLimit },
+    lastSyncProperty: s.tracker.properties.lastSync,
   });
+
+  /** A short GitHub rate limit the running pass is waiting out, for the card. */
+  function showLimit(limit: RateLimit | undefined) {
+    if (current.kind !== 'ready' || !current.busy) return;
+    const { limited: _, ...rest } = current;
+    set(limit ? { ...rest, limited: { until: limit.until } } : rest);
+  }
 
   /** When the view last showed imported rows; see `showImported`. */
   let shownAt = 0;
@@ -530,6 +578,7 @@ export function createController(
 
         const result = await work(s, ready);
         conflict = undefined;
+        carried = undefined;
         const after = latest(ready);
         // Rows touched while this pass ran are not in its result yet.
         const touched = (after.touched ?? []).filter(
@@ -538,22 +587,26 @@ export function createController(
         for (const subject of changes.keys())
           if (!touched.includes(subject)) changes.delete(subject);
 
+        if (result) syncedAt = now();
+
         return set({
           kind: 'ready',
           connectionId: ready.connectionId,
           repository: ready.repository,
           ...(result
-            ? { last: { at: now(), result: withChanges(result) } }
+            ? { last: { at: syncedAt!, result: withChanges(result) } }
             : after.last
               ? { last: after.last }
               : {}),
           ...(touched.length ? { touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
         });
       } catch (error) {
         // A row write refused because the grant lapsed during the pass.
         if (foreign && (await lapsed())) return current;
         const problem = classify(error);
         if (problem.kind === 'conflict') conflict = problem;
+        if (problem.kind !== 'rate-limited') carried = undefined;
         const after = latest(ready);
         let last = after.last;
 
@@ -582,7 +635,9 @@ export function createController(
           repository: ready.repository,
           ...(last ? { last } : {}),
           ...(after.touched?.length ? { touched: after.touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
           problem,
+          failedAt: now(),
         });
       }
     });
@@ -636,7 +691,7 @@ export function createController(
       return true;
     } catch (error) {
       if (foreign && (await lapsed())) return false;
-      set({ ...latest(ready), problem: classify(error) });
+      set({ ...latest(ready), problem: classify(error), failedAt: now() });
 
       return false;
     }
@@ -706,6 +761,7 @@ export function createController(
         kind: 'ready',
         connectionId: connection.connectionId,
         repository,
+        ...(syncedAt ? { syncedAt } : {}),
       });
     },
 
@@ -794,7 +850,9 @@ export function createController(
       try {
         listing = {
           kind: 'listed',
-          repositories: await listRepositories(store.proxy, connectionId),
+          repositories: await listRepositories(store.proxy, connectionId, {
+            now,
+          }),
         };
       } catch (error) {
         listing = {
@@ -852,17 +910,24 @@ export function createController(
 
     sync() {
       return run('syncing', (s, ready) =>
-        runPass(passOptions(s, ready.connectionId, ready.repository)),
+        runPass({
+          ...passOptions(s, ready.connectionId, ready.repository),
+          ...(carried ? { approved: carried } : {}),
+        }),
       );
     },
 
     send() {
       const held = current.kind === 'ready' ? current.last?.result.held : [];
+      const approved = new Set(
+        (held ?? []).map(h => approvalKey(h.subject, h.key)),
+      );
+      carried = approved;
 
       return run('sending', (s, ready) =>
         runPass({
           ...passOptions(s, ready.connectionId, ready.repository),
-          approved: new Set((held ?? []).map(h => h.key)),
+          approved,
         }),
       );
     },
@@ -1121,6 +1186,8 @@ export function describe(state: ViewState): string {
           return `GitHub no longer accepts this connection. Your issues are still here. Reconnect to continue. (${message})`;
         if (kind === 'paused')
           return `Sync paused: ${message}. Nothing is resent automatically; check the issue on GitHub before syncing again.`;
+        if (kind === 'rate-limited')
+          return `GitHub is rate-limiting; retrying at ${clock(state.problem.until)}. Changes waiting to send are kept and go out then. (${message})`;
 
         return `Sync failed: ${message}`;
       }
