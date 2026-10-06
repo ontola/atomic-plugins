@@ -193,8 +193,12 @@ each step's assertions, the cleanup outcome (created, deleted, leftover) and
 account's own invented content. The file says it ran the app's source, not the
 published bundle and not the host's frame.
 
-A failed assertion or incomplete cleanup is a failed run. Committing the files
-is a deliberate step by whoever ran it. Nothing reads them yet:
+A failed assertion or incomplete cleanup is a failed run. The default folder
+is gitignored, so a run never lands in the repository by accident; pass
+`--out` to keep the files outside the checkout (for example
+`~/live-evidence/<app>/`). Raw evidence stays out of the repository: only
+redacted summary lines, written by hand, go into a README or READINESS row.
+Nothing reads the files yet:
 `integrations/evidence.json` and `certify.mjs` still say `live: not-run`, and
 catalog copy stays "declared, not verified" until a person reads a passing run
 and decides what it supports.
