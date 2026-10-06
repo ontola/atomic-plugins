@@ -21,6 +21,7 @@ import { OPTION_ID_SHORTNAME } from './options.js';
 import { loadSchema } from './record.js';
 import type { HostProxy, JSONValue } from './store.js';
 import { atomic } from './sync.js';
+import { syncStatusFor } from './view/status.js';
 
 const T0 = Date.parse('2026-09-24T12:00:00.000Z');
 const POINTS = notionFieldShortname('n%3D1');
@@ -348,7 +349,7 @@ describe('review and send', () => {
 
   it('stops at a PATCH with no answer: unknown, and the rest is not sent', async () => {
     const base = fixtureProxy();
-    const { controller, edit, patches } = await synced({
+    const { controller, edit, patches, rowOf } = await synced({
       request: async request => {
         if (request.method === 'PATCH') {
           await base.request(request);
@@ -367,6 +368,104 @@ describe('review and send', () => {
     ]);
     // The base proxy's own log: one PATCH reached the fixture.
     expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
+    expect(patches()).toEqual([]);
+    // The card (Q-084) counts the edit once: the row whose PATCH got no
+    // answer is still listed as a change (its baseline did not advance),
+    // but it is "sent without an answer", not "waiting to send". Only the
+    // row the send never reached waits.
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      uncertain: 1,
+    });
+    // The strip and the Send button count the same: pressing Send again
+    // sends only the row that waits, leaves the uncertain one to the next
+    // sync, and keeps its outcome, so the card goes on naming it.
+    const again = await controller.send();
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+    expect('outcomes' in again && again.outcomes).toMatchObject([
+      { status: 'unknown', subject: rowOf(LAUNCH)[0] },
+      { status: 'unknown', subject: rowOf(CHANGELOG)[0] },
+    ]);
+    expect(
+      syncStatusFor({ state: again, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 0, uncertain: 2 });
+    // Nothing left that Send would send: a third press is a no-op.
+    expect(await controller.send()).toBe(again);
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+  });
+
+  it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {
+    const base = fixtureProxy();
+    const gateway = { status: 502, headers: {}, body: 'Bad gateway' };
+    /** When set, every read fails too, so a sync fails. */
+    let readsFail = false;
+    const { controller, edit, patches } = await synced({
+      request: async request =>
+        request.method === 'PATCH' || readsFail
+          ? gateway
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    edit(CHANGELOG, POINTS, 1);
+    await controller.refreshRows();
+    const state = await controller.send();
+    // A gateway may answer 502 or 504 after Notion applied the PATCH, so
+    // the row is unknown and the batch stops, as for a lost answer.
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'unknown',
+        // Short: the review's own prefix says it is unknown (`review.ts`).
+        message: 'Notion answered 502',
+      },
+    ]);
+    expect(patches()).toEqual([]);
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      uncertain: 1,
+    });
+
+    // A failed sync settles nothing, so it keeps the uncertain outcome:
+    // the card still says "sent without an answer", not "waiting".
+    readsFail = true;
+    const failed = await controller.sync();
+    expect(failed.kind).toBe('failed');
+    expect('outcomes' in failed && failed.outcomes).toMatchObject([
+      { status: 'unknown', message: 'Notion answered 502' },
+    ]);
+    expect(
+      syncStatusFor({ state: failed, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 1, uncertain: 1 });
+
+    // A sync that succeeds reads Notion back and settles it: the PATCH was
+    // never applied here, so the edit is a plain change again.
+    readsFail = false;
+    const synced2 = await controller.sync();
+    expect(synced2.kind).toBe('ready');
+    expect(
+      'outcomes' in synced2 ? synced2.outcomes : undefined,
+    ).toBeUndefined();
+    expect(
+      syncStatusFor({ state: synced2, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 2 });
+  });
+
+  it('the card holds back a whole row when one of its fields conflicts', async () => {
+    const { controller, edit, proxy, patches } = await synced();
+    edit(LAUNCH, POINTS, 5);
+    edit(LAUNCH, DONE, true);
+    proxy.api.editPage(LAUNCH, { Points: { number: 7 } });
+    const state = await controller.sync();
+    expect(changesOf(state)).toMatchObject([
+      { fields: [{ shortname: DONE }, { shortname: POINTS, conflict: true }] },
+    ]);
+    // Points conflicts and Done is clean, but `sendable` is per row: Send
+    // makes no PATCH, and the card says 1 waiting, 1 held, not "2 waiting,
+    // 1 held".
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      held: 1,
+    });
+    await controller.send();
     expect(patches()).toEqual([]);
   });
 

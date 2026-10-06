@@ -33,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.4.2';
+const VERSION = '0.5.0';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -79,13 +79,26 @@ test.describe('notion drive plugin', () => {
       timeout: 60_000,
     });
     const appUrl = page.url();
+    // The shared sync-status card (Q-084, 0.5.0) first: the outcome, the
+    // row total and the write-back mode; the databases right below it.
     const card = app.getByRole('region', { name: 'Sync status' });
-    await expect(card.getByRole('list', { name: 'Databases' })).toContainText(
-      'Roadmap',
-    );
+    await expect(card).toContainText('Synced');
     await expect(card).toContainText('3 rows in this table');
+    await expect(card).toContainText(
+      'Edits here are sent to Notion after you review them.',
+    );
+    const databases = app.getByRole('region', {
+      name: 'Databases synced with this table',
+    });
+    await expect(
+      databases.getByRole('list', { name: 'Databases' }),
+    ).toContainText('Roadmap');
     await expect(app.getByRole('table')).toHaveCount(0);
-    await app.getByRole('button', { name: 'Sync details' }).click();
+    // The connbar's toggle: the card offers a "Sync details" button too.
+    await app
+      .locator('.pl-connbar')
+      .getByRole('button', { name: 'Sync details' })
+      .click();
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
     ).toContainText('1 page has formatting in Notes');
@@ -305,7 +318,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
   const status = app.getByRole('status');
   const banner = app.locator('.pl-banner');
   const card = app.getByRole('region', { name: 'Sync status' });
-  const databases = card.getByRole('list', { name: 'Databases' });
+  // The databases block right below the card (0.5.0).
+  const dbBlock = app.getByRole('region', {
+    name: 'Databases synced with this table',
+  });
+  const databases = dbBlock.getByRole('list', { name: 'Databases' });
   const strip = app.locator('.nt-changes');
   const review = app.getByRole('region', {
     name: 'Changes to send to Notion',
@@ -339,7 +356,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
-    await app.getByRole('button', { name: 'Sync details' }).click();
+    // The connbar's toggle: the card offers a "Sync details" button too.
+    await app
+      .locator('.pl-connbar')
+      .getByRole('button', { name: 'Sync details' })
+      .click();
     const details = app.getByRole('dialog', { name: 'Sync details' });
     await expect(details).toContainText('Reading list');
     await expect(details).toContainText('Recommended by people');
@@ -355,7 +376,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
     const statusAppUrl = page.url();
-    await card.getByRole('button', { name: 'Open table' }).click();
+    await dbBlock.getByRole('button', { name: 'Open table' }).click();
     const shipped = page
       .getByRole('main')
       .getByText('Shipped', { exact: true })
@@ -367,7 +388,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await page.goto(statusAppUrl);
     await setRowField(page, 'Launch plan', STATUS, DONE_OPTION, true);
     await page.reload();
-    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+    await expect(strip).toContainText('1 change not sent to Notion', {
       timeout: 60_000,
     });
     await strip.getByRole('button', { name: 'Review changes' }).click();
@@ -388,7 +409,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     // request to Notion, and sent only after review.
     await setRowField(page, 'Launch plan', POINTS, 5);
     await page.reload();
-    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+    await expect(strip).toContainText('1 change not sent to Notion', {
       timeout: 60_000,
     });
     await shot('s15-pending');
@@ -449,6 +470,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     });
     await expect(banner.getByText('Technical details')).toBeVisible();
     await expect(status).toHaveText('Sync failed');
+    // The card names the failure and the gap, and still writes back after
+    // review (sending waits for a sync that succeeds).
+    await expect(card).toContainText('Sync failed');
+    await expect(card).toContainText('Last good sync');
+    await expect(card).toContainText('Sending waits until a sync succeeds.');
     await shot('s13-failed');
 
     // S5 over kept rows: nothing shared any more; the card still counts them.
@@ -474,7 +500,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     // the rows are browsed and edited.
     await driver('setScenario', ['default']);
     const appUrl = page.url();
-    await card.getByRole('button', { name: 'Open table' }).click();
+    await dbBlock.getByRole('button', { name: 'Open table' }).click();
     await expect(page).not.toHaveURL(appUrl);
     await expect(
       page.getByRole('main').getByText('Launch plan', { exact: true }).first(),
@@ -496,6 +522,9 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     });
     await expect(status).toHaveText('Not connected');
     await expect(card).toContainText('5 rows in this table');
+    // No connection: the card is read-only and says how to resume.
+    await expect(card).toContainText('Read-only: edits here stay in Atomic.');
+    await expect(card).toContainText('connect it again to sync and send');
     await shot('disconnected');
   } finally {
     // Leaves the fixture as it found it for any later test; a retry resets

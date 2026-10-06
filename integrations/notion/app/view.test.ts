@@ -185,7 +185,7 @@ describe('view model', () => {
         NOW,
       )?.text,
     ).toBe('Importing 2 of 3 databases');
-    expect(pill({ kind: 'reauth', rows }, NOW)).toEqual({
+    expect(pill({ kind: 'reauth', at: NOW, rows }, NOW)).toEqual({
       tone: 'neg',
       text: 'Reconnect needed',
     });
@@ -196,6 +196,7 @@ describe('view model', () => {
       pill(
         {
           kind: 'failed',
+          at: NOW,
           connectionId: 'c',
           rows,
           title: '',
@@ -326,11 +327,29 @@ describe('view (DOM)', () => {
       'Roadmap4 rows',
       'Reading list1 row',
     ]);
+    // The databases block keeps when and how long; the shared card (Q-084,
+    // first in the view) has the outcome, the counts and the row total.
     expect(q('[data-key=last-sync]')?.textContent).toMatch(
-      /^Today, \d\d:\d\d · took 3 s · 5 new$/,
+      /^Today, \d\d:\d\d · took 3 s$/,
+    );
+    expect(card.classList.contains('ss')).toBe(true);
+    expect(card.nextElementSibling).toBe(q('.nt-summary'));
+    expect(card.querySelector('[data-key=headline]')?.textContent).toBe(
+      'Synced 4 min ago',
+    );
+    expect(card.querySelector('[data-key=counts]')?.textContent).toBe(
+      'Last sync: 5 added, 0 updated, 0 unchanged',
     );
     expect(card.textContent).toContain('5 rows in this table');
-    expect(card.textContent).toContain('Browse and edit the rows in the table');
+    expect(card.querySelector('[data-key=mode]')?.textContent).toBe(
+      'Edits here are sent to Notion after you review them.',
+    );
+    // Roadmap's one formatted page is a note: the card points at Sync details.
+    expect(card.getAttribute('data-tone')).toBe('warn');
+    expect(card.textContent).toContain('1 note from the last sync.');
+    expect(q('.nt-summary')?.textContent).toContain(
+      'Browse and edit the rows in the table',
+    );
     // The host's table shows the rows; the app no longer does.
     expect(q('table')).toBeNull();
     expect(root.textContent).not.toContain('Launch plan');
@@ -340,12 +359,18 @@ describe('view (DOM)', () => {
     expect(q('[data-key=open-table]')).toBeNull();
     q<HTMLButtonElement>('[data-key=sync-now]')!.click();
     expect(actions.sync).toHaveBeenCalledOnce();
+    // The card's "Sync details" opens the panel and does not close it again
+    // through the document click handler.
+    expect(q('.nt-details')).toBeNull();
+    q<HTMLButtonElement>('[data-k=ss-details]')!.click();
+    expect(q('.nt-details')).toBeTruthy();
   });
 
   it('says when the shared databases have no pages, and before the first sync', () => {
     app.render({ ...ready, rows: [] });
-    expect(q('.nt-summary')?.textContent).toContain(
-      'None yet: the shared databases have no pages',
+    expect(q('.ss')?.textContent).toContain('0 rows in this table');
+    expect(q('.ss')?.textContent).toContain(
+      'The shared databases have no pages. Add one in Notion, then sync again.',
     );
     // Connected, nothing stored yet: the import placeholder, not the card.
     app.render({ kind: 'ready', connectionId: 'c', rows: [] });
@@ -387,7 +412,7 @@ describe('view (DOM)', () => {
   });
 
   it('S11–S13: one banner with one recovery action; role=alert only after a sync', () => {
-    app.render({ kind: 'reauth', connectionId: 'c', rows, last });
+    app.render({ kind: 'reauth', at: NOW, connectionId: 'c', rows, last });
     expect(q('.pl-banner')?.textContent).toContain('Your 5 rows are kept');
     expect(q('.pl-banner')?.getAttribute('role')).toBeNull();
     expect(all('.pl-banner button').map(b => b.textContent)).toEqual([
@@ -399,6 +424,7 @@ describe('view (DOM)', () => {
     app.render({ ...ready, kind: 'syncing', progress: [] });
     app.render({
       kind: 'failed',
+      at: NOW,
       connectionId: 'c',
       rows,
       last,
@@ -408,6 +434,24 @@ describe('view (DOM)', () => {
     });
     expect(q('.pl-banner')?.getAttribute('role')).toBe('alert');
     expect(q('.pl-banner pre')?.textContent).toBe('POST /v1/search → 502');
+    // The card names the failure and the gap since the last good sync, and
+    // stays write-back: the edits wait for a sync that succeeds.
+    expect(q('.ss')?.getAttribute('data-tone')).toBe('neg');
+    expect(q('.ss [data-key=headline]')?.textContent).toBe(
+      'Sync failed just now',
+    );
+    expect(q('.ss [data-key=last-good]')?.textContent).toBe(
+      'Last good sync 4 min ago.',
+    );
+    // The databases block agrees: the record is the last good sync, and it
+    // keeps that sync's counts, which the card no longer shows.
+    expect(q('.nt-s-facts dt')?.textContent).toBe('Last good sync');
+    expect(q('[data-key=last-sync]')?.textContent).toMatch(
+      /^Today, \d\d:\d\d · took 3 s · 5 new$/,
+    );
+    expect(q('.ss [data-key=mode]')?.textContent).toBe(
+      'Edits here are sent to Notion after you review them. Sending waits until a sync succeeds.',
+    );
     q<HTMLButtonElement>('[data-key=try-again]')!.click();
     expect(actions.sync).toHaveBeenCalledOnce();
   });
@@ -416,6 +460,7 @@ describe('view (DOM)', () => {
     vi.useFakeTimers();
     app.render({
       kind: 'rate-limited',
+      at: NOW,
       connectionId: 'c',
       rows,
       last,
@@ -475,10 +520,57 @@ describe('view (DOM)', () => {
       app.render({ ...ready, changes: [] });
       expect(q('.nt-changes')).toBeNull();
       app.render({ ...ready, changes });
+      // Counted in rows, as the card right below counts (`writeQueue`).
       expect(q('.nt-changes')?.textContent).toContain(
-        '2 changes in 2 rows not sent to Notion yet · 1 row also changed in Notion',
+        '2 changes not sent to Notion yet · 1 row also changed in Notion',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '2 changes waiting to send to Notion; 1 held back until it is fixed.',
       );
       expect(q('.nt-summary')).toBeTruthy();
+      // A row whose PATCH got no answer is still a change, but neither the
+      // strip nor the card counts it as waiting: the strip agrees with the
+      // card's "1 change waiting" and "1 change sent without an answer".
+      app.render({
+        ...ready,
+        changes,
+        outcomes: [
+          {
+            subject: changes[0]!.subject,
+            name: changes[0]!.name,
+            status: 'unknown',
+            message: 'No answer from Notion.',
+          },
+        ],
+      });
+      expect(q('.nt-changes')?.textContent).toContain(
+        '1 change not sent to Notion yet',
+      );
+      expect(q('.nt-changes')?.textContent).not.toContain('2 changes');
+      expect(q('.ss')?.textContent).toContain(
+        '1 change waiting to send to Notion',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '1 change sent without an answer from Notion',
+      );
+      // Every listed row left to the next sync: nothing waits, but the
+      // strip does not call that "handled" while the card lists them.
+      app.render({
+        ...ready,
+        changes,
+        outcomes: changes.map(c => ({
+          subject: c.subject,
+          name: c.name,
+          status: 'unknown' as const,
+          message: 'Notion answered 502',
+        })),
+      });
+      expect(q('.nt-changes')?.textContent).toBe(
+        'Waiting for the next sync to confirm 2 changes.Show results',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '2 changes sent without an answer from Notion',
+      );
     });
 
     it('reviews before → after with option names, sends only what can be sent', () => {
@@ -537,12 +629,14 @@ describe('view (DOM)', () => {
             subject: 'row1',
             name: 'Launch plan',
             status: 'unknown',
-            message: 'No answer',
+            message: 'Notion answered 502',
           },
         ],
       });
-      expect(q('[data-outcome="unknown"]')?.textContent).toContain(
-        'Unknown whether Notion applied it',
+      // The exact line for a 5xx: the prefix says it is unknown once, and
+      // `send.ts`'s short message does not repeat it.
+      expect(q('[data-outcome="unknown"]')?.textContent).toBe(
+        'Unknown whether Notion applied it; sending stopped: Notion answered 502',
       );
       q<HTMLButtonElement>('[data-key="review-close"]')!.click();
       expect(q('.nt-review')).toBeNull();
@@ -612,7 +706,11 @@ describe('view (DOM)', () => {
         'Connect Notion',
       ]);
       expect(q('[data-key=sync-now]')).toBeNull();
-      expect(q('.nt-summary')?.textContent).toContain('5 rows in this table');
+      // No connection: the card is read-only and says how to resume.
+      expect(q('.ss')?.textContent).toContain('5 rows in this table');
+      expect(q('.ss [data-key=mode]')?.textContent).toBe(
+        'Read-only: edits here stay in Atomic. Notion is not connected to this app; connect it again to sync and send.',
+      );
       // No connection: no "Choose pages in Notion", no Disconnect.
       q<HTMLButtonElement>('[data-key="menu:More"]')!.click();
       expect(all('[role=menuitem]').map(b => b.textContent)).toEqual([

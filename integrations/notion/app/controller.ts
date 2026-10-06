@@ -1,6 +1,12 @@
 // @wc-ignore-file
 import type { OpenApiDocument } from 'syncables/browser';
-import { localChanges, type Conflicts, type RowChange } from './changes.js';
+import {
+  isSettled,
+  localChanges,
+  writeQueue,
+  type Conflicts,
+  type RowChange,
+} from './changes.js';
 import { classifyFailure, type ProviderFailure } from './errors.js';
 import {
   loadRecord,
@@ -67,17 +73,20 @@ export type ViewState =
   | ({ kind: 'importing'; progress: SyncProgress[] } & Connected)
   /** Connected, but Notion shares no database with the integration. */
   | ({ kind: 'no-databases' } & Connected)
-  | ({ kind: 'reauth'; technical?: string } & Connected)
+  /** The three failure states carry `at`: when the sync that found them ended. */
+  | ({ kind: 'reauth'; at: number; technical?: string } & Connected)
   /** No connection for this app, but rows from an earlier one are kept. */
   | ({ kind: 'disconnected' } & Connected)
   | ({
       kind: 'rate-limited';
+      at: number;
       retryAt: number;
       pagesRead: number;
       technical: string;
     } & Connected)
   | ({
       kind: 'failed';
+      at: number;
       title: string;
       message: string;
       technical: string;
@@ -264,16 +273,24 @@ export function createController(
         !proxy ||
         running ||
         current.kind !== 'ready' ||
-        !current.connectionId ||
-        !current.changes?.length
+        !current.connectionId
       )
         return current;
+      // Exactly what the review's Send button and the sync-status card
+      // count (`writeQueue`): the rows the last Send left to the next sync
+      // (no usable answer, or written but not confirmed here) are not sent
+      // again, and their outcomes are kept until that sync, so the card
+      // keeps naming them.
+      const queue = writeQueue(current.changes, current.outcomes);
+      if (!queue.ready.length) return current;
       schema ??= await loadSchema(store);
       if (!schema) return current;
       running = true;
-      const outcomes: SendOutcome[] = [];
+      const outcomes: SendOutcome[] = (current.outcomes ?? []).filter(
+        isSettled,
+      );
       const before = current;
-      set({ ...before, sending: true, outcomes: [] });
+      set({ ...before, sending: true, outcomes: [...outcomes] });
 
       try {
         await sendChanges({
@@ -281,7 +298,7 @@ export function createController(
           proxy,
           connectionId: before.connectionId!,
           schema,
-          changes: before.changes!,
+          changes: queue.ready,
           onOutcome: outcome => {
             outcomes.push(outcome);
             if (outcome.status === 'changed')
@@ -343,6 +360,13 @@ export function createController(
       if (!connectionId) return current;
       running = true;
       const before = base();
+      // The rows the last Send left to the next sync (`isSettled`) stay
+      // named until a sync succeeds: a failed sync settles nothing, so it
+      // keeps those outcomes instead of turning "sent without an answer"
+      // back into "waiting to send".
+      const settledOutcomes = (
+        isConnected(current) ? (current.outcomes ?? []) : []
+      ).filter(isSettled);
       const kind = before.rows.length ? 'syncing' : 'importing';
       const progress: SyncProgress[] = [];
       const failures: ProviderFailure[] = [];
@@ -434,13 +458,18 @@ export function createController(
           ...(last ? { last } : {}),
           ...(changed.length ? { changed } : {}),
         };
+        const kept = settledOutcomes.length
+          ? { outcomes: settledOutcomes }
+          : {};
         if (failure?.kind === 'rate-limited')
           return set({
             ...after,
+            ...kept,
             ...failure,
+            at: now(),
             pagesRead: progress.reduce((n, p) => n + p.pages, 0),
           });
-        if (failure) return set({ ...after, ...failure });
+        if (failure) return set({ ...after, ...kept, ...failure, at: now() });
         if (result && result.dataSources === 0)
           return set({ kind: 'no-databases', ...after });
 

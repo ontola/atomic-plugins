@@ -18,11 +18,14 @@ export default {
   test: {
     include: [
       '*.test.ts',
-      'app/*.test.ts',
+      'app/**/*.test.ts',
       'host/*.test.ts',
       'devonian/**/*.test.ts',
       // The live check's offline tests (the mock Notion); never the live run.
       'live/*.test.ts',
     ],
+    // The shared sync-status card (app/view/app.ts) imports card.css?raw;
+    // without this Vitest stubs CSS to ''.
+    css: { include: [/card\.css/] },
   },
 };

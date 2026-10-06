@@ -3,7 +3,8 @@
  * The Notion app's view: a small sync-status view (#177 Q9). It renders a
  * controller `ViewState` into the frame: header (status pill, Sync now),
  * connection bar (databases, Sync details, menu), the state's banner, the
- * "Changes to send" strip with its review, and one status card. It owns only
+ * "Changes to send" strip with its review, then the shared sync-status card
+ * (Q-084, `status.ts`) above the databases block. It owns only
  * the UI state those need (menu, details, review, the disconnect question)
  * and keeps focus, scroll and the one live region stable across re-renders.
  * The rows are browsed and edited in the host's own table and views.
@@ -21,17 +22,19 @@ import {
   updatePill,
 } from '../ui/shell.js';
 import { PL_CSS } from '../ui/styles.js';
+import { renderSyncStatus, syncStatusCss } from '../../../sync-status/card.js';
 import { pill, sources as listSources, syncAction } from './model.js';
 import {
   noDatabases,
   preConnection,
+  renderDatabases,
   renderDetails,
   renderImport,
-  renderStatus,
   stateBanner,
   type UiState,
   type ViewContext,
 } from './parts.js';
+import { syncStatusFor } from './status.js';
 import { NT_CSS } from './styles.js';
 import { renderChangesBar, renderReview } from './review.js';
 
@@ -71,7 +74,13 @@ export function createApp(
   { now = Date.now, locale }: AppOptions = {},
 ): App {
   const doc = root.ownerDocument;
-  const style = h(doc, 'style', { 'data-notion-app': '' }, PL_CSS + NT_CSS);
+  // The shell's rules, Notion's, then the shared sync-status card's (`.ss-*`).
+  const style = h(
+    doc,
+    'style',
+    { 'data-notion-app': '' },
+    PL_CSS + NT_CSS + syncStatusCss,
+  );
   (doc.head ?? root).appendChild(style);
   if (doc.body) doc.body.style.margin = '0';
   const app = h(doc, 'div', { class: 'pl-app' });
@@ -95,10 +104,13 @@ export function createApp(
     const target = event.target as Element | null;
     const patch: Partial<UiState> = {};
     if (ui.menu && !target?.closest?.('.pl-menu-wrap')) patch.menu = false;
+    // The openers stay open: the connbar toggle, the menu item and the
+    // card's "Sync details" (`status.ts`), whose click bubbles here after
+    // the re-render that opened the panel.
     if (
       ui.details &&
       !target?.closest?.(
-        '.nt-details, [data-key="details-toggle"], .pl-menu-wrap',
+        '.nt-details, [data-key="details-toggle"], [data-k="ss-details"], .pl-menu-wrap',
       )
     )
       patch.details = false;
@@ -115,9 +127,10 @@ export function createApp(
   doc.addEventListener('click', onClick);
   doc.addEventListener('keydown', onKey);
 
-  // "Synced 4 min ago" keeps up without a state change.
+  // "Synced 4 min ago" and "Sync failed 4 min ago" keep up without a state
+  // change.
   const tick = setInterval(() => {
-    if (state.kind === 'ready') render();
+    if (isConnected(state)) render();
   }, 60_000);
 
   function scheduleRetry() {
@@ -261,17 +274,34 @@ export function createApp(
     );
   }
 
-  /** The status card, or what stands in for it before the first rows. */
-  function content(ctx: ViewContext): HTMLElement {
+  /**
+   * The data view: the shared sync-status card first (Q-084), then the
+   * databases; or what stands in for them before the first rows.
+   */
+  function content(ctx: ViewContext): HTMLElement[] {
     const s = ctx.state;
     if (
       s.kind === 'importing' ||
       (s.kind === 'ready' && !s.last && !s.rows.length)
     )
-      return renderImport(ctx, s.kind === 'importing' ? s.progress : []);
-    if (s.kind === 'no-databases' && !s.rows.length) return noDatabases(ctx);
+      return [renderImport(ctx, s.kind === 'importing' ? s.progress : [])];
+    if (s.kind === 'no-databases' && !s.rows.length) return [noDatabases(ctx)];
+    const at = locale ? { locale } : {};
 
-    return renderStatus(ctx);
+    return [
+      renderSyncStatus(
+        doc,
+        syncStatusFor({
+          state: s,
+          sources: ctx.sources,
+          now: ctx.now,
+          ...at,
+          onDetails: () => update({ details: true, menu: false }),
+        }),
+        { now: ctx.now, ...at, buttonClass: 'pl-btn is-secondary is-sm' },
+      ),
+      renderDatabases(ctx),
+    ];
   }
 
   function render(next?: ViewState) {

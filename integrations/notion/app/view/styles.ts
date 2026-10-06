@@ -11,6 +11,7 @@ export const NT_CSS = `
 .nt-content{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;overflow:auto}
 .nt-muted{color:var(--pl-muted)}
 .nt-dbname{display:inline-flex;align-items:center;gap:6px;color:var(--pl-muted)}
+.nt-content>.ss{margin:12px 16px 0;max-width:620px}
 .nt-summary{margin:12px 16px 16px;padding:14px 16px;max-width:620px;display:grid;gap:12px;border:1px solid var(--pl-hair);border-radius:var(--pl-radius);background:var(--pl-surface);font-size:13px}
 .nt-summary h2{margin:0;font:700 15px/1.3 var(--t-font-family-header,system-ui)}
 .nt-summary>p{margin:0}
@@ -91,6 +92,6 @@ export const NT_CSS = `
 .nt-r-outcome.is-sent{color:var(--pl-pos)}
 .nt-r-outcome.is-unknown,.nt-r-outcome.is-failed{color:var(--pl-neg)}
 .nt-r-foot{display:flex;align-items:center;gap:12px;position:sticky;bottom:-12px;padding:10px 0 2px;background:var(--pl-surface)}
-@container pl-app (max-width:639.98px){.nt-summary{margin:12px 12px}.nt-import{padding:14px 12px 10px}.nt-changes{margin:12px 12px 0}.nt-review{margin:12px 12px 12px}.nt-s-facts{grid-template-columns:1fr}}
+@container pl-app (max-width:639.98px){.nt-content>.ss{margin:12px 12px 0}.nt-summary{margin:12px 12px}.nt-import{padding:14px 12px 10px}.nt-changes{margin:12px 12px 0}.nt-review{margin:12px 12px 12px}.nt-s-facts{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){.nt-bar.is-indeterminate span{animation:none;width:100%;opacity:0.4}}
 `;
