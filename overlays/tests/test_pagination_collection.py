@@ -16,6 +16,7 @@ import yaml
 from jsonschema import Draft4Validator
 from openapi_spec_validator import validate
 from openapi_spec_validator.validation.exceptions import OpenAPIValidationError
+from referencing.exceptions import PointerToNowhere
 
 from generate_identity_catalog_fixtures import ROOT, apply, fetch, merge
 
@@ -24,6 +25,11 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    "hubspot_files": "APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_hubdb": "APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_posts": "APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_conversations": "APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_lists": "APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
     "confluence": "APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml",
     "figma": "APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml",
     "clickup": "APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml",
@@ -86,6 +92,12 @@ def applications(document):
                 yield path, method, item, operation, application
 
 
+def json_response_schema(response):
+    """Keep the OAD's original media key, including HubSpot's wildcard JSON bodies."""
+    content = response["content"]
+    return content["application/json" if "application/json" in content else "*/*"]["schema"]
+
+
 class PaginationCollectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -125,7 +137,7 @@ class PaginationCollectionTests(unittest.TestCase):
                             expected = "integer" if metadata["role"] == "pageSize" else "string"
                             self.assertEqual(field_schema(document, body_schema, field)["type"], expected)
                     response = resolve(document, operation["responses"]["200"])
-                    schema = response["content"]["application/json"]["schema"]
+                    schema = json_response_schema(response)
                     for field, metadata in scheme["response"].get("bodyFields", {}).items():
                         expected = metadata.get("schema", {}).get("type", "integer" if metadata["role"] == "totalCount" else "string")
                         self.assertEqual(schema_types(document, field_schema(document, schema, field)), {expected})
@@ -141,7 +153,7 @@ class PaginationCollectionTests(unittest.TestCase):
             with self.subTest(provider=name):
                 standard = copy.deepcopy(document)
                 standard["components"].pop("paginationSchemes")
-                if name != "mailchimp":
+                if name not in ("mailchimp", "hubspot_hubdb"):
                     validate(standard)
                 if name == "slack":
                     # Only users.list's malformed metadata reference is repaired;
@@ -177,6 +189,20 @@ class PaginationCollectionTests(unittest.TestCase):
                     self.assertEqual(errors[0].message, "False is not of type 'string'")
                     self.assertEqual(errors[1].message, errors[0].message)
                     self.assertEqual(list(errors[1].absolute_path), list(errors[0].absolute_path))
+                if name == "hubspot_hubdb":
+                    # Two source item schemas point to an absent component.
+                    # Check this exact baseline failure on both documents;
+                    # the complete standard contract equality above ensures
+                    # metadata introduces no new API-schema change.
+                    for source in (original, standard):
+                        self.assertNotIn("HubDbTableRowV3Wrapper", source["components"]["schemas"])
+                        for collection in ("RandomAccessCollectionResponseWithTotalHubDbTableRowV3",
+                                           "StreamingCollectionResponseWithTotalHubDbTableRowV3"):
+                            items = source["components"]["schemas"][collection]["properties"]["results"]["items"]
+                            self.assertEqual(items, {"$ref": "#/components/schemas/HubDbTableRowV3Wrapper"})
+                        with self.assertRaises(PointerToNowhere) as raised:
+                            validate(source)
+                        self.assertEqual(raised.exception.ref, "/components/schemas/HubDbTableRowV3Wrapper")
 
     def test_slack_envelopes_and_explicit_cursor_scope(self):
         document = self.documents["slack"][1]
@@ -427,6 +453,55 @@ class PaginationCollectionTests(unittest.TestCase):
         self.assertNotIn("next_cursor", scheme["request"]["queryParameters"])
         self.assertNotIn("x-pagination", document["paths"][base + "/docs/{doc_id}"]["get"])
         self.assertNotIn("x-pagination", document["paths"][base + "/chat/channels/{channel_id}/messages"]["post"])
+
+    def test_hubspot_service_collections_and_optional_totals(self):
+        expected = {
+            "files": {"/files/2026-03/files/search", "/files/2026-03/folders/search"},
+            "hubdb": {"/cms/hubdb/2026-03/tables", "/cms/hubdb/2026-03/tables/draft",
+                      "/cms/hubdb/2026-03/tables/{tableIdOrName}/rows", "/cms/hubdb/2026-03/tables/{tableIdOrName}/rows/draft"},
+            "posts": {"/cms/blogs/2026-03/posts", "/cms/blogs/2026-03/posts/{objectId}/revisions"},
+            "conversations": {"/conversations/v3/conversations/" + suffix for suffix in (
+                "channel-accounts", "channels", "inboxes", "threads", "threads/{threadId}/messages")},
+            "lists": {"/crm/v3/lists/{listId}/memberships", "/crm/v3/lists/{listId}/memberships/join-order"},
+        }
+        for service, paths in expected.items():
+            with self.subTest(service=service):
+                document = self.documents["hubspot_" + service][1]
+                selected = list(applications(document))
+                self.assertEqual({(path, method) for path, method, _, _, _ in selected}, {(path, "get") for path in paths})
+                scheme = document["components"]["paginationSchemes"]["cursorResults"]
+                self.assertEqual(scheme["request"], {"queryParameters": {"after": {"role": "cursor"}, "limit": {"role": "pageSize"}}})
+                self.assertEqual(scheme["response"], {"envelope": {"itemsField": "results"}, "bodyFields": {"paging.next.after": {"role": "nextCursor"}}})
+                for path, _, _, operation, application in selected:
+                    response = resolve(document, operation["responses"]["200"])
+                    schema = json_response_schema(response)
+                    fields = merge(copy.deepcopy(scheme), application.get("overrides", {}))["response"]["bodyFields"]
+                    # Totals are metadata only where the operation declares them;
+                    # thread/message reads and Files must not inherit a total.
+                    has_total = service in ("hubdb", "posts", "lists") or (
+                        service == "conversations" and path.rsplit("/", 1)[-1] in ("channel-accounts", "channels", "inboxes"))
+                    self.assertEqual("total" in fields, has_total)
+                    self.assertEqual("total" in properties(document, schema), has_total)
+                    if has_total:
+                        self.assertEqual(fields["total"], {"role": "totalCount"})
+        posts = self.documents["hubspot_posts"][1]
+        for path, item in posts["paths"].items():
+            if "/cursor" in path:
+                self.assertNotIn("x-pagination", item.get("get", {}))
+        # The provider's timestamp ordering is a separate traversal mode.
+        conversations = self.documents["hubspot_conversations"][1]
+        thread = conversations["paths"]["/conversations/v3/conversations/threads"]["get"]["x-pagination"][0]
+        self.assertIn("sort=id", thread["description"])
+        self.assertIn("outside this scheme", thread["description"])
+        self.assertNotIn("x-pagination", self.documents["hubspot_lists"][1]["paths"]["/crm/v3/lists/search"]["post"])
+
+    def test_hubspot_posts_keep_original_wildcard_media(self):
+        original, composed = self.documents["hubspot_posts"]
+        for path in ("/cms/blogs/2026-03/posts", "/cms/blogs/2026-03/posts/{objectId}/revisions"):
+            original_response = original["paths"][path]["get"]["responses"]["200"]
+            response = composed["paths"][path]["get"]["responses"]["200"]
+            self.assertEqual(response, original_response)
+            self.assertEqual(set(response["content"]), {"*/*"})
 
 
 if __name__ == "__main__":

@@ -231,6 +231,12 @@ directly.
 | [Figma](APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml) | 13 GET collections: versions, reactions, webhooks, three team libraries, six library analytics and daily AI usage. | [Team libraries](https://developers.figma.com/docs/rest-api/component-endpoints/), [Version history](https://developers.figma.com/docs/rest-api/version-history-endpoints/), [Library analytics](https://developers.figma.com/docs/rest-api/library-analytics-endpoints/), [AI usage](https://developers.figma.com/docs/rest-api/ai-usage-endpoints/) |
 | [ClickUp v3](APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml) | Nine GET collections: channels, followers, members, messages, reactions, replies, tagged users, attachments and Docs. `data` or `docs` envelopes. | [Chat messages](https://developer.clickup.com/reference/getchatmessages), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/88ea4994e816563201c2069526252475d77e853f/APIs/clickup.com/v3/version/openapi.yaml) |
 
+| [HubSpot Files](APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET searches for files and folders. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/files/files/search-files), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/files/2026-03/openapi.yaml) |
+| [HubSpot HubDB](APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Four GET collections: published/draft tables and published/draft table rows. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/cms/hubdb/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/hubdb/2026-03/openapi.yaml) |
+| [HubSpot blog posts](APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET collections: posts and individual post revisions. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/latest/cms/blogs/posts/get-posts), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/posts/2026-03/openapi.yaml) |
+| [HubSpot Conversations](APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Five GET collections: channel accounts, channels, inboxes, threads and thread messages. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/conversations/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/conversations/v3/openapi.yaml) |
+| [HubSpot Lists](APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET membership collections in record and join order. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/crm/lists/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/lists/v3/openapi.yaml) |
+
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
 not impose a shared numeric limit on all methods. The pinned `users.list`
@@ -308,9 +314,33 @@ is not selected. ClickUp v2 task reads start `page` at zero and use a
 `last_page` flag, while comment pagination derives two continuation values
 from the last item. Neither is described by this v3 cursor overlay.
 
+HubSpot Files, HubDB, blog posts, Conversations and Lists retain their exact
+pinned paths, filters and response schemas, even where the provider's current
+documentation describes a later API date. Forward traversal sends the opaque
+`paging.next.after` value through `after` and uses the `results` envelope.
+Only operations declaring `total` receive total-count metadata; Files and
+thread/message reads do not. HubDB row reads also accept `offset`, but this
+scheme uses their declared forward cursor rather than combining both modes.
+The HubDB source references a missing `HubDbTableRowV3Wrapper` item schema
+in two collection schemas. The regression checks that exact source validation
+failure before and after composition; this overlay preserves the contract
+and adds no substitute item schema.
+Thread cursors apply to default ID ordering or `sort=id`; timestamp ordering
+requires `latestMessageTimestampAfter` and is outside this scheme. Provider
+documentation also limits thread filtering to one inbox ID; the overlay
+preserves the original OAD's parameter schemas.
+
+List search is a POST with `hasMore` and a returned integer offset, rather
+than the membership cursor scheme. Six blog author/post/tag cursor endpoints
+have empty response-property maps in the pinned OAD and remain unselected.
+The blog post collections declare their JSON-shaped response under `*/*`;
+tests read that original media key without replacing it or modifying schemas.
+Individual reads, batch reads and writes stay outside these selections.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
-and 2026-10-06 (Confluence, Figma and ClickUp), not live provider certification.
+and 2026-10-06 (Confluence, Figma, ClickUp and the five additional HubSpot OADs),
+not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
@@ -319,7 +349,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the ten pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 15 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.
