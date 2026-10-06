@@ -360,6 +360,13 @@ export function createController(
       if (!connectionId) return current;
       running = true;
       const before = base();
+      // The rows the last Send left to the next sync (`isSettled`) stay
+      // named until a sync succeeds: a failed sync settles nothing, so it
+      // keeps those outcomes instead of turning "sent without an answer"
+      // back into "waiting to send".
+      const settledOutcomes = (
+        isConnected(current) ? (current.outcomes ?? []) : []
+      ).filter(isSettled);
       const kind = before.rows.length ? 'syncing' : 'importing';
       const progress: SyncProgress[] = [];
       const failures: ProviderFailure[] = [];
@@ -451,14 +458,18 @@ export function createController(
           ...(last ? { last } : {}),
           ...(changed.length ? { changed } : {}),
         };
+        const kept = settledOutcomes.length
+          ? { outcomes: settledOutcomes }
+          : {};
         if (failure?.kind === 'rate-limited')
           return set({
             ...after,
+            ...kept,
             ...failure,
             at: now(),
             pagesRead: progress.reduce((n, p) => n + p.pages, 0),
           });
-        if (failure) return set({ ...after, ...failure, at: now() });
+        if (failure) return set({ ...after, ...kept, ...failure, at: now() });
         if (result && result.dataSources === 0)
           return set({ kind: 'no-databases', ...after });
 

@@ -93,7 +93,7 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,587 bytes for
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,712 bytes for
   0.5.0 (115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
@@ -236,7 +236,8 @@ verified against live Notion or the real integration proxy.
   gateway may answer 502 or 504 after Notion applied it; 0.5.0), is
   reported as "Unknown whether Notion applied it" and the batch stops; the
   next sync shows what Notion has, and the card lists the row as sent
-  without an answer, not as waiting. A proxy refusal or a 429 also stops
+  without an answer, not as waiting, until a sync succeeds (a failed sync
+  keeps that outcome). A proxy refusal or a 429 also stops
   the batch; those wrote nothing. Nothing
   is sent while the app is closed (no `afterCommit` hook at the pin).
   Conflicts are kept in memory until the next sync finds them again from

@@ -266,8 +266,9 @@ export async function sendChanges({
       report({
         ...who,
         status: 'unknown',
-        // Short: the review's own prefix already says it is unknown.
-        message: `Notion answered ${answer.status}: ${notionMessage(answer.status, answer.body)}`,
+        // Short ("Notion answered 502[: message]"): the review's own prefix
+        // already says it is unknown.
+        message: notionMessage(answer.status, answer.body),
       });
       break;
     }

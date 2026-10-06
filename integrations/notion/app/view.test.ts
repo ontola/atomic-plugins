@@ -553,6 +553,24 @@ describe('view (DOM)', () => {
       expect(q('.ss')?.textContent).toContain(
         '1 change sent without an answer from Notion',
       );
+      // Every listed row left to the next sync: nothing waits, but the
+      // strip does not call that "handled" while the card lists them.
+      app.render({
+        ...ready,
+        changes,
+        outcomes: changes.map(c => ({
+          subject: c.subject,
+          name: c.name,
+          status: 'unknown' as const,
+          message: 'Notion answered 502',
+        })),
+      });
+      expect(q('.nt-changes')?.textContent).toBe(
+        'Waiting for the next sync to confirm 2 changes.Show results',
+      );
+      expect(q('.ss')?.textContent).toContain(
+        '2 changes sent without an answer from Notion',
+      );
     });
 
     it('reviews before → after with option names, sends only what can be sent', () => {
@@ -611,12 +629,14 @@ describe('view (DOM)', () => {
             subject: 'row1',
             name: 'Launch plan',
             status: 'unknown',
-            message: 'No answer',
+            message: 'Notion answered 502',
           },
         ],
       });
-      expect(q('[data-outcome="unknown"]')?.textContent).toContain(
-        'Unknown whether Notion applied it',
+      // The exact line for a 5xx: the prefix says it is unknown once, and
+      // `send.ts`'s short message does not repeat it.
+      expect(q('[data-outcome="unknown"]')?.textContent).toBe(
+        'Unknown whether Notion applied it; sending stopped: Notion answered 502',
       );
       q<HTMLButtonElement>('[data-key="review-close"]')!.click();
       expect(q('.nt-review')).toBeNull();

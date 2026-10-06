@@ -84,6 +84,8 @@ export function renderChangesBar(
   // rows, without the rows the last Send left to the next sync.
   const { queued } = writeQueue(changes, state.outcomes);
   const conflicts = queued.filter(c => c.fields.some(f => f.conflict)).length;
+  // Rows the last Send left to the next sync: listed, not waiting.
+  const settled = changes.length - queued.length;
 
   return h(
     doc,
@@ -102,7 +104,9 @@ export function renderChangesBar(
               ? ` · ${plural(conflicts, 'row')} also changed in Notion`
               : '',
           ]
-        : 'All reviewed changes were handled.',
+        : settled
+          ? `Waiting for the next sync to confirm ${plural(settled, 'change')}.`
+          : 'All reviewed changes were handled.',
     ),
     button(doc, {
       kind: 'secondary',

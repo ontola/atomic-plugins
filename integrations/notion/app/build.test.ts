@@ -19,7 +19,7 @@ describe('Notion drive-plugin bundle', async () => {
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource, so the size is capped at
     // the measured size plus about 10% (the owner's rule for bundle limits):
-    // 125 587 bytes on 2026-10-06 for 0.5.0 (the shared sync-status card of
+    // 125 712 bytes on 2026-10-06 for 0.5.0 (the shared sync-status card of
     // Q-084 with its card.css and the view/status.ts mapping, on top of
     // syncables 0.19.0's read path, the catalog document, devonian's Atomic
     // Data API, the sync-status view of #177 Q9, #8's compare-on-open,
@@ -28,7 +28,7 @@ describe('Notion drive-plugin bundle', async () => {
     // measured 115 818; 0.4.1 113 988 with syncables 0.18.0; 0.4.0 113 536;
     // 0.3.0 107 509; 0.2.0 133 028 with the #89 browsing views; 0.1.0
     // 117 969. A change that needs more should say why and re-measure.
-    expect(bytes).toBeLessThan(138_200);
+    expect(bytes).toBeLessThan(138_300);
   });
 
   it('carries no credential handling or network access of its own', () => {

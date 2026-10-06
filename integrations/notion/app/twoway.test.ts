@@ -396,10 +396,13 @@ describe('review and send', () => {
 
   it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {
     const base = fixtureProxy();
+    const gateway = { status: 502, headers: {}, body: 'Bad gateway' };
+    /** When set, every read fails too, so a sync fails. */
+    let readsFail = false;
     const { controller, edit, patches } = await synced({
       request: async request =>
-        request.method === 'PATCH'
-          ? { status: 502, headers: {}, body: 'Bad gateway' }
+        request.method === 'PATCH' || readsFail
+          ? gateway
           : base.request(request),
     });
     edit(LAUNCH, POINTS, 5);
@@ -411,7 +414,8 @@ describe('review and send', () => {
     expect('outcomes' in state && state.outcomes).toMatchObject([
       {
         status: 'unknown',
-        message: expect.stringMatching(/^Notion answered 502: /),
+        // Short: the review's own prefix says it is unknown (`review.ts`).
+        message: 'Notion answered 502',
       },
     ]);
     expect(patches()).toEqual([]);
@@ -419,6 +423,30 @@ describe('review and send', () => {
       pending: 1,
       uncertain: 1,
     });
+
+    // A failed sync settles nothing, so it keeps the uncertain outcome:
+    // the card still says "sent without an answer", not "waiting".
+    readsFail = true;
+    const failed = await controller.sync();
+    expect(failed.kind).toBe('failed');
+    expect('outcomes' in failed && failed.outcomes).toMatchObject([
+      { status: 'unknown', message: 'Notion answered 502' },
+    ]);
+    expect(
+      syncStatusFor({ state: failed, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 1, uncertain: 1 });
+
+    // A sync that succeeds reads Notion back and settles it: the PATCH was
+    // never applied here, so the edit is a plain change again.
+    readsFail = false;
+    const synced2 = await controller.sync();
+    expect(synced2.kind).toBe('ready');
+    expect(
+      'outcomes' in synced2 ? synced2.outcomes : undefined,
+    ).toBeUndefined();
+    expect(
+      syncStatusFor({ state: synced2, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 2 });
   });
 
   it('the card holds back a whole row when one of its fields conflicts', async () => {
