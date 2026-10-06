@@ -237,6 +237,12 @@ directly.
 | [HubSpot Conversations](APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Five GET collections: channel accounts, channels, inboxes, threads and thread messages. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/conversations/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/conversations/v3/openapi.yaml) |
 | [HubSpot Lists](APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Two GET membership collections in record and join order. `results` envelope and `paging.next.after` cursor. | [Provider documentation](https://developers.hubspot.com/docs/api-reference/legacy/crm/lists/guide), [Pinned OAD](https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/lists/v3/openapi.yaml) |
 
+| [Asana](APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | 64 ordinary GET collections using opaque `next_page.offset` and `data`. | [Pagination documentation](https://developers.asana.com/docs/pagination) |
+| [Zendesk Support](APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml) | 14 GET collections in offset mode, following `next_page` URLs. | [Pagination documentation](https://developer.zendesk.com/documentation/api-basics/pagination/paginating-through-lists-using-offset-pagination/) |
+| [Square v2](APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml) | 69 GET/read-POST collections with query, body or integer merchant cursors. | [Pagination documentation](https://developer.squareup.com/docs/build-basics/common-api-patterns/pagination) |
+| [Zoom Meetings](APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml) | 29 GET collections using `next_page_token` and explicit item envelopes. | [Pagination documentation](https://developers.zoom.us/docs/api/meetings/) |
+| [Mastodon](APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml) | Six GET relationship/saved-status collections. Documented `Link` headers and root arrays. | [Pagination documentation](https://docs.joinmastodon.org/api/guidelines/#paginating-through-api-responses) |
+
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
 not impose a shared numeric limit on all methods. The pinned `users.list`
@@ -337,10 +343,52 @@ The blog post collections declare their JSON-shaped response under `*/*`;
 tests read that original media key without replacing it or modifying schemas.
 Individual reads, batch reads and writes stay outside these selections.
 
+Asana requires `limit` to enable ordinary pagination; its `offset` is an
+opaque token, not an item count. The overlay marks that pagination request
+field required without changing the OAD's parameter contract. It preserves
+filters and `opt_fields`, and stops on null `next_page`. Audit logs are
+excluded: that stream can keep returning a token even with no matching data.
+
+Zendesk selects offset-mode reads with declared `page` or `per_page` fields
+and a next-page URL. It follows that URL instead of calculating a page number.
+Activities uses `activities`, not the sideloaded `actors` or `users` arrays.
+Cursor-mode routes, incremental exports and batch show-many routes are outside
+this variant. The provider limits offset traversal to the first 10,000 records;
+larger collections need a separately reviewed cursor/export variant.
+
+Square separates query cursors on GET from body cursors on read/search POST,
+preserving all search filters. Page size is added only where the pinned request
+declares `limit`. Merchant cursors are integers in both directions and remain
+opaque; the overlay never increments them. Catalog searches page `objects` or
+`items` rather than related objects or variation IDs; event searches page
+`events` rather than associated metadata. Order search is excluded because
+`return_entries` chooses between `orders` and `order_entries`. Errors are never
+the paged item array. Square documents a five-minute cursor lifetime.
+The pinned source omits `AppFeeAllocation` and `CurrencyExchange` payment
+schemas, leaving five dangling references. Tests assert their exact locations
+and the unchanged source validation failure. This pagination overlay adds no
+substitute payment schema.
+
+Zoom Meetings uses opaque tokens with operation-specific envelopes. It does
+not select deprecated `page_number` pagination, individual archive files, or
+writes. Tokens expire after 15 minutes; filters and date ranges must remain
+fixed. The archive-files API can normalize a future `to` to the current time,
+and callers must reuse that returned effective date. This extension has no
+role for copying a non-pagination response filter into the next request, so
+the overlay records that caller requirement explicitly.
+
+Mastodon's selected response bodies remain root arrays. Its pinned OAD omits
+response headers, so the overlay adds only the documented string `Link` header
+to followers, following, blocks, mutes, bookmarks and favourites. Follow the
+RFC 8288 next relation; private relationship IDs can differ from visible
+account or status IDs. Unpaged batch reads, directory offsets and instance
+peer reads are excluded. Server selection and dynamic OAuth registration
+remain separate from this pagination metadata.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
-and 2026-10-06 (Confluence, Figma, ClickUp and the five additional HubSpot OADs),
-not live provider certification.
+and 2026-10-06 (Confluence, Figma, ClickUp, the five additional HubSpot OADs,
+Asana, Zendesk, Square, Zoom and Mastodon), not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
@@ -349,7 +397,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the 15 pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 20 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.

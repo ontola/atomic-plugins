@@ -25,6 +25,11 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    'asana': 'APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml',
+    'zendesk': 'APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml',
+    'squareup': 'APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml',
+    'zoom': 'APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml',
+    'mastodon': 'APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml',
     "hubspot_files": "APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
     "hubspot_hubdb": "APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
     "hubspot_posts": "APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
@@ -64,6 +69,28 @@ def properties(document, schema):
         for branch in schema.get(keyword, []):
             fields.update(properties(document, branch))
     return fields
+
+
+def missing_local_references(document):
+    """Inventory every dangling local reference, including its exact location."""
+    missing = {}
+
+    def visit(value, path):
+        if isinstance(value, dict):
+            reference = value.get("$ref", "")
+            if reference.startswith("#/"):
+                try:
+                    resolve(document, {"$ref": reference})
+                except KeyError:
+                    missing.setdefault(reference, []).append(path)
+            for key, child in value.items():
+                visit(child, path + (key,))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, path + (index,))
+
+    visit(document, ())
+    return missing
 
 
 def field_schema(document, schema, dotted_path):
@@ -145,15 +172,16 @@ class PaginationCollectionTests(unittest.TestCase):
                         header = resolve(document, response["headers"][field])
                         self.assertEqual(metadata["role"], "nextLink")
                         self.assertEqual(schema_types(document, header["schema"]), {"string"})
-                    envelope = scheme["response"]["envelope"]["itemsField"]
-                    self.assertEqual(schema_types(document, field_schema(document, schema, envelope)), {"array"})
+                    envelope = scheme["response"].get("envelope", {}).get("itemsField")
+                    items_schema = field_schema(document, schema, envelope) if envelope else schema
+                    self.assertEqual(schema_types(document, items_schema), {"array"})
 
     def test_api_contract_only_changes_in_documented_schema_enrichments(self):
         for name, (original, document) in self.documents.items():
             with self.subTest(provider=name):
                 standard = copy.deepcopy(document)
                 standard["components"].pop("paginationSchemes")
-                if name not in ("mailchimp", "hubspot_hubdb"):
+                if name not in ("mailchimp", "hubspot_hubdb", "squareup"):
                     validate(standard)
                 if name == "slack":
                     # Only users.list's malformed metadata reference is repaired;
@@ -174,6 +202,14 @@ class PaginationCollectionTests(unittest.TestCase):
                 if name == "spotify":
                     standard["components"]["schemas"].pop("SpotifyPagingCategories")
                     standard["components"]["responses"]["PagedCategories"] = copy.deepcopy(original["components"]["responses"]["PagedCategories"])
+                if name == "mastodon":
+                    # Add only the six documented Link headers absent from the
+                    # pinned source; bodies, parameters and security stay intact.
+                    for path, _, _, _, _ in applications(standard):
+                        response = standard["paths"][path]["get"]["responses"]["200"]
+                        source = original["paths"][path]["get"]["responses"]["200"]
+                        self.assertNotIn("headers", source)
+                        self.assertEqual(set(response.pop("headers")), {"Link"})
                 for _, _, _, operation, _ in list(applications(standard)):
                     operation.pop("x-pagination", None)
                 self.assertEqual(standard, original)
@@ -203,6 +239,24 @@ class PaginationCollectionTests(unittest.TestCase):
                         with self.assertRaises(PointerToNowhere) as raised:
                             validate(source)
                         self.assertEqual(raised.exception.ref, "/components/schemas/HubDbTableRowV3Wrapper")
+                if name == "squareup":
+                    # The pinned source omits two payment schema components.
+                    # Assert all five dangling references and the same validator
+                    # failure, rather than accepting arbitrary source errors.
+                    expected = {
+                        "#/components/schemas/AppFeeAllocation": [
+                            ("components", "schemas", schema, "properties", "app_fee_allocations", "items")
+                            for schema in ("CreatePaymentRequest", "Payment", "PaymentRefund", "RefundPaymentRequest")
+                        ],
+                        "#/components/schemas/CurrencyExchange": [
+                            ("components", "schemas", "Payment", "properties", "buyer_currency_exchange")
+                        ],
+                    }
+                    for source in (original, standard):
+                        self.assertEqual(missing_local_references(source), expected)
+                        with self.assertRaises(PointerToNowhere) as raised:
+                            validate(source)
+                        self.assertEqual(raised.exception.ref, "/components/schemas/AppFeeAllocation")
 
     def test_slack_envelopes_and_explicit_cursor_scope(self):
         document = self.documents["slack"][1]
@@ -502,6 +556,78 @@ class PaginationCollectionTests(unittest.TestCase):
             response = composed["paths"][path]["get"]["responses"]["200"]
             self.assertEqual(response, original_response)
             self.assertEqual(set(response["content"]), {"*/*"})
+
+    def test_asana_cursor_mode_excludes_audit_stream(self):
+        document = self.documents["asana"][1]
+        selected = {(p, m) for p, m, _, _, _ in applications(document)}
+        self.assertEqual(len(selected), 64)
+        self.assertTrue(all(m == "get" for _, m in selected))
+        for p in ("/tasks", "/projects", "/projects/{project_gid}/tasks", "/tasks/{task_gid}/dependencies", "/workspaces"):
+            self.assertIn((p, "get"), selected)
+        scheme = document["components"]["paginationSchemes"]["cursorData"]
+        self.assertEqual(scheme["request"]["queryParameters"], {"offset": {"role": "cursor"}, "limit": {"role": "pageSize", "required": True}})
+        self.assertEqual(scheme["response"], {"envelope": {"itemsField": "data"}, "bodyFields": {"next_page.offset": {"role": "nextCursor"}}})
+        # Unlike ordinary lists, audit logs can keep returning a next page
+        # on an empty result. An ordinary cursor's terminal rule is unsuitable.
+        self.assertNotIn("x-pagination", document["paths"]["/workspaces/{workspace_gid}/audit_log_events"]["get"])
+        self.assertNotIn("x-pagination", document["paths"]["/tasks/{task_gid}"]["get"])
+
+    def test_zendesk_offset_links_exclude_exports_and_sideloaded_arrays(self):
+        document = self.documents["zendesk"][1]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual(len(selected), 14)
+        activities = selected["/api/v2/activities"]
+        self.assertEqual(activities["overrides"]["response"]["envelope"], {"itemsField": "activities"})
+        self.assertEqual(document["components"]["paginationSchemes"]["linkedCollections"]["response"]["bodyFields"], {"next_page": {"role": "nextLink"}})
+        for path, _, item, operation, _ in applications(document):
+            query = {resolve(document, p)["name"] for p in item.get("parameters", []) + operation.get("parameters", [])}
+            self.assertTrue({"page", "per_page"} & query)
+            self.assertNotIn("/incremental/", path)
+        for path in ("/api/v2/incremental/tickets", "/api/v2/routing/agents/instance_values", "/api/v2/views/show_many"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+    def test_square_query_body_and_integer_merchant_cursors(self):
+        document = self.documents["squareup"][1]
+        selected = {(p, m): a for p, m, _, _, a in applications(document)}
+        self.assertEqual(len(selected), 69)
+        for path, method, _, _, application in applications(document):
+            self.assertEqual(application["scheme"], "merchantCursor" if path == "/v2/merchants" else "queryCursor" if method == "get" else "bodyCursor")
+        schemes = document["components"]["paginationSchemes"]
+        self.assertEqual(schemes["queryCursor"]["request"], {"queryParameters": {"cursor": {"role": "cursor"}}})
+        self.assertEqual(schemes["bodyCursor"]["request"], {"bodyFields": {"cursor": {"role": "cursor"}}})
+        self.assertEqual(schemes["merchantCursor"]["response"], {"envelope": {"itemsField": "merchant"}, "bodyFields": {"cursor": {"role": "nextCursor", "schema": {"type": "integer"}}}})
+        for path, envelope in {"/v2/catalog/search": "objects", "/v2/catalog/search-catalog-items": "items", "/v2/events": "events", "/v2/customers/search": "customers"}.items():
+            self.assertEqual(selected[(path, "post")]["overrides"]["response"]["envelope"], {"itemsField": envelope})
+        # Orders may return orders or order_entries depending on the request;
+        # neither errors nor sideloaded references are the primary page.
+        self.assertNotIn("x-pagination", document["paths"]["/v2/orders/search"]["post"])
+        self.assertNotIn("x-pagination", document["paths"]["/v2/payments"]["post"])
+        self.assertNotIn("x-pagination", document["paths"]["/v2/customers"]["post"])
+
+    def test_zoom_tokens_envelopes_and_date_range_limit(self):
+        document = self.documents["zoom"][1]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual(len(selected), 29)
+        scheme = document["components"]["paginationSchemes"]["tokenCollections"]
+        self.assertEqual(set(scheme["request"]["queryParameters"]), {"next_page_token", "page_size"})
+        for path, envelope in {"/users/{userId}/meetings": "meetings", "/devices": "devices", "/past_meetings/{meetingId}/participants": "participants", "/report/operationlogs": "operation_logs"}.items():
+            self.assertEqual(selected[path]["overrides"]["response"]["envelope"], {"itemsField": envelope})
+        self.assertIn("response to value", selected["/archive_files"]["description"])
+        self.assertNotIn("x-pagination", document["paths"]["/past_meetings/{meetingUUID}/archive_files"]["get"])
+
+    def test_mastodon_link_header_enrichment_and_root_arrays(self):
+        original, document = self.documents["mastodon"]
+        selected = {(p, m) for p, m, _, _, _ in applications(document)}
+        self.assertEqual(selected, {(p, "get") for p in ("/api/v1/accounts/{id}/followers", "/api/v1/accounts/{id}/following", "/api/v1/blocks", "/api/v1/mutes", "/api/v1/bookmarks", "/api/v1/favourites")})
+        scheme = document["components"]["paginationSchemes"]["linkedArrays"]
+        self.assertEqual(scheme["response"], {"headers": {"Link": {"role": "nextLink"}}})
+        for path, _ in selected:
+            response = document["paths"][path]["get"]["responses"]["200"]
+            source = original["paths"][path]["get"]["responses"]["200"]
+            self.assertEqual(response["content"], source["content"])
+            self.assertEqual(response["headers"]["Link"]["schema"], {"type": "string"})
+        for path in ("/api/v1/accounts/relationships", "/api/v1/directory", "/api/v1/instance/peers"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
 
 
 if __name__ == "__main__":
