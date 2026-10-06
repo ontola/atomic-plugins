@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/google-tasks-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Google Tasks drive app (read-only import of chosen task lists into the shared issue-v1 class). Records only the version its catalog entry and apps/google-tasks/<version>/ui.js carry (integrations/tooling/apps.mjs); no npm dependencies. Not a certified sandbox package (no atomicCertification)."
+}

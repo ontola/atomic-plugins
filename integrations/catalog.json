@@ -183,6 +183,27 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-B2Q7lcKGnJq7bEP/WPBmC0b7tkAUo8dscvZyDCl2TOilmOSCpGQI/N/3tqUJ0SkT"
   },
   {
+    "https://atomicdata.dev/properties/localId": "google-tasks",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "google-tasks",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Google Tasks",
+    "https://atomicdata.dev/properties/emoji": "☑️",
+    "https://atomicdata.dev/properties/description": "Bring the Google Tasks lists you tick into an Issues table, read-only.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports the tasks of the Google task lists you tick (completed and hidden ones included) into the app's table as rows of the shared Issue class (issue-v1: title, task/v1 status, notes as the body, and the due day as an exact date), with the task list, the parent task of a subtask, the Google task id and presence as extra columns, so other views of that class can read them. A task that leaves its list is looked up by id once and marked deleted, unavailable or unconfirmed, with when it was last seen; a task completed in Google is closed here because Google still lists it. No row is ever removed.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Tasks through the host's consent bar and tick the task lists to import. Tasks refresh whenever the app is opened, on Sync now and after you tick or untick a list. Nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Google Tasks access is the tasks.readonly scope, so closing, editing or creating a task here is not sent to Google, and a local edit to an imported column is overwritten at the next sync. Subtasks are imported flat, with the parent task's id as a column. A task gone from its list is never assumed completed: when Google's by-id check answers 404 or fails, the row keeps its last known values and says so; at most 50 such checks run per sync. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Google account (Decision Inbox Q-098), including what Google answers by id for a deleted task.",
+    "https://atomicdata.dev/integrations/properties/keywords": "google tasks todo task lists issues read-only drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-FBobwmDntiWdRbL6uIMfZ9cJ18cyUnChT5dRztbk6hTigctZ3aUttXSXlN+9FmMa"
+  },
+  {
     "@id": "https://atomicdata.dev/integrations/catalog/money",
     "https://atomicdata.dev/properties/isA": [
       "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"

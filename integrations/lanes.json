@@ -252,6 +252,19 @@
       "e2e": ["integrations/tooling/e2e/ontology.spec.ts"]
     },
     {
+      "id": "google-tasks",
+      "index": 19,
+      "platforms": ["google-tasks"],
+      "tiers": ["typecheck", "unit", "e2e"],
+      "paths": [
+        "ontology/**",
+        "ontology-kit/**",
+        "integrations/sync-status/**"
+      ],
+      "note": "The Google Tasks drive app (#355; integrations/google-tasks/app/, modelled on the Todoist app): a read-only import of the task lists a person ticks into its own table of the shared issue-v1 class. paths: it bundles ontology-kit/terms.mjs and resolver.mjs and the shared sync-status card (integrations/sync-status/, Q-084), so a change to either runs this lane too; the e2e reads issue-v1 from its published GitHub Pages subject (checked first with ontology-kit/served.mjs), so it needs network access to ontola.github.io. google-tasks.spec.ts installs the app from the catalog's Drive apps section, as the committed apps/google-tasks/<version>/ui.js, and drives it through the host's proxy relay against the SYNTHETIC google-tasks fixture in fixtures/google-tasks/ (hand-written from the Tasks API v1 reference; no recording, and no live run: Decision Inbox Q-098), using its drivers to complete and delete tasks in Google.",
+      "e2e": ["integrations/google-tasks/e2e/google-tasks.spec.ts"]
+    },
+    {
       "id": "sync-status",
       "index": 18,
       "platforms": [],
