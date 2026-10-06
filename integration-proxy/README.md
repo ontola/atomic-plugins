@@ -551,7 +551,7 @@ git commit -am "Deploy atomic-integration-proxy <version> from crates.io"
 Merging that to its `main` deploys. Do not copy this source tree there: the
 wrapper is the whole repository now.
 
-The release after 0.2.5 limits key checks per client network
+0.3.0 limits key checks per client network
 (`KEY_CHECK_LIMIT_PER_HOUR`). On Heroku every request's peer address is the
 router's, so set `TRUST_FORWARDED_FOR=heroku` before deploying it, or all
 clients share one limit (the proxy logs a warning at startup when it finds

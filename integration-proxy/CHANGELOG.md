@@ -3,7 +3,11 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## Unreleased
+## 0.3.0 (2026-10-06)
+
+0.3.0 rather than 0.2.6 because `Config` gains public fields (below), a
+breaking change under Cargo's 0.x semver rules. **Deploying 0.3.0 on Heroku
+needs `TRUST_FORWARDED_FOR=heroku`.**
 
 - HTTP bearer and basic tokens (Decision Inbox Q-086): a security scheme of
   `type: http` with `scheme: bearer` or `scheme: basic` is a user credential.
@@ -62,10 +66,7 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `trust_forwarded_for` (new `TrustForwardedFor`,
   `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`), which breaks code that builds
   `Config` with a struct literal, as 0.2.1's `operator_*` fields did;
-  `Config::from_env` callers are unaffected. **At release this needs a
-  deliberate version choice:** under Cargo's 0.x semver rules a breaking
-  change to a public type calls for 0.3.0, not 0.2.6, unless the
-  struct-literal break is accepted as in 0.2.1. New dependency: `hmac` 0.12.
+  `Config::from_env` callers are unaffected. Hence the 0.3.0 version. New dependency: `hmac` 0.12.
   Review fixes before merge: the limit is taken only when a key check will
   reach the provider (a declared `keyCheck`, and not a cookie API key);
   under `heroku` the header is split on bytes, and a missing or unparseable
