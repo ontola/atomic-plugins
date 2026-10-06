@@ -10,14 +10,17 @@
  * AGENTS.md), for esbuild. No npm dependencies of its own: it bundles
  * ../todoist.ts, ontology-kit's terms and resolver, and the small
  * `Datatype` shim that stands in for the atomic library ../todoist.ts
- * imports (atomic-lib-shim.ts). No code splitting and no CSS file: "a plugin
- * in the drive is one module".
+ * imports (atomic-lib-shim.ts), and the shared sync-status card
+ * (../../sync-status/card.ts, Q-084) whose `card.css?raw` import
+ * `cssRawPlugin` serves minified. No code splitting and no CSS file: "a
+ * plugin in the drive is one module".
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -51,7 +54,7 @@ export async function build({ outfile } = {}) {
     legalComments: 'none',
     write: false,
     outfile: outfile ?? path('dist/ui.js'),
-    plugins: [atomicLibShim],
+    plugins: [atomicLibShim, cssRawPlugin(esbuild)],
     logLevel: 'silent',
   });
   const text = result.outputFiles[0].text;

@@ -9,6 +9,7 @@
     "checkJs": false,
     "lib": ["ES2023", "DOM"]
   },
-  "include": ["*.ts"],
+  // ../../sync-status/css.d.ts declares the card's `card.css?raw` import.
+  "include": ["*.ts", "../../sync-status/css.d.ts"],
   "exclude": ["*.test.ts", "fakeStore.ts"]
 }

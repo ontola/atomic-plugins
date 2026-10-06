@@ -1,0 +1,66 @@
+# Reviewed 2026-10-06 against the exact pinned OAD and official provider documentation.
+# Source: https://developers.hubspot.com/docs/api-reference/latest/cms/hubdb/guide
+# Documentation may describe a later API date; the paths and schemas below follow extends.
+overlay: 1.0.0
+info:
+  title: HubSpot hubdb explicit forward collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/hubdb/2026-03/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      cursorResults:
+        type: pageToken
+        autoDetect: false
+        description: Return the opaque paging.next.after token as the after query parameter, preserving
+          collection filters and sort order. Stop when paging.next.after is absent or empty. This scheme
+          selects forward pagination only; do not send before or an offset alongside after.
+        request:
+          queryParameters:
+            after:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: results
+          bodyFields:
+            paging.next.after:
+              role: nextCursor
+- target: $.paths['/cms/hubdb/2026-03/tables'].get
+  update:
+    x-pagination:
+    - scheme: cursorResults
+      overrides:
+        response:
+          bodyFields:
+            total:
+              role: totalCount
+- target: $.paths['/cms/hubdb/2026-03/tables/draft'].get
+  update:
+    x-pagination:
+    - scheme: cursorResults
+      overrides:
+        response:
+          bodyFields:
+            total:
+              role: totalCount
+- target: $.paths['/cms/hubdb/2026-03/tables/{tableIdOrName}/rows'].get
+  update:
+    x-pagination:
+    - scheme: cursorResults
+      overrides:
+        response:
+          bodyFields:
+            total:
+              role: totalCount
+- target: $.paths['/cms/hubdb/2026-03/tables/{tableIdOrName}/rows/draft'].get
+  update:
+    x-pagination:
+    - scheme: cursorResults
+      overrides:
+        response:
+          bodyFields:
+            total:
+              role: totalCount

@@ -33,11 +33,11 @@ automatically. You can ship the composed document with your application.
 
 ## Try the current source
 
-This guide describes `main`, including changes listed as **Unreleased** in
-the [README](../README.md#changelog). The package version in this checkout is
-still `0.18.0`; installing that npm release does not include the newer writable
-browser client and recovery APIs. To try the complete guide, use Node 22 and
-build this checkout:
+This guide follows `main`; the [changelog](../README.md#changelog) identifies
+which package version introduced each feature. The writable browser client
+and recovery controls arrived in 0.19.0, and missing-record checks, deletion
+feeds and read tombstones in 0.20.0. To run the examples against the current
+source, use Node 22 and build this checkout:
 
 ```sh
 git clone https://github.com/ontola/atomic-plugins.git
@@ -434,6 +434,75 @@ sends it. A provider-supported idempotency key can make create retries safer.
 The [writing reference](../README.md#writing) explains those controls, failure
 classification and their provider-dependent assumptions.
 
+## Handle a record that disappears from a collection
+
+A record missing from a fully read collection may have been deleted, filtered
+out, or become inaccessible. Syncables holds its queued PUT/PATCH updates while
+it checks the evidence. An update already in flight completes; if its outcome
+leaves it queued, it is held before another send. The local edit remains visible.
+
+Evidence can come from three declarations or from an item read:
+
+- A collection's [`x-completeness: { absent: deleted }`](../../openapi-extensions/spec/collection-completeness/README.md)
+  states that absence means deletion within its declared scope. It is not used
+  when a query selection narrows that scope beyond the declaration.
+- A collection's [`x-deletion-feed`](../../openapi-extensions/spec/deletion-feeds/README.md)
+  identifies a GET operation that reports deletions, optionally from a cursor
+  or timestamp query parameter. Syncables follows its pages, reads it once per
+  complete collection/context at the end of the sync, and keeps cursors and
+  relevant tombstones in the outbox when persistent storage is supplied.
+- A resource's [`x-read-tombstone`](../../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
+  describes a deletion marker in a successful item response, such as
+  `{ "id": "n1", "status": "deleted" }`. Without the declaration, a matching
+  2xx record looks like an existing record.
+- An item GET can show that the record is still available, or answer 404/410.
+  It uses the same request/time budget as collection and feed reads.
+
+The declaration must match the provider's contract; an ordinary status field
+does not automatically become a tombstone. The exact evidence order, feed
+cursor rules and draft-extension limitations are in the
+[missing-record reference](../README.md#records-a-refresh-no-longer-returns).
+
+| Evidence                          | Outcome for held updates                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `deleted`                         | Fail with `missingRecord: 'deleted'`; retain the local edit for deliberate resolution.                               |
+| `filtered`                        | Use the matching live record returned by GET as the confirmed copy, check conflicts and resume delivery.             |
+| `unknown`                         | Fail with `missingRecord: 'unknown'`; leave the decision visible to the application.                                 |
+| Check deferred by the read budget | Keep updates held for a later sync; repeated non-releasing syncs eventually fail them as described in the reference. |
+
+Expose these outcomes alongside ordinary delivery state:
+
+```js
+const client = createApiClient(document, {
+  transport,
+  storage: recordStorage,
+  missingRecordChecks: 'pending', // default: records with queued updates
+  onMissingRecord: ({ resource, id, evidence, source }) => {
+    console.log('Missing record:', { resource, id, evidence, source });
+  },
+});
+await client.sync();
+const missingEdits = client
+  .pendingWrites()
+  .filter((write) => write.missingRecord);
+```
+
+Here the transport and storage come from your application. Use
+`missingRecordChecks: 'all'` to also report missing records without queued
+writes, or `'none'` to disable item/feed checks; an applicable completeness
+declaration still counts. A failed edit can be retried or discarded with
+`resolveWrite`. Retrying is a deliberate application decision: a provider may
+reject it again or let a write restore the record. New edits of a record known
+to be missing are held and checked too.
+
+Feed responses that fail, are malformed, or exceed a read budget do not supply
+new tombstones or advance a normal cursor. Cursor-expiry responses follow the
+declared expiry rule. Read tombstones are checked only in missing-record item
+reads; collection records and write responses do not trigger that check.
+Current regression tests cover these paths, ordering and restarts with invented
+providers. No provider overlay currently declares these deletion extensions;
+live provider compatibility remains to be established.
+
 ## What "any API" requires
 
 Syncables is driven by descriptions rather than a built-in provider switch.
@@ -452,11 +521,10 @@ other complete collections may refresh before `sync()` rejects. Default read
 budgets are 10,000 requests, 5,000 records and 30 minutes, configurable through
 `limits`; exceeding a budget is an incomplete read, not a full snapshot.
 Following all pages does not prove the provider supplied a consistent snapshot
-or that an absent record was deleted. A queued update of a record a complete
-read no longer returns is held and checked instead: the collection's draft
-`x-completeness` declaration, or a GET of the record, tells a deleted record
-from a filtered one (see the README's "Records a refresh no longer returns").
-Deletion feeds (tombstones, `deleted_since`) are not read.
+or that an absent record was deleted. Use the
+[missing-record controls](#handle-a-record-that-disappears-from-a-collection)
+and provider declarations to expose deletion evidence when a local update's
+record disappears.
 
 For a one-off import, use `readCollections` for raw assembled collections or
 `readPlatform` for ontology/datatype projection. For ongoing local reads,
