@@ -11,7 +11,6 @@ import {
   ignoredGroups,
   nextStep,
   NO_RELAY_NOTE,
-  OTHER_TABLE_NOTE,
   syncStatusFor,
   WRITE_BACK_NOTE,
 } from './status.js';
@@ -73,7 +72,7 @@ const synced = (over: Partial<SyncSummary> = {}): ViewState => ({
 });
 
 const lines = (state: ViewState) =>
-  statusLines(syncStatusFor({ state, now: NOW, ...WORDS }), NOW);
+  statusLines(syncStatusFor({ state, now: NOW, ...WORDS })!, NOW);
 
 describe('syncStatusFor', () => {
   it('is read-only in every state, and says local edits are overwritten wherever it syncs', () => {
@@ -86,7 +85,6 @@ describe('syncStatusFor', () => {
       { kind: 'error', message: 'x', at: NOW, tasks: TASKS },
     ];
     const never: [ViewState, string][] = [
-      [{ kind: 'other-table' }, OTHER_TABLE_NOTE],
       [{ kind: 'no-relay' }, NO_RELAY_NOTE],
     ];
 
@@ -94,7 +92,8 @@ describe('syncStatusFor', () => {
       ...syncing.map((s): [ViewState, string] => [s, WRITE_BACK_NOTE]),
       ...never,
     ]) {
-      const status = syncStatusFor({ state });
+      const status = syncStatusFor({ state })!;
+      expect(status).toBeDefined();
       expect(status.provider).toBe('Todoist');
       expect(status.writeBack).toBe('read-only');
       expect(status.writeBackNote).toBe(note);
@@ -283,11 +282,15 @@ describe('syncStatusFor', () => {
       expect(words.rows).toBe('4 tasks from Todoist');
     }
 
-    // Never synced: no last good read to name.
+    // Never synced: no last good read to name. Without a connection (the
+    // load's connection lookup failed) the next step is the one button shown.
     const fresh = syncStatusFor({
       state: { kind: 'error', message: 'x', at: NOW, tasks: [] },
-    });
+    })!;
     expect(fresh.last).not.toHaveProperty('lastGood');
+    expect(fresh.last).toMatchObject({
+      nextStep: 'Reload the app, or press Connect Todoist.',
+    });
   });
 
   it('says a rate limit is retried by itself, or that the sync stopped and when to try again', () => {
@@ -351,7 +354,7 @@ describe('syncStatusFor', () => {
     expect(lines(disconnected).headline).toBe('Synced 2 days ago');
 
     const never: ViewState = { kind: 'disconnected', tasks: [] };
-    expect(syncStatusFor({ state: never }).last).toBeUndefined();
+    expect(syncStatusFor({ state: never })!.last).toBeUndefined();
     expect(lines(never).headline).toBe('Not synced yet');
   });
 
@@ -374,11 +377,11 @@ describe('syncStatusFor', () => {
       headline: 'Syncing with Todoist…',
       rows: '4 tasks from Todoist',
     });
-    expect(syncStatusFor({ state: { kind: 'loading' } }).rows).toBeUndefined();
+    expect(syncStatusFor({ state: { kind: 'loading' } })!.rows).toBeUndefined();
   });
 
-  it('names a host without the proxy client, and another table', () => {
-    const noRelay = syncStatusFor({ state: { kind: 'no-relay' } });
+  it('names a host without the proxy client, and renders no card on another table', () => {
+    const noRelay = syncStatusFor({ state: { kind: 'no-relay' } })!;
     expect(noRelay.problems).toEqual([
       expect.objectContaining({
         lead: 'This Atomic Server cannot connect apps to Todoist, so nothing is read.',
@@ -390,10 +393,8 @@ describe('syncStatusFor', () => {
       headline: 'Not synced yet',
     });
 
-    const other = syncStatusFor({ state: { kind: 'other-table' } });
-    expect(other.problems).toEqual([
-      expect.objectContaining({ lead: 'This is another Issue table.' }),
-    ]);
-    expect(other.rows).toBeUndefined();
+    // Another app's Issue table may be written back by that app, so no
+    // "read-only" card goes there: the view shows the plain notice only.
+    expect(syncStatusFor({ state: { kind: 'other-table' } })).toBeUndefined();
   });
 });

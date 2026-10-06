@@ -87,7 +87,7 @@ verified behaviour.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 39,066
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,912
 bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
@@ -147,10 +147,12 @@ Q-084) heads the view; `todoist-app/status.ts` maps the controller's state
 onto it, pure, and `main.ts` renders it on every state change. It says, in
 every state: "Read-only: edits here stay in Atomic. Nothing is sent to
 Todoist. An edit here to an imported column (Name, Status, Description, Due
-date) is overwritten at the next sync; a row added here is kept." (On
-another app's Issue table, which this app never syncs, and on a host without
-the proxy client, the note says instead that nothing is read, sent or
-overwritten there.) Then the
+date) is overwritten at the next sync; a row added here is kept." (On a host
+without the proxy client the note says instead that nothing is read or
+overwritten until it can connect apps to Todoist. On another app's Issue
+table, which this app never syncs and whose own app may send edits back, no
+card is rendered at all: the view shows only the plain notice that it imports
+into its own table.) Then the
 last sync ("Synced 4 min ago", its added, updated and unchanged counts, "5
 tasks from Todoist"), or a failed one with the plain next step (401/403
 "Reconnect Todoist."; 5xx "try again in a moment") and when the last

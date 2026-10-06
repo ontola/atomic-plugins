@@ -42,9 +42,6 @@ export interface StatusInput {
  */
 export const WRITE_BACK_NOTE =
   'Nothing is sent to Todoist. An edit here to an imported column (Name, Status, Description, Due date) is overwritten at the next sync; a row added here is kept.';
-/** `other-table`: a view on another app's table, which this app never syncs. */
-export const OTHER_TABLE_NOTE =
-  'This app syncs only its own table, so nothing here is read, sent or overwritten.';
 /** `no-relay`: no sync can run on this host. */
 export const NO_RELAY_NOTE =
   'Nothing is sent to Todoist, and nothing is read or overwritten until this Atomic Server can connect apps to it.';
@@ -125,19 +122,21 @@ export function ignoredGroups(
   return out;
 }
 
-export function syncStatusFor(input: StatusInput): SyncStatus {
+/**
+ * The card for `state`, or `undefined` for `other-table`: that is a view on
+ * another app's Issue table, which this app never syncs, and whose own app
+ * may well send edits back, so no "read-only" card belongs there. The view
+ * shows the plain notice instead.
+ */
+export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
   const { state } = input;
+  if (state.kind === 'other-table') return undefined;
   const now = input.now ?? Date.now();
   const words = { locale: input.locale, timeZone: input.timeZone };
   const status: SyncStatus = {
     provider: 'Todoist',
     writeBack: 'read-only',
-    writeBackNote:
-      state.kind === 'other-table'
-        ? OTHER_TABLE_NOTE
-        : state.kind === 'no-relay'
-          ? NO_RELAY_NOTE
-          : WRITE_BACK_NOTE,
+    writeBackNote: state.kind === 'no-relay' ? NO_RELAY_NOTE : WRITE_BACK_NOTE,
     rowNoun: ['task', 'tasks'],
   };
   const problems: Problem[] = [];
@@ -163,12 +162,6 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
         lead: 'This Atomic Server cannot connect apps to Todoist, so nothing is read.',
         text: 'The host has no proxy client for apps yet.',
         tone: 'neg',
-      });
-      break;
-    case 'other-table':
-      problems.push({
-        lead: 'This is another Issue table.',
-        text: 'The Todoist app imports only into its own table; nothing is read or written here.',
       });
       break;
     case 'disconnected':
@@ -216,7 +209,13 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
           ? limited.nextStep
             ? { nextStep: limited.nextStep }
             : {}
-          : { nextStep: nextStep(state.status) }),
+          : {
+              // Without a connection only "Connect Todoist" is shown, so
+              // point at it: the load's connection lookup failed.
+              nextStep: state.connection
+                ? nextStep(state.status)
+                : 'Reload the app, or press Connect Todoist.',
+            }),
         ...(lastGood !== undefined ? { lastGood } : {}),
       };
       break;

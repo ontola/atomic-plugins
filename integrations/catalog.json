@@ -180,7 +180,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.2.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-FLm3tJtjUZP9850E+xEjgJS5/HoEC6geve2FBmh7u5J7xSU7UrGFWmWGdFZeZ6fm"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-B2Q7lcKGnJq7bEP/WPBmC0b7tkAUo8dscvZyDCl2TOilmOSCpGQI/N/3tqUJ0SkT"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",

@@ -46,7 +46,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   const style = el('style', css);
   const heading = el('h1', 'Todoist');
-  /** Replaced on every render by the card for the new state. */
+  /** Replaced on every render: the card, or the plain notice where there is none. */
   let card: HTMLElement = el('section');
   const status = el('p');
   status.setAttribute('role', 'status');
@@ -76,11 +76,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     void store.openResource!(subject).catch(() => undefined);
 
   const render = (state: ViewState) => {
-    const next = renderSyncStatus(
-      doc,
-      syncStatusFor({ state, ...(canOpen ? { onOpenRow: openRow } : {}) }),
-      { now: Date.now() },
-    );
+    const mapped = syncStatusFor({
+      state,
+      ...(canOpen ? { onOpenRow: openRow } : {}),
+    });
+    // No card on another app's table (`status.ts`): the notice alone.
+    const next = mapped
+      ? renderSyncStatus(doc, mapped, { now: Date.now() })
+      : el('p', describe(state));
     card.replaceWith(next);
     card = next;
     status.textContent = describe(state);

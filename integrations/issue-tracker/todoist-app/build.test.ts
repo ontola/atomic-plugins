@@ -20,7 +20,7 @@ describe('Todoist drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 39,066 bytes minified on 2026-10-06 for 0.2.0, at the
+    // Measured 38,912 bytes minified on 2026-10-06 for 0.2.0, at the
     // a12b74a6783b pin: ../todoist.ts, ontology-kit's terms and resolver,
     // the issue-v1 provisioning and the plain-DOM view, the hand-made and
     // incomplete rows with "Open row" (0.1.1, 26,857 bytes), plus (0.2.0)
