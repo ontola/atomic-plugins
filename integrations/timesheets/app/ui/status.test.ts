@@ -3,7 +3,7 @@
  * `status.ts`: the controller's state, the timesheet and the changes list
  * mapped onto the shared sync-status card's model, without a DOM.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangesState, SyncOutcome, ViewState } from '../controller.js';
 import type { Timesheet } from '../model/types.js';
 import type { SyncResult } from '../sync.js';
@@ -17,6 +17,16 @@ import {
 } from './status.js';
 
 const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+// `syncStatusFor` falls back to `Date.now()` where a test passes no `now`, so
+// the clock is pinned to NOW: without it a fixture like "a lease until NOW +
+// 60 s" turns into the past once the real date passes NOW.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const CONNECTION = { platform: 'clockify', connectionId: 'c1' };
