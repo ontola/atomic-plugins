@@ -67,6 +67,7 @@ import {
   type Tracker,
 } from './tracker.js';
 import { relayDispatch, type Dispatch } from './transport.js';
+import type { RateLimitOptions } from './rateLimit.js';
 
 /** Stable, so saved snapshots keep binding (`Bridge` checks `binding.base`). */
 export const BRIDGE_BASE = 'https://github-issues-app.invalid/bridge';
@@ -606,6 +607,8 @@ export interface PassOptions {
   overlay?: Overlay;
   /** Tests inject the relay directly. */
   dispatch?: Dispatch;
+  /** How the relay waits out GitHub's rate limits, and who is told (`rateLimit.ts`). */
+  rateLimits?: RateLimitOptions;
   /**
    * Called as the pass imports GitHub issues and comments into the table,
    * so the view can show them before the pass ends.
@@ -654,7 +657,8 @@ function bridgeFor(options: PassOptions) {
     journal: state.state.journal,
     save: () => state.saveJournal(),
     dispatch:
-      options.dispatch ?? relayDispatch(options.proxy, options.connectionId),
+      options.dispatch ??
+      relayDispatch(options.proxy, options.connectionId, options.rateLimits),
   });
   const remote = new GitHubPort(undefined, { repository }, transport);
   const journal = state.state.journal as Record<

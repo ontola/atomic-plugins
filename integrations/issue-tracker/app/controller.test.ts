@@ -4,6 +4,7 @@ import { SEEDED_REPOSITORY } from '../fixtures/github-issues/scenario.mjs';
 import {
   classify,
   createController,
+  describe,
   describeHeld,
   type ViewState,
 } from './controller.js';
@@ -687,3 +688,129 @@ group(
     });
   },
 );
+
+group('issue-tracker controller: GitHub rate limits', () => {
+  const limit = (store: FakeStore, remaining = 1) => {
+    store.rateLimit = {
+      status: 403,
+      headers: { 'retry-after': '3600' },
+      remaining,
+      writesOnly: true,
+      message: 'You have exceeded a secondary rate limit.',
+    };
+  };
+
+  it('classifies a limit the relay gave up on, with its retry time', () => {
+    const until = Date.now() + 3_600_000;
+    const error = Object.assign(new Error('GitHub is rate-limiting requests'), {
+      notSent: true,
+      rateLimit: { status: 429, until, source: 'retry-after', secondary: true },
+    });
+    expect(classify(error)).toEqual({
+      kind: 'rate-limited',
+      message: 'GitHub is rate-limiting requests',
+      until,
+    });
+  });
+
+  it('a rate-limited send keeps the approved change and sends it on the next sync, without a second review', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    const before = store.calls.length;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    const until = (failed.problem as { until: number }).until;
+    expect(until).toBeGreaterThan(Date.now() + 3_500_000);
+    expect(failed.failedAt).toBeGreaterThan(0);
+    // One refused write, no repeat: a 3600 s wait is not slept out.
+    expect(
+      store.calls.slice(before).filter(c => (c.method ?? 'GET') !== 'GET'),
+    ).toHaveLength(1);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+    // The change is still listed as waiting; nothing is uncertain.
+    expect(failed.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: status Todo → Done (close it)',
+    ]);
+    expect(failed.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    // The retry (the timer's `sync`, or Sync now) sends it as approved.
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.sentToGitHub).toBe(1);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('a short limit on a write is waited out inside the pass, once', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    store.rateLimit = {
+      status: 429,
+      headers: { 'retry-after': '0' },
+      remaining: 1,
+      writesOnly: true,
+    };
+    const limits: unknown[] = [];
+    const seen = createController(store, s => {
+      if (s.kind === 'ready' && s.limited) limits.push(s.limited.until);
+    });
+    await seen.load();
+    // The second controller shares the store; it finds the held change.
+    await seen.sync();
+    const sent = ready(await seen.send());
+    expect(sent.problem).toBeUndefined();
+    expect(sent.limited).toBeUndefined();
+    expect(limits.length).toBeGreaterThan(0);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('any other outcome drops the carried approval: the change is held again, not sent', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    store.status = 502;
+    expect(ready(await controller.sync()).problem).toMatchObject({
+      kind: 'failed',
+    });
+    store.status = undefined;
+    const held = ready(await controller.sync());
+    expect(held.problem).toBeUndefined();
+    // Held for review again. The Bridge resumed a saved operation whose
+    // last attempt threw (the 502), so it is flagged to check GitHub first,
+    // as after any interrupted send; nothing was sent.
+    expect(held.last!.result.held).toHaveLength(1);
+    expect(describeHeld(held.last!.result.held[0])).toMatch(
+      /^Update #1: status Todo → Done \(close it\)/,
+    );
+    expect(held.last!.result.held[0].unconfirmed).toBe(true);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+  });
+
+  it('describes the rate limit with its retry time', () => {
+    const until = Date.UTC(2026, 9, 6, 14, 5);
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem: { kind: 'rate-limited', message: 'HTTP 429', until },
+      }),
+    ).toMatch(
+      /^GitHub is rate-limiting; retrying at \d{1,2}:\d\d( [AP]M)?\. Changes waiting to send are kept and go out then\. \(HTTP 429\)$/,
+    );
+  });
+});

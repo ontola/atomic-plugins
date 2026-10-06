@@ -73,6 +73,18 @@ export interface FakeStore extends PluginStore {
   lostWriteLands?: boolean;
   /** Answers every relayed call with this status until cleared. */
   status?: number;
+  /**
+   * Answers the next `remaining` relayed calls (writes only, with
+   * `writesOnly`) as GitHub's rate limit: `status` with `headers` and a
+   * GitHub-shaped body; nothing reaches the fixture for those.
+   */
+  rateLimit?: {
+    status: number;
+    headers: Record<string, string>;
+    remaining: number;
+    writesOnly?: boolean;
+    message?: string;
+  };
   /** Answers every call with this integration-proxy refusal code. */
   refusal?: string;
   lagReads: number;
@@ -297,6 +309,25 @@ export function fakeStore({
           headers: {},
           body: { message: 'Bad credentials' },
         };
+
+      const limit = fake.rateLimit;
+
+      if (limit && limit.remaining > 0 && (write || !limit.writesOnly)) {
+        limit.remaining--;
+
+        return {
+          status: limit.status,
+          headers: limit.headers,
+          body: {
+            message:
+              limit.message ??
+              'API rate limit exceeded for user ID 1. Check the documentation.',
+            documentation_url:
+              'https://docs.github.com/rest/overview/rate-limits-for-the-rest-api',
+          },
+        };
+      }
+
       const url = new URL(
         `/proxy/github-issues${request.path}`,
         'https://proxy.example',

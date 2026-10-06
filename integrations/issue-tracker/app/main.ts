@@ -25,6 +25,7 @@ import {
   typing,
 } from './model.js';
 import type { ViewArgs } from './store.js';
+import { syncStatusCss } from '../../sync-status/card.js';
 import { APP_CSS } from './styles.js';
 import { liveRegion } from './ui/kit.js';
 import { injectStyles, watchFrame } from './ui/theme.js';
@@ -39,6 +40,13 @@ import {
 
 const RETRY_FIRST = 4 * 60;
 const RETRY_MAX = 60 * 60;
+/**
+ * After a GitHub rate limit (`rateLimit.ts`): the retry runs at GitHub's
+ * `until`, but never sooner than this after the failure, doubled per
+ * consecutive rate-limited failure up to `RETRY_MAX`, so a limit without a
+ * usable header cannot make the app knock once a minute for hours.
+ */
+const RATE_RETRY_FIRST = 60;
 
 const freshDrafts = (): Drafts => ({
   tab: 'preview',
@@ -49,7 +57,9 @@ const freshDrafts = (): Drafts => ({
 });
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
-  injectStyles(root, APP_CSS);
+  // The kit's and the app's rules, then the shared sync-status card's
+  // (`.ss-*`, Q-084; its light fallbacks are its own, not the kit's).
+  injectStyles(root, `${APP_CSS}\n${syncStatusCss}`);
   root.classList.add('pl-app');
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
@@ -82,8 +92,15 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   const render = () => {
     ui.now = Date.now();
-    if (retryAt) ui.retryIn = Math.max(0, (retryAt - ui.now) / 1000);
-    else delete ui.retryIn;
+
+    if (retryAt) {
+      ui.retryIn = Math.max(0, (retryAt - ui.now) / 1000);
+      ui.retryAt = retryAt;
+    } else {
+      delete ui.retryIn;
+      delete ui.retryAt;
+    }
+
     const state = controller.state();
     const active = doc.activeElement as HTMLElement | null;
     const key =
@@ -142,27 +159,43 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     if (key) byKey(key)?.focus();
   };
 
-  const scheduleRetry = (state: ViewState) => {
-    const failed = state.kind === 'ready' && state.problem?.kind === 'failed';
+  let rateRetryDelay = RATE_RETRY_FIRST;
 
-    if (!failed) {
+  const scheduleRetry = (state: ViewState) => {
+    const problem = state.kind === 'ready' ? state.problem : undefined;
+    const failed = problem?.kind === 'failed';
+    const limited = problem?.kind === 'rate-limited';
+
+    if (!failed && !limited) {
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = undefined;
       retryAt = undefined;
-      if (state.kind === 'ready' && !state.problem && !state.busy)
+
+      if (state.kind === 'ready' && !state.problem && !state.busy) {
         retryDelay = RETRY_FIRST;
+        rateRetryDelay = RATE_RETRY_FIRST;
+      }
 
       return;
     }
 
     if (retryTimer) return;
-    retryAt = Date.now() + retryDelay * 1000;
+    const now = Date.now();
+    // GitHub's own time wins over the ladder, within the same ceiling.
+    const delay = limited
+      ? Math.min(
+          RETRY_MAX,
+          Math.max(rateRetryDelay, Math.ceil((problem.until - now) / 1000)),
+        )
+      : retryDelay;
+    retryAt = now + delay * 1000;
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
       retryAt = undefined;
-      retryDelay = Math.min(RETRY_MAX, retryDelay * 2);
+      if (limited) rateRetryDelay = Math.min(RETRY_MAX, rateRetryDelay * 2);
+      else retryDelay = Math.min(RETRY_MAX, retryDelay * 2);
       void controller.sync();
-    }, retryDelay * 1000);
+    }, delay * 1000);
   };
 
   /** Rows whose content changed since the last result, for the 1.5 s highlight. */

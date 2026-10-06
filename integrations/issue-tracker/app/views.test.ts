@@ -598,3 +598,87 @@ describe('a create GitHub never answered', () => {
     expect(creates()).toBe(1);
   });
 });
+
+describe('the shared sync-status card (Q-084)', () => {
+  const card = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('section[aria-label="Sync status"]');
+
+  it('comes first in the board, says edits are sent after review, and names the last sync', async () => {
+    const { root } = await mount();
+    const section = card(root)!;
+    expect(section).not.toBeNull();
+    expect(section.parentElement?.className).toBe('split-main');
+    expect(section.parentElement?.firstElementChild).toBe(section);
+    expect(section.querySelector('[data-key=headline]')?.textContent).toBe(
+      'Synced just now',
+    );
+    expect(section.querySelector('[data-key=mode]')?.textContent).toBe(
+      'Edits here are sent to GitHub after you review them.',
+    );
+    expect(section.querySelector('[data-key=rows]')?.textContent).toMatch(
+      /^2 issues in this table, 2 synced with /,
+    );
+    // The card is not a live region: the pill stays the one role=status.
+    expect(section.getAttribute('role')).toBeNull();
+    expect(root.querySelectorAll('[role=status]')).toHaveLength(1);
+  });
+
+  it('lists a change waiting to send, with Review and send, and clears it once sent', async () => {
+    const { root, store } = await mount();
+    const subject = cardOf(root, '#1').dataset.issue!;
+    store.edit(subject, { 'https://atomicdata.dev/properties/name': 'Edited' });
+    q(root, '[data-key=sync-now]').click();
+    await settle(root);
+    const pending = card(root)!.querySelector('[data-key=pending]')!;
+    expect(pending.textContent).toContain(
+      '1 change waiting to send to GitHub.',
+    );
+    // The card's buttons carry `data-k` (sync-status/card.ts).
+    q(root, '[data-k=ss-review]').click();
+    await settle(root);
+    expect(root.querySelector('[data-key=send]')).not.toBeNull();
+  });
+
+  it('is read-only on an Issue table the app didn’t make, and without the relay', async () => {
+    const team = fakeStore({ table: 'did:ad:team', connected: false });
+    team.resources.set('did:ad:team', {
+      'https://atomicdata.dev/properties/parent': 'did:ad:drive',
+      'https://atomicdata.dev/properties/name': 'Team issues',
+      'https://atomicdata.dev/properties/classtype': ISSUE_V1,
+    });
+    const other = await mount({ store: team, bind: false });
+    const mode = card(other.root)!.querySelector('[data-key=mode]')!;
+    expect(mode.textContent).toMatch(/^Read-only: edits here stay in Atomic\./);
+    expect(mode.textContent).toContain('isn’t synced with GitHub');
+
+    const none = await mount({
+      store: fakeStore({ relay: false }),
+      bind: false,
+    });
+    expect(card(none.root)!.querySelector('[data-key=mode]')?.textContent).toBe(
+      'Read-only: edits here stay in Atomic. This Atomic Server cannot connect apps to GitHub, so nothing is read or sent until it can.',
+    );
+  });
+
+  it('shows a rate limit as a problem with its retry time, and the pill as paused', async () => {
+    const { root, store } = await mount();
+    store.rateLimit = {
+      status: 429,
+      headers: { 'retry-after': '1800' },
+      remaining: 1,
+    };
+    q(root, '[data-key=sync-now]').click();
+    await settle(root);
+    expect(q(root, '.pl-pill').dataset.state).toBe('paused');
+    expect(q(root, '.pl-pill').textContent).toBe('GitHub rate limit');
+    const problem = card(root)!.querySelector('.ss-problem[data-tone=warn] b')!;
+    expect(problem.textContent).toMatch(
+      /^GitHub is rate-limiting; retrying at \d{1,2}:\d\d( [AP]M)?\.$/,
+    );
+    expect(card(root)!.querySelector('[data-key=headline]')?.textContent).toBe(
+      'Sync failed just now',
+    );
+    // No banner: the card carries it.
+    expect(root.querySelector('.pl-banner')).toBeNull();
+  });
+});
