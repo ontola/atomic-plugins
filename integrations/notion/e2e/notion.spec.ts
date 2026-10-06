@@ -94,7 +94,11 @@ test.describe('notion drive plugin', () => {
       databases.getByRole('list', { name: 'Databases' }),
     ).toContainText('Roadmap');
     await expect(app.getByRole('table')).toHaveCount(0);
-    await app.getByRole('button', { name: 'Sync details' }).click();
+    // The connbar's toggle: the card offers a "Sync details" button too.
+    await app
+      .locator('.pl-connbar')
+      .getByRole('button', { name: 'Sync details' })
+      .click();
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
     ).toContainText('1 page has formatting in Notes');
@@ -352,7 +356,11 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
-    await app.getByRole('button', { name: 'Sync details' }).click();
+    // The connbar's toggle: the card offers a "Sync details" button too.
+    await app
+      .locator('.pl-connbar')
+      .getByRole('button', { name: 'Sync details' })
+      .click();
     const details = app.getByRole('dialog', { name: 'Sync details' });
     await expect(details).toContainText('Reading list');
     await expect(details).toContainText('Recommended by people');
