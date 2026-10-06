@@ -30,7 +30,7 @@ import {
   lastSync,
   NAME,
   PARENT,
-  recordSync,
+  recordPass,
   TAG_DONE,
   TAG_TODO,
   TASK_BODY,
@@ -334,8 +334,10 @@ export async function syncTasks(
   }
 
   // Rows are written first: a failed record of the read's time must not
-  // leave imported tasks unwritten, only this one timestamp stale.
-  if (summary.complete) await recordSync(store, drive, seenAt);
+  // leave imported tasks unwritten, only these timestamps stale. The pass
+  // time is recorded whatever the read; the complete-read time only after
+  // a complete one (one App write either way).
+  await recordPass(store, drive, seenAt, summary.complete);
 
   return out;
 }

@@ -194,37 +194,50 @@ describe('reconcileTasks', () => {
     expect(records.find(r => r.id === 'b')?.lastSeen).toBe(T0);
   });
 
-  it('marks the tasks of a list that is gone unavailable without a lookup, and leaves a partial read alone', () => {
+  it('marks the tasks of a list that is gone unavailable without a lookup, after a complete read only', () => {
     const previous = [
       record('a'),
       record('b', { listId: 'gone', listTitle: 'Gone' }),
     ];
     const { records, summary } = reconcileTasks({
       previous,
-      fetched: {
-        lists: [{ id: LIST, title: 'A' }],
-        listsComplete: true,
-        read: [{ id: LIST, title: 'A', tasks: [], partial: 'cap' }],
-      },
+      fetched: fetched([task('a')]),
       chosen: [LIST, 'gone'],
       seenAt: T1,
       lastCompleteAt: T0,
     });
-    expect(records.find(r => r.id === 'a')).toEqual(previous[0]);
+    expect(records.find(r => r.id === 'a')).toMatchObject({
+      presence: 'present',
+    });
     expect(records.find(r => r.id === 'b')).toMatchObject({
       presence: 'unavailable',
       lastSeen: T0,
     });
-    expect(summary.complete).toBe(false);
+    expect(summary.complete).toBe(true);
 
-    // With the task-list read itself partial, a list's absence says nothing.
-    const partial = reconcileTasks({
-      previous,
-      fetched: { lists: [], listsComplete: false, read: [] },
-      chosen: [LIST, 'gone'],
-      seenAt: T1,
-    });
-    expect(partial.records).toEqual(previous);
+    // A partial read of any chosen list settles nothing: not the tasks of
+    // that list, and not the tasks of a vanished list either, so the card's
+    // "no task was settled" holds. The same when the task-list read itself
+    // was partial.
+    for (const partialFetched of [
+      {
+        lists: [{ id: LIST, title: 'A' }],
+        listsComplete: true,
+        read: [{ id: LIST, title: 'A', tasks: [], partial: 'cap' }],
+      },
+      { lists: [], listsComplete: false, read: [] },
+    ]) {
+      expect(absentTasks(previous, partialFetched)).toEqual([]);
+      const partial = reconcileTasks({
+        previous,
+        fetched: partialFetched,
+        chosen: [LIST, 'gone'],
+        seenAt: T1,
+        lastCompleteAt: T0,
+      });
+      expect(partial.records).toEqual(previous);
+      expect(partial.summary.complete).toBe(false);
+    }
   });
 
   it('refuses a seenAt that is not an ISO 8601 date and time', () => {

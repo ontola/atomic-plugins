@@ -16,6 +16,7 @@
 import {
   chosenLists,
   type Drive,
+  lastPass,
   lastSync,
   OtherTable,
   provision,
@@ -41,6 +42,13 @@ export interface Listed {
   tasks: TaskRow[];
   /** The App's last complete read (`google-tasks-last-sync`), ISO 8601 UTC, if any. */
   lastGood?: string;
+  /**
+   * The App's last pass that wrote the table, complete or partial
+   * (`google-tasks-last-pass`), if any. Equal to `lastGood` after a complete
+   * read, later after a partial one; so a table with rows from a partial
+   * first read never reads "Not synced yet".
+   */
+  lastPass?: string;
   /** The person's task lists, as the last read listed them; `[]` before one. */
   lists: TaskListEntry[];
   /** The lists the person ticked, by id (`google-tasks-lists` on the App). */
@@ -208,6 +216,7 @@ export function createController(
   let state: ViewState = { kind: 'loading' };
   let drive: Drive | undefined;
   let lastGood: string | undefined;
+  let lastPassAt: string | undefined;
   let lists: TaskListEntry[] = [];
   let chosen: string[] = [];
   /** The automatic retry waiting for Google's `Retry-After`, if any. */
@@ -231,6 +240,7 @@ export function createController(
   const listed = (rows: TaskRow[]): Listed => ({
     tasks: rows,
     ...(lastGood ? { lastGood } : {}),
+    ...(lastPassAt ? { lastPass: lastPassAt } : {}),
     lists,
     chosen,
   });
@@ -265,6 +275,7 @@ export function createController(
   const reread = async (): Promise<Listed> => {
     if (!drive) return listed(tasks());
     lastGood = await lastSync(store, drive, clock()).catch(() => lastGood);
+    lastPassAt = await lastPass(store, drive, clock()).catch(() => lastPassAt);
     chosen = await chosenLists(store, drive).catch(() => chosen);
 
     return listed(await listTasks(store, drive).catch(() => tasks()));

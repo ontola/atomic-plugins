@@ -61,6 +61,18 @@ export function nextStep(status: number | undefined): string {
 
 const is = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
+/** The partial-read problem: true because a partial pass settles nothing (tasks.ts). */
+function partialProblem(lastGood: number | undefined, now: number): Problem {
+  return {
+    lead: 'The read was partial, so no missing task was checked.',
+    text: `Google kept sending pages past the cap of ${MAX_PAGES}; tasks past it were not read and no task was settled. ${
+      lastGood === undefined
+        ? 'There has been no complete read yet.'
+        : `The last complete read was ${ago(lastGood, now)}.`
+    }`,
+  };
+}
+
 /**
  * The rows the pass left out or settled, grouped, in the table's current
  * state. Each row is in at most one group: an incomplete row is only in the
@@ -85,27 +97,29 @@ export function ignoredGroups(
       });
   };
 
+  // An unticked list is neither read nor checked, whatever its rows'
+  // presence, so those rows go here first and in no presence group below:
+  // an unconfirmed one there is not "checked again at the next sync".
+  const unticked = (t: TaskRow) => !!t.listId && !chosen.includes(t.listId);
   group(
-    by(t => t.presence === 'deleted'),
+    by(unticked),
+    n =>
+      `${is(n, 'is', 'are')} in a task list that is no longer ticked: kept as last read, not synced or checked. Tick the list to sync ${is(n, 'it', 'them')} again.`,
+  );
+  group(
+    by(t => !unticked(t) && t.presence === 'deleted'),
     n =>
       `${is(n, 'was', 'were')} deleted in Google Tasks: kept here as last read; not closed.`,
   );
   group(
-    by(t => t.presence === 'unavailable'),
+    by(t => !unticked(t) && t.presence === 'unavailable'),
     () =>
       'can no longer be reached in Google Tasks (gone, moved, or no access): kept here with the last values Google sent; not closed.',
   );
   group(
-    by(t => t.presence === 'unconfirmed'),
+    by(t => !unticked(t) && t.presence === 'unconfirmed'),
     () =>
       'could not be checked in Google Tasks: last known values kept; checked again at the next sync.',
-  );
-  group(
-    by(
-      t => t.presence === 'present' && !!t.listId && !chosen.includes(t.listId),
-    ),
-    n =>
-      `${is(n, 'is', 'are')} in a task list that is no longer ticked: kept as last read, not synced. Tick the list to sync ${is(n, 'it', 'them')} again.`,
   );
   group(
     by(t => t.presence === 'local'),
@@ -167,6 +181,15 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
     'lastGood' in state && state.lastGood
       ? Date.parse(state.lastGood)
       : undefined;
+  const lastPass =
+    'lastPass' in state && state.lastPass
+      ? Date.parse(state.lastPass)
+      : undefined;
+  /** A pass after the last complete read wrote rows from a partial read. */
+  const partialPass =
+    lastPass !== undefined && (lastGood === undefined || lastPass > lastGood)
+      ? lastPass
+      : undefined;
 
   switch (state.kind) {
     case 'loading':
@@ -204,15 +227,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
           lead: 'No task list chosen.',
           text: `Google lists ${s.lists.length} task list${s.lists.length === 1 ? '' : 's'} for this account; tick the ones to import below.`,
         });
-      if (!s.complete)
-        problems.push({
-          lead: 'The read was partial, so no missing task was checked.',
-          text: `Google kept sending pages past the cap of ${MAX_PAGES}; tasks past it were not read and no task was settled. ${
-            lastGood === undefined
-              ? 'There has been no complete read yet.'
-              : `The last complete read was ${ago(lastGood, now)}.`
-          }`,
-        });
+      if (!s.complete) problems.push(partialProblem(lastGood, now));
       if (s.presence.unconfirmed > MAX_LOOKUPS)
         problems.push({
           lead: `More than ${MAX_LOOKUPS} tasks left their lists at once.`,
@@ -247,10 +262,20 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
     }
   }
 
-  // Before this page load's first sync: when a complete read last confirmed
-  // the table, without counts.
-  if (!status.last && lastGood !== undefined)
-    status.last = { ok: true, at: lastGood };
+  // Before this page load's first sync: when a read last wrote the table,
+  // without counts. A complete read when there was one; else the partial
+  // pass that wrote the rows, named as partial, so a table holding rows
+  // never reads "Not synced yet".
+  if (!status.last && (lastGood !== undefined || lastPass !== undefined))
+    status.last = { ok: true, at: lastGood ?? lastPass! };
+
+  // A partial pass since the last complete read (or with none yet) is told
+  // in every state but a sync of this page load, which speaks for itself.
+  if (state.kind !== 'synced' && partialPass !== undefined)
+    problems.push({
+      lead: `The last sync, ${ago(partialPass, now)}, was partial.`,
+      text: `${partialProblem(lastGood, now).text} Its rows are in the table.`,
+    });
 
   if (problems.length) status.problems = problems;
 

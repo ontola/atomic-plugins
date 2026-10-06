@@ -189,6 +189,9 @@ describe('syncStatusFor', () => {
     const tasks: TaskRow[] = [
       task('5', { presence: 'unconfirmed' }),
       task('6', { listId: 'l2', list: 'Groceries' }),
+      // Unconfirmed in an unticked list: that list is neither read nor
+      // checked, so it is in the unticked group and not promised a check.
+      task('8', { listId: 'l2', list: 'Groceries', presence: 'unconfirmed' }),
       // Deleted AND incomplete: only in the incomplete group.
       task('7', {
         presence: 'deleted',
@@ -199,12 +202,18 @@ describe('syncStatusFor', () => {
     const groups = ignoredGroups(tasks, CHOSEN, s => opened.push(s));
     expect(groups.map(g => [g.count, g.reason.split(':')[0], g.items])).toEqual(
       [
+        [
+          2,
+          'are in a task list that is no longer ticked',
+          ['Task 6', 'Task 8'],
+        ],
         [1, 'could not be checked in Google Tasks', ['Task 5']],
-        [1, 'is in a task list that is no longer ticked', ['Task 6']],
         [1, 'is incomplete (missing Name)', ['(no name)']],
       ],
     );
-    expect(groups[0].reason).toContain('checked again at the next sync');
+    expect(groups[1].reason).toContain('checked again at the next sync');
+    expect(groups[0].reason).toContain('not synced or checked');
+    expect(groups[0].reason).not.toContain('next sync');
     expect(groups.reduce((n, g) => n + g.count, 0)).toBe(tasks.length);
     const incomplete = groups[2];
     expect(incomplete.reason).toContain('give the task a title in Google');
@@ -216,7 +225,7 @@ describe('syncStatusFor', () => {
     expect(ignoredGroups(tasks, CHOSEN)[2].action).toBeUndefined();
     expect(
       ignoredGroups(
-        [...tasks, { ...tasks[2], subject: 'did:ad:other' }],
+        [...tasks, { ...tasks[3], subject: 'did:ad:other' }],
         CHOSEN,
         () => {},
       )[2].action,
@@ -424,6 +433,74 @@ describe('syncStatusFor', () => {
     const never: ViewState = { kind: 'disconnected', ...empty };
     expect(syncStatusFor({ state: never })!.last).toBeUndefined();
     expect(lines(never).headline).toBe('Not synced yet');
+  });
+
+  it('names a partial pass instead of "Not synced yet" on a table with rows, and after a later complete read', () => {
+    const PASS = '2026-10-06T11:00:00.000Z';
+    // A partial first read wrote 3 rows; no complete read yet; reloaded
+    // while disconnected.
+    const partialOnly: ViewState = {
+      kind: 'disconnected',
+      tasks: [task('1'), task('2'), task('3')],
+      lists: [],
+      chosen: CHOSEN,
+      lastPass: PASS,
+    };
+    const status = syncStatusFor({ state: partialOnly, now: NOW })!;
+    expect(status.last).toEqual({ ok: true, at: Date.parse(PASS) });
+    expect(lines(partialOnly).headline).toBe('Synced 1 h ago');
+    expect(status.problems).toEqual([
+      {
+        lead: 'Not connected.',
+        text: 'Connect Google Tasks to import the task lists you choose.',
+      },
+      {
+        lead: 'The last sync, 1 h ago, was partial.',
+        text: expect.stringContaining(
+          'There has been no complete read yet. Its rows are in the table.',
+        ),
+      },
+    ]);
+
+    // A partial pass after a complete read: the complete read is the last
+    // good one, and the partial pass is told.
+    const later = syncStatusFor({
+      state: { ...partialOnly, lastGood: LAST_GOOD },
+      now: NOW,
+    })!;
+    expect(later.last).toEqual({ ok: true, at: Date.parse(LAST_GOOD) });
+    expect(later.problems?.[1].text).toContain(
+      'The last complete read was 2 days ago.',
+    );
+
+    // A complete read after the partial pass: nothing to tell.
+    const complete = syncStatusFor({
+      state: { ...partialOnly, lastGood: PASS, lastPass: PASS },
+      now: NOW,
+    })!;
+    expect(complete.problems).toHaveLength(1);
+
+    // A failed sync with only a partial pass before it names no "last good"
+    // sync, but still tells of the partial pass.
+    const failed = syncStatusFor({
+      state: {
+        ...partialOnly,
+        kind: 'error',
+        message: 'x',
+        at: NOW,
+        connection: CONNECTION,
+      },
+      now: NOW,
+    })!;
+    expect(failed.last).not.toHaveProperty('lastGood');
+    expect(failed.problems?.[0].lead).toBe(
+      'The last sync, 1 h ago, was partial.',
+    );
+
+    // During a sync of this page load the pass speaks for itself.
+    expect(
+      syncStatusFor({ state: synced({ complete: false }), now: NOW })!.problems,
+    ).toHaveLength(1);
   });
 
   it('is busy while loading, connecting and syncing', () => {

@@ -16,10 +16,12 @@
  *   task's id for a subtask, and the task as Google last sent it (JSON
  *   text). They are declared as the App's `row-extras` (atomic-server
  *   #1849).
- * - Two string properties on the App resource, not on rows: the time of the
- *   last complete read (`google-tasks-last-sync`, so a pass that finds
- *   nothing changed writes no row) and the task lists the person chose to
- *   import (`google-tasks-lists`, a JSON array of list ids).
+ * - Three string properties on the App resource, not on rows: the time of
+ *   the last complete read (`google-tasks-last-sync`, so a pass that finds
+ *   nothing changed writes no row), the time of the last pass that wrote the
+ *   table at all, complete or partial (`google-tasks-last-pass`, so a table
+ *   holding rows never reads "Not synced yet"), and the task lists the
+ *   person chose to import (`google-tasks-lists`, a JSON array of list ids).
  *
  * On first open (`provision`) the app makes itself a view of `issue-v1`: it
  * adds the class to its App's `renders`, its extras to `row-extras`, and
@@ -72,6 +74,7 @@ export type OwnProperty =
   | 'parent'
   | 'source'
   | 'lastSync'
+  | 'lastPass'
   | 'lists';
 
 interface PropertySpec {
@@ -144,6 +147,14 @@ export const PROPERTY_SPECS: PropertySpec[] = [
     datatype: datatypes.string,
     description:
       'When the Google Tasks app last read the chosen task lists completely, as an ISO 8601 date and time in UTC. On the App resource.',
+  },
+  {
+    key: 'lastPass',
+    shortname: 'google-tasks-last-pass',
+    name: 'Google Tasks last pass',
+    datatype: datatypes.string,
+    description:
+      'When the Google Tasks app last finished reading and wrote the table, complete or partial (the page cap), as an ISO 8601 date and time in UTC. Later than or equal to Google Tasks last sync. On the App resource.',
   },
   {
     key: 'lists',
@@ -345,14 +356,41 @@ export async function lastSync(
   );
 }
 
-export async function recordSync(
+/** The time of the last pass that wrote the table, complete or partial. */
+export async function lastPass(
+  store: PluginStore,
+  drive: Drive,
+  now: number,
+): Promise<string | undefined> {
+  return syncTime(
+    (await store.getResource(drive.app)).get(drive.properties.lastPass),
+    now,
+  );
+}
+
+/**
+ * Records a finished pass on the App in one write: `google-tasks-last-pass`
+ * always, `google-tasks-last-sync` too when the read was complete. Writes
+ * nothing when both already hold `at`.
+ */
+export async function recordPass(
   store: PluginStore,
   drive: Drive,
   at: string,
+  complete: boolean,
 ): Promise<void> {
   const app = await store.getResource(drive.app);
-  if (app.get(drive.properties.lastSync) === at) return;
-  await app.set(drive.properties.lastSync, at).save();
+  let changed = false;
+
+  for (const key of complete
+    ? (['lastPass', 'lastSync'] as const)
+    : (['lastPass'] as const))
+    if (app.get(drive.properties[key]) !== at) {
+      app.set(drive.properties[key], at);
+      changed = true;
+    }
+
+  if (changed) await app.save();
 }
 
 /** The ids of the task lists the person chose to import; none at first. */

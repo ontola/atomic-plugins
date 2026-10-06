@@ -113,7 +113,7 @@ describe('provisioning', () => {
     expect(table[NAME]).toBe(TABLE_NAME);
     expect(drive.rowClass).toBe(ISSUE_V1);
     const listed = store.resources.get(ONTOLOGY)![PROPERTIES] as string[];
-    expect(listed).toHaveLength(9);
+    expect(listed).toHaveLength(10);
     expect(listed.map(s => store.resources.get(s)![SHORTNAME])).toContain(
       'google-tasks-task-id',
     );
@@ -263,13 +263,19 @@ describe('import', () => {
       updated: 0,
       unchanged: 5,
     });
-    // The persisted sync time is the one allowed write; any other write,
-    // to a row or to another App property, fails this test.
+    // The persisted sync times (one save of the App, holding the complete
+    // read's time and the pass's time) are the one allowed write; any other
+    // write, to a row or to another App property, fails this test.
     expect(store.writes.slice(before)).toEqual([{ op: 'save', subject: APP }]);
     const appAfter = { ...store.resources.get(APP)! };
     expect(appAfter[p.lastSync]).toBe(T2);
-    delete appBefore[p.lastSync];
-    delete appAfter[p.lastSync];
+    expect(appAfter[p.lastPass]).toBe(T2);
+
+    for (const key of [p.lastSync, p.lastPass]) {
+      delete appBefore[key];
+      delete appAfter[key];
+    }
+
     expect(appAfter).toEqual(appBefore);
     for (const [subject, props] of rows)
       expect(store.resources.get(subject)).toEqual(props);
@@ -483,8 +489,9 @@ describe('a task that stops appearing', () => {
       store.calls.slice(calls).some(c => /\/tasks\/[^/?]+$/.test(c.path)),
     ).toBe(false);
     expect(rowOf('synthetic-task-1')[p.presence]).toBe('present');
-    // The App's last complete read stays T1.
+    // The App's last complete read stays T1; the pass is recorded.
     expect(store.resources.get(APP)![p.lastSync]).toBe(T1);
+    expect(store.resources.get(APP)![p.lastPass]).toBe(T2);
 
     expect(await sync(T3)).toMatchObject({
       checked: 1,
@@ -689,6 +696,38 @@ describe('controller', () => {
     await controller.sync();
     expect(controller.state()).toMatchObject({ kind: 'synced' });
     expect(controller.state()).not.toHaveProperty('rateLimited');
+  });
+
+  it('after a partial first read, a reload knows the pass that wrote the rows, not a complete read', async () => {
+    const store = fakeStore();
+    // The list is chosen before the first open, so the very first pass is
+    // the partial one (three tasks per fixture page, one page read).
+    await recordChosenLists(store, await provision(store), [MY_TASKS]);
+    const controller = createController(store, () => undefined, {
+      now: () => T1,
+      clock: () => Date.parse(T1),
+      read: { maxPages: 1 },
+    });
+    await (
+      await controller.load()
+    ).syncing;
+    expect(controller.state()).toMatchObject({
+      kind: 'synced',
+      summary: { total: 3, complete: false },
+      lastPass: T1,
+    });
+    expect(controller.state()).not.toHaveProperty('lastGood');
+
+    // Reloaded while disconnected: the rows are there, and so is the pass.
+    store.proxy!.connections = async () => [];
+    const reopened = track(store);
+    await reopened.load();
+    expect(reopened.state()).toMatchObject({
+      kind: 'disconnected',
+      lastPass: T1,
+    });
+    expect(reopened.state()).not.toHaveProperty('lastGood');
+    expect((reopened.state() as { tasks: unknown[] }).tasks).toHaveLength(3);
   });
 
   it('knows the last complete read before this page load syncs, and ignores a junk or future one', async () => {

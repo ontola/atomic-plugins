@@ -122,19 +122,21 @@ const isComplete = (fetched: Fetched) =>
 
 /**
  * The previous tasks to check by id before `reconcileTasks`: those that were
- * present or unconfirmed, whose list was read completely, and that the read
- * no longer holds. In order of their list, then id, so a cap takes the same
- * ones each pass. A task whose list is gone from a complete task-list read
- * is not here: `reconcileTasks` marks it unavailable without a call.
+ * present or unconfirmed and that a complete read no longer holds. In order
+ * of their list, then id, so a cap takes the same ones each pass. None when
+ * any part of the read was partial (the task-list read, or any chosen list):
+ * the pass then settles nothing, so the card's "no task was settled" is
+ * true. A task whose list is gone from a complete read is not here either:
+ * `reconcileTasks` marks it unavailable without a call.
  */
 export function absentTasks(
   previous: TaskRecord[],
   fetched: Fetched,
 ): { id: string; listId: string }[] {
   const out: { id: string; listId: string }[] = [];
+  if (!isComplete(fetched)) return out;
 
   for (const list of fetched.read) {
-    if (list.partial) continue;
     const present = new Set(list.tasks.map(t => t.id).filter(Boolean));
     out.push(
       ...previous
@@ -165,12 +167,14 @@ export interface ReconcileSummary extends Record<Presence, number> {
  *
  * - A task in the read is `present`, with Google's current values; a task
  *   that was absent or settled before counts as reappeared.
- * - A previous task of a chosen list that was read completely, but missing
- *   from it, takes the presence its lookup supports (see the header). It
- *   keeps the values Google last sent and `lastSeen` stays what it was.
- * - A previous task whose list is gone from a complete task-list read is
- *   `unavailable` with no lookup.
- * - A partial read of a list changes none of that list's previous tasks.
+ * - After a complete read (the task lists and every chosen list), a
+ *   previous task missing from its list takes the presence its lookup
+ *   supports (see the header). It keeps the values Google last sent and
+ *   `lastSeen` stays what it was.
+ * - After a complete read, a previous task whose list is gone from the
+ *   person's lists is `unavailable` with no lookup.
+ * - A partial read (of the task lists or of any chosen list) settles no
+ *   previous task at all; it only takes the tasks it did read.
  * - A previous task of a list the person no longer chose is kept as it is.
  * - Nothing is removed, and nothing is written to Google.
  *
@@ -201,6 +205,7 @@ export function reconcileTasks({
   const check = new Set(absentTasks(previous, fetched).map(a => a.id));
   const readLists = new Map(fetched.read.map(l => [l.id, l]));
   const knownLists = new Set(fetched.lists.map(l => l.id));
+  const complete = isComplete(fetched);
   let reappeared = 0;
   const seen: TaskRecord[] = [];
   const present = new Set<string>();
@@ -229,10 +234,11 @@ export function reconcileTasks({
         presence,
         lastSeen: row.lastSeen ?? lastCompleteAt ?? seenAt,
       });
-      // The list itself is gone: no call can find the task.
+      // The list itself is gone: no call can find the task. Only after a
+      // complete read, like every other settling.
       if (
+        complete &&
         chosen.includes(row.listId) &&
-        fetched.listsComplete &&
         !knownLists.has(row.listId) &&
         !SETTLED.includes(row.presence)
       )
@@ -263,7 +269,7 @@ export function reconcileTasks({
     unavailable: 0,
     unconfirmed: 0,
     reappeared,
-    complete: isComplete(fetched),
+    complete,
   };
   for (const row of records) summary[row.presence]++;
 

@@ -84,11 +84,16 @@ id once:
 | an error, or no lookup (the per-pass cap)   | `unconfirmed` | last known values; checked again at the next sync |
 | its list is gone from a complete lists read | `unavailable` | no lookup made                                    |
 
-A partial read (the page cap) settles nothing, and the App's
-`google-tasks-last-sync` is not moved. A task back in a read is `present`
-again. No row is ever removed, and nothing is sent to Google.
-`last-seen` is set only on a task that is not `present`: a present task was
-seen at the App's last sync.
+A partial read (the page cap, on the task lists or on any chosen list)
+settles nothing at all: no lookup is made and no vanished list is marked,
+only the tasks it did read are taken, and the App's `google-tasks-last-sync`
+is not moved; `google-tasks-last-pass` is, so a table holding rows from a
+partial first read says "Synced … ago" with "The last sync … was partial"
+instead of "Not synced yet". A task back in a read is `present` again. No
+row is ever removed, and nothing is sent to Google. `last-seen` is set only
+on a task that is not `present`: a present task was seen at the App's last
+sync. A row in a list the person unticked is neither read nor checked,
+whatever its presence; the card lists it as such.
 
 **Not verified** against Google: that a deleted task answers 200 with
 `deleted: true` by id (the reference documents the field; the fixture models
@@ -170,7 +175,7 @@ Moneybird apps made the same choice.
 
 ## What is verified
 
-- Unit (`app/*.test.ts`, 70 tests): the mapping, the reader and its rate
+- Unit (`app/*.test.ts`, 72 tests): the mapping, the reader and its rate
   limits, every card state, the import pass and the controller, with the
   clock pinned (`vi.useFakeTimers({ toFake: ['Date'] })`).
 - Host E2E (`e2e/google-tasks.spec.ts`, the `google-tasks` lane): catalog
