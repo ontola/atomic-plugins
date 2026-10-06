@@ -42,7 +42,7 @@ import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.1';
+const VERSION = '0.3.2';
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';
@@ -119,10 +119,26 @@ test.describe('calendar drive app', () => {
     // weekly series (master and instance) and the cancelled event are not
     // imported.
     await expect(pill).toContainText('Synced', { timeout: 30_000 });
-    await app.getByRole('button', { name: 'Agenda', exact: true }).click();
-    await expect(app.locator('.agenda')).toContainText(
-      '2 recurring events and 1 cancelled event aren’t imported yet.',
+    // The shared sync-status card (Q-084), first in the main landmark: the
+    // last sync and its counts, the write-back sentence, and what was not
+    // imported, with the reason. The agenda carries no copy of it.
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card).toContainText(/Synced (just now|\d+ min ago)/);
+    await expect(card).toContainText(/3 events from Synthetic/);
+    await expect(card).toContainText(
+      'Last sync: 3 added, 0 updated, 0 unchanged',
     );
+    await expect(card).toContainText(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
+    await expect(card).toContainText(
+      '2 events are recurring: not imported yet, so a series is never mapped in part.',
+    );
+    await expect(card).toContainText(
+      '1 event is cancelled in Google: counted, not imported, and never treated as a deletion here.',
+    );
+    await app.getByRole('button', { name: 'Agenda', exact: true }).click();
+    await expect(app.locator('.agenda')).not.toContainText('imported');
     await expect(
       app.getByRole('button', { name: /^Calendar timed fixture, .*Room 4/ }),
     ).toBeVisible();
@@ -216,6 +232,13 @@ test.describe('calendar drive app', () => {
     await expect(sheet).toContainText('0 of 1 change sent');
     await expect(sheet).toContainText('Changed in Google since this preview');
     expect((await driver('state', [])).writes).toHaveLength(1);
+    // The card: the row is still edited, and the send wrote nothing.
+    await expect(card).toContainText(
+      '1 change waiting to send to Google Calendar.',
+    );
+    await expect(card).toContainText(
+      '1 change not written to Google Calendar.',
+    );
 
     // A lost response: the PATCH reaches the proxy, its answer never
     // reaches the frame. The app says it can't know.
@@ -235,6 +258,12 @@ test.describe('calendar drive app', () => {
     await sheet.getByRole('button', { name: 'Done' }).click();
     const banner = app.locator('.banner');
     await expect(banner).toContainText('may or may not have applied');
+    // The card counts only that send as uncertain, over the last good sync.
+    await expect(card).toContainText(
+      '1 change sent without an answer from Google Calendar: checked on the next sync.',
+    );
+    await expect(card).toContainText(/Synced (just now|\d+ min ago)/);
+    await expect(card).not.toContainText('Sync failed');
 
     // Nothing was spent (there are no connection codes any more): the same
     // connection syncs straight away. Google has the change, so the new
@@ -246,6 +275,9 @@ test.describe('calendar drive app', () => {
       0,
     );
     expect((await driver('state', [])).writes).toHaveLength(2);
+    // The sync settled it: no stale warning outlives it.
+    await expect(card).not.toContainText('without an answer');
+    await expect(card).not.toContainText('waiting to send');
 
     // Compare on open (#192): an edit made in the host's table, in the
     // host's format (End day, exclusive), found when the app opens again and
@@ -599,15 +631,17 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
     await expect(
       app.getByRole('dialog').getByRole('button', { name: 'Edit' }),
     ).toHaveCount(0);
-    // The row with an empty Name is listed as incomplete, with a way to the
-    // row, and drawn as "(untitled)" with the tag; the rest is unaffected.
-    const incomplete = app.getByRole('region', { name: 'Incomplete rows' });
-    await expect(incomplete).toContainText('1 row is incomplete');
-    await expect(incomplete).toContainText('(untitled)');
-    await expect(incomplete).toContainText('Incomplete: missing Name');
-    await expect(
-      incomplete.getByRole('button', { name: 'Open row' }),
-    ).toBeVisible();
+    // The sync-status card says the table is read only, and lists the row
+    // with an empty Name as incomplete, with a way to the row; the row is
+    // drawn as "(untitled)" with the tag, and the rest is unaffected.
+    const card = app.getByRole('region', { name: 'Sync status' });
+    await expect(card).toContainText('Not synced yet');
+    await expect(card).toContainText('Read-only: edits here stay in Atomic.');
+    await expect(card).toContainText(
+      '1 event is incomplete (missing Name). Fill the column in the table.',
+    );
+    await expect(card).toContainText('(untitled)');
+    await expect(card.getByRole('button', { name: 'Open row' })).toBeVisible();
     await expect(
       app.getByRole('button', {
         name: /^\(untitled\), All day, .*incomplete: missing name$/,
@@ -696,6 +730,12 @@ test.describe('calendar drive app: any event-v1 table (#177)', () => {
       }),
     ).toBeVisible({ timeout: 45_000 });
     await importPrimary(app);
+    // Synced now: the card says edits go back to Google.
+    await expect(
+      app.getByRole('region', { name: 'Sync status' }),
+    ).toContainText(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
 
     // Google's events are rows of that table now, with the app's extras;
     // the person's own row is as it was; the table kept its name and class.

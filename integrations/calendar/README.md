@@ -16,7 +16,7 @@ drive apps.
 1. **Install.** From the catalog: entry `calendar` (experimental; published but disabled pending launch: the catalog entry carries the module and its integrity with `enabled: false`, so the Integrations page does not offer it yet; the lanes' dev-server serves it enabled (`DEV_SERVER_ENABLE_APPS`), which is how the e2e installs it). Once enabled it is listed under the
    Integrations page's **Drive apps**. The host downloads
    `apps/calendar/<version>/ui.js` (`app/build.mjs`'s bundle, minified,
-   129,735 bytes for 0.3.1) from GitHub Pages and refuses it unless it
+   139,741 bytes for 0.3.2) from GitHub Pages and refuses it unless it
    matches the entry's integrity hash (see
    [Publishing a drive app](../README.md#publishing-a-drive-app)). The e2e
    installs it that way, from the committed module the lane's dev-server
@@ -33,7 +33,9 @@ drive apps.
    events never offer Edit.
 4. **Sync now.** A full, paged scan of the calendar's events (see _Scope_),
    on open and on "Sync now". New events become rows; Google-side edits
-   update rows that were not edited here. Reads never write to Google.
+   update rows that were not edited here. Reads never write to Google. The
+   **Sync status** card (0.3.2) at the top of every data view says how it
+   went; see [The sync-status card](#the-sync-status-card-032).
 5. **Look and edit.** Agenda (the default below 720px) and Week (3, 5 or 7
    days by width, with a sidebar from 900px). An event opens in a drawer;
    Edit changes exactly the five mapped fields and saves to the row only
@@ -128,10 +130,12 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
 - **Incomplete rows** (0.3.1; ontology-kit's rule for every shared-class
   view: a row missing a required field is shown as incomplete, not skipped).
   `event-v1` requires Name and Day. A row without one is read through the
-  resolver's `missing`, kept in the views, and listed in an "Incomplete rows"
-  section above the Agenda and Week with "Incomplete: missing Day" (or Name,
-  or both) and an "Open row" button (`store.openResource`) to fix it in the
-  table; the drawer says the same. A row without a Day is drawn on no day,
+  resolver's `missing`, kept in the views, and listed in the sync-status
+  card above the Agenda and Week (0.3.2; 0.3.1 had an "Incomplete rows"
+  section there) as incomplete, grouped by what is missing (Day, Name, or
+  both), with an "Open row" button (`store.openResource`) to fix it in the
+  table when it is the only row of its group; the drawer says the same, with
+  its own Open row. A row without a Day is drawn on no day,
   as the host's Calendar view draws it nowhere (the section is where it
   appears); one without a Name is drawn as "(untitled)" with the tag. A
   synced row that is incomplete is held back whole, like an invalid edit:
@@ -150,6 +154,70 @@ shared fields by subject only, through `ontology-kit`'s strict resolver
   per session; #177 S1). A browser that has never seen the class, while
   Pages is down, shows the table with no columns (#177 H1, not fixed at the
   pin).
+
+## The sync-status card (0.3.2)
+
+Every data view (the first import, Agenda and Week, a table that isn't
+synced, a failed sync over the rows that stay) starts with the shared
+sync-status card of [`../sync-status/`](../sync-status/README.md) (Decision
+Inbox Q-084, adopted by Clockify first). `app/ui/status.ts` maps the
+controller's snapshot onto it; `app/ui/status.test.ts` checks every state
+without a DOM. What it says here:
+
+- **Headline:** "Synced 4 min ago" with "Last sync: 1 added, 2 updated, 5
+  unchanged" and "8 events from Work"; "Syncing… (page 3)" or "Sending 2 of
+  3 to Google Calendar…" while that runs; "Sync failed 1 min ago" with the
+  banner's title, a plain next step and "Last good sync 2 days ago." A
+  failed send is not a failed sync: the last good read stands, and the
+  send's failure is a problem under it. When a full read succeeds, its time
+  is kept next to the calendar id as `google-last-sync` (an ISO 8601 UTC
+  string, a Property of the app's ontology: on the app's own table, or on
+  the sync binding of a table it didn't make), so after a reload a failed
+  first read, or a paused table, still names the last good sync instead of
+  "just now" over days-old rows or "Not synced yet". A table last synced by
+  0.3.1 has no such time until its next successful read.
+- **Write-back:** "Edits here are sent to Google Calendar after you review
+  them." on a table bound to a calendar, also on a calendar Google shares
+  read only (a change made in the table is still reviewed; the note says
+  Google refuses edits sent from here, and Edit is not offered). "Read-only:
+  edits here stay in Atomic." on a table that isn't synced, while it is
+  being set up (Sync this table pressed, no calendar chosen yet, or that
+  step failed) and, with "Syncing with Google Calendar is paused.", while
+  its grant is taken back. Synced means bound to a calendar (the snapshot's
+  `calendarId`), never the placeholder details of the not-synced view.
+- **Write queue:** what "Review N changes" offers (the planned sends, or the
+  rows edited here since the last preview), how many are held back because
+  the edit can't be sent, and the last send's outcomes until a successful
+  refresh replaces them (a failed read keeps them): "could not be sent;
+  nothing was written" for a refusal, "written to Google Calendar, but could
+  not be finished here" when the `PATCH` stood and saving the row's baseline
+  failed (the `written` flag on the outcome, 0.3.2), "sent without an
+  answer" for exactly the one uncertain send (a `412` and a refusal are not
+  uncertain). The uncertain row and the written row are still edited (their
+  baselines did not move) and so still in what Review offers, but each has
+  its own line, so "waiting to send" leaves them out. A `412` is a
+  problem below instead: "1 change not written to Google Calendar. Changed
+  in Google after you reviewed it, so nothing was overwritten. Review again
+  to see what Google has now." (the card's own `notWritten` line names
+  Clockify's sheet, and a card change would re-publish every app that
+  bundles it).
+- **Left out, with the reason:** recurring events, cancelled events,
+  events with dates the app can't read (named), rows made here (never sent:
+  creating events isn't supported), rows that can't be sent as edited (named
+  with the reason), and incomplete rows grouped by what is missing ("1 event
+  is incomplete (missing Day): drawn on no day, and nothing of it is sent to
+  Google Calendar. Fill the column in the table.", with "Open row" when it
+  is the only one).
+- **Problems:** conflicts ("2 events need a decision", with "Review
+  conflicts"), and columns the app doesn't send.
+
+It replaced the sidebar's "Not shown" note, the agenda's copy of it, the
+"Incomplete rows" section and the connection bar's "Last synced …". The #89
+banners stay: the error banner keeps Retry, Reconnect and the rate-limit
+countdown (the card names the same failure, without the countdown), and the
+"Not synced" banner keeps "Sync this table". The card is a named region, not
+a live region; the header pill stays the one `role="status"`. The wording is
+a default: no user tester has seen it yet.
 
 ## Syncing a table the app didn't make
 
@@ -380,8 +448,9 @@ Declared, not live-verified (see _Verification_):
   supports at most 25,000 events per scan" and writes nothing. A partial scan
   is never taken for the whole calendar.
 - **Recurrence.** Series masters and all their instances are not imported,
-  and the status line counts them ("Not imported: N recurring, M
-  cancelled"). No partial mapping of a recurring event.
+  and the sync-status card counts them ("2 events are recurring: not
+  imported yet, so a series is never mapped in part."). No partial mapping
+  of a recurring event.
 - **Cancellation.** A cancelled event that was never imported is only
   counted. For an imported event, cancellation in Google is a _conflict_:
   "Event cancelled, recurring or inaccessible; no deletion inferred". The
@@ -520,7 +589,9 @@ node --test integrations/localthought/mock-proxy.test.mjs
 
 - **Unit, views** (`app/view.test.ts`, jsdom; `app/controller.test.ts`,
   `app/events.test.ts`, `app/contrast.test.ts`): every screen of the design
-  against the fake store, the banner copy for each provider status, agenda
+  against the fake store, the banner copy for each provider status, the
+  sync-status card first in the main landmark (what was not imported, the
+  read-only table, a failed sync over the rows), agenda
   grouping and week packing on the host Calendar view's days (exclusive
   End day, End day == Day, missing Day or End day, midnight crossings,
   events stored in another offset), local edits stored as offset-qualified
@@ -547,6 +618,14 @@ node --test integrations/localthought/mock-proxy.test.mjs
   Not now, the binding under the App, the table untouched, rows already
   there kept local, a row edit sent with `If-Match`, a reopen without a
   question, a revoked grant pausing without a proxy request, no delete).
+  `app/ui/status.test.ts`: the sync-status card's mapping for every state
+  (not synced, paused, first import, a table being set up, synced, a
+  read-only calendar, sending, every send outcome, a failed read and a
+  failed send, what is left out, incomplete rows, conflicts and unmapped
+  columns), and, driven by the controller against the fake store: a lost
+  response on one of two edits counted once, a failed read keeping it, a
+  hand-made table whose set-up fails staying read-only, a view-only
+  calendar, the recorded last sync named after a reload and when paused.
   `app/build.test.ts` checks that the
   bundle is one ES module exporting only `view`, with no storage, `fetch` or
   credential of its own. `app/operations.test.ts`: the declared scope (see
@@ -566,7 +645,11 @@ node --test integrations/localthought/mock-proxy.test.mjs
   (`POST /fixture/google-calendar/…`). It then sends a reviewed edit
   (checking the fixture received that `If-Match`), sends into a `412`, and
   loses a `PATCH` response (Playwright lets the request reach the mock, then
-  aborts the response), syncs again, and checks that the preview agrees.
+  aborts the response), syncs again, and checks that the preview agrees. It
+  reads the sync-status card at each step: the counts and what was not
+  imported after the import, "not written" after the `412`, exactly one
+  "sent without an answer" after the lost response, and neither after the
+  sync that settled them.
   Then (#192) it sets the one-day all-day event's End day a day later as
   the signed-in user (a commit, as a table edit is; not through the table's
   cells), reloads the page so the app opens again, checks that the review

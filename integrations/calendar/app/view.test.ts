@@ -170,10 +170,30 @@ describe('Calendar views: agenda and week', () => {
     expect(one(root, 'group', 'All-day events').textContent).toContain(
       'Calendar all-day fixture',
     );
-    // Sidebar at 900px and wider, with what was not imported.
-    expect(one(root, 'complementary', 'Calendars').textContent).toContain(
-      '2 recurring events and 1 cancelled event aren’t imported yet.',
+    // Sidebar at 900px and wider; what was not imported is the sync-status
+    // card's (Q-084), first in the main landmark, not the sidebar's.
+    const side = one(root, 'complementary', 'Calendars');
+    expect(side.textContent).not.toContain('recurring');
+    const card = one(root, 'region', 'Sync status');
+    expect(root.querySelector('main')!.firstElementChild).toBe(card);
+    expect(card.textContent).toContain('Synced just now');
+    expect(card.textContent).toContain('3 events from Synthetic');
+    expect(card.textContent).toContain(
+      'Last sync: 3 added, 0 updated, 0 unchanged',
     );
+    expect(card.textContent).toContain(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
+    expect(card.textContent).toContain(
+      '2 events are recurring: not imported yet, so a series is never mapped in part.',
+    );
+    expect(card.textContent).toContain(
+      '1 event is cancelled in Google: counted, not imported, and never treated as a deletion here.',
+    );
+    // No other copy of it: the agenda's note is gone too.
+    await click(one(root, 'button', 'Agenda'));
+    expect(root.querySelectorAll('.ag-note')).toHaveLength(0);
+    expect(byRole(root, 'region', 'Sync status')).toHaveLength(1);
   });
 
   it('switches view with the segmented control and the keyboard', async () => {
@@ -295,6 +315,10 @@ describe('Calendar views: edit, review, send', () => {
     });
     const root = await mount(store, 1120);
     expect(root.textContent).toContain('Not synced with Google Calendar.');
+    const card = one(root, 'region', 'Sync status');
+    expect(card.textContent).toContain('Not synced yet');
+    expect(card.textContent).toContain('1 event in this table');
+    expect(card.textContent).toContain('Read-only: edits here stay in Atomic.');
     expect(byRole(root, 'button', 'Sync now')).toEqual([]);
     expect(byRole(root, 'button', 'Connection menu')).toEqual([]);
     expect(byRole(root, 'button', 'Connect Google Calendar')).toEqual([]);
@@ -324,10 +348,20 @@ describe('Calendar views: edit, review, send', () => {
       [SHARED.day]: '2026-09-24',
     });
     const root = await mount(store, 1120);
-    const list = one(root, 'region', 'Incomplete rows');
-    expect(list.textContent).toContain('2 rows are incomplete');
-    expect(list.textContent).toContain('RetroIncomplete: missing Daynot drawn');
-    expect(list.textContent).toContain('(untitled)Incomplete: missing Name');
+    // Listed by the sync-status card, grouped by what is missing, with the
+    // read-only table's wording (nothing about sending).
+    const list = one(root, 'region', 'Sync status');
+    expect(list.textContent).toContain('Read-only: edits here stay in Atomic.');
+    expect(list.textContent).toContain(
+      '1 event is incomplete (missing Day): drawn on no day. Fill the column in the table.',
+    );
+    expect(list.textContent).toContain(
+      '1 event is incomplete (missing Name). Fill the column in the table.',
+    );
+    expect(list.textContent).not.toContain('sent to Google');
+    expect(
+      [...list.querySelectorAll('.ss-items li')].map(li => li.textContent),
+    ).toEqual(['Retro', '(untitled)']);
     // A row without a Day is drawn on no day; one without a Name is.
     expect(byRole(root, 'button', /^Retro, /)).toEqual([]);
     const untitled = one(
@@ -465,6 +499,22 @@ describe('Calendar views: conflicts and errors', () => {
     const banner = root.querySelector('.banner')!;
     expect(banner.getAttribute('role')).toBe('status');
     expect(banner.textContent).toContain('Couldn’t reach Google.');
+    // The sync-status card names the same failure as the last sync, with
+    // the next step and the last good sync, over the rows that stay; the
+    // banner above keeps the action. The card is never a live region.
+    const card = one(root, 'region', 'Sync status');
+    expect(card.getAttribute('role')).toBeNull();
+    expect(root.querySelector('main')!.firstElementChild).toBe(card);
+    expect(card.getAttribute('data-tone')).toBe('neg');
+    expect(card.textContent).toContain('Sync failed just now');
+    expect(card.textContent).toContain(
+      'Couldn’t reach Google.Check your connection, then retry.Last good sync just now.',
+    );
+    expect(card.textContent).toContain('3 events from Synthetic');
+    expect(card.textContent).toContain(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
+    expect(byRole(root, 'button', 'Retry')).toHaveLength(1);
   });
 });
 

@@ -43,7 +43,8 @@ root.append(
 ```
 
 The app maps its own state onto a `SyncStatus` in its own folder
-(`timesheets/app/ui/status.ts` is the first), bundles the card with esbuild
+(`timesheets/app/ui/status.ts` was the first; `calendar/app/ui/status.ts`
+followed), bundles the card with esbuild
 like `ontology-kit`'s resolver, minifies `card.css` with esbuild's CSS
 minifier (timesheets' `build.mjs` does, through its `?raw` plugin), and
 lists `integrations/sync-status/**` in its lane's `paths` in
@@ -72,14 +73,25 @@ than its own client, `writes` is: `pending` the entries with `state:
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app: Notion, calendar, issue-tracker and money adopt the card in
-follow-ups.
+done for any app: Notion, issue-tracker and money adopt the card in
+follow-ups. Google Calendar (0.3.2) has its own client and counts its review
+and send outcomes, like Clockify. It says a `412` as a problem of its own
+instead of `notWritten`, whose wording names Clockify's "Changes to send"
+sheet: a change to `card.ts` or `card.css` changes the bytes of every
+published app that bundles the card, and published `apps/` files are
+immutable, so such a change needs a new version of each adopter (and
+`apps.mjs check` fails until it has one). Keep the card's words
+app-neutral, and bundle every adopter when they do change.
 
 ## What is verified
 
-The card's own render states pass in jsdom (`card.test.ts`, 17 tests, 2026-10-06).
+The card's own render states pass in jsdom (`card.test.ts`, 20 tests, 2026-10-06).
 Clockify's mapping passes in `timesheets/app/ui/status.test.ts`, its DOM in
 `ui.test.ts`, and the `timesheets` e2e checks the card after the first
 import, after a vanished timer ("not loaded yet") and on a read-only table.
+Google Calendar's mapping passes in `calendar/app/ui/status.test.ts` (15
+tests), its DOM in `calendar/app/view.test.ts`, and the `calendar` e2e checks
+the card after the import, after a 412, after a lost response and on a
+read-only hand-made table.
 Nothing here has been seen by a user tester yet: the wording is a sensible
 default, not a verified fix for findings #6, #7 and #14.
