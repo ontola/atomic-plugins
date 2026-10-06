@@ -120,7 +120,7 @@ const error = (
 });
 
 const lines = (s: Snapshot, extra = {}) =>
-  statusLines(syncStatusFor({ snapshot: s, now: NOW, ...extra }), NOW);
+  statusLines(syncStatusFor({ snapshot: s, ...extra }), NOW);
 
 describe('syncStatusFor: the states before a sync', () => {
   it('loading: busy, nothing known yet', () => {
@@ -132,7 +132,6 @@ describe('syncStatusFor: the states before a sync', () => {
         at: undefined,
         meta: undefined,
       }),
-      now: NOW,
     });
     expect(status.busy).toBe('Loading…');
     expect(status.last).toBeUndefined();
@@ -151,7 +150,7 @@ describe('syncStatusFor: the states before a sync', () => {
       own: false,
       table: 'Team events',
     });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.writeBack).toBe('read-only');
     expect(status.writeBackNote).toBeUndefined();
     expect(status.rows).toBe(2);
@@ -180,9 +179,7 @@ describe('syncStatusFor: the states before a sync', () => {
       headline: 'Synced 3 days ago',
       mode: `Read-only: edits here stay in Atomic. ${PAUSED_SHORT}`,
     });
-    expect(
-      syncStatusFor({ snapshot: paused, now: NOW }).writes,
-    ).toBeUndefined();
+    expect(syncStatusFor({ snapshot: paused }).writes).toBeUndefined();
     const refused = snap({
       state: {
         kind: 'local',
@@ -206,7 +203,7 @@ describe('syncStatusFor: the states before a sync', () => {
       at: undefined,
     });
     expect(lines(s)).toMatchObject({ tone: 'busy', headline: 'Syncing…' });
-    expect(syncStatusFor({ snapshot: s, now: NOW }).last).toBeUndefined();
+    expect(syncStatusFor({ snapshot: s }).last).toBeUndefined();
     expect(
       syncStatusFor({
         snapshot: snap({
@@ -214,9 +211,9 @@ describe('syncStatusFor: the states before a sync', () => {
           summary: undefined,
           at: undefined,
         }),
-        now: NOW,
       }).busy,
     ).toBe('Syncing… (page 2)');
+
     // The setup screens are not data views; the mapping still answers, and
     // without a calendar nothing is synced.
     for (const state of [
@@ -233,7 +230,6 @@ describe('syncStatusFor: the states before a sync', () => {
           summary: undefined,
           at: undefined,
         }),
-        now: NOW,
       });
       expect(status.last).toBeUndefined();
       expect(status.writes).toBeUndefined();
@@ -260,13 +256,11 @@ describe('syncStatusFor: the states before a sync', () => {
       own: false,
       table: 'Team events',
     });
-    expect(syncStatusFor({ snapshot: listing, now: NOW })).toMatchObject({
+    expect(syncStatusFor({ snapshot: listing })).toMatchObject({
       writeBack: 'read-only',
       busy: 'Syncing…',
     });
-    expect(
-      syncStatusFor({ snapshot: listing, now: NOW }).writeBackNote,
-    ).toBeUndefined();
+    expect(syncStatusFor({ snapshot: listing }).writeBackNote).toBeUndefined();
     const failed = snap({
       state: error('network'),
       calendarId: undefined,
@@ -277,7 +271,7 @@ describe('syncStatusFor: the states before a sync', () => {
       own: false,
       table: 'Team events',
     });
-    const status = syncStatusFor({ snapshot: failed, now: NOW });
+    const status = syncStatusFor({ snapshot: failed });
     expect(status.writeBack).toBe('read-only');
     expect(status.writeBackNote).toBeUndefined();
     expect(status.writes).toBeUndefined();
@@ -296,7 +290,7 @@ describe('syncStatusFor: the states before a sync', () => {
 describe('syncStatusFor: synced', () => {
   it('ready: synced ago, the counts, the rows from the calendar, write-back after review', () => {
     const s = snap();
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.writeBack).toBe('after-review');
     expect(status.writeBackNote).toBeUndefined();
     expect(status.last).toEqual({
@@ -318,14 +312,14 @@ describe('syncStatusFor: synced', () => {
 
   it('a calendar Google shares read only: still write-back after review, with the note', () => {
     const s = snap({ meta: { ...META, accessRole: 'reader' } });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.writeBack).toBe('after-review');
     expect(status.writeBackNote).toBe(READ_ONLY_CALENDAR_NOTE);
   });
 
   it('a refresh over a previous result keeps the last good sync under "Syncing…"', () => {
     const s = snap({ state: { kind: 'refreshing', summary: summary() } });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.busy).toBe('Syncing…');
     expect(status.last).toMatchObject({ ok: true, at: AT.getTime() });
     expect(lines(s).headline).toBe('Syncing…');
@@ -342,14 +336,13 @@ describe('syncStatusFor: synced', () => {
       },
       summary: summary({ review }),
     });
-    expect(syncStatusFor({ snapshot: planned, now: NOW }).writes).toEqual({
+    expect(syncStatusFor({ snapshot: planned }).writes).toEqual({
       pending: 2,
     });
     // A local edit since the preview: the edited rows count, not the plan.
     expect(
       syncStatusFor({
         snapshot: { ...planned, stale: true, pending: 3 },
-        now: NOW,
       }).writes,
     ).toEqual({ pending: 3 });
     // Held back whole: counted in pending (the row is edited), named apart.
@@ -361,7 +354,7 @@ describe('syncStatusFor: synced', () => {
       pending: 1,
       stale: true,
     });
-    const status = syncStatusFor({ snapshot: held, now: NOW });
+    const status = syncStatusFor({ snapshot: held });
     expect(status.writes).toEqual({ pending: 1, held: 1 });
     expect(status.ignored).toEqual([
       {
@@ -375,7 +368,6 @@ describe('syncStatusFor: synced', () => {
     expect(
       syncStatusFor({
         snapshot: snap({ summary: summary({ invalid }) }),
-        now: NOW,
       }).writes,
     ).toEqual({ pending: 0 });
     expect(lines(held).tone).toBe('warn');
@@ -390,7 +382,7 @@ describe('syncStatusFor: synced', () => {
         progress: [{ status: 'sent', title: 'a' }, 'sending', undefined],
       },
     });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.busy).toBe('Sending 2 of 3 to Google Calendar…');
     expect(status.last).toMatchObject({ ok: true });
   });
@@ -421,7 +413,7 @@ describe('syncStatusFor: synced', () => {
       pending: 4,
       stale: true,
     });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.writes).toEqual({
       pending: 2,
       failed: [
@@ -453,18 +445,18 @@ describe('syncStatusFor: synced', () => {
         outcomes: outcomes.filter(o => o.status === 'stale'),
       },
     });
-    const keptStatus = syncStatusFor({ snapshot: kept, now: NOW });
+    const keptStatus = syncStatusFor({ snapshot: kept });
     expect(keptStatus.writes).toEqual({ pending: 0 });
     expect(keptStatus.problems).toHaveLength(1);
     expect(lines(kept).tone).toBe('warn');
-    const fresh = syncStatusFor({ snapshot: snap(), now: NOW });
+    const fresh = syncStatusFor({ snapshot: snap() });
     expect(fresh.writes).toEqual({ pending: 0 });
     expect(fresh.problems).toBeUndefined();
   });
 
   it('a send that failed before any outcome: a problem over the last good sync', () => {
     const s = snap({ state: error('reauth', { phase: 'send' }), pending: 2 });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.last).toMatchObject({ ok: true });
     expect(status.problems).toEqual([
       {
@@ -479,7 +471,7 @@ describe('syncStatusFor: synced', () => {
 
   it('a failed read: the banner’s title, the next step and the last good sync', () => {
     const s = snap({ state: error('network') });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.last).toEqual({
       ok: false,
       at: NOW - MINUTE,
@@ -503,7 +495,7 @@ describe('syncStatusFor: synced', () => {
       at: undefined,
       lastSync: new Date(NOW - 2 * 24 * HOUR),
     });
-    expect(syncStatusFor({ snapshot: reloaded, now: NOW }).last).toMatchObject({
+    expect(syncStatusFor({ snapshot: reloaded }).last).toMatchObject({
       ok: false,
       lastGood: NOW - 2 * 24 * HOUR,
     });
@@ -514,7 +506,7 @@ describe('syncStatusFor: synced', () => {
       at: undefined,
       lastSync: new Date(NOW - 2 * 24 * HOUR),
     });
-    expect(syncStatusFor({ snapshot: opening, now: NOW }).last).toEqual({
+    expect(syncStatusFor({ snapshot: opening }).last).toEqual({
       ok: true,
       at: NOW - 2 * 24 * HOUR,
     });
@@ -522,7 +514,6 @@ describe('syncStatusFor: synced', () => {
     expect(
       syncStatusFor({
         snapshot: snap({ state: error('rate-limited') }),
-        now: NOW,
       }).last,
     ).toMatchObject({
       error: 'Google is limiting requests.',
@@ -530,8 +521,7 @@ describe('syncStatusFor: synced', () => {
     });
     // Reauth names the calendar's reconnect.
     expect(
-      syncStatusFor({ snapshot: snap({ state: error('reauth') }), now: NOW })
-        .last,
+      syncStatusFor({ snapshot: snap({ state: error('reauth') }) }).last,
     ).toMatchObject({
       error: 'Google access has expired.',
       nextStep: 'Reconnect Google Calendar.',
@@ -542,9 +532,9 @@ describe('syncStatusFor: synced', () => {
       summary: undefined,
       at: undefined,
     });
-    expect(
-      syncStatusFor({ snapshot: first, now: NOW }).last,
-    ).not.toHaveProperty('lastGood');
+    expect(syncStatusFor({ snapshot: first }).last).not.toHaveProperty(
+      'lastGood',
+    );
   });
 
   it('left out: recurring, cancelled, unreadable (named), made here', () => {
@@ -555,7 +545,7 @@ describe('syncStatusFor: synced', () => {
         localOnly: 1,
       }),
     });
-    const status = syncStatusFor({ snapshot: s, now: NOW });
+    const status = syncStatusFor({ snapshot: s });
     expect(status.ignored).toEqual([
       {
         count: 2,
@@ -614,7 +604,6 @@ describe('syncStatusFor: synced', () => {
     });
     const status = syncStatusFor({
       snapshot: s,
-      now: NOW,
       onOpenRow: subject => opened.push(subject),
     });
     expect(status.writes).toEqual({ pending: 0 });
@@ -634,9 +623,9 @@ describe('syncStatusFor: synced', () => {
       items: ['(untitled)', 'Plan'],
     });
     // Without a way to the host, no action.
-    expect(
-      syncStatusFor({ snapshot: s, now: NOW }).ignored![0],
-    ).not.toHaveProperty('action');
+    expect(syncStatusFor({ snapshot: s }).ignored![0]).not.toHaveProperty(
+      'action',
+    );
   });
 
   it('conflicts need a decision, with the way to the sheet; unmapped columns are kept here only', () => {
@@ -652,7 +641,6 @@ describe('syncStatusFor: synced', () => {
     });
     const status = syncStatusFor({
       snapshot: s,
-      now: NOW,
       onConflicts: () => opened++,
     });
     expect(status.problems).toHaveLength(2);
@@ -701,7 +689,7 @@ async function imported(store = fakeStore()) {
 }
 
 const cardOf = (controller: ReturnType<typeof createController>) =>
-  syncStatusFor({ snapshot: controller.snapshot(), now: NOW });
+  syncStatusFor({ snapshot: controller.snapshot() });
 
 describe('syncStatusFor: driven by the controller', () => {
   it('a lost response on one of two edits: one uncertain, one waiting, never both for the same row', async () => {
@@ -802,7 +790,7 @@ describe('syncStatusFor: driven by the controller', () => {
     ).refreshing;
     expect(reopened.state()).toMatchObject({ kind: 'error', phase: 'read' });
     const later = NOW + 2 * 24 * HOUR;
-    const card = syncStatusFor({ snapshot: reopened.snapshot(), now: later });
+    const card = syncStatusFor({ snapshot: reopened.snapshot() });
     expect(card.last).toEqual({
       ok: false,
       at: later,
@@ -829,10 +817,7 @@ describe('syncStatusFor: driven by the controller', () => {
       kind: 'local',
       reason: PAUSED_NOTE,
     });
-    const card = syncStatusFor({
-      snapshot: reopened.snapshot(),
-      now: NOW + 3 * 24 * HOUR,
-    });
+    const card = syncStatusFor({ snapshot: reopened.snapshot() });
     expect(card.writeBack).toBe('read-only');
     expect(card.writeBackNote).toBe(PAUSED_SHORT);
     expect(card.last).toEqual({ ok: true, at: NOW });

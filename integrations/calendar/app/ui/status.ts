@@ -34,8 +34,6 @@ export const PROVIDER = 'Google Calendar';
 
 export interface StatusInput {
   snapshot: Snapshot;
-  /** The clock, for "ago"; `Date.now()` by default. */
-  now?: number;
   /** Opens the Conflicts sheet, for the conflicts problem's action. */
   onConflicts?: () => void;
   /** Opens a row in the host, for a lone incomplete row's "Open row". */
@@ -118,7 +116,6 @@ function incompleteGroups(
 
 export function syncStatusFor(input: StatusInput): SyncStatus {
   const { snapshot: snap } = input;
-  const now = input.now ?? Date.now();
   const { state, summary, meta, events } = snap;
   const local = state.kind === 'local';
   // Synced: the table is bound to a calendar (`calendarId`), and not paused.

@@ -370,7 +370,6 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       doc,
       syncStatusFor({
         snapshot: snap,
-        now: c.now,
         onConflicts: () => openSheet('conflicts'),
         ...(snap.can.openResource
           ? {
