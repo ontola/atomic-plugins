@@ -372,8 +372,9 @@ impl Catalog {
             _ => Err("platform does not use an OAuth security scheme".into()),
         }
     }
-    /// Resolves whichever kind of security scheme (OAuth or static apiKey)
-    /// the platform's composed document declares, generically. With an
+    /// Resolves whichever kind of security scheme (OAuth, static apiKey, a
+    /// bearer or basic http token, or none) the platform's composed document
+    /// declares, generically. With an
     /// `authenticationProfile` selection the document may declare several
     /// kinds, and the selected profile decides
     /// (openapi-extensions/spec/authentication-profiles).
@@ -388,7 +389,13 @@ impl Catalog {
         }
         let oauth_scheme = self.selected_string(platform, "oauthSecurityScheme")?;
         let api_key_scheme = self.selected_string(platform, "apiKeySecurityScheme")?;
-        crate::providers::SecurityScheme::from_document(&document, oauth_scheme, api_key_scheme)
+        let http_scheme = self.selected_string(platform, "httpSecurityScheme")?;
+        crate::providers::SecurityScheme::from_document(
+            &document,
+            oauth_scheme,
+            api_key_scheme,
+            http_scheme,
+        )
     }
     fn selected_string(&self, platform: &str, key: &str) -> Result<Option<&str>, String> {
         match self
@@ -412,10 +419,13 @@ impl Catalog {
                 .is_some()
                 || self
                     .selected_string(platform, "apiKeySecurityScheme")?
+                    .is_some()
+                || self
+                    .selected_string(platform, "httpSecurityScheme")?
                     .is_some())
         {
             return Err(
-                "authenticationProfile selection excludes oauthSecurityScheme and apiKeySecurityScheme"
+                "authenticationProfile selection excludes oauthSecurityScheme, apiKeySecurityScheme and httpSecurityScheme"
                     .into(),
             );
         }
@@ -1033,11 +1043,17 @@ mod tests {
             // scopes (it authorizes by integration capability instead), so
             // it is the one OAuth platform excluded from the non-empty
             // check. Clockify uses a static apiKey scheme, which has none.
-            if let crate::providers::SecurityScheme::OAuth(provider) = scheme {
+            if let crate::providers::SecurityScheme::OAuth(provider) = &scheme {
                 if name != "notion" {
                     assert!(!provider.scopes.is_empty(), "{name}");
                 }
             }
+            // Q-086 added http bearer/basic schemes; no platform of this
+            // catalog resolves to one, so none changes kind.
+            assert!(
+                !matches!(scheme, crate::providers::SecurityScheme::Http(_)),
+                "{name}"
+            );
         }
         // atomic-plugins#121: Clockify's key field links to where a key is
         // made, and a pasted key is checked with GET /v1/user first.
@@ -1730,6 +1746,8 @@ mod tests {
             // it could disagree, so the pair is refused even when it agrees.
             json!({"authenticationProfile": "user", "oauthSecurityScheme": "userOAuth"}),
             json!({"authenticationProfile": "bot", "apiKeySecurityScheme": "botToken"}),
+            json!({"authenticationProfile": "bot", "httpSecurityScheme": "botToken"}),
+            json!({"httpSecurityScheme": "botToken"}),
         ] {
             let catalog = mixed_catalog(selection.clone());
             assert!(catalog.security_scheme("mixed").is_err(), "{selection}");
@@ -1741,6 +1759,7 @@ mod tests {
             json!({"authenticationProfile": "nobody"}),
             json!({"authenticationProfile": 1}),
             json!({"authenticationProfile": "user", "oauthSecurityScheme": "userOAuth"}),
+            json!({"authenticationProfile": "user", "httpSecurityScheme": "userOAuth"}),
         ] {
             let catalog = mixed_catalog(selection.clone());
             assert!(
@@ -1748,6 +1767,56 @@ mod tests {
                 "{selection}"
             );
         }
+    }
+
+    /// Q-086: `httpSecurityScheme` picks one of several bearer or basic
+    /// schemes of a document that declares no other kind; it must be a
+    /// string, like the other scheme selections.
+    #[test]
+    fn an_http_selection_picks_one_of_several_http_schemes() {
+        use serde_json::json;
+        let catalog = |selection| {
+            Catalog::from_test_document(
+                "service",
+                json!({
+                    "servers": [{"url": "https://api.service.example"}],
+                    "components": {"securitySchemes": {
+                        "pat": {"type": "http", "scheme": "bearer"},
+                        "basicToken": {"type": "http", "scheme": "basic",
+                            "x-api-key-details": {"basicCredentials":
+                                {"token": "username", "password": ""}}}
+                    }},
+                    "security": [{"pat": []}, {"basicToken": []}],
+                    "paths": {"/items": {"get": {}}}
+                }),
+                selection,
+            )
+        };
+        assert!(catalog(json!({})).security_scheme("service").is_err());
+        assert!(catalog(json!({"httpSecurityScheme": 1}))
+            .security_scheme("service")
+            .is_err());
+        assert!(matches!(
+            catalog(json!({"httpSecurityScheme": "pat"})).security_scheme("service"),
+            Ok(crate::providers::SecurityScheme::Http(
+                crate::providers::HttpScheme {
+                    auth: crate::providers::HttpAuth::Bearer,
+                    ..
+                }
+            ))
+        ));
+        assert!(matches!(
+            catalog(json!({"httpSecurityScheme": "basicToken"})).security_scheme("service"),
+            Ok(crate::providers::SecurityScheme::Http(
+                crate::providers::HttpScheme {
+                    auth: crate::providers::HttpAuth::Basic(_),
+                    ..
+                }
+            ))
+        ));
+        assert!(catalog(json!({"httpSecurityScheme": "pat"}))
+            .oauth_provider("service")
+            .is_err());
     }
 
     /// Writes the `name` entry of the checked-in catalog `file` as a

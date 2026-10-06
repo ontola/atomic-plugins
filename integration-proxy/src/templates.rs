@@ -142,6 +142,30 @@ pub struct ApiKeyHelp<'a> {
     pub help_url: Option<&'a str>,
     /// Why the last key was not accepted, when the page asks again.
     pub problem: Option<&'a str>,
+    /// What the pasted secret is called on the page.
+    pub secret: SecretName,
+    /// For an `http` `basic` scheme whose username the person types
+    /// (`basicCredentials.usernameLabel`): that field's label, plain text.
+    pub username_label: Option<&'a str>,
+}
+
+/// What the consent page calls the secret it asks for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SecretName {
+    /// An `apiKey` scheme's key.
+    #[default]
+    ApiKey,
+    /// An `http` `bearer` or `basic` scheme's token.
+    ApiToken,
+}
+
+impl SecretName {
+    fn text(self) -> &'static str {
+        match self {
+            Self::ApiKey => "API key",
+            Self::ApiToken => "API token",
+        }
+    }
 }
 
 /// Renders the consent screen for one selected platform. `destination` is
@@ -226,15 +250,32 @@ fn api_key_field(platform: &str, help: ApiKeyHelp<'_>) -> String {
     ));
     if let Some(url) = help.help_url {
         html.push_str(&format!(
-            r#"<p class="secret-help"><a href="{}" target="_blank" rel="noopener noreferrer">Where to find your {} API key</a> (opens in a new tab)</p>"#,
+            r#"<p class="secret-help"><a href="{}" target="_blank" rel="noopener noreferrer">Where to find your {} {}</a> (opens in a new tab)</p>"#,
             escape(url),
-            escape(&platform_label(platform))
+            escape(&platform_label(platform)),
+            help.secret.text()
         ));
     }
-    html.push_str(
-        r#"<p class="secret-help">The key is stored encrypted on this proxy and never sent back to the destination.</p>
-               <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="password" name="api_key" autocomplete="off" placeholder="API key" required />"#,
-    );
+    let (noun, name) = match help.secret {
+        SecretName::ApiKey => ("key", "API key"),
+        SecretName::ApiToken => ("token", "API token"),
+    };
+    html.push_str(&format!(
+        r#"<p class="secret-help">The {noun} is stored encrypted on this proxy and never sent back to the destination.</p>"#
+    ));
+    // A typed username is not a secret: a plain text field, before the
+    // token, labelled by the scheme's declaration (escaped).
+    if let Some(label) = help.username_label {
+        html.push_str(&format!(
+            r#"
+               <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="text" name="username" autocomplete="off" placeholder="{label}" aria-label="{label}" required />"#,
+            label = escape(label)
+        ));
+    }
+    html.push_str(&format!(
+        r#"
+               <input class="button" style="background:white;color:#202124;border:1px solid #ccc" type="password" name="api_key" autocomplete="off" placeholder="{name}" required />"#
+    ));
     html
 }
 
@@ -572,6 +613,7 @@ mod tests {
                 description: Some("Made under <b>Preferences</b> & Advanced."),
                 help_url: Some(r#"https://help.example/keys?a=1&b="x""#),
                 problem: Some("Clockify did not accept that key <again>."),
+                ..ApiKeyHelp::default()
             }),
         );
         assert!(html.contains("Made under &lt;b&gt;Preferences&lt;/b&gt; &amp; Advanced."));

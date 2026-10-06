@@ -91,7 +91,7 @@ impl ApiKeyScheme {
             Some("cookie") => ApiKeyLocation::Cookie,
             _ => return Err("apiKey scheme must declare a supported 'in' location".into()),
         };
-        let (help_url, key_check) = api_key_details(document, scheme_name, scheme)?;
+        let (help_url, key_check) = api_key_details(document, scheme_name, scheme, false)?;
         Ok(Self {
             name: name.to_owned(),
             location,
@@ -109,11 +109,14 @@ impl ApiKeyScheme {
 
 /// Reads `x-api-key-details` (openapi-extensions/spec/api-key-details).
 /// An invalid declaration is an error, not ignored: the consent page must
-/// not silently drop a key check the document asks for.
+/// not silently drop a key check the document asks for. `basic` allows the
+/// `basicCredentials` member, which only an `http` `basic` scheme may have;
+/// [`HttpScheme::from_document`] reads it.
 fn api_key_details(
     document: &Value,
     scheme_name: &str,
     scheme: &Value,
+    basic: bool,
 ) -> Result<(Option<String>, Option<KeyCheck>), String> {
     let Some(details) = scheme.get("x-api-key-details") else {
         return Ok((None, None));
@@ -123,7 +126,7 @@ fn api_key_details(
         .ok_or("x-api-key-details must be an object")?;
     if details
         .keys()
-        .any(|key| key != "helpUrl" && key != "keyCheck")
+        .any(|key| key != "helpUrl" && key != "keyCheck" && !(basic && key == "basicCredentials"))
     {
         return Err("x-api-key-details has an unknown member".into());
     }
@@ -215,7 +218,7 @@ fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCh
         return Err("key check: operation must take no parameters or body".into());
     }
     if !covers(document, operation, scheme_name) {
-        return Err("key check: operation must require this API key scheme".into());
+        return Err("key check: operation must require this security scheme".into());
     }
     let server = document
         .get("servers")
@@ -232,6 +235,175 @@ fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCh
     Ok(KeyCheck { url, label_pointer })
 }
 
+/// An OpenAPI `http` security scheme with `scheme: bearer` or
+/// `scheme: basic`: a personal access token (or a token inside a Basic
+/// credential) pasted on the consent page, sealed like an API key, and sent
+/// in the `Authorization` header. Like an API key it has no scopes and
+/// nothing to exchange or refresh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpScheme {
+    pub auth: HttpAuth,
+    /// The scheme's own `description`, shown as plain text next to the
+    /// token field.
+    pub description: Option<String>,
+    /// `x-api-key-details.helpUrl`, as for an API key. Always `https`.
+    pub help_url: Option<String>,
+    /// `x-api-key-details.keyCheck`, resolved to a fixed URL.
+    pub key_check: Option<KeyCheck>,
+}
+
+/// How an `http` scheme carries the pasted token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HttpAuth {
+    /// `Authorization: Bearer <token>`.
+    Bearer,
+    /// `Authorization: Basic base64(username:password)`, laid out by the
+    /// scheme's `x-api-key-details.basicCredentials`.
+    Basic(BasicCredentials),
+}
+
+/// Where the pasted token goes in a Basic credential, and what the other
+/// half is (openapi-extensions/spec/api-key-details, section 4.3). There is
+/// deliberately no layout in which the person types a password other than
+/// the token itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BasicCredentials {
+    /// The token is the username; the password is this fixed value (it may
+    /// be empty).
+    UsernameToken { password: String },
+    /// The token is the password; the username is this fixed value.
+    PasswordToken { username: String },
+    /// The token is the password; the person types the username (an email
+    /// address, an account name) in a field with this label.
+    PasswordTokenAskingUsername { label: String },
+}
+
+/// The longest declared username field label, in characters.
+const MAX_USERNAME_LABEL: usize = 100;
+
+impl HttpScheme {
+    /// Reads a `bearer` or `basic` `http` scheme from the composed document.
+    /// Without `selected_scheme`, the document must declare exactly one.
+    pub fn from_document(document: &Value, selected_scheme: Option<&str>) -> Result<Self, String> {
+        let schemes = document
+            .pointer("/components/securitySchemes")
+            .and_then(Value::as_object)
+            .ok_or("missing security schemes")?;
+        let candidates: Vec<_> = schemes
+            .iter()
+            .filter(|(_, scheme)| http_auth_scheme(scheme).is_some())
+            .collect();
+        let (scheme_name, scheme) = match selected_scheme {
+            Some(selected) => candidates
+                .iter()
+                .find(|(name, _)| name.as_str() == selected)
+                .copied()
+                .ok_or("selected http security scheme is not a bearer or basic http scheme")?,
+            None => match candidates.as_slice() {
+                [candidate] => *candidate,
+                _ => {
+                    return Err(
+                        "httpSecurityScheme selection is required unless exactly one bearer or basic http scheme exists"
+                            .into(),
+                    )
+                }
+            },
+        };
+        let basic = http_auth_scheme(scheme) == Some("basic");
+        let (help_url, key_check) = api_key_details(document, scheme_name, scheme, basic)?;
+        let auth = if basic {
+            HttpAuth::Basic(basic_credentials(
+                scheme.pointer("/x-api-key-details/basicCredentials"),
+            )?)
+        } else {
+            HttpAuth::Bearer
+        };
+        Ok(Self {
+            auth,
+            description: scheme
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned),
+            help_url,
+            key_check,
+        })
+    }
+}
+
+/// `"bearer"` or `"basic"` for an `http` scheme of either kind (the
+/// `scheme` value is case-insensitive, RFC 9110 section 11.1), else `None`.
+fn http_auth_scheme(scheme: &Value) -> Option<&'static str> {
+    if scheme.get("type").and_then(Value::as_str) != Some("http") {
+        return None;
+    }
+    let name = scheme.get("scheme").and_then(Value::as_str)?;
+    ["bearer", "basic"]
+        .into_iter()
+        .find(|known| name.eq_ignore_ascii_case(known))
+}
+
+/// Reads `x-api-key-details.basicCredentials`. A Basic scheme without it is
+/// refused: nothing would then say that the password is a token rather than
+/// the person's account password.
+fn basic_credentials(declared: Option<&Value>) -> Result<BasicCredentials, String> {
+    let declared = declared
+        .ok_or("a basic http scheme needs x-api-key-details.basicCredentials")?
+        .as_object()
+        .ok_or("x-api-key-details.basicCredentials must be an object")?;
+    if declared.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "token" | "username" | "usernameLabel" | "password"
+        )
+    }) {
+        return Err("x-api-key-details.basicCredentials has an unknown member".into());
+    }
+    let string = |key: &str| -> Result<Option<&str>, String> {
+        match declared.get(key) {
+            None => Ok(None),
+            Some(value) => value
+                .as_str()
+                .filter(|value| !value.chars().any(char::is_control))
+                .map(Some)
+                .ok_or_else(|| {
+                    format!(
+                        "x-api-key-details.basicCredentials.{key} must be a string without control characters"
+                    )
+                }),
+        }
+    };
+    match (
+        string("token")?,
+        string("username")?,
+        string("usernameLabel")?,
+        string("password")?,
+    ) {
+        (Some("username"), None, None, Some(password)) => Ok(BasicCredentials::UsernameToken {
+            password: password.to_owned(),
+        }),
+        (Some("password"), Some(username), None, None)
+            if !username.is_empty() && !username.contains(':') =>
+        {
+            Ok(BasicCredentials::PasswordToken {
+                username: username.to_owned(),
+            })
+        }
+        (Some("password"), None, Some(label), None)
+            if !label.trim().is_empty() && label.chars().count() <= MAX_USERNAME_LABEL =>
+        {
+            Ok(BasicCredentials::PasswordTokenAskingUsername {
+                label: label.trim().to_owned(),
+            })
+        }
+        _ => Err(
+            "x-api-key-details.basicCredentials must be {token: username, password} or {token: password} with exactly one of username (without ':') or usernameLabel"
+                .into(),
+        ),
+    }
+}
+
 /// Which kind of credential a catalog platform's composed document declares.
 /// Resolved generically from the document's `securitySchemes`, never from the
 /// platform's name.
@@ -239,6 +411,8 @@ fn key_check(document: &Value, scheme_name: &str, check: &Value) -> Result<KeyCh
 pub enum SecurityScheme {
     OAuth(Provider),
     ApiKey(ApiKeyScheme),
+    /// A `bearer` or `basic` `http` scheme: a pasted token.
+    Http(HttpScheme),
     /// The document explicitly requires no security: top-level
     /// `security: []`, no declared security scheme, and no operation that
     /// requires one. Connecting takes consent only, stores no provider
@@ -247,10 +421,18 @@ pub enum SecurityScheme {
 }
 
 impl SecurityScheme {
+    /// Without an authentication profile, a document declares one kind of
+    /// user credential. An `http` scheme counts only when the document
+    /// declares neither `oauth2` nor `apiKey`: OAuth documents often declare
+    /// `http` `basic` for their token endpoint's client authentication, and
+    /// such documents resolve exactly as they did before `http` schemes were
+    /// supported. A profile can still name an `http` scheme of such a
+    /// document ([`SecurityScheme::for_profile`]).
     pub fn from_document(
         document: &Value,
         oauth_selected: Option<&str>,
         api_key_selected: Option<&str>,
+        http_selected: Option<&str>,
     ) -> Result<Self, String> {
         if declares_no_security(document) {
             return Ok(Self::NoCredential);
@@ -272,6 +454,13 @@ impl SecurityScheme {
                 "platform declares both oauth2 and apiKey security schemes; mixed-kind catalogs are not supported"
                     .into(),
             ),
+            (false, false)
+                if schemes
+                    .values()
+                    .any(|scheme| scheme.get("type").and_then(Value::as_str) == Some("http")) =>
+            {
+                HttpScheme::from_document(document, http_selected).map(Self::Http)
+            }
             (false, false) => Err("no supported security scheme found".into()),
         }
     }
@@ -300,6 +489,9 @@ impl SecurityScheme {
             }
             Some("apiKey") => {
                 ApiKeyScheme::from_document(document, Some(scheme_name)).map(Self::ApiKey)
+            }
+            Some("http") if http_auth_scheme(scheme).is_some() => {
+                HttpScheme::from_document(document, Some(scheme_name)).map(Self::Http)
             }
             _ => Err("authentication profile's security scheme kind is not supported".into()),
         }
@@ -1780,11 +1972,11 @@ mod tests {
     #[test]
     fn security_scheme_dispatches_generically_on_declared_type() {
         assert!(matches!(
-            SecurityScheme::from_document(&document(), None, None).unwrap(),
+            SecurityScheme::from_document(&document(), None, None, None).unwrap(),
             SecurityScheme::OAuth(_)
         ));
         assert!(matches!(
-            SecurityScheme::from_document(&api_key_document(), None, None).unwrap(),
+            SecurityScheme::from_document(&api_key_document(), None, None, None).unwrap(),
             SecurityScheme::ApiKey(_)
         ));
     }
@@ -1794,11 +1986,236 @@ mod tests {
         let mut mixed = document();
         mixed["components"]["securitySchemes"]["clockifyApiKey"] =
             api_key_document()["components"]["securitySchemes"]["clockifyApiKey"].clone();
-        assert!(SecurityScheme::from_document(&mixed, None, None).is_err());
+        assert!(SecurityScheme::from_document(&mixed, None, None, None).is_err());
 
         let neither = serde_json::json!({"components":{"securitySchemes":{"basic":{
             "type":"http","scheme":"basic"}}}});
-        assert!(SecurityScheme::from_document(&neither, None, None).is_err());
+        assert!(SecurityScheme::from_document(&neither, None, None, None).is_err());
+    }
+
+    /// A document whose one scheme is `scheme`, with a key check
+    /// (openapi-extensions/spec/api-key-details).
+    fn http_document(scheme: Value) -> Value {
+        let mut scheme = scheme;
+        scheme["description"] = "  A personal access token, from Settings.  ".into();
+        scheme["x-api-key-details"]["helpUrl"] = "https://service.example/help/tokens".into();
+        scheme["x-api-key-details"]["keyCheck"] =
+            serde_json::json!({"operationId": "getMe", "label": "$response.body#/email"});
+        serde_json::json!({
+            "servers": [{"url": "https://api.service.example/api"}],
+            "components": {"securitySchemes": {"serviceToken": scheme}},
+            "security": [{"serviceToken": []}],
+            "paths": {
+                "/v1/user": {"get": {"operationId": "getMe"}},
+                "/v1/items": {"get": {}}
+            }
+        })
+    }
+
+    fn basic_layout(layout: Value) -> Value {
+        serde_json::json!({"type": "http", "scheme": "basic",
+            "x-api-key-details": {"basicCredentials": layout}})
+    }
+
+    fn resolve(document: &Value) -> Result<HttpScheme, String> {
+        match SecurityScheme::from_document(document, None, None, None)? {
+            SecurityScheme::Http(scheme) => Ok(scheme),
+            other => panic!("expected an http scheme, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bearer_and_basic_http_schemes_resolve_with_their_help_and_key_check() {
+        for name in ["bearer", "Bearer", "BEARER"] {
+            let scheme = resolve(&http_document(
+                serde_json::json!({"type": "http", "scheme": name}),
+            ))
+            .unwrap();
+            assert_eq!(scheme.auth, HttpAuth::Bearer, "{name}");
+            assert_eq!(
+                scheme.description.as_deref(),
+                Some("A personal access token, from Settings.")
+            );
+            assert_eq!(
+                scheme.help_url.as_deref(),
+                Some("https://service.example/help/tokens")
+            );
+            let check = scheme.key_check.unwrap();
+            assert_eq!(
+                check.url.as_str(),
+                "https://api.service.example/api/v1/user"
+            );
+            assert_eq!(check.label_pointer.as_deref(), Some("/email"));
+        }
+        for (layout, expected) in [
+            (
+                serde_json::json!({"token": "username", "password": "api_token"}),
+                BasicCredentials::UsernameToken {
+                    password: "api_token".into(),
+                },
+            ),
+            (
+                serde_json::json!({"token": "username", "password": ""}),
+                BasicCredentials::UsernameToken {
+                    password: String::new(),
+                },
+            ),
+            (
+                serde_json::json!({"token": "password", "username": "api"}),
+                BasicCredentials::PasswordToken {
+                    username: "api".into(),
+                },
+            ),
+            (
+                serde_json::json!({"token": "password", "usernameLabel": " Email address "}),
+                BasicCredentials::PasswordTokenAskingUsername {
+                    label: "Email address".into(),
+                },
+            ),
+        ] {
+            let scheme = resolve(&http_document(basic_layout(layout.clone()))).unwrap();
+            assert_eq!(scheme.auth, HttpAuth::Basic(expected), "{layout}");
+        }
+        // Help and key check are optional, as for an API key.
+        let bare = serde_json::json!({
+            "components": {"securitySchemes": {"t": {"type": "http", "scheme": "bearer"}}},
+            "security": [{"t": []}], "paths": {"/items": {"get": {}}}
+        });
+        let scheme = resolve(&bare).unwrap();
+        assert_eq!(
+            (scheme.description, scheme.help_url, scheme.key_check),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_basic_scheme_is_refused_unless_its_token_layout_is_declared() {
+        let refused = |scheme: Value| resolve(&http_document(scheme)).unwrap_err();
+        // No basicCredentials: nothing says the password is not the
+        // person's account password.
+        assert!(
+            refused(serde_json::json!({"type": "http", "scheme": "basic"}))
+                .contains("basicCredentials")
+        );
+        for layout in [
+            serde_json::json!("username"),
+            serde_json::json!({}),
+            serde_json::json!({"token": "username"}),
+            serde_json::json!({"token": "username", "password": "x", "username": "y"}),
+            serde_json::json!({"token": "username", "password": 1}),
+            serde_json::json!({"token": "password"}),
+            // The person never types a password other than the token.
+            serde_json::json!({"token": "password", "password": "x"}),
+            serde_json::json!({"token": "password", "passwordLabel": "Password"}),
+            serde_json::json!({"token": "password", "username": "a", "usernameLabel": "b"}),
+            serde_json::json!({"token": "password", "username": ""}),
+            serde_json::json!({"token": "password", "username": "a:b"}),
+            serde_json::json!({"token": "password", "usernameLabel": "  "}),
+            serde_json::json!({"token": "password", "usernameLabel": "x".repeat(101)}),
+            serde_json::json!({"token": "password", "usernameLabel": "Email\n"}),
+            serde_json::json!({"token": "username", "password": "a\u{0}b"}),
+            serde_json::json!({"token": "both", "password": "x"}),
+            serde_json::json!({"token": "username", "password": "x", "extra": true}),
+        ] {
+            assert!(
+                !refused(basic_layout(layout.clone())).is_empty(),
+                "{layout}"
+            );
+        }
+        // basicCredentials belongs to a basic scheme only.
+        let mut bearer = serde_json::json!({"type": "http", "scheme": "bearer"});
+        bearer["x-api-key-details"]["basicCredentials"] =
+            serde_json::json!({"token": "username", "password": ""});
+        assert!(refused(bearer).contains("unknown member"));
+        let mut api_key = api_key_details_document();
+        api_key["components"]["securitySchemes"]["serviceKey"]["x-api-key-details"]
+            ["basicCredentials"] = serde_json::json!({"token": "username", "password": ""});
+        assert!(ApiKeyScheme::from_document(&api_key, None).is_err());
+        // An unsafe key check is refused for http schemes as for API keys.
+        let mut document = http_document(serde_json::json!({"type": "http", "scheme": "bearer"}));
+        document["paths"]["/v1/user"]["get"]["security"] = serde_json::json!([{}]);
+        assert!(resolve(&document)
+            .unwrap_err()
+            .contains("require this security scheme"));
+    }
+
+    #[test]
+    fn http_schemes_count_only_where_no_oauth_or_api_key_scheme_is_declared() {
+        // An OAuth document that declares http basic (for client
+        // authentication at its token endpoint, say) resolves as before.
+        let mut oauth = document();
+        oauth["components"]["securitySchemes"]["clientBasic"] =
+            serde_json::json!({"type": "http", "scheme": "basic"});
+        assert!(matches!(
+            SecurityScheme::from_document(&oauth, None, None, None),
+            Ok(SecurityScheme::OAuth(_))
+        ));
+        let mut api_key = api_key_document();
+        api_key["components"]["securitySchemes"]["pat"] =
+            serde_json::json!({"type": "http", "scheme": "bearer"});
+        assert!(matches!(
+            SecurityScheme::from_document(&api_key, None, None, Some("pat")),
+            Ok(SecurityScheme::ApiKey(_))
+        ));
+        // Two http schemes need a selection, which must name one of them.
+        let mut two = http_document(serde_json::json!({"type": "http", "scheme": "bearer"}));
+        two["components"]["securitySchemes"]["other"] =
+            basic_layout(serde_json::json!({"token": "username", "password": ""}));
+        assert!(SecurityScheme::from_document(&two, None, None, None)
+            .unwrap_err()
+            .contains("httpSecurityScheme"));
+        assert!(matches!(
+            SecurityScheme::from_document(&two, None, None, Some("other")),
+            Ok(SecurityScheme::Http(HttpScheme {
+                auth: HttpAuth::Basic(_),
+                ..
+            }))
+        ));
+        assert!(SecurityScheme::from_document(&two, None, None, Some("missing")).is_err());
+        // Other http schemes are not supported.
+        for name in ["digest", "negotiate", "hoba"] {
+            let only = serde_json::json!({
+                "components": {"securitySchemes": {"t": {"type": "http", "scheme": name}}},
+                "security": [{"t": []}], "paths": {"/items": {"get": {}}}
+            });
+            assert!(
+                SecurityScheme::from_document(&only, None, None, None).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_http_profile_resolves_to_its_scheme_and_covers_only_its_operations() {
+        let mut document = mixed();
+        document["components"]["securitySchemes"]["pat"] =
+            serde_json::json!({"type": "http", "scheme": "bearer"});
+        document["components"]["x-authentication-profiles"]["pat"] =
+            serde_json::json!({"securityScheme": "pat"});
+        // No operation accepts it yet: the profile covers nothing.
+        assert!(SecurityScheme::for_profile(&document, "pat").is_err());
+        document["paths"]["/users/@me"]["get"]["security"] =
+            serde_json::json!([{"botToken": []}, {"pat": []}]);
+        assert!(matches!(
+            SecurityScheme::for_profile(&document, "pat"),
+            Ok(SecurityScheme::Http(HttpScheme {
+                auth: HttpAuth::Bearer,
+                ..
+            }))
+        ));
+        let covered =
+            |path: &str, method: &str| covers(&document, &document["paths"][path][method], "pat");
+        assert!(covered("/users/@me", "get"));
+        assert!(!covered("/users/@me/guilds", "get"));
+        assert!(!covered("/channels/{id}/messages", "get"));
+        // Without a profile the document is still mixed-kind, and refused.
+        assert!(SecurityScheme::from_document(&document, None, None, Some("pat")).is_err());
+        // A basic profile still needs its token layout.
+        document["components"]["securitySchemes"]["pat"] =
+            serde_json::json!({"type": "http", "scheme": "basic"});
+        assert!(SecurityScheme::for_profile(&document, "pat")
+            .unwrap_err()
+            .contains("basicCredentials"));
     }
 
     fn mixed() -> Value {
@@ -1817,7 +2234,7 @@ mod tests {
             (Some("userOAuth"), Some("botToken")),
         ] {
             assert!(
-                SecurityScheme::from_document(&mixed(), oauth, api_key)
+                SecurityScheme::from_document(&mixed(), oauth, api_key, None)
                     .unwrap_err()
                     .contains("mixed-kind"),
                 "{oauth:?} {api_key:?}"
@@ -1952,7 +2369,7 @@ mod tests {
                 "unsupported scheme kind",
                 Box::new(move |d| {
                     d["components"]["securitySchemes"]["basic"] =
-                        serde_json::json!({"type": "http", "scheme": "basic"});
+                        serde_json::json!({"type": "http", "scheme": "digest"});
                     d["paths"]["/public"]["get"]["security"] = serde_json::json!([{"basic": []}]);
                     d.pointer_mut(profiles).unwrap()["user"]["securityScheme"] =
                         serde_json::json!("basic")
@@ -1992,7 +2409,7 @@ mod tests {
     #[test]
     fn an_explicit_empty_security_requirement_needs_no_credential() {
         assert_eq!(
-            SecurityScheme::from_document(&no_security_document(), None, None),
+            SecurityScheme::from_document(&no_security_document(), None, None, None),
             Ok(SecurityScheme::NoCredential)
         );
         // An empty scheme map and per-operation `security: []` are still none.
@@ -2000,7 +2417,7 @@ mod tests {
         doc["components"] = serde_json::json!({"securitySchemes": {}});
         doc["paths"]["/pets"]["get"]["security"] = serde_json::json!([]);
         assert_eq!(
-            SecurityScheme::from_document(&doc, None, None),
+            SecurityScheme::from_document(&doc, None, None, None),
             Ok(SecurityScheme::NoCredential)
         );
     }
@@ -2011,22 +2428,22 @@ mod tests {
         // missing. Refused, never connected without credentials.
         let mut silent = no_security_document();
         silent.as_object_mut().unwrap().remove("security");
-        assert!(SecurityScheme::from_document(&silent, None, None).is_err());
+        assert!(SecurityScheme::from_document(&silent, None, None, None).is_err());
         // `security: []` next to a declared scheme is not an opt-out.
         let mut declared = api_key_document();
         declared["security"] = serde_json::json!([]);
         assert!(matches!(
-            SecurityScheme::from_document(&declared, None, None),
+            SecurityScheme::from_document(&declared, None, None, None),
             Ok(SecurityScheme::ApiKey(_))
         ));
         // Nor is one operation that requires a scheme.
         let mut operation = no_security_document();
         operation["paths"]["/pets"]["get"]["security"] = serde_json::json!([{"key": []}]);
-        assert!(SecurityScheme::from_document(&operation, None, None).is_err());
+        assert!(SecurityScheme::from_document(&operation, None, None, None).is_err());
         // A non-array top-level `security` is not an opt-out either.
         let mut malformed = no_security_document();
         malformed["security"] = serde_json::json!({});
-        assert!(SecurityScheme::from_document(&malformed, None, None).is_err());
+        assert!(SecurityScheme::from_document(&malformed, None, None, None).is_err());
     }
 
     #[test]
