@@ -292,6 +292,11 @@ export const sharedPorts = config =>
  * which a plugin bundles) and `ontology` (its published term files, which a
  * plugin's e2e reads through the dev-server) are not npm packages, but a
  * plugin depends on them the same way (#177).
+ *
+ * `integrations/sync-status` (the shared sync-status card, Decision Inbox
+ * Q-084) is shared code under `integrations/` with a lane of its own for its
+ * typecheck and unit tiers; an app that bundles it lists it here too, so a
+ * card change runs that app's lane as well.
  */
 export const SHARED_PACKAGES = [
   'devonian',
@@ -299,6 +304,7 @@ export const SHARED_PACKAGES = [
   'reflector',
   'ontology',
   'ontology-kit',
+  'integrations/sync-status',
 ];
 
 /**

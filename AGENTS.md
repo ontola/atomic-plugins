@@ -69,7 +69,10 @@ in [`integrations/READINESS.md`](integrations/READINESS.md).
    paging, and optionally a lens from the npm `devonian` package for the
    mapping. `pets/app/` (syncables), `notion/app/` (syncables plus a
    Devonian `AtomicLens`) and `timesheets/app/` (its own Clockify client)
-   are this shape. At the pin, Integrations → Drive apps installs a drive app
+   are this shape. A drive app may head its view with the shared sync-status
+   card in `integrations/sync-status/` (Decision Inbox Q-084, status-only;
+   `timesheets/app/` does, from 0.7.0), which its build inlines like the
+   ontology resolver. At the pin, Integrations → Drive apps installs a drive app
    from a catalog entry that has `app-module` (atomic-server#1689;
    [#94](https://github.com/ontola/atomic-plugins/issues/94), closed), and the
    lane e2es install through that UI with the lane's dev-server standing in
@@ -354,6 +357,13 @@ below and #227 disagree, #227 is newer.
   approved by Michiel on #177: shared-class terms, subject constants, the
   field resolver and class-to-class lenses belong there, while a plugin's
   provider-specific terms and code stay in its own folder.
+  `integrations/sync-status/` is the other approved shared code (Decision
+  Inbox Q-084, status-only): the sync-status card a drive app renders above
+  its data (`card.ts`, `card.css`, with their tests and the `sync-status`
+  lane), and nothing wider: no UI kit, no fake host. An app maps its own
+  state onto the card's `SyncStatus` in its own folder
+  (`timesheets/app/ui/status.ts`) and lists `integrations/sync-status/**`
+  in its lane's `paths`.
 - Never merge ontola/atomic-server PRs; they are reviewed by its
   maintainer. Pin `.atomic-server-ref` to a commit SHA instead, which may be
   on an unmerged branch.

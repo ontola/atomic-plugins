@@ -145,7 +145,8 @@ in CI; see [usertest-droplet.md](usertest-droplet.md)).
 
 The rules each worker got, beyond the checks: fetch `origin/main` first; plan
 before code; keep a plugin inside its folder (shared code only in
-`integrations/tooling/`, `ontology/`, `ontology-kit/`); `// @wc-ignore-file`
+`integrations/tooling/`, `ontology/`, `ontology-kit/` and, for the
+sync-status card, `integrations/sync-status/`); `// @wc-ignore-file`
 on every `.ts`; hedged "declared, not verified" wording in docs; heavy runs
 (atomic-server builds, e2e) one at a time.
 

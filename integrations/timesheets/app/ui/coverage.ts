@@ -78,16 +78,17 @@ export function renderIncomplete(
  * `[from, to)` in epoch ms), above the grid or day list. `unknown` is
  * `sheet.unknown` clipped to `span`, possibly empty.
  *
- * M2: a "Not loaded" note listing the spans (`../timeline/render.ts`);
- * nothing when `unknown` is empty.
+ * M2: a "Not loaded" note listing the spans (`../timeline/render.ts`), with
+ * "Sync now" when `onSync` is given; nothing when `unknown` is empty.
  */
 export function renderUnknown(
   h: H,
   sheet: Timesheet,
   _span: Interval,
   unknown: Interval[],
+  onSync?: () => void,
 ): HTMLElement | null {
-  return renderUnknownSpans(h, sheet, unknown);
+  return renderUnknownSpans(h, sheet, unknown, onSync);
 }
 
 /**
@@ -111,11 +112,38 @@ export function renderConflicts(
  * as "Not loaded: 08:09 – 08:09". */
 export const MIN_UNKNOWN_MS = 60_000;
 
-/** `sheet.unknown` clipped to `span`, without sub-minute slivers. */
-export const unknownIn = (sheet: Timesheet, span: Interval): Interval[] =>
-  sheet.unknown
+/**
+ * `sheet.unknown` clipped to `span`, without sub-minute slivers, and, with
+ * `hideTail` (the default), without the tail: the time between the last
+ * complete read (`sheet.lastChecked`) and the end of the window is not
+ * loaded by definition, and after a successful sync the sync-status card's
+ * "Synced 4 min ago" already says so. A tester read that tail as a problem
+ * ("Not loaded: 13:07 – 13:08", usertest-findings #14). A gap that starts
+ * before the last read (a span a shrunk or failed read left uncovered, a
+ * vanished running timer's span) is still reported. Callers pass
+ * `hideTail: false` when the last sync of this page load failed, or none
+ * ran yet (`status.ts` `hidesTail`): then the tail may be days long and
+ * nothing else says it is unread.
+ */
+export const unknownIn = (
+  sheet: Timesheet,
+  span: Interval,
+  { hideTail = true }: { hideTail?: boolean } = {},
+): Interval[] => {
+  const checked = sheet.lastChecked ? Date.parse(sheet.lastChecked) : NaN;
+  const end = sheet.window?.to;
+  const isTail = (i: Interval) =>
+    hideTail &&
+    Number.isFinite(checked) &&
+    end !== undefined &&
+    i.to >= end - MIN_UNKNOWN_MS &&
+    i.from >= checked - MIN_UNKNOWN_MS;
+
+  return sheet.unknown
+    .filter(i => !isTail(i))
     .map(i => ({
       from: Math.max(i.from, span.from),
       to: Math.min(i.to, span.to),
     }))
     .filter(i => i.to - i.from >= MIN_UNKNOWN_MS);
+};

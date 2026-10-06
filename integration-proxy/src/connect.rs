@@ -464,11 +464,24 @@ fn valid_api_key(approval: &Approval) -> Option<&str> {
         .filter(|key| (4..=512).contains(&key.len()))
 }
 
+/// Whether `token` may be sent as `Authorization: Bearer <token>`: RFC 6750's
+/// `b64token` (`[A-Za-z0-9-._~+/]+=*`), except that `:` is also allowed
+/// before the padding. Asana's personal access tokens, as its documentation
+/// shows them (`2/<user id>/<token id>:<secret>`), contain `:`; that format
+/// is taken from its documentation, not checked against a live token. A `:`
+/// cannot end or split the header value, so it widens nothing else.
+fn bearer_token(token: &str) -> bool {
+    let body = token.trim_end_matches('=');
+    !body.is_empty()
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._~+/:".contains(&b))
+}
+
 /// The credential an `http` scheme's consent form submitted, laid out as
-/// the scheme says, or why it cannot be used. A bearer token must be
-/// visible ASCII (it goes into a header as it is); a Basic half may be any
-/// text without control characters, and the username half may not contain
-/// `:` (RFC 7617).
+/// the scheme says, or why it cannot be used. A bearer token must be a
+/// [`bearer_token`]; a Basic half may be any text without control
+/// characters, and the username half may not contain `:` (RFC 7617).
 fn http_credential(
     platform: &str,
     scheme: &crate::providers::HttpScheme,
@@ -481,12 +494,13 @@ fn http_credential(
     let provider = platform.to_owned();
     match &scheme.auth {
         HttpAuth::Bearer => {
-            if !token.bytes().all(|b| b.is_ascii_graphic()) {
+            if !bearer_token(token) {
                 return Err("Enter a valid API token");
             }
             Ok(StoredCredential::HttpBearer {
                 provider,
                 token: token.to_owned(),
+                scheme: Some(scheme.name.clone()),
             })
         }
         HttpAuth::Basic(layout) => {
@@ -521,9 +535,76 @@ fn http_credential(
                 provider,
                 username,
                 password,
+                scheme: Some(scheme.name.clone()),
+                layout: Some(layout.layout()),
             })
         }
     }
+}
+
+/// The most key checks one consent may make. A rejected key shows the
+/// consent page again without spending the consent, so without a cap one
+/// consent would let its holder try keys (or username and token pairs)
+/// against the provider without limit.
+const MAX_KEY_CHECKS: u32 = 5;
+const TOO_MANY_KEY_CHECKS: &str =
+    "Too many attempts to enter a key for this connection; start again from your hub";
+
+fn key_check_slot(csrf: &str, n: u32) -> String {
+    format!("consent-key-check:{csrf}:{n}")
+}
+
+/// Takes one of the consent's [`MAX_KEY_CHECKS`] key-check attempts before
+/// a key check is called. The attempts are single-use records next to the
+/// consent's own (`consent:<csrf>`, kept ten minutes, as long as a consent
+/// lives), so they hold across instances and concurrent submissions. When
+/// none is left the consent is spent, its cookie removed, and the answer is
+/// "too many attempts"; an already spent consent answers as approved. On
+/// success it also says whether this was the last attempt, so a rejection
+/// then ends the consent instead of asking again.
+async fn take_key_check(
+    security: &Security,
+    jar: PrivateCookieJar,
+    csrf: &str,
+) -> Result<(PrivateCookieJar, bool), Box<Response>> {
+    let unavailable = || error("Connections are unavailable");
+    match security
+        .nonce_used(&key_check_slot(csrf, MAX_KEY_CHECKS))
+        .await
+    {
+        Ok(true) => return Err(Box::new(too_many_key_checks(security, jar, csrf).await)),
+        Ok(false) => {}
+        Err(_) => return Err(Box::new(unavailable())),
+    }
+    match security.nonce_used(&format!("consent:{csrf}")).await {
+        Ok(true) => return Err(Box::new(error(ALREADY_APPROVED))),
+        Ok(false) => {}
+        Err(_) => return Err(Box::new(unavailable())),
+    }
+    for n in 1..=MAX_KEY_CHECKS {
+        match security.consume_nonce(&key_check_slot(csrf, n)).await {
+            Ok(true) => return Ok((jar, n == MAX_KEY_CHECKS)),
+            Ok(false) => {}
+            Err(_) => return Err(Box::new(unavailable())),
+        }
+    }
+    Err(Box::new(too_many_key_checks(security, jar, csrf).await))
+}
+
+/// Spends the consent and says there were too many attempts.
+async fn too_many_key_checks(security: &Security, jar: PrivateCookieJar, csrf: &str) -> Response {
+    if security
+        .consume_nonce(&format!("consent:{csrf}"))
+        .await
+        .is_err()
+    {
+        return error("Connections are unavailable");
+    }
+    protected((
+        StatusCode::BAD_REQUEST,
+        jar.remove(Cookie::build(CONSENT_COOKIE).path("/").build()),
+        TOO_MANY_KEY_CHECKS,
+    ))
 }
 
 /// `POST /connect/authorize`: the consent form's submission.
@@ -565,6 +646,7 @@ pub async fn authorize(
     let Some(security) = &state.security else {
         return error("Connections are unavailable");
     };
+    let mut jar = jar;
     // Refuse an unusable API key before the consent is spent, so correcting
     // it and approving again works. That includes a key the platform's key
     // check (`x-api-key-details.keyCheck`) rejects: the page asks again.
@@ -578,8 +660,18 @@ pub async fn authorize(
         let Some(key) = valid_api_key(&approval) else {
             return error("Enter a valid API key");
         };
+        let last = match take_key_check(security, jar, &consent.csrf).await {
+            Ok((taken, last)) => {
+                jar = taken;
+                last
+            }
+            Err(response) => return *response,
+        };
         match check_api_key(&state, api_key, key).await {
             KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected if last => {
+                return too_many_key_checks(security, jar, &consent.csrf).await
+            }
             KeyCheck::Rejected => {
                 let Ok(target) = consent.request.validate() else {
                     return error("Connection request expired or invalid; start again from your hub");
@@ -610,8 +702,18 @@ pub async fn authorize(
             Ok(credential) => credential,
             Err(message) => return error(message),
         };
+        let last = match take_key_check(security, jar, &consent.csrf).await {
+            Ok((taken, last)) => {
+                jar = taken;
+                last
+            }
+            Err(response) => return *response,
+        };
         match check_http_credential(&state, http, &credential).await {
             KeyCheck::Accepted(label) => key_label = label,
+            KeyCheck::Rejected if last => {
+                return too_many_key_checks(security, jar, &consent.csrf).await
+            }
             KeyCheck::Rejected => {
                 let Ok(target) = consent.request.validate() else {
                     return error("Connection request expired or invalid; start again from your hub");
@@ -648,13 +750,15 @@ pub async fn authorize(
     // no-credential platform needs nothing, so both complete the handoff
     // directly (decision 11).
     match state.catalog.security_scheme(&consent.request.platform) {
-        Ok(crate::providers::SecurityScheme::ApiKey(_)) => {
+        Ok(crate::providers::SecurityScheme::ApiKey(api_key)) => {
             let Some(key) = valid_api_key(&approval) else {
                 return error("Enter a valid API key");
             };
             let credential = crate::proxy::StoredCredential::ApiKey {
                 provider: consent.request.platform.clone(),
                 key: key.to_owned(),
+                placement: Some(api_key.placement()),
+                scheme: Some(api_key.scheme_name),
             };
             let code =
                 match labelled_handoff(security, &consent.request, credential, key_label).await {
@@ -1381,10 +1485,25 @@ mod tests {
         assert_eq!(record.owner, owner.id());
         let credential: crate::proxy::StoredCredential =
             serde_json::from_slice(&record.credential).unwrap();
-        assert!(matches!(
-            credential,
-            crate::proxy::StoredCredential::ApiKey { ref key, .. } if key == "clockify-secret"
-        ));
+        let crate::proxy::StoredCredential::ApiKey {
+            key,
+            scheme,
+            placement,
+            ..
+        } = &credential
+        else {
+            panic!("{credential:?}");
+        };
+        assert_eq!(key, "clockify-secret");
+        // Bound to the scheme it was entered for, and to where it goes.
+        assert_eq!(scheme.as_deref(), Some("clockifyApiKey"));
+        assert_eq!(
+            *placement,
+            Some(crate::providers::ApiKeyPlacement {
+                location: "header".into(),
+                name: "x-api-key".into(),
+            })
+        );
         // Single use.
         let reused = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
         assert_eq!(reused.status(), StatusCode::BAD_REQUEST);
@@ -1414,6 +1533,25 @@ mod tests {
     /// A stand-in provider for the key check: `/api/v1/user` answers by the
     /// key it gets, in the `X-Api-Key` header or the query.
     async fn key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        key_check_upstream_counting(Default::default()).await
+    }
+
+    /// Wraps a stand-in provider so `counter` counts the requests it gets.
+    fn counting(
+        app: axum::Router,
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> axum::Router {
+        app.layer(tower::util::MapRequestLayer::new(
+            move |request: axum::http::Request<axum::body::Body>| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                request
+            },
+        ))
+    }
+
+    async fn key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = axum::Router::new().route(
@@ -1455,6 +1593,7 @@ mod tests {
                 },
             ),
         );
+        let app = counting(app, counter);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (format!("http://{address}"), server)
     }
@@ -1751,6 +1890,12 @@ mod tests {
     /// A stand-in provider for an `http` scheme's key check: `/api/v1/user`
     /// answers by the `Authorization` header it gets.
     async fn http_key_check_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        http_key_check_upstream_counting(Default::default()).await
+    }
+
+    async fn http_key_check_upstream_counting(
+        counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let accepted = [
@@ -1781,6 +1926,7 @@ mod tests {
                 }
             }),
         );
+        let app = counting(app, counter);
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (format!("http://{address}"), server)
     }
@@ -1794,7 +1940,9 @@ mod tests {
             &bearer_scheme,
             &token_approval(token, username),
         ) {
-            Ok(StoredCredential::HttpBearer { provider, token }) => {
+            Ok(StoredCredential::HttpBearer {
+                provider, token, ..
+            }) => {
                 assert_eq!(provider, "service");
                 Ok(token)
             }
@@ -2083,22 +2231,174 @@ mod tests {
             let credential: crate::proxy::StoredCredential =
                 serde_json::from_slice(&record.credential).unwrap();
             match (username, credential) {
-                (None, crate::proxy::StoredCredential::HttpBearer { token, .. }) => {
-                    assert_eq!(token, "good-token")
+                (None, crate::proxy::StoredCredential::HttpBearer { token, scheme, .. }) => {
+                    assert_eq!(token, "good-token");
+                    // Bound to the scheme it was entered for.
+                    assert_eq!(scheme.as_deref(), Some("serviceToken"));
                 }
                 (
                     Some(expected),
                     crate::proxy::StoredCredential::HttpBasic {
-                        username, password, ..
+                        username,
+                        password,
+                        scheme,
+                        layout,
+                        ..
                     },
-                ) => assert_eq!(
-                    (username.as_str(), password.as_str()),
-                    (expected, "good-token")
-                ),
+                ) => {
+                    assert_eq!(
+                        (username.as_str(), password.as_str()),
+                        (expected, "good-token")
+                    );
+                    assert_eq!(scheme.as_deref(), Some("serviceToken"));
+                    assert_eq!(
+                        layout,
+                        Some(crate::providers::BasicLayout::Password { username: None })
+                    );
+                }
                 (_, other) => panic!("{other:?}"),
             }
         }
         server.abort();
+    }
+
+    #[test]
+    fn a_bearer_token_is_a_b64token_or_an_asana_style_token() {
+        for good in [
+            "good-token",
+            "ghp_AbC123",
+            "a.b_c~d+e/f",
+            "dG9rZW4=",
+            "dG9r==",
+            "2/1234/5678:abcdef",
+        ] {
+            assert!(bearer_token(good), "{good}");
+        }
+        for bad in [
+            "",
+            "==",
+            "a=b",
+            "has space",
+            "quote\"d",
+            "semi;colon",
+            "comma,",
+            "tok\u{e9}n",
+            "back\\slash",
+            "a\tb",
+            "<tag>",
+            "50%",
+        ] {
+            assert!(!bearer_token(bad), "{bad:?}");
+        }
+    }
+
+    /// One consent makes at most [`MAX_KEY_CHECKS`] key checks: the last
+    /// rejection spends it and says so, and nothing is checked after that,
+    /// for an API key and for an `http` token alike.
+    ///
+    /// The cap is per consent page, not per client: anyone can open another
+    /// consent page (SECURITY.md).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_consent_allows_at_most_five_key_checks() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let security = crate::test_support::security().await;
+        for http in [false, true] {
+            let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (upstream, server) = if http {
+                http_key_check_upstream_counting(checks.clone()).await
+            } else {
+                key_check_upstream_counting(checks.clone()).await
+            };
+            let (document, wrong, good, asked_again) = if http {
+                (
+                    http_document(bearer()),
+                    "wrong-token",
+                    "good-token",
+                    "did not accept that API token",
+                )
+            } else {
+                (
+                    key_check_document("header"),
+                    "wrong-key",
+                    "good-key",
+                    "did not accept that API key",
+                )
+            };
+            let mut s = state(Some(security.clone()));
+            s.test_upstream = Some(upstream);
+            s.catalog = crate::catalog::Catalog::from_test_document(
+                "clockify",
+                document,
+                serde_json::json!({}),
+            );
+            let new_consent = || {
+                let consent = Consent {
+                    request: api_key_request(),
+                    csrf: random(),
+                    expires: crate::now_secs() + 600,
+                };
+                let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                    CONSENT_COOKIE,
+                    serde_json::to_string(&consent).unwrap(),
+                ));
+                (consent, jar)
+            };
+            let submit = |s: &AppState, jar: &PrivateCookieJar, csrf: &str, key: &str| {
+                authorize(
+                    State(s.clone()),
+                    jar.clone(),
+                    HeaderMap::new(),
+                    Form(Approval {
+                        csrf: csrf.to_owned(),
+                        ..token_approval(key, None)
+                    }),
+                )
+            };
+            let (consent, jar) = new_consent();
+            let approve = |key: &str| submit(&s, &jar, &consent.csrf, key);
+            // A malformed key is refused before any check and costs nothing.
+            assert_eq!(approve("  ").await.status(), StatusCode::BAD_REQUEST);
+            for attempt in 1..MAX_KEY_CHECKS {
+                let response = approve(wrong).await;
+                assert_eq!(response.status(), StatusCode::OK, "{http} {attempt}");
+                assert!(body_text(response).await.contains(asked_again));
+            }
+            // The last allowed check is rejected too: the consent is spent.
+            let last = approve(wrong).await;
+            assert_eq!(last.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_text(last).await, TOO_MANY_KEY_CHECKS);
+            assert!(security
+                .nonce_used(&format!("consent:{}", consent.csrf))
+                .await
+                .unwrap());
+            // Even a good key is not checked or accepted now.
+            let after = approve(good).await;
+            assert_eq!(after.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(body_text(after).await, TOO_MANY_KEY_CHECKS);
+            // The provider was asked exactly five times.
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+
+            // Thirty concurrent submissions of one fresh consent: still
+            // exactly five checks, and none is accepted.
+            checks.store(0, SeqCst);
+            let (consent, jar) = new_consent();
+            let tasks: Vec<_> = (0..30)
+                .map(|_| {
+                    let request = submit(&s, &jar, &consent.csrf, wrong);
+                    tokio::spawn(async move { request.await.status() })
+                })
+                .collect();
+            for task in tasks {
+                let status = task.await.unwrap();
+                assert!(
+                    matches!(status, StatusCode::OK | StatusCode::BAD_REQUEST),
+                    "{status}"
+                );
+            }
+            assert_eq!(checks.load(SeqCst), MAX_KEY_CHECKS as usize, "{http}");
+            server.abort();
+        }
     }
 
     /// Collects everything a `tracing` subscriber writes.
@@ -2374,6 +2674,8 @@ mod tests {
         let security = crate::test_support::security().await;
         let s = state(Some(security.clone()));
         let credential = crate::proxy::StoredCredential::ApiKey {
+            placement: None,
+            scheme: None,
             provider: "github-issues".into(),
             key: "k".into(),
         };
@@ -2446,6 +2748,8 @@ mod tests {
             &security,
             &request(),
             crate::proxy::StoredCredential::ApiKey {
+                placement: None,
+                scheme: None,
                 provider: "github-issues".into(),
                 key: "k".into(),
             },
