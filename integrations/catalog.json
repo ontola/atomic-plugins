@@ -239,11 +239,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited. Coordination between two open copies is advisory (the drive has no compare-and-swap), so two copies starting to send in the same moment can still both send, at worst creating a duplicate that the app then offers to remove; it has been tested with simulated devices only, not with two real browsers. The same field edited directly on two devices keeps the later edit. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it): a row whose entry is deleted in Clockify is kept, unsynced, for you to delete, and the table's existing rows are not uploaded. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.7.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.7.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.7.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-GOGlyoLFW0AyPf2lmUZz5Dn/M13Oqx+njzDbuMrbQzYIu/lkI3SXZTiXTcz9SxZg"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.7.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-gYkk+Tt/Snp7NRm+A3IwZ3U5wEj4jICkSlpt3Eirt0x2CDJNMbta7W++LLpSibX0"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",

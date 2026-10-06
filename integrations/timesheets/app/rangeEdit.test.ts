@@ -343,6 +343,28 @@ describe('creates that may not have arrived', () => {
     expect(t.writes().filter(w => w.method === 'POST')).toHaveLength(1);
   });
 
+  it('the sync that settles an uncertain send drops its outcome in the same copy', async () => {
+    const t = await setup([]);
+    const c = await t.open();
+    await c.editRange({
+      from: at(13),
+      to: at(14),
+      target: { kind: 'worked', projectId: P },
+    });
+    t.proxy.fixture.state.failBefore = { status: 503 };
+    await c.send();
+    expect(c.changes().outcomes!.results[0].status).toBe('uncertain');
+
+    // The card would otherwise still say "checked on the next sync" after
+    // that sync; what happened is in `recovered`, the change is listed again.
+    await c.sync();
+    expect(c.changes().outcomes).toBeUndefined();
+    expect(c.changes().recovered).toMatchObject([{ applied: false }]);
+    expect(c.changes().review).toMatchObject([
+      { kind: 'create', blockers: [] },
+    ]);
+  });
+
   it('S16: a POST that failed before applying is listed again, and sent once more', async () => {
     const t = await setup([]);
     const c = await t.open();

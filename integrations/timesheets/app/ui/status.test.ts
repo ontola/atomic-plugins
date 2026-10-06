@@ -255,6 +255,125 @@ describe('syncStatusFor', () => {
     ]);
   });
 
+  it('a held lease is a problem only until its turn ends; a settled sync carries no lease problem', () => {
+    const until = new Date(NOW + 60_000).toISOString();
+    const held = `Another open copy of this app (another device or tab) is sending changes to Clockify. Nothing was sent; try again after 12:01:00, when its turn ends at the latest.`;
+    const outcome = {
+      entryId: 'a',
+      title: 'a',
+      kind: 'update',
+      status: 'not-sent',
+      message: held,
+      until,
+    } as SendOutcome;
+    const changes = {
+      ...NO_CHANGES,
+      review: [
+        {
+          entryId: 'a',
+          blockers: [],
+          kind: 'update',
+          title: 'a',
+        } as ChangesState['review'][number],
+      ],
+      outcomes: { at: NOW, results: [outcome] },
+    };
+    const live = syncStatusFor({
+      state: ready(),
+      sheet: sheet(),
+      changes,
+      now: NOW,
+    });
+    expect(live.problems).toHaveLength(1);
+    // Its turn has ended: the outcome is still listed, the problem is not.
+    const over = syncStatusFor({
+      state: ready(),
+      sheet: sheet(),
+      changes,
+      now: NOW + 61_000,
+    });
+    expect(over.problems).toBe(undefined);
+    expect(over.writes).toEqual({ pending: 1 });
+    // The sync's own "sending elsewhere" is timed the same way.
+    const elsewhere = (now: number) =>
+      syncStatusFor({
+        state: ready({
+          ok: true,
+          at: NOW,
+          result: result({ sendingElsewhereUntil: until }),
+        }),
+        sheet: sheet(),
+        changes: NO_CHANGES,
+        now,
+      }).problems;
+    expect(elsewhere(NOW)).toHaveLength(1);
+    expect(elsewhere(NOW + 61_000)).toBe(undefined);
+  });
+
+  it('a failure after the write stood is marked written', () => {
+    const status = syncStatusFor({
+      state: ready(),
+      sheet: sheet(),
+      changes: {
+        ...NO_CHANGES,
+        outcomes: {
+          at: NOW,
+          results: [
+            {
+              entryId: 'a',
+              title: 'Weekly sync',
+              kind: 'update',
+              status: 'failed',
+              message: 'Clockify no longer lists it as a completed entry.',
+              written: true,
+            },
+            {
+              entryId: 'b',
+              title: 'Standup',
+              kind: 'update',
+              status: 'failed',
+              message: 'HTTP 400',
+            },
+          ] as SendOutcome[],
+        },
+      },
+    });
+    expect(status.writes!.failed).toEqual([
+      {
+        title: 'Weekly sync',
+        reason: 'Clockify no longer lists it as a completed entry.',
+        written: true,
+      },
+      { title: 'Standup', reason: 'HTTP 400' },
+    ]);
+  });
+
+  it('the settings sheet over a failed sync still shows the failure', () => {
+    const failed: SyncOutcome = {
+      ok: false,
+      at: NOW,
+      error: 'HTTP 401',
+      problem: { kind: 'reauth', detail: 'HTTP 401' },
+    };
+    const status = syncStatusFor({
+      state: {
+        kind: 'setup',
+        connection: CONNECTION,
+        draft: SETTINGS,
+        last: failed,
+      },
+      sheet: sheet({ lastChecked: new Date(NOW - HOUR).toISOString() }),
+      changes: NO_CHANGES,
+    });
+    expect(status.last).toEqual({
+      ok: false,
+      at: NOW,
+      error: 'HTTP 401',
+      nextStep: 'Reconnect Clockify.',
+      lastGood: NOW - HOUR,
+    });
+  });
+
   it('sends that wrote nothing for another reason are counted, and a changes error is a problem', () => {
     const outcome = (title: string, status: SendOutcome['status']) =>
       ({ entryId: title, title, kind: 'update', status }) as SendOutcome;

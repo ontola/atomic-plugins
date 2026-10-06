@@ -63,6 +63,12 @@ export interface WriteFailure {
   /** The row, as the person knows it. */
   title: string;
   reason: string;
+  /**
+   * The provider write itself succeeded and what failed came after it (a
+   * verification read, saving the row), so "nothing was written" would be
+   * wrong; the next sync reads it back.
+   */
+  written?: boolean;
 }
 
 /** The app's write queue towards the provider. */
@@ -343,7 +349,19 @@ export function renderSyncStatus(
         ),
       );
 
-    if (writes.failed?.length)
+    const failedList = (failures: WriteFailure[]) =>
+      el(
+        doc,
+        'ul',
+        { class: 'ss-items' },
+        failures.map(f =>
+          el(doc, 'li', {}, el(doc, 'b', {}, f.title), `: ${f.reason}`),
+        ),
+      );
+    const unwritten = (writes.failed ?? []).filter(f => !f.written);
+    const written = (writes.failed ?? []).filter(f => f.written);
+
+    if (unwritten.length)
       items.push(
         el(
           doc,
@@ -353,17 +371,31 @@ export function renderSyncStatus(
             doc,
             'span',
             {},
-            el(doc, 'b', {}, plural(writes.failed.length, CHANGE)),
+            el(doc, 'b', {}, plural(unwritten.length, CHANGE)),
             ` could not be sent to ${status.provider}; nothing was written.`,
           ),
+          failedList(unwritten),
+        ),
+      );
+
+    if (written.length)
+      items.push(
+        el(
+          doc,
+          'li',
+          {
+            class: 'ss-problem',
+            'data-tone': 'neg',
+            'data-key': 'failed-written',
+          },
           el(
             doc,
-            'ul',
-            { class: 'ss-items' },
-            writes.failed.map(f =>
-              el(doc, 'li', {}, el(doc, 'b', {}, f.title), `: ${f.reason}`),
-            ),
+            'span',
+            {},
+            el(doc, 'b', {}, plural(written.length, CHANGE)),
+            ` ${written.length === 1 ? 'was' : 'were'} written to ${status.provider}, but could not be finished here; the next sync reads ${written.length === 1 ? 'it' : 'them'} back.`,
           ),
+          failedList(written),
         ),
       );
 

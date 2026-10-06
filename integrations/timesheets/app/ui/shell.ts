@@ -524,6 +524,9 @@ export function mountShell(
           state,
           sheet,
           changes: controller.changes(),
+          // The shell's clock, so a held lease's "until" is judged by the
+          // same time the card's "ago" uses.
+          now: now(),
           ...(canSyncNow ? { onSync: sync } : {}),
           ...(controller.canOpen().resource
             ? { onOpenRow: (id: string) => void controller.openRow(id) }

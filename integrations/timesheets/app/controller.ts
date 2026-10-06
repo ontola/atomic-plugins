@@ -115,6 +115,10 @@ export type ViewState =
       options?: SetupOptions;
       busy?: 'options' | 'saving';
       error?: string;
+      /** The last sync of this page load, kept while the settings sheet is
+       * open over the data, so the view (the sync-status card) still shows
+       * its failure; restored to `ready` on cancel. */
+      last?: SyncOutcome;
     }
   | {
       kind: 'ready';
@@ -347,18 +351,26 @@ export function createController(
   const loadOptions = async (
     connection: ConnectionReference,
     draft: Partial<Settings>,
+    last?: SyncOutcome,
   ) => {
     const proxy = store.proxy!;
-    set({ kind: 'setup', connection, draft, busy: 'options' });
+    const keep = last ? { last } : {};
+    set({ kind: 'setup', connection, draft, busy: 'options', ...keep });
 
     try {
       const options = await fetchSetupOptions(
         relayTransport(proxy, connection),
       );
 
-      return set({ kind: 'setup', connection, draft, options });
+      return set({ kind: 'setup', connection, draft, options, ...keep });
     } catch (error) {
-      return set({ kind: 'setup', connection, draft, error: message(error) });
+      return set({
+        kind: 'setup',
+        connection,
+        draft,
+        error: message(error),
+        ...keep,
+      });
     }
   };
 
@@ -514,7 +526,7 @@ export function createController(
       if (current.kind !== 'ready' && current.kind !== 'setup') return current;
       const draft = current.kind === 'ready' ? current.settings : current.draft;
 
-      return loadOptions(current.connection, draft);
+      return loadOptions(current.connection, draft, current.last);
     },
 
     async saveSettings(choice) {
@@ -540,6 +552,7 @@ export function createController(
           draft,
           options,
           error: message(error),
+          ...(current.last ? { last: current.last } : {}),
         });
       }
 
@@ -588,11 +601,23 @@ export function createController(
           },
         );
         await refreshIntents(schema);
+        // The last send's outcomes stay listed, except those this read
+        // settled: an uncertain send is now in `recovered`, as applied or
+        // not (`syncRow`; a still-requested delete of an entry that still
+        // exists is not applied, and is listed again), and a `not-sent`
+        // change is back in `review`. Left in, they would
+        // say "checked on the next sync" after that sync, and name another
+        // copy's lease long after its turn ended.
+        const settled = (changes.outcomes?.results ?? []).filter(
+          o => o.status !== 'uncertain' && o.status !== 'not-sent',
+        );
         changes = {
           review: result.review,
           providerWon: result.providerWon,
           recovered: result.recovered,
-          ...(changes.outcomes ? { outcomes: changes.outcomes } : {}),
+          ...(changes.outcomes && settled.length
+            ? { outcomes: { ...changes.outcomes, results: settled } }
+            : {}),
         };
         input = {
           mirror: result.mirror,
@@ -643,7 +668,12 @@ export function createController(
       const settings = readComplete(current.draft);
       if (!settings) return current;
 
-      return set({ kind: 'ready', connection: current.connection, settings });
+      return set({
+        kind: 'ready',
+        connection: current.connection,
+        settings,
+        ...(current.last ? { last: current.last } : {}),
+      });
     },
 
     async setLookback(days) {
