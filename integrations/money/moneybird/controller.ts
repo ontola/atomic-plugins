@@ -78,6 +78,8 @@ export interface SyncHistory {
    * after a failed refresh is named across page loads.
    */
   lastGood: LastGood;
+  /** The collections this view syncs (the table's one, or the stored choice), once the home is known. */
+  chosen?: Collection[];
 }
 
 export type ViewState =
@@ -249,6 +251,34 @@ export function createController(
   /** The one collection a shared-class table (a view, or the app's own) holds. */
   const fixed = (): Collection | undefined => where?.collection;
 
+  /**
+   * What the home remembers, for the card, as soon as the home is known and
+   * before any state is shown: the collections this view syncs, and the
+   * stored last good refresh per collection (unless this page load already
+   * knows a later one). So a table that holds imported rows never reads "Not
+   * synced yet", not even while disconnected or paused.
+   */
+  const remember = async () => {
+    if (!home) return;
+    const resource = await store.getResource(home);
+    const chosen = fixed();
+    const stored = parseCollections(
+      resource.get(term(COLLECTIONS_TERM.shortname)),
+    );
+    history.chosen = chosen
+      ? [chosen]
+      : stored.length
+        ? stored
+        : [...COLLECTIONS];
+
+    for (const [c, at] of Object.entries(
+      parseLastSync(resource.get(term(LAST_SYNC.shortname))),
+    ) as [Collection, Date][]) {
+      const known = history.lastGood[c];
+      if (!known || known < at) history.lastGood[c] = at;
+    }
+  };
+
   const settings = async () => {
     const resource = await store.getResource(home!);
     const administration = resource.get(term(ADMINISTRATION.shortname));
@@ -256,15 +286,6 @@ export function createController(
     const collections = chosen
       ? [chosen]
       : parseCollections(resource.get(term(COLLECTIONS_TERM.shortname)));
-
-    // The stored last good refresh per collection, unless this page load
-    // already knows a later one.
-    for (const [c, at] of Object.entries(
-      parseLastSync(resource.get(term(LAST_SYNC.shortname))),
-    ) as [Collection, Date][]) {
-      const known = history.lastGood[c];
-      if (!known || known < at) history.lastGood[c] = at;
-    }
 
     return {
       administration:
@@ -370,6 +391,8 @@ export function createController(
             return {};
           }
 
+          await remember();
+
           if (!(await hasRowAccess(store, where, adopted))) {
             set({ kind: 'paused', table: where.name, collection });
 
@@ -377,6 +400,7 @@ export function createController(
           }
         } else {
           home = where.app;
+          await remember();
         }
       } catch (error) {
         set({ kind: 'error', message: message(error) });
@@ -411,6 +435,7 @@ export function createController(
         }
 
         home = await bindTable(store, where, adopted);
+        await remember();
       } catch (error) {
         set({ kind: 'error', message: message(error) });
 
@@ -591,6 +616,7 @@ export function createController(
       const refreshed = collections.filter(c => !('error' in results[c]!));
       for (const c of refreshed) history.lastGood[c] = at;
       history.last = { at, collections, results };
+      history.chosen = [...collections];
 
       // Remember the good refreshes across page loads (one write per sync
       // that refreshed anything). A failure here is not the sync's: the

@@ -20,7 +20,8 @@
  *   when it last refreshed, and the next step. Only when every chosen
  *   collection failed is the sync itself "failed"; then too the rows are
  *   named as kept, with the last good refresh of each collection this app
- *   knows, across page loads.
+ *   knows, across page loads (the first sync ever, failing, has nothing to
+ *   keep and does not claim it).
  * - A table that holds imported rows never reads "Not synced yet": before
  *   this page load's first sync, the stored last good refresh is the last
  *   sync, without counts.
@@ -256,18 +257,21 @@ export function syncStatusFor({
         : `${COLLECTION_LABELS[c]}: ${result.error}${when}`;
     };
 
+    // "Kept" only when a refresh is known to have happened: the first sync
+    // ever, failing, has nothing to keep.
     status.last = {
       ok: false,
       at: last.at.getTime(),
-      error: `${bad.map(part).join(' ')} The rows imported earlier are kept.`,
+      error: `${bad.map(part).join(' ')}${known.length ? ' The rows imported earlier are kept.' : ''}`,
       nextStep: NEXT_STEP[problem ?? 'other'],
       ...(known.length ? { lastGood: Math.min(...known) } : {}),
     };
   } else {
     // Before this page load's first sync (or while it runs after a failed
-    // one): the stored last good refresh, without counts, so a table that
-    // holds imported rows never reads "Not synced yet".
-    const known = times(lastGood, COLLECTIONS);
+    // one): the chosen collections' stored last good refresh, without
+    // counts, so a table that holds imported rows never reads "Not synced
+    // yet".
+    const known = times(lastGood, history?.chosen ?? COLLECTIONS);
     if (known.length) status.last = { ok: true, at: Math.max(...known) };
   }
 

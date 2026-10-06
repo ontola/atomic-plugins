@@ -188,6 +188,34 @@ describe('the sync-status card for the Moneybird app', () => {
       expect(lines(state, stored).headline).toBe('Synced 2 days ago');
       expect(lines(state, stored).counts).toBeUndefined();
     }
+
+    // Only the collections this view syncs count: a view on the hours table
+    // does not borrow the contacts' or mutations' time.
+    const hoursOnly: SyncHistory = { ...stored, chosen: ['hours'] };
+    expect(lines({ kind: 'disconnected' }, hoursOnly).headline).toBe(
+      'Synced 2 days ago',
+    );
+    const contactsOnly: SyncHistory = { ...stored, chosen: ['contacts'] };
+    expect(lines({ kind: 'disconnected' }, contactsOnly).headline).toBe(
+      'Synced 3 days ago',
+    );
+    const mutationsOnly: SyncHistory = { ...stored, chosen: ['mutations'] };
+    expect(lines({ kind: 'disconnected' }, mutationsOnly).headline).toBe(
+      'Not synced yet',
+    );
+    // A paused table reads the same way (the controller reads the stored
+    // times before showing "paused").
+    const paused: ViewState = {
+      kind: 'paused',
+      table: 'Bank',
+      collection: 'mutations',
+    };
+    expect(
+      lines(paused, {
+        lastGood: { mutations: new Date(NOW - DAY) },
+        chosen: ['mutations'],
+      }).headline,
+    ).toBe('Synced yesterday');
   });
 
   it('after a sync of three collections: each one counted, the totals, and when', () => {
@@ -418,8 +446,8 @@ describe('the sync-status card for the Moneybird app', () => {
       syncStatusFor({ state: synced(last), history: both, now: NOW })!.last,
     ).toMatchObject({ ok: false, lastGood: NOW - 3 * DAY });
 
-    // One collection, never good as far as this app knows: its error
-    // alone, the rows named as kept, no gap named.
+    // The first sync ever, failing: its error alone, no gap named, and no
+    // claim that rows are kept, since none were imported.
     const one = record({
       collections: ['contacts'],
       results: {
@@ -438,8 +466,7 @@ describe('the sync-status card for the Moneybird app', () => {
     ).toEqual({
       ok: false,
       at: NOW - 2 * MIN,
-      error:
-        'Moneybird refused contacts (401); reconnect Moneybird. The rows imported earlier are kept.',
+      error: 'Moneybird refused contacts (401); reconnect Moneybird.',
       nextStep: 'Reconnect Moneybird.',
     });
   });

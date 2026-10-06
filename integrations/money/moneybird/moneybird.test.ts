@@ -14,7 +14,7 @@ import {
   YEAR,
 } from '../fixtures/moneybird/synthetic.mjs';
 import { PAGE_CAP } from '../fixtures/moneybird/scenario.mjs';
-import { collectionOf } from './binding.js';
+import { collectionOf, formatLastSync, parseLastSync } from './binding.js';
 import { CONTACT_FIELDS, contactName, contactValues } from './contacts.js';
 import { createController, describe as say } from './controller.js';
 import {
@@ -388,6 +388,34 @@ describe('mapping', () => {
     expect(collectionOf(BANK_TRANSACTION)).toBe('mutations');
     expect(collectionOf('did:ad:class-item')).toBeUndefined();
   });
+
+  it('reads moneybird-last-sync strictly: its own shape only, never a future time', () => {
+    const now = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const at = new Date(now - 60_000);
+    const value = formatLastSync({ contacts: at, hours: at });
+    expect(value).toBe(
+      `contacts:${at.toISOString()},hours:${at.toISOString()}`,
+    );
+    expect(parseLastSync(value, now)).toEqual({ contacts: at, hours: at });
+    // Unknown names, other date shapes, junk and future times are dropped.
+    expect(
+      parseLastSync(
+        [
+          'invoices:2026-10-06T11:59:00.000Z',
+          'contacts:2026-10-06 11:59:00',
+          'hours:Tue, 06 Oct 2026 11:59:00 GMT',
+          'mutations:2026-10-07T00:00:00.000Z',
+          'contacts:1.5',
+          'hours',
+        ].join(','),
+        now,
+      ),
+    ).toEqual({});
+    expect(parseLastSync(`hours:${at.toISOString()}`, now)).toEqual({
+      hours: at,
+    });
+    expect(parseLastSync(42, now)).toEqual({});
+  });
 });
 
 describe('importing', () => {
@@ -752,6 +780,28 @@ describe('controller on the app’s own table', () => {
     ).toBe(
       `contacts:${after.lastGood.contacts!.toISOString()},hours:${after.lastGood.hours!.toISOString()}`,
     );
+
+    // Disconnected on a later open: the stored times and the chosen
+    // collections are known before "Not connected" shows.
+    store.proxy!.connections = async () => [];
+    const seen: { kind: string; lastGood: unknown; chosen: unknown }[] = [];
+    const offline = createController(store, (s, h) =>
+      seen.push({
+        kind: s.kind,
+        lastGood: { ...h.lastGood },
+        chosen: h.chosen,
+      }),
+    );
+    await offline.load();
+    expect(offline.state().kind).toBe('disconnected');
+    expect(seen.at(-1)).toEqual({
+      kind: 'disconnected',
+      lastGood: {
+        contacts: first.lastGood.contacts,
+        hours: after.lastGood.hours,
+      },
+      chosen: ['contacts', 'hours'],
+    });
   });
 
   it('imports only the chosen collections, and an administration chosen by 0.1.x means contacts', async () => {
@@ -947,6 +997,27 @@ describe('controller on a table the app is a view of (#177 item 14)', () => {
       collection: 'mutations',
     });
     expect(say(bound.state())).toMatch(/paused/);
+
+    // A later open of the paused table knows, from the binding, when the
+    // mutations last refreshed and that mutations are what it syncs, before
+    // "paused" shows. (A new open re-declares the extras, which the fake's
+    // grant then covers again, so the grant itself is taken away here.)
+    store.rowAccess = async () => ({ status: 'none' as const });
+    const seen: { kind: string; lastGood: unknown; chosen: unknown }[] = [];
+    const again = createController(store, (s, h) =>
+      seen.push({
+        kind: s.kind,
+        lastGood: { ...h.lastGood },
+        chosen: h.chosen,
+      }),
+    );
+    await again.load();
+    expect(again.state().kind).toBe('paused');
+    expect(seen.at(-1)).toEqual({
+      kind: 'paused',
+      lastGood: { mutations: bound.history().lastGood.mutations },
+      chosen: ['mutations'],
+    });
     store.resources.get(APP)![ROW_EXTRAS_PROPERTY] = extras;
   });
 

@@ -527,7 +527,10 @@ bundle above and does not touch the Bank statements importer's table.
   0.3.0 the same resource also carries `moneybird-last-sync`, when each
   collection last refreshed without error
   (`contacts:<ISO 8601>,hours:<ISO 8601>`), written once per sync that
-  refreshed anything, for the card. The view
+  refreshed anything, for the card: the one write a sync makes besides rows
+  (the live check's S3 excludes exactly that save). Read when the home is
+  known, before any state shows; a time later than now, or not in
+  `toISOString`'s shape, is ignored. The view
   syncs once each time it opens, and on Sync now, each chosen collection on
   its own: one that fails is reported next to the others ("contacts: refresh
   failed: … Rows imported earlier are kept."). Every collection reads
