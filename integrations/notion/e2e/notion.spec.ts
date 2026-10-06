@@ -388,7 +388,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await page.goto(statusAppUrl);
     await setRowField(page, 'Launch plan', STATUS, DONE_OPTION, true);
     await page.reload();
-    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+    await expect(strip).toContainText('1 change not sent to Notion', {
       timeout: 60_000,
     });
     await strip.getByRole('button', { name: 'Review changes' }).click();
@@ -409,7 +409,7 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     // request to Notion, and sent only after review.
     await setRowField(page, 'Launch plan', POINTS, 5);
     await page.reload();
-    await expect(strip).toContainText('1 change in 1 row not sent to Notion', {
+    await expect(strip).toContainText('1 change not sent to Notion', {
       timeout: 60_000,
     });
     await shot('s15-pending');
