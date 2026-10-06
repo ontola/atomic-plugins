@@ -356,10 +356,12 @@ address. To stop a script from using your proxy to test keys, each client
 network may make at most `KEY_CHECK_LIMIT_PER_HOUR` checks (default 20) per
 platform in any hour; over that it gets `429` "Too many key checks from your
 network for <Platform>; try again later" and nothing is sent to the
-provider. Only platforms whose scheme declares a key check count. A
+provider. Only platforms whose scheme declares a key check count (an API
+key sent in a cookie is never checked, so it does not count either). A
 network is an IPv4 address or an IPv6 /64. The count lives in
 PostgreSQL (`key_check_limits`, created at startup), keyed by an HMAC of the
-platform and network under `ENCRYPTION_KEY`, never the address itself, and
+platform and network under a subkey derived from `ENCRYPTION_KEY`, never
+the address itself, and
 rows are deleted an hour after use. OAuth connections are not counted.
 
 Which address counts depends on what is in front of the proxy:

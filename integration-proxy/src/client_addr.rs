@@ -50,8 +50,9 @@ pub(crate) fn client_network(
 }
 
 /// The last entry of the last `X-Forwarded-For` line, if it is an address
-/// (`ip`, `ip:port`, `[ipv6]` or `[ipv6]:port`). A zone index (`%eth0`)
-/// is not accepted.
+/// (`ip`, `ip:port`, `[ipv6]` or `[ipv6]:port`). A bare zone index
+/// (`fe80::1%eth0`) is not accepted; a bracketed numeric zone with a port
+/// (`[fe80::1%3]:80`) parses, and only the network's /64 is used.
 fn rightmost_forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
     let last_line = headers.get_all(X_FORWARDED_FOR).iter().next_back()?;
     let last_entry = last_line.as_bytes().rsplit(|&b| b == b',').next()?;

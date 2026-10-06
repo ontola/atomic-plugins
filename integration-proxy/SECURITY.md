@@ -214,7 +214,8 @@ tokens alike) are also limited per client network and platform:
   are never read. The header line is split on bytes and only that last
   entry is decoded, so a non-UTF-8 byte the client sends earlier on the line
   does not make it unreadable. When that entry is missing or not an address
-  (`ip`, `ip:port`, `[ipv6]`, `[ipv6]:port`; no zone index), the check
+  (`ip`, `ip:port`, `[ipv6]`, `[ipv6]:port`; a bare zone index is not
+  accepted, a bracketed numeric zone with a port counts as its /64), the check
   counts against one fixed shared bucket, `unparseable`: never the peer
   address (on Heroku, a router address many clients share) and never an
   entry further left. localthought.io runs on
