@@ -1,17 +1,19 @@
 // @wc-ignore-file
 /**
- * `status.ts`: every `ViewState`, with and without a latest sync, mapped onto
- * the shared sync-status card's model (Q-084), without a DOM. The words are
- * checked through the card's own `statusLines`, so a card change that moves
- * them shows here.
+ * `status.ts`: every `ViewState`, with and without a sync this page load and
+ * with and without stored last good refreshes, mapped onto the shared
+ * sync-status card's model (Q-084), without a DOM. The words are checked
+ * through the card's own `statusLines`, so a card change that moves them
+ * shows here.
  */
 import { describe, expect, it } from 'vitest';
 import { statusLines } from '../../sync-status/card.js';
-import type { SyncRecord, ViewState } from './controller.js';
+import type { SyncHistory, SyncRecord, ViewState } from './controller.js';
 import type { SyncSummary } from './sync.js';
 import {
   NEXT_STEP,
   NO_RELAY_NOTE,
+  NOTHING_SENT_NOTE,
   OVERWRITES_NOTE,
   PAUSED_NOTE,
   syncStatusFor,
@@ -20,6 +22,8 @@ import {
 
 const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
 const MIN = 60_000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
 const connection = { platform: 'moneybird', connectionId: 'c1' };
 const A = '100000000000000001';
 
@@ -43,13 +47,16 @@ const record = (over: Partial<SyncRecord> = {}): SyncRecord => ({
     hours: summary(4),
     mutations: summary(6),
   },
-  lastGood: {
-    contacts: new Date(NOW - 2 * MIN),
-    hours: new Date(NOW - 2 * MIN),
-    mutations: new Date(NOW - 2 * MIN),
-  },
   ...over,
 });
+
+/** A history whose latest sync is `last`, every collection good at `last.at`. */
+const history = (
+  last: SyncRecord,
+  lastGood: SyncHistory['lastGood'] = Object.fromEntries(
+    last.collections.map(c => [c, last.at]),
+  ),
+): SyncHistory => ({ last, lastGood });
 
 const synced = (last: SyncRecord): ViewState => ({
   kind: 'synced',
@@ -60,8 +67,8 @@ const synced = (last: SyncRecord): ViewState => ({
   results: last.results,
 });
 
-const lines = (state: ViewState, last?: SyncRecord) =>
-  statusLines(syncStatusFor({ state, last, now: NOW })!, NOW);
+const lines = (state: ViewState, h?: SyncHistory) =>
+  statusLines(syncStatusFor({ state, history: h, now: NOW })!, NOW);
 
 describe('the sync-status card for the Moneybird app', () => {
   it('shows no card while loading or on a table it cannot sync', () => {
@@ -98,7 +105,7 @@ describe('the sync-status card for the Moneybird app', () => {
         collections: ['hours'],
       },
       synced(record()),
-      { kind: 'error', message: 'boom' },
+      { kind: 'error', message: 'boom', bound: true },
     ];
 
     for (const state of states) {
@@ -112,7 +119,7 @@ describe('the sync-status card for the Moneybird app', () => {
     }
   });
 
-  it('says nothing is overwritten on an unsynced or paused table, and why nothing is read without a relay', () => {
+  it('says nothing is overwritten on an unsynced or paused table, why nothing is read without a relay, and claims only "nothing is sent" after an error on an unbound table', () => {
     const unsynced: ViewState = {
       kind: 'unsynced',
       table: 'Bank',
@@ -133,21 +140,63 @@ describe('the sync-status card for the Moneybird app', () => {
     expect(
       syncStatusFor({ state: { kind: 'no-relay' }, now: NOW })!.writeBackNote,
     ).toBe(NO_RELAY_NOTE);
-    for (const note of [UNSYNCED_NOTE, PAUSED_NOTE, NO_RELAY_NOTE])
+    // The layout or the binding failed: the table may not be this app's.
+    expect(
+      syncStatusFor({ state: { kind: 'error', message: 'boom' }, now: NOW })!
+        .writeBackNote,
+    ).toBe(NOTHING_SENT_NOTE);
+    for (const note of [
+      UNSYNCED_NOTE,
+      PAUSED_NOTE,
+      NO_RELAY_NOTE,
+      NOTHING_SENT_NOTE,
+    ])
       expect(note).toMatch(/^Nothing is sent to Moneybird/);
   });
 
-  it('before any sync: not synced yet, no rows, no counts', () => {
-    const l = lines({ kind: 'disconnected' });
+  it('before any sync anywhere: not synced yet, no rows, no counts', () => {
+    const l = lines({ kind: 'disconnected' }, { lastGood: {} });
     expect(l.headline).toBe('Not synced yet');
     expect(l.tone).toBe('idle');
     expect(l.rows).toBeUndefined();
     expect(l.counts).toBeUndefined();
   });
 
+  it('before this page load’s first sync, a table that holds imported rows names the stored last good refresh, not "Not synced yet"', () => {
+    const stored: SyncHistory = {
+      lastGood: {
+        contacts: new Date(NOW - 3 * DAY),
+        hours: new Date(NOW - 2 * DAY),
+      },
+    };
+    const states: ViewState[] = [
+      { kind: 'disconnected' },
+      {
+        kind: 'choosing',
+        connection,
+        administrations: [{ id: A, name: 'Synthetic Studio B.V.' }],
+        collections: ['contacts', 'hours'],
+        selectable: true,
+      },
+      { kind: 'error', message: 'boom', bound: true },
+    ];
+
+    for (const state of states) {
+      const status = syncStatusFor({ state, history: stored, now: NOW })!;
+      // The most recent refresh, without counts: nothing was read this time.
+      expect(status.last).toEqual({ ok: true, at: NOW - 2 * DAY });
+      expect(lines(state, stored).headline).toBe('Synced 2 days ago');
+      expect(lines(state, stored).counts).toBeUndefined();
+    }
+  });
+
   it('after a sync of three collections: each one counted, the totals, and when', () => {
     const last = record();
-    const status = syncStatusFor({ state: synced(last), last, now: NOW })!;
+    const status = syncStatusFor({
+      state: synced(last),
+      history: history(last),
+      now: NOW,
+    })!;
     expect(status.rows).toBe(15);
     expect(status.rowNoun).toEqual(['row', 'rows']);
     expect(status.rowsScope).toBe(
@@ -160,7 +209,7 @@ describe('the sync-status card for the Moneybird app', () => {
     });
     expect(status.problems).toBeUndefined();
     expect(status.ignored).toBeUndefined();
-    const l = lines(synced(last), last);
+    const l = lines(synced(last), history(last));
     expect(l.headline).toBe('Synced 2 min ago');
     expect(l.tone).toBe('ok');
     expect(l.rows).toBe(
@@ -173,19 +222,18 @@ describe('the sync-status card for the Moneybird app', () => {
     const last = record({
       collections: ['hours'],
       results: { hours: summary(4, { added: 1, unchanged: 3 }) },
-      lastGood: { hours: new Date(NOW - 2 * MIN) },
     });
-    const l = lines(synced(last), last);
+    const l = lines(synced(last), history(last));
     expect(l.rows).toBe('4 time entries imported');
     expect(l.counts).toBe('Last sync: 1 added, 0 updated, 3 unchanged');
     const one = record({
       collections: ['mutations'],
       results: { mutations: summary(1) },
     });
-    expect(lines(synced(one), one).rows).toBe('1 mutation imported');
+    expect(lines(synced(one), history(one)).rows).toBe('1 mutation imported');
   });
 
-  it('skipped records are ignored rows, named with the reason, per collection', () => {
+  it('skipped records are ignored rows, named with the reason, per collection; no "nothing to read" next to them', () => {
     const hours = summary(4, {
       added: 3,
       skipped: 1,
@@ -219,7 +267,7 @@ describe('the sync-status card for the Moneybird app', () => {
     });
     const status = syncStatusFor({
       state: synced(both),
-      last: both,
+      history: history(both),
       now: NOW,
     })!;
     // Rows in the tables, not the skipped ones.
@@ -238,19 +286,47 @@ describe('the sync-status card for the Moneybird app', () => {
         items: ['Nep Hosting', 'Mutation 7'],
       },
     ]);
-    expect(lines(synced(both), both).tone).toBe('warn');
+    expect(lines(synced(both), history(both))).toMatchObject({
+      tone: 'warn',
+      counts: 'Last sync: 7 added, 0 updated, 0 unchanged',
+    });
 
     // One collection: the card's noun is that collection's.
     const only = record({ collections: ['hours'], results: { hours } });
     const single = syncStatusFor({
       state: synced(only),
-      last: only,
+      history: history(only),
       now: NOW,
     })!;
     expect(single.rowNoun).toEqual(['time entry', 'time entries']);
     expect(single.ignored![0].reason).toBe(
       'without a readable start (started_at) in Moneybird: not imported.',
     );
+
+    // Every record skipped: no counts line ("nothing to read" would be
+    // wrong next to "3 time entries … not imported").
+    const none = record({
+      collections: ['hours'],
+      results: {
+        hours: summary(3, {
+          added: 0,
+          skipped: 3,
+          skippedRows: ['a', 'b', 'c'].map(name => ({
+            name,
+            reason:
+              'without a readable start (started_at) in Moneybird: not imported.',
+          })),
+        }),
+      },
+    });
+    const l = lines(synced(none), history(none));
+    expect(l.counts).toBeUndefined();
+    expect(l.rows).toBe('0 time entries imported');
+    expect(l.headline).toBe('Synced 2 min ago');
+    expect(
+      syncStatusFor({ state: synced(none), history: history(none), now: NOW })!
+        .ignored![0].count,
+    ).toBe(3);
   });
 
   it('one collection failing: the others count, the failure names its error, the kept rows, the last good refresh and the next step', () => {
@@ -260,13 +336,17 @@ describe('the sync-status card for the Moneybird app', () => {
         hours: summary(4, { added: 0, unchanged: 4 }),
         mutations: summary(6, { added: 0, unchanged: 6 }),
       },
-      lastGood: {
-        contacts: new Date(NOW - 3 * 60 * MIN),
-        hours: new Date(NOW - 2 * MIN),
-        mutations: new Date(NOW - 2 * MIN),
-      },
     });
-    const status = syncStatusFor({ state: synced(last), last, now: NOW })!;
+    const h = history(last, {
+      contacts: new Date(NOW - 3 * HOUR),
+      hours: last.at,
+      mutations: last.at,
+    });
+    const status = syncStatusFor({
+      state: synced(last),
+      history: h,
+      now: NOW,
+    })!;
     expect(status.rows).toBe(10);
     expect(status.rowsScope).toBe('imported: 4 time entries, 6 mutations');
     expect(status.last).toEqual({
@@ -281,24 +361,21 @@ describe('the sync-status card for the Moneybird app', () => {
         tone: 'neg',
       },
     ]);
-    const l = lines(synced(last), last);
+    const l = lines(synced(last), h);
     expect(l.headline).toBe('Synced 2 min ago');
     expect(l.tone).toBe('neg');
 
-    // Never refreshed this page load: no "last refreshed" claim.
-    const fresh = record({
-      results: last.results,
-      lastGood: { hours: new Date(NOW), mutations: new Date(NOW) },
-    });
+    // Never refreshed as far as this app knows: no "last refreshed" claim.
+    const fresh = history(last, { hours: last.at, mutations: last.at });
     expect(
-      syncStatusFor({ state: synced(fresh), last: fresh, now: NOW })!
+      syncStatusFor({ state: synced(last), history: fresh, now: NOW })!
         .problems![0].text,
     ).toBe(
       'Moneybird answered 503 for contacts page 2. The contacts imported earlier are kept. Press Sync now to try again.',
     );
   });
 
-  it('every collection failing: the sync failed, with the last good sync and the next step', () => {
+  it('every collection failing: the sync failed, the rows are kept, each known last good refresh is named, and the next step', () => {
     const last = record({
       collections: ['hours', 'mutations'],
       results: {
@@ -308,29 +385,41 @@ describe('the sync-status card for the Moneybird app', () => {
         },
         mutations: { error: 'Moneybird answered 500 for financial accounts.' },
       },
-      lastGood: {
-        hours: new Date(NOW - 3 * 24 * 60 * MIN),
-        mutations: new Date(NOW - 2 * 24 * 60 * MIN),
-      },
     });
-    const status = syncStatusFor({ state: synced(last), last, now: NOW })!;
+    // Stored on the home by an earlier page load: hours only.
+    const h = history(last, { hours: new Date(NOW - 3 * DAY) });
+    const status = syncStatusFor({
+      state: synced(last),
+      history: h,
+      now: NOW,
+    })!;
     expect(status.rows).toBeUndefined();
     expect(status.last).toEqual({
       ok: false,
       at: NOW - 2 * MIN,
       error:
-        'Hours (time entries): Moneybird kept limiting requests (429) after 5 retries. Financial mutations: Moneybird answered 500 for financial accounts.',
+        'Hours (time entries): Moneybird kept limiting requests (429) after 5 retries. Its time entries last refreshed 3 days ago. Financial mutations: Moneybird answered 500 for financial accounts. The rows imported earlier are kept.',
       nextStep: NEXT_STEP['rate-limited'],
-      // The oldest: when every chosen collection was last good.
-      lastGood: NOW - 3 * 24 * 60 * MIN,
+      // The oldest of the refreshes this app knows, not none.
+      lastGood: NOW - 3 * DAY,
     });
     expect(status.problems).toBeUndefined();
-    const l = lines(synced(last), last);
+    const l = lines(synced(last), h);
     expect(l.headline).toBe('Sync failed 2 min ago');
     expect(l.tone).toBe('neg');
     expect(l.counts).toBeUndefined();
 
-    // One collection, never good this page load: its error alone, no gap named.
+    // Both known: the older one is the gap.
+    const both = history(last, {
+      hours: new Date(NOW - 3 * DAY),
+      mutations: new Date(NOW - 1 * DAY),
+    });
+    expect(
+      syncStatusFor({ state: synced(last), history: both, now: NOW })!.last,
+    ).toMatchObject({ ok: false, lastGood: NOW - 3 * DAY });
+
+    // One collection, never good as far as this app knows: its error
+    // alone, the rows named as kept, no gap named.
     const one = record({
       collections: ['contacts'],
       results: {
@@ -339,19 +428,23 @@ describe('the sync-status card for the Moneybird app', () => {
           problem: 'reauth',
         },
       },
-      lastGood: {},
     });
     expect(
-      syncStatusFor({ state: synced(one), last: one, now: NOW })!.last,
+      syncStatusFor({
+        state: synced(one),
+        history: history(one, {}),
+        now: NOW,
+      })!.last,
     ).toEqual({
       ok: false,
       at: NOW - 2 * MIN,
-      error: 'Moneybird refused contacts (401); reconnect Moneybird.',
+      error:
+        'Moneybird refused contacts (401); reconnect Moneybird. The rows imported earlier are kept.',
       nextStep: 'Reconnect Moneybird.',
     });
   });
 
-  it('while syncing: busy, with the wait for Moneybird’s limit while it lasts; the last sync stays', () => {
+  it('while syncing: busy, with the wait for Moneybird’s limit while it lasts; the last good sync stays, the previous sync’s failures do not', () => {
     const last = record();
     const syncing: ViewState = {
       kind: 'syncing',
@@ -359,7 +452,7 @@ describe('the sync-status card for the Moneybird app', () => {
       administration: A,
       collections: ['contacts', 'hours', 'mutations'],
     };
-    expect(lines(syncing, last)).toMatchObject({
+    expect(lines(syncing, history(last))).toMatchObject({
       tone: 'busy',
       headline: 'Syncing…',
       counts: 'Last sync: 15 added, 0 updated, 0 unchanged',
@@ -381,6 +474,35 @@ describe('the sync-status card for the Moneybird app', () => {
         waiting: { ms: 12_500, reason: 'pacing', path: '/x' },
       }).headline,
     ).toBe('Pacing requests under Moneybird’s limit: next in 13 s…');
+
+    // A failed collection of the previous sync is not listed while the
+    // running one settles it; a wholly failed previous sync falls back to
+    // the last good refresh.
+    const partial = record({
+      results: {
+        contacts: { error: 'Moneybird answered 503 for contacts page 2.' },
+        hours: summary(4),
+        mutations: summary(6),
+      },
+    });
+    const h = history(partial, { hours: partial.at, mutations: partial.at });
+    expect(
+      syncStatusFor({ state: syncing, history: h, now: NOW })!.problems,
+    ).toBeUndefined();
+    expect(
+      syncStatusFor({ state: synced(partial), history: h, now: NOW })!.problems,
+    ).toHaveLength(1);
+    const failed = record({
+      collections: ['hours'],
+      results: { hours: { error: 'Moneybird answered 500 for time entries.' } },
+    });
+    const old = history(failed, { hours: new Date(NOW - DAY) });
+    expect(
+      syncStatusFor({ state: syncing, history: old, now: NOW })!.last,
+    ).toEqual({ ok: true, at: NOW - DAY });
+    expect(
+      syncStatusFor({ state: synced(failed), history: old, now: NOW })!.last,
+    ).toMatchObject({ ok: false, lastGood: NOW - DAY });
   });
 
   it('settings open or an error after a sync: the last sync stays on the card', () => {
@@ -392,13 +514,18 @@ describe('the sync-status card for the Moneybird app', () => {
       collections: ['contacts'],
       selectable: true,
     };
-    expect(lines(choosing, last).headline).toBe('Synced 2 min ago');
+    expect(lines(choosing, history(last)).headline).toBe('Synced 2 min ago');
     const error: ViewState = {
       kind: 'error',
       connection,
       message: 'Choose at least one collection to import.',
+      bound: true,
     };
-    const status = syncStatusFor({ state: error, last, now: NOW })!;
+    const status = syncStatusFor({
+      state: error,
+      history: history(last),
+      now: NOW,
+    })!;
     expect(status.problems).toEqual([
       {
         lead: 'This app hit a problem.',
@@ -406,7 +533,7 @@ describe('the sync-status card for the Moneybird app', () => {
         tone: 'neg',
       },
     ]);
-    expect(lines(error, last)).toMatchObject({
+    expect(lines(error, history(last))).toMatchObject({
       headline: 'Synced 2 min ago',
       tone: 'neg',
     });

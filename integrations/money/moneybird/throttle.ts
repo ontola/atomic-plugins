@@ -14,8 +14,9 @@
  *   the window. A small sync never waits; the period-halving mutations read
  *   (`readFinancialMutations`, up to 200 requests) does.
  * - **429.** A `429 Too Many Requests` is retried after `Retry-After` when
- *   Moneybird sends one (seconds or an HTTP-date), else after an exponential
- *   backoff from `backoffMs` (2 s, doubling). One wait is capped at
+ *   Moneybird sends one (delay-seconds or an IMF-fixdate; never less than
+ *   the backoff, so a `0` or a past date does not retry at once), else after
+ *   an exponential backoff from `backoffMs` (2 s, doubling). One wait is capped at
  *   `maxWaitMs` (60 s): a longer `Retry-After` fails the read now, with the
  *   asked wait in the message, rather than hold the import for minutes; one
  *   request is retried at most `maxRetries` (5) times. The error is a
@@ -62,18 +63,23 @@ export interface ThrottleOptions {
 }
 
 const RETRY_AFTER_SECONDS = /^\s*\d+\s*$/;
+/** RFC 9110 IMF-fixdate: `Tue, 06 Oct 2026 12:00:30 GMT`. */
+const IMF_FIXDATE =
+  /^\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT\s*$/;
 
 /**
- * A `Retry-After` header as milliseconds from `now`: delay-seconds, or an
- * HTTP-date (never negative); `undefined` when absent or unreadable.
+ * A `Retry-After` header as milliseconds from `now`: delay-seconds (digits
+ * only), or an IMF-fixdate (never negative); `undefined` for anything else
+ * (`-1`, `1.5`, other date forms), which the backoff then covers.
  */
 export function retryAfterMs(
   header: string | undefined,
   now: number,
 ): number | undefined {
-  if (header === undefined || header === '') return undefined;
+  if (header === undefined) return undefined;
   if (RETRY_AFTER_SECONDS.test(header)) return Number(header.trim()) * 1000;
-  const at = Date.parse(header);
+  if (!IMF_FIXDATE.test(header)) return undefined;
+  const at = Date.parse(header.trim());
 
   return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
 }
@@ -145,7 +151,8 @@ export function throttled(
           `Moneybird is limiting requests (429) and asks to wait ${seconds(asked)}, longer than this import waits (${seconds(maxWaitMs)}). Try again then.`,
           429,
         );
-      const ms = asked ?? Math.min(backoffMs * 2 ** (attempt - 1), maxWaitMs);
+      const backoff = Math.min(backoffMs * 2 ** (attempt - 1), maxWaitMs);
+      const ms = asked === undefined ? backoff : Math.max(asked, backoff);
       await wait({ ms, reason: 'rate-limited', attempt, path });
     }
   };

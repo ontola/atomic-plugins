@@ -440,14 +440,23 @@ bundle above and does not touch the Bank statements importer's table.
   ("Contacts: refresh failed. Moneybird answered 503 for contacts page 2. The
   contacts imported earlier are kept; they last refreshed 3 h ago. Press Sync
   now to try again."); only when every chosen collection failed does the card
-  say "Sync failed", with the last good sync when this page load knows it
-  (the time is not stored, so a reload forgets it). Skipped records are listed
-  as ignored with their reason and names: a time entry "without a readable
-  start (started_at) in Moneybird: not imported.", a mutation "with an amount
-  Moneybird did not send as a decimal string: not imported, never
-  approximated." A wait for Moneybird's rate limit shows while it lasts (see
-  Rate limits). The `role="status"` line stays the one live region; while the
-  card holds the same words it is visually hidden, not removed. The card's
+  say "Sync failed", naming the rows as kept and each collection's last good
+  refresh this app knows. Those times are stored on the App or the binding as
+  `moneybird-last-sync` (see Flow), so they survive a reload: the app syncs on
+  open, and an open whose every collection fails still names the gap, and a
+  table that holds imported rows never reads "Not synced yet" (before this
+  page load's first sync the card shows the stored time, without counts).
+  Skipped records are listed as ignored with their reason and names: a time
+  entry "without a readable start (started_at) in Moneybird: not imported.",
+  a mutation "with an amount Moneybird did not send as a decimal string: not
+  imported, never approximated."; a refresh that wrote nothing but skipped
+  something gets no counts line (it would read "nothing to read"). A wait for
+  Moneybird's rate limit shows while it lasts, counting down (see Rate
+  limits); while a sync runs, the previous sync's failures are not listed,
+  since the running one settles them. After an error on a table the app is
+  not bound to, the note claims only that nothing is sent. The
+  `role="status"` line stays the one live region; while the card holds the
+  same words it is visually hidden, not removed. The card's
   CSS is embedded by `cssRawPlugin` (`integrations/sync-status/build.mjs`)
   in `moneybird/build.mjs`; the money lane's `paths` list
   `integrations/sync-status/**`, so a card change runs this lane too.
@@ -461,13 +470,15 @@ bundle above and does not touch the Bank statements importer's table.
   collections share one window): a sliding window of 120 requests per 300 s
   before the next request waits (a small sync never waits; the period-halving
   mutations read, up to 200 requests, does), and a `429` retried after
-  `Retry-After` (seconds or an HTTP-date) when Moneybird sends one, else
-  after a backoff of 2 s doubling per retry; one wait is capped at 60 s (a
-  longer `Retry-After` fails the read now, naming the asked wait), and one
-  request is retried at most 5 times, after which the collection fails with
-  "Wait a few minutes, then press Sync now." on the card. While a wait lasts
-  the card is busy with "Moneybird is limiting requests (429): retrying in
-  4 s…" or "Pacing requests under Moneybird's limit: next in 13 s…".
+  `Retry-After` (delay-seconds, digits only, or an IMF-fixdate; anything
+  else, `-1` or `1.5` say, is ignored) when Moneybird sends one, never less
+  than the backoff, else after a backoff of 2 s doubling per retry; one wait
+  is capped at 60 s (a longer `Retry-After` fails the read now, naming the
+  asked wait), and one request is retried at most 5 times, after which the
+  collection fails with "Wait a few minutes, then press Sync now." on the
+  card. While a wait lasts the card is busy with "Moneybird is limiting
+  requests (429): retrying in 4 s…" or "Pacing requests under Moneybird's
+  limit: next in 13 s…", counting down every second.
   Verified with fake transports and a fake clock only (`throttle.test.ts`);
   the synthetic fixture never answers 429, and nothing is observed against
   Moneybird.
@@ -512,7 +523,11 @@ bundle above and does not touch the Bank statements importer's table.
   connect page), then choose an administration (`GET /administrations.json`)
   and the collections (stored on the App, or on the binding, as
   `moneybird-administration` and `moneybird-collections`; an administration
-  stored by 0.1.x without collections means contacts), then import. The view
+  stored by 0.1.x without collections means contacts), then import. From
+  0.3.0 the same resource also carries `moneybird-last-sync`, when each
+  collection last refreshed without error
+  (`contacts:<ISO 8601>,hours:<ISO 8601>`), written once per sync that
+  refreshed anything, for the card. The view
   syncs once each time it opens, and on Sync now, each chosen collection on
   its own: one that fails is reported next to the others ("contacts: refresh
   failed: … Rows imported earlier are kept."). Every collection reads

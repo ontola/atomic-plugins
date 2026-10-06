@@ -73,15 +73,44 @@ describe('Moneybird rate limits', () => {
     expect(PACE.requests).toBeLessThan(ANNOUNCED_LIMIT.requests);
   });
 
-  it('reads Retry-After as seconds or as an HTTP-date, never negative', () => {
+  it('reads Retry-After as delay-seconds or an IMF-fixdate only, never negative', () => {
     const now = Date.UTC(2026, 9, 6, 12, 0, 0);
     expect(retryAfterMs('7', now)).toBe(7_000);
     expect(retryAfterMs(' 0 ', now)).toBe(0);
     expect(retryAfterMs('Tue, 06 Oct 2026 12:00:30 GMT', now)).toBe(30_000);
+    // A past date is 0, not negative.
     expect(retryAfterMs('Tue, 06 Oct 2026 11:59:00 GMT', now)).toBe(0);
     expect(retryAfterMs(undefined, now)).toBeUndefined();
     expect(retryAfterMs('', now)).toBeUndefined();
     expect(retryAfterMs('soon', now)).toBeUndefined();
+    // Junk that Date.parse would read as a date is refused.
+    expect(retryAfterMs('-1', now)).toBeUndefined();
+    expect(retryAfterMs('1.5', now)).toBeUndefined();
+    expect(retryAfterMs('2026-10-06T12:00:30Z', now)).toBeUndefined();
+  });
+
+  it('never waits less than the backoff: a 0, past or junk Retry-After falls back to it', async () => {
+    for (const header of ['0', 'Tue, 06 Oct 2026 11:00:00 GMT', '-1', '1.5']) {
+      const c = clock();
+      let calls = 0;
+      const get = throttled(
+        async () =>
+          calls++ === 0 ? tooMany({ 'retry-after': header }) : ok([]),
+        { ...c, pace: false },
+      );
+      expect((await get('/administrations.json')).status).toBe(200);
+      expect(c.slept).toEqual([BACKOFF_MS]);
+    }
+
+    // A Retry-After above the backoff is honoured as is.
+    const c = clock();
+    let calls = 0;
+    const get = throttled(
+      async () => (calls++ === 0 ? tooMany({ 'retry-after': '5' }) : ok([])),
+      { ...c, pace: false },
+    );
+    await get('/administrations.json');
+    expect(c.slept).toEqual([5_000]);
   });
 
   it('retries a 429 part-way through a paged read and still returns every record', async () => {
@@ -178,7 +207,8 @@ describe('Moneybird rate limits', () => {
       /kept limiting requests \(429\) after 5 retries/,
     );
     expect(calls).toBe(MAX_RETRIES + 1);
-    expect(c.slept).toEqual([1_000, 1_000, 1_000, 1_000, 1_000]);
+    // Retry-After 1 s is under the backoff, which is the floor.
+    expect(c.slept).toEqual([2_000, 4_000, 8_000, 16_000, 32_000]);
   });
 
   it('paces the period-halving mutations read under the limit, and a small read never waits', async () => {

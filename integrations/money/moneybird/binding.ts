@@ -55,6 +55,31 @@ export function parseCollections(value: JSONValue): Collection[] {
   return COLLECTIONS.filter(c => names.includes(c));
 }
 
+/** When each collection last refreshed without error (`own.ts` `LAST_SYNC`). */
+export type LastGood = Partial<Record<Collection, Date>>;
+
+/** `contacts:2026-10-06T12:00:00.000Z,hours:…` as dates; unknown names and unreadable times are dropped. */
+export function parseLastSync(value: JSONValue): LastGood {
+  const out: LastGood = {};
+  if (typeof value !== 'string') return out;
+
+  for (const part of value.split(',')) {
+    const at = part.indexOf(':');
+    if (at < 0) continue;
+    const name = part.slice(0, at).trim();
+    const time = Date.parse(part.slice(at + 1).trim());
+    if (COLLECTIONS.includes(name as Collection) && Number.isFinite(time))
+      out[name as Collection] = new Date(time);
+  }
+
+  return out;
+}
+
+export const formatLastSync = (lastGood: LastGood) =>
+  COLLECTIONS.filter(c => lastGood[c])
+    .map(c => `${c}:${lastGood[c]!.toISOString()}`)
+    .join(',');
+
 export const formatCollections = (collections: readonly Collection[]) =>
   COLLECTIONS.filter(c => collections.includes(c)).join(',');
 

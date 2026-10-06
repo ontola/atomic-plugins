@@ -714,6 +714,46 @@ describe('controller on the app’s own table', () => {
     expect(rows(store)).toHaveLength(5);
   });
 
+  it('remembers when each collection last refreshed without error, on the home, across page loads', async () => {
+    const store = fakeStore();
+    const controller = createController(store, () => {});
+    await controller.load();
+    await controller.select(A, ['contacts', 'hours']);
+    const first = controller.history();
+    expect(first.last?.collections).toEqual(['contacts', 'hours']);
+    expect(first.lastGood.contacts).toBeInstanceOf(Date);
+    expect(first.lastGood.hours).toEqual(first.lastGood.contacts);
+    expect(first.lastGood.mutations).toBeUndefined();
+    const stored =
+      store.resources.get(APP)![shortnameOf(store).get('moneybird-last-sync')!];
+    expect(stored).toBe(
+      `contacts:${first.lastGood.contacts!.toISOString()},hours:${first.lastGood.hours!.toISOString()}`,
+    );
+
+    // A new page load knows the stored times before its own sync, and the
+    // sync that fails on contacts (the fixture's second read) keeps the
+    // contacts time while the hours time moves on.
+    const reloaded = createController(store, () => {});
+    const { syncing } = await reloaded.load();
+    expect(reloaded.history().last).toBeUndefined();
+    expect(reloaded.history().lastGood.contacts).toEqual(
+      first.lastGood.contacts,
+    );
+    await syncing;
+    const after = reloaded.history();
+    if (!after.last) throw new Error('no sync');
+    expect(after.last.results.contacts).toMatchObject({ error: /503/ });
+    expect(after.lastGood.contacts).toEqual(first.lastGood.contacts);
+    expect(after.lastGood.hours!.getTime()).toBeGreaterThanOrEqual(
+      first.lastGood.hours!.getTime(),
+    );
+    expect(
+      store.resources.get(APP)![shortnameOf(store).get('moneybird-last-sync')!],
+    ).toBe(
+      `contacts:${after.lastGood.contacts!.toISOString()},hours:${after.lastGood.hours!.toISOString()}`,
+    );
+  });
+
   it('imports only the chosen collections, and an administration chosen by 0.1.x means contacts', async () => {
     const store = fakeStore({ outage: false });
     const controller = createController(store, () => {});

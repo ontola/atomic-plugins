@@ -21,7 +21,7 @@ import { COLLECTION_LABELS, COLLECTIONS, type Collection } from './binding.js';
 import {
   createController,
   describe,
-  type SyncRecord,
+  type SyncHistory,
   type ViewState,
 } from './controller.js';
 import { syncStatusFor } from './status.js';
@@ -88,9 +88,9 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     change,
   );
 
-  const render = (state: ViewState, last: SyncRecord | undefined) => {
+  const render = (state: ViewState, history: SyncHistory) => {
     const now = Date.now();
-    const shown = syncStatusFor({ state, last, now });
+    const shown = syncStatusFor({ state, history, now });
     card.replaceChildren(
       ...(shown ? [renderSyncStatus(doc, shown, { now })] : []),
     );
@@ -136,7 +136,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   };
 
   const controller = createController(store, render);
-  render(controller.state(), controller.last());
+  render(controller.state(), controller.history());
   connect.addEventListener('click', () => void controller.connect());
   importButton.addEventListener('click', () => {
     const chosen = [...boxes]

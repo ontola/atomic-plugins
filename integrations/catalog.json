@@ -222,7 +222,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.3.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-5kisjoKFOHofeh2YmDmXI//FPHCr2EdoqflOC6/5fydwOZoOJjzTaBWn9ecLtpQH"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-E7Ey5J/sT5Y5bGlKIqIo7/P8BE/V/tzP+XKKTjtjLPm9NHZvaHsAqphblLVT/g/z"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",

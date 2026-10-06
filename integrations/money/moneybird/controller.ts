@@ -14,15 +14,24 @@ import {
   ensureRowAccess,
   findHome,
   formatCollections,
+  formatLastSync,
   hasRowAccess,
   layout,
   parseCollections,
+  parseLastSync,
   unbindTable,
   type Collection,
+  type LastGood,
   type Layout,
 } from './binding.js';
 import { WORK_PERSON, WORK_PROJECT } from './hours.js';
-import { adopt, COLLECTIONS_TERM, ensureTables, type Adopted } from './own.js';
+import {
+  adopt,
+  COLLECTIONS_TERM,
+  ensureTables,
+  LAST_SYNC,
+  type Adopted,
+} from './own.js';
 import {
   MoneybirdError,
   readAdministrations,
@@ -49,17 +58,26 @@ export interface Failed {
 
 export type Results = Partial<Record<Collection, SyncSummary | Failed>>;
 
-/**
- * The latest sync this page load, kept apart from the state so the card
- * still names it while the settings are open or after a later error
- * (`controller.last()`, also handed to `render`).
- */
+/** The latest sync this page load. */
 export interface SyncRecord {
   at: Date;
   collections: Collection[];
   results: Results;
-  /** When each collection last refreshed without error, this page load. */
-  lastGood: Partial<Record<Collection, Date>>;
+}
+
+/**
+ * What the card needs beyond the state, kept apart from it so the last sync
+ * still shows while the settings are open or after a later error
+ * (`controller.history()`, also handed to `render`).
+ */
+export interface SyncHistory {
+  last?: SyncRecord;
+  /**
+   * When each collection last refreshed without error: this page load's
+   * syncs, and before them the home's `moneybird-last-sync`, so the gap
+   * after a failed refresh is named across page loads.
+   */
+  lastGood: LastGood;
 }
 
 export type ViewState =
@@ -111,6 +129,8 @@ export type ViewState =
       connection?: ConnectionReference;
       administration?: string;
       collections?: Collection[];
+      /** The table is this app's own or bound to it, so its syncs write here. */
+      bound?: boolean;
     };
 
 const NOUNS: Record<Collection, string> = {
@@ -207,19 +227,18 @@ const LEGACY_COLLECTIONS: Collection[] = ['contacts'];
 
 export function createController(
   store: PluginStore,
-  render: (state: ViewState, last: SyncRecord | undefined) => void,
+  render: (state: ViewState, history: SyncHistory) => void,
 ) {
   let state: ViewState = { kind: 'loading' };
   let where: Layout | undefined;
   let adopted: Adopted | undefined;
   /** The App (own table) or the table's binding: where the settings live. */
   let home: string | undefined;
-  let last: SyncRecord | undefined;
-  const lastGood: SyncRecord['lastGood'] = {};
+  const history: SyncHistory = { lastGood: {} };
 
   const set = (next: ViewState) => {
-    state = next;
-    render(state, last);
+    state = next.kind === 'error' && home ? { ...next, bound: true } : next;
+    render(state, history);
   };
 
   const term = (shortname: string) => adopted!.properties.get(shortname)!;
@@ -237,6 +256,15 @@ export function createController(
     const collections = chosen
       ? [chosen]
       : parseCollections(resource.get(term(COLLECTIONS_TERM.shortname)));
+
+    // The stored last good refresh per collection, unless this page load
+    // already knows a later one.
+    for (const [c, at] of Object.entries(
+      parseLastSync(resource.get(term(LAST_SYNC.shortname))),
+    ) as [Collection, Date][]) {
+      const known = history.lastGood[c];
+      if (!known || known < at) history.lastGood[c] = at;
+    }
 
     return {
       administration:
@@ -306,8 +334,8 @@ export function createController(
 
   const controller = {
     state: () => state,
-    /** The latest sync this page load, if any. */
-    last: () => last,
+    /** The latest sync this page load and the last good refresh per collection. */
+    history: () => history,
 
     /**
      * Adopts, finds where this view is and its settings, then starts one
@@ -491,10 +519,27 @@ export function createController(
       };
       set(syncing);
       // One paced wrapper for the whole sync, so the three collections share
-      // the window; a wait shows on the card while it lasts.
+      // the window; a wait shows on the card while it lasts, counting down.
+      let ticker: ReturnType<typeof setInterval> | undefined;
       const get = throttled(relayGet(proxy, connection), {
-        onWait: waiting => set({ ...syncing, waiting }),
-        onResume: () => set(syncing),
+        onWait: waiting => {
+          const until = Date.now() + waiting.ms;
+          set({ ...syncing, waiting });
+          clearInterval(ticker);
+          ticker = setInterval(
+            () =>
+              set({
+                ...syncing,
+                waiting: { ...waiting, ms: Math.max(0, until - Date.now()) },
+              }),
+            1000,
+          );
+        },
+        onResume: () => {
+          clearInterval(ticker);
+          ticker = undefined;
+          set(syncing);
+        },
       });
       const results: Results = {};
 
@@ -541,10 +586,25 @@ export function createController(
         }
       }
 
+      clearInterval(ticker);
       const at = new Date();
-      for (const collection of collections)
-        if (!('error' in results[collection]!)) lastGood[collection] = at;
-      last = { at, collections, results, lastGood: { ...lastGood } };
+      const refreshed = collections.filter(c => !('error' in results[c]!));
+      for (const c of refreshed) history.lastGood[c] = at;
+      history.last = { at, collections, results };
+
+      // Remember the good refreshes across page loads (one write per sync
+      // that refreshed anything). A failure here is not the sync's: the
+      // card still knows this page load's times.
+      if (refreshed.length && home)
+        try {
+          const resource = await store.getResource(home);
+          const value = formatLastSync(history.lastGood);
+          if (resource.get(term(LAST_SYNC.shortname)) !== value)
+            await resource.set(term(LAST_SYNC.shortname), value).save();
+        } catch {
+          // Kept in memory only, this page load.
+        }
+
       set({
         kind: 'synced',
         connection,
