@@ -176,11 +176,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps and connect Todoist through the host's consent bar. Tasks refresh whenever the app is opened and on Sync now. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Todoist access is data:read, so closing, editing or creating a task here is not sent to Todoist, and a local edit to an imported column is overwritten at the next sync. Active tasks only: a task completed before the first import is never imported. A task gone from the active list is never assumed completed: when Todoist's by-id check answers 404 or fails, the row keeps its last known values and says so. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Todoist account (#46), including what Todoist answers by id for a completed task.",
     "https://atomicdata.dev/integrations/properties/keywords": "todoist tasks todo projects issues read-only drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.1.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-If2Jk4iJL2xlwTkQd1RMsNYWTNS+TtskmF7fW6OXRGNsqWipSBN4G+ZH6M/7brqb"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-INwSEY1UnuMupYnMEZRjsr3wVWd6hE31Jb2u7aUAkWEVBlGplHPTs4W7/+yNuUNl"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",

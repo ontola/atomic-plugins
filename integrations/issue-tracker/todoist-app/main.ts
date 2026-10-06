@@ -4,14 +4,20 @@
  * journey). The host's generated shell does
  * `const plugin = await import(js_url); await plugin.view({ root, store })`,
  * so this module exports `view` and does not render on import. One module,
- * no stylesheet, no network access of its own: every call goes through the
- * host's proxy client. Plain DOM, no framework: a heading, a status line,
- * the connect and sync buttons, and the table's tasks with their presence.
+ * one `<style>` (the shared sync-status card's rules and a visually hidden
+ * class), no network access of its own: every call goes through the host's
+ * proxy client. Plain DOM, no framework: a heading, the shared sync-status
+ * card first (Q-084; `status.ts` maps the state onto it: last sync and its
+ * counts, read-only and that local edits are overwritten, the #99 results,
+ * a rate limit's retry time), the connect and sync buttons, a visually
+ * hidden `role="status"` line, and the table's tasks with their presence.
  * A row missing the class's required Name is listed with "Incomplete:
  * missing Name" and, where the host can show a row, an "Open row" button
  * (#177; ontology-kit's rule: shown as incomplete, never skipped).
  */
+import { renderSyncStatus, syncStatusCss } from '../../sync-status/card.js';
 import { createController, describe, type ViewState } from './controller.js';
+import { syncStatusFor } from './status.js';
 import type { ViewArgs } from './store.js';
 import type { TaskRow } from './sync.js';
 
@@ -25,6 +31,9 @@ const COLUMNS: [string, (t: TaskRow) => string][] = [
   ['Last seen', t => t.lastSeen ?? ''],
 ];
 
+/** The app's own rules, then the shared card's (`.ss-*`). */
+const css = `.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.ss{margin:0 0 .75rem}\n${syncStatusCss}`;
+
 export async function view({ root, store }: ViewArgs): Promise<void> {
   const doc = root.ownerDocument;
 
@@ -35,16 +44,18 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     return node;
   };
 
+  const style = el('style', css);
   const heading = el('h1', 'Todoist');
+  /** Replaced on every render by the card for the new state. */
+  let card: HTMLElement = el('section');
   const status = el('p');
   status.setAttribute('role', 'status');
+  status.className = 'sr';
   const connect = el('button', 'Connect Todoist');
   const sync = el('button', 'Sync now');
   for (const button of [connect, sync]) button.type = 'button';
-  const note = el(
-    'p',
-    'Read-only: closing or editing a task here is not sent to Todoist. A task that stops appearing is checked by id and shown as completed only when Todoist says so.',
-  );
+  const controls = el('p');
+  controls.append(connect, ' ', sync);
   const table = el('table');
   const head = el('thead');
   const headRow = el('tr');
@@ -59,9 +70,19 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   root.style.padding = '1rem';
   table.style.borderCollapse = 'collapse';
   table.style.marginTop = '1rem';
-  root.replaceChildren(heading, status, connect, sync, note, table);
+  root.replaceChildren(style, heading, card, controls, status, table);
+
+  const openRow = (subject: string) =>
+    void store.openResource!(subject).catch(() => undefined);
 
   const render = (state: ViewState) => {
+    const next = renderSyncStatus(
+      doc,
+      syncStatusFor({ state, ...(canOpen ? { onOpenRow: openRow } : {}) }),
+      { now: Date.now() },
+    );
+    card.replaceWith(next);
+    card = next;
     status.textContent = describe(state);
     connect.hidden = !(
       state.kind === 'disconnected' ||
@@ -106,9 +127,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
             'aria-label',
             `Open row ${task.name || '(no name)'}`,
           );
-          open.addEventListener('click', () => {
-            void store.openResource!(task.subject).catch(() => undefined);
-          });
+          open.addEventListener('click', () => openRow(task.subject));
           td.append(open);
           row.append(td);
         }

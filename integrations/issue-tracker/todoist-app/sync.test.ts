@@ -31,8 +31,14 @@ import {
   ROW_EXTRAS,
   TABLE,
 } from './fakeStore.js';
-import { TodoistError } from './read.js';
+import {
+  DEFAULT_RETRY_MS,
+  MAX_INLINE_WAIT_MS,
+  TodoistError,
+  TodoistRateLimited,
+} from './read.js';
 import { relayGet, syncTasks } from './sync.js';
+import { MAX_AUTO_RETRIES, MAX_AUTO_RETRY_MS } from './controller.js';
 
 const T1 = '2026-03-01T10:00:00.000Z';
 const T2 = '2026-03-01T11:00:00.000Z';
@@ -46,8 +52,16 @@ async function setUp() {
     platform: 'todoist',
     connectionId: 'c1',
   });
+  const waits: number[] = [];
   const sync = (now: string, read?: { maxPages?: number }) =>
-    syncTasks(store, get, drive, { now: () => now, read });
+    syncTasks(store, get, drive, {
+      now: () => now,
+      read,
+      rateLimit: {
+        now: () => Date.parse(now),
+        sleep: async ms => void waits.push(ms),
+      },
+    });
 
   const rowOf = (taskId: string) => {
     for (const [subject, props] of store.resources)
@@ -59,7 +73,7 @@ async function setUp() {
 
   const p = drive.properties;
 
-  return { store, drive, sync, rowOf, p };
+  return { store, drive, sync, rowOf, p, waits };
 }
 
 describe('provisioning', () => {
@@ -199,7 +213,45 @@ describe('import', () => {
         e instanceof TodoistError && /reconnect Todoist/.test(e.message),
     );
   });
+
+  it('waits out a short rate limit, and stops before any write on a long one', async () => {
+    const { store, sync, waits } = await setUp();
+    store.limitNext = { count: 1, retryAfter: '2' };
+    expect(await sync(T1)).toMatchObject({ added: 5 });
+    expect(waits).toEqual([2000]);
+
+    store.todoist.completeTask('synthetic-task-1');
+    store.limitNext = { count: 1, retryAfter: '120' };
+    const before = store.writes.length;
+    const error = (await sync(T2).catch(
+      (e: unknown) => e,
+    )) as TodoistRateLimited;
+    expect(error).toBeInstanceOf(TodoistRateLimited);
+    expect(error.retryAt).toBe(Date.parse(T2) + 120_000);
+    expect(store.writes.length).toBe(before);
+    expect(waits).toEqual([2000]);
+
+    // A rate limit on the by-id check stops the pass too: the task is not
+    // marked unconfirmed, and the App's last complete read is not moved.
+    store.limitNext = { count: 1, only: 'lookup' };
+    const calls = store.calls.length;
+    await expect(sync(T3)).rejects.toBeInstanceOf(TodoistRateLimited);
+    expect(store.calls.slice(calls).at(-1)?.path).toBe(
+      '/api/v1/tasks/synthetic-task-1',
+    );
+    expect(store.writes.length).toBe(before);
+    expect(store.resources.get(APP)![driveProps(store).lastSync]).toBe(T1);
+  });
 });
+
+/** The drive's property subjects, from the App's ontology (test helper). */
+function driveProps(store: ReturnType<typeof fakeStore>) {
+  const listed = store.resources.get(ONTOLOGY)![PROPERTIES] as string[];
+  const by = (shortname: string) =>
+    listed.find(s => store.resources.get(s)![SHORTNAME] === shortname)!;
+
+  return { lastSync: by('todoist-last-sync') };
+}
 
 describe('a task that stops appearing (#99)', () => {
   it('is looked up by id once and closed only when Todoist says completed', async () => {
@@ -351,7 +403,10 @@ describe('a task that stops appearing (#99)', () => {
 describe('controller', () => {
   const states: string[] = [];
   const track = (store: ReturnType<typeof fakeStore>) =>
-    createController(store, s => states.push(s.kind), { now: () => T1 });
+    createController(store, s => states.push(s.kind), {
+      now: () => T1,
+      clock: () => Date.parse(T1),
+    });
 
   it('syncs on load with a connection and lists the table', async () => {
     states.length = 0;
@@ -447,7 +502,7 @@ describe('controller', () => {
     expect(bare.state().kind).toBe('no-relay');
   });
 
-  it('keeps the imported rows when a refresh fails', async () => {
+  it('keeps the imported rows when a refresh fails, and names the last good read', async () => {
     const store = fakeStore();
     const controller = track(store);
     await (
@@ -459,6 +514,179 @@ describe('controller', () => {
     expect(state.kind).toBe('error');
     if (state.kind !== 'error') return;
     expect(state.message).toContain('host offline');
+    expect(state.status).toBeUndefined();
+    expect(state.at).toBe(Date.parse(T1));
+    expect(state.lastGood).toBe(T1);
     expect(state.tasks).toHaveLength(5);
+
+    delete store.fail;
+    store.todoist.failNext(1, 503, 'list');
+    await controller.sync();
+    expect(controller.state()).toMatchObject({ kind: 'error', status: 503 });
+  });
+
+  it('knows the last complete read before this page load syncs', async () => {
+    const store = fakeStore();
+    await (
+      await track(store).load()
+    ).syncing;
+    const again = track(fakeStore({ connected: false }));
+    await again.load();
+    expect(again.state()).toMatchObject({ kind: 'disconnected' });
+    expect(again.state()).not.toHaveProperty('lastGood');
+
+    store.proxy!.connections = async () => [];
+    const reopened = track(store);
+    await reopened.load();
+    expect(reopened.state()).toMatchObject({
+      kind: 'disconnected',
+      lastGood: T1,
+    });
+  });
+});
+
+describe('controller under a rate limit', () => {
+  const NOW = Date.parse(T1);
+
+  /** A controller whose clock and retry timer the test drives. */
+  function limited(store: ReturnType<typeof fakeStore>) {
+    const states: string[] = [];
+    const timers: {
+      run: () => void;
+      ms: number;
+      cleared: boolean;
+      ran?: boolean;
+    }[] = [];
+    let now = NOW;
+    const controller = createController(store, s => states.push(s.kind), {
+      now: () => new Date(now).toISOString(),
+      clock: () => now,
+      rateLimit: { now: () => now, sleep: async () => undefined },
+      timer: {
+        set: (run, ms) => {
+          const timer = { run, ms, cleared: false };
+          timers.push(timer);
+
+          return timer;
+        },
+        clear: handle => {
+          (handle as { cleared: boolean }).cleared = true;
+        },
+      },
+    });
+
+    /** Lets the one waiting retry fire, as the timer would. */
+    const fire = async () => {
+      const pending = timers.filter(t => !t.cleared && !t.ran);
+      expect(pending).toHaveLength(1);
+      const [timer] = pending;
+      timer.ran = true;
+      now += timer.ms;
+      timer.run();
+      // The retry's sync runs on the next ticks.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    };
+
+    return {
+      controller,
+      states,
+      timers,
+      fire,
+      tick: (ms: number) => void (now += ms),
+    };
+  }
+
+  it('retries by itself at Retry-After when that is soon, then syncs', async () => {
+    const store = fakeStore();
+    const { controller, states, timers, fire } = limited(store);
+    const seconds = MAX_INLINE_WAIT_MS / 1000 + 20;
+    store.limitNext = { count: 1, retryAfter: String(seconds) };
+    await (
+      await controller.load()
+    ).syncing;
+    const state = controller.state();
+    expect(state).toMatchObject({
+      kind: 'error',
+      status: 429,
+      rateLimited: { retryAt: NOW + seconds * 1000, retrying: true },
+      tasks: [],
+    });
+    expect(timers).toHaveLength(1);
+    expect(timers[0].ms).toBe(seconds * 1000);
+    // Nothing was imported: only the provisioning wrote.
+    const provisioned = store.writes.length;
+
+    await fire();
+    expect(controller.state()).toMatchObject({ kind: 'synced' });
+    expect(states).toEqual(['syncing', 'error', 'syncing', 'synced']);
+    expect(
+      store.writes.slice(provisioned).filter(w => w.op === 'create'),
+    ).toHaveLength(5);
+    expect((controller.state() as { tasks: unknown[] }).tasks).toHaveLength(5);
+  });
+
+  it('stops, saying when to try again, for a long Retry-After or after too many retries', async () => {
+    const store = fakeStore();
+    const { controller, timers, fire } = limited(store);
+    const far = new Date(NOW + MAX_AUTO_RETRY_MS + 1000).toUTCString();
+    store.limitNext = { count: 1, retryAfter: far };
+    await (
+      await controller.load()
+    ).syncing;
+    expect(controller.state()).toMatchObject({
+      kind: 'error',
+      rateLimited: { retryAt: NOW + MAX_AUTO_RETRY_MS + 1000, retrying: false },
+    });
+    expect(timers).toHaveLength(0);
+
+    // A 429 with no Retry-After: the default wait, retried, at most
+    // MAX_AUTO_RETRIES times in a row.
+    for (let n = 0; n < MAX_AUTO_RETRIES; n++) {
+      store.limitNext = { count: 1 };
+      if (n === 0) await controller.sync();
+      else await fire();
+      expect(controller.state()).toMatchObject({
+        kind: 'error',
+        rateLimited: { retrying: true },
+      });
+      const paused = controller.state() as {
+        rateLimited: { retryAt: number };
+      };
+      expect(
+        paused.rateLimited.retryAt - DEFAULT_RETRY_MS,
+      ).toBeGreaterThanOrEqual(NOW);
+    }
+
+    store.limitNext = { count: 1 };
+    await fire();
+    expect(controller.state()).toMatchObject({
+      kind: 'error',
+      rateLimited: { retrying: false },
+    });
+    expect(timers.filter(t => !t.cleared)).toHaveLength(MAX_AUTO_RETRIES);
+
+    // "Sync now" starts afresh and succeeds.
+    await controller.sync();
+    expect(controller.state()).toMatchObject({ kind: 'synced' });
+  });
+
+  it('cancels a waiting retry when the person syncs now', async () => {
+    const store = fakeStore();
+    const { controller, timers } = limited(store);
+    store.limitNext = { count: 1, retryAfter: '30' };
+    await (
+      await controller.load()
+    ).syncing;
+    expect(timers).toHaveLength(1);
+    await controller.sync();
+    expect(timers[0].cleared).toBe(true);
+    expect(controller.state()).toMatchObject({ kind: 'synced' });
+
+    store.limitNext = { count: 1, retryAfter: '30' };
+    await controller.sync();
+    expect(timers).toHaveLength(2);
+    controller.dispose();
+    expect(timers[1].cleared).toBe(true);
   });
 });
