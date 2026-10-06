@@ -63,7 +63,7 @@ invitation, which does not exist yet (question for Michiel, in the PR).
 
 ## Todoist
 
-The Todoist drive app (`integrations/issue-tracker/todoist-app/`, 0.1.1)
+The Todoist drive app (`integrations/issue-tracker/todoist-app/`, 0.2.0)
 has no plan: it is not in `../../catalog.mjs`, so the test catalog cannot
 install it, it imports active tasks only (read-only, nothing to send), and
 its synthetic fixture has five tasks. A plan would need a `-sample` entry

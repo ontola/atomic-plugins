@@ -1,0 +1,295 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developer.atlassian.com/cloud/confluence/rest/v2/intro/
+overlay: 1.0.0
+info:
+  title: Confluence v2 linked collections
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5e659825c92ed8d1284b63cdc84a94a0c51d7217/APIs/atlassian.com/confluence-v2/2.0.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedResults:
+        type: nextLink
+        autoDetect: false
+        description: Follow only rel="next" from the RFC 8288 Link response header. Resolve relative link
+          targets against the request URL; preserve the returned cursor and filters. Stop when no next
+          relation is supplied.
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: results
+          headers:
+            Link:
+              role: nextLink
+- target: $.paths['/attachments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/attachments/{id}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/attachments/{attachment-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/attachments/{id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/attachments/{id}/footer-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/attachments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/custom-content'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/likes/users'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{blogpost-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{id}/attachments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{id}/footer-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{id}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{custom-content-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/labels/{id}/attachments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/labels/{id}/blogposts'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/labels/{id}/pages'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/attachments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/custom-content'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/likes/users'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{page-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/whiteboards/{id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/whiteboards/{id}/direct-children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/whiteboards/{id}/descendants'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/databases/{id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/databases/{id}/direct-children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/databases/{id}/descendants'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/embeds/{id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/embeds/{id}/direct-children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/embeds/{id}/descendants'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/folders/{id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/folders/{id}/direct-children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/folders/{id}/descendants'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{custom-content-id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{id}/blogposts'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{id}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{id}/content/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{id}/custom-content'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{id}/pages'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/spaces/{space-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/footer-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/inline-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/footer-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/blogposts/{id}/inline-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/footer-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/footer-comments/{id}/children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/footer-comments/{id}/likes/users'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/footer-comments/{id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/inline-comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/inline-comments/{id}/children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/inline-comments/{id}/likes/users'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/inline-comments/{id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/comments/{comment-id}/properties'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/tasks'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/custom-content/{id}/children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/direct-children'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/pages/{id}/descendants'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults
+- target: $.paths['/data-policies/spaces'].get
+  update:
+    x-pagination:
+    - scheme: linkedResults

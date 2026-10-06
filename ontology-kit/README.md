@@ -31,8 +31,8 @@ specifies:
 | `work-project-v1`, `work-person-v1` | `name`                                                            | –                                                                                                 | –                                                                                                                      |
 | `bank-transaction-v1`               | `bank-account`, `bank-currency`, `bank-amount`, `bank-value-date` | `name`, `bank-booking-date`, `bank-description`, `bank-reference`, `money-category`, `money-note` | money 0.2.0's shortnames, unchanged                                                                                    |
 
-Which app uses which class today: Google Calendar (`calendar` 0.3.1) writes
-`event-v1`; GitHub issues (`issue-tracker` 0.3.1) and Todoist (`todoist` 0.1.1)
+Which app uses which class today: Google Calendar (`calendar` 0.3.2) writes
+`event-v1`; GitHub issues (`issue-tracker` 0.3.1) and Todoist (`todoist` 0.2.0)
 write `issue-v1`; Clockify (`timesheets` 0.7.1) writes `time-entry-v1`, linked
 to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
 writes `bank-transaction-v1`; Moneybird (`moneybird` 0.3.0, in

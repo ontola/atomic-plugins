@@ -87,8 +87,8 @@ verified behaviour.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 26,857
-bytes for 0.1.1; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,912
+bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
 connected account's **active tasks** into its own table, nothing more; the
@@ -103,8 +103,9 @@ connection, every open of the view and every "Sync now" runs one pass
 each previously imported task that a complete read no longer lists; then
 `reconcileTodoistTasks` from `../todoist.ts`, whose table above says what
 each row becomes. All reads happen before any write, so a failed read
-leaves the table as it was. The view lists the table's tasks with their
-status, presence, due day, priority, project and last-seen.
+leaves the table as it was. The view puts the shared sync-status card first
+(below), then the connect and sync buttons, then the table's tasks with
+their status, presence, due day, priority, project and last-seen.
 
 **Rows** are of the shared class `issue-v1` (#177), like the GitHub issues
 app's: on first open the app adds the class to its App's `renders`, its
@@ -140,15 +141,70 @@ pass, a hand-made one is completed in the table. Unit
 Name; the server refuses a commit without the property, see the GitHub
 issues app's note on incomplete rows).
 
+**The sync-status card (0.2.0).** The shared card of
+[`integrations/sync-status/`](../sync-status/README.md) (Decision Inbox
+Q-084) heads the view; `todoist-app/status.ts` maps the controller's state
+onto it, pure, and `main.ts` renders it on every state change. It says, in
+every state: "Read-only: edits here stay in Atomic. Nothing is sent to
+Todoist. An edit here to an imported column (Name, Status, Description, Due
+date) is overwritten at the next sync; a row added here is kept." (On a host
+without the proxy client the note says instead that nothing is read or
+overwritten until it can connect apps to Todoist. On another app's Issue
+table, which this app never syncs and whose own app may send edits back, no
+card is rendered at all: the view shows only the plain notice that it imports
+into its own table.) Then the
+last sync ("Synced 4 min ago", its added, updated and unchanged counts, "5
+tasks from Todoist"), or a failed one with the plain next step (401/403
+"Reconnect Todoist."; 5xx "try again in a moment") and when the last
+complete read was ("Last good sync 2 days ago", from the App's
+`todoist-last-sync`), so a gap is never hidden. The #99 results are counted
+groups naming the tasks under "Which": completed in Todoist (closed here),
+deleted, no longer reachable (kept open, not closed), could not be checked
+(checked again next time); rows added here and incomplete rows (with "Open
+row" on a single one) are listed the same way. A partial read is a warning
+over an otherwise good sync that names the last complete read. A load that
+fails (the host cannot answer which connection the app has) is a visible
+error state, never "Loading…" for good. The card is not a live region: the one
+`role="status"` line is kept, visually hidden, with the summary sentence
+the e2e waits on. `build.mjs` bundles the card through
+`cssRawPlugin` from `../../sync-status/build.mjs` (its CSS minified), and the
+`issue-tracker` lane lists `integrations/sync-status/**` in its `paths`.
+
+**Rate limits (0.2.0).** Todoist answers 429 with `Retry-After`
+(delay-seconds or an IMF-fixdate, "Tue, 06 Oct 2026 12:00:00 GMT"), which
+the host relays; any other shape counts as no header, and a wait is clamped
+to a day. `read.ts`'s `rateLimited` wraps every GET of a pass: a
+`Retry-After` of at most 10 s is waited out and the same request retried, at
+most twice per request (so at most 20 s per request); a longer one, one retry
+too many, or no usable header (60 s is assumed) throws `TodoistRateLimited`
+with the time to try again, before any row is written. A 429 on a by-id check stops the pass the same way
+rather than marking the task unconfirmed. The controller then retries the
+whole (idempotent) pass by itself at that time when it is within 15 min, at
+most 3 times in a row, and the card says "Todoist is rate-limiting; retrying
+at 14:05."; otherwise, or after the third, it says "Todoist is rate-limiting;
+the sync stopped." with "Try again after 14:05." "Sync now" cancels a waiting
+retry and starts the count afresh. Every wait honours `Retry-After`; none is
+unbounded. `dispose()` cancels a waiting retry and keeps a sync in flight
+from scheduling one; the host has no teardown hook for a view yet, so only
+tests call it. The same pattern as the calendar, Notion and Clockify apps, with
+no shared code: it lives in this folder. Tested against fake transports only
+(`read.test.ts`, `sync.test.ts`); Todoist's real limits and header form are
+not verified (#46).
+
 **Tests.** `todoist-app/sync.test.ts` (the pass against an in-memory store
-and the fixture: provisioning, import, a refresh that writes no row, and
-every #99 case), `todoist-app/build.test.ts` (the bundle, its size limit and
-a typecheck), `todoist-fixture.test.ts` (the fixture against `todoist.ts`),
-and the lane's `e2e/todoist.spec.ts`: install from the catalog, connect,
-import five tasks as `issue-v1` rows, a reload that leaves every row's
-properties byte-for-byte the same, a task completed in Todoist that turns
-up `completed` and done, and one made unreachable that turns up
-`unavailable` and still open. Run them with:
+and the fixture: provisioning, import, a refresh that writes no row, every
+#99 case, a rate limit waited out or stopping the pass, and the controller's
+automatic retry, its cap and its cancellation, with a scripted clock and
+timer), `todoist-app/read.test.ts` (`parseRetryAfter` and `rateLimited`
+against fake transports), `todoist-app/status.test.ts` (every state on the
+card, and the words it then says), `todoist-app/build.test.ts` (the bundle,
+its size limit and a typecheck), `todoist-fixture.test.ts` (the fixture
+against `todoist.ts`), and the lane's `e2e/todoist.spec.ts`: install from
+the catalog, connect, import five tasks as `issue-v1` rows, a reload that
+leaves every row's properties byte-for-byte the same, a task completed in
+Todoist that turns up `completed` and done, and one made unreachable that
+turns up `unavailable` and still open, with the card's words at each step
+(no 429 end to end). Run them with:
 
 ```sh
 browser/node_modules/.bin/vitest run --config integrations/issue-tracker/vitest.config.ts todoist
