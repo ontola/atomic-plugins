@@ -1,0 +1,256 @@
+openapi: 3.1.0
+info:
+  title: GitHub webhook deliveries (synthetic fixture)
+  version: 0.1.0
+  description: >
+    A synthetic, trimmed document for the Webhook Deliveries extension's
+    tests. It is NOT a published overlay and NOT the composed github-issues
+    document: its paths are cut down to the operations x-webhook-deliveries
+    references, and its crudResources repeat only the identity and collection
+    templates of the issue resource in
+    overlays/APIs/github.com/github-issues/1.1.4/crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml.
+    The webhook facts follow GitHub's documentation (README section 6.2);
+    none has been checked against live deliveries.
+servers:
+  - url: https://api.github.com
+paths:
+  /repos/{owner}/{repo}:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+    get:
+      operationId: repos/get
+      responses:
+        '200':
+          { description: The repository; its numeric id is the source key. }
+  /repos/{owner}/{repo}/issues:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+    get:
+      operationId: issues/list-for-repo
+      responses:
+        '200': { description: Issues. }
+  /repos/{owner}/{repo}/issues/{issue_number}:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+      - $ref: '#/components/parameters/issue_number'
+    get:
+      operationId: issues/get
+      responses:
+        '200': { description: An issue. }
+  /repos/{owner}/{repo}/issues/comments/{comment_id}:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+      - $ref: '#/components/parameters/comment_id'
+    get:
+      operationId: issues/get-comment
+      responses:
+        '200': { description: An issue comment. }
+  /repos/{owner}/{repo}/issues/{issue_number}/comments:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+      - $ref: '#/components/parameters/issue_number'
+    get:
+      operationId: issues/list-comments
+      responses:
+        '200': { description: Comments. }
+  /repos/{owner}/{repo}/hooks:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+    get:
+      operationId: repos/list-webhooks
+      responses:
+        '200': { description: The repository's hooks. }
+    post:
+      operationId: repos/create-webhook
+      responses:
+        '201': { description: The hook. }
+  /repos/{owner}/{repo}/hooks/{hook_id}:
+    parameters:
+      - $ref: '#/components/parameters/owner'
+      - $ref: '#/components/parameters/repo'
+      - $ref: '#/components/parameters/hook_id'
+    delete:
+      operationId: repos/delete-webhook
+      responses:
+        '204': { description: Deleted. }
+components:
+  parameters:
+    owner: { name: owner, in: path, required: true, schema: { type: string } }
+    repo: { name: repo, in: path, required: true, schema: { type: string } }
+    issue_number:
+      {
+        name: issue_number,
+        in: path,
+        required: true,
+        schema: { type: integer },
+      }
+    comment_id:
+      { name: comment_id, in: path, required: true, schema: { type: integer } }
+    hook_id:
+      { name: hook_id, in: path, required: true, schema: { type: integer } }
+  crudResources:
+    issue:
+      identity:
+        urlTemplate: /repos/{owner}/{repo}/issues/{issue_number}
+        bindings:
+          issue_number: { field: number }
+      collections:
+        issues:
+          urlTemplate: /repos/{owner}/{repo}/issues
+    issueComment:
+      identity:
+        urlTemplate: /repos/{owner}/{repo}/issues/comments/{comment_id}
+        bindings:
+          comment_id: { field: id }
+      collections:
+        issueComments:
+          urlTemplate: /repos/{owner}/{repo}/issues/{issue_number}/comments
+x-webhook-deliveries:
+  description: >
+    GitHub signs the raw body with HMAC-SHA256 in X-Hub-Signature-256
+    ("sha256=" and 64 hex digits) and sends no signed timestamp
+    (https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
+    X-GitHub-Delivery is a GUID kept on redelivery, and GitHub expects a 2XX
+    within 10 seconds
+    (https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks).
+    Payloads are capped at 25 MB
+    (https://docs.github.com/en/webhooks/webhook-events-and-payloads).
+  verificationProfiles:
+    githubApp:
+      algorithm: hmac-sha256
+      signedContent: rawBody
+      signature:
+        {
+          in: header,
+          name: X-Hub-Signature-256,
+          prefix: 'sha256=',
+          encoding: hex,
+        }
+      secret: { source: operatorConfigured }
+      description: The GitHub App's webhook secret, set by the operator.
+    githubRepositoryHook:
+      algorithm: hmac-sha256
+      signedContent: rawBody
+      signature:
+        {
+          in: header,
+          name: X-Hub-Signature-256,
+          prefix: 'sha256=',
+          encoding: hex,
+        }
+      secret: { source: receiverGenerated }
+  delivery:
+    id: { in: header, name: X-GitHub-Delivery }
+    redelivery: sameId
+    eventType: { in: header, name: X-GitHub-Event }
+    action: $request.body#/action
+    responseDeadlineSeconds: 10
+    maxPayloadBytes: 26214400
+  sources:
+    repository:
+      key: $request.body#/repository/id
+      access:
+        operation: { method: get, path: '/repos/{owner}/{repo}' }
+        key: $response.body#/id
+      context:
+        installation: $request.body#/installation/id
+      description: >
+        Keyed by the numeric repository id, which survives renames and
+        transfers; owner and name are only used to call the API.
+  hooks:
+    sharedApplication:
+      verificationProfile: githubApp
+      description: >
+        The GitHub App's own webhook, configured in the App's settings by its
+        operator (https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/using-webhooks-with-github-apps).
+        Preferred for the pilot. The receiver never changes or deletes it.
+    dedicated:
+      verificationProfile: githubRepositoryHook
+      source: repository
+      create:
+        method: post
+        path: /repos/{owner}/{repo}/hooks
+        body:
+          name: web
+          active: true
+          events: $events
+          config:
+            url: $receiver.url
+            secret: $receiver.secret
+            content_type: json
+            insecure_ssl: '0'
+      hookId: $response.body#/id
+      list:
+        method: get
+        path: /repos/{owner}/{repo}/hooks
+        url: $response.body#/*/config/url
+        hookId: $response.body#/*/id
+      delete:
+        method: delete
+        path: /repos/{owner}/{repo}/hooks/{hook_id}
+      hookIdParameter: hook_id
+      description: >
+        Repository hooks need the "Webhooks" repository permission (write),
+        which the pilot's Issues write / Metadata read grant does not include
+        (https://docs.github.com/en/rest/repos/webhooks). Declared for
+        completeness; the pilot does not use it.
+  events:
+    issues:
+      source: repository
+      actions:
+        [
+          opened,
+          edited,
+          deleted,
+          closed,
+          reopened,
+          transferred,
+          labeled,
+          unlabeled,
+          assigned,
+          unassigned,
+        ]
+      resources:
+        - resource: issue
+          bindings:
+            owner: $request.body#/repository/owner/login
+            repo: $request.body#/repository/name
+            issue_number: $request.body#/issue/number
+      collections:
+        - resource: issue
+          collection: issues
+          bindings:
+            owner: $request.body#/repository/owner/login
+            repo: $request.body#/repository/name
+    issue_comment:
+      source: repository
+      actions: [created, edited, deleted]
+      resources:
+        - resource: issueComment
+          bindings:
+            owner: $request.body#/repository/owner/login
+            repo: $request.body#/repository/name
+            comment_id: $request.body#/comment/id
+      collections:
+        - resource: issueComment
+          collection: issueComments
+          bindings:
+            owner: $request.body#/repository/owner/login
+            repo: $request.body#/repository/name
+            issue_number: $request.body#/issue/number
+  revocations:
+    - event: installation_repositories
+      actions: [removed]
+      source: repository
+      keys: $request.body#/repositories_removed/*/id
+    - event: installation
+      actions: [deleted, suspend]
+      source: repository
+      context: installation
+      keys: $request.body#/installation/id
