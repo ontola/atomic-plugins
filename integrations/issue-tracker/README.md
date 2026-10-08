@@ -82,7 +82,16 @@ tasks up through the host's proxy client, and calls
 (`synthetic.mjs`, hand-written from Todoist's API documentation) until #46
 records `api/`; its drivers model `completeTask` as "gone from `/tasks`,
 `checked: true` by id", which is this fixture's assumption, not Todoist's
-verified behaviour.
+verified behaviour. The recording settles it: `record.mjs --completed-task
+<id>` records what `GET /tasks/{id}` answers for a task completed by hand in
+the test account (GET only, the token never written), `scenario.mjs` reads
+that answer (`source().completed`) and makes a completed task answer 404 by
+id when Todoist did, and `todoist-fixture.test.ts` fails on a recording that
+left the question open or answered with neither. If the answer is 404, the
+app shows completed tasks as `unavailable` (the row stays open, never a
+false "completed"), and the e2e's step 3 expectation (`completed`, done)
+must change to `unavailable` with the recording. Without a recording, the
+tests prove the mechanism against an invented `api/` only.
 
 ## Todoist drive app (`todoist-app/`)
 
