@@ -313,6 +313,16 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
+- Pagination Schemes 0.6.0: `request-builder.ts`'s `pageStart` is the
+  `page` field's `start` (default 1), used for the first page, the next
+  page and by the mock server. `walkPages` reads a `pageNumber` scheme's
+  `shortPage`: before a page is handed on it throws `PageReadError` for
+  more than `size` items or a page whose identities repeat the previous
+  one; after it, a page with fewer than `size` items ends the walk
+  (`PageWalk.outcome` not complete unless `assurance: documented`), and a
+  full page goes on to the next page number unless another declared signal
+  (`totalCount`, `totalPages`, a token or link) ends it. The validator
+  checks §9 rules 19–21, `resolveEffectiveScheme` rule 22.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

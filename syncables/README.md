@@ -1034,11 +1034,30 @@ client does not apply it (it applies complete snapshots only). Without a
 range the collection is left unread, with an error. A `rangeWindow` scheme
 is never auto-detected, and `x-pagination` that applies it with another
 scheme throws `PaginationSchemeError`.
+
+A `page` field's `start` (Pagination Schemes 0.6.0 §4.3.1) gives the first
+page number, so a zero-based `page` (ClickUp's) starts at 0; the default
+stays 1, and the mock server honours it too. A `pageNumber` scheme with a
+`shortPage` (§4.4.5) ends at the first page with fewer than `size` items
+(`size: request` takes `pageSize`, which must then be passed), or at the end
+another declared field shows on a full page. A page with more than `size`
+items, or one that repeats the page before it, ends the read with
+`PageReadError` before its items are taken. A read ended by a short page is
+complete only when the `assurance` is `documented`; with `observed` or
+`assumed` its snapshot has `complete: false` and `notComplete`, with no
+error, so the client does not apply it.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
+  short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
+  0.6.0: a short page ends the list, an oversized or repeated page ends the
+  read with `PageReadError`, and only `assurance: documented` makes such a
+  read complete. The validator checks §9 rules 19–21 and
+  `resolveEffectiveScheme` rule 22. Exports `PageReadError` and
+  `ShortPageObject`.
 - **Unreleased**: `rangeWindow` pagination (Pagination Schemes 0.5.0 §4.6):
   a read by windows over a caller-chosen range (`range` for `paginate`,
   `ranges` for `readCollections`/`readPlatform`), halving full windows,

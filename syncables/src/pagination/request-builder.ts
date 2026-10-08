@@ -30,6 +30,23 @@ function fieldsWithRole(
 }
 
 /**
+ * The number of the first page: the `start` of the scheme's `page` field
+ * (spec 0.6.0 §4.3.1), else 1.
+ */
+export function pageStart(scheme: PaginationSchemeObject): number {
+  for (const location of ['queryParameters', 'bodyFields'] as const) {
+    for (const field of Object.values(
+      (scheme.request?.[location] ?? {}) as Record<string, RequestFieldObject>,
+    )) {
+      if (field.role === 'page' && typeof field.start === 'number') {
+        return field.start;
+      }
+    }
+  }
+  return 1;
+}
+
+/**
  * The values a page request carries, by field name, for one location
  * (query parameters or JSON body fields). Numbers stay numbers here; the
  * query builder stringifies them.
@@ -53,7 +70,7 @@ function cursorValues(
     values[name] = cursor.offset ?? 0;
   }
   for (const name of withRole('page')) {
-    values[name] = cursor.page ?? 1;
+    values[name] = cursor.page ?? pageStart(scheme);
   }
   if (cursor.pageToken !== undefined) {
     for (const name of [...withRole('pageToken'), ...withRole('cursor')]) {
@@ -138,7 +155,7 @@ export function nextCursor(
         return { offset: (cursor.offset ?? 0) + itemsReturned };
       }
       if (fieldsWithRole(scheme, 'page', both).length > 0) {
-        return { page: (cursor.page ?? 1) + 1 };
+        return { page: (cursor.page ?? pageStart(scheme)) + 1 };
       }
       return null;
   }

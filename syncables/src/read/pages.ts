@@ -10,6 +10,7 @@ import {
   buildBody,
   buildQuery,
   nextCursor,
+  pageStart,
   type PageCursor,
 } from '../pagination/request-builder.js';
 import {
@@ -57,6 +58,13 @@ export class BudgetExhausted extends Error {}
 
 /** A 429's `Retry-After` reaches past the read's deadline. */
 export class RetryBeyondDeadline extends Error {}
+
+/**
+ * A page-number read that ended with an error (Pagination Schemes 0.6.0
+ * §4.4.5 step 3): a page with more items than the declared full size, or a
+ * page that repeats the one before it. The read is not complete.
+ */
+export class PageReadError extends Error {}
 
 /** A page answered a non-2xx status; carries the status and the body text. */
 export class PageStatusError extends Error {
@@ -298,6 +306,18 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   let cursor: PageCursor = {};
   let next: URL | undefined;
   let itemsSoFar = 0;
+  // Pagination Schemes 0.6.0 §4.4.5: a page with fewer than `size` items
+  // ends a pageNumber list.
+  const short =
+    scheme?.type === 'pageNumber' ? scheme.response?.shortPage : undefined;
+  const shortSize = short?.size === 'request' ? walk.pageSize : short?.size;
+  if (short && shortSize === undefined) {
+    throw new PageReadError(
+      'The shortPage size of the scheme is the page size the client sends; pass pageSize',
+    );
+  }
+  let previousPage: string | undefined;
+  const first = scheme ? pageStart(scheme) : 1;
 
   for (;;) {
     let url = next;
@@ -352,6 +372,24 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       walk.itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
         : itemsAt(body, walk.itemsField);
+    // Checked before the page is handed on: its items are not taken.
+    if (short && shortSize !== undefined) {
+      if (items.length > shortSize) {
+        throw new PageReadError(
+          `Page ${String(cursor.page ?? first)} holds ${items.length} items, more than the declared ${shortSize}; the read is not complete`,
+        );
+      }
+      const identity = walk.identity;
+      const fingerprint = JSON.stringify(
+        identity ? items.map((item) => identity(item)) : items,
+      );
+      if (items.length > 0 && fingerprint === previousPage) {
+        throw new PageReadError(
+          `Page ${String(cursor.page ?? first)} repeats the page before it; the read is not complete`,
+        );
+      }
+      previousPage = fingerprint;
+    }
     itemsSoFar += items.length;
     yield { url, items, body };
 
@@ -371,6 +409,30 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       state.nextLinkValue !== undefined &&
       state.nextLinkValue !== null &&
       state.nextLinkValue !== '';
+    if (short && shortSize !== undefined) {
+      if (items.length < shortSize) {
+        if (walk.outcome && short.assurance !== 'documented') {
+          walk.outcome.complete = false;
+          walk.outcome.reason = `ended by a short page whose end is ${short.assurance}, not documented: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`;
+        }
+        return;
+      }
+      // A full page: another declared signal may still end the list.
+      const signalled =
+        linkPresent ||
+        state.nextPageToken !== null ||
+        state.totalCount !== null ||
+        state.totalPages !== null;
+      if (!signalled || state.hasNextPage) {
+        if (!linkPresent) {
+          cursor = { page: (cursor.page ?? first) + 1 };
+          next = undefined;
+          continue;
+        }
+      } else if (!linkPresent) {
+        return;
+      }
+    }
     if (!state.hasNextPage && !linkPresent) {
       return;
     }
