@@ -138,11 +138,31 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
+A declared PUT is chosen even when the item's PATCH is declared as a merge
+patch, so such a document still sends full records; preferring the merge
+patch there is a possible follow-up, not done.
+
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
 reported as a `WriteConflict` on that field, even when the two changes touch
-different nested members.
-An update's response is merged over the record it sent, so a provider that
+different nested members. A refresh is compared with the field as the
+client's own patches leave it, applied in order (a `null` matches an absent
+field), so a refresh that shows the client's own merge patch applied before
+its response arrived is not a conflict, for that write or a later queued
+one. A failed merge-patch update loses only the nested members a later
+settled merge patch sets, and `resolveWrite` `retry` strips only those of
+newer queued merge patches; other routes do this by top-level field.
+
+Each update stores the body format it was made with (`updateBody` in the
+outbox). A client restarted on a document that now declares another format
+for the route does not send or replay the update under the new one: the
+update, and every write queued before it, becomes `failed` with a
+`lastError` that says so; it stays visible as made, `retry` throws, and
+`discard` drops it. When a create is queued before such an update, the
+record's writes are kept unrestorable instead (written back unchanged).
+An update's response is merged over the record it sent (a shallow spread,
+on merge-patch routes too: a `null` in a response is stored as a value,
+not read as a removal), so a provider that
 answers with only some fields (or only bookkeeping such as `updatedAt`) does
 not shrink the confirmed record or revert the edit. The trade-off: a field
 that the provider removed in that response, rather than omitted, stays in the
@@ -832,10 +852,14 @@ the methods that wait for it, rather than overwrite writes this client cannot
 read. Entries for a collection the current document lacks (queued writes and
 pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
-tombstones of such a collection. The write fields `lastStatus`
-and `missingRecord`, the state `blocked` and the top-level `authBlock`,
+tombstones of such a collection. The write fields `lastStatus`,
+`missingRecord` and `updateBody`, the state `blocked` and the top-level `authBlock`,
 `feedCursors` and `feedTombstones` were added within version `1`; a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Set `outboxNamespace` to
+(`status` 0) until `authRenewed()`. A client from before `updateBody`
+ignores the field: downgraded with a merge-patch update queued, it would
+send that update as a full record, with a `null` stored as a value and a
+nested patch replacing its field; settle or discard such writes before
+downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -1061,7 +1085,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   without a `patchFormat`, no `x-crud` and legacy documents keep the full
   record. `mergePatch` is exported from both entries. Behaviour change only
   for documents that declare `jsonMergePatch` or `jsonPatch` on their
-  update operation.
+  update operation. Conflict checks, superseding and `retry` follow the
+  merge patch's nested members; each update stores its body format
+  (`updateBody`, added within outbox version 1), and one restored under a
+  document that declares another format fails instead of being
+  reinterpreted. `mergePatch` treats a `__proto__` member as data.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

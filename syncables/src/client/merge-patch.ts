@@ -15,7 +15,52 @@ export function mergePatch(target: unknown, patch: unknown): unknown {
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     if (value === null) delete result[key];
-    else result[key] = mergePatch(result[key], value);
+    // Defined, not assigned: a `__proto__` member is data, not the prototype.
+    else
+      Object.defineProperty(result, key, {
+        value: mergePatch(result[key], value),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+  }
+  return result;
+}
+
+/**
+ * The value a record field has after the merge-patch member `patch` is
+ * applied to its value `current`: `undefined` (the field is absent) for a
+ * `null` member.
+ */
+export function patchedField(current: unknown, patch: unknown): unknown {
+  return patch === null ? undefined : mergePatch(current, patch);
+}
+
+/**
+ * `patch` without what a later merge patch `later` sets: a member `later`
+ * sets is dropped, except that where both are objects only the nested
+ * members `later` sets are, recursively; an object left empty is dropped
+ * too. Neither argument is changed.
+ */
+export function withoutPatched(
+  patch: Record<string, unknown>,
+  later: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...patch };
+  for (const [key, value] of Object.entries(later)) {
+    if (value === undefined || !Object.hasOwn(result, key)) continue;
+    const own = result[key];
+    if (isRecord(own) && isRecord(value)) {
+      const left = withoutPatched(own, value);
+      if (Object.keys(left).length)
+        Object.defineProperty(result, key, {
+          value: left,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      else delete result[key];
+    } else delete result[key];
   }
   return result;
 }

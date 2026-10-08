@@ -41,3 +41,28 @@ after a restart, and checking both bodies and the result. README (Writing
 section, missing-records passage, Unreleased changelog) and CLAUDE.md
 updated. Not verified: any real provider's merge-patch endpoint; a nested
 merge patch reports a conflict on the whole top-level field.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review fixes for the PR. Blocker:
+conflict detection compared a refresh with the raw patch value, so the
+client's own `null` removal or nested patch, read back before its response,
+was reported as a conflict, also on later queued writes. Should-fix:
+superseding and `retry` stripped whole top-level fields, dropping a failed
+nested change that was never sent; the body format was not stored with the
+write, so a restart under a changed document reinterpreted queued updates.
+Nits: `__proto__` in `mergePatch`; document that a `null` in an update
+response is stored as a value; note PUT-over-merge-patch as a follow-up.
+
+**Assistant:** `detectConflicts` computes each merge-patch write's field
+value after the patch (`patchedField`, applied in order from the first
+write's base) and compares the refresh with that and with earlier writes'
+results. `withoutSetBy`/`withoutPatched` strip nested members in
+`supersede` and the `retry` path. Each update stores `updateBody`
+(`mergePatch`, absent for a full record; added within outbox version 1);
+`rebuild` and sending use the write's format; `restore` fails a mismatched
+update and the writes queued before it, or keeps the entry unrestorable
+behind a create; `retry` refuses such a write. `mergePatch` defines members
+instead of assigning them. Tests for each. An earlier, unpushed commit that
+merged update responses by RFC 7396 was dropped, as the review asked to
+keep storing a response's `null` as a value.

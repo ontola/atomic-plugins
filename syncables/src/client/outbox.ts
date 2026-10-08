@@ -43,6 +43,12 @@ export interface StoredWrite {
   seq?: number;
   /** A failed update whose record a complete refresh no longer returned. */
   missingRecord?: 'deleted' | 'unknown';
+  /**
+   * Added within version 1: an update made as a JSON Merge Patch (absent:
+   * the full record, as every update before). A client from before this
+   * field ignores it and would send such an update as a full record.
+   */
+  updateBody?: 'mergePatch';
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -148,6 +154,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unknown') &&
+    (value['updateBody'] === undefined ||
+      value['updateBody'] === 'mergePatch') &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.
     value['lastKnown'] === undefined

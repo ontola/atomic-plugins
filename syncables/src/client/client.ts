@@ -16,7 +16,11 @@ import {
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
-import { mergePatchRecord } from './merge-patch.js';
+import {
+  mergePatchRecord,
+  patchedField,
+  withoutPatched,
+} from './merge-patch.js';
 import {
   bindPath,
   Budget,
@@ -696,6 +700,12 @@ interface QueuedWrite {
   /** Failed because a complete refresh no longer returned the record. */
   missingRecord?: 'deleted' | 'unknown';
   /**
+   * An update's body format, fixed when it was made (absent: `record`, the
+   * full record): stored, so a restart under a document that now declares
+   * another format does not reinterpret its changes.
+   */
+  updateBody?: 'mergePatch';
+  /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
    */
@@ -1021,13 +1031,49 @@ function clientRoutes(
  * over the record.
  */
 function applyChanges(
-  route: ClientRoute,
+  body: UpdateBody,
   base: Record<string, unknown> | undefined,
   changes: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
-  return route.updateBody === 'mergePatch'
+  return body === 'mergePatch'
     ? mergePatchRecord(base, changes)
     : { ...base, ...changes };
+}
+
+type UpdateBody = 'record' | 'mergePatch';
+
+/** The body format an update was made with. */
+function writeBody(write: { updateBody?: 'mergePatch' }): UpdateBody {
+  return write.updateBody ?? 'record';
+}
+
+/** The body format the route's update operation declares now. */
+function routeBody(route: ClientRoute): UpdateBody | 'refused' {
+  return route.updateRefused ? 'refused' : (route.updateBody ?? 'record');
+}
+
+/** Whether a stored update was made for another body format than the route's now. */
+function bodyMismatch(write: QueuedWrite): boolean {
+  return write.type === 'update' && writeBody(write) !== routeBody(write.route);
+}
+
+/**
+ * The changes of a failed or retried update without what a later write
+ * sets: by top-level field, or, when both are merge patches, by nested
+ * member. A later create or delete sets everything.
+ */
+function withoutSetBy(
+  write: QueuedWrite,
+  later: QueuedWrite,
+): Record<string, unknown> {
+  const changes = write.changes ?? {};
+  if (later.type !== 'update') return {};
+  const set = later.changes ?? {};
+  if (writeBody(write) === 'mergePatch' && writeBody(later) === 'mergePatch')
+    return withoutPatched(changes, set);
+  const left = { ...changes };
+  for (const field of Object.keys(set)) delete left[field];
+  return left;
 }
 
 /** A browser-safe local replica. Transport/auth/storage are supplied at its boundaries. */
@@ -1192,6 +1238,7 @@ export function createApiClient(
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
       ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
+      ...(write.updateBody ? { updateBody: write.updateBody } : {}),
     };
   }
 
@@ -1351,6 +1398,7 @@ export function createApiClient(
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
       ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
+      ...(stored.updateBody ? { updateBody: stored.updateBody } : {}),
     };
     if (stored.seq !== undefined && stored.seq >= nextSeq)
       nextSeq = stored.seq + 1;
@@ -1426,6 +1474,21 @@ export function createApiClient(
       }
       const scope = scopeFor(route, entry.context);
       const key = keyFor(scope, entry.id);
+      // An update stored for another body format than the document now
+      // declares fails below, with the writes queued before it; behind a
+      // create that cannot be, so the record's writes stay unrestorable.
+      let staleAt = -1;
+      entry.queue.forEach((stored, at) => {
+        if (
+          stored.type === 'update' &&
+          (stored.updateBody ?? 'record') !== routeBody(route)
+        )
+          staleAt = at;
+      });
+      if (entry.queue.slice(0, staleAt + 1).some((w) => w.type === 'create')) {
+        unrestorable.push(entry);
+        continue;
+      }
       if (entry.confirmed) remote(scope).set(entry.id, entry.confirmed);
       const restored = (stored: StoredWrite): QueuedWrite => {
         if (stored.sending) changed = true;
@@ -1441,6 +1504,24 @@ export function createApiClient(
       const head = queue[0];
       if (head && head.state === 'failed' && head.type !== 'create')
         failed.push(queue.shift() as QueuedWrite);
+      // Not sent or replayed under a body format it was not made for: it
+      // fails, and so does every write queued before it, since a failed
+      // write is never newer than a queued one.
+      let stale = -1;
+      queue.forEach((write, at) => {
+        if (bodyMismatch(write)) stale = at;
+      });
+      if (stale >= 0) {
+        for (const write of queue.splice(0, stale + 1)) {
+          write.state = 'failed';
+          write.lastError = bodyMismatch(write)
+            ? `This update was made for a ${writeBody(write)} body and the document now declares ${routeBody(write.route)}; discard it`
+            : 'Queued before an update made for another body format, which failed on restore';
+          delete write.lastStatus;
+          failed.push(write);
+        }
+        changed = true;
+      }
       // Updates send the whole record, so they wait for a refresh of their
       // collection instead of replaying on a confirmed record from before
       // the stop. Behind a create, the create's response is fresh enough.
@@ -1562,7 +1643,7 @@ export function createApiClient(
       else if (write.type === 'update')
         value = {
           ...applyChanges(
-            write.route,
+            writeBody(write),
             value ?? write.lastKnown ?? lastKnownFor(scope, id),
             write.changes,
           ),
@@ -1695,7 +1776,7 @@ export function createApiClient(
             ? write.data
             : {
                 ...applyChanges(
-                  route,
+                  writeBody(write),
                   remote(write.scope).get(write.id) ??
                     write.lastKnown ??
                     lastKnownFor(write.scope, write.id),
@@ -1706,7 +1787,7 @@ export function createApiClient(
         // A merge patch carries the changes alone; `data` is still the
         // record they make, which the response is merged over.
         const body =
-          write.type === 'update' && route.updateBody === 'mergePatch'
+          write.type === 'update' && writeBody(write) === 'mergePatch'
             ? (write.changes ?? {})
             : data;
         const result = await requestJson({
@@ -1723,7 +1804,7 @@ export function createApiClient(
               : (route.updateMethod as 'PUT' | 'PATCH'),
           headers: {
             'content-type':
-              write.type === 'update'
+              write.type === 'update' && writeBody(write) === 'mergePatch'
                 ? (route.updateContentType ?? 'application/json')
                 : 'application/json',
             ...(write.idempotencyKey && route.idempotencyHeader
@@ -2038,13 +2119,10 @@ export function createApiClient(
   function supersede(key: string, settled: QueuedWrite): void {
     const failed = gaveUpWrites.get(key);
     if (!failed) return;
-    const fields = touched(settled);
     const left = failed.filter((write) => {
-      if (write.type !== 'update' || !fields) return false;
-      const changes = { ...write.changes };
-      for (const field of fields) delete changes[field];
-      write.changes = changes;
-      return Object.keys(changes).length > 0;
+      if (write.type !== 'update') return false;
+      write.changes = withoutSetBy(write, settled);
+      return Object.keys(write.changes).length > 0;
     });
     if (left.length) gaveUpWrites.set(key, left);
     else gaveUpWrites.delete(key);
@@ -2126,20 +2204,38 @@ export function createApiClient(
       // Values this client already sent or queued, per field, so a refresh
       // showing an earlier write applied (before its response arrived) is
       // not mistaken for a remote change.
+      // A merge patch's value is the field after the patch, applied in
+      // order from the first write's base (`null`: the field is absent).
       const ours = new Map<string, unknown[]>();
+      const latest = new Map<string, unknown>();
       for (const write of writes) {
         if (write.scope !== scope || write.type !== 'update') continue;
-        checkConflicts(write, records.get(write.id), ours);
-        for (const [field, value] of Object.entries(write.changes ?? {}))
+        const after = new Map<string, unknown>();
+        for (const [field, local] of Object.entries(write.changes ?? {}))
+          after.set(
+            field,
+            writeBody(write) === 'mergePatch'
+              ? patchedField(
+                  latest.has(field) ? latest.get(field) : write.base?.[field],
+                  local,
+                )
+              : local,
+          );
+        checkConflicts(write, records.get(write.id), ours, after);
+        for (const [field, value] of after) {
           ours.set(field, [...(ours.get(field) ?? []), value]);
+          latest.set(field, value);
+        }
       }
     }
   }
 
+  /** `after`: each changed field's value once this write applies. */
   function checkConflicts(
     write: QueuedWrite,
     next: Record<string, unknown> | undefined,
     ours: Map<string, unknown[]>,
+    after: Map<string, unknown>,
   ): void {
     // A remote deletion under a pending update is not reported here.
     if (!write.base || !next) return;
@@ -2150,7 +2246,7 @@ export function createApiClient(
       write.base[field] = value;
       write.conflicts ??= new Map();
       if (
-        sameValue(value, local) ||
+        sameValue(value, after.get(field)) ||
         ours.get(field)?.some((own) => sameValue(own, value))
       ) {
         write.conflicts.delete(field);
@@ -3152,7 +3248,7 @@ export function createApiClient(
           : existing;
       if (!remote(scope).has(id) && seed) remote(scope).set(id, seed);
       const record = {
-        ...applyChanges(route, existing, data),
+        ...applyChanges(routeBody(route) as UpdateBody, existing, data),
         [route.collection.idField]: id,
       };
       const confirmedRecord = remote(scope).get(id);
@@ -3163,6 +3259,9 @@ export function createApiClient(
         id,
         type: 'update',
         changes: data,
+        ...(route.updateBody === 'mergePatch'
+          ? { updateBody: 'mergePatch' as const }
+          : {}),
         ...(stillMissing ? { awaitingRefresh: true } : {}),
         ...(confirmedRecord
           ? {
@@ -3297,15 +3396,19 @@ export function createApiClient(
       if (resolution.action === 'confirm')
         throw new Error('Only an uncertain create can be confirmed');
       if (resolution.action === 'retry') {
+        const stale = failed.find(bodyMismatch);
+        if (stale)
+          throw new Error(
+            `The failed update of record ${id} of ${resource} was made for a ${writeBody(stale)} body and the document now declares ${routeBody(route)}; discard it`,
+          );
         // Newer queued writes are sent first; a retried older write must not
         // overwrite what they set.
         const newer = queue ?? [];
         const retried = failed.flatMap((write): QueuedWrite[] => {
           if (newer.length && write.type === 'delete') return [];
-          const changes = { ...write.changes };
+          let changes = { ...write.changes };
           for (const later of newer)
-            for (const field of touched(later) ?? Object.keys(changes))
-              delete changes[field];
+            changes = withoutSetBy({ ...write, changes }, later);
           if (write.type === 'update' && !Object.keys(changes).length)
             return [];
           const again: QueuedWrite = {
