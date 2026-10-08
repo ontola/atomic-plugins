@@ -7,6 +7,10 @@ import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { locateItemsField } from '../pagination/items.js';
 import { resolveLink } from '../pagination/links.js';
 import {
+  classifyThrottling,
+  type ThrottlingDeclaration,
+} from '../throttling/throttling.js';
+import {
   buildBody,
   buildQuery,
   nextCursor,
@@ -34,7 +38,7 @@ export interface ReadLimits {
   maxRecords: number;
   /** Wall-clock budget for the whole read, in milliseconds. */
   timeoutMs: number;
-  /** 429 retries per request, honouring `Retry-After`. */
+  /** Retries per throttled request (a 429, or a declared throttling signal), each after the earliest retry time. */
   maxRetries: number;
 }
 
@@ -67,8 +71,11 @@ const defaultSleep = (ms: number): Promise<void> =>
 
 /**
  * Wraps a transport with the whole-read budget: a request count, a
- * deadline, and bounded 429 retries that wait out `Retry-After` (seconds or
- * an HTTP date). A 429 without a usable `Retry-After` is returned as-is.
+ * deadline, and bounded retries of throttled requests (a 429, or a response
+ * that matches a signal of the document's `x-throttling`, draft Throttling
+ * extension) that wait until the earliest retry time the response gives
+ * (`Retry-After`, or the declared `retryAfter`/`reset` headers). A
+ * throttled response without a usable time is returned as-is.
  */
 export class Budget {
   readonly limits: ReadLimits;
@@ -79,6 +86,7 @@ export class Budget {
     private readonly transport: Transport,
     limits: Partial<ReadLimits> = {},
     private readonly sleep: (ms: number) => Promise<void> = defaultSleep,
+    private readonly throttling?: ThrottlingDeclaration,
   ) {
     this.limits = { ...DEFAULT_READ_LIMITS, ...limits };
     this.deadline = Date.now() + this.limits.timeoutMs;
@@ -96,24 +104,23 @@ export class Budget {
         );
       }
       const raw = await this.transport(request);
+      const receivedAt = Date.now();
       const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
-      if (response.status !== 429 || retries >= this.limits.maxRetries) {
+      if (retries >= this.limits.maxRetries) {
         return response;
       }
-      const retryAfter = response.headers['retry-after'];
-      const seconds = Number(retryAfter);
-      const at =
-        retryAfter !== undefined &&
-        retryAfter !== '' &&
-        Number.isFinite(seconds)
-          ? Date.now() + Math.max(0, seconds) * 1000
-          : retryAfter
-            ? Date.parse(retryAfter)
-            : NaN;
-      if (!Number.isFinite(at)) {
+      const throttled = classifyThrottling(this.throttling, {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+        receivedAt,
+      });
+      if (!throttled || throttled.retryAt === undefined) {
         return response;
       }
-      const delay = Math.max(0, at - Date.now());
+      // Never earlier than the response asks (the spec's MUST); a read
+      // that cannot wait that long stops instead.
+      const delay = Math.max(0, throttled.retryAt - Date.now());
       if (Date.now() + delay > this.deadline) {
         throw new RetryBeyondDeadline(
           'API retry delay exceeds the remaining read time',

@@ -26,6 +26,12 @@ import {
   type ReadLimits,
 } from '../read/pages.js';
 import { readNestedField } from '../pagination/response-parser.js';
+import {
+  classifyThrottling,
+  declaredThrottling,
+  operationBuckets,
+  type ThrottlingVerdict,
+} from '../throttling/throttling.js';
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
@@ -110,17 +116,34 @@ export interface WriteFailure {
    * call `auth`.
    */
   afterRenewal: boolean;
+  /**
+   * Set when the response is throttling under the document's `x-throttling`
+   * (draft Throttling extension: a matching Signal Object, or a 429), with
+   * the earliest retry time when one is known. See `classifyThrottling`.
+   */
+  throttling?: ThrottlingVerdict;
+  /**
+   * True when the document declares `x-throttling.signals`. With signals,
+   * only a matching signal or a 429 is throttling (a 403 that matches none
+   * is a refused credential or a missing permission); without them (absent
+   * or false) the default classification keeps its header heuristic for a
+   * 403. The client sets it on every failure it classifies.
+   */
+  signalsDeclared?: boolean;
 }
 
 /**
  * The default classification:
  * - a delete answered 404 or 410: `satisfied` (the record is already gone);
+ * - a response that is throttling under the document's `x-throttling`
+ *   (`failure.throttling`: a matching signal, or any 429): `retry`;
  * - 401: `auth`;
- * - 403: `retry` when the response carries `Retry-After` or
- *   `x-ratelimit-remaining: 0` (a rate limit, as GitHub sends); otherwise
- *   `permanent` when `afterRenewal` (a refusal that renewed credentials did
- *   not fix is a missing permission), and `auth` before that;
- * - 408, 425 and 429: `retry`;
+ * - 403, when the document declares no signals: `retry` when the response
+ *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
+ *   GitHub sends); otherwise, and with signals declared, `permanent` when
+ *   `afterRenewal` (a refusal that renewed credentials did not fix is a
+ *   missing permission), and `auth` before that;
+ * - 408 and 425: `retry`;
  * - every other 4xx (400, 404 and 410 on a create or update, 405, 409, 413,
  *   415, 422, ...): `permanent`;
  * - anything else (5xx, and 1xx/3xx a transport did not handle): `retry`.
@@ -131,11 +154,13 @@ export function defaultWriteFailureClass(
   const { status, type, headers } = failure;
   if (type === 'delete' && (status === 404 || status === 410))
     return 'satisfied';
+  if (failure.throttling) return 'retry';
   if (status === 401) return 'auth';
   if (status === 403) {
     if (
-      headers['retry-after'] !== undefined ||
-      headers['x-ratelimit-remaining'] === '0'
+      !failure.signalsDeclared &&
+      (headers['retry-after'] !== undefined ||
+        headers['x-ratelimit-remaining'] === '0')
     )
       return 'retry';
     return failure.afterRenewal ? 'permanent' : 'auth';
@@ -694,6 +719,8 @@ type WriteOutcome =
 
 /** The server answered with a non-2xx status. */
 class HttpStatusError extends Error {
+  /** When the response arrived, in milliseconds since the epoch. */
+  readonly receivedAt = Date.now();
   constructor(
     message: string,
     readonly status: number,
@@ -753,12 +780,17 @@ class NotSentError extends Error {}
  * responses other than 503 count as uncertain: a gateway error or timeout can
  * follow a committed create. 503 and 429 conventionally mean the request was
  * not processed, other 4xx responses mean it was refused, and an error before
- * sending means nothing went out, so those keep the ordinary retry path.
+ * sending means nothing went out, so those keep the ordinary retry path. A
+ * response the document's `x-throttling` signals declare as a rate-limit
+ * refusal (`throttling`) was not applied either, by that declaration.
  */
-function mayHaveApplied(error: unknown): boolean {
+function mayHaveApplied(
+  error: unknown,
+  throttling?: ThrottlingVerdict,
+): boolean {
   if (error instanceof NotSentError) return false;
   if (error instanceof HttpStatusError)
-    return error.status >= 500 && error.status !== 503;
+    return !throttling && error.status >= 500 && error.status !== 503;
   return true;
 }
 
@@ -977,6 +1009,11 @@ export function createApiClient(
   const doc = resolveRefs(document);
   if (options.baseUrl) doc['servers'] = [{ url: options.baseUrl }];
   const upstream = upstreamOf(doc);
+  // The root x-throttling (draft Throttling extension): header roles and
+  // the signals that make a response a rate-limit refusal.
+  const throttling = declaredThrottling(doc);
+  /** Buckets a quotaExhausted answer declared exhausted, by identifier ('*' when unnamed), until (ms). */
+  const pausedBuckets = new Map<string, number>();
   const storage = options.storage ?? new InMemoryStorageAdapter();
   const baseTransport =
     options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch);
@@ -1681,9 +1718,22 @@ export function createApiClient(
       accepted();
       return settled(write, resolvedId);
     } catch (error) {
+      // Throttling under the document's x-throttling (a matching signal, or
+      // a 429), with the earliest retry time; decided once per response.
+      const throttled =
+        error instanceof HttpStatusError
+          ? classifyThrottling(throttling, {
+              status: error.status,
+              headers: error.headers,
+              body: error.body,
+              receivedAt: error.receivedAt,
+            })
+          : undefined;
+      if (throttled?.meaning === 'quotaExhausted' && throttled.retryAt)
+        pauseBucket(throttled.bucket, throttled.retryAt);
       const classified =
         error instanceof HttpStatusError
-          ? classify(write, error, sentAfterRenewal)
+          ? classify(write, error, sentAfterRenewal, throttled)
           : undefined;
       let failureClass: WriteFailureClass = classified?.result ?? 'retry';
       // Any answer but a refusal shows the credentials were accepted; a 403
@@ -1701,7 +1751,7 @@ export function createApiClient(
       if (
         failureClass === 'auth' &&
         write.type === 'create' &&
-        mayHaveApplied(error) &&
+        mayHaveApplied(error, throttled) &&
         !usableKey(write)
       )
         failureClass = 'retry';
@@ -1730,7 +1780,7 @@ export function createApiClient(
       // create happened, and a replay would return the same unusable body.
       if (
         write.type === 'create' &&
-        mayHaveApplied(error) &&
+        mayHaveApplied(error, throttled) &&
         (!usableKey(write) || error instanceof UnusableResponseError)
       )
         return { status: 'uncertain' };
@@ -1743,13 +1793,32 @@ export function createApiClient(
         retry.baseDelayMs * 2 ** (write.attempts - 1),
         retry.maxDelayMs,
       );
+      if (throttled) {
+        // The earliest retry time of the Throttling extension: the write is
+        // never sent before it (nor below the backoff, so a time already
+        // past cannot make a tight loop). A wait longer than
+        // retry.maxRetryAfterMs is not cut short: the write gives up
+        // instead, as the extension allows, and resolveWrite can retry it.
+        const wait =
+          throttled.retryAt === undefined ? 0 : throttled.retryAt - Date.now();
+        if (wait > retry.maxRetryAfterMs) {
+          write.lastError = `${message}; the API asks to wait until ${new Date(
+            throttled.retryAt as number,
+          ).toISOString()}, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not retried`;
+          return { status: 'gaveUp' };
+        }
+        return {
+          status: 'retry',
+          delayMs: Math.min(Math.max(backoff, wait), MAX_TIMER_MS),
+        };
+      }
       const asked =
         error instanceof HttpStatusError
           ? retryAfterMs(error.headers)
           : undefined;
-      // Retry-After only lengthens the wait (never below the backoff, so
-      // "0", a past date or a fast clock cannot make a tight loop), up to
-      // retry.maxRetryAfterMs.
+      // A Retry-After on another retryable answer (a 503, say) only
+      // lengthens the wait (never below the backoff, so "0", a past date or
+      // a fast clock cannot make a tight loop), up to retry.maxRetryAfterMs.
       return {
         status: 'retry',
         delayMs: Math.min(
@@ -1758,6 +1827,44 @@ export function createApiClient(
         ),
       };
     }
+  }
+
+  /**
+   * Holds back every write counted against `bucket` (all writes when the
+   * signal names none) until `until`: a `quotaExhausted` answer says the
+   * bucket refuses every request until it resets, not only the one sent.
+   */
+  function pauseBucket(bucket: string | undefined, until: number): void {
+    const key = bucket ?? '*';
+    pausedBuckets.set(key, Math.max(pausedBuckets.get(key) ?? 0, until));
+  }
+
+  /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
+  function pauseFor(write: QueuedWrite): number {
+    if (!pausedBuckets.size) return 0;
+    const now = Date.now();
+    for (const [key, until] of pausedBuckets)
+      if (until <= now) pausedBuckets.delete(key);
+    const buckets = throttling
+      ? operationBuckets(throttling, writeOperation(write))
+      : [];
+    let until = pausedBuckets.get('*') ?? 0;
+    for (const bucket of buckets)
+      until = Math.max(until, pausedBuckets.get(bucket) ?? 0);
+    return Math.max(0, until - now);
+  }
+
+  /** The OpenAPI operation a write is sent to, for its bucket selection. */
+  function writeOperation(write: QueuedWrite): OperationObject | undefined {
+    const { route } = write;
+    if (write.type === 'create')
+      return route.createPath ? doc.paths[route.createPath]?.post : undefined;
+    if (write.type === 'delete')
+      return route.deletePath ? doc.paths[route.deletePath]?.delete : undefined;
+    const item = route.collection.itemUrl
+      ? doc.paths[route.collection.itemUrl]
+      : undefined;
+    return route.updateMethod === 'PATCH' ? item?.patch : item?.put;
   }
 
   /**
@@ -1771,6 +1878,7 @@ export function createApiClient(
     write: QueuedWrite,
     error: HttpStatusError,
     sentAfterRenewal: boolean,
+    throttled: ThrottlingVerdict | undefined,
   ): { result: WriteFailureClass; refused: boolean } {
     const failure: WriteFailure = {
       type: write.type,
@@ -1786,6 +1894,8 @@ export function createApiClient(
       resource: write.route.collection.name,
       id: write.id,
       afterRenewal: sentAfterRenewal,
+      ...(throttled ? { throttling: throttled } : {}),
+      signalsDeclared: throttling?.signals !== undefined,
     };
     let result = classOf(failure);
     if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
@@ -1831,6 +1941,21 @@ export function createApiClient(
           authBlock
         )
           return;
+        // An exhausted bucket (a quotaExhausted signal) holds back every
+        // write counted against it until it resets; checked again after.
+        const paused = pauseFor(write);
+        if (paused > 0) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, Math.min(paused, MAX_TIMER_MS));
+            if (typeof timer.unref === 'function') timer.unref();
+            wakers.set(key, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          wakers.delete(key);
+          continue;
+        }
         const outcome = await attemptWrite(write);
         write.sending = false;
         // Its record went missing while it was in flight. Answered without
@@ -2832,6 +2957,7 @@ export function createApiClient(
       conditionalTransport,
       options.limits,
       options.sleep,
+      throttling,
     );
     const result = await readCollections(doc, {
       transport: conditionalTransport,
