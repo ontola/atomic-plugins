@@ -1,0 +1,85 @@
+# Reviewed 2026-10-08 against the pinned OAD and the overlays it composes with.
+# Evidence: the timesheets drive app reads `GET /api/v1/workspaces`, takes the
+# workspace whose id is the entry's workspaceId, and treats
+# `settings.forceProjects: true` as "every time entry needs a project"
+# (integrations/timesheets/app/clockifyApi.ts fetchAccountContext;
+# integrations/timesheets/README.md: "no project under forceProjects" is not
+# written back). That behaviour is mock-tested in the app, not verified against
+# a live Clockify account. The pinned OAD has no Workspace schema; the
+# crud-causality overlay's Workspace lists only id and name, so settings is
+# added here.
+# Not covered: an empty `projectId: ""`. The `when` condition matches an
+# absent or null projectId only; whether Clockify treats "" as "no project"
+# is not verified.
+# Needs Write Preconditions 0.1.0-draft (source and when, §4.4.1).
+# Meant to compose after crud-causality and time-entry-write for this pin, in
+# either order: every action deep-merges into $.components or $.paths.
+overlay: 1.0.0
+info:
+  title: Clockify time-entry write preconditions (forceProjects)
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dd34a70a45c5109479068b4b5d91337baf8822cd/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      schemas:
+        Workspace:
+          properties:
+            settings:
+              type: object
+              description: Workspace settings; only the field the write preconditions use is listed.
+              properties:
+                forceProjects:
+                  type: boolean
+                  description: Every time entry in the workspace must have a project.
+      crudResources:
+        workspace:
+          description: >-
+            A workspace the API key's user belongs to. Read for its settings
+            only: Clockify has no single-workspace read in these documents, so
+            a client finds it in a complete read of GET /v1/workspaces by id.
+          identity:
+            urlTemplate: /v1/workspaces/{workspaceId}
+            bindings:
+              workspaceId:
+                field: id
+          collections:
+            workspaces:
+              urlTemplate: /v1/workspaces
+  - target: $.paths
+    update:
+      /v1/workspaces/{workspaceId}/time-entries:
+        post:
+          x-write-precondition:
+            kind: none
+            refuseWhen:
+              - source:
+                  resource: workspace
+                field: settings.forceProjects
+                values: [true]
+                when:
+                  field: projectId
+                  values: [null]
+                description: >-
+                  The workspace requires a project on every time entry; an
+                  entry without projectId is not sent. If the workspace cannot
+                  be read, such an entry is not sent either (fail closed).
+      /v1/workspaces/{workspaceId}/time-entries/{id}:
+        put:
+          x-write-precondition:
+            kind: none
+            refuseWhen:
+              - source:
+                  resource: workspace
+                field: settings.forceProjects
+                values: [true]
+                when:
+                  field: projectId
+                  values: [null]
+                description: >-
+                  As for a create: under forceProjects a full replacement
+                  without projectId is not sent.
+            description: >-
+              Clockify documents no conditional update for time entries, and
+              PUT replaces the whole entry (pieces.md K11); kind none states
+              last writer wins. Only the forceProjects refusal is declared.

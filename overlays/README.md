@@ -107,6 +107,7 @@ provider was called.
 | Overlay | Declares | Evidence |
 | --- | --- | --- |
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series (`recurrence` present) or one of its occurrences (`recurringEventId` present), as the calendar drive app scopes its writes. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
+| [Clockify 1.0.0-readonly](APIs/clockify.me/1.0.0-readonly/write-preconditions-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | Time-entry create (`POST`) and replace (`PUT`): `kind: none`, refused without `projectId` when the workspace's `settings.forceProjects` is true, read from a `workspace` resource (`GET /v1/workspaces`); fails closed when the workspace cannot be read. Adds `settings.forceProjects` to the `Workspace` schema. Composes after `crud-causality` and `time-entry-write` (test: `tests/test_clockify_force_projects.py`). | The timesheets app's `fetchAccountContext` (mock-tested, not verified live) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
 ## Directory layout and OAD revisions
