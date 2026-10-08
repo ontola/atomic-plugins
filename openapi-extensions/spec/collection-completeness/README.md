@@ -159,7 +159,7 @@ object reads it with the resource's `read` operation. The answer means:
 
 For `unavailable`, a consumer MUST NOT report the object as deleted, and MUST
 NOT infer any other state (completed, archived) from the answer. It keeps the
-object's last known values, marked as unavailable. It SHOULD NOT send a write
+object's last known values, marked as unavailable. It MUST NOT send a write
 it queued for the object without its user's or application's decision. A
 later complete read that returns the object, or a later 2xx read of it,
 supersedes the mark.
@@ -184,7 +184,15 @@ variable that another resource's `identity.bindings` binds to one of that
 resource's own fields (CRUD Causality §4.1.2): `/lists/{listId}/tasks` is
 nested in task lists when the task-list resource binds `listId`. That
 resource is the collection's _parent_, and the object whose field supplied
-the variable for a read is the _parent object_ of that read.
+the variable for a read is the _parent object_ of that read. `parentAbsent`
+requires exactly one parent: a collection with path variables bound by two
+or more other resources has no single parent object, and this version does
+not describe it.
+
+`parentAbsent: deleted` also requires every Completeness Object of the
+parent resource's collections to state `notFound` explicitly, so that a
+`404` the parent's read answers for a missing permission cannot cascade as a
+deletion of its members through the `deleted` default.
 
 `parentAbsent` says what the members of a nested collection mean once a
 consumer has concluded that their parent object is gone: it was absent from a
@@ -318,9 +326,12 @@ A conforming document:
 * since 0.2.0: MUST give `notFound` and `parentAbsent`, when present, one of
   the values in §4.3 and §4.4; MUST NOT declare `notFound` together with
   `absent: deleted`; MUST declare `parentAbsent` only on a Collection Object
-  of a nested collection (§4.4) whose parent resource has at least one
-  collection with a Completeness Object; MUST NOT declare `notFound: deleted`
-  or `parentAbsent: deleted` without provider documentation for it.
+  of a nested collection (§4.4) with exactly one parent resource, which has
+  at least one collection with a Completeness Object; MUST declare
+  `parentAbsent: deleted` only when every Completeness Object of the parent
+  resource's collections states `notFound` explicitly; MUST NOT declare
+  `notFound: deleted` or `parentAbsent: deleted` without provider
+  documentation for it.
 
 A conforming consumer:
 
@@ -334,6 +345,8 @@ A conforming consumer:
   `absent: removed`;
 * since 0.2.0: MUST classify that read's answer as §4.3 says, and MUST NOT
   report an `unavailable` object as deleted or infer another state from it;
+* since 0.2.0: MUST NOT send a write it queued for an `unavailable` object
+  without its user's or application's decision;
 * since 0.2.0: MUST NOT apply `parentAbsent` before it has concluded, by §4.2
   or §4.3, that the parent object is deleted or unavailable.
 
