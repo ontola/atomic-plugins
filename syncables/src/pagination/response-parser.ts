@@ -41,23 +41,40 @@ export function setNestedField(
 }
 
 /**
- * Parses an RFC 8288 Link header value and extracts the URL with rel="next".
- * Example: `<https://api.example.com/items?page=2>; rel="next", <...>; rel="prev"`
+ * Parses an RFC 8288 Link header value and extracts the target of the link
+ * whose `rel` includes `relation` (default `next`). Example:
+ * `<https://api.example.com/items?page=2>; rel="next", <...>; rel="prev"`.
+ * A `rel` value is a quoted, space-separated list of relation types, or one
+ * unquoted token; relation types compare case-insensitively, and a link
+ * with `rel="last next"` is the next page (Pagination Schemes §4.4.3 rule 1
+ * says "rel includes next"). The first `rel` parameter of a link counts
+ * (RFC 8288 §3.3). The target is returned as written, relative or not.
  */
-export function parseLinkHeader(header: string): string | null {
+export function parseLinkHeader(
+  header: string,
+  relation = 'next',
+): string | null {
   if (!header) {
     return null;
   }
+  const wanted = relation.toLowerCase();
   const parts = header.split(/,\s*(?=<)/);
   for (const part of parts) {
-    const match = part.match(/^\s*<([^>]+)>(.*)/);
+    const match = part.match(/^\s*<([^>]*)>(.*)$/s);
     if (!match) {
       continue;
     }
     const [, url, attrs] = match;
-    const relMatch = attrs?.match(/\brel\s*=\s*"?([^";,\s]+)"?/i);
-    if (relMatch?.[1]?.trim().toLowerCase() === 'next') {
-      return url ?? null;
+    const rel = attrs?.match(/;\s*rel\s*=\s*(?:"([^"]*)"|([^;,\s"]+))/i);
+    if (!rel) {
+      continue;
+    }
+    const types = (rel[1] ?? rel[2] ?? '')
+      .trim()
+      .split(/\s+/)
+      .map((type) => type.toLowerCase());
+    if (types.includes(wanted)) {
+      return url ? url : null;
     }
   }
   return null;

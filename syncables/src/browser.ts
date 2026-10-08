@@ -90,7 +90,10 @@ export type {
   SchemaObject,
 } from './openapi/types.js';
 
-export { resolveEffectiveScheme } from './pagination/autodetect.js';
+export {
+  PaginationSchemeError,
+  resolveEffectiveScheme,
+} from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
 export { validatePaginationScheme } from './pagination/validate.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';

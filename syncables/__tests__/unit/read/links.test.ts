@@ -262,4 +262,72 @@ describe('a declared base for a relative Link header (§8.11)', () => {
     ).rejects.toThrow('Pagination left the API origin');
     expect(transport).toHaveBeenCalledTimes(1);
   });
+
+  it('pages on when the Link header lists several relation types (#384 item 2)', async () => {
+    const transport = vi.fn<Transport>(async (r) =>
+      r.url.searchParams.has('cursor')
+        ? reply([{ id: 'i3' }], {
+            link: '<items?cursor=abc>; rel="first last"',
+          })
+        : reply([{ id: 'i1' }, { id: 'i2' }], {
+            link: '<items?cursor=abc>; rel="last next"',
+          }),
+    );
+    const read = await paginate(declaredBase, {
+      transport,
+      path: itemsPath,
+      pathParams: { projectId: 'p1' },
+    });
+    expect(read).toHaveLength(3);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('an explicit x-pagination that cannot be applied (#384 item 1)', () => {
+  /** `twilioShaped` with a typo in `linkResolution.base`. */
+  const typo = (): OpenApiDocument => {
+    const doc = structuredClone(twilioShaped);
+    const schemes = doc.components!['paginationSchemes'] as unknown as Record<
+      string,
+      { response: { bodyFields: Record<string, Record<string, unknown>> } }
+    >;
+    schemes['linkedCollections']!.response.bodyFields['next_page_uri']![
+      'linkResolution'
+    ] = { base: 'servr' };
+    return doc;
+  };
+
+  it('fails the read before any request, instead of returning one page as complete', async () => {
+    const transport = calls(page1);
+    await expect(walk(transport, typo())).rejects.toThrow(
+      /x-pagination names the pagination scheme "linkedCollections", which is invalid/,
+    );
+    expect(transport).toHaveBeenCalledTimes(0);
+  });
+
+  it('leaves a collection read incomplete, with the error, for Collection Completeness consumers', async () => {
+    const doc = typo();
+    doc.components!['crudResources'] = {
+      call: {
+        identity: {
+          urlTemplate: '/2010-04-01/Accounts/{AccountSid}/Calls/{sid}.json',
+          bindings: { sid: { field: 'sid' } },
+        },
+        collections: { calls: { urlTemplate: callsPath } },
+      },
+    };
+    const transport = calls(page1);
+    const result = await readCollections(doc, {
+      transport,
+      constants: { AccountSid: 'AC0' },
+    });
+    expect(result.collections).toMatchObject([
+      {
+        complete: false,
+        items: [],
+        error: expect.stringMatching(/which is invalid/),
+      },
+    ]);
+    expect(transport).toHaveBeenCalledTimes(0);
+  });
 });

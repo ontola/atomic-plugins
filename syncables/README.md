@@ -1011,6 +1011,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Two reads that could end early and look complete now end
+  with an error (#384 items 1 and 2): an explicit `x-pagination` whose
+  scheme is undeclared, invalid or made invalid by its overrides (a typo
+  such as `linkResolution.base: servr`) fails the read before any request
+  (`PaginationSchemeError`, exported) instead of being dropped, and a `Link`
+  header whose `rel` lists several relation types (`rel="last next"`) is
+  read as the next page, as RFC 8288 and Pagination Schemes §4.4.3 say.
+  `parseLinkHeader` takes the relation to look for as a second argument.
 - **Unreleased**: The collection read honours the CRUD Causality Collection
   Object's `envelope.itemsField` (a dot-path to the items array, as the feed
   read already did for `x-deletion-feed`), so a list whose items sit at
