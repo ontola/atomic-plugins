@@ -87,14 +87,14 @@ class GitHubCompoundCreateTests(unittest.TestCase):
 
         def send_create(body):
             sent.append(("issues-create", body))
-            return "ok", created
+            return "ok", created, None
 
         def send_follow_up(operation, request):
             sent.append((operation, request))
             return follow_up
 
         planned = {"title": "Write spec", "labels": ["atomic:doing"]}
-        return compound_create(self.crud, planned, send_create, send_follow_up,
+        return compound_create(self.document, self.crud, planned, send_create, send_follow_up,
                                {"owner": "ontola", "repo": "atomic-plugins"}), sent
 
     def test_labels_applied_by_the_create(self):
@@ -114,7 +114,7 @@ class GitHubCompoundCreateTests(unittest.TestCase):
         result, sent = self.run_create({"number": 12, "labels": []}, follow_up="refused")
         self.assertEqual(result["state"], "partlyApplied")
         self.assertEqual(result["created"]["number"], 12)
-        self.assertEqual([p[0] for p in result["pending"]], ["issues-add-labels"])
+        self.assertEqual([(p["operation"], p["reason"]) for p in result["pending"]], [("issues-add-labels", "refused")])
         self.assertEqual([s[0] for s in sent].count("issues-create"), 1)
 
     def test_no_dated_catalog_selects_the_overlay(self):
