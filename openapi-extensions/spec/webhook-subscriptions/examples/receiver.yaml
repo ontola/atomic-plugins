@@ -29,12 +29,14 @@ x-webhook-subscriptions:
     receipts:
       ttlSeconds: 172800
       maxCount: 200000
+      maxCountPerOwner: 20000
     closed:
       tombstoneTtlSeconds: 2592000
       maxTombstones: 10000
     cleanup:
       deadlineSeconds: 2592000
       maxJobs: 10000
+      maxJobsPerOwner: 20
     sweep:
       maxIntervalSeconds: 60
     delivery:

@@ -56,6 +56,10 @@ def check_policy(policy):
             "policy: delivery.maxBodyBytes <= delivery.maxVerifiedBytes")
     require(policy["access"]["maxCheckAgeSeconds"] <= min(MAX_CHECK_AGE, lease["durationSeconds"]),
             "policy.access.maxCheckAgeSeconds: at most 86400 and at most lease.durationSeconds")
+    require(policy["receipts"]["maxCountPerOwner"] <= policy["receipts"]["maxCount"],
+            "policy.receipts: maxCountPerOwner <= maxCount")
+    require(policy["cleanup"]["maxJobsPerOwner"] <= policy["cleanup"]["maxJobs"],
+            "policy.cleanup: maxJobsPerOwner <= maxJobs")
     require(policy["receipts"]["ttlSeconds"] >= MIN_RECEIPT_TTL,
             "policy.receipts.ttlSeconds: at least 1800, twice the largest timestamp tolerance Webhook Deliveries allows")
     require(policy["sweep"]["maxIntervalSeconds"] <= 60, "policy.sweep.maxIntervalSeconds: at most 60")

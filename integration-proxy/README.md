@@ -247,6 +247,8 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `OPERATOR_NAME` | no | Who runs this proxy, as the landing and consent pages name them. Defaults to `this integration proxy`, and the pages then name no one. The consent page also shows the host of `BASE_URL`. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
+| `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables and runs its sweeper (ontola/atomic-plugins#369, step 2; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. No webhook route is mounted in this release either way. Unreleased. |
+| `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
 | `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
 
@@ -491,6 +493,7 @@ private and may change in any release:
 | `AgentId`, `parse_agent_id` | A parsed agent id; `as_str()` is the canonical `atomic:agent:` form. |
 | `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve, recording each request's peer address (`into_make_service_with_connect_info::<SocketAddr>()`) for the key-check limit. A caller that serves `build_app`'s router itself should do the same; without it, and without a trusted `X-Forwarded-For`, all clients share one limit. |
 | `TrustForwardedFor`, `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR` | `Config::trust_forwarded_for` and the default of `Config::key_check_limit_per_hour`. Unreleased. |
+| `WebhookConfig`, `DEFAULT_WEBHOOK_INBOX_MAX_BYTES` | `Config::webhooks` (`WEBHOOKS_ENABLED`, `WEBHOOK_INBOX_MAX_BYTES`); `#[non_exhaustive]`, so build one with `WebhookConfig::default()` and set its fields. Unreleased. |
 | `run() -> ExitCode` | What the binary does: init `tracing` from `RUST_LOG` (default `info`), `Config::from_env`, `serve`, print any `Error` to stderr. |
 | `Error` | Startup/serve failure; `Display` is the one-line message the binary prints. |
 
@@ -596,6 +599,10 @@ describes the controls and what is not yet verified.
   (the pending request and CSRF token) and `platform_oauth` (binding the
   callback to the approving browser). Provider state, handoffs and
   connections live in PostgreSQL, so any instance can serve any request.
+- With `WEBHOOKS_ENABLED=true`, the webhook inbox keeps its subscriptions,
+  retained payloads, per-owner receipts, usage counters and hook cleanup jobs
+  in PostgreSQL too, every one of them bounded (SECURITY.md, "Webhook
+  inbox"). With it off, none of these tables exists.
 - Cookies are marked `Secure`, so in production `BASE_URL` must use
   `https://`. `http://localhost` works during local development because
   browsers treat `localhost` as a secure context.

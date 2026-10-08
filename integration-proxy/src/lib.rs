@@ -56,6 +56,10 @@ mod signature;
 mod templates;
 #[cfg(test)]
 mod test_support;
+// Step 2 of #369: the store's operations have no caller outside the tests
+// until step 3 mounts the routes.
+#[cfg_attr(not(test), allow(dead_code))]
+mod webhooks;
 
 use std::sync::Arc;
 
@@ -73,8 +77,8 @@ use tracing_subscriber::EnvFilter;
 pub use access::{Access, AccessPolicy, AllowAll, EnvAccessPolicy};
 pub use agent_id::{parse as parse_agent_id, AgentId};
 pub use config::{
-    Config, TrustForwardedFor, DEFAULT_CATALOG_PATH, DEFAULT_KEY_CHECK_LIMIT_PER_HOUR,
-    DEFAULT_OPERATOR_NAME,
+    Config, TrustForwardedFor, WebhookConfig, DEFAULT_CATALOG_PATH,
+    DEFAULT_KEY_CHECK_LIMIT_PER_HOUR, DEFAULT_OPERATOR_NAME, DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
 };
 
 #[derive(Clone)]
@@ -228,6 +232,11 @@ pub async fn build_app_with_access(
         .await
         .map_err(Error::Catalog)?;
     let security = security::Security::connect(&config.database_url, &config.encryption_key)
+        .await
+        .map_err(Error::Security)?;
+    // Off by default: with WEBHOOKS_ENABLED unset there are no inbox tables,
+    // no sweeper and no webhook route.
+    webhooks::start(&config.webhooks, &config.database_url, &security)
         .await
         .map_err(Error::Security)?;
     if config.key_check_limit_per_hour > 0
