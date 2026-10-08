@@ -83,6 +83,25 @@ class ValidationTests(unittest.TestCase):
         parent["absent"] = "deleted"
         validate(document)
 
+        # A parent collection without a Completeness Object blocks a deleted cascade.
+        def undeclared_parent_collection(document):
+            completeness(document)["parentAbsent"] = "deleted"
+            document["components"]["crudResources"]["taskList"]["collections"]["shared"] = {"urlTemplate": "/shared/lists"}
+        self.invalid(undeclared_parent_collection, "['shared'] declare none")
+        # ...unless its list operation declares one.
+        document = example()
+        completeness(document)["parentAbsent"] = "deleted"
+        document["components"]["crudResources"]["taskList"]["collections"]["shared"] = {"urlTemplate": "/shared/lists"}
+        document["paths"]["/shared/lists"] = {"get": {"x-crud": {"action": "list", "resource": "taskList", "collection": "shared"},
+                                                      "x-completeness": {"absent": "removed", "notFound": "unavailable"},
+                                                      "responses": {"200": {"description": "ok"}}}}
+        validate(document)
+        # Collections of one resource must agree on notFound.
+        document["paths"]["/shared/lists"]["get"]["x-completeness"]["notFound"] = "deleted"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("different notFound values", str(raised.exception))
+
         def on_operation(document):
             document["paths"]["/lists/{listId}/tasks"]["get"]["x-completeness"] = copy.deepcopy(completeness(document))
         self.invalid(on_operation, "only on a Collection Object")
@@ -101,6 +120,9 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(self.classify(410, None), "unavailable")
         for status, body in ((500, None), (403, None), (200, {"id": "other"}), (200, None), (None, None)):
             self.assertEqual(self.classify(status, body), "unknown")
+
+    def test_unrecognised_not_found_counts_as_unavailable(self):
+        self.assertEqual(self.classify(404, None, {"absent": "removed", "notFound": "purged"}), "unavailable")
 
     def test_not_found_defaults_to_deleted(self):
         self.assertEqual(self.classify(404, None, {"absent": "removed"}), "deleted")

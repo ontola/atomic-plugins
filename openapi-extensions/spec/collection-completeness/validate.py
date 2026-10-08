@@ -62,12 +62,35 @@ def parents(document, resource_name, collection):
     return found
 
 
+def declarations_of(document, resource_name):
+    """{collection name: its Completeness Object, from the Collection Object or else its list operation, or None}."""
+    resource = _resources(document).get(resource_name) or {}
+    found = {}
+    for name, collection in (resource.get("collections") or {}).items():
+        if not isinstance(collection, dict):
+            continue
+        declaration = collection.get("x-completeness")
+        if declaration is None:
+            for item in document.get("paths", {}).values():
+                for method in METHODS:
+                    operation = item.get(method) if isinstance(item, dict) else None
+                    crud = operation.get("x-crud") if isinstance(operation, dict) else None
+                    if isinstance(crud, dict) and crud.get("action") == "list" and crud.get("resource") == resource_name \
+                            and crud.get("collection") == name and "x-completeness" in operation:
+                        declaration = operation["x-completeness"]
+        found[name] = declaration if isinstance(declaration, dict) else None
+    return found
+
+
 def validate(document):
     errors = []
     resources = _resources(document)
     for resource_name, resource in resources.items():
         if not isinstance(resource, dict):
             continue
+        explicit = {d["notFound"] for d in declarations_of(document, resource_name).values() if d and "notFound" in d}
+        if len(explicit) > 1:
+            errors.append(f"crudResources.{resource_name}: collections declare different notFound values {sorted(map(str, explicit))}")
         for name, collection in (resource.get("collections") or {}).items():
             if not isinstance(collection, dict) or "x-completeness" not in collection:
                 continue
@@ -85,12 +108,15 @@ def validate(document):
                 errors.append(f"{where}.parentAbsent: more than one parent resource {candidates} (§4.4)")
                 continue
             parent = candidates[0]
-            declarations = [c["x-completeness"] for c in (resources[parent].get("collections") or {}).values()
-                            if isinstance(c, dict) and isinstance(c.get("x-completeness"), dict)]
-            if not declarations:
+            declarations = declarations_of(document, parent)
+            if not any(declarations.values()):
                 errors.append(f"{where}.parentAbsent: parent {parent} has no collection with x-completeness")
-            elif declaration.get("parentAbsent") == "deleted" and not all("notFound" in d for d in declarations if d.get("absent") == "removed"):
-                errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every absent: removed collection of {parent}")
+            elif declaration.get("parentAbsent") == "deleted":
+                undeclared = sorted(n for n, d in declarations.items() if d is None)
+                if undeclared:
+                    errors.append(f"{where}.parentAbsent: deleted needs a Completeness Object on every collection of {parent}; {undeclared} declare none")
+                if not all("notFound" in d for d in declarations.values() if d and d.get("absent") == "removed"):
+                    errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every absent: removed collection of {parent}")
     for path, item in document.get("paths", {}).items():
         if not isinstance(item, dict):
             continue
@@ -100,6 +126,8 @@ def validate(document):
                 _object(operation["x-completeness"], f"paths.{path}.{method}.x-completeness", errors, on_collection=False)
     if errors:
         raise ValueError("\n".join(errors))
+
+
 
 
 def _field(value, path):
@@ -121,7 +149,8 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body):
     the resource's x-read-tombstone (or None), `body` the parsed JSON body (or None).
     """
     if status in (404, 410):
-        return (declaration or {}).get("notFound", "deleted")
+        value = (declaration or {}).get("notFound", "deleted")
+        return value if value in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
     if not isinstance(status, int) or not 200 <= status < 300:
         return "unknown"
     identifier, found = _field(body, id_field)
