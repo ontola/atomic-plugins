@@ -1,0 +1,37 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0015c1809b72209188f76d1795a12b0e322acb6e/APIs/airtable.com/1.0-readonly/openapi.yaml
+info:
+  title: Airtable record-list offset pagination
+  version: 1.0.0
+  description: >-
+    Airtable returns up to 100 records per response and supplies an opaque
+    offset when another page exists. Copy the offset to the next request and
+    preserve other query parameters. Checked against Airtable's Web API guide
+    on 2026-10-08.
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      recordsOffset:
+        type: pageToken
+        autoDetect: false
+        description: >-
+          Follow the returned opaque offset query value; it expires and must not
+          be synthesized. Preserve base, table and all other query parameters.
+          Absence of offset terminates the collection.
+        request:
+          queryParameters:
+            offset:
+              role: cursor
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: records
+          bodyFields:
+            offset:
+              role: nextCursor
+- target: $.paths['/v0/{baseId}/{tableIdOrName}'].get
+  update:
+    x-pagination:
+    - scheme: recordsOffset

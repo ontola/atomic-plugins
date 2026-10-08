@@ -1,0 +1,46 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0015c1809b72209188f76d1795a12b0e322acb6e/APIs/airtable.com/1.0-readonly/openapi.yaml
+info:
+  title: Airtable read-only OAuth authentication profile
+  version: 1.0.0
+  description: >-
+    Read accessible bases, their table schemas, and table records. Requests only
+    schema.bases:read and data.records:read. OAuth and PKCE details checked
+    against Airtable's OAuth reference on 2026-10-08.
+actions:
+- target: $.components.securitySchemes
+  update:
+    airtableReadOnlyOAuth:
+      type: oauth2
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          token_endpoint_auth_methods_supported: [client_secret_basic, none]
+          code_challenge_methods_supported: [S256]
+        authorizationCode:
+          pkce:
+            requirement: required
+      flows:
+        authorizationCode:
+          authorizationUrl: https://airtable.com/oauth2/v1/authorize
+          tokenUrl: https://airtable.com/oauth2/v1/token
+          scopes:
+            schema.bases:read: Read bases and their table schemas.
+            data.records:read: Read records in accessible tables.
+- target: $.paths['/v0/meta/bases'].get
+  update:
+    security:
+    - airtableReadOnlyOAuth: [schema.bases:read]
+- target: $.paths['/v0/meta/bases/{baseId}/tables'].get
+  update:
+    security:
+    - airtableReadOnlyOAuth: [schema.bases:read]
+- target: $.paths['/v0/{baseId}/{tableIdOrName}'].get
+  update:
+    security:
+    - airtableReadOnlyOAuth: [data.records:read]
+- target: $.components
+  update:
+    x-authentication-profiles:
+      airtableReadOnly:
+        securityScheme: airtableReadOnlyOAuth
+        description: Read accessible base metadata, table schemas, and records.
