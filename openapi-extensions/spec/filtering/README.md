@@ -79,7 +79,7 @@ An optional `x-time-zone` on a Parameter Object states how its value is read:
 | `interpretation` | `wallClock` | Yes | The value's date and time digits are local time in the zone below. Any offset or `Z` in the value is ignored by the API. It is the only value in this version. |
 | `zone` | Zone Source Object | Yes | Where the zone comes from. |
 | `suffix` | string | No | What the client appends to the wall-clock digits because the API requires it, although it ignores it: `Z`, or an offset such as `+00:00`. When absent, the client sends the digits with no suffix. |
-| `ambiguous` | `unspecified` \| `earlier` \| `later` | No | Which instant the API takes for a wall-clock time that occurs twice (a repeated daylight-saving hour), and, for one that does not occur (a skipped hour), which of the two offsets around the gap it applies: `earlier` the instant or offset before the change, `later` the one after. Default: `unspecified`. |
+| `ambiguous` | `unspecified` \| `earlier` \| `later` | No | Which UTC offset the API applies to a wall-clock time at a daylight-saving change, where two offsets compete: `earlier` the offset in effect before the change, `later` the one after it. The values name offsets, not instants. In a repeated hour, `earlier` gives the earlier of the two instants (Amsterdam 2026-10-25 02:30 at +02:00 is 00:30Z). In a skipped hour it gives the later one (Amsterdam 2026-03-29 02:30 at +01:00 is 01:30Z, and at +02:00 00:30Z). This is Python's `fold=0` and `fold=1`. Default: `unspecified`. |
 | `description` | string | No | Qualifications. |
 
 Zone Source Object, exactly one of:
@@ -99,17 +99,26 @@ A client that sends such a parameter:
    the digits in the parameter's declared format (Clockify's
    `yyyy-MM-ddThh:mm:ssZ`), and appends `suffix`;
 3. records the UTC span a read covered from the instants its wall-clock
-   bounds can mean. With `ambiguous: unspecified`, a bound in a repeated or
-   skipped hour can mean two instants, and the client records the reading
-   that covers least: the later instant for a lower bound, the earlier for
-   an upper bound.
+   bounds can mean. With `ambiguous: earlier` or `later`, each bound means
+   the instant under that offset. With `ambiguous: unspecified`, a bound in
+   a repeated or skipped hour can mean two instants, and the client records
+   the reading that covers least: the later instant for a lower bound, the
+   earlier for an upper bound. A span whose lower end is not before its
+   upper end covers nothing;
+4. reads the zone again after the last request of the read. When it
+   differs from the zone the bounds were written in, the read covered an
+   unknown span: the client discards the span it recorded (it MAY keep the
+   items as items) and reads again.
 
 When the zone cannot be read (the operation fails, the pointer resolves to
 nothing, or the value is not an IANA name the client knows), the client MUST
 NOT assume UTC. It MAY still send the request, with the UTC digits, but it
-then knows the window only to within the largest offset any zone has from
-UTC, 14 hours (UTC+14; the smallest is UTC−12): it records each bound as
-covering 14 hours less. A read so narrowed is still not wrong, only less
+then knows the window only to within the offsets zones have from UTC. For
+current offsets, which run from UTC−12 to UTC+14, a lower bound needs only
+12 hours and an upper bound 14; a client records each bound as covering 14
+hours less, which is safe for both. Historic local mean time offsets in the
+time zone database exceed 14 hours; a profile zone cannot use them for
+present-day times. A window shorter than 28 hours then covers nothing. A read so narrowed is still not wrong, only less
 useful; a read recorded as covering the unnarrowed span would be.
 
 An `x-filter` on the same parameter states its predicate on instants: after
@@ -224,7 +233,7 @@ These extensions do not authorize HTTP requests or loosen origin/security checks
 
 ## Reference implementation
 
-[`validate.py`](validate.py) checks the `x-time-zone` rules of §7 and the shape of `x-filter` (a JSON Pointer `field` and one of the five operators) in a whole document, including Parameter Objects under `components.parameters`. It also holds `wall_clock_param` and `covered_span`, a reference implementation of the client steps under "Parameter time zones". From the repository root:
+[`validate.py`](validate.py) checks the `x-time-zone` rules of §7 and the shape of `x-filter` (a JSON Pointer `field` and one of the five operators) in a whole document, including Parameter Objects under `components.parameters`. It also holds `wall_clock_param` and `covered_span`, a reference implementation of the client steps under "Parameter time zones". It finds Parameter Objects under `paths`, `webhooks`, `components.pathItems`, callbacks and `components.parameters`, resolves `$ref`'d schemas and `content` parameters' schemas for the date-time check, and checks the zone operation of a `components.parameters` entry that no operation uses for existence and method only. From the repository root:
 
 ```sh
 python3 -m venv /tmp/filtering-venv
@@ -238,5 +247,5 @@ The rest of this proposal (`x-collection-scope`, `x-for-each`) has no validator 
 
 ## Changes
 
-- **0.2.0-draft** (2026-10-08): adds `x-time-zone` on a Parameter Object, for date-time parameters an API reads as wall-clock time in a zone that a fixed name or another operation's response gives (Clockify's `start` and `end`, pieces.md K12), with the client steps, the narrowing when the zone is unknown, a validator, an example and tests.
+- **0.2.0-draft** (2026-10-08): adds `x-time-zone` on a Parameter Object, for date-time parameters an API reads as wall-clock time in a zone that a fixed name or another operation's response gives (Clockify's `start` and `end`, pieces.md K12), with the client steps, the narrowing when the zone is unknown, a validator, an example and tests. Revised after review: `earlier` and `later` name offsets (the instant in a skipped hour follows from the offset), the zone is read again after the read, a span shorter than the fallback narrowing covers nothing, and the validator covers `$ref`'d and `content` schemas, unused component parameters, webhooks and callbacks.
 - **0.1.0-draft**: `x-filter`, `x-collection-scope` and `x-for-each`.
