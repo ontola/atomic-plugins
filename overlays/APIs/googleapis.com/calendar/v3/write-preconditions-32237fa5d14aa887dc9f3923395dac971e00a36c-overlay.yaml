@@ -1,0 +1,77 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/calendar/api/guides/version-resources
+# ("Every resource has a version field that changes every time the resource changes - the
+# etag field"; "specify an If-Match header that contains the value of the etag from the
+# previous retrieval"; "Otherwise, you will get a 412 (Precondition failed) response code").
+# The pinned OAD declares the Event etag field, but not the If-Match header or a 412 response.
+# Source for the refusals: the pinned OAD's Event.recurrence ("List of RRULE, EXRULE, RDATE
+# and EXDATE lines for a recurring event ... omitted for single events or instances of
+# recurring events") and Event.recurringEventId ("For an instance of a recurring event,
+# this is the id of the recurring event to which this instance belongs").
+# Needs Write Preconditions 0.1.0-draft (openapi-extensions/spec/write-preconditions).
+overlay: 1.0.0
+info:
+  title: Google Calendar API event write preconditions
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].patch
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review; the calendar drive
+          app neither imports nor writes series (integrations/calendar/README.md, "Recurrence").
+      - field: recurringEventId
+        present: true
+        description: One occurrence of a recurring series. A write to it turns it into an
+          exception of the series; the calendar drive app neither imports nor writes occurrences.
+      description: Send the event's etag, as last read from events.get or events.list, in
+        If-Match; 412 means the event changed since. Recurring series and their occurrences
+        are not written. As integrations/calendar/app does for its patches.
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].put
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review; the calendar drive
+          app neither imports nor writes series (integrations/calendar/README.md, "Recurrence").
+      - field: recurringEventId
+        present: true
+        description: One occurrence of a recurring series. A write to it turns it into an
+          exception of the series; the calendar drive app neither imports nor writes occurrences.
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].delete
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review; the calendar drive
+          app neither imports nor writes series (integrations/calendar/README.md, "Recurrence").
+      - field: recurringEventId
+        present: true
+        description: One occurrence of a recurring series. A write to it turns it into an
+          exception of the series; the calendar drive app neither imports nor writes occurrences.
