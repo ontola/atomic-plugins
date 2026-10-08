@@ -5,7 +5,8 @@
 `.atomic-server-ref` holds one full atomic-server commit SHA. CI, the lanes,
 `link-atomic-server.mjs` and `usertest-deploy.yml` all check out that
 commit. On 2026-10-08 it is candidate20, `0fa9c07856de9b136119e45d9bcb0cc44e38a992`
-(candidate19 `a12b74a` plus atomic-server#2069 and its tester entry).
+(candidate19 `a12b74a` plus atomic-server#2069, its tester entry and a Connect lens
+re-read).
 
 The pin is always a **candidate**: a commit on an atomic-server branch
 `claude/atomic-plugins-pin-candidateN`, never `develop`. A candidate
