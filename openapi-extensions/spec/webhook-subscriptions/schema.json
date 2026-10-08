@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ontola/atomic-plugins/openapi-extensions/spec/webhook-subscriptions/schema.json",
+  "title": "x-webhook-subscriptions",
+  "description": "Webhook Subscriptions extension 0.1.0-draft: the root field, and under $defs the records a receiver exposes. Shape only; validate.py checks the rest.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": { "^x-": {} },
+  "required": ["policy"],
+  "properties": {
+    "policy": { "$ref": "#/$defs/Policy" },
+    "description": { "type": "string" }
+  },
+  "$defs": {
+    "opaque": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,512}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "seconds": { "type": "integer", "minimum": 1 },
+    "count": { "type": "integer", "minimum": 1 },
+    "agent": {
+      "type": "string",
+      "pattern": "^atomic:agent:[A-Za-z0-9_-]{43}$"
+    },
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lease",
+        "subscription",
+        "owner",
+        "deployment",
+        "receipts",
+        "closed",
+        "cleanup",
+        "sweep",
+        "delivery",
+        "fetch"
+      ],
+      "properties": {
+        "lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durationSeconds",
+            "renewAfterSeconds",
+            "progressDeadlineSeconds"
+          ],
+          "properties": {
+            "durationSeconds": { "$ref": "#/$defs/seconds", "default": 604800 },
+            "renewAfterSeconds": {
+              "$ref": "#/$defs/seconds",
+              "default": 43200
+            },
+            "progressDeadlineSeconds": {
+              "$ref": "#/$defs/seconds",
+              "default": 604800
+            }
+          }
+        },
+        "subscription": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxPendingEvents",
+            "maxPendingBytes",
+            "maxPendingAgeSeconds"
+          ],
+          "properties": {
+            "maxPendingEvents": { "$ref": "#/$defs/count", "default": 10000 },
+            "maxPendingBytes": { "$ref": "#/$defs/count", "default": 67108864 },
+            "maxPendingAgeSeconds": {
+              "$ref": "#/$defs/seconds",
+              "default": 604800
+            }
+          }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxPendingBytes",
+            "maxPendingReferences",
+            "maxActiveSubscriptions"
+          ],
+          "properties": {
+            "maxPendingBytes": {
+              "$ref": "#/$defs/count",
+              "default": 268435456
+            },
+            "maxPendingReferences": {
+              "$ref": "#/$defs/count",
+              "default": 50000
+            },
+            "maxActiveSubscriptions": { "$ref": "#/$defs/count", "default": 20 }
+          }
+        },
+        "deployment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxInboxBytes"],
+          "properties": {
+            "maxInboxBytes": { "$ref": "#/$defs/count", "default": 1073741824 }
+          }
+        },
+        "receipts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ttlSeconds", "maxCount"],
+          "properties": {
+            "ttlSeconds": { "$ref": "#/$defs/seconds", "default": 172800 },
+            "maxCount": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 200000."
+            }
+          }
+        },
+        "closed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tombstoneTtlSeconds", "maxTombstones"],
+          "properties": {
+            "tombstoneTtlSeconds": {
+              "$ref": "#/$defs/seconds",
+              "default": 2592000
+            },
+            "maxTombstones": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 10000."
+            }
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deadlineSeconds", "maxJobs"],
+          "properties": {
+            "deadlineSeconds": {
+              "$ref": "#/$defs/seconds",
+              "default": 2592000
+            },
+            "maxJobs": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 10000."
+            }
+          }
+        },
+        "sweep": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxIntervalSeconds"],
+          "properties": {
+            "maxIntervalSeconds": { "$ref": "#/$defs/seconds", "default": 60 }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxBodyBytes", "maxJsonDepth"],
+          "properties": {
+            "maxBodyBytes": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 26214400."
+            },
+            "maxJsonDepth": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 512,
+              "description": "Open: proposed 64."
+            }
+          }
+        },
+        "fetch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxEvents", "maxWaitSeconds"],
+          "properties": {
+            "maxEvents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "description": "Open: proposed 100."
+            },
+            "maxWaitSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 300,
+              "description": "Open: proposed 25."
+            }
+          }
+        }
+      }
+    },
+    "Source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "key"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        },
+        "key": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "Lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expiresAt", "renewAfter", "progressDeadlineAt"],
+      "properties": {
+        "expiresAt": { "$ref": "#/$defs/timestamp" },
+        "renewAfter": { "$ref": "#/$defs/timestamp" },
+        "progressDeadlineAt": {
+          "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+        }
+      }
+    },
+    "GapMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "reason",
+        "detectedAt",
+        "lastAcknowledged",
+        "earliestAvailableCursor"
+      ],
+      "properties": {
+        "generation": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "examples": [
+            "initial",
+            "subscription-events-limit",
+            "subscription-bytes-limit",
+            "subscription-age-limit",
+            "owner-limit",
+            "deployment-limit",
+            "oversized-delivery",
+            "uncapturable-delivery",
+            "access-suspended",
+            "receiver-restored"
+          ]
+        },
+        "detectedAt": { "$ref": "#/$defs/timestamp" },
+        "lastAcknowledged": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        },
+        "earliestAvailableCursor": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        }
+      }
+    },
+    "ReconciliationRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "subscription", "state", "action", "gap"],
+      "properties": {
+        "status": { "const": "reconciliation-required" },
+        "subscription": { "$ref": "#/$defs/opaque" },
+        "state": { "enum": ["needs-reconciliation", "expired", "closed"] },
+        "action": { "enum": ["reconcile", "resubscribe"] },
+        "generation": { "$ref": "#/$defs/opaque" },
+        "barrier": { "$ref": "#/$defs/opaque" },
+        "gap": { "$ref": "#/$defs/GapMarker" }
+      }
+    },
+    "Subscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "connection",
+        "consumer",
+        "source",
+        "events",
+        "hook",
+        "state",
+        "generation",
+        "lease",
+        "acknowledged",
+        "pending",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaque" },
+        "connection": { "$ref": "#/$defs/opaque" },
+        "consumer": { "$ref": "#/$defs/agent" },
+        "source": { "$ref": "#/$defs/Source" },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "hook": { "enum": ["sharedApplication", "dedicated"] },
+        "state": {
+          "enum": [
+            "provisioning",
+            "needs-reconciliation",
+            "active",
+            "expired",
+            "cleanup-pending",
+            "closed"
+          ]
+        },
+        "generation": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        },
+        "lease": { "oneOf": [{ "$ref": "#/$defs/Lease" }, { "type": "null" }] },
+        "acknowledged": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        },
+        "pending": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["events", "bytes"],
+          "properties": {
+            "events": { "type": "integer", "minimum": 0 },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "reconciliationRequired": { "$ref": "#/$defs/ReconciliationRequired" },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "Event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cursor",
+        "generation",
+        "deliveryId",
+        "eventType",
+        "action",
+        "receivedAt",
+        "source",
+        "payload"
+      ],
+      "properties": {
+        "cursor": { "$ref": "#/$defs/opaque" },
+        "generation": { "$ref": "#/$defs/opaque" },
+        "deliveryId": { "type": "string", "pattern": "^[\\x21-\\x7e]{1,255}$" },
+        "eventType": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "action": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 128 },
+            { "type": "null" }
+          ]
+        },
+        "receivedAt": { "$ref": "#/$defs/timestamp" },
+        "source": { "$ref": "#/$defs/Source" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "bytes", "sha256", "body"],
+          "properties": {
+            "mediaType": { "const": "application/json" },
+            "bytes": { "type": "integer", "minimum": 0 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "body": { "type": "string", "contentEncoding": "base64" }
+          }
+        }
+      }
+    },
+    "EventPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subscription", "generation", "events", "next", "more"],
+      "properties": {
+        "subscription": { "$ref": "#/$defs/opaque" },
+        "generation": { "$ref": "#/$defs/opaque" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/Event" } },
+        "next": { "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }] },
+        "more": { "type": "boolean" },
+        "reconciliationRequired": { "$ref": "#/$defs/ReconciliationRequired" }
+      }
+    },
+    "Acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "cursor"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/opaque" },
+        "cursor": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "Renewal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/opaque" },
+        "checkpoint": {
+          "oneOf": [{ "$ref": "#/$defs/opaque" }, { "type": "null" }]
+        }
+      }
+    },
+    "ReconciliationComplete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "barrier"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/opaque" },
+        "barrier": { "$ref": "#/$defs/opaque" }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "code"],
+      "properties": {
+        "status": { "const": "error" },
+        "code": {
+          "enum": [
+            "unknown-subscription",
+            "obsolete-generation",
+            "cursor-not-issued",
+            "cursor-ahead",
+            "barrier-mismatch",
+            "quota-exceeded",
+            "capacity-unavailable",
+            "access-denied",
+            "rate-limited",
+            "expired",
+            "closed"
+          ]
+        },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

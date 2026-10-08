@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ontola/atomic-plugins/openapi-extensions/spec/webhook-deliveries/schema.json",
+  "title": "x-webhook-deliveries",
+  "description": "Webhook Deliveries extension 0.1.0-draft. Shape only; validate.py checks cross-references.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": { "^x-": {} },
+  "required": [
+    "verificationProfiles",
+    "delivery",
+    "sources",
+    "hooks",
+    "events"
+  ],
+  "properties": {
+    "verificationProfiles": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/verificationProfile" }
+    },
+    "delivery": { "$ref": "#/$defs/delivery" },
+    "sources": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/source" }
+    },
+    "hooks": { "$ref": "#/$defs/hooks" },
+    "events": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/eventType" },
+      "additionalProperties": { "$ref": "#/$defs/event" }
+    },
+    "revocations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/revocation" }
+    },
+    "description": { "type": "string" }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+    "eventType": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
+    },
+    "headerName": {
+      "type": "string",
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$"
+    },
+    "requestBodyExpression": {
+      "type": "string",
+      "pattern": "^\\$request\\.body#(?:/(?:[^~/]|~[01])*)*$"
+    },
+    "responseBodyExpression": {
+      "type": "string",
+      "pattern": "^\\$response\\.body#(?:/(?:[^~/]|~[01])*)*$"
+    },
+    "headerLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["in", "name"],
+      "properties": {
+        "in": { "const": "header" },
+        "name": { "$ref": "#/$defs/headerName" }
+      }
+    },
+    "operationReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "enum": ["get", "put", "post", "delete", "patch"] },
+        "path": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "verificationProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "required": ["algorithm", "signedContent", "signature", "secret"],
+      "properties": {
+        "algorithm": { "const": "hmac-sha256" },
+        "signedContent": { "enum": ["rawBody", "timestampDotRawBody"] },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["in", "name", "encoding"],
+          "properties": {
+            "in": { "const": "header" },
+            "name": { "$ref": "#/$defs/headerName" },
+            "prefix": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[\\x21-\\x7e]+$"
+            },
+            "encoding": { "enum": ["hex", "base64"] }
+          }
+        },
+        "timestamp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["in", "name", "format", "toleranceSeconds"],
+          "properties": {
+            "in": { "const": "header" },
+            "name": { "$ref": "#/$defs/headerName" },
+            "format": { "const": "unixSeconds" },
+            "toleranceSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 900
+            }
+          }
+        },
+        "secret": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": { "enum": ["receiverGenerated", "operatorConfigured"] },
+            "minBytes": { "type": "integer", "minimum": 32, "maximum": 1024 }
+          }
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "required": ["id", "redelivery", "eventType"],
+      "properties": {
+        "id": { "$ref": "#/$defs/headerLocation" },
+        "redelivery": { "enum": ["sameId", "newId", "unspecified"] },
+        "eventType": {
+          "oneOf": [
+            { "$ref": "#/$defs/headerLocation" },
+            { "$ref": "#/$defs/requestBodyExpression" }
+          ]
+        },
+        "action": { "$ref": "#/$defs/requestBodyExpression" },
+        "responseDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "maxPayloadBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "required": ["key", "access"],
+      "properties": {
+        "key": { "$ref": "#/$defs/requestBodyExpression" },
+        "access": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "key"],
+          "properties": {
+            "operation": { "$ref": "#/$defs/operationReference" },
+            "key": { "$ref": "#/$defs/responseBodyExpression" }
+          }
+        },
+        "context": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/requestBodyExpression" }
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "required": ["event", "source", "keys"],
+      "properties": {
+        "event": { "$ref": "#/$defs/eventType" },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source": { "$ref": "#/$defs/name" },
+        "context": { "$ref": "#/$defs/name" },
+        "keys": { "$ref": "#/$defs/requestBodyExpression" }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "minProperties": 1,
+      "properties": {
+        "sharedApplication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verificationProfile"],
+          "properties": {
+            "verificationProfile": { "$ref": "#/$defs/name" },
+            "description": { "type": "string" }
+          }
+        },
+        "dedicated": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verificationProfile",
+            "source",
+            "create",
+            "hookId",
+            "delete",
+            "hookIdParameter"
+          ],
+          "properties": {
+            "verificationProfile": { "$ref": "#/$defs/name" },
+            "source": { "$ref": "#/$defs/name" },
+            "create": { "$ref": "#/$defs/hookOperation" },
+            "hookId": { "$ref": "#/$defs/responseBodyExpression" },
+            "delete": { "$ref": "#/$defs/hookOperation" },
+            "hookIdParameter": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "list": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "path", "url", "hookId"],
+              "properties": {
+                "method": { "const": "get" },
+                "path": { "type": "string", "pattern": "^/" },
+                "url": { "$ref": "#/$defs/responseBodyExpression" },
+                "hookId": { "$ref": "#/$defs/responseBodyExpression" }
+              }
+            },
+            "description": { "type": "string" }
+          }
+        }
+      }
+    },
+    "hookOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "enum": ["get", "put", "post", "delete", "patch"] },
+        "path": { "type": "string", "pattern": "^/" },
+        "body": {}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/requestBodyExpression" }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^x-": {} },
+      "required": ["source"],
+      "properties": {
+        "source": { "$ref": "#/$defs/name" },
+        "actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource", "bindings"],
+            "properties": {
+              "resource": { "type": "string", "minLength": 1 },
+              "bindings": { "$ref": "#/$defs/binding" }
+            }
+          }
+        },
+        "collections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource", "collection"],
+            "properties": {
+              "resource": { "type": "string", "minLength": 1 },
+              "collection": { "type": "string", "minLength": 1 },
+              "bindings": { "$ref": "#/$defs/binding" }
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$ref"],
+          "properties": { "$ref": { "type": "string", "pattern": "^#/" } }
+        },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

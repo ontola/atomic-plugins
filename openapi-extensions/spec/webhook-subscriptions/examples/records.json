@@ -1,0 +1,250 @@
+{
+  "_note": "Invented records for the Example Tracker of the Webhook Deliveries examples. Every id, cursor and agent key is fake.",
+  "records": {
+    "Subscription": [
+      {
+        "id": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "connection": "conn_Zml4dHVyZS1jb25uZWN0aW9u",
+        "consumer": "atomic:agent:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "source": {
+          "kind": "project",
+          "key": "p-100"
+        },
+        "events": ["task"],
+        "hook": "sharedApplication",
+        "createdAt": "2026-10-08T12:00:00Z",
+        "state": "provisioning",
+        "generation": null,
+        "lease": null,
+        "acknowledged": null,
+        "pending": {
+          "events": 0,
+          "bytes": 0
+        }
+      },
+      {
+        "id": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "connection": "conn_Zml4dHVyZS1jb25uZWN0aW9u",
+        "consumer": "atomic:agent:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "source": {
+          "kind": "project",
+          "key": "p-100"
+        },
+        "events": ["task"],
+        "hook": "sharedApplication",
+        "createdAt": "2026-10-08T12:00:00Z",
+        "state": "needs-reconciliation",
+        "generation": "gen_fixture_1",
+        "lease": {
+          "expiresAt": "2026-10-15T12:00:00Z",
+          "renewAfter": "2026-10-09T00:00:00Z",
+          "progressDeadlineAt": null
+        },
+        "acknowledged": null,
+        "pending": {
+          "events": 0,
+          "bytes": 0
+        },
+        "reconciliationRequired": {
+          "status": "reconciliation-required",
+          "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+          "state": "needs-reconciliation",
+          "action": "reconcile",
+          "generation": "gen_fixture_1",
+          "barrier": "cur_g1_0",
+          "gap": {
+            "generation": null,
+            "reason": "initial",
+            "detectedAt": "2026-10-08T12:00:00Z",
+            "lastAcknowledged": null,
+            "earliestAvailableCursor": null
+          }
+        }
+      },
+      {
+        "id": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "connection": "conn_Zml4dHVyZS1jb25uZWN0aW9u",
+        "consumer": "atomic:agent:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "source": {
+          "kind": "project",
+          "key": "p-100"
+        },
+        "events": ["task"],
+        "hook": "sharedApplication",
+        "createdAt": "2026-10-08T12:00:00Z",
+        "state": "active",
+        "generation": "gen_fixture_1",
+        "acknowledged": "cur_g1_1",
+        "pending": {
+          "events": 1,
+          "bytes": 120
+        },
+        "lease": {
+          "expiresAt": "2026-10-15T12:00:00Z",
+          "renewAfter": "2026-10-09T00:00:00Z",
+          "progressDeadlineAt": "2026-10-15T12:05:00Z"
+        }
+      }
+    ],
+    "EventPage": [
+      {
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "generation": "gen_fixture_1",
+        "events": [
+          {
+            "cursor": "cur_g1_1",
+            "generation": "gen_fixture_1",
+            "deliveryId": "d-0001",
+            "eventType": "task",
+            "action": "updated",
+            "receivedAt": "2026-10-08T12:00:01Z",
+            "source": {
+              "kind": "project",
+              "key": "p-100"
+            },
+            "payload": {
+              "mediaType": "application/json",
+              "bytes": 120,
+              "sha256": "60dc009ce5c1035b35c2228b5adba848e444282e9e74005c4a61d83c45bfaa93",
+              "body": "eyJraW5kIjoidGFzayIsImNoYW5nZSI6InVwZGF0ZWQiLCJwcm9qZWN0Ijp7ImlkIjoicC0xMDAiLCJ3b3Jrc3BhY2UiOiJ3LTEifSwidGFzayI6eyJpZCI6InQvNyIsInRpdGxlIjoiRml4dHVyZSB0YXNrIn19"
+            }
+          },
+          {
+            "cursor": "cur_g1_2",
+            "generation": "gen_fixture_1",
+            "deliveryId": "d-0003",
+            "eventType": "task",
+            "action": "updated",
+            "receivedAt": "2026-10-08T12:00:01Z",
+            "source": {
+              "kind": "project",
+              "key": "p-100"
+            },
+            "payload": {
+              "mediaType": "application/json",
+              "bytes": 120,
+              "sha256": "13520f97898aa84add4ea955146b8b738422db73ce2782c82d040106dfd7cb8b",
+              "body": "eyJraW5kIjoidGFzayIsImNoYW5nZSI6InVwZGF0ZWQiLCJwcm9qZWN0Ijp7ImlkIjoicC0xMDAiLCJ3b3Jrc3BhY2UiOiJ3LTEifSwidGFzayI6eyJpZCI6InQvOCIsInRpdGxlIjoiRml4dHVyZSB0YXNrIn19"
+            }
+          }
+        ],
+        "next": "cur_g1_2",
+        "more": false
+      },
+      {
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "generation": "gen_fixture_1",
+        "events": [
+          {
+            "cursor": "cur_g1_501",
+            "generation": "gen_fixture_1",
+            "deliveryId": "d-0601",
+            "eventType": "task",
+            "action": "updated",
+            "receivedAt": "2026-10-08T12:00:01Z",
+            "source": {
+              "kind": "project",
+              "key": "p-100"
+            },
+            "payload": {
+              "mediaType": "application/json",
+              "bytes": 120,
+              "sha256": "a6e29064bee80b1bdc2d3d5baafd89249c29914fb92d3b1f71a96143521cd9e7",
+              "body": "eyJraW5kIjoidGFzayIsImNoYW5nZSI6InVwZGF0ZWQiLCJwcm9qZWN0Ijp7ImlkIjoicC0xMDAiLCJ3b3Jrc3BhY2UiOiJ3LTEifSwidGFzayI6eyJpZCI6InQvOSIsInRpdGxlIjoiRml4dHVyZSB0YXNrIn19"
+            }
+          }
+        ],
+        "next": "cur_g1_501",
+        "more": true,
+        "reconciliationRequired": {
+          "status": "reconciliation-required",
+          "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+          "state": "needs-reconciliation",
+          "action": "reconcile",
+          "generation": "gen_fixture_2",
+          "barrier": "cur_g2_10500",
+          "gap": {
+            "generation": "gen_fixture_1",
+            "reason": "subscription-events-limit",
+            "detectedAt": "2026-10-12T09:30:00Z",
+            "lastAcknowledged": "cur_g1_2",
+            "earliestAvailableCursor": "cur_g1_501"
+          }
+        }
+      }
+    ],
+    "ReconciliationRequired": [
+      {
+        "status": "reconciliation-required",
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "state": "needs-reconciliation",
+        "action": "reconcile",
+        "generation": "gen_fixture_1",
+        "barrier": "cur_g1_0",
+        "gap": {
+          "generation": null,
+          "reason": "initial",
+          "detectedAt": "2026-10-08T12:00:00Z",
+          "lastAcknowledged": null,
+          "earliestAvailableCursor": null
+        }
+      },
+      {
+        "status": "reconciliation-required",
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "state": "needs-reconciliation",
+        "action": "reconcile",
+        "generation": "gen_fixture_2",
+        "barrier": "cur_g2_10500",
+        "gap": {
+          "generation": "gen_fixture_1",
+          "reason": "subscription-events-limit",
+          "detectedAt": "2026-10-12T09:30:00Z",
+          "lastAcknowledged": "cur_g1_2",
+          "earliestAvailableCursor": "cur_g1_501"
+        }
+      },
+      {
+        "status": "reconciliation-required",
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "state": "expired",
+        "action": "resubscribe",
+        "gap": {
+          "generation": "gen_fixture_2",
+          "reason": "subscription-age-limit",
+          "detectedAt": "2026-10-20T09:30:00Z",
+          "lastAcknowledged": "cur_g1_2",
+          "earliestAvailableCursor": null
+        }
+      }
+    ],
+    "Acknowledgement": [
+      {
+        "generation": "gen_fixture_1",
+        "cursor": "cur_g1_2"
+      }
+    ],
+    "Renewal": [
+      {
+        "generation": "gen_fixture_1",
+        "checkpoint": "cur_g1_2"
+      },
+      {
+        "checkpoint": null
+      }
+    ],
+    "ReconciliationComplete": [
+      {
+        "generation": "gen_fixture_1",
+        "barrier": "cur_g1_0"
+      }
+    ],
+    "Error": [
+      {
+        "status": "error",
+        "code": "cursor-ahead",
+        "message": "That cursor was never returned to this subscription."
+      }
+    ]
+  }
+}
