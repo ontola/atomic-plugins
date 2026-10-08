@@ -15,11 +15,11 @@
  *   browser/node_modules/.bin/vitest run \
  *     --config integrations/money/vitest.config.ts moneybird-fixture
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { fixtures } from '../localthought/fixtures/index.mjs';
 import {
   civilYear as recorderYear,
@@ -414,8 +414,14 @@ describe('moneybird fixture: always-on checks', () => {
  * contacts over two pages (one archived), two time entries, one account,
  * two mutations in YEAR. Nothing in it is from a real account.
  */
+const invented: string[] = [];
+afterAll(() => {
+  for (const dir of invented) rmSync(dir, { recursive: true, force: true });
+});
+
 function inventedRecording(year: number): URL {
   const dir = mkdtempSync(join(tmpdir(), 'moneybird-fixture-'));
+  invented.push(dir);
   const admin = '100000000000000001';
   const answer = (body: unknown, headers: Record<string, string> = {}) => ({
     status: 200,
