@@ -335,33 +335,22 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            header::IF_MATCH,
-            header::IF_NONE_MATCH,
-            header::IF_MODIFIED_SINCE,
-            HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
-            HeaderName::from_static(signature::AGENT_HEADER),
-            HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
-            HeaderName::from_static(signature::TIMESTAMP_HEADER),
-            HeaderName::from_static(signature::SIGNATURE_HEADER),
-            HeaderName::from_static(signature::VERSION_HEADER),
-        ])
-        .expose_headers(
+        .allow_headers(
             [
-                header::CONTENT_TYPE,
-                header::LINK,
-                header::RETRY_AFTER,
-                header::ETAG,
-                header::LAST_MODIFIED,
-                HeaderName::from_static("x-total-count"),
-                HeaderName::from_static("x-next-page"),
+                header::AUTHORIZATION,
+                HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
+                HeaderName::from_static(signature::AGENT_HEADER),
+                HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
+                HeaderName::from_static(signature::TIMESTAMP_HEADER),
+                HeaderName::from_static(signature::SIGNATURE_HEADER),
+                HeaderName::from_static(signature::VERSION_HEADER),
             ]
             .into_iter()
-            .chain(proxy::RATE_LIMIT_HEADERS.map(HeaderName::from_static))
+            .chain(proxy::CALLER_HEADERS)
             .collect::<Vec<_>>(),
         )
+        // The same list the proxy forwards from, so they cannot drift.
+        .expose_headers(proxy::forwarded_response_headers().collect::<Vec<_>>())
 }
 
 fn router(state: AppState) -> Router {

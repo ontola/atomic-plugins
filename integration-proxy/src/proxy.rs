@@ -18,7 +18,7 @@
 use axum::{
     body::Bytes,
     extract::{OriginalUri, Path, RawQuery, State},
-    http::{header, HeaderMap, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -348,7 +348,7 @@ pub async fn forward(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    match forward_inner(
+    let mut response = match forward_inner(
         &state,
         &connection_id,
         &platform,
@@ -363,7 +363,13 @@ pub async fn forward(
     {
         Ok(response) => response,
         Err(error) => error.into_response(),
-    }
+    };
+    // A proxied response is one caller's view of one connection: never to
+    // be cached, also not heuristically from a forwarded `Last-Modified`.
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -569,13 +575,32 @@ async fn forward_inner(
             CredentialInjection::None
         }
     };
-    let forward_idempotency_key = headers.contains_key(IDEMPOTENCY_KEY)
-        && state.catalog.declares_header_parameter(
-            platform,
-            method.as_str(),
-            &request_path,
-            IDEMPOTENCY_KEY,
-        );
+    // P3: only where the operation declares the header. A provider scopes
+    // idempotency keys to the account that sends them; a no-credential
+    // connection sends none, so every tenant would share one key space and
+    // one tenant could replay another's stored response. There the key is
+    // namespaced per connection: stable, so a retry still matches.
+    let idempotency_key = match headers.get(IDEMPOTENCY_KEY) {
+        Some(value)
+            if state.catalog.declares_header_parameter(
+                platform,
+                method.as_str(),
+                &request_path,
+                IDEMPOTENCY_KEY,
+            ) =>
+        {
+            match &credential {
+                StoredCredential::NoCredential { .. } => Some(
+                    HeaderValue::from_str(
+                        &security.connection_idempotency_key(connection_id, value.as_bytes()),
+                    )
+                    .map_err(|_| ApiError::Internal)?,
+                ),
+                _ => Some(value.clone()),
+            }
+        }
+        _ => None,
+    };
     let upstream = match upstream_request(
         &state.http_client,
         method.clone(),
@@ -583,7 +608,7 @@ async fn forward_inner(
         injection,
         headers,
         &required_headers,
-        forward_idempotency_key,
+        idempotency_key.as_ref(),
         body,
     )
     .send()
@@ -631,30 +656,46 @@ pub(crate) const RATE_LIMIT_HEADERS: [&str; 10] = [
     "ratelimit-reset",
 ];
 
-/// Request headers a caller may send upstream besides `Content-Type` and
-/// `If-Match`: the conditional-read validators (P2). `Idempotency-Key` (P3)
-/// goes only where the operation declares it; see `upstream_request`.
-const CONDITIONAL_REQUEST_HEADERS: [header::HeaderName; 2] =
-    [header::IF_NONE_MATCH, header::IF_MODIFIED_SINCE];
+/// Representation and pagination response headers forwarded unchanged.
+const REPRESENTATION_HEADERS: [&str; 7] = [
+    "content-type",
+    "link",
+    "retry-after",
+    "etag",
+    "last-modified",
+    "x-total-count",
+    "x-next-page",
+];
 
+/// Every response header the proxy forwards, and so every one CORS
+/// exposes (`browser_cors`): the one list both use.
+pub(crate) fn forwarded_response_headers() -> impl Iterator<Item = header::HeaderName> {
+    REPRESENTATION_HEADERS
+        .into_iter()
+        .chain(RATE_LIMIT_HEADERS)
+        .map(header::HeaderName::from_static)
+}
+
+/// The caller's headers that go upstream unchanged, unless the catalog
+/// fixes a value for the same name: the body's type, the write
+/// precondition and the conditional-read validators (P2). None of them is
+/// covered by the request signature (SECURITY.md, "Validating proxy").
+pub(crate) const CALLER_HEADERS: [header::HeaderName; 4] = [
+    header::CONTENT_TYPE,
+    header::IF_MATCH,
+    header::IF_NONE_MATCH,
+    header::IF_MODIFIED_SINCE,
+];
+
+/// P3: forwarded only where the operation declares it, and namespaced per
+/// connection on a no-credential connection (`forward_inner`).
 pub(crate) const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
 // Forward only representation, pagination and rate-limit metadata from an
 // explicit list, never provider cookies or credentials.
 fn upstream_response_headers(headers: &HeaderMap) -> HeaderMap {
     let mut result = HeaderMap::new();
-    let names = [
-        header::CONTENT_TYPE,
-        header::LINK,
-        header::RETRY_AFTER,
-        header::ETAG,
-        header::LAST_MODIFIED,
-        axum::http::HeaderName::from_static("x-total-count"),
-        axum::http::HeaderName::from_static("x-next-page"),
-    ]
-    .into_iter()
-    .chain(RATE_LIMIT_HEADERS.map(axum::http::HeaderName::from_static));
-    for name in names {
+    for name in forwarded_response_headers() {
         for value in headers.get_all(&name) {
             result.append(name.clone(), value.clone());
         }
@@ -700,33 +741,26 @@ fn upstream_request(
     injection: CredentialInjection,
     headers: &HeaderMap,
     required_headers: &[(String, String)],
-    forward_idempotency_key: bool,
+    idempotency_key: Option<&HeaderValue>,
     body: Bytes,
 ) -> reqwest::RequestBuilder {
     // The caller's own `Authorization` (a frame capability) is consumed by
     // `authenticate` and never copied: only the headers below go upstream.
+    // A value the catalog fixes wins over the caller's, so no header is
+    // sent twice.
+    let fixed = |name: &str| {
+        required_headers
+            .iter()
+            .any(|(fixed, _)| fixed.eq_ignore_ascii_case(name))
+    };
     let mut request = injection.apply(client.request(method, target));
-    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
-        request = request.header(header::CONTENT_TYPE, content_type);
-    }
-    if let Some(etag) = headers.get(header::IF_MATCH) {
-        request = request.header(header::IF_MATCH, etag);
-    }
-    for name in CONDITIONAL_REQUEST_HEADERS {
-        if let Some(value) = headers.get(&name) {
+    for name in CALLER_HEADERS {
+        if let Some(value) = headers.get(&name).filter(|_| !fixed(name.as_str())) {
             request = request.header(name, value);
         }
     }
-    // Only for an operation that declares an `Idempotency-Key` header
-    // parameter, and never next to a fixed value the catalog sets itself.
-    if forward_idempotency_key
-        && !required_headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(IDEMPOTENCY_KEY))
-    {
-        if let Some(value) = headers.get(IDEMPOTENCY_KEY) {
-            request = request.header(IDEMPOTENCY_KEY, value);
-        }
+    if let Some(value) = idempotency_key.filter(|_| !fixed(IDEMPOTENCY_KEY)) {
+        request = request.header(IDEMPOTENCY_KEY, value);
     }
     for (name, value) in required_headers {
         request = request.header(name, value);
@@ -788,7 +822,7 @@ mod tests {
                 CredentialInjection::Bearer("test-provider-token".to_string()),
                 &headers,
                 &[],
-                false,
+                None,
                 Bytes::from_static(b"{}"),
             )
             .send()
@@ -839,7 +873,7 @@ mod tests {
             },
             &HeaderMap::new(),
             &[],
-            false,
+            None,
             Bytes::new(),
         )
         .send()
@@ -977,6 +1011,7 @@ mod tests {
         headers.insert(header::COOKIE, HeaderValue::from_static("session=caller"));
         headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Capability caller"));
+        let key = HeaderValue::from_static("create-1");
         let send = |declared: bool, required: Vec<(String, String)>| {
             let request = upstream_request(
                 &client,
@@ -985,7 +1020,7 @@ mod tests {
                 CredentialInjection::None,
                 &headers,
                 &required,
-                declared,
+                declared.then_some(&key),
                 Bytes::new(),
             );
             async move {
@@ -1017,7 +1052,33 @@ mod tests {
         )
         .await;
         assert_eq!(fixed["idempotency_key"], json!(["catalog-fixed"]));
+        // A conditional header the catalog fixes is sent once, with the
+        // catalog's value.
+        let fixed = send(
+            false,
+            vec![
+                ("If-None-Match".to_owned(), "*".to_owned()),
+                ("if-modified-since".to_owned(), "catalog-date".to_owned()),
+            ],
+        )
+        .await;
+        assert_eq!(fixed["if_none_match"], json!(["*"]));
+        assert_eq!(fixed["if_modified_since"], json!(["catalog-date"]));
         server.abort();
+    }
+
+    #[test]
+    fn the_forwarded_list_is_the_representation_and_rate_limit_headers() {
+        let names: Vec<_> = forwarded_response_headers().collect();
+        assert_eq!(names.len(), 17);
+        for name in [
+            "last-modified",
+            "x-next-page",
+            "x-ratelimit-reset",
+            "ratelimit-policy",
+        ] {
+            assert!(names.iter().any(|n| n == name), "{name}");
+        }
     }
 
     #[test]
@@ -1053,6 +1114,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        // Every proxied response, refusals included, is no-store.
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
 
     #[tokio::test]
@@ -1161,7 +1224,7 @@ mod tests {
                 injection,
                 &incoming,
                 &[],
-                false,
+                None,
                 Bytes::new(),
             )
             .send()
@@ -1902,22 +1965,29 @@ mod tests {
             }),
             json!({}),
         );
-        let owner = Agent::new(39);
-        let id = security
-            .create_connection(
-                "pets",
-                &owner.id(),
-                &serde_json::to_vec(&StoredCredential::NoCredential {
-                    provider: "pets".into(),
-                })
-                .unwrap(),
-            )
-            .await
-            .unwrap();
-        let post = |path: &str| {
+        let connect = |owner: Agent| {
+            let security = security.clone();
+            async move {
+                let id = security
+                    .create_connection(
+                        "pets",
+                        &owner.id(),
+                        &serde_json::to_vec(&StoredCredential::NoCredential {
+                            provider: "pets".into(),
+                        })
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                (owner, id)
+            }
+        };
+        let (owner, id) = connect(Agent::new(39)).await;
+        let (other, other_id) = connect(Agent::new(40)).await;
+        let post_as = |owner: &Agent, id: &str, path: &str| {
             let mut request = signed_request(
                 &s,
-                &owner,
+                owner,
                 "POST",
                 &format!("/proxy/{id}/pets/api/{path}"),
                 vec![],
@@ -1927,6 +1997,7 @@ mod tests {
             headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"v1\""));
             crate::router(s.clone()).oneshot(request)
         };
+        let post = |path: &str| post_as(&owner, &id, path);
 
         let response = post("items").await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -1939,9 +2010,26 @@ mod tests {
             "Wed, 07 Oct 2026 10:00:00 GMT"
         );
         assert!(!headers.contains_key("x-ratelimit-token"));
+        // Never cached, although it carries Last-Modified.
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
         let body = body_json(response).await;
-        assert_eq!(body["idempotency_key"], "create-1");
         assert_eq!(body["if_none_match"], "\"v1\"");
+        // On a no-credential connection the key is namespaced per
+        // connection: stable for a retry, different for another tenant
+        // sending the same key, and not the caller's key.
+        let sent = body["idempotency_key"].as_str().unwrap().to_owned();
+        assert_ne!(sent, "create-1");
+        assert_eq!(sent, security.connection_idempotency_key(&id, b"create-1"));
+        assert_eq!(sent.len(), 43);
+        let again = body_json(post("items").await.unwrap()).await;
+        assert_eq!(again["idempotency_key"], sent.as_str());
+        let theirs = body_json(post_as(&other, &other_id, "items").await.unwrap()).await;
+        let theirs = theirs["idempotency_key"].as_str().unwrap();
+        assert_ne!(theirs, sent);
+        assert_eq!(
+            theirs,
+            security.connection_idempotency_key(&other_id, b"create-1")
+        );
 
         let body = body_json(post("other").await.unwrap()).await;
         assert_eq!(body["idempotency_key"], serde_json::Value::Null);

@@ -345,7 +345,17 @@ Headers cross the proxy only by exact name (`proxy::upstream_request`,
 provider's `Set-Cookie`, `WWW-Authenticate`, `X-OAuth-Scopes` or an
 `x-ratelimit-*`-looking name outside the list never reaches the caller, and
 the caller's `Cookie`, `Authorization`, `Host` and forwarding headers never
-reach the provider.
+reach the provider. Both lists are single constants: the response list is
+also exactly what CORS exposes (`proxy::forwarded_response_headers`), the
+request list exactly what CORS allows besides `Authorization`,
+`Idempotency-Key` and the signature headers (`proxy::CALLER_HEADERS`). Where
+the catalog fixes a value for one of the caller's headers, the catalog's
+value is sent and the caller's is dropped, so no header is sent twice.
+
+Every response from `/proxy/…`, forwarded or refused, carries
+`Cache-Control: no-store`, whatever the provider sent: a forwarded
+`Last-Modified` would otherwise let a browser cache a proxied `GET`
+heuristically.
 
 - **Rate-limit response headers** (`X-RateLimit-Limit`, `-Remaining`,
   `-Used`, `-Reset`, `-Resource`, `RateLimit`, `RateLimit-Policy`,
@@ -368,12 +378,29 @@ reach the provider.
   `304` with no body. The proxy keeps no response cache, so a conditional
   request cannot make one tenant's response serve another's.
 - **`Idempotency-Key`** goes only to an operation whose composed document
-  declares a header parameter of that name, and never next to a fixed value
-  the catalog sets. A provider scopes keys to the credential that sends them,
-  and each connection sends its own credential; on a no-credential
-  connection two tenants could in principle choose the same key for the same
-  operation, which is why the header is limited to declared operations
-  rather than forwarded everywhere.
+  declares a header parameter of that name (on the operation or its path
+  item, `$ref`s resolved), and never next to a fixed value the catalog sets.
+  A provider scopes keys to the account that sends them. With a credential,
+  that is the connection's own account, and the key goes unchanged. A
+  no-credential connection sends no account, so every tenant would share one
+  key space and tenant B, sending tenant A's key, could be answered with A's
+  stored response. There the proxy sends
+  `base64url(HMAC-SHA256(subkey, connection_id ‖ 0x00 ‖ key))` instead, under
+  a subkey derived from `ENCRYPTION_KEY`
+  (`HMAC-SHA256(ENCRYPTION_KEY, "integration-proxy-idempotency-key-v1")`):
+  stable for one connection and key, so a retry still matches; different for
+  every other connection; and not reversible to the caller's key.
+- **Outside the signature.** The v2 request signature covers the method,
+  the full URL, the timestamp and a hash of the body, not these request
+  headers (nor `Content-Type` and `If-Match` before them). That is acceptable
+  because (1) TLS keeps anyone on the path from changing them; (2) a signed
+  request is accepted once, so a captured request cannot be resent with
+  other headers; (3) only the signer's own environment could set different
+  ones, and it can sign whatever it likes anyway; and (4) the most a changed
+  value can do is turn a read into a `304`, a write into a `412`, or make a
+  create match one of the same connection's earlier keys (on a no-credential
+  connection the key is namespaced per connection, above). None of them
+  widens what the catalog allows or which credential is sent.
 
 ## Release gate
 

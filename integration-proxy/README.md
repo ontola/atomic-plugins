@@ -150,7 +150,12 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   the rate-limit headers `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
   `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
   `-Remaining` and `-Reset` come back unchanged, by exact name; every other
-  response header is dropped.
+  response header is dropped, and every `/proxy/…` response carries
+  `Cache-Control: no-store`. On a no-credential connection the
+  `Idempotency-Key` goes upstream namespaced per connection (an HMAC of the
+  connection id and the key; SECURITY.md), so tenants never share keys. A
+  value the catalog fixes for one of these request headers replaces the
+  caller's.
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
   signer's runtimes. Never credentials. Shape:

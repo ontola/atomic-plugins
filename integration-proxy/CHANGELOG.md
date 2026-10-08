@@ -24,8 +24,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `-Remaining`, `-Reset` and `Last-Modified` now come back to the caller and
   are CORS-exposed; the caller's `If-None-Match` and `If-Modified-Since` go
   upstream, and `Idempotency-Key` where the operation declares that header
-  parameter. Every list is exact names only. See SECURITY.md, "Validating
-  proxy".
+  parameter, namespaced per connection on a no-credential connection. Every
+  list is exact names only, and every `/proxy/…` response is now
+  `Cache-Control: no-store`. A catalog-fixed value for a caller header now
+  replaces the caller's instead of being sent next to it. See SECURITY.md,
+  "Validating proxy".
 
 ## 0.3.0 (2026-10-06)
 

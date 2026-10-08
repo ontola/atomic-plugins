@@ -255,7 +255,12 @@ impl Catalog {
             let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
-            let path_item = paths.get(template)?.as_object()?;
+            // A path item may itself be a local `$ref` (OpenAPI 3.1).
+            let mut path_item = paths.get(template)?;
+            if let Some(reference) = path_item.get("$ref") {
+                path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;
+            }
+            let path_item = path_item.as_object()?;
             let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
             Some(
                 operation
@@ -705,13 +710,15 @@ mod tests {
         let catalog = super::Catalog::from_test_document(
             "test",
             json!({"servers":[{"url":"https://example.com/v1"}],
-            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}}},
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}},
+                "pathItems":{"shared":{"put":{"parameters":[{"$ref":"#/components/parameters/key"}]}}}},
             "paths":{
                 "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
                     "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
                 "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
                     "patch":{}},
-                "/other":{"post":{}}
+                "/other":{"post":{}},
+                "/shared":{"$ref":"#/components/pathItems/shared"}
             }}),
             json!({}),
         );
@@ -719,6 +726,7 @@ mod tests {
             catalog.declares_header_parameter("test", method, path, "idempotency-key")
         };
         assert!(declared("POST", "/v1/items"));
+        assert!(declared("PUT", "/v1/shared"));
         assert!(declared("PATCH", "/v1/items/7"));
         // A query parameter of that name, another operation, another path,
         // a path outside the server URL or an unknown platform: not declared.
