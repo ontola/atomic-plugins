@@ -157,12 +157,31 @@ property per definition whose type has a Type Object. The property is keyed
 by the definition's `id`, named by its `name`, typed by the Type Object's
 `schema`, and, with `options`, limited to the options the definition lists,
 each keyed by its option id. Items that share a describer share the class.
-
-A definition id that occurs more than once in one describer makes that describer ambiguous for the id: the client MUST NOT derive a property for it, and SHOULD report it. Members that match such an id are treated as undescribed (§5.4).
-
-An option value whose shape does not fit its Type Object (an option reference without an id at `valueId`, or a value that is not an array when `multiple` is `true`) is invalid: the client MUST NOT store any value for that member, and SHOULD report it.
 Items with different describers (pages of two Notion data sources) get
 different classes, even when their columns have the same names.
+
+A describer can be ambiguous, and the client SHOULD report each case:
+
+- A definition id that occurs more than once: the client MUST NOT derive a
+  property for it. Members that match such an id are treated as undescribed
+  (§5.4).
+- A name that two definitions share (possible with `shape: array`): with
+  `match: key` and `keyedBy: name`, a member keyed by that name matches
+  neither, and is unmatched (§5.2). With `match: id` it changes nothing but
+  the display name.
+- An option id that occurs more than once in one definition's options: the
+  client keeps the first option with that id. An option without a name at
+  the Options Object's `name` has no name (`null`); the client keeps it.
+
+An item can be ambiguous too: two members that match the same definition (a
+member keyed by a stale name and one keyed by the current name, say). The
+client MUST NOT store a value from either for that definition, and SHOULD
+report it.
+
+An option value whose shape does not fit its Type Object (an option
+reference without an id at `valueId`, or a value that is not an array when
+`multiple` is `true`) is invalid: the client MUST NOT store any value for
+that member, and SHOULD report it.
 
 ### 5.2 When to read the describer
 
@@ -191,9 +210,13 @@ Definitions are keyed by `id`, so:
    with the old values is its own policy; it MUST NOT read the definition's
    absence as every item's value being deleted.
 3. A changed `type` for the same `id` changes the value's shape. A client
-   MUST NOT interpret values stored under the old type as values of the new
-   one. With `memberType`, a member whose type differs from its definition's
-   is unmatched (§5.2) until the describer and the member agree.
+   MUST NOT interpret a value it knows was stored under the old type as a
+   value of the new one. With `memberType`, a member whose type differs from
+   its definition's is unmatched (§5.2) until the describer and the member
+   agree. Without it, a client cannot tell a member written under the old
+   type, so a document whose members carry their type SHOULD declare
+   `memberType`; one that does not accepts that a retyped column can be
+   misread until the item is written again.
 4. An option (§4.5) that is gone from the definition can still be referenced
    by stored values; a client keeps such a reference as an unknown option
    rather than dropping it.

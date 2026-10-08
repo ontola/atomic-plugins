@@ -131,6 +131,19 @@ class SchemaTests(unittest.TestCase):
         document["components"]["crudResources"]["row"]["references"]["table"]["resource"] = "nothing"
         self.assertInvalid(document, "is not a crudResources key")
 
+    def test_malformed_references_or_path_items_do_not_crash(self):
+        document = example()
+        document["components"]["crudResources"]["row"]["references"] = ["table"]
+        self.assertInvalid(document, "has no 'table'")
+        document = example()
+        document["paths"]["/tables/{tableId}"] = "not a path item"
+        self.assertInvalid(document, "has no get operation")
+        document = example()
+        document["components"]["crudResources"]["table"]["identity"] = "nope"
+        warnings = []
+        validate(document, warnings)
+        self.assertEqual(len(warnings), 1)
+
     def test_describer_read_operation(self):
         document = example()
         document["paths"]["/tables/{tableId}"]["post"] = document["paths"]["/tables/{tableId}"].pop("get")
@@ -254,10 +267,48 @@ class ReadingTests(unittest.TestCase):
     def test_no_describer_gives_an_empty_class(self):
         # A reference that identifies no describer (absent parent, 404): no class (§5.5).
         derived = derive_class(self.runtime, {})
-        self.assertEqual(derived, {"properties": {}, "undescribed": [], "duplicates": []})
+        self.assertEqual((derived["properties"], derived["undescribed"], derived["duplicates"]), ({}, [], []))
         result = read_members(self.runtime, derived, ROW)
         self.assertEqual(result["values"], {})
         self.assertEqual(sorted(result["unmatched"]), ["Due", "Estimate", "Stage", "Tags"])
+
+    def test_option_without_a_name_is_kept_with_none(self):
+        # Review of #398: no MISSING sentinel as an option name.
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Stage"]["select"]["options"].append({"id": "opt-3"})
+        options = derive_class(self.runtime, table)["properties"]["c%3Ad"]["options"]
+        self.assertIsNone(options["opt-3"])
+        self.assertEqual(options["opt-1"], "Doing")
+
+    def test_duplicate_option_ids_keep_the_first_and_are_reported(self):
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Stage"]["select"]["options"].append({"id": "opt-1", "name": "Again"})
+        derived = derive_class(self.runtime, table)
+        self.assertEqual(derived["properties"]["c%3Ad"]["options"]["opt-1"], "Doing")
+        self.assertEqual(derived["duplicateOptions"], {"c%3Ad": ["opt-1"]})
+
+    def test_two_members_matching_one_definition_conflict(self):
+        row = copy.deepcopy(ROW)
+        row["properties"]["Old estimate"] = {"id": "a%3Ab", "type": "number", "number": 5}
+        result = read_members(self.runtime, derive_class(self.runtime, TABLE), row)
+        self.assertEqual(sorted(result["conflicting"]), ["Estimate", "Old estimate"])
+        self.assertNotIn("a%3Ab", result["values"])
+
+    def test_key_matching_by_name_reports_undescribed_and_duplicate_names(self):
+        runtime = dict(self.runtime, match="key")
+        del runtime["memberId"]
+        del runtime["memberType"]
+        result = read_members(runtime, derive_class(runtime, TABLE), ROW)
+        # Due is a formula: undescribed, not unmatched, so no needless describer re-read.
+        self.assertEqual(result["undescribed"], ["Due"])
+        self.assertEqual(result["unmatched"], [])
+        runtime["describedBy"] = dict(runtime["describedBy"], shape="array")
+        table = {"properties": [{"id": "x1", "name": "Points", "type": "number"},
+                                {"id": "x2", "name": "Points", "type": "number"}]}
+        derived = derive_class(runtime, table)
+        self.assertEqual(derived["duplicateNames"], ["Points"])
+        result = read_members(runtime, derived, {"properties": {"Points": {"number": 3}}})
+        self.assertEqual((result["unmatched"], result["values"]), (["Points"], {}))
 
     def test_array_definitions_and_key_matching(self):
         runtime = {
@@ -270,7 +321,7 @@ class ReadingTests(unittest.TestCase):
         derived = derive_class(runtime, form)
         self.assertEqual(derived["properties"]["f1"]["name"], "Name")
         result = read_members(runtime, derived, {"fields": {"f1": "Ada", "f2": "x.png", "f9": "?"}})
-        self.assertEqual(result, {"values": {"f1": "Ada"}, "unmatched": ["f9"], "undescribed": ["f2"], "invalid": []})
+        self.assertEqual(result, {"values": {"f1": "Ada"}, "unmatched": ["f9"], "undescribed": ["f2"], "invalid": [], "conflicting": []})
 
 
 if __name__ == "__main__":
