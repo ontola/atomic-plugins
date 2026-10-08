@@ -83,8 +83,10 @@ Q-087..Q-092 behind the browser flag
 | Install state                              | A `View` per tab; a `sync-binding` (`synced-table`, `sync-state` JSON) under the integration App, per table                                                                | Real                          |
 
 The coordinator relays that candidate20 will carry #2069 into the pin, behind
-the flag. **Estimated:** candidate20 is "being prepared" (S26), and how it
-relates to the freeze's "no new pin candidates" (S23) was not checked.
+the flag. It is a one-off exception to the freeze's "no new pin candidates"
+(S23), given by Michiel in chat on 2026-10-08 for user testing and recorded in
+[working-model.md](../agents/working-model.md). **Estimated:** candidate20 is
+"being prepared" (S26).
 
 ## 2. What is new in the statement
 
