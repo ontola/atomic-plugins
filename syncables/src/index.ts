@@ -95,7 +95,10 @@ export { LinkRefused, resolveLink } from './pagination/links.js';
 export type { ResolveLinkOptions } from './pagination/links.js';
 export type { LinkResolutionObject } from './pagination/types.js';
 
-export { resolveEffectiveScheme } from './pagination/autodetect.js';
+export {
+  PaginationSchemeError,
+  resolveEffectiveScheme,
+} from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
 export { validatePaginationScheme } from './pagination/validate.js';
 export type {
