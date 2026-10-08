@@ -1,0 +1,62 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dd34a70a45c5109479068b4b5d91337baf8822cd/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+info:
+  title: Clockify time-entry list bounds in the user's profile time zone
+  version: 1.0.0
+# Filtering 0.2.0-draft (openapi-extensions/spec/filtering) x-filter and
+# x-time-zone for the time-entry list's `start` and `end`. Compose after
+# crud-causality-dd34a70a...-overlay.yaml, which adds GET /v1/user
+# (getClockifyCurrentUser) and the CurrentUser schema this overlay extends.
+# Selected by no dated catalog until syncables reads x-time-zone.
+#
+# Basis: checked against a live account on 2026-09-24 (ontola/atomic-plugins
+# #123) and recorded in integrations/timesheets/app/timeZone.ts and
+# clockifyObserve.ts: the list reads `start` and `end` as wall-clock time in
+# the user's profile time zone (`GET /v1/user` -> `settings.timeZone`),
+# ignores the `Z` or an offset and refuses a value with neither, and selects
+# entries whose `timeInterval.start` is in [start, end). Clockify's
+# published reference describes the parameters only as "yyyy-MM-ddThh:mm:ssZ"
+# and does not document the zone; not checked: how it resolves a wall-clock
+# time in a repeated or skipped daylight-saving hour (ambiguous: unspecified).
+#
+# All three actions target paths that exist in the bare OAD, so the overlay
+# also resolves on its own, as validate_oad_pins.py requires of an overlay
+# no catalog selects.
+actions:
+  - target: $.components.parameters.Start
+    update:
+      x-filter:
+        field: /timeInterval/start
+        operator: gte
+      x-time-zone:
+        interpretation: wallClock
+        zone: {operationId: getClockifyCurrentUser, pointer: /settings/timeZone}
+        suffix: Z
+        ambiguous: unspecified
+        description: >-
+          Wall-clock time in the user's profile time zone; the Z is required
+          and ignored. Checked live on 2026-09-24 (#123).
+  - target: $.components.parameters.End
+    update:
+      x-filter:
+        field: /timeInterval/start
+        operator: lt
+      x-time-zone:
+        interpretation: wallClock
+        zone: {operationId: getClockifyCurrentUser, pointer: /settings/timeZone}
+        suffix: Z
+        ambiguous: unspecified
+        description: >-
+          Wall-clock time in the user's profile time zone; the Z is required
+          and ignored. Checked live on 2026-09-24 (#123).
+  - target: $.components
+    update:
+      schemas:
+        CurrentUser:
+          properties:
+            settings:
+              type: object
+              properties:
+                timeZone:
+                  type: string
+                  description: The user's profile time zone, an IANA name such as Europe/Amsterdam.
