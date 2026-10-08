@@ -77,7 +77,7 @@ impl Store {
                 let row = client
                     .query_one(
                         "SELECT hook_id, platform, source_kind, source_key, coalesce(access_parameters, '{}'),
-                                provider_hook_id, management_connection_id
+                                provider_hook_id, management_connection_id, endpoint_id
                          FROM webhook_hooks WHERE hook_id = $1",
                         &[&hook_id],
                     )
@@ -90,6 +90,7 @@ impl Store {
                     access_parameters: row.get(4),
                     provider_hook_id: row.get(5),
                     management_connection_id: row.get(6),
+                    endpoint_id: row.get(7),
                 }
             };
             match deleter.delete(&hook).await {

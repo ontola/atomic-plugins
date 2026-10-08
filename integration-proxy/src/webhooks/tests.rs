@@ -52,9 +52,12 @@ async fn env(policy: Policy) -> Env {
         .append_pair("application_name", &tag);
     let url = url.to_string();
     let security = Security::connect(&url, TEST_KEY).await.expect("security");
-    let store = Store::connect(&url, &security, policy)
+    let mut store = Store::connect(&url, &security, policy)
         .await
         .expect("inbox store");
+    // The tests' clock runs ahead of the real one; until a test sweeps,
+    // the store counts as freshly started.
+    store.set_started_at(at(400 * DAY));
     Env {
         store: Arc::new(store),
         security,
@@ -200,6 +203,59 @@ impl Env {
         assert_eq!(row.get::<_, i64>(0), row.get::<_, i64>(3), "inbox bytes");
         assert_eq!(row.get::<_, i64>(1), row.get::<_, i64>(4), "receipts");
         assert_eq!(row.get::<_, i64>(2), row.get::<_, i64>(5), "cleanup jobs");
+        // And every limit holds.
+        let policy = self.store.policy();
+        let over: i64 = client
+            .query_one(
+                "SELECT count(*) FROM webhook_subscriptions WHERE pending_events > $1 OR pending_bytes > $2",
+                &[&policy.subscription_max_pending_events, &policy.subscription_max_pending_bytes],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(over, 0, "subscription limits");
+        let over: i64 = client
+            .query_one(
+                "SELECT count(*) FROM webhook_owner_usage
+                 WHERE pending_bytes > $1 OR pending_refs > $2 OR live_subscriptions > $3",
+                &[
+                    &policy.owner_max_pending_bytes,
+                    &policy.owner_max_pending_references,
+                    &policy.owner_max_live_subscriptions,
+                ],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(over, 0, "owner limits");
+        assert!(
+            row.get::<_, i64>(0) <= policy.deployment_max_inbox_bytes,
+            "deployment budget"
+        );
+        assert!(
+            row.get::<_, i64>(1) <= policy.receipt_max_count,
+            "receipt cap"
+        );
+        let over: i64 = client
+            .query_one(
+                "SELECT count(*) FROM (SELECT owner FROM webhook_receipts GROUP BY owner HAVING count(*) > $1) o",
+                &[&policy.receipt_max_per_owner],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(over, 0, "per-owner receipt cap");
+        let over: i64 = client
+            .query_one(
+                "SELECT count(*) FROM (SELECT owner FROM webhook_hooks
+                   WHERE ownership = 'dedicated' AND state <> 'closed'
+                   GROUP BY owner HAVING count(*) > $1) o",
+                &[&policy.cleanup_max_jobs_per_owner],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(over, 0, "per-owner dedicated hooks");
     }
 
     async fn state(&self, id: &str) -> (String, Option<String>, i64) {
@@ -1460,6 +1516,7 @@ async fn a_dedicated_hook_is_handed_over_and_cleaned_up() {
         calls[0].provider_hook_id.as_deref(),
         Some("provider-hook-1")
     );
+    assert_eq!(calls[0].endpoint_id, hook.endpoint_id);
     assert_eq!(calls[0].source_key, "p");
     assert_eq!(calls[0].access_parameters, "{\"projectId\":\"fixture\"}");
     assert_eq!(env.state(&second.id).await.0, "closed");
@@ -1576,17 +1633,274 @@ async fn failed_provisioning_closes_the_waiting_subscriptions() {
         ended_reason(error),
         ("closed".into(), "provisioning-failed".into())
     );
+    // The provider may have created it before the failure was seen: it is
+    // cleaned up, not forgotten.
     assert_eq!(
-        env.count("SELECT count(*) FROM webhook_hooks WHERE state = 'closed'")
+        env.count("SELECT count(*) FROM webhook_hooks WHERE state = 'cleanup-pending'")
             .await,
         1
     );
     assert_eq!(
         env.count("SELECT count(*) FROM webhook_cleanup_jobs").await,
-        0
+        1
     );
     env.check_invariants().await;
     env.drop_schema().await;
+}
+
+/// Review of #383, blocking 1: one delivery to several subscriptions of
+/// one owner stays within the owner's budget.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn one_delivery_to_several_subscriptions_of_one_owner_stays_within_its_budget() {
+    let env = env(small()).await;
+    let hook = env.shared().await;
+    let owner = agent("fanout");
+    let connection = env.connection(&owner).await;
+    let mut subs = Vec::new();
+    for _ in 0..3 {
+        subs.push(
+            env.subscribe(&owner, &connection, &hook.hook_id, "same", at(0))
+                .await
+                .unwrap(),
+        );
+    }
+    for n in 0..12 {
+        let outcome = env
+            .deliver(
+                &hook.endpoint_id,
+                &format!("f-{n}"),
+                "same",
+                1000,
+                at(1 + n),
+            )
+            .await;
+        assert_eq!(outcome.routed, 3);
+        let owner_bytes = env
+            .count("SELECT pending_bytes FROM webhook_owner_usage")
+            .await;
+        assert!(owner_bytes <= 8192, "delivery {n}: {owner_bytes} > 8192");
+        env.check_invariants().await;
+    }
+    // Room for eight 1000-byte events in all, across the three.
+    let total: i64 = env
+        .count("SELECT sum(pending_events)::bigint FROM webhook_subscriptions")
+        .await;
+    assert_eq!(total, 8);
+    env.drop_schema().await;
+}
+
+/// Review of #383, blocking 2: a dedicated hook nothing ever subscribes to
+/// is retired by the sweeper, with a cleanup job.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn an_unused_dedicated_hook_is_retired() {
+    let env = env(small()).await;
+    let owner = agent("unused");
+    let connection = env.connection(&owner).await;
+    let lonely = dedicated(&env, &owner, &connection, "lonely", at(0)).await;
+    env.store
+        .hook_provisioned(&lonely.hook_id, "provider-lonely", at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        env.store.sweep(at(HOUR - 1)).await.unwrap().hooks_retired,
+        0
+    );
+    assert_eq!(env.store.sweep(at(HOUR)).await.unwrap().hooks_retired, 1);
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_hooks WHERE state = 'cleanup-pending'")
+            .await,
+        1
+    );
+    let deleter = ScriptedDeleter::new(vec![Ok(())]);
+    assert_eq!(
+        env.store
+            .run_cleanup(&deleter, at(HOUR + 1))
+            .await
+            .unwrap()
+            .deleted,
+        1
+    );
+    env.store.sweep(at(HOUR + 2)).await.unwrap();
+    assert_eq!(env.count("SELECT count(*) FROM webhook_hooks").await, 0);
+    env.check_invariants().await;
+    env.drop_schema().await;
+}
+
+/// Review of #383, blocking 2: the subscription ends while the hook is
+/// still provisioning, then the provider's answer arrives. The hook is
+/// cleaned up, with the provider's id, never forgotten.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_hook_provisioned_after_its_last_subscription_ended_is_cleaned_up() {
+    let env = env(small()).await;
+    let owner = agent("racer");
+    let connection = env.connection(&owner).await;
+    let hook = dedicated(&env, &owner, &connection, "p", at(0)).await;
+    let sub = env
+        .subscribe(&owner, &connection, &hook.hook_id, "p", at(0))
+        .await
+        .unwrap();
+    env.store.delete(&sub.id, &owner, at(1)).await.unwrap();
+    assert_eq!(env.state(&sub.id).await.0, "cleanup-pending");
+    env.store
+        .hook_provisioned(&hook.hook_id, "provider-late", at(2))
+        .await
+        .expect("the late answer is recorded");
+    let deleter = ScriptedDeleter::new(vec![Ok(())]);
+    env.store.run_cleanup(&deleter, at(3)).await.unwrap();
+    let calls = deleter.calls.lock().unwrap().clone();
+    assert_eq!(calls[0].provider_hook_id.as_deref(), Some("provider-late"));
+    assert_eq!(env.state(&sub.id).await.0, "closed");
+
+    // An answer after the cleanup gave up starts a new cleanup.
+    let late = dedicated(&env, &owner, &connection, "q", at(10)).await;
+    let failing =
+        ScriptedDeleter::new(vec![Err(CleanupError::Permanent("no-managing-connection"))]);
+    env.store
+        .hook_provisioning_failed(&late.hook_id, at(11))
+        .await
+        .unwrap();
+    assert_eq!(
+        env.store
+            .run_cleanup(&failing, at(12))
+            .await
+            .unwrap()
+            .failed,
+        1
+    );
+    env.store
+        .hook_provisioned(&late.hook_id, "provider-very-late", at(13))
+        .await
+        .unwrap();
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_cleanup_jobs").await,
+        1
+    );
+    env.check_invariants().await;
+    env.drop_schema().await;
+}
+
+/// Review of #383: dedicated hooks count against the owner's and the
+/// deployment's caps, and a subscription must be for the hook's own source.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn dedicated_hooks_are_capped_and_bound_to_their_source() {
+    let env = env(small()).await;
+    let owner = agent("capped");
+    let connection = env.connection(&owner).await;
+    let hook = dedicated(&env, &owner, &connection, "p", at(0)).await;
+    let refused = env
+        .store
+        .create_dedicated_hook(
+            PLATFORM,
+            "project",
+            "q",
+            "{}",
+            &owner,
+            &connection,
+            "sealed",
+            at(1),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(InboxError::CapacityUnavailable)),
+        "one per owner here"
+    );
+    assert!(matches!(
+        env.subscribe(&owner, &connection, &hook.hook_id, "another-source", at(2))
+            .await,
+        Err(InboxError::UnknownHook)
+    ));
+    env.check_invariants().await;
+    env.drop_schema().await;
+}
+
+/// Review of #383: management stays with a connection that still has a
+/// subscription on the hook, and never moves to a deleted connection.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn hook_management_stays_or_moves_only_to_a_live_connection() {
+    let env = env(small()).await;
+    let alice = agent("manager");
+    let bob = agent("ghost");
+    let carol = agent("heir2");
+    let ac = env.connection(&alice).await;
+    let bc = env.connection(&bob).await;
+    let cc = env.connection(&carol).await;
+    let hook = dedicated(&env, &alice, &ac, "p", at(0)).await;
+    env.store
+        .hook_provisioned(&hook.hook_id, "provider", at(0))
+        .await
+        .unwrap();
+    let a1 = env
+        .subscribe(&alice, &ac, &hook.hook_id, "p", at(1))
+        .await
+        .unwrap();
+    let _a2 = env
+        .subscribe(&alice, &ac, &hook.hook_id, "p", at(2))
+        .await
+        .unwrap();
+    let _b = env
+        .subscribe(&bob, &bc, &hook.hook_id, "p", at(3))
+        .await
+        .unwrap();
+    let _c = env
+        .subscribe(&carol, &cc, &hook.hook_id, "p", at(4))
+        .await
+        .unwrap();
+    let manager = || async {
+        env.sql()
+            .await
+            .query_one(
+                "SELECT management_connection_id FROM webhook_hooks WHERE hook_id = $1",
+                &[&hook.hook_id],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+    };
+    env.store.delete(&a1.id, &alice, at(5)).await.unwrap();
+    assert_eq!(manager().await, ac, "alice still has a subscription on it");
+    // Bob's connection is deleted (his subscription not yet swept); alice
+    // leaves: management skips bob for carol.
+    assert!(env.security.delete_connection(&bc, &bob).await.unwrap());
+    env.store.delete(&_a2.id, &alice, at(6)).await.unwrap();
+    assert_eq!(manager().await, cc);
+    env.drop_schema().await;
+}
+
+/// Review of #383: with no sweep since the store started (a NULL last
+/// sweep), new subscriptions are refused once three intervals passed.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_sweeper_that_never_ran_refuses_new_subscriptions() {
+    let schema_env = env(small()).await;
+    let mut store = Store::connect(&schema_env.url, &schema_env.security, small())
+        .await
+        .unwrap();
+    store.set_started_at(at(0));
+    let owner = agent("unswept");
+    let connection = schema_env.connection(&owner).await;
+    let hook = store.ensure_shared_hook(PLATFORM, at(0)).await.unwrap();
+    let new = |key: &str| NewSubscription {
+        connection_id: connection.clone(),
+        owner: owner.clone(),
+        consumer: owner.clone(),
+        hook_id: hook.hook_id.clone(),
+        source_kind: "project".into(),
+        source_key: key.into(),
+        events: vec!["task".into()],
+    };
+    store.create_subscription(new("a"), at(180)).await.unwrap();
+    assert!(matches!(
+        store.create_subscription(new("b"), at(181)).await,
+        Err(InboxError::CapacityUnavailable)
+    ));
+    store.sweep(at(181)).await.unwrap();
+    store.create_subscription(new("b"), at(182)).await.unwrap();
+    schema_env.drop_schema().await;
 }
 
 // --- races ---------------------------------------------------------------------------
@@ -1761,9 +2075,17 @@ async fn acknowledgements_and_renewals_race_sweeps_consistently() {
         sweep.unwrap();
         let (state, _, _) = env.state(&sub.id).await;
         match renew {
-            Ok(_) if state != "closed" => assert!(ack.is_ok()),
-            Ok(_) => {} // renewed, then the sweep at a later time expired it
-            Err(InboxError::Ended(_)) => assert_eq!(state, "closed"),
+            // The renewal won: the sweep found a lease running to
+            // deadline - 1 + 7 days, and nothing ended.
+            Ok(_) => {
+                assert_ne!(state, "closed", "renewed, so not expired");
+                assert!(ack.is_ok());
+            }
+            // The sweep won: everything after it finds the subscription ended.
+            Err(InboxError::Ended(_)) => {
+                assert_eq!(state, "closed");
+                assert!(matches!(ack, Ok(_) | Err(InboxError::Ended(_))));
+            }
             Err(other) => panic!("{other:?}"),
         }
         env.check_invariants().await;

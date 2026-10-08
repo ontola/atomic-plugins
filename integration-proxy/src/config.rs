@@ -93,7 +93,8 @@ pub(crate) fn webhook_config(
         Some("true") => true,
         Some(_) => return Err("WEBHOOKS_ENABLED must be true or false".into()),
     };
-    let inbox_max_bytes = match inbox_max_bytes.map(str::trim) {
+    // Read only when the inbox is on: off, the variable is ignored.
+    let inbox_max_bytes = match inbox_max_bytes.map(str::trim).filter(|_| enabled) {
         None | Some("") => DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
         Some(value) => match value.parse::<i64>() {
             Ok(bytes) if bytes >= MIN_WEBHOOK_INBOX_MAX_BYTES => bytes,
@@ -441,13 +442,21 @@ mod tests {
             assert!(webhook_config(Some(invalid), None).is_err(), "{invalid}");
         }
         assert_eq!(
-            webhook_config(None, Some("536870912"))
+            webhook_config(Some("true"), Some("536870912"))
                 .unwrap()
                 .inbox_max_bytes,
             512 << 20
         );
         for invalid in ["0", "-1", "1e9", "268435455", "lots"] {
-            assert!(webhook_config(None, Some(invalid)).is_err(), "{invalid}");
+            assert!(
+                webhook_config(Some("true"), Some(invalid)).is_err(),
+                "{invalid}"
+            );
+            // Off, the budget is not read at all.
+            assert_eq!(
+                webhook_config(None, Some(invalid)).unwrap(),
+                WebhookConfig::default()
+            );
         }
     }
 

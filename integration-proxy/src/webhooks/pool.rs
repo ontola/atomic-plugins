@@ -10,6 +10,9 @@
 use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
 use tokio_postgres::Client;
 
+const LOCK_TIMEOUT_MS: u64 = 10_000;
+const STATEMENT_TIMEOUT_MS: u64 = 30_000;
+
 pub struct Pool {
     database_url: String,
     idle: Mutex<Vec<Client>>,
@@ -58,6 +61,14 @@ impl Pool {
                         tracing::warn!(%error, "webhook inbox connection closed");
                     }
                 });
+                // No inbox statement waits for a lock, or runs, without
+                // bound: a stuck one fails (and the provider may retry).
+                client
+                    .batch_execute(&format!(
+                        "SET lock_timeout = '{LOCK_TIMEOUT_MS}ms'; SET statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
                 client
             }
         };

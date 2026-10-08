@@ -6,9 +6,10 @@
 //! an update:
 //!
 //! 1. subscription rows, by id;
-//! 2. owner usage rows, by owner;
+//! 2. owner usage rows, by owner (an upsert locks each);
 //! 3. the single deployment usage row;
-//! 4. a hook row; payload and receipt rows.
+//! 4. then, as needed: receipt rows (any owner's, when one is evicted),
+//!    one hook row, payload rows.
 //!
 //! Since every write takes the deployment row, writes are serialized after
 //! their subscription locks; that is the pilot's throughput bound.
@@ -343,6 +344,9 @@ pub struct HookRecord {
 #[derive(Clone, Debug)]
 pub struct HookToDelete {
     pub hook_id: String,
+    /// Its endpoint: a hook whose provider id is unknown (provisioning
+    /// ended first) is found by listing and matching this endpoint's URL.
+    pub endpoint_id: String,
     pub platform: String,
     pub source_kind: String,
     pub source_key: String,
@@ -619,6 +623,9 @@ pub struct Store {
     pool: Pool,
     policy: Policy,
     cursors: CursorKey,
+    /// When this store started; stands in for the last sweep until the
+    /// first one ran.
+    started_at: SystemTime,
     #[cfg(test)]
     pub(crate) fail_before_commit: std::sync::atomic::AtomicBool,
 }
@@ -653,6 +660,7 @@ impl Store {
             pool: Pool::new(database_url, 4),
             policy,
             cursors: CursorKey::new(security.derive_subkey(super::cursor::SUBKEY_LABEL)),
+            started_at: SystemTime::now(),
             #[cfg(test)]
             fail_before_commit: std::sync::atomic::AtomicBool::new(false),
         })
@@ -660,6 +668,12 @@ impl Store {
 
     pub fn policy(&self) -> &Policy {
         &self.policy
+    }
+
+    /// Tests run on a simulated clock: the store's start moves with it.
+    #[cfg(test)]
+    pub(crate) fn set_started_at(&mut self, at: SystemTime) {
+        self.started_at = at;
     }
 
     async fn commit(&self, transaction: Transaction<'_>) -> Result<()> {
@@ -930,58 +944,73 @@ impl Store {
                 .await?;
             let hook_state: String = hook.get(0);
             let manager: Option<String> = hook.get(1);
-            let successor = tx
-                .query_opt(
+            // Other live subscriptions whose connection still exists.
+            let remaining: Vec<(String, String)> = tx
+                .query(
                     &format!(
-                        "SELECT connection_id, owner FROM webhook_subscriptions
-                         WHERE hook_id = $1 AND subscription_id <> $2 AND state IN {LIVE}
-                         ORDER BY created_at, subscription_id LIMIT 1"
+                        "SELECT s.connection_id, s.owner FROM webhook_subscriptions s
+                         WHERE s.hook_id = $1 AND s.subscription_id <> $2 AND s.state IN {LIVE}
+                           AND EXISTS (SELECT 1 FROM agent_connections c WHERE c.connection_id = s.connection_id)
+                         ORDER BY s.created_at, s.subscription_id"
                     ),
                     &[&row.hook_id, &row.id],
                 )
-                .await?;
-            match successor {
-                Some(successor) => {
-                    // Management moves on when its connection leaves
-                    // (Webhook Deliveries §4.5.2).
-                    if manager.as_deref() == Some(row.connection_id.as_str()) || manager.is_none() {
-                        let connection: String = successor.get(0);
-                        let new_owner: String = successor.get(1);
-                        tx.execute(
-                            "UPDATE webhook_hooks SET management_connection_id = $2, owner = $3 WHERE hook_id = $1",
-                            &[&row.hook_id, &connection, &new_owner],
-                        )
-                        .await?;
-                    }
-                }
-                None if row.created_by_receiver && hook_state == "active" => {
-                    tx.execute(
-                        "UPDATE webhook_hooks SET state = 'cleanup-pending' WHERE hook_id = $1",
-                        &[&row.hook_id],
-                    )
-                    .await?;
-                    let inserted = tx
-                        .execute(
-                            "INSERT INTO webhook_cleanup_jobs (hook_id, next_attempt_at, deadline_at, created_at)
-                             VALUES ($1, $2, $3, $2) ON CONFLICT DO NOTHING",
-                            &[&row.hook_id, &now, &(now + policy.cleanup_deadline)],
-                        )
-                        .await?;
-                    deployment.cleanup_jobs += inserted as i64;
+                .await?
+                .iter()
+                .map(|r| (r.get(0), r.get(1)))
+                .collect();
+            if remaining.is_empty() {
+                if row.created_by_receiver
+                    && matches!(hook_state.as_str(), "active" | "provisioning")
+                {
+                    Self::retire_hook(tx, policy, &row.hook_id, deployment, now).await?;
                     row.state = State::CleanupPending;
                 }
-                None => {
-                    if hook_state == "provisioning" {
-                        tx.execute(
-                            "UPDATE webhook_hooks SET state = 'closed', closed_at = $2 WHERE hook_id = $1",
-                            &[&row.hook_id, &now],
-                        )
-                        .await?;
-                    }
-                }
+            } else if !manager.as_ref().is_some_and(|manager| {
+                remaining
+                    .iter()
+                    .any(|(connection, _)| connection == manager)
+            }) {
+                // Management moves on only when its connection leaves the
+                // hook, and only to a connection that still exists (Webhook
+                // Deliveries §4.5.2).
+                let (connection, new_owner) = &remaining[0];
+                tx.execute(
+                    "UPDATE webhook_hooks SET management_connection_id = $2, owner = $3 WHERE hook_id = $1",
+                    &[&row.hook_id, connection, new_owner],
+                )
+                .await?;
             }
         }
         Self::save_subscription(tx, row).await
+    }
+
+    /// Starts the cleanup of a dedicated hook nothing uses any more:
+    /// `cleanup-pending` and a job. A hook still provisioning gets one too,
+    /// since the provider may have created it (the job lists, then deletes).
+    /// The caller holds the deployment row.
+    async fn retire_hook(
+        tx: &Transaction<'_>,
+        policy: &Policy,
+        hook_id: &str,
+        deployment: &mut Deployment,
+        now: SystemTime,
+    ) -> Result<()> {
+        tx.execute(
+            "UPDATE webhook_hooks SET state = 'cleanup-pending'
+             WHERE hook_id = $1 AND state IN ('active', 'provisioning')",
+            &[&hook_id],
+        )
+        .await?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO webhook_cleanup_jobs (hook_id, next_attempt_at, deadline_at, created_at)
+                 VALUES ($1, $2, $3, $2) ON CONFLICT DO NOTHING",
+                &[&hook_id, &now, &(now + policy.cleanup_deadline)],
+            )
+            .await?;
+        deployment.cleanup_jobs += inserted as i64;
+        Ok(())
     }
 
     // --- views -----------------------------------------------------------------
@@ -1097,13 +1126,8 @@ impl Store {
                 }),
                 _ => None,
             },
-            acknowledged: (row.ack_seq > 0).then(|| {
-                self.cursor(
-                    row,
-                    row.gap_generation.unwrap_or(row.generation).max(1),
-                    row.ack_seq,
-                )
-            }),
+            acknowledged: (row.ack_seq > 0)
+                .then(|| self.cursor(row, row.generation.max(1), row.ack_seq)),
             pending: PendingView {
                 events: row.pending_events,
                 bytes: row.pending_bytes,
@@ -1202,8 +1226,10 @@ impl Store {
 
     /// Records a dedicated hook before the provider is asked to create it
     /// (Webhook Deliveries §4.5.2): its endpoint, sealed secret, bound key
-    /// and the access parameters its management will re-check. Refused at
-    /// the deployment's or the owner's cleanup-job cap.
+    /// and the access parameters its management will re-check. Refused when
+    /// the deployment or the owner holds as many dedicated hooks that are not
+    /// closed as their cleanup-job caps, so cleanup jobs (one per such hook
+    /// at most) stay within those caps.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_dedicated_hook(
         &self,
@@ -1220,17 +1246,17 @@ impl Store {
         let tx = client.transaction().await?;
         // Lock order: owner, then deployment.
         let _owner = Self::lock_owners(&tx, &[owner.to_owned()]).await?;
-        let deployment = Self::lock_deployment(&tx).await?;
-        let owner_jobs: i64 = tx
+        let _deployment = Self::lock_deployment(&tx).await?;
+        let counts = tx
             .query_one(
-                "SELECT count(*) FROM webhook_cleanup_jobs j JOIN webhook_hooks h USING (hook_id)
-                 WHERE h.owner = $1",
+                "SELECT count(*), count(*) FILTER (WHERE owner = $1) FROM webhook_hooks
+                 WHERE ownership = 'dedicated' AND state <> 'closed'",
                 &[&owner],
             )
-            .await?
-            .get(0);
-        if deployment.cleanup_jobs >= self.policy.cleanup_max_jobs
-            || owner_jobs >= self.policy.cleanup_max_jobs_per_owner
+            .await?;
+        let (all_hooks, owner_hooks): (i64, i64) = (counts.get(0), counts.get(1));
+        if all_hooks >= self.policy.cleanup_max_jobs
+            || owner_hooks >= self.policy.cleanup_max_jobs_per_owner
         {
             return Err(InboxError::CapacityUnavailable);
         }
@@ -1267,7 +1293,10 @@ impl Store {
         Ok(hook)
     }
 
-    /// The provider created the hook: its subscriptions start capturing.
+    /// The provider created the hook: its subscriptions start capturing. If
+    /// they all ended meanwhile, the hook is already being cleaned up, and
+    /// its provider id is recorded for that; if that cleanup already gave
+    /// up, a new one starts. The provider's hook is never left unrecorded.
     pub async fn hook_provisioned(
         &self,
         hook_id: &str,
@@ -1286,78 +1315,151 @@ impl Store {
             .iter()
             .map(|row| row.get(0))
             .collect();
+        let mut rows = Vec::new();
         for id in &ids {
-            if let Some(mut row) = Self::lock_subscription(&tx, id).await? {
-                if row.state == State::Provisioning {
-                    row.start_initial(now);
-                    Self::save_subscription(&tx, &row).await?;
-                }
+            if let Some(row) = Self::lock_subscription(&tx, id).await? {
+                rows.push(row);
             }
         }
-        let updated = tx
-            .execute(
-                "UPDATE webhook_hooks SET state = 'active', provider_hook_id = $2
-                 WHERE hook_id = $1 AND state = 'provisioning'",
-                &[&hook_id, &provider_hook_id],
+        let mut deployment = Self::lock_deployment(&tx).await?;
+        let state: String = tx
+            .query_opt(
+                "SELECT state FROM webhook_hooks WHERE hook_id = $1 AND ownership = 'dedicated' FOR UPDATE",
+                &[&hook_id],
             )
-            .await?;
-        if updated == 0 {
-            return Err(InboxError::UnknownHook);
+            .await?
+            .ok_or(InboxError::UnknownHook)?
+            .get(0);
+        match state.as_str() {
+            "provisioning" => {
+                for row in rows
+                    .iter_mut()
+                    .filter(|row| row.state == State::Provisioning)
+                {
+                    row.start_initial(now);
+                    Self::save_subscription(&tx, row).await?;
+                }
+                tx.execute(
+                    "UPDATE webhook_hooks SET state = 'active', provider_hook_id = $2 WHERE hook_id = $1",
+                    &[&hook_id, &provider_hook_id],
+                )
+                .await?;
+            }
+            "closed" => {
+                tx.execute(
+                    "UPDATE webhook_hooks SET state = 'cleanup-pending', provider_hook_id = $2,
+                       cleanup_failed = FALSE, closed_at = NULL
+                     WHERE hook_id = $1",
+                    &[&hook_id, &provider_hook_id],
+                )
+                .await?;
+                let inserted = tx
+                    .execute(
+                        "INSERT INTO webhook_cleanup_jobs (hook_id, next_attempt_at, deadline_at, created_at)
+                         VALUES ($1, $2, $3, $2) ON CONFLICT DO NOTHING",
+                        &[&hook_id, &now, &(now + self.policy.cleanup_deadline)],
+                    )
+                    .await?;
+                deployment.cleanup_jobs += inserted as i64;
+                Self::save_deployment(&tx, &deployment).await?;
+            }
+            _ => {
+                // Active already (a repeated answer) or being cleaned up:
+                // record the id the cleanup will delete.
+                tx.execute(
+                    "UPDATE webhook_hooks SET provider_hook_id = coalesce(provider_hook_id, $2) WHERE hook_id = $1",
+                    &[&hook_id, &provider_hook_id],
+                )
+                .await?;
+            }
         }
         self.commit(tx).await
     }
 
-    /// The provider did not create the hook within its bounded retries: its
-    /// subscriptions close, and so does the hook record (nothing to clean
-    /// up at the provider).
+    /// Provisioning gave up: the waiting subscriptions close and the hook is
+    /// cleaned up (the provider may have created it before the failure was
+    /// seen), all in one transaction.
     pub async fn hook_provisioning_failed(&self, hook_id: &str, now: SystemTime) -> Result<()> {
-        let ids: Vec<String> = {
-            let client = self.pool.get().await.map_err(InboxError::Database)?;
-            client
-                .query(
+        let mut client = self.pool.get().await.map_err(InboxError::Database)?;
+        let tx = client.transaction().await?;
+        let ids: Vec<String> = tx
+            .query(
+                &format!(
                     "SELECT subscription_id FROM webhook_subscriptions
-                     WHERE hook_id = $1 AND state = 'provisioning' ORDER BY subscription_id",
-                    &[&hook_id],
-                )
-                .await?
-                .iter()
-                .map(|row| row.get(0))
-                .collect()
-        };
+                     WHERE hook_id = $1 AND state IN {LIVE} ORDER BY subscription_id"
+                ),
+                &[&hook_id],
+            )
+            .await?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        let mut rows = Vec::new();
         for id in &ids {
-            let mut client = self.pool.get().await.map_err(InboxError::Database)?;
-            let tx = client.transaction().await?;
-            if let Some(mut row) = Self::lock_subscription(&tx, id).await? {
-                if row.state == State::Provisioning {
-                    let mut owners =
-                        Self::lock_owners(&tx, std::slice::from_ref(&row.owner)).await?;
-                    let mut deployment = Self::lock_deployment(&tx).await?;
-                    let owner = owners.get_mut(&row.owner).expect("locked");
-                    Self::end(
-                        &tx,
-                        &self.policy,
-                        &mut row,
-                        owner,
-                        &mut deployment,
-                        ended::PROVISIONING_FAILED,
-                        now,
-                    )
-                    .await?;
-                    Self::save_owners(&tx, &owners).await?;
-                    Self::save_deployment(&tx, &deployment).await?;
-                }
+            if let Some(row) = Self::lock_subscription(&tx, id).await? {
+                rows.push(row);
             }
-            self.commit(tx).await?;
         }
-        let client = self.pool.get().await.map_err(InboxError::Database)?;
-        client
-            .execute(
-                "UPDATE webhook_hooks SET state = 'closed', closed_at = $2, secret_envelope = NULL
-                 WHERE hook_id = $1 AND state = 'provisioning'",
-                &[&hook_id, &now],
+        let owner_ids: Vec<String> = rows.iter().map(|row| row.owner.clone()).collect();
+        let mut owners = Self::lock_owners(&tx, &owner_ids).await?;
+        let mut deployment = Self::lock_deployment(&tx).await?;
+        for row in rows.iter_mut().filter(|row| row.state.is_live()) {
+            let owner = owners.get_mut(&row.owner).expect("locked");
+            Self::end(
+                &tx,
+                &self.policy,
+                row,
+                owner,
+                &mut deployment,
+                ended::PROVISIONING_FAILED,
+                now,
             )
             .await?;
-        Ok(())
+        }
+        // With no subscription at all, the hook is retired here.
+        tx.query_opt(
+            "SELECT 1 FROM webhook_hooks WHERE hook_id = $1 FOR UPDATE",
+            &[&hook_id],
+        )
+        .await?;
+        Self::retire_hook(&tx, &self.policy, hook_id, &mut deployment, now).await?;
+        Self::save_owners(&tx, &owners).await?;
+        Self::save_deployment(&tx, &deployment).await?;
+        self.commit(tx).await
+    }
+
+    /// Retires a dedicated hook the receiver created that has had no live
+    /// subscription since `unused_before` (the sweeper's step).
+    pub(crate) async fn retire_unused_hook(
+        &self,
+        hook_id: &str,
+        unused_before: SystemTime,
+        now: SystemTime,
+    ) -> Result<bool> {
+        let mut client = self.pool.get().await.map_err(InboxError::Database)?;
+        let tx = client.transaction().await?;
+        let mut deployment = Self::lock_deployment(&tx).await?;
+        let unused = tx
+            .query_opt(
+                &format!(
+                    "SELECT 1 FROM webhook_hooks h
+                     WHERE h.hook_id = $1 AND h.ownership = 'dedicated' AND h.created_by_receiver
+                       AND h.state IN ('provisioning', 'active') AND h.created_at <= $2
+                       AND NOT EXISTS (SELECT 1 FROM webhook_subscriptions s
+                                       WHERE s.hook_id = h.hook_id AND s.state IN {LIVE})
+                     FOR UPDATE"
+                ),
+                &[&hook_id, &unused_before],
+            )
+            .await?
+            .is_some();
+        if !unused {
+            return Ok(false);
+        }
+        Self::retire_hook(&tx, &self.policy, hook_id, &mut deployment, now).await?;
+        Self::save_deployment(&tx, &deployment).await?;
+        self.commit(tx).await?;
+        Ok(true)
     }
 
     // --- subscriptions ---------------------------------------------------------
@@ -1399,7 +1501,8 @@ impl Store {
         let deployment = Self::lock_deployment(&tx).await?;
         let hook = tx
             .query_opt(
-                "SELECT state, platform, ownership, created_by_receiver FROM webhook_hooks WHERE hook_id = $1 FOR UPDATE",
+                "SELECT state, platform, ownership, created_by_receiver, source_kind, source_key
+                 FROM webhook_hooks WHERE hook_id = $1 FOR UPDATE",
                 &[&new.hook_id],
             )
             .await?
@@ -1421,13 +1524,20 @@ impl Store {
         if !matches!(hook_state.as_str(), "active" | "provisioning") {
             return Err(InboxError::UnknownHook);
         }
+        if hook.get::<_, String>(2) == "dedicated"
+            && (hook.get::<_, Option<String>>(4).as_deref() != Some(new.source_kind.as_str())
+                || hook.get::<_, Option<String>>(5).as_deref() != Some(new.source_key.as_str()))
+        {
+            // Another source's hook: its subscribers could become its
+            // manager through a hand-over.
+            return Err(InboxError::UnknownHook);
+        }
         let owner = owners.get_mut(&new.owner).expect("locked");
         if owner.live_subscriptions >= self.policy.owner_max_live_subscriptions {
             return Err(InboxError::QuotaExceeded);
         }
-        if deployment
-            .last_sweep_at
-            .is_some_and(|at| at + self.policy.sweep_interval * 3 < now)
+        if deployment.last_sweep_at.unwrap_or(self.started_at) + self.policy.sweep_interval * 3
+            < now
         {
             // The sweeper is behind: new state could not be kept bounded.
             return Err(InboxError::CapacityUnavailable);
@@ -1575,25 +1685,39 @@ impl Store {
                 .make_room(&tx, row, owner, &mut deployment, body_bytes, now)
                 .await?
             {
-                None => retainers.push(index),
                 Some(reason) => {
                     row.record_gap(reason, now);
                     Self::save_subscription(&tx, row).await?;
                     outcome.gaps += 1;
                 }
-            }
-        }
-
-        if !retainers.is_empty() {
-            let needed =
-                body_bytes + PAYLOAD_ROW_OVERHEAD + retainers.len() as i64 * REFERENCE_ROW_OVERHEAD;
-            if deployment.inbox_bytes + needed > self.policy.deployment_max_inbox_bytes {
-                // No owner's history is evicted for another's (§5.1).
-                for index in retainers.drain(..) {
-                    let row = &mut subs[index];
-                    row.record_gap(gap::DEPLOYMENT, now);
-                    Self::save_subscription(&tx, row).await?;
-                    outcome.gaps += 1;
+                None => {
+                    // The deployment budget: this reference, and the payload
+                    // for the first subscription that keeps it. No owner's
+                    // history is evicted for another's (§5.1).
+                    let needed = REFERENCE_ROW_OVERHEAD
+                        + if retainers.is_empty() {
+                            body_bytes + PAYLOAD_ROW_OVERHEAD
+                        } else {
+                            0
+                        };
+                    if deployment.inbox_bytes + needed > self.policy.deployment_max_inbox_bytes {
+                        row.record_gap(gap::DEPLOYMENT, now);
+                        Self::save_subscription(&tx, row).await?;
+                        outcome.gaps += 1;
+                        continue;
+                    }
+                    // Counted at once, so the next subscription of the same
+                    // owner is checked against a budget that includes it.
+                    deployment.inbox_bytes += needed;
+                    if row.pending_events == 0 {
+                        // From the moment pending became non-empty (§4.3).
+                        row.progress_deadline_at = Some(now + self.policy.progress_deadline);
+                    }
+                    row.pending_events += 1;
+                    row.pending_bytes += body_bytes;
+                    owner.pending_refs += 1;
+                    owner.pending_bytes += body_bytes;
+                    retainers.push(index);
                 }
             }
         }
@@ -1620,10 +1744,8 @@ impl Store {
                 )
                 .await?
                 .get(0);
-            deployment.inbox_bytes += body_bytes + PAYLOAD_ROW_OVERHEAD;
             for index in retainers {
                 let row = &mut subs[index];
-                let owner = owners.get_mut(&row.owner).expect("locked");
                 let seq = row.next_seq;
                 row.next_seq += 1;
                 tx.execute(
@@ -1632,15 +1754,6 @@ impl Store {
                     &[&row.id, &seq, &row.generation, &payload_id, &now, &body_bytes],
                 )
                 .await?;
-                if row.pending_events == 0 {
-                    // From the moment pending became non-empty (§4.3).
-                    row.progress_deadline_at = Some(now + self.policy.progress_deadline);
-                }
-                row.pending_events += 1;
-                row.pending_bytes += body_bytes;
-                owner.pending_refs += 1;
-                owner.pending_bytes += body_bytes;
-                deployment.inbox_bytes += REFERENCE_ROW_OVERHEAD;
                 Self::save_subscription(&tx, row).await?;
                 outcome.retained += 1;
             }

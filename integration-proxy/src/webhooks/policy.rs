@@ -36,6 +36,9 @@ pub struct Policy {
     pub cleanup_deadline: Duration,
     pub cleanup_max_jobs: i64,
     pub cleanup_max_jobs_per_owner: i64,
+    /// A dedicated hook with no live subscription for this long is retired
+    /// (cleanup job), whether it ever had one or not.
+    pub unused_hook_deadline: Duration,
     pub sweep_interval: Duration,
     /// `delivery.maxVerifiedBytes`: the verification cap.
     pub max_verified_bytes: i64,
@@ -75,6 +78,7 @@ impl Policy {
             cleanup_deadline: Duration::from_secs(30 * DAY),
             cleanup_max_jobs: 10_000,
             cleanup_max_jobs_per_owner: 20,
+            unused_hook_deadline: Duration::from_secs(3600),
             sweep_interval: Duration::from_secs(60),
             max_verified_bytes: 25 << 20,
             max_body_bytes: 8 << 20,

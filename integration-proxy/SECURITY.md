@@ -371,15 +371,20 @@ What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
   payload row and 128 per reference. These row overheads are estimates
   until measured (plan, step 7). Every limit records a gap before history
   is lost: eviction drops the receiving subscription's own oldest events,
-  never another owner's.
+  never another owner's. A delivery routed to several subscriptions of one
+  owner is counted against that owner once per subscription, each time
+  before the next subscription is checked, so the owner's budget holds
+  however many of its subscriptions one delivery reaches.
 - **Abandonment ends retention.** A lease lasts 7 days from the last
   renewal. With events pending and no acknowledgement for 7 days, the
   subscription expires even while it is renewed. Both deadlines are
   enforced in the same transaction as any delivery, fetch,
   acknowledgement or renewal, and by the minute sweeper. So retention stops
-  at the deadline even if the sweeper is down. An expired subscription
-  releases its payloads at once and is closed in the same transaction. Its
-  tombstone lasts at most 30 days, and at most 10,000 tombstones exist.
+  at the deadline even if the sweeper is down. A subscription past a
+  deadline is expired by the first request or sweep that touches it
+  (within a minute while the sweeper runs): that transaction releases its
+  payloads and closes it. Its tombstone lasts at most 30 days, and at most
+  10,000 tombstones exist.
 - **Access.** A subscription is created only by the caller after a
   passing access check. Its connection must belong to the hook's platform
   and to the subscriber. No events are served while the last passing check
@@ -402,19 +407,35 @@ What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
   from another subscription, was never returned, or belongs to an obsolete
   generation is refused.
 - **Dedicated hooks.** The record (endpoint, sealed secret, bound key,
-  access parameters) is stored before the provider is asked. Management
-  moves to a remaining subscription's connection when its connection's
-  subscription ends. The last subscription starts a cleanup job: backoff up
-  to a day, a 30-day deadline, then a visible failure. Pending cleanups are
-  capped at 20 per owner and 10,000 in all, so one owner's failing cleanups
-  never block another's. Shared application hooks are never changed.
-  Provider calls (and the access re-check before them) are step 3.
+  access parameters) is stored before the provider is asked, and a
+  subscription must be for the hook's own source. Management stays with
+  its connection while that connection has a live subscription on the
+  hook, and otherwise moves to the connection of another live
+  subscription, never to a deleted connection. A hook nothing uses any
+  more gets a cleanup job, also while still provisioning (the provider may
+  have created it; the job lists, then deletes), and so does one with no
+  live subscription an hour after it was created. A provider answer that
+  arrives after cleanup started is recorded for it; one after cleanup
+  gave up starts a new cleanup, so no created hook is left unrecorded.
+  Cleanup: backoff up to a day, a 30-day deadline, then a visible failure.
+  New dedicated hooks are refused while the owner holds 20, or the
+  deployment 10,000, that are not closed; since each has at most one
+  cleanup job, those are also the caps on jobs, and one owner's failing
+  cleanups never block another's. Shared application hooks are never
+  changed. Provider calls (and the access re-check before them) are step 3.
 
-Concurrency: every write takes row locks in one order: subscriptions,
-owners, the deployment row, then hooks, payloads and receipts. All writes
-pass the deployment row, so they are serialized after their subscription
-locks. That is the pilot's throughput bound. The inbox uses up to four
-connections of its own, because the shared client cannot run transactions.
+Concurrency: every write takes row locks in one order: subscription rows
+by id, owner rows by owner, the deployment row, then (as needed) receipt
+rows, one hook row and payload rows. A write that takes no subscription or
+owner lock starts at the deployment row. All writes pass the deployment
+row, so they are serialized after their subscription locks; that is the
+pilot's throughput bound. The sweeper deletes owner rows one at a time.
+The inbox uses up to four connections of its own, because the shared
+client cannot run transactions; each has a 10-second `lock_timeout` and a
+30-second `statement_timeout`, so nothing waits without bound. A sweep
+runs every step even when one fails (receipts first), and records its time
+only when all succeeded; until a first sweep, the store's start time
+stands in, so a sweeper that never runs also stops new subscriptions.
 
 Not yet verified: physical bytes per row, sweep lag under load, and
 behaviour with several proxy instances beyond what row locks guarantee
