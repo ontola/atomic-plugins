@@ -53,6 +53,7 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze, fileFindings } from './analyze.mjs';
+import { loadPlans, PLACEHOLDER } from './plans.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8082);
@@ -97,42 +98,23 @@ const clientOf = req =>
     .slice(0, 16);
 
 const SCRIPT = readFileSync(join(here, 'script.md'), 'utf8');
-/** Session plans by name: sessions/<name>.md (README.md is not a plan). */
-const PLANS = Object.fromEntries(
-  readdirSync(join(here, 'sessions'))
-    .filter(file => file.endsWith('.md') && file !== 'README.md')
-    .map(file => [
-      file.slice(0, -3),
-      readFileSync(join(here, 'sessions', file), 'utf8'),
-    ]),
-);
+/** Session plans by name: sessions/<name>.md (README.md is not a plan), and
+ * what the page's "What do you want to test?" menu lists (plans.mjs). A plan
+ * that still holds its entry placeholder is left out of both, so an
+ * unfinished plan deployed by accident cannot be started. */
+const {
+  plans: PLANS,
+  list: PLAN_LIST,
+  skipped: SKIPPED_PLANS,
+} = loadPlans(join(here, 'sessions'));
+for (const id of SKIPPED_PLANS)
+  process.stderr.write(
+    `sessions/${id}.md is not offered: it still holds ${PLACEHOLDER}…]\n`,
+  );
 /** The plan an invite link without `session` gets: the first one we ran. */
 const DEFAULT_PLAN = 'calendar';
 if (!PLANS[DEFAULT_PLAN])
   throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
-/** Files a plan has the tester download from the catalog host's
- * `samples/` (#196): the backticked `<app>/<file>` paths on its line that
- * starts with `Sample files`. The page links them. */
-function sampleFiles(text) {
-  const line = text.match(/^Sample files\b.*$/m)?.[0] ?? '';
-
-  return [...line.matchAll(/`([^`]+)`/g)]
-    .map(m => m[1])
-    .filter(path => /^[a-z0-9-]+\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(path));
-}
-
-/** What the page's "What do you want to test?" menu lists: each plan's
- * first line, `# Session plan: <title>`, in the order of their titles, with
- * its sample files. */
-const PLAN_LIST = Object.entries(PLANS)
-  .map(([id, text]) => {
-    const title = text.match(/^# (?:Session plan: )?(.+)$/m)?.[1]?.trim();
-    if (!title) throw new Error(`sessions/${id}.md has no # heading`);
-    const samples = sampleFiles(text);
-
-    return samples.length ? { id, title, samples } : { id, title };
-  })
-  .sort((a, b) => a.title.localeCompare(b.title));
 const client = new Anthropic();
 /** id -> { dir, meta, lang, langChanged, started, plan, cursor, clients, messages, turns, done, analyzed } */
 const sessions = new Map();
