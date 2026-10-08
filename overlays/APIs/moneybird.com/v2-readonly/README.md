@@ -29,3 +29,22 @@ source-IP quota using [`openapi-extensions/spec/throttling`](../../../../openapi
 window algorithm is explicitly unspecified; pacing/retries remain consumer
 choices. The catalog excludes report endpoints, whose stricter quota is not
 modeled by this overlay. Source: https://developer.moneybird.com/#throttling
+
+`pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
+declares `GET /{administration_id}/financial_mutations.json` as a
+[Pagination Schemes 0.5.0](../../../../openapi-extensions/spec/pagination-schemes/README.md#46-range-windows)
+`rangeWindow`: the list has no page parameter and its description says it is
+"Limited to 100 financial mutations" (the pinned document, and
+https://developer.moneybird.com/api/financial_mutations/), so a client reads
+a range of days as `filter=period:YYYYMMDD..YYYYMMDD` windows and halves a
+window whose answer holds 100 mutations, down to single days. A single day
+with 100 mutations ends the read with an error. This is what the Money app's
+`integrations/money/moneybird/read.ts` does in code today. Declared, not
+verified against a live administration: that the period bounds are
+inclusive (inferred from the documented example `20130101..20130131`), that
+a one-day period is accepted, which mutation field the period compares
+(`date` is likely, so the overlay names no `field`), and whose time zone the
+days are in (so it names no `timeZone`). The overlay goes after the
+`pagination` overlay in a catalog. No dated catalog selects it until
+syncables reads `rangeWindow` schemes. Check it with
+`python3 overlays/tests/test_moneybird_range_window.py --directory <openapi-directory clone>`.

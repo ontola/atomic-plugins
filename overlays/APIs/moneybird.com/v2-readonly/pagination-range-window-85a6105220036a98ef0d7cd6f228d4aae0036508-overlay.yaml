@@ -1,0 +1,46 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
+info:
+  title: Moneybird financial mutations read by period windows
+  version: 1.0.0
+  description: >-
+    Pagination Schemes 0.5.0 rangeWindow for the financial mutations list,
+    which has no page parameter and answers at most 100 mutations. Compose
+    after the pagination overlay; it adds one scheme and does not change the
+    pageNumber scheme. Selected by no dated catalog until syncables reads
+    rangeWindow schemes.
+actions:
+- target: "$.components"
+  update:
+    paginationSchemes:
+      periodWindows:
+        type: rangeWindow
+        autoDetect: false
+        description: >-
+          GET financial_mutations.json is "Limited to 100 financial
+          mutations" (the pinned document and developer.moneybird.com) and
+          has no page parameter. Its filter takes a custom period
+          YYYYMMDD..YYYYMMDD; the documented example 20130101..20130131
+          (January) is read as a closed day range. Not verified against a
+          live administration: that the bounds are inclusive, that a
+          one-day range is accepted, which mutation field the period
+          compares (date is likely), and whose time zone the days are in
+          (the administration's, by assumption). A passed filter replaces
+          every default, but the other defaults (state:all,
+          mutation_type:all) already select every mutation, so the template
+          sends the period alone, as the Money app does.
+        window:
+          unit: day
+          format: basicDate
+          bounds: closed
+          cap: 100
+          minimumWidth: 1
+        request:
+          queryParameters:
+            filter:
+              role: windowRange
+              template: "period:{start}..{end}"
+- target: "$.paths['/{administration_id}/financial_mutations.json'].get"
+  update:
+    x-pagination:
+    - scheme: periodWindows
