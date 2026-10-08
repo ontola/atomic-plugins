@@ -108,6 +108,60 @@ const handle = client.startPolling({
 handle.stop();
 ```
 
+### Wall-clock date-time parameters (`x-time-zone`)
+
+Some APIs read a date-time query parameter as wall-clock time in a zone the
+request does not carry (Clockify's time-entry `start` and `end`, in the
+user's profile zone). A parameter that declares `x-time-zone` (Filtering
+0.2.0-draft, `openapi-extensions/spec/filtering/`) is sent as the spec's
+client steps say, when a `selection` gives it a value:
+
+- The value must be an instant with `Z` or an offset
+  (`2026-01-01T00:00:00Z`); anything else fails that collection's read.
+- The zone is read before the list request: a fixed `zone.name`, or a GET of
+  `zone.operationId` with the request's own path values (matched by name),
+  at `zone.pointer`. One read per zone source and bound path values per
+  `readCollections`/`sync()`, through the read's budget (and its
+  `storeResponse` hook, like any read response). Conversion uses `Intl`, so
+  it is as accurate as the runtime's time zone data.
+- The value sent is the wall-clock digits in that zone,
+  `yyyy-MM-ddTHH:mm:ss` (whole seconds, truncated), plus `suffix`.
+- The UTC span covered is computed from the digits sent: `gte`/`gt`
+  parameters' `x-filter` give the lower end, `lte`/`lt` the upper one, and
+  `ambiguous` picks the offset in a repeated or skipped hour (`unspecified`:
+  the reading that covers least).
+- A zone that cannot be read (an error status, nothing at the pointer, not
+  an IANA name this runtime knows, a zone operation that needs a parameter
+  the request does not have) is not taken as UTC: the UTC digits are sent
+  and each bound covers 14 hours less, so a window of 28 hours or less
+  covers nothing.
+- After the read, each operation zone source is read again; if the zone
+  differs or cannot be read, the span is discarded (`zoneChanged`). The
+  items are kept. syncables does not read again by itself: the caller
+  decides.
+
+The result is on `CollectionSnapshot.coverage` (from `readCollections`) and
+on `SyncResult.coverage` (per collection and bound context):
+
+```ts
+const { coverage } = await client.sync();
+// [{ collection: 'entries', context: {...},
+//    parameters: { start: '2026-01-01T01:00:00Z', end: '2026-02-01T01:00:00Z' },
+//    zones: { start: 'Europe/Amsterdam', end: 'Europe/Amsterdam' },
+//    span: { from: '2026-01-01T00:00:00.000Z', to: '2026-02-01T00:00:00.000Z' } }]
+```
+
+`span` is null when the read covers nothing known; `reason` is then
+`empty`, `zoneChanged`, `noRangePredicate` (a parameter with a value but no
+range `x-filter`) or `incomplete`. An open end is left out. Whether `from`
+and `to` are inclusive follows the parameters' `x-filter` operators.
+`readPlatform` does not report coverage. Only query parameters are read;
+an `x-time-zone` in a request body or path is ignored.
+`wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
+`wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
+the offsets a day either side of the wall-clock time, so two offset
+changes within two days are not told apart.
+
 ## Writing
 
 `create`/`update`/`remove` are local-first: they update local storage
@@ -1022,6 +1076,16 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Filtering 0.2.0-draft `x-time-zone` on list query
+  parameters: the zone is read (a fixed name, or another operation's
+  response at a pointer) once per read and again after it, values are sent
+  as wall-clock digits plus `suffix`, and the covered UTC span is reported
+  on `CollectionSnapshot.coverage` and `SyncResult.coverage` (new), with
+  the 14-hour narrowing when the zone cannot be read and the span discarded
+  when the zone changed. `wallClockParam`, `instantsOf` and `coveredSpan`
+  are exported. Behaviour change only for documents that declare
+  `x-time-zone`: their values are now converted, and a value without `Z`
+  or an offset fails the read.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

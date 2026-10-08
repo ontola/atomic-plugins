@@ -1,3 +1,4 @@
+import type { ReadCoverage } from '../read/time-zone.js';
 import { discoverResources } from '../resources/discover.js';
 import type {
   OpenApiDocument,
@@ -308,6 +309,19 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * Per collection read whose list operation has `x-time-zone` query
+   * parameters with values (Filtering 0.2.0-draft, set through
+   * `selection`): the values sent and the UTC span the read is known to
+   * cover. Absent when there is none.
+   */
+  coverage?: CollectionCoverage[];
+}
+
+/** A `ReadCoverage` with the collection and bound context it belongs to. */
+export interface CollectionCoverage extends ReadCoverage {
+  collection: string;
+  context?: Record<string, string>;
 }
 
 export interface PollOptions {
@@ -2960,7 +2974,24 @@ export function createApiClient(
     await countRefreshMisses(released);
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
-    return { changed: [...changed] };
+    const coverage = result.collections.flatMap(
+      (snapshot): CollectionCoverage[] => {
+        if (!snapshot.coverage) return [];
+        const route = byResource.get(snapshot.collection.name) as ClientRoute;
+        const context = contextFor(route, snapshot.pathParams);
+        return [
+          {
+            collection: snapshot.collection.name,
+            ...(Object.keys(context).length ? { context } : {}),
+            ...snapshot.coverage,
+          },
+        ];
+      },
+    );
+    return {
+      changed: [...changed],
+      ...(coverage.length ? { coverage } : {}),
+    };
   }
 
   function sync(): Promise<SyncResult> {

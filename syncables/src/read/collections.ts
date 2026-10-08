@@ -15,9 +15,16 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
 } from './pages.js';
+import {
+  timeZoneParameters,
+  wallClockQuery,
+  zoneReader,
+  type ReadCoverage,
+} from './time-zone.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import type { Transport } from './transport.js';
 
@@ -52,6 +59,12 @@ export interface CollectionSnapshot {
   /** False when a page, identity check, storage hook or budget failed. */
   complete: boolean;
   error?: string;
+  /**
+   * Present when the list operation has `x-time-zone` query parameters
+   * (Filtering 0.2.0-draft) with values: the values sent and the UTC span
+   * the read is known to cover.
+   */
+  coverage?: ReadCoverage;
 }
 
 export interface CollectionReadResult {
@@ -138,6 +151,15 @@ export async function readCollections(
       options.sleep,
     );
   const upstream = upstreamOf(doc);
+  // Zones are read once per read and again after it (Filtering 0.2.0-draft).
+  const zones = zoneReader(
+    doc,
+    upstream,
+    (request) => budget.send(request),
+    (error) =>
+      error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
+  );
+  const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];
   const origins = new Map<string, Origin[]>();
@@ -186,6 +208,26 @@ export async function readCollections(
               `${collection.url} declares no ${collection.method} operation`,
             );
           }
+          let query = collection.listQuery;
+          const timeZoned = operation
+            ? timeZoneParameters(
+                doc.paths[collection.url]?.['parameters'],
+                operation,
+              )
+            : [];
+          if (timeZoned.length) {
+            const written = await wallClockQuery(
+              timeZoned,
+              query,
+              path,
+              zones.read,
+            );
+            query = written.query;
+            if (written.coverage) {
+              snapshot.coverage = written.coverage;
+              zoned.push({ snapshot, keys: written.keys });
+            }
+          }
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -193,7 +235,7 @@ export async function readCollections(
             upstream,
             path: bindPath(collection.url, path),
             method: collection.method,
-            query: collection.listQuery,
+            query,
             body: collection.listBody,
             // The declared envelope, if any; else walkPages locates the array.
             ...(collection.itemsField !== undefined
@@ -250,5 +292,23 @@ export async function readCollections(
     pending = waiting;
   }
   if (options.probe) throw new Error('No collection available to check');
+  if (zoned.length) {
+    // Step 4: a zone that changed during the read leaves its span unknown.
+    let changed = new Set<string>();
+    try {
+      if (!exhausted) changed = await zones.recheck();
+    } catch {
+      // The budget ran out: no zone could be checked again.
+      changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    }
+    if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    for (const { snapshot, keys } of zoned) {
+      const coverage = snapshot.coverage as ReadCoverage;
+      if (!snapshot.complete)
+        snapshot.coverage = { ...coverage, span: null, reason: 'incomplete' };
+      else if ([...keys].some((key) => changed.has(key)))
+        snapshot.coverage = { ...coverage, span: null, reason: 'zoneChanged' };
+    }
+  }
   return { collections, errors };
 }
