@@ -14,9 +14,6 @@
       "@tomic/lib": ["../../browser/lib/src/index.ts"]
     }
   },
-  "include": [
-    "adapter.ts",
-    "devonian/github-issues/lens/algebra.ts",
-    "devonian/todoist/lens/index.ts"
-  ]
+  "include": ["devonian/**/*.ts"],
+  "exclude": ["devonian/**/*.test.ts"]
 }

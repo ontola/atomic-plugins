@@ -196,3 +196,43 @@ conformance test harness.
 The manifest declares every consumed configuration field with the
 host-supported string/object schema; none is globally required, because
 import-only and pod-only configurations are both valid.
+
+## Passive bookmark lens
+
+`devonian/bookmarks/lens/index.ts` is an unhosted, effect-free Devonian prototype,
+separate from this Pod route implementation. It maps **already-expanded
+JSON-LD** bookmark nodes to Atomic's built-in Bookmark name and URL properties.
+It recognizes the `bookmark#Bookmark` / `bookmark#BookMark` variants and
+ActivityStreams Notes with a bookmark URL, the title/label/name variants used
+by Solid Data Modules, and `recalls` as a named node or string literal.
+ActivityStreams `url` is also supported. Named HTTP(S) subjects, exactly one
+supported title predicate, exactly one supported link predicate, and one value
+per managed predicate are required. Multiple aliases/values, unsupported literal
+datatypes, blank subjects, relative links and language-tagged destination URLs
+are refused. This is not a JSON-LD context expansion, graph traversal or Turtle
+parser.
+
+A reverse edit keeps the original RDF subject, predicates, title language and
+link-versus-literal encoding. Unknown predicates, topics, timestamps and other
+nodes stay outside its ownership. It owns only native isA/name/URL; native
+notes are retained. `solidBookmarkUpdatePlan` emits detached semantic
+`deletes`/`inserts` triples for changed fields only, with an empty plan for a
+no-op. A Pod host must merge that delta into the full dataset, check the current
+ETag and implement any applicable Soukai CRDT update protocol. The plan is not
+an executable CRDT transaction or a whole-document replacement. External WebIDs
+are not converted to Atomic signing agents.
+
+The current module is not adopted by `plugin.mjs` or a drive app. Its schema
+helper is an offline property catalog. Tests use invented expanded nodes and
+local AtomicStore state; no live Pod or deployed Atomic write is established.
+The prototype uses unreleased `devonian/lenses` source through test aliases.
+Source conventions: [Solid Data Modules](https://github.com/solid-contrib/data-modules/tree/main/bookmarks)
+and [PDS Interop bookmark conventions](https://pdsinterop.org/conventions/bookmark/).
+See [ontology/API and Media Kraken mapping](../../docs/design/ontology-api-lenses.md).
+
+After `node integrations/tooling/link-atomic-server.mjs`:
+
+```sh
+node integrations/tooling/run-lane.mjs solid --tier typecheck
+node integrations/tooling/run-lane.mjs solid --tier unit
+```

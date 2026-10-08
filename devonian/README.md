@@ -242,3 +242,6 @@ above).
 
 Added: `reconcileRecord`, `acknowledgedBaseline` and their `Sync*` types are
 exported from the package root.
+
+For existing Atomic schema targets, new provider lens prototypes and a Solid/Media
+Kraken bridge assessment, see [ontology/API lenses](../docs/design/ontology-api-lenses.md).
