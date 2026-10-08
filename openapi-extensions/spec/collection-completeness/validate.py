@@ -89,8 +89,8 @@ def validate(document):
                             if isinstance(c, dict) and isinstance(c.get("x-completeness"), dict)]
             if not declarations:
                 errors.append(f"{where}.parentAbsent: parent {parent} has no collection with x-completeness")
-            elif declaration.get("parentAbsent") == "deleted" and not all("notFound" in d for d in declarations):
-                errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every collection of {parent}")
+            elif declaration.get("parentAbsent") == "deleted" and not all("notFound" in d for d in declarations if d.get("absent") == "removed"):
+                errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every absent: removed collection of {parent}")
     for path, item in document.get("paths", {}).items():
         if not isinstance(item, dict):
             continue

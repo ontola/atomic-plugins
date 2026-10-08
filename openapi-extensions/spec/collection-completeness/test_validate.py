@@ -75,7 +75,12 @@ class ValidationTests(unittest.TestCase):
             completeness(document, "taskList", "taskLists").pop("notFound")
         self.invalid(cascade_without_not_found, "deleted needs an explicit notFound")
         document = example()
-        completeness(document)["parentAbsent"] = "deleted"  # parent states notFound: unavailable explicitly
+        completeness(document)["parentAbsent"] = "deleted"  # parent (absent: removed) states notFound explicitly
+        validate(document)
+        # The natural cascade: a parent collection declared absent: deleted needs (and allows) no notFound.
+        parent = completeness(document, "taskList", "taskLists")
+        parent.pop("notFound")
+        parent["absent"] = "deleted"
         validate(document)
 
         def on_operation(document):

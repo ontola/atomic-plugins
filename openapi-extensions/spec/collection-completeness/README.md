@@ -190,9 +190,12 @@ or more other resources has no single parent object, and this version does
 not describe it.
 
 `parentAbsent: deleted` also requires every Completeness Object of the
-parent resource's collections to state `notFound` explicitly, so that a
-`404` the parent's read answers for a missing permission cannot cascade as a
-deletion of its members through the `deleted` default.
+parent resource's collections that declares `absent: removed` to state
+`notFound` explicitly, so that a `404` the parent's read answers for a
+missing permission cannot cascade as a deletion of its members through the
+`deleted` default. A parent collection declared `absent: deleted` needs no
+`notFound` (none is allowed there): its absent objects are deleted without a
+read.
 
 `parentAbsent` says what the members of a nested collection mean once a
 consumer has concluded that their parent object is gone: it was absent from a
@@ -329,7 +332,8 @@ A conforming document:
   of a nested collection (§4.4) with exactly one parent resource, which has
   at least one collection with a Completeness Object; MUST declare
   `parentAbsent: deleted` only when every Completeness Object of the parent
-  resource's collections states `notFound` explicitly; MUST NOT declare
+  resource's collections that declares `absent: removed` states `notFound`
+  explicitly; MUST NOT declare
   `notFound: deleted` or `parentAbsent: deleted` without provider
   documentation for it.
 
