@@ -195,6 +195,10 @@ export async function readCollections(
             method: collection.method,
             query: collection.listQuery,
             body: collection.listBody,
+            // The declared envelope, if any; else walkPages locates the array.
+            ...(collection.itemsField !== undefined
+              ? { itemsField: collection.itemsField }
+              : {}),
           })) {
             if (options.probe) throw new ProbeDone();
             for (const value of page.items) {

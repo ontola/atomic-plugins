@@ -174,48 +174,119 @@ function outboxOf(storage: CrashableStorage): {
   return (storage.outbox() ?? {}) as ReturnType<typeof outboxOf>;
 }
 
+/**
+ * The §2 budget: transactions per budget, read as a change list whose feed
+ * is the list itself, items at `data.transactions`, the cursor a number at
+ * `data.server_knowledge` (12 plus the log length). A deleted transaction
+ * is logged as `{ id, deleted: true }`. Item GETs and writes answer 503, so
+ * updates are held and the feed decides.
+ */
+function budget(initial: Row[]): Fake & {
+  transactions: Map<string, Row>;
+  log: Row[];
+} {
+  const transactions = new Map(initial.map((t) => [String(t['id']), t]));
+  const log: Row[] = [];
+  const fake = fakeFor(transactionsFeed, (r, path, query) => {
+    if (r.method === 'GET' && path === '/budgets/b1/transactions') {
+      const knowledge = query.get('last_knowledge_of_server');
+      return json({
+        data: {
+          transactions:
+            knowledge === null
+              ? [...transactions.values()]
+              : log.slice(Number(knowledge) - 12),
+          server_knowledge: 12 + log.length,
+        },
+      });
+    }
+    return unavailable();
+  });
+  return { ...fake, transactions, log };
+}
+
+const tx1 = { id: 't1', amount: '-1200', deleted: false };
+const tx2 = { id: 't2', amount: '35000', deleted: false };
+const b1 = { budgetId: 'b1' };
+
 describe('Deletion Feeds §2: a change list whose feed is the collection list itself', () => {
-  // Red until #373: the collection read does not yet use the Collection
-  // Object's `envelope.itemsField`, so this list (items at
-  // `data.transactions`) is not read completely, `sync()` rejects with
-  // "Read incomplete: ... Could not locate the items array", and the feed
-  // (the same operation) is not read. The feed read itself does honour the
-  // envelope.
-  it.fails(
-    'reads the list completely through the Collection Object envelope, then the feed with last_knowledge_of_server=12 on the next sync (#373)',
-    async () => {
-      const rows = [{ id: 't1', amount: '-1200', deleted: false }];
-      const fake = fakeFor(transactionsFeed, (r, path) => {
-        if (r.method === 'GET' && path === '/budgets/b1/transactions')
-          return json({ data: { transactions: rows, server_knowledge: 12 } });
-        return undefined;
-      });
-      const storage = new CrashableStorage();
-      const client = createApiClient(transactionsFeed, {
-        transport: fake.transport,
-        constants: { budgetId: 'b1' },
-        storage,
-      });
-      await client.sync();
-      expect(await client.list('transactions', { budgetId: 'b1' })).toEqual(
-        rows,
-      );
-      // The collection read, then the feed read (the same operation).
-      expect(fake.requests).toEqual([
-        'GET /budgets/b1/transactions',
-        'GET /budgets/b1/transactions',
-      ]);
-      expect(outboxOf(storage).feedCursors).toMatchObject([
-        { cursor: '12', operation: 'listTransactions' },
-      ]);
-      fake.requests.length = 0;
-      await client.sync();
-      expect(fake.requests).toEqual([
-        'GET /budgets/b1/transactions',
-        'GET /budgets/b1/transactions?last_knowledge_of_server=12',
-      ]);
-    },
-  );
+  it('reads the list completely through the Collection Object envelope, then the feed with last_knowledge_of_server=12 on the next sync (#373, §4.2)', async () => {
+    const fake = budget([tx1, tx2]);
+    const storage = new CrashableStorage();
+    const client = createApiClient(transactionsFeed, {
+      transport: fake.transport,
+      constants: b1,
+      storage,
+    });
+    await client.sync();
+    expect(await client.list('transactions', b1)).toEqual([tx1, tx2]);
+    // The collection read, then the feed read (the same operation).
+    expect(fake.requests).toEqual([
+      'GET /budgets/b1/transactions',
+      'GET /budgets/b1/transactions',
+    ]);
+    // A numeric cursor is kept as text and sent back in its decimal form.
+    expect(outboxOf(storage).feedCursors).toMatchObject([
+      { cursor: '12', operation: 'listTransactions' },
+    ]);
+    fake.requests.length = 0;
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /budgets/b1/transactions',
+      'GET /budgets/b1/transactions?last_knowledge_of_server=12',
+    ]);
+  });
+
+  it('fails a held update of a transaction the feed reports with deleted: true, found through the identity binding transactionId -> id (§4.1 default idField)', async () => {
+    const reports: MissingRecord[] = [];
+    const fake = budget([tx1, tx2]);
+    const client = createApiClient(transactionsFeed, {
+      ...slow,
+      transport: fake.transport,
+      constants: b1,
+      onMissingRecord: (r) => reports.push(r),
+    });
+    await client.sync();
+    await hold(client, 'transactions', 't1', b1);
+    fake.transactions.delete('t1');
+    fake.log.push({ id: 't1', deleted: true });
+    fake.requests.length = 0;
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /budgets/b1/transactions',
+      'GET /budgets/b1/transactions/t1',
+      'GET /budgets/b1/transactions?last_knowledge_of_server=12',
+    ]);
+    expect(reports).toEqual([
+      {
+        resource: 'transactions',
+        id: 't1',
+        context: b1,
+        evidence: 'deleted',
+        source: 'feed',
+      },
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      { id: 't1', state: 'failed', missingRecord: 'deleted' },
+    ]);
+  });
+
+  it('compares a tombstone value by JSON type and value: deleted: "true" is not deleted: true (§4.3)', async () => {
+    const fake = budget([tx1, tx2]);
+    const client = createApiClient(transactionsFeed, {
+      ...slow,
+      transport: fake.transport,
+      constants: b1,
+    });
+    await client.sync();
+    await hold(client, 'transactions', 't1', b1);
+    fake.transactions.delete('t1');
+    fake.log.push({ id: 't1', deleted: 'true' });
+    await client.sync();
+    expect(client.pendingWrites()).toMatchObject([
+      { id: 't1', state: 'failed', missingRecord: 'unknown', lastStatus: 503 },
+    ]);
+  });
 
   it('applies the §6 overlay to a document without the declaration, giving the §2 document', () => {
     const base = withoutDeclaration(transactionsFeed, 'x-deletion-feed');

@@ -967,7 +967,13 @@ const { records, ontology, errors } = await readPlatform(document, {
   record, with its path variables filled in through `identity.bindings`. On a
   collection, `x-list-query` adds fixed query parameters, `x-list-method: POST`
   lists with a POST instead of a GET, and `x-list-body` adds fixed JSON body
-  fields.
+  fields. The Collection Object's `envelope: { itemsField: <dot-path> }`
+  (CRUD Causality §4.2) says where each list response holds its array of
+  items (`data.transactions`, say); a body without an array there fails that
+  collection's read with "No items array at <path>", never an empty read.
+  Without it (or with `itemsField: null`), the array is located as before: a
+  top-level array body, else the response schema's array property, else a
+  common envelope name (`items`, `data`, `results`, `records`, `content`).
 - **Pagination** follows the operation's pagination scheme: page numbers or
   offsets, page tokens or cursors, and next links in the body or a `Link`
   header. A cursor declared in `request.bodyFields` travels in the JSON body
@@ -991,6 +997,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: The collection read honours the CRUD Causality Collection
+  Object's `envelope.itemsField` (a dot-path to the items array, as the feed
+  read already did for `x-deletion-feed`), so a list whose items sit at
+  `data.transactions` reads completely and its deletion feed is read. A body
+  without an array at the declared path fails the collection's read with a
+  clear error. Without the declaration, items are located as before
+  (ontola/atomic-plugins#373).
 - **0.20.0**: A queued update (PUT or PATCH) whose record a complete
   refresh no longer returns is held rather than sent on its last known copy,
   in memory as after a restart; the client checks the record, within the
