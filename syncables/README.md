@@ -153,7 +153,8 @@ Entries carry `attempts`, `lastError` (for an HTTP failure: the path, the
 status and up to 200 characters of the response body, whitespace collapsed)
 and `lastStatus` (the HTTP status behind `lastError`, absent when `lastError`
 does not describe a response). A failed update whose record a refresh no
-longer returned also carries `missingRecord` (`deleted` or `unknown`).
+longer returned also carries `missingRecord` (`deleted`, `unavailable` or
+`unknown`).
 
 A new `create`/`update`/`remove` does not drop a failed write. A failed create
 holds back later writes to the record, like an uncertain one. A failed update
@@ -356,7 +357,8 @@ update that is not in flight, the client looks for evidence:
 
 | Evidence | Found by | The held updates |
 | --- | --- | --- |
-| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410, or 2xx with the record carrying the resource's [read tombstone](#read-tombstones) marker, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
+| `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410 (unless the collection declares `notFound: unavailable`, next row), or 2xx with the record carrying the resource's [read tombstone](#read-tombstones) marker, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
+| `unavailable` | The collection declares `x-completeness: { absent: removed, notFound: unavailable }` and a GET of the record answers 404 or 410: this caller can no longer read the record, and the API does not say whether it was deleted, moved out of reach, or access was lost (Collection Completeness 0.2.0 §4.3); for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unavailable'` and `lastError` "Record <id> is unavailable at the provider (...)"; never reported as deleted. The last known values stay, with the edits on top, until `resolveWrite` retries or discards them. A later complete read that returns the record, or a 2xx GET of it when a new update of the record is checked, supersedes the mark for new updates; the failed ones still wait for the decision |
 | `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id, and that is not a read tombstone | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
@@ -366,11 +368,24 @@ read from the collection's CRUD Causality definition, which covers its fixed
 for a collection with neither (the operation may serve several collections;
 this also serves a document without `crudResources`). A `selection` that adds
 or changes a query parameter of the collection makes its reads narrower than
-the declaration, so it is not used for that collection. `absent: removed`,
+the declaration, so its `absent` is not used for that collection. `absent: removed`,
 like no declaration, leads to a GET (unless a stored tombstone of the
 collection's deletion feed decides first). A wrong `deleted` declaration makes filtered
 records count as deleted; no overlay declares one yet, and the behaviour has
 not been verified against a real provider.
+
+What that GET's 404 or 410 means is the declaration's `notFound` (0.2.0
+§4.3): `deleted` when the field is absent (the default, as 0.1.0 consumers
+read it) or has a value other than `unavailable`; `unavailable` means the
+record is kept with its last known values and its queued updates fail with
+`missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
+reported as deleted, until the app decides (`resolveWrite`). The field is
+read from the same placement as `absent`, and still applies when a
+`selection` narrows the read, since it says what the record's own read
+means. With `absent: deleted`, where the spec does not allow it, no GET is
+made, so it has no effect. A tombstone in the collection's deletion feed is
+positive evidence of deletion and stands over an `unavailable` answer. No
+overlay declares `notFound` yet; not verified against a real provider.
 
 The GET uses the record's item path, the client's transport and
 authentication, the conditional-request cache and `storeResponse`, and counts
@@ -663,7 +678,9 @@ failed writes, each write's state, attempts and last error, the conflict
 bases and conflicts of pending updates, idempotency keys, the confirmed remote
 record the writes are replayed on, local ids of creates the server has not
 confirmed (with the writes queued behind them), each write's last HTTP status,
-the `missingRecord` evidence of failed updates, the block while the
+the `missingRecord` evidence of failed updates (`unavailable` was added
+within version `1`; a client from before it keeps such an entry
+unrestorable), the block while the
 server refuses the client's credentials, and the cursor of each collection's
 [deletion feed](#deletion-feeds) with the tombstones it reported for records
 with unsettled writes. A client built on the same
@@ -1011,6 +1028,18 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Collection Completeness 0.2.0 §4.3, `notFound`: a 404
+  or 410 from the GET of a record a complete refresh no longer returned
+  means `deleted` by default, as before, or, when the collection declares
+  `x-completeness: { absent: removed, notFound: unavailable }`, the new
+  evidence `unavailable`: the caller can no longer read the record and the
+  API does not say why. It is never reported as deleted; the record keeps
+  its last known values, and its queued updates fail with
+  `missingRecord: 'unavailable'` (`lastError` "unavailable at the
+  provider"), held for `resolveWrite` rather than sent. A tombstone in the
+  collection's deletion feed stands over it. `MissingRecordFailure` names
+  the three `missingRecord` values. The outbox stores the new value within
+  version `1`.
 - **Unreleased**: The collection read honours the CRUD Causality Collection
   Object's `envelope.itemsField` (a dot-path to the items array, as the feed
   read already did for `x-deletion-feed`), so a list whose items sit at

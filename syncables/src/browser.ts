@@ -56,6 +56,7 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  MissingRecordFailure,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,
   PollOptions,

@@ -1,6 +1,7 @@
 import { isRecord } from '../read/model.js';
 import type {
   AuthBlock,
+  MissingRecordFailure,
   PendingWriteState,
   PendingWriteType,
   WriteConflict,
@@ -41,8 +42,12 @@ export interface StoredWrite {
   refreshMisses?: number;
   /** The order in which the write was queued. */
   seq?: number;
-  /** A failed update whose record a complete refresh no longer returned. */
-  missingRecord?: 'deleted' | 'unknown';
+  /**
+   * A failed update whose record a complete refresh no longer returned.
+   * `unavailable` was added within version 1; a client from before it keeps
+   * such an entry as unrestorable.
+   */
+  missingRecord?: MissingRecordFailure;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -147,6 +152,7 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['seq'] === undefined || typeof value['seq'] === 'number') &&
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
+      value['missingRecord'] === 'unavailable' ||
       value['missingRecord'] === 'unknown') &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.

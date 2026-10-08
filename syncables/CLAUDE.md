@@ -181,10 +181,13 @@ Data flows through four stages, each its own directory under `src/`:
    on each update up to the first create, never on one with `sending`), at
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
-   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   the route's `x-completeness: { absent: deleted }` (`declaredCompleteness`,
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
-   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
+   the collection's Completeness Object says `notFound: unavailable`
+   (`notFoundMeansUnavailable`, 0.2.0 §4.3; `declaredCompleteness` parses
+   `absent` and `notFound`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
    on the CRUD Resource Object, else, or when that one does not parse, the
    item GET operation, a Tombstone Object of the deletion-feeds draft; not
@@ -202,7 +205,9 @@ Data flows through four stages, each its own directory under `src/`:
    settled on during the sync, or whose stored tombstone a read dropped
    earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
    `stored`
-   and no GET; unchecked and `unknown` GET answers go there too.
+   and no GET; unchecked, `unknown` and `unavailable` GET answers go there
+   too (a feed tombstone stands over `unavailable`; without one, that
+   answer applies).
    `finishFeeds`, after every collection's checks, reads each feed once
    (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
    `feedCursors`, items counted per read against `maxRecords`;
@@ -220,9 +225,9 @@ Data flows through four stages, each its own directory under `src/`:
    a later complete read that returns the record, or `resolveWrite` `retry`
    on the record, clears the flag.
    `failWrite` and the waiting-path `discard` wake a removed head's drain.
-   `deleted`/`unknown` fail the head and each following held update
-   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
-   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   `deleted`/`unavailable`/`unknown` fail the head and each following held
+   update (`failWrite`, `missingRecord`, stored; a sleeping drain is woken
+   through `wakers`); `filtered` takes the returned record as confirmed (conflicts
    checked) and releases. A record settled on during the check (up to the
    end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
@@ -360,6 +365,13 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/completeness-outcomes.test.ts` covers Collection Completeness
+  0.2.0 §4.3, `notFound`: a 404 or 410 as `unavailable` (PUT and PATCH, the
+  held write, the kept values, the report), the `deleted` default (no field,
+  `deleted`, an unrecognised value, no declaration), the operation and
+  legacy placements, no GET under `absent: deleted`, a later list or GET
+  superseding the mark for new updates, the stored value across a restart,
+  `missingRecordChecks: 'all'`, and precedence against a deletion feed.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored

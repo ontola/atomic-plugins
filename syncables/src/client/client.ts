@@ -171,11 +171,26 @@ export interface AuthBlock {
  * - `filtered`: it still exists; the list just does not return it. A GET of
  *   the record answered 2xx with the record, without a declared
  *   read-tombstone marker.
+ * - `unavailable`: this caller can no longer read it, and the API does not
+ *   say whether it was deleted, moved out of reach, or access was lost. A
+ *   GET of the record answered 404 or 410 and the collection declares
+ *   `x-completeness: { notFound: unavailable }` (Collection Completeness
+ *   0.2.0 §4.3). Never reported as deleted; the last known values are kept.
  * - `unknown`: neither could be told: the GET answered another status, its
  *   2xx body did not hold the record, it failed, or no GET was made (the
  *   resource declares no item GET, or `missingRecordChecks` is `'none'`).
  */
-export type MissingRecordEvidence = 'deleted' | 'filtered' | 'unknown';
+export type MissingRecordEvidence =
+  | 'deleted'
+  | 'filtered'
+  | 'unavailable'
+  | 'unknown';
+
+/**
+ * Why an update failed because a complete refresh no longer returned its
+ * record: the `MissingRecordEvidence` other than `filtered`.
+ */
+export type MissingRecordFailure = 'deleted' | 'unavailable' | 'unknown';
 
 /** A record a complete refresh no longer returned, and what that means. */
 export interface MissingRecord {
@@ -418,11 +433,12 @@ export interface PendingWriteInfo {
   conflicts?: WriteConflict[];
   /**
    * Set on an update that failed because a complete refresh no longer
-   * returned its record: `deleted` (`lastError` "deleted at the provider") or
-   * `unknown` (`lastError` "not in the refreshed collection"). See
+   * returned its record: `deleted` (`lastError` "deleted at the provider"),
+   * `unavailable` (`lastError` "unavailable at the provider") or `unknown`
+   * (`lastError` "not in the refreshed collection"). See
    * `MissingRecordEvidence`.
    */
-  missingRecord?: 'deleted' | 'unknown';
+  missingRecord?: MissingRecordFailure;
 }
 
 export interface ApiClient {
@@ -585,6 +601,12 @@ interface ClientRoute {
   idempotencyHeader?: string;
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
   absentMeansDeleted?: boolean;
+  /**
+   * `x-completeness: { notFound: unavailable }`: a 404 or 410 from the item
+   * GET of a record a complete read lacked means the caller can no longer
+   * read it, not that it was deleted (Collection Completeness 0.2.0 §4.3).
+   */
+  notFoundMeansUnavailable?: boolean;
   /** The item URL declares a GET, so a missing record can be read. */
   itemReadable?: boolean;
   /** `x-deletion-feed`: the operation that reports deletions. */
@@ -675,7 +697,7 @@ interface QueuedWrite {
   /** Queue order across the client and its restarts (absent in older outboxes). */
   seq?: number;
   /** Failed because a complete refresh no longer returned the record. */
-  missingRecord?: 'deleted' | 'unknown';
+  missingRecord?: MissingRecordFailure;
   /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
@@ -780,17 +802,27 @@ function declaredIdempotencyHeader(
   )?.name;
 }
 
+/** A parsed Completeness Object (draft Collection Completeness extension, §4.1). */
+interface Completeness {
+  absent: 'deleted' | 'removed';
+  /** §4.3; `deleted` when the field is absent or has another value. */
+  notFound: 'deleted' | 'unavailable';
+}
+
 /**
- * The Collection Completeness extension's `absent` value for a collection:
- * from its CRUD Causality Collection Object, which covers the collection's
- * own fixed `x-list-query`/`x-list-body`, else from its list operation,
- * which covers only a read that adds nothing to the operation's request (no
- * fixed query or body), since several collections may share that operation.
+ * The Collection Completeness extension's Completeness Object for a
+ * collection: from its CRUD Causality Collection Object, which covers the
+ * collection's own fixed `x-list-query`/`x-list-body`, else from its list
+ * operation, which covers only a read that adds nothing to the operation's
+ * request (no fixed query or body), since several collections may share that
+ * operation. A declaration whose `absent` is not `deleted` or `removed` is
+ * ignored; a `notFound` that is not `deleted` or `unavailable` takes the
+ * spec's default, `deleted`.
  */
-function declaredAbsence(
+function declaredCompleteness(
   document: OpenApiDocument,
   collection: ReadCollection,
-): 'deleted' | 'removed' | undefined {
+): Completeness | undefined {
   const resources = document.components?.['crudResources'];
   const resource = isRecord(resources)
     ? resources[collection.resource]
@@ -812,8 +844,14 @@ function declaredAbsence(
       : fixed
         ? undefined
         : operation?.['x-completeness'];
-  const absent = isRecord(declared) ? declared['absent'] : undefined;
-  return absent === 'deleted' || absent === 'removed' ? absent : undefined;
+  if (!isRecord(declared)) return undefined;
+  const absent = declared['absent'];
+  if (absent !== 'deleted' && absent !== 'removed') return undefined;
+  return {
+    absent,
+    notFound:
+      declared['notFound'] === 'unavailable' ? 'unavailable' : 'deleted',
+  };
 }
 
 /**
@@ -953,8 +991,10 @@ function clientRoutes(
           route.deletePath = path;
       }
     }
-    if (declaredAbsence(document, collection) === 'deleted')
-      route.absentMeansDeleted = true;
+    const completeness = declaredCompleteness(document, collection);
+    if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
+    if (completeness?.notFound === 'unavailable')
+      route.notFoundMeansUnavailable = true;
     const feed = declaredDeletionFeed(document, collection);
     if (feed) route.deletionFeed = feed;
     const readTombstone = declaredReadTombstone(document, collection);
@@ -2233,7 +2273,8 @@ export function createApiClient(
     let failed = false;
     for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
       failWrite(head, missingMessage(head, found), previous);
-      head.missingRecord = found.evidence === 'deleted' ? 'deleted' : 'unknown';
+      head.missingRecord =
+        found.evidence === 'filtered' ? 'unknown' : found.evidence;
       if (found.status !== undefined) head.lastStatus = found.status;
       released.add(head);
       failed = true;
@@ -2242,9 +2283,11 @@ export function createApiClient(
   }
 
   function missingMessage(write: QueuedWrite, found: Evidence): string {
-    return found.evidence === 'deleted'
-      ? `Record ${write.id} was deleted at the provider (${found.detail}); not sent`
-      : `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely; ${found.detail}); not sent, to avoid a partial update`;
+    if (found.evidence === 'deleted')
+      return `Record ${write.id} was deleted at the provider (${found.detail}); not sent`;
+    if (found.evidence === 'unavailable')
+      return `Record ${write.id} is unavailable at the provider (${found.detail}); not sent without a decision: retry or discard it with resolveWrite`;
+    return `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely; ${found.detail}); not sent, to avoid a partial update`;
   }
 
   /**
@@ -2493,13 +2536,22 @@ export function createApiClient(
     const { status } = response;
     // Rate-limited after the budget's own 429 retries: not checked.
     if (status === 429) return undefined;
+    // §4.3 of the Collection Completeness draft: what the status means is
+    // the collection's `notFound`, `deleted` by default.
     if (status === 404 || status === 410)
-      return {
-        evidence: 'deleted',
-        source: 'read',
-        status,
-        detail: `GET ${path} answered ${status}`,
-      };
+      return route.notFoundMeansUnavailable
+        ? {
+            evidence: 'unavailable',
+            source: 'read',
+            status,
+            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+          }
+        : {
+            evidence: 'deleted',
+            source: 'read',
+            status,
+            detail: `GET ${path} answered ${status}`,
+          };
     if (status >= 200 && status < 300) {
       let body: unknown;
       try {
@@ -2643,8 +2695,13 @@ export function createApiClient(
         }
 
     // Undecided by this sync's GETs: the feed read at the end may decide.
+    // A tombstone there is positive evidence of deletion, so it also stands
+    // over an `unavailable` answer; without one, that answer applies.
     const undecided = (found: Evidence | undefined): boolean =>
-      feedRead && (!found || found.evidence === 'unknown');
+      feedRead &&
+      (!found ||
+        found.evidence === 'unknown' ||
+        found.evidence === 'unavailable');
     const evidence = new Map<string, Evidence>();
     for (const id of missing) {
       const key = keyFor(scope, id);
