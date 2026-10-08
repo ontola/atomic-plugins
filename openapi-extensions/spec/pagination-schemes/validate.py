@@ -231,11 +231,17 @@ def validate(document):
         if not isinstance(applications, list):
             errors.append(f"{location}: expected an array")
             continue
-        windowed = [
-            a for a in applications
-            if isinstance(a, dict) and isinstance(schemes.get(a.get("scheme")), dict)
-            and schemes[a["scheme"]].get("type") == "rangeWindow"
-        ]
+        def merged_type(application):
+            """The type after overrides (§5), so an override cannot hide a rangeWindow."""
+            if not isinstance(application, dict):
+                return None
+            overrides = application.get("overrides")
+            if isinstance(overrides, dict) and "type" in overrides:
+                return overrides["type"]
+            scheme = schemes.get(application.get("scheme"))
+            return scheme.get("type") if isinstance(scheme, dict) else None
+
+        windowed = [a for a in applications if merged_type(a) == "rangeWindow"]
         if windowed and len(applications) != 1:
             # Rule 17.
             errors.append(f"{location}: an operation that applies a rangeWindow scheme applies no other scheme")

@@ -229,7 +229,7 @@ A `rangeWindow` scheme is never matched by auto-detection (§6): its window fiel
 |-------|------|----------|-------------|
 | `unit` | `"day"` \| `"second"` \| `"integer"` | **Yes** | The unit of a window's width and of its bounds: civil days, whole seconds, or integers (a sequence number, say). |
 | `format` | string | **Yes** | How one bound is written (§4.6.2). It MUST fit `unit`. |
-| `bounds` | `"closed"` \| `"halfOpen"` | **Yes** | `closed`: the window `[start, end]` includes both bounds. `halfOpen`: `[start, end)` includes `start` and excludes `end`. There is no default, because a wrong guess either skips or doubles every boundary. |
+| `bounds` | `"closed"` \| `"halfOpen"` | **Yes** | `closed`: the window `[start, end]` includes both bounds, each as a whole `unit` (§4.6.2). `halfOpen`: `[start, end)` includes `start` and excludes `end`. A document declares `closed` only when the server compares that way, and otherwise `halfOpen`. There is no default, because a wrong guess either skips or doubles every boundary. |
 | `cap` | integer, at least 1 | **Yes** | The most items one answer holds. An answer with `cap` items or more is _full_ (§4.6.4). |
 | `minimumWidth` | integer, at least 1 | No | The narrowest window, in `unit`s, the operation selects correctly. Default: `1`. |
 | `field` | JSON Pointer string | No | The item field the range selects on, relative to one item, as in the [Filtering proposal](../filtering/README.md)'s `x-filter.field`. A client MAY use it to check that each returned item lies inside its window. When absent, the document makes no claim about which field the operation compares. |
@@ -248,6 +248,8 @@ A `rangeWindow` scheme's `request` MUST carry the window in exactly one of two w
 | `dateTime` | `second` | An RFC 3339 `date-time` in UTC, with `Z` and without fractional seconds | `2026-01-31T23:59:59Z` |
 | `unixSeconds` | `second` | Whole seconds since 1970-01-01T00:00:00Z, in decimal | `1769903999` |
 | `integer` | `integer` | A decimal integer, with `-` when negative and no leading zeros | `4711` |
+
+A bound names one whole `unit`, so it covers every value of a more precise item field within that unit. With `closed` bounds, the upper bound `e` covers `[e, e + 1 unit)`: a window `[s, e]` of `unit: second` holds an item whose field is `12:00:00.500` when `e` is `12:00:00`, and the next window starts at `12:00:01`, so no value falls between two adjacent windows. A server whose closed upper bound compares as an instant (`<= 12:00:00.000`) does not compare this way, and a document then declares that operation `halfOpen` if the server allows it, or not as a `rangeWindow` at all.
 
 Bounds are exact strings in these forms, never floats. A provider format outside this table (a month such as `202601`, or a time zone offset other than `Z`) needs a later version; until then a document does not declare such an operation as a `rangeWindow`.
 
@@ -270,9 +272,11 @@ In this version a `rangeWindow` operation has no page parameter, so an operation
 1. A window's answer with fewer than `cap` items is _complete for that window_: it holds every item the operation selected for that window when it answered.
 2. An answer with `cap` items or more is _full_, and may have been cut short. A client MUST NOT treat its items as all of the window's items. It MAY keep them, since they are real items, but they do not make the window complete. An answer of exactly `cap` items counts as full even when nothing was left out, because a client cannot tell the two apart.
 3. A read of the range is complete when the windows whose answers were complete for them are adjacent and together cover the range exactly. Windows MAY overlap (when a client re-reads a window, say); the client then keeps one item per identity, as the [CRUD Causality](../crud-causality/README.md) identity of the operation's resource says.
-4. A read that ended with an error (§4.6.3 step 4, a non-2xx answer, or a window the client did not request because of its own request budget) is not complete, and MUST NOT be treated as complete; a consumer of the [Collection Completeness](../collection-completeness/README.md) extension therefore infers nothing about absent objects from it. Whether to keep the items read so far is the client's choice. The Money app (`integrations/money/moneybird/read.ts`) writes nothing.
-5. A complete read is complete for the range only, that is for the items whose selected field lies inside it. An object outside the range that is absent from the read says nothing about that object. A client that combines a windowed read with Collection Completeness applies it to that range-selected view, not to the whole collection.
+4. A read that ended with an error (§4.6.3 step 4, a non-2xx answer, or a window the client did not request because of its own request budget) is not complete, and MUST NOT be treated as complete; Whether to keep the items read so far is the client's choice.
+5. A complete windowed read is complete only in the sense of this section: every window was answered below the cap. It is never a complete read in the sense of [Collection Completeness](../collection-completeness/README.md), whatever its outcome, so a consumer of that extension infers nothing about an object absent from it, whether the object's field lies inside the range or outside it. Allowing such an inference for a range-selected view needs a later version of Collection Completeness.
 6. A windowed read is not a snapshot. An item whose field changes during the read can appear in two windows (and is kept once, by rule 3), or in none, when it moves from a window not yet read into one already read. A client that must not miss such an item re-reads, or uses an operation that offers a snapshot or a change feed.
+
+_Non-normative note._ The Money app's Moneybird reader (`integrations/money/moneybird/read.ts` in ontola/atomic-plugins) reads financial mutations this way today, and writes nothing when a read ends with an error. Moneybird also documents a financial mutations synchronization API (`GET /{administration_id}/financial_mutations/synchronization`, which lists every mutation's id and version) as the way to read more than 100; the read-only OpenAPI document the overlays pin does not include it, and a document that does could describe that operation instead of, or alongside, a `rangeWindow`.
 
 ---
 
@@ -730,7 +734,7 @@ A conforming implementation MUST enforce:
 14. The roles `windowStart`, `windowEnd` and `windowRange` appear only in a `rangeWindow` scheme. A `rangeWindow` scheme's `request` has either exactly one `windowRange` field and no `windowStart` or `windowEnd`, or exactly one `windowStart` and exactly one `windowEnd` field and no `windowRange`.
 15. `template` appears only on a field whose `role` is `windowRange`, and such a field MUST have one. It contains `{start}` exactly once and `{end}` exactly once, and no other `{` or `}`.
 16. A `rangeWindow` scheme's `autoDetect`, when present, MUST be `false`.
-17. An operation whose `x-pagination` applies a `rangeWindow` scheme applies exactly one scheme.
+17. An operation whose `x-pagination` applies a `rangeWindow` scheme, after overrides are merged, applies exactly one scheme.
 18. When a `rangeWindow` scheme applied to an operation carries its window in `queryParameters` or `headerFields`, after its overrides are merged, each window field MUST name a parameter of that operation (its own or its path item's, by `name` and `in`, `$ref`s to `components.parameters` resolved).
 
 A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows, and the reading and completeness rules of §4.6.3 and §4.6.4 to every windowed read.
