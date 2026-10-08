@@ -127,3 +127,120 @@ async fn published_catalog_still_loads_with_tenant_identity_selections_present()
         );
     }
 }
+
+/// Load the real composed Asana/Airtable catalog through the proxy's catalog
+/// loader and OAuth profile parser. Run explicitly after the immutable Pages
+/// catalog is published; before that, local Syncables validation can proceed
+/// against the draft files.
+#[tokio::test]
+#[ignore = "downloads the final immutable Asana/Airtable catalog sources"]
+async fn published_asana_airtable_profiles_are_read_only_and_proxy_compatible() {
+    let client = crate::build_http_client();
+    let catalog = if let Ok(url) = std::env::var("ASANA_AIRTABLE_CATALOG_URL") {
+        Catalog::load(&url, &client).await
+    } else if let Ok(file) = std::env::var("ASANA_AIRTABLE_CATALOG_FILE") {
+        Catalog::load_checked_in_file(&client, &file).await
+    } else {
+        Catalog::load(
+            "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-08-asana-airtable.json",
+            &client,
+        )
+        .await
+    }
+    .expect("catalog and its immutable OAD/overlay pins must load");
+
+    for (platform, expected_scopes) in [
+        (
+            "asana",
+            vec![
+                "projects:read",
+                "tasks:read",
+                "users:read",
+                "workspaces:read",
+            ],
+        ),
+        ("airtable", vec!["data.records:read", "schema.bases:read"]),
+    ] {
+        let provider = catalog
+            .oauth_provider(platform)
+            .unwrap_or_else(|error| panic!("{platform} profile must parse: {error}"));
+        assert_eq!(
+            provider.scopes, expected_scopes,
+            "{platform} minimum scopes"
+        );
+        assert!(provider.use_pkce, "{platform} must use S256 PKCE");
+
+        let (reads, writes): (&[(&str, &str)], &[(&str, &str)]) = match platform {
+            "asana" => (
+                &[
+                    ("GET", "/api/1.0/workspaces"),
+                    ("GET", "/api/1.0/workspaces/ws-1/projects"),
+                    ("GET", "/api/1.0/projects/p-1/tasks"),
+                    ("GET", "/api/1.0/users"),
+                ],
+                &[
+                    ("POST", "/api/1.0/workspaces"),
+                    ("POST", "/api/1.0/projects/p-1/tasks"),
+                    ("PUT", "/api/1.0/tasks/t-1"),
+                    ("DELETE", "/api/1.0/tasks/t-1"),
+                ],
+            ),
+            "airtable" => (
+                &[
+                    ("GET", "/v0/meta/bases"),
+                    ("GET", "/v0/meta/bases/base-1/tables"),
+                    ("GET", "/v0/base-1/Tasks"),
+                    ("GET", "/v0/base-1/Tasks/rec-1"),
+                ],
+                &[
+                    ("POST", "/v0/base-1/Tasks"),
+                    ("PATCH", "/v0/base-1/Tasks/rec-1"),
+                    ("DELETE", "/v0/base-1/Tasks/rec-1"),
+                ],
+            ),
+            _ => unreachable!(),
+        };
+        for (method, path) in reads {
+            assert!(
+                catalog.allows(platform, method, path).is_some(),
+                "{platform} profile must permit {method} {path}"
+            );
+        }
+        for (method, path) in writes {
+            assert!(
+                catalog.allows(platform, method, path).is_none(),
+                "{platform} profile must refuse {method} {path}"
+            );
+        }
+    }
+
+    // Exercise the proxy's configured-provider parser against both client
+    // authentication methods Airtable advertises, using disposable test values.
+    let names = [
+        "OAUTH_AIRTABLE_CLIENT_ID",
+        "OAUTH_AIRTABLE_CLIENT_SECRET",
+        "OAUTH_AIRTABLE_CLIENT_AUTH_METHOD",
+    ];
+    let previous: Vec<_> = names.iter().map(|key| std::env::var_os(key)).collect();
+    std::env::set_var(names[0], "runtime-test-client");
+    std::env::set_var(names[1], "runtime-test-secret");
+    for method in ["client_secret_basic", "none"] {
+        std::env::set_var(names[2], method);
+        let configured = crate::providers::Provider::configured(&catalog, "airtable")
+            .unwrap_or_else(|error| panic!("Airtable {method} must parse: {error}"));
+        match method {
+            "client_secret_basic" => assert_eq!(
+                configured.client_auth,
+                crate::providers::ClientAuth::SecretBasic
+            ),
+            "none" => assert_eq!(configured.client_auth, crate::providers::ClientAuth::None),
+            _ => unreachable!(),
+        }
+    }
+    for (key, value) in names.iter().zip(previous) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+}
