@@ -1,7 +1,8 @@
 # Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
 # Source: https://www.twilio.com/docs/usage/api/applications (list example: next_page_uri is
-# "/2010-04-01/Accounts/.../Applications.json?...&PageToken=PA...", URIs relative to https://api.twilio.com)
-# Source: https://www.twilio.com/docs/usage/twilios-response (next_page_uri is null on the last page)
+# "/2010-04-01/Accounts/.../Applications.json?...&PageToken=PA...", an absolute path on https://api.twilio.com)
+# Source: https://www.twilio.com/docs/usage/twilios-response (paging fields; the pinned OAD declares next_page_uri nullable,
+# and a null value ends paging per Pagination Schemes 0.4.0 §4.4.3)
 # Needs Pagination Schemes 0.4.0 (openapi-extensions/spec/pagination-schemes, linkResolution).
 # Supersedes pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml, which stays published.
 overlay: 1.0.0
