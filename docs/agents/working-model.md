@@ -16,8 +16,9 @@ authoritative):
   Michiel: …" on #227; don't number questions yourself.
 - **Never merge into atomic-server `develop`.** Only the trekmeester (Joep's
   agent) does, in batches.
-- **atomic-server freeze (Michiel, 2026-10-01).** No new atomic-server PRs and
-  no new pin candidates; only shepherd the open ones. A host need becomes an
+- **atomic-server freeze (Michiel, 2026-10-01).** No new atomic-server PRs;
+  only shepherd the open ones. (It also said no new pin candidates; Decision
+  Inbox Q-104 lifted that part on 2026-10-08.) A host need becomes an
   **issue for Joep** on atomic-server (for example atomic-server#1952), drafted
   in the worker's report. Atomic-plugins stays on the current pin. The
   coordinator session can't file in ontola/atomic-server, so it collects the
@@ -25,11 +26,24 @@ authoritative):
   [Issue drafts for Joep](#issue-drafts-for-joep)).
   One-off exception (Michiel in chat, 2026-10-08, relayed by the VPS
   coordinator): candidate20, candidate19 plus atomic-server#2069's two
-  commits, may become the pin for user testing ("even if we can't merge this
+  commits, may become the pin for user testing ("Even if we can't merge this
   to develop, you can merge it to our pin so we can start user testing for
   it"). The freeze otherwise stands.
 - **Pin bumps** (`.atomic-server-ref` → a candidate) are pre-approved. See
   [pins.md](pins.md).
+- **Standing OKs for deploys, candidates and releases** (Decision Inbox, both
+  answered "Yes, standing OK as worded" on 2026-10-08):
+  - **Q-104:** deploy to user testing (the catalog, the moderator and the
+    atomic-server image), after checking on the server that no session is in
+    progress ([usertest-droplet.md](usertest-droplet.md)), and build and tag
+    new atomic-server pin candidates ([pins.md](pins.md)).
+  - **Q-105:** npm releases (syncables, devonian, …) and integration-proxy
+    crates.io releases, and proxy deploys to Heroku, only from merged,
+    Opus-reviewed, CI-green `main`, following the recipes, and named in the
+    next status report ([proxy-release.md](proxy-release.md)). Heroku deploys
+    go through the coordinator's worker, which holds the Heroku access.
+
+  Nothing else in these rules changes, and the rest of the freeze stands.
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo
   has no git hooks of its own (no `core.hooksPath`, nothing in `.git/hooks`
   as cloned). Rule 5's "Fresh Worktrees" warm-up is not in this repo's
