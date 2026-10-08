@@ -132,23 +132,17 @@ async fn published_catalog_still_loads_with_tenant_identity_selections_present()
 }
 
 /// Load the real composed Asana/Airtable catalog through the proxy's catalog
-/// loader and OAuth profile parser. Run explicitly after the immutable Pages
-/// catalog is published; before that, local Syncables validation can proceed
-/// against the draft files.
+/// loader and OAuth profile parser. By default this uses the checked-in dated
+/// catalog with exact local overlay bytes and immutable remote OAD pins. Set
+/// `ASANA_AIRTABLE_CATALOG_URL` to repeat the same check against published Pages.
 #[tokio::test]
-#[ignore = "downloads the final immutable Asana/Airtable catalog sources"]
-async fn published_asana_airtable_profiles_are_read_only_and_proxy_compatible() {
+#[ignore = "downloads pinned OAD sources; set ASANA_AIRTABLE_CATALOG_URL for the Pages run"]
+async fn asana_airtable_profiles_are_read_only_and_proxy_compatible() {
     let client = crate::build_http_client();
     let catalog = if let Ok(url) = std::env::var("ASANA_AIRTABLE_CATALOG_URL") {
         Catalog::load(&url, &client).await
-    } else if let Ok(file) = std::env::var("ASANA_AIRTABLE_CATALOG_FILE") {
-        Catalog::load_checked_in_file(&client, &file).await
     } else {
-        Catalog::load(
-            "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-08-asana-airtable.json",
-            &client,
-        )
-        .await
+        Catalog::load_checked_in_file(&client, "catalog/2026-10-08-asana-airtable.json").await
     }
     .expect("catalog and its immutable OAD/overlay pins must load");
 

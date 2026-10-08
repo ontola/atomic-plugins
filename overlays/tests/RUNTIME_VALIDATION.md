@@ -25,18 +25,22 @@ Exercise the proxy's real `Catalog` and OAuth profile parser against the same
 local catalog and immutable OAD pins:
 
 ```sh
-ASANA_AIRTABLE_CATALOG_FILE=catalog/2026-10-08-asana-airtable.json \
-  cargo test --manifest-path integration-proxy/Cargo.toml \
-  published_asana_airtable_profiles_are_read_only_and_proxy_compatible \
+cargo test --manifest-path integration-proxy/Cargo.toml \
+  asana_airtable_profiles_are_read_only_and_proxy_compatible \
   -- --ignored --nocapture
 ```
 
-After the dated catalog is on Pages, repeat without the environment override;
-that makes the ignored test load the published catalog and sources:
+The default is `load_checked_in_file`, which uses the exact local overlay
+bytes and downloads the immutable OAD pins. That keeps `cargo test
+-- --include-ignored` independent of Pages deployment.
+
+After the dated catalog is on Pages, set an explicit URL to run the same parser
+against the published catalog and sources:
 
 ```sh
-cargo test --manifest-path integration-proxy/Cargo.toml \
-  published_asana_airtable_profiles_are_read_only_and_proxy_compatible \
+ASANA_AIRTABLE_CATALOG_URL=https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-08-asana-airtable.json \
+  cargo test --manifest-path integration-proxy/Cargo.toml \
+  asana_airtable_profiles_are_read_only_and_proxy_compatible \
   -- --ignored --nocapture
 ```
 
