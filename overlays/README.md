@@ -750,3 +750,11 @@ actual two-page Syncables imports for each new platform and both profiles in
 the proxy parser. The Google Tasks importer fixture is
 `tests/google_tasks_syncables.test.ts`; its composition checks are
 `tests/test_google_tasks_readonly.py`. Real-account sync is not certified.
+
+## Google Tasks deployment without GitLab
+
+`catalog/2026-10-08-google-tasks.json` preserves all eleven production entries
+and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
+catalog. This twelve-entry option allows Tasks deployment independently when
+its OAuth client is ready and GitLab registration is still pending. It changes
+no existing pins or API metadata and does not activate itself.
