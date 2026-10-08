@@ -350,3 +350,72 @@ body validation, further SSRF hardening (e.g. blocking requests to internal
 network ranges), rate limiting of proxied requests (key checks are limited
 per client network, above), and an external review of the token envelope
 format before live credentials are handled.
+
+## Webhook inbox (#369, unreleased)
+
+Off by default. With `WEBHOOKS_ENABLED` unset there are no inbox tables, no
+sweeper and no route. Enabled, this release only creates the tables and runs
+the sweeper: no webhook route is mounted, so nothing can reach the inbox
+from outside. Step 3 adds the receiver and the consumer routes. The inbox
+follows `openapi-extensions/spec/webhook-subscriptions` and the storage rules
+of `webhook-deliveries`, with the plan's pilot limits
+(`src/webhooks/policy.rs`, checked against the spec's schema by a test).
+
+What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
+`src/webhooks/tests.rs`):
+
+- **Bounded retention.** A subscription keeps at most 10,000 events,
+  64 MiB, and 7 days of pending events. One owner keeps at most 256 MiB,
+  50,000 references and 20 live subscriptions. The deployment keeps at most
+  `WEBHOOK_INBOX_MAX_BYTES`, counted as payload bytes plus 512 bytes per
+  payload row and 128 per reference. These row overheads are estimates
+  until measured (plan, step 7). Every limit records a gap before history
+  is lost: eviction drops the receiving subscription's own oldest events,
+  never another owner's.
+- **Abandonment ends retention.** A lease lasts 7 days from the last
+  renewal. With events pending and no acknowledgement for 7 days, the
+  subscription expires even while it is renewed. Both deadlines are
+  enforced in the same transaction as any delivery, fetch,
+  acknowledgement or renewal, and by the minute sweeper. So retention stops
+  at the deadline even if the sweeper is down. An expired subscription
+  releases its payloads at once and is closed in the same transaction. Its
+  tombstone lasts at most 30 days, and at most 10,000 tombstones exist.
+- **Access.** A subscription is created only by the caller after a
+  passing access check. Its connection must belong to the hook's platform
+  and to the subscriber. No events are served while the last passing check
+  is older than 12 hours. A failed check closes the subscription.
+  Deliveries are routed only to subscriptions whose connection still
+  exists. Deleting the connection stops reads at once; the sweeper releases
+  the rest.
+- **Receipts.** Receipts are kept per owner, and only for deliveries routed
+  to that owner. Caps: 20,000 per owner, 200,000 in all. A receipt younger
+  than 1,800 seconds is never evicted. At a cap with nothing evictable, the
+  delivery is stored for no subscription of that owner, a `receipt-limit`
+  gap is recorded, and the delivery still counts as accepted, so other
+  owners are unaffected.
+- **Durable before acknowledged.** Ingest is one transaction. Only its
+  `Ok` may become a 2xx. A failure, including a lost database connection,
+  rolls everything back, receipt included, so the provider's retry is
+  accepted as new.
+- **Cursors** carry an HMAC under a subkey of `ENCRYPTION_KEY`
+  (`integration-proxy-webhook-cursor-v1`). A cursor that was edited, came
+  from another subscription, was never returned, or belongs to an obsolete
+  generation is refused.
+- **Dedicated hooks.** The record (endpoint, sealed secret, bound key,
+  access parameters) is stored before the provider is asked. Management
+  moves to a remaining subscription's connection when its connection's
+  subscription ends. The last subscription starts a cleanup job: backoff up
+  to a day, a 30-day deadline, then a visible failure. Pending cleanups are
+  capped at 20 per owner and 10,000 in all, so one owner's failing cleanups
+  never block another's. Shared application hooks are never changed.
+  Provider calls (and the access re-check before them) are step 3.
+
+Concurrency: every write takes row locks in one order: subscriptions,
+owners, the deployment row, then hooks, payloads and receipts. All writes
+pass the deployment row, so they are serialized after their subscription
+locks. That is the pilot's throughput bound. The inbox uses up to four
+connections of its own, because the shared client cannot run transactions.
+
+Not yet verified: physical bytes per row, sweep lag under load, and
+behaviour with several proxy instances beyond what row locks guarantee
+(tested with concurrent tasks against one database).
