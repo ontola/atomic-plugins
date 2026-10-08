@@ -21,7 +21,10 @@ interface Source {
   body: string | null;
   labels: string[];
 }
-interface View { name: string; body: string }
+interface View {
+  name: string;
+  body: string;
+}
 
 const issue = recordLens<Source, View>({
   name: fieldLens<Source, 'title'>('title'),
@@ -111,7 +114,16 @@ Provider code stays in its integration folder:
   prototype reuses existing running/locked/custom-field/project/interval
   restrictions and captures a copy of host-supplied context.
 
-Both prototypes have deterministic law and preservation tests. They are not
+The ontology-target batch adds three more passive prototypes: Solid RDF bookmarks
+(`integrations/solid/devonian/bookmarks/lens/`), Raindrop bookmarks
+(`integrations/bookmarks/devonian/raindrop/lens/`) and Todoist issues
+(`integrations/issue-tracker/devonian/todoist/lens/`). They provide property patches
+for `devonian/atomic`, merge edited values into the previous source, and return
+minimal reverse update plans. Todoist completion and scheduling are read-only.
+See the [ontology/API and Solid assessment](../../docs/design/ontology-api-lenses.md)
+and their per-provider READMEs for the supported domains and preservation rules.
+
+These prototypes have deterministic law and preservation tests. They are not
 imported by current app entry points or exported by the integrations' existing
 barrels, so their published app modules remain unchanged. Production adoption
 requires a Devonian npm release followed by explicit app dependency/version

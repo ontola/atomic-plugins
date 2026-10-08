@@ -1,4 +1,5 @@
 # Bidirectional Lenses for Data Portability
+
 ## Work in Progress
 
 [API docs](https://tubsproject.github.io/devonian/)
@@ -45,13 +46,13 @@ Every entry point resolves to compiled JS in `build/` with matching `.d.ts`
 (`npm run build` runs before every publish), and every one bundles for the
 browser without Node built-ins or polyfills:
 
-| Import | Contents |
-|---|---|
-| `devonian` | Everything below except `devonian/reflect`, plus the row API (`DevonianTable`, `DevonianLens`, `DevonianClient`, `DevonianIndex`), `effect` schemas and `reconcileRecord` |
-| `devonian/atomic` | Only the native Atomic Data API (`AtomicStore`, `AtomicIdentityMap`, `AtomicLens`, resource helpers). Runtime dependency: the optional `@tomic/lib` peer |
-| `devonian/background` | `BackgroundSync` and its service-worker helpers |
-| `devonian/lenses` (unreleased) | Dependency-free synchronous field, custom and composed value lenses, with contract checks |
-| `devonian/reflect` | The reflection engine; `FileIdMap`/`FileKvStore` only outside the `browser` condition (see above) |
+| Import                         | Contents                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `devonian`                     | Everything below except `devonian/reflect`, plus the row API (`DevonianTable`, `DevonianLens`, `DevonianClient`, `DevonianIndex`), `effect` schemas and `reconcileRecord` |
+| `devonian/atomic`              | Only the native Atomic Data API (`AtomicStore`, `AtomicIdentityMap`, `AtomicLens`, resource helpers). Runtime dependency: the optional `@tomic/lib` peer                  |
+| `devonian/background`          | `BackgroundSync` and its service-worker helpers                                                                                                                           |
+| `devonian/lenses` (unreleased) | Dependency-free synchronous field, custom and composed value lenses, with contract checks                                                                                 |
+| `devonian/reflect`             | The reflection engine; `FileIdMap`/`FileKvStore` only outside the `browser` condition (see above)                                                                         |
 
 `DevonianClient` and `DevonianTable` extend `DevonianEventEmitter`, a small
 synchronous emitter with the `node:events` methods they use, instead of
@@ -80,6 +81,7 @@ and the service-worker path beyond unit tests with fakes.
 The GitHub issues lens (now in ontola/atomic-plugins' `integrations/issue-tracker/devonian/github-issues/`) wraps it as `createBackgroundSync`. Its README describes the browser support limits: Periodic Background Sync is Chromium-only and the browser sets the cadence. Coverage so far is unit tests with fakes, with no real-browser or service-worker run.
 
 ## Local Identifiers and IdMaps
+
 What I think none of the other lens projects are currently offering is a built-in way to deal with the mapping of local identifiers.
 
 In Tubs I'm not using Devonian to track schema evolution in a single system of record, but to create bridge bots between multiple systems of record (APIs of SaaS platforms).
@@ -89,76 +91,115 @@ For instance if I'm bridging a GitHub issue tracker with a Jira one, and in the 
 This way, if I kill my bridge bot and restart it on a different server, it will find back these "foreign IDs" notes in the metadata, and know how these issues were already synced, instead of thinking they are unrelated issues that still need to be synced.
 
 ## Comparison with other lens projects
+
 ### Cambria
+
 Cambria's lens language translates documents, JSON Patch edits and schemas, with a graph connecting schema versions. Devonian uses application-written TypeScript mappings and scoped identities for bridges between systems with their own IDs and write APIs. It does not generate schemas or provide Cambria's schema-version graph. See [Devonian for Cambria users](docs/from-cambria.md) for the comparison and concrete examples.
 
 ### Jonathan Edwards 'Edit History'
+
 In [Braid meeting 106](https://braid.org/meeting-106) (from 48:30), Jonathan Edwards presented his experiment that treats a schema conversion as an edit operation in a spreadsheet. This also uses a DSL with operations like `split-table` and `join`. I have yet to study this further to understand the benefits of using a DSL over using a Turing-complete language. I think it has something to do with applying a schema change in a distributed database, but I'll update this section as soon as I understand more of it.
 
 ### Express Schema
+
 Jonathan Schickling pointed me to [Effect Schema Transformations](https://effect.website/docs/schema/transformations/#async-transformations) which looks like it can do a lot of the things I want to, including transformations that require an API call. I will try using it and update this section with my findings. Maybe it means I don't need to create my own lens project and I can just use Effect Schema instead. :)
 
 ### Lens VM
-[Source Inc.](https://source.network/) are working on [Lens VM](https://github.com/lens-vm/lens-vm.org/blob/master/content/about.md) which uses WASM to define lenses and content ID's to identify database rows. I will try this out as soon as there is a bit more documentation. 
+
+[Source Inc.](https://source.network/) are working on [Lens VM](https://github.com/lens-vm/lens-vm.org/blob/master/content/about.md) which uses WASM to define lenses and content ID's to identify database rows. I will try this out as soon as there is a bit more documentation.
 
 I think Lens VM also has a concept of foreign IDs and id maps, but I think it is tied to content IDs, which might be too restrictive when syncing issue trackers and other types of data.
 
 For instance in a bank account statement, if I transfer 100 euros from my savings account to my current account, and then do the same again on the same day, some CSV export formats will meaningfully represent this as two identical rows in the CSV file (date, amount, from, to), and refering to these rows by content ID would incorrectly collapse them into a single row.
 
 ## How the legacy row API works
+
 The core is in DevonianLens which is very simple: it links corresponding database tables on different systems of record (e.g. bridging a Slack channel with a Matrix room, copying over messages from one to the other), and calls a 'left to right' translation function when a change happens on the left, then add the result on the right. So far only additions have been implemented; updates and deletions coming soon. Here is an implementation of the ['Extract Entity' challenge](https://arxiv.org/pdf/2309.11406):
+
 ```ts
-new DevonianLens<AcmeComprehensiveOrderWithoutId, AcmeLinkedOrderWithoutId, AcmeComprehensiveOrder, AcmeLinkedOrder>(
-      this.acmeComprehensiveOrderTable,
-      this.acmeLinkedOrderTable,
-      async (input: AcmeComprehensiveOrder): Promise<AcmeLinkedOrder> => {
-        const customerId = await this.acmeCustomerTable.getPlatformId({
-          name: input.customerName,
-          address: input.customerAddress,
-          foreignIds: {},
-        }, true);
-        const linkedId = this.index.convertId('order', 'comprehensive', input.id.toString(), 'linked');
-        const ret = {
-          id: linkedId as number,
-          item: input.item,
-          quantity: input.quantity,
-          shipDate: input.shipDate,
-          customerId: customerId as number,
-          foreignIds: this.index.convertForeignIds('comprehensive', input.id.toString(), input.foreignIds, 'linked'),
-        };
-        return ret;
+new DevonianLens<
+  AcmeComprehensiveOrderWithoutId,
+  AcmeLinkedOrderWithoutId,
+  AcmeComprehensiveOrder,
+  AcmeLinkedOrder
+>(
+  this.acmeComprehensiveOrderTable,
+  this.acmeLinkedOrderTable,
+  async (input: AcmeComprehensiveOrder): Promise<AcmeLinkedOrder> => {
+    const customerId = await this.acmeCustomerTable.getPlatformId(
+      {
+        name: input.customerName,
+        address: input.customerAddress,
+        foreignIds: {},
       },
-      async (input: AcmeLinkedOrder): Promise<AcmeComprehensiveOrder> => {
-        const comprehensiveId = this.index.convertId('order', 'linked', input.id.toString(), 'comprehensive');
-        const customer = await this.acmeCustomerTable.getRow(input.customerId);
-        const ret = {
-          id: comprehensiveId as number,
-          item: input.item,
-          quantity: input.quantity,
-          shipDate: input.shipDate,
-          customerName: customer.name,
-          customerAddress: customer.address,
-          foreignIds: this.index.convertForeignIds('linked', input.id.toString(), input.foreignIds, 'comprehensive'),
-        };
-        return ret;
-      },
+      true,
     );
+    const linkedId = this.index.convertId(
+      'order',
+      'comprehensive',
+      input.id.toString(),
+      'linked',
+    );
+    const ret = {
+      id: linkedId as number,
+      item: input.item,
+      quantity: input.quantity,
+      shipDate: input.shipDate,
+      customerId: customerId as number,
+      foreignIds: this.index.convertForeignIds(
+        'comprehensive',
+        input.id.toString(),
+        input.foreignIds,
+        'linked',
+      ),
+    };
+    return ret;
+  },
+  async (input: AcmeLinkedOrder): Promise<AcmeComprehensiveOrder> => {
+    const comprehensiveId = this.index.convertId(
+      'order',
+      'linked',
+      input.id.toString(),
+      'comprehensive',
+    );
+    const customer = await this.acmeCustomerTable.getRow(input.customerId);
+    const ret = {
+      id: comprehensiveId as number,
+      item: input.item,
+      quantity: input.quantity,
+      shipDate: input.shipDate,
+      customerName: customer.name,
+      customerAddress: customer.address,
+      foreignIds: this.index.convertForeignIds(
+        'linked',
+        input.id.toString(),
+        input.foreignIds,
+        'comprehensive',
+      ),
+    };
+    return ret;
+  },
+);
 ```
 
 Apart from the translation of differently named JSON fields, when copying a message from Slack to Matrix, it will be assigned a newly minted primary key on Matrix, and the bridge needs to keep track of which Slack message ID corresponds to which Matrix message ID.
 The `DevonianIndex` class keeps track of different identifiers an object may have on different platforms, and generates a `ForeignIds` object for each platform. If a platform API offers a place for storing custom metadata, the `ForeignIds` object can be stored there.
 
 ## Link with Automerge
+
 You can choose between InMemory or [Automerge](https://automerge.org) storage. If two sides update a conflicting thing, InMemory storage will lead to Last Write Wines, whereas with Automerge the hope is that conflicting changes can be handled more gracefully in more situations. This is a topic of ongoing research though, and I don't have a good example yet that shows this in action.
 
 ## Usage
+
 Short answer: DON'T.
 Take into account that this is a work in progress, and the version you see now may become deprecated overnight without warning.
 See the [examples folder](https://github.com/tubsproject/devonian/blob/main/examples/) for inspiration.
 More documentation coming soon.
 
 ## Contributing
+
 Please [create an issue](https://github.com/tubsproject/devonian/issues/new) with any feedback you might have.
+
 ```sh
 pnpm install
 pnpm build
@@ -242,3 +283,6 @@ above).
 
 Added: `reconcileRecord`, `acknowledgedBaseline` and their `Sync*` types are
 exported from the package root.
+
+For existing Atomic schema targets, new provider lens prototypes and a Solid/Media
+Kraken bridge assessment, see [ontology/API lenses](../docs/design/ontology-api-lenses.md).

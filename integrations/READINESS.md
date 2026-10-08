@@ -135,3 +135,13 @@ The `e2e` tier needs the atomic-server binary built at the pin (AGENTS.md,
 from atomic-server in `4bab16ee6`, and certify fails when a named test
 matches nothing. `evidence.json` (2026-09-18) predates that
 removal and is historical.
+
+## Ontology-target lens prototypes (2026-10-08)
+
+The [ontology/API assessment](../docs/design/ontology-api-lenses.md) adds unhosted
+Raindrop Bookmark, Solid RDF Bookmark and Todoist issue-v1 lenses. They have no
+install entry point and are not adopted by the existing apps or Solid protocol
+plugin. Their evidence is offline typecheck/unit tests against invented records
+and local Devonian AtomicStore state. No live or host-installed round trip is
+verified. They depend on unreleased devonian/lenses source; the per-provider
+READMEs document the bounded write directions.
