@@ -341,6 +341,20 @@ class RangeWindowSchemaTests(unittest.TestCase):
         document["paths"][TRANSACTIONS]["get"]["x-pagination"].append({"scheme": "pages"})
         self.assertInvalid(document, "applies no other scheme")
 
+    def test_applied_alone_after_overrides(self):
+        # A pageNumber scheme overridden into a rangeWindow counts as one (review of #397).
+        document = self.document()
+        document["components"]["paginationSchemes"]["pages"] = {
+            "type": "pageNumber", "request": {"queryParameters": {"page": {"role": "page"}}}}
+        document["paths"][TRANSACTIONS]["get"]["x-pagination"] = [
+            {"scheme": "pages"},
+            {"scheme": "pages", "overrides": {"type": "rangeWindow", "autoDetect": False,
+                                              "window": copy.deepcopy(self.scheme(document)["window"]),
+                                              "request": {"queryParameters": {
+                                                  "page": {"role": "x-unused"},
+                                                  "filter": {"role": "windowRange", "template": "{start}..{end}"}}}}}]
+        self.assertInvalid(document, "applies no other scheme")
+
     def test_window_parameters_exist_on_the_operation(self):
         document = self.document()
         parameters = document["paths"][TRANSACTIONS]["get"]["parameters"]
