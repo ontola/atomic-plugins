@@ -594,7 +594,7 @@ async function start() {
   localStorage.setItem('plugin-catalog-url', CATALOG_URL);
   const width = Math.round(screen.availWidth * 0.62);
   const app = window.open(
-    '/app/dev-drive',
+    startPath(),
     'atomic-usertest-app',
     `popup,width=${width},height=${screen.availHeight},left=${screen.availWidth - width},top=0`,
   );
@@ -678,6 +678,24 @@ async function loadPlans() {
 
   $('plan').value = fallback ?? '';
   showSamples();
+  showReopen();
+}
+
+/** Where the tester's Atomic window opens: the chosen plan's start page (a
+ * `/app/…` path the moderator already checked), else a fresh drive. */
+function startPath() {
+  const start = plans.find(p => p.id === $('plan').value)?.start;
+
+  return typeof start === 'string' && start.startsWith('/app/')
+    ? start
+    : '/app/dev-drive';
+}
+
+/** Offers to open the chosen plan's start page again (in the same window),
+ * for plans that have one; hidden otherwise. */
+function showReopen() {
+  const start = plans.find(p => p.id === $('plan').value)?.start;
+  $('reopen').hidden = !start;
 }
 
 /** Links the chosen plan's sample files, or hides the card. */
@@ -939,6 +957,10 @@ $('voice-try').addEventListener('click', testSpeaker);
 $('retry').addEventListener('click', () => retryAction?.());
 $('plan').addEventListener('change', rememberPlan);
 $('plan').addEventListener('change', showSamples);
+$('plan').addEventListener('change', showReopen);
+$('reopen-button').addEventListener('click', () =>
+  window.open(startPath(), 'atomic-usertest-app'),
+);
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
 // Hands over at once, with whatever was heard so far.
