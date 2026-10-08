@@ -24,11 +24,60 @@ describe('parseLinkHeader', () => {
   it('extracts the rel="next" URL from an RFC 8288 Link header', () => {
     const header =
       '<https://api.example.com/items?page=2>; rel="next", <https://api.example.com/items?page=1>; rel="prev"';
-    expect(parseLinkHeader(header)).toBe('https://api.example.com/items?page=2');
+    expect(parseLinkHeader(header)).toBe(
+      'https://api.example.com/items?page=2',
+    );
   });
 
   it('returns null when there is no rel="next" entry', () => {
-    expect(parseLinkHeader('<https://api.example.com/items?page=1>; rel="prev"')).toBeNull();
+    expect(
+      parseLinkHeader('<https://api.example.com/items?page=1>; rel="prev"'),
+    ).toBeNull();
+  });
+
+  // #384 item 2: `rel` is a list of relation types; "rel includes next"
+  // (Pagination Schemes §4.4.3 rule 1).
+  it('finds next among several rel tokens, in any case and unquoted', () => {
+    expect(
+      parseLinkHeader(
+        '<https://api.example.com/items?page=2>; rel="last next"',
+      ),
+    ).toBe('https://api.example.com/items?page=2');
+    expect(
+      parseLinkHeader(
+        '<https://api.example.com/items?page=2>; rel="next last"',
+      ),
+    ).toBe('https://api.example.com/items?page=2');
+    expect(
+      parseLinkHeader('<https://api.example.com/items?page=2>; rel="NEXT"'),
+    ).toBe('https://api.example.com/items?page=2');
+    expect(parseLinkHeader('<items?cursor=abc>; rel=next')).toBe(
+      'items?cursor=abc',
+    );
+    expect(
+      parseLinkHeader(
+        '<https://api.example.com/items?page=1>; rel="first prev", <https://api.example.com/items?page=3>; rel="next last"; title="next"',
+      ),
+    ).toBe('https://api.example.com/items?page=3');
+  });
+
+  it('does not take a token that merely starts with next, a title of next, or an empty target', () => {
+    expect(
+      parseLinkHeader('<https://api.example.com/x>; rel="nextish"'),
+    ).toBeNull();
+    expect(
+      parseLinkHeader('<https://api.example.com/x>; title="next"; rel="prev"'),
+    ).toBeNull();
+    expect(parseLinkHeader('<>; rel="next"')).toBeNull();
+  });
+
+  it('reads another relation on request', () => {
+    expect(
+      parseLinkHeader(
+        '<https://api.example.com/items?page=1>; rel="prev", <https://api.example.com/items?page=3>; rel="next"',
+        'prev',
+      ),
+    ).toBe('https://api.example.com/items?page=1');
   });
 });
 
@@ -55,7 +104,9 @@ describe('parsePaginationState', () => {
       type: 'pageToken',
       response: { bodyFields: { nextCursor: { role: 'nextPageToken' } } },
     };
-    expect(parsePaginationState(scheme, { nextCursor: 'abc' }).hasNextPage).toBe(true);
+    expect(
+      parsePaginationState(scheme, { nextCursor: 'abc' }).hasNextPage,
+    ).toBe(true);
     expect(parsePaginationState(scheme, {}).hasNextPage).toBe(false);
   });
 
@@ -92,9 +143,9 @@ describe('parsePaginationState', () => {
       parsePaginationState(scheme, { total_count: 7 }, {}, 7).hasNextPage,
     ).toBe(false);
     // Without itemsFetchedSoFar, totalCount alone isn't enough to tell.
-    expect(
-      parsePaginationState(scheme, { total_count: 7 }).hasNextPage,
-    ).toBe(false);
+    expect(parsePaginationState(scheme, { total_count: 7 }).hasNextPage).toBe(
+      false,
+    );
   });
 
   it('parses a nextLink from a response header, not just the body', () => {

@@ -89,7 +89,8 @@
         "integrations/tooling/e2e/route-install.ts",
         "devonian/src/atomic/**",
         "devonian/src/lenses/**",
-        "devonian/package.json"
+        "devonian/package.json",
+        "ontology/lenses/**"
       ],
       "nodeTests": [
         "integrations/solid/plugin.test.mjs",
@@ -100,7 +101,7 @@
         "ATOMIC_SOLID_OIDC_ISSUERS": "http://127.0.0.1:{mockProxy}"
       },
       "e2e": ["integrations/solid/e2e/solid.spec.ts"],
-      "note": "Solid pod on an installation origin: LDP resources and containers as PlainText atoms, Turtle/JSON-LD, N3 Patch and SPARQL Update data, strong ETags, WAC-Allow, Solid-OIDC DPoP verified by the host (`auth: dpop`, atomic-server claude/plugin-solid-host). The e2e starts a test Solid-OIDC issuer on the lane's otherwise unused mock-proxy port (platforms is empty) and drives the pod with @inrupt/solid-client; against a host without `auth: dpop` it skips with that reason. Passive Solid bookmark lenses also have typecheck/unit tiers, aliased to Devonian source; no Pod-client or protocol-host coverage is implied."
+      "note": "Solid pod on an installation origin: LDP resources and containers as PlainText atoms, Turtle/JSON-LD, N3 Patch and SPARQL Update data, strong ETags, WAC-Allow, Solid-OIDC DPoP verified by the host (`auth: dpop`, atomic-server claude/plugin-solid-host). The e2e starts a test Solid-OIDC issuer on the lane's otherwise unused mock-proxy port (platforms is empty) and drives the pod with @inrupt/solid-client; against a host without `auth: dpop` it skips with that reason. Passive Solid bookmark lenses also have typecheck/unit tiers, aliased to Devonian source; no Pod-client or protocol-host coverage is implied. paths: catalog.test.ts checks the code lens against the published catalog entry ontology/lenses/solid-bookmark-v1 (ontology-kit/LENSES.md), so a catalog change runs this lane too."
     },
     {
       "id": "localthought",
@@ -295,9 +296,10 @@
       "paths": [
         "devonian/src/atomic/**",
         "devonian/src/lenses/**",
-        "devonian/package.json"
+        "devonian/package.json",
+        "ontology/lenses/**"
       ],
-      "note": "Unhosted Raindrop bookmark lens prototype only. Typecheck and offline unit tests use Devonian source. No drive app, proxy, provider credential, live verification or published bundle."
+      "note": "Unhosted Raindrop bookmark lens prototype only. Typecheck and offline unit tests use Devonian source. No drive app, proxy, provider credential, live verification or published bundle. paths: catalog.test.ts checks the code lens against the published catalog entry ontology/lenses/raindrop-bookmark-v1 (ontology-kit/LENSES.md), so a catalog change runs this lane too."
     }
   ]
 }
