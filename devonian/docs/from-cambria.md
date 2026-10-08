@@ -7,10 +7,10 @@ The additional problem is keeping track of which records correspond when each
 system assigns its own identifiers and accepts writes through its own API.
 
 This guide describes the source in this repository. The `devonian/lenses` value
-algebra and its GitHub and Clockify prototypes are **unreleased** additions in
-[PR #271](https://github.com/ontola/atomic-plugins/pull/271); npm 0.8.0 does not
-contain that entry point. The native Atomic Data API is already available in
-0.8.0. Devonian remains a work in progress.
+algebra, added in [PR #271](https://github.com/ontola/atomic-plugins/pull/271),
+is published from 0.9.0; its GitHub and Clockify prototypes live in plugin
+folders and are not part of the package. The native Atomic Data API was
+already available in 0.8.0. Devonian remains a work in progress.
 
 ## Start with the concepts you already know
 
@@ -47,7 +47,7 @@ lens files. There is no Cambria importer.
 Several Devonian APIs use the word _lens_. Choose according to the work you
 need to do:
 
-- **`ValueLens<Source, View>`**, from the unreleased `devonian/lenses`, maps
+- **`ValueLens<Source, View>`**, from `devonian/lenses` (0.9.0), maps
   supplied values synchronously. It has no connector, identity map or scheduler.
 - **`AtomicLens<External>`**, from `devonian/atomic`, imports external records
   into native resources and publishes native edits through a connector. It owns
@@ -64,7 +64,7 @@ ledger serve that reflection workflow.
 
 ## A mapping retains the previous representation
 
-Here is a complete example using the unreleased value algebra. The source is a
+Here is a complete example using the value algebra. The source is a
 provider object; the editable view exposes only its title and body.
 
 ```ts
@@ -254,7 +254,7 @@ that bridge behaves under concurrent edits, retries and failures.
 
 ## Where to go next
 
-- [Value lenses](value-lenses.md): the unreleased combinators, equality,
+- [Value lenses](value-lenses.md): the combinators, equality,
   ownership and supported-edit contracts.
 - [Native Atomic Data API](atomic-data.md): resource schemas, scoped IDs,
   connector contracts, deletion and persistence.
