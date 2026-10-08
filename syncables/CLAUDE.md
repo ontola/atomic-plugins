@@ -61,7 +61,10 @@ Data flows through four stages, each its own directory under `src/`:
 
 2. **Resource discovery** — `read/model.ts` reads `components.crudResources`
    for both the one-off reader and local replica: named collections, identity
-   fields, parent bindings and GET/POST list configuration. `read/collections.ts`
+   fields, parent bindings, GET/POST list configuration and the Collection
+   Object's `envelope.itemsField` (`ReadCollection.itemsField`, a dot-path
+   the collection read passes to `walkPages`; without it `pageItems`
+   locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
    completion/error status. `read/read.ts` adds ontology/type projection.
 
@@ -363,11 +366,17 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
   a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
-  §2 test, whose feed is the list itself and whose Collection Object
-  declares `envelope: { itemsField: data.transactions }`, is `it.fails`
-  until #373: the collection read does not yet use the Collection Object's
-  `envelope.itemsField` (only the feed read does), so that list is not read
-  completely and its feed is not read.
+  §2 tests, whose feed is the list itself and whose Collection Object
+  declares `envelope: { itemsField: data.transactions }`, check that the
+  collection read and the feed read share that envelope (#373), with the
+  numeric cursor sent back in decimal form, a `deleted: true` tombstone
+  found through the identity binding, and `"true"` not taken for `true`.
+- `unit/read/collections.test.ts` covers the Collection Object's
+  `envelope.itemsField` in the collection read (#373): the model field, a
+  nested dot-path, a missing or non-array path (an incomplete read with
+  "No items array at <path>", never an empty one), no heuristic once an
+  envelope is declared, and the unchanged heuristic without a declaration,
+  with `itemsField: null`, or with one that is not a string.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination
