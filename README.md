@@ -31,6 +31,10 @@ deprecated.
 
 See [AGENTS.md](AGENTS.md) for how to work in each.
 
+Proposed next step: [proxy webhooks, subscription expiry and two-way sync](docs/design/proxy-webhooks-and-two-way-sync.md).
+The plan covers bounded event retention for abandoned consumers and recovery
+when a daemon returns after its subscription expires; it is not implemented yet.
+
 ## Plugins
 
 Every plugin here is **experimental**. What each one does is declared, not
