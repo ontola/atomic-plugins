@@ -77,3 +77,27 @@ parent that still exists, without the field, with an unrecognised value,
 or with it on the list operation. README, CLAUDE.md and the changelog
 updated. Not recursive (a record concluded through `parentAbsent` is not
 itself a gone parent); not verified against a real provider.
+
+## Turn 2
+
+**Human (via the coordinator session):** The work is pushed as a draft PR
+and under review. #387 is getting a blocker fix: `parentAbsent: deleted`
+will require an explicit `notFound` on the parent's collections declared
+`absent: removed` (since `notFound` is not allowed with `absent: deleted`);
+check whether the parsing assumes otherwise. Then go on with K11: read
+`x-crud` `mode` and `patchFormat` for updates on a new branch from main.
+
+**Assistant:** Rebased the two commits onto the rebased spec branch and
+merged `main` again. The spec branch's re-review commit adds two document
+rules: `parentAbsent` needs exactly one parent resource, and
+`parentAbsent: deleted` needs `notFound` stated on the parent's
+collections. The consumer now follows both without trusting the document:
+a nested collection whose path variables two or more other resources bind
+has its `parentAbsent` ignored, and `parentAbsent: deleted` is read as
+`unavailable` unless every `absent: removed` Collection Object of the
+parent resource states `notFound` (`parentStatesNotFound`; `absent:
+deleted` collections pass, since they may not carry `notFound`). Two tests:
+a parent `absent: removed` without `notFound` whose 404 concludes the list
+deleted by the default but its tasks only unavailable, and a two-parent
+collection (`/owners/{ownerId}/lists/{listId}/tasks`) that draws no
+conclusion. README, CLAUDE.md and the changelog updated.

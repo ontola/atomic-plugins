@@ -869,6 +869,87 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
   });
 
+  it('reads parentAbsent: deleted as unavailable when a parent collection declared absent: removed omits notFound', async () => {
+    // §4.4: the declaration needs an explicit notFound on the parent's
+    // absent: removed collections; a 404 for a missing permission must not
+    // cascade as a deletion through the default.
+    const doc = nestedDocument((resources) => {
+      delete completenessOf(resources, 'taskList', 'taskLists')['notFound'];
+      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
+        'deleted';
+    });
+    const { client, reports } = await listsThenGone({ doc, edit: true });
+    await client.sync();
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'deleted', 'read'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      { id: 't2', state: 'failed', missingRecord: 'unavailable' },
+    ]);
+  });
+
+  it('ignores parentAbsent on a collection with two parent resources', async () => {
+    // §4.4: a collection whose path variables two other resources bind has
+    // no single parent object, and this version does not describe it.
+    const doc = nestedDocument((resources, paths) => {
+      resources['owner'] = {
+        identity: {
+          urlTemplate: '/owners/{ownerId}',
+          bindings: { ownerId: { field: 'id' } },
+        },
+        collections: { owners: { urlTemplate: '/owners' } },
+      };
+      paths['/owners'] = {
+        get: { responses: { '200': { description: 'Owners' } } },
+      };
+      paths['/owners/{ownerId}'] = {
+        get: {
+          parameters: [
+            {
+              name: 'ownerId',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          responses: { '200': { description: 'An owner' } },
+        },
+      };
+      const tasks = (resources['task']!['collections'] as Record<string, Row>)[
+        'listTasks'
+      ]!;
+      tasks['urlTemplate'] = '/owners/{ownerId}/lists/{listId}/tasks';
+      paths['/owners/{ownerId}/lists/{listId}/tasks'] =
+        paths['/lists/{listId}/tasks']!;
+      delete paths['/lists/{listId}/tasks'];
+    });
+    const fake = taskProvider([L1, L2], { L1: [t1], L2: [t2, t3] });
+    const inner = fake.transport;
+    const reports: MissingRecord[] = [];
+    // The owners read and the re-shaped task lists, over the same fake.
+    const transport: Transport = async (r) => {
+      if (r.url.pathname === '/owners') return response([{ id: 'o1' }]);
+      const url = new URL(r.url);
+      url.pathname = url.pathname.replace(/^\/owners\/o1/, '');
+      return inner({ ...r, url });
+    };
+    const client = createApiClient(doc, {
+      transport,
+      missingRecordChecks: 'all',
+      onMissingRecord: (r) => reports.push(r),
+    });
+    await client.sync();
+    expect(
+      await client.get('listTasks', 't2', { ownerId: 'o1', listId: 'L2' }),
+    ).toEqual(t2);
+    fake.hidden.add('L2');
+    fake.lists.delete('L2');
+    await client.sync();
+    expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
+  });
+
   it('parentAbsent: deleted under a parent concluded unavailable makes the tasks unavailable', async () => {
     const doc = nestedDocument((resources) => {
       completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =

@@ -234,7 +234,10 @@ Data flows through four stages, each its own directory under `src/`:
    For a nested collection whose Collection Object declares
    `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
    the collection that supplies its path variable in `nestedUnder`, from
-   `model.providers`, skipping variables `constants` fix), every parent
+   `model.providers`, skipping variables `constants` fix; dropped with two
+   or more parent resources, and `deleted` read as `unavailable` unless
+   `parentStatesNotFound`: every `absent: removed` collection of the parent
+   states `notFound`), every parent
    record concluded `deleted` or `unavailable` (declaration, GET or feed, at
    the same three points as `reportMissing`) has `applyParentAbsent` conclude
    the records last read under it (`nestedScopes`: confirmed records and

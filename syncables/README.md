@@ -390,8 +390,14 @@ overlay declares `notFound` yet; not verified against a real provider.
 A nested collection (one whose URL has a path variable that another
 resource's `identity.bindings` binds, `/lists/{listId}/tasks` under task
 lists) can declare `parentAbsent: deleted | unavailable` on its Collection
-Object (0.2.0 §4.4; ignored on the list operation, and for a variable a
-`constants` entry fixes). Once a record of the parent collection is
+Object (0.2.0 §4.4; ignored on the list operation, for a variable a
+`constants` entry fixes, and on a collection whose path variables two or
+more other resources bind, which the spec does not describe). The spec
+requires `parentAbsent: deleted` to come with an explicit `notFound` on
+every `absent: removed` collection of the parent resource, so that a 404
+the parent's read answers for a missing permission cannot cascade as a
+deletion through the `deleted` default; where a document omits that, the
+client reads the declaration as `unavailable`. Once a record of the parent collection is
 concluded gone, by its declaration (`absent: deleted`), by the GET
 (404/410 per `notFound`, or a read tombstone) or by a feed tombstone, the
 records last read under it in that nested collection are concluded too,
@@ -1070,7 +1076,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `source: 'parent'`, and their held updates fail accordingly; nothing is
   pruned. The default `missingRecordChecks: 'pending'` now also checks a
   vanished parent record without writes when such a nested collection has
-  unsettled writes under it.
+  unsettled writes under it. The declaration is ignored with two or more
+  parent resources, and `deleted` is read as `unavailable` unless the
+  parent's `absent: removed` collections state `notFound`.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

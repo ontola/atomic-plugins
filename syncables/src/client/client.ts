@@ -977,6 +977,34 @@ function declaredReadTombstone(
   );
 }
 
+/**
+ * Whether every Collection Object of `resource` whose Completeness Object
+ * says `absent: removed` states `notFound` itself (Collection Completeness
+ * 0.2.0 §4.4: what `parentAbsent: deleted` on a nested collection needs).
+ * `absent: deleted` collections may not carry `notFound`, so they pass.
+ */
+function parentStatesNotFound(
+  document: OpenApiDocument,
+  resource: string,
+): boolean {
+  const resources = document.components?.['crudResources'];
+  const definition = isRecord(resources) ? resources[resource] : undefined;
+  const collections = isRecord(definition)
+    ? definition['collections']
+    : undefined;
+  if (!isRecord(collections)) return true;
+  return Object.values(collections).every((collection) => {
+    const declared = isRecord(collection)
+      ? collection['x-completeness']
+      : undefined;
+    if (!isRecord(declared) || declared['absent'] !== 'removed') return true;
+    return (
+      declared['notFound'] === 'deleted' ||
+      declared['notFound'] === 'unavailable'
+    );
+  });
+}
+
 function clientRoutes(
   document: OpenApiDocument,
   collections: ReadCollection[],
@@ -1076,7 +1104,12 @@ export function createApiClient(
   if (byResource.size !== routes.length)
     throw new Error('Collection names must be unique across resources');
   // §4.4: the nested collections that declare parentAbsent, by the
-  // collection whose records supply their path variable (`param`). A
+  // collection whose records supply their path variable (`param`). The
+  // declaration needs exactly one parent resource; with more it is ignored.
+  // `parentAbsent: deleted` also needs every `absent: removed` collection of
+  // the parent to state `notFound` itself, so that a 404 the parent's read
+  // answers for a missing permission cannot cascade as a deletion through
+  // the `deleted` default; without that it counts as `unavailable`. A
   // variable a constant fixes has no parent object to go missing.
   const nestedUnder = new Map<
     string,
@@ -1084,12 +1117,33 @@ export function createApiClient(
   >();
   for (const route of routes) {
     if (!route.parentAbsent) continue;
+    const parents = new Map<string, { param: string; collection: string }[]>();
     for (const param of route.collection.contextParams) {
-      if (options.constants && param in options.constants) continue;
       const provider = model.providers.get(param);
-      if (!provider || provider.collection === route.collection.name) continue;
-      nestedUnder.set(provider.collection, [
-        ...(nestedUnder.get(provider.collection) ?? []),
+      const resource = model.collections.find(
+        (c) => c.name === provider?.collection,
+      )?.resource;
+      if (!provider || !resource || resource === route.collection.resource)
+        continue;
+      parents.set(resource, [
+        ...(parents.get(resource) ?? []),
+        { param, collection: provider.collection },
+      ]);
+    }
+    const [parent] = [...parents];
+    if (!parent || parents.size !== 1) {
+      delete route.parentAbsent;
+      continue;
+    }
+    if (
+      route.parentAbsent === 'deleted' &&
+      !parentStatesNotFound(doc, parent[0])
+    )
+      route.parentAbsent = 'unavailable';
+    for (const { param, collection } of parent[1]) {
+      if (options.constants && param in options.constants) continue;
+      nestedUnder.set(collection, [
+        ...(nestedUnder.get(collection) ?? []),
         { route, param },
       ]);
     }
