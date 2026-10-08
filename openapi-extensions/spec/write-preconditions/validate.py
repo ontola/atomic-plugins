@@ -83,9 +83,10 @@ def validate(document):
 
 
 def _field(value, path):
+    """The value at a dot-path; an absent field reads as None (§4.5: absent equals null)."""
     for key in path.split("."):
         if not isinstance(value, dict) or key not in value:
-            return _MISSING
+            return None
         value = value[key]
     return value
 
@@ -98,57 +99,95 @@ def _same(a, b):
     return type(a) is type(b) and a == b
 
 
+def _header(headers, name):
+    for key, value in (headers or {}).items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def version_of(declaration, body, headers=None):
+    """The object's version under ifMatch, from the read's body or response headers, or None."""
+    version = declaration["version"]
+    if version["in"] == "header":
+        return _header(headers, version["name"])
+    return _field(body, version["name"])
+
+
 def refused(declaration, current):
     """The first Refusal Object that matches the object, or None."""
     for refusal in (declaration or {}).get("refuseWhen", []):
         value = _field(current, refusal["field"])
-        if value is not _MISSING and any(_same(value, v) for v in refusal["values"]):
+        if any(_same(value, v) for v in refusal["values"]):
             return refusal
     return None
 
 
-def may_send(declaration, baseline, written, current):
+def may_send(declaration, baseline, written, current, headers=None):
     """§4.2/§4.4: ('send', headers) | ('refused', refusal) | ('conflict', fields) | ('read-first', None).
 
     `baseline` maps written fields (dot-paths) to their last read values,
-    `written` the fields the write sets, `current` the object as just read
-    (readVerify) or as last read (ifMatch, none), or None when not read.
+    `written` lists the fields the write sets, `current` is the object as just
+    read (readVerify) or as last read, or None when not read, and `headers`
+    the response headers of that read (for a header version).
     """
-    kind = (declaration or {}).get("kind")
-    if current is None and kind in ("ifMatch", "readVerify"):
+    declaration = declaration or {}
+    kind = declaration.get("kind")
+    if current is None and (kind in ("ifMatch", "readVerify") or declaration.get("refuseWhen")):
         return "read-first", None
     if current is not None:
         refusal = refused(declaration, current)
         if refusal:
             return "refused", refusal
     if kind == "ifMatch":
-        version = declaration["version"]
-        if version["in"] != "body":
-            raise ValueError("a header version is passed by the caller, from the read's response headers")
-        value = _field(current, version["name"])
-        if value is _MISSING:
+        value = version_of(declaration, current, headers)
+        if value is None:
             return "read-first", None
         return "send", {declaration.get("header", "If-Match"): value}
     if kind == "readVerify":
-        changed = sorted(f for f in written if not _same(_field(current, f), baseline.get(f, _MISSING)))
+        changed = sorted(f for f in written if not _same(_field(current, f), baseline.get(f)))
         if changed:
             return "conflict", changed
     return "send", {}
 
 
-def resolve_unknown(declaration, method, baseline, written, current):
-    """§4.5 after an unknown outcome: 'resend', 'applied', 'not-applied' or 'conflict'.
+def resolve_unknown(declaration, method, baseline, written, read=None, sent_version=None, not_found="deleted"):
+    """§4.5 after an unknown outcome.
 
-    `written` maps fields to the values the write set; `current` is the object
-    read after the unknown outcome, or None when the client has not read it.
+    Returns 'resend' (no read needed), 'read-first', 'applied', 'not-applied',
+    'conflict' or 'unknown'. `written` maps fields to the values the write set
+    (empty for a DELETE); `baseline` maps fields to their last read values;
+    `read` is None (not read yet) or {'status': int, 'body': ..., 'headers': {...}};
+    `sent_version` is the version an ifMatch write sent; `not_found` is the
+    Collection Completeness notFound value for the object's resource.
     """
-    default = method.lower() in ("put", "delete")
-    idempotent = (declaration or {}).get("idempotent", default)
-    if current is None:
-        return "resend" if idempotent else "read-first"
-    if all(_same(_field(current, f), v) for f, v in written.items()):
+    declaration = declaration or {}
+    kind = declaration.get("kind")
+    method = method.lower()
+    idempotent = declaration.get("idempotent", method in ("put", "delete"))
+    if read is None:
+        if kind != "readVerify" and idempotent:
+            return "resend"
+        return "read-first"
+    status, body = read.get("status"), read.get("body")
+    if method == "delete":
+        if status in (404, 410):
+            return "unknown" if not_found == "unavailable" else "applied"
+        if not isinstance(status, int) or not 200 <= status < 300:
+            return "unknown"
+        if kind == "ifMatch" and sent_version is not None:
+            unchanged = _same(version_of(declaration, body, read.get("headers")), sent_version)
+        else:
+            unchanged = all(_same(_field(body, f), v) for f, v in baseline.items())
+        return "not-applied" if unchanged else "conflict"
+    if not isinstance(status, int) or not 200 <= status < 300 or not written:
+        return "unknown"
+    if kind == "ifMatch" and sent_version is not None \
+            and _same(version_of(declaration, body, read.get("headers")), sent_version):
+        return "not-applied"
+    if all(_same(_field(body, f), v) for f, v in written.items()):
         return "applied"
-    if all(_same(_field(current, f), baseline.get(f, _MISSING)) for f in written):
+    if all(_same(_field(body, f), baseline.get(f)) for f in written):
         return "not-applied"
     return "conflict"
 

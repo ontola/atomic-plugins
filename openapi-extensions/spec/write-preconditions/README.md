@@ -97,7 +97,8 @@ Placed under `x-write-precondition` on the Operation Object of a write: a
 Without `x-write-precondition`, the document says nothing about
 preconditions; a client decides for itself.
 
-Values compare as JSON values (same type and value). A client compares a
+Values compare as JSON values (same type and value), with an absent field
+equal to `null` (§4.5). A client compares a
 field in the form it reads it, not in the form it writes it, where the two
 differ (a rich-text field read as an array of runs and written as plain text,
 say); a field it cannot compare that way it does not write under
@@ -130,7 +131,11 @@ reads it first; it does not send the write without `header`.
 
 A client checks every Refusal Object against the object as it last read it,
 and, for `readVerify`, against the read made just before the write. When one
-matches, it MUST NOT send the write and reports why. Declare a state here
+matches, it MUST NOT send the write and reports why. A client that has not
+read the object (a write it composes without a read, under `ifMatch` or
+`none`) MUST read it first when the operation declares `refuseWhen`; a state
+reached after its last read is otherwise missed, and the declaration only
+protects writes whose read is recent. Declare a state here
 when the provider documents it as the object having been taken out of use by
 its owner (trashed, archived, cancelled), so that a background write would
 silently change something its owner put away. A state the provider refuses
@@ -147,15 +152,45 @@ provider applied it: no response arrived, or a gateway answered `502`, `503`
 or `504`, or the provider answered another `5xx` that it does not document as
 "not applied".
 
-* When `idempotent` is `true`, a client MAY send the same request again, with
-  the same version for `ifMatch`.
-* When it is `false`, a client MUST NOT send the request again before it has
-  read the object. If every written field holds the value the write set, the
-  write was applied. If every written field holds its baseline, it was not,
-  and the client MAY send it again. Otherwise the outcome is a conflict.
-* Under `ifMatch`, a repeated write that answers a `conflictStatus` may be the
-  first write's own effect, which changed the version. The client resolves it
-  by the same read and comparison.
+**Whether to read first.**
+
+* Under `readVerify`, a client MUST read the object and resolve the outcome
+  as below before sending anything again, whatever `idempotent` says: a
+  resend skips the pre-write comparison, and would overwrite a change made in
+  the meantime.
+* Under `ifMatch` or `none`, when `idempotent` is `true`, a client MAY send
+  the same request again (under `ifMatch` with the same version) without
+  reading. When it is `false`, it MUST read the object first.
+
+**Resolving by a read.** The client reads the object (§3) and compares:
+
+* _Update_ (`PUT`, `PATCH`, a `POST` that changes the object):
+  * under `ifMatch`, a version equal to the one it sent means the write was
+    not applied;
+  * otherwise, when every written field holds the value the write set, the
+    write counts as applied; when every written field holds its baseline, as
+    not applied, and the client MAY send it again; anything else is a
+    conflict.
+* _Delete_:
+  * a `404` or `410` means applied, unless a collection of the object's
+    resource declares `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
+    §4.3), when it means unknown;
+  * a 2xx with the object means not applied when the object still matches
+    its baseline (under `ifMatch`, the same version), and a conflict when it
+    changed since.
+* Any other answer leaves the outcome unknown.
+
+"Applied" means that the object now holds what the write set. A read cannot
+tell this write from another writer that set the same values in the
+meantime; for a sync either way ends in the same state.
+
+A field the write removes (a JSON Merge Patch `null`) and a field the object
+lacks compare equal: absent and `null` are the same value in every comparison
+of this extension.
+
+Under `ifMatch`, a repeated write that answers a `conflictStatus` may be the
+first write's own effect, which changed the version. The client resolves it by
+the same read.
 
 An idempotency key that the operation declares as a header parameter (such as
 `Idempotency-Key`) makes a `POST` safe to repeat; that is ordinary OpenAPI and
