@@ -1,4 +1,4 @@
-"""Validate CRUD Causality 0.4.0 collection reads (rules 2, 4 and 14-19).
+"""Validate CRUD Causality 0.5.0 collection reads and compound creates (rules 2, 4, 14-19 and 20-24).
 
 `validate(document)` raises ValueError listing every violation it finds and
 returns None for a valid document. It checks the Collection Object's
@@ -9,6 +9,8 @@ ordinary OpenAPI validation are separate.
 
 `read_request(document, resource, collection, context)` returns the request a
 read's first page sends (§4.2.1, steps 1-3), as a reference for consumers.
+`compound_create(crud, planned, send_create, send_follow_up, context)` makes a
+compound create as §4.7.2 says, and `validate` checks its `followUps`.
 """
 import copy
 import json
@@ -189,7 +191,7 @@ def _json_request_body(document, item, operation):
 
 
 def validate(document, warnings=None):
-    """Raise ValueError for violations of rules 2, 4 and 14-18; append rule 19 to `warnings`.
+    """Raise ValueError for violations of rules 2, 4, 14-18 and 20-24; append rule 19 to `warnings`.
 
     Rules 14-18 apply to the standard fields only. The x-list-* forms are a
     consumer fallback (§4.2.1) and are not checked, so a 0.3.0 document that
@@ -269,6 +271,7 @@ def validate(document, warnings=None):
             if not isinstance(resource, dict):
                 errors.append(f"{where}.resource: {crud.get('resource')!r} is not a crudResources key")
                 continue
+            errors += _follow_up_errors(document, crud, where, item, operation)
             if crud.get("action") != "list":
                 continue
             collection = (resource.get("collections") or {}).get(crud.get("collection"))
@@ -283,6 +286,216 @@ def validate(document, warnings=None):
                 errors.append(f"{where}: collection {crud['collection']} is read at {expected.upper()} {template}")
     if errors:
         raise ValueError("\n".join(errors))
+
+
+FOLLOW_UP_FIELDS = {"field", "create", "itemKey", "operation", "bind", "description"}
+BIND_FROM = ("created", "planned", "missing")
+
+
+def _well_formed_path(value):
+    """A nonempty dot-path whose every segment is a name or a bracketed name."""
+    if not isinstance(value, str) or not value:
+        return False
+    position = 0
+    while True:
+        match = SEGMENT.match(value, position)
+        if not match or match.end() == position:
+            return False
+        position = match.end()
+        if position == len(value):
+            return True
+        if value[position] != "." or position + 1 == len(value):
+            return False
+        position += 1
+
+
+def _operation_by_id(document, operation_id):
+    found = []
+    for path, item in (document.get("paths") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        for method in METHODS:
+            operation = item.get(method)
+            if isinstance(operation, dict) and operation.get("operationId") == operation_id:
+                found.append((path, method, item, operation))
+    return found
+
+
+def _parameters(document, item, operation):
+    found = {}
+    for source in (item, operation):
+        for raw in source.get("parameters") or []:
+            parameter = _resolve(document, raw)
+            if isinstance(parameter, dict) and "name" in parameter and "in" in parameter:
+                found[(parameter["in"], parameter["name"])] = parameter
+    return found
+
+
+def _follow_up_errors(document, crud, where, create_item, create_operation):
+    """Rules 20-24 for one x-crud."""
+    if "followUps" not in crud:
+        return []
+    if crud.get("action") != "create":
+        return [f"{where}.followUps: allowed only on action create (rule 20)"]
+    follow_ups = crud["followUps"]
+    if not isinstance(follow_ups, list) or not follow_ups:
+        return [f"{where}.followUps: expected a nonempty array (rule 20)"]
+    errors = []
+    create_path = {name for (kind, name) in _parameters(document, create_item, create_operation) if kind == "path"}
+    for index, follow_up in enumerate(follow_ups):
+        at = f"{where}.followUps[{index}]"
+        if not isinstance(follow_up, dict):
+            errors.append(f"{at}: expected an object")
+            continue
+        errors += [f"{at}.{key}: unknown member" for key in follow_up
+                   if key not in FOLLOW_UP_FIELDS and not key.startswith("x-")]
+        for key in ("field", "operation", "bind"):
+            if key not in follow_up:
+                errors.append(f"{at}: {key} is required (rule 21)")
+        if follow_up.get("create") not in ("include", "omit"):
+            errors.append(f"{at}.create: expected include or omit (rule 21)")
+        for key in ("field", "itemKey"):
+            if key in follow_up and not _well_formed_path(follow_up[key]):
+                errors.append(f"{at}.{key}: expected a dot-path (rule 21)")
+        targets = _operation_by_id(document, follow_up.get("operation"))
+        if len(targets) != 1:
+            errors.append(f"{at}.operation: {follow_up.get('operation')!r} names {len(targets)} operations, not one (rule 22)")
+            continue
+        _, _, item, operation = targets[0]
+        target_crud = operation.get("x-crud")
+        if not isinstance(target_crud, dict) or target_crud.get("action") != "update" \
+                or target_crud.get("resource") != crud.get("resource"):
+            errors.append(f"{at}.operation: {follow_up['operation']!r} is not an update of {crud.get('resource')!r} (rule 22)")
+        bind = follow_up.get("bind")
+        if not isinstance(bind, dict):
+            errors.append(f"{at}.bind: expected an object (rule 23)")
+            continue
+        parameters = _parameters(document, item, operation)
+        body_keys = [key for key in bind if key == "body" or key.startswith("body.")]
+        if body_keys and not _json_request_body(document, item, operation):
+            errors.append(f"{at}.bind: {follow_up['operation']!r} declares no JSON request body (rule 23)")
+        if "body" in bind and len(body_keys) > 1:
+            errors.append(f"{at}.bind: body excludes body.<field> keys (rule 23)")
+        for key, source in bind.items():
+            kind, _, name = key.partition(".")
+            if kind == "body":
+                if key != "body" and not _well_formed_path(name):
+                    errors.append(f"{at}.bind.{key}: expected body.<dot-path> (rule 23)")
+            elif kind in ("path", "query", "header") and name:
+                if (kind, name) not in parameters:
+                    errors.append(f"{at}.bind.{key}: {follow_up['operation']!r} has no {kind} parameter {name!r} (rule 23)")
+            else:
+                errors.append(f"{at}.bind.{key}: expected body, body.<dot-path>, path.<name>, query.<name> or header.<name> (rule 23)")
+            if not isinstance(source, dict) or source.get("from") not in BIND_FROM \
+                    or not _well_formed_path(source.get("field")):
+                errors.append(f"{at}.bind.{key}: expected {{from: created|planned|missing, field: <dot-path>}} (rule 23)")
+            elif source["from"] == "missing" and source["field"] != follow_up.get("field"):
+                errors.append(f"{at}.bind.{key}: from missing needs the follow-up's own field (rule 23)")
+        for (kind, name), parameter in parameters.items():
+            if kind == "path" and f"path.{name}" not in bind and name not in create_path:
+                errors.append(f"{at}.bind: path parameter {name!r} is neither bound nor carried from the create (rule 24)")
+    return errors
+
+
+MISSING = object()
+
+
+def get_path(value, path):
+    """The value at a dot-path, or MISSING."""
+    for segment in dot_path(path):
+        if not isinstance(value, dict) or segment not in value:
+            return MISSING
+        value = value[segment]
+    return value
+
+
+def _set_path(target, path, value):
+    segments = dot_path(path)
+    for segment in segments[:-1]:
+        target = target.setdefault(segment, {})
+    target[segments[-1]] = value
+
+
+def _drop_path(target, path):
+    segments = dot_path(path)
+    for segment in segments[:-1]:
+        target = target.get(segment)
+        if not isinstance(target, dict):
+            return
+    target.pop(segments[-1], None)
+
+
+def missing_value(follow_up, planned, created):
+    """§4.7.2 step 4: the part of the planned value the create did not apply, or MISSING for none."""
+    wanted = get_path(planned, follow_up["field"])
+    if wanted is MISSING:
+        return MISSING
+    if follow_up["create"] == "omit" or created is None:
+        return wanted
+    shown = get_path(created, follow_up["field"])
+    if isinstance(wanted, list):
+        shown = shown if isinstance(shown, list) else []
+        key = follow_up.get("itemKey")
+        values = [get_path(item, key) if key and isinstance(item, dict) else item for item in shown]
+        rest = [item for item in wanted if item not in values]
+        return rest if rest else MISSING
+    return MISSING if shown == wanted else wanted
+
+
+def follow_up_request(follow_up, planned, created, missing, context):
+    """The follow-up request filled by `bind`: {"path", "query", "header", "body"}."""
+    request = {"path": dict(context or {}), "query": {}, "header": {}, "body": None}
+    for key, source in follow_up["bind"].items():
+        if source["from"] == "missing":
+            value = missing
+        else:
+            value = get_path(created if source["from"] == "created" else planned, source["field"])
+        kind, _, name = key.partition(".")
+        if kind == "body":
+            if key == "body":
+                request["body"] = value
+            else:
+                request["body"] = request["body"] if isinstance(request["body"], dict) else {}
+                _set_path(request["body"], name, value)
+        else:
+            request[kind][name] = value
+    return request
+
+
+def compound_create(crud, planned, send_create, send_follow_up, context=None):
+    """A reference implementation of §4.7.2.
+
+    `send_create(body)` returns ("ok", created object), ("refused", None) or
+    ("unknown", None). `send_follow_up(operation_id, request)` returns "ok",
+    "refused" or "unknown". `context` holds the create request's path
+    parameters, carried to follow-ups that do not bind them. Returns
+    {"state": "refused" | "uncertain" | "applied" | "partlyApplied",
+    "created": the created object or None, "pending": [(operation_id,
+    request)] still to send as updates of the bound object}.
+    """
+    follow_ups = crud.get("followUps", [])
+    body = copy.deepcopy(planned)
+    for follow_up in follow_ups:
+        if follow_up["create"] == "omit":
+            _drop_path(body, follow_up["field"])
+    outcome, created = send_create(body)
+    if outcome == "refused":
+        return {"state": "refused", "created": None, "pending": []}
+    if outcome != "ok":
+        return {"state": "uncertain", "created": None, "pending": []}
+    pending, failed = [], False
+    for follow_up in follow_ups:
+        missing = missing_value(follow_up, planned, created)
+        if missing is MISSING:
+            continue
+        request = follow_up_request(follow_up, planned, created, missing, context)
+        if failed:
+            pending.append((follow_up["operation"], request))
+            continue
+        if send_follow_up(follow_up["operation"], request) != "ok":
+            failed = True
+            pending.append((follow_up["operation"], request))
+    return {"state": "partlyApplied" if failed else "applied", "created": created, "pending": pending}
 
 
 def read_request(document, resource, collection, context):
@@ -307,4 +520,4 @@ def _load(path):
 if __name__ == "__main__":
     for name in sys.argv[1:]:
         validate(_load(name))
-        print(f"{name}: collection reads valid")
+        print(f"{name}: collection reads and compound creates valid")

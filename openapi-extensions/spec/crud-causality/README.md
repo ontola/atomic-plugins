@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.4.0
+**Spec version:** 0.5.0
 
 ---
 
@@ -265,6 +265,7 @@ Placed under the `crud` field of an OAS Operation Object. States the CRUD action
 | `mode` | `replace` \| `patch` | Conditional*** | For `update`: whether the request body replaces the object wholesale or partially modifies it. |
 | `patchFormat` | `PatchFormat` (§4.6) | No | For `update` with `mode: patch`: the patch document format. |
 | `removesFrom` | array of string \| `"*"` | No | For `delete`: collection names the object is removed from. Default: `"*"` (every collection listed in that resource's `memberOf` history). |
+| `followUps` | array of `FollowUpObject` (§4.7.1) | No | For `create` only: fields that may need a follow-up update after the create, in the order they are sent. Added in 0.5.0. |
 | `x-*` | any | No | Extension fields. |
 
 \* Required when `action` is `create`.
@@ -321,6 +322,82 @@ Describes one field the server sets on create that the client did not supply in 
 | `jsonPatch` | [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) JSON Patch — request body is an array of operations. |
 | `jsonMergePatch` | [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396) JSON Merge Patch — request body is a partial object merged into the existing one. |
 | `custom` | API-specific partial-update format; describe it in the operation's `description`. |
+
+### 4.7 Compound creates
+
+Added in 0.5.0. Some objects cannot be created with all their fields in one
+request. GitHub's create-issue operation accepts `labels`, but its
+documentation says "Only users with push access can set labels for new
+issues. Labels are silently dropped otherwise"; the labels then take a
+second request, `POST /repos/{owner}/{repo}/issues/{issue_number}/labels`,
+which can be refused after the issue was made. Other APIs take some fields
+only through a separate operation. A _compound create_ is one logical
+create made of the create operation and one or more follow-up updates of the
+created object. Its first request can succeed and a later one fail, which
+leaves the object _partly applied_: it exists, with only some of the fields
+the client meant to give it.
+
+`followUps` on a `create` Operation CRUD Object lists, in order, the fields
+that may need a follow-up, and the operation that sets each.
+
+#### 4.7.1 Follow-up Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path, in the object, to the field this follow-up sets. |
+| `create` | `include` \| `omit` | **Yes** | `include`: the client sends the field in the create body, and the server may silently not apply it, so the client checks the create response (§4.7.2). `omit`: the create body cannot carry the field; the client always sets it with the follow-up. |
+| `itemKey` | string | No | For an array field whose items the response gives as objects but the request names by one of their fields (GitHub's `labels`: names in a request, label objects in a response): dot-path, in a response item, to that field. Values are compared through it. |
+| `operation` | string | **Yes** | The `operationId` of the follow-up. Its `x-crud` is an `update` of the same resource. |
+| `bind` | `Record<string, BindSource>` | **Yes** | How each part of the follow-up request is filled. A key is `path.<name>`, `query.<name>` or `header.<name>` for a parameter of the follow-up operation, `body` for the whole JSON body, or `body.<dot-path>` for one body field. A path parameter of the follow-up operation that is not bound takes the value of the create request's path parameter of the same name, as CRUD Causality §4.1.2 carries request context. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+A BindSource is an object with `from` and `field`:
+
+| `from` | The value is |
+|--------|--------------|
+| `created` | the value at `field` in the object the create made: its response body, with `addedFields` and the identity read back as §4.3.2 says. |
+| `planned` | the value at `field` in the object the client meant to create. |
+| `missing` | of the planned value at `field`, the part the create did not apply (§4.7.2). |
+
+#### 4.7.2 Making a compound create
+
+1. The client sends the create, with every `include` field and without every
+   `omit` field.
+2. When the create is refused (4xx), nothing was applied, and the logical
+   create is refused. When its outcome is unknown (a timeout, a 5xx after
+   which the object may exist), the logical create is uncertain, and the
+   client sends no follow-up until it knows whether the object exists.
+3. When the create succeeds, the object exists. Before it sends anything
+   else, the client records the logical create as bound to the created
+   object's identity (§4.3.2). From then on it MUST NOT send the create
+   again for this logical create, whatever happens to the follow-ups.
+4. For each follow-up in order, the client works out what is missing: for
+   `omit`, the planned value; for `include`, the planned value minus what
+   the create response shows at `field` (for an array, the planned items
+   whose value, through `itemKey`, is not among the response's items; for
+   anything else, the planned value unless the response's value equals it).
+   When nothing is missing, it skips the follow-up. Otherwise it sends the
+   follow-up, filled by `bind`, and waits for its answer before the next.
+5. When every follow-up succeeded or was skipped, the logical create is
+   applied.
+6. When a follow-up is refused, or its outcome is unknown, the logical
+   create is _partly applied_. The object exists with the create's fields
+   and the follow-ups that succeeded. The client MUST keep it bound (step 3)
+   and MUST NOT report the logical create as either refused or applied. What
+   is still missing becomes a pending update of the bound object, which the
+   client sends, retries or puts to review as it does any update. Whether a
+   follow-up whose outcome is unknown may simply be sent again is a property
+   of that operation, outside this section; until the document says, the
+   client reads the object back before sending it again.
+
+The reading of a response in step 4 covers what the response shows. A
+server that answers before it applies a field (an asynchronous label
+assignment, say) needs a later version.
+
+This version covers creates only. An update that takes several requests is
+described by declaring each request as its own `update` (`mode: patch`); its
+partial state is that of independent updates.
 
 ---
 
@@ -644,6 +721,11 @@ A conforming implementation MUST enforce:
 17. `listBody` MUST be a JSON object, MUST NOT be present unless the read's method is `POST`, and requires the operation to declare an `application/json` request body (in Swagger 2.0, a `body` parameter).
 18. No `listQuery` or `listBody` key may name a field to which the pagination scheme the operation applies explicitly (`x-pagination`, after overrides) gives a role other than `pageSize`. `listBody` keys are compared as dot-paths with the pagination scheme's request `bodyFields` keys, a segment holding a `.` written `["a.b"]` as in Pagination Schemes §4.4.
 19. A Collection Object SHOULD NOT carry both a standard field and its `x-list-*` counterpart.
+20. `followUps` MUST NOT be present unless `action` is `create`, and MUST be a nonempty array.
+21. Every Follow-up Object has `field`, `create` (`include` or `omit`), `operation` and `bind`; `field` and `itemKey` are dot-paths.
+22. `operation` MUST be the `operationId` of exactly one operation in the document, whose `x-crud` has `action: update` and the same `resource` as the create.
+23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
+24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name.
 
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
@@ -652,11 +734,11 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Validator and tests
 
-[`validate.py`](validate.py) checks rules 2, 4 and 14–19 for a loaded OpenAPI
+[`validate.py`](validate.py) checks rules 2, 4, 14–19 and 20–24 for a loaded OpenAPI
 document: the collection reads of §4.2.1 and the resource and collection names
 they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
 rules. It also holds `read_request`, which builds the first request of a read
-(§4.2.1 steps 1–3, with the `x-list-*` fallback). [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
+(§4.2.1 steps 1–3, with the `x-list-*` fallback), and `compound_create`, a reference implementation of §4.7.2 over a caller-supplied request function. [`examples/compound-create.yaml`](examples/compound-create.yaml) is a synthetic document with a compound create. [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
 is a synthetic document with a fixed-query `GET` collection and a `POST`
 search collection. From the repository root:
 
@@ -664,11 +746,12 @@ search collection. From the repository root:
 cd openapi-extensions/spec/crud-causality
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/fixed-query.yaml
+python3 validate.py examples/fixed-query.yaml examples/compound-create.yaml
 ```
 
 ## Changes
 
+- **0.5.0** (2026-10-08): adds compound creates (§4.7): `followUps` on a `create` Operation CRUD Object, each naming a field, whether the create body carries it (`include`, possibly silently dropped, or `omit`), the follow-up update that sets it, and how its request is filled (`bind`); the steps of a compound create and its partly-applied state; validation rules 20–24, `compound_create` in the validator, an example and tests. For ontola/atomic-plugins pieces.md K8 (GitHub's issue create and label add). A 0.4.0 document stays valid and means the same.
 - **0.4.0** (2026-10-08): adds `listMethod`, `listQuery` and `listBody` to the
   Collection Object and defines a read of a collection (§4.2.1), with
   validation rules 14–19, a validator, an example and tests. They standardise
