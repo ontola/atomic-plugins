@@ -1055,7 +1055,7 @@ class PaginationCollectionTests(unittest.TestCase):
         self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, expected)
         path = "/v1/{parent}/locations"
         params = {p["name"]: p for p in document["paths"][path]["get"]["parameters"]}
-        self.assertTrue(params["readMask"]["required"])
+        self.assertTrue(params["readMask"]["description"].startswith("Required."))
         self.assertIn("readMask query is required", selected[path]["description"])
         self.assertEqual(document["paths"][path]["get"]["parameters"], original["paths"][path]["get"]["parameters"])
 
