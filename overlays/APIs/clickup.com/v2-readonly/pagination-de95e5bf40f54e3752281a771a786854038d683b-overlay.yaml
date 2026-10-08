@@ -1,0 +1,30 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/de95e5bf40f54e3752281a771a786854038d683b/APIs/clickup.com/v2-readonly/openapi.yaml
+info:
+  title: ClickUp filtered Workspace task pagination
+  version: 1.0.0
+  description: >-
+    ClickUp documents zero-based page numbers and a maximum of 100 tasks per
+    response. The current API reference declares no continuation field, so
+    this metadata describes page selection and the response envelope without
+    asserting a terminal-page signal.
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      workspaceTaskPages:
+        type: pageNumber
+        autoDetect: false
+        description: >-
+          The page query parameter starts at 0 and responses are capped at
+          100 tasks. The API reference does not document a continuation field.
+          Pagination Schemes defines page-number requests as 1-based and does
+          not describe a response-less terminal rule, so no page role is
+          assigned here.
+        response:
+          envelope:
+            itemsField: tasks
+- target: $.paths['/v2/team/{team_Id}/task'].get
+  update:
+    x-pagination:
+    - scheme: workspaceTaskPages
