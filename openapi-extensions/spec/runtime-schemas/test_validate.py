@@ -94,7 +94,10 @@ class SchemaTests(unittest.TestCase):
         del self.runtime(document)["memberId"]
         self.assertInvalid(document)
         self.runtime(document)["match"] = "key"
-        validate(document)
+        warnings = []
+        validate(document, warnings)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("races renames", warnings[0])
 
     def test_type_and_options_rules(self):
         for mutate in (lambda t: t["number"].pop("value"), lambda t: t["number"].pop("schema"),
@@ -209,6 +212,53 @@ class ReadingTests(unittest.TestCase):
         values = read_members(self.runtime, derive_class(self.runtime, table), ROW)["values"]
         self.assertEqual(values["c%3Ad"], "opt-1")
 
+    def test_wrong_option_shapes_are_invalid_not_values(self):
+        # Review of #398: no sentinel stored as a value, no iterating a dict's keys.
+        derived = derive_class(self.runtime, TABLE)
+        for stage, tags in (({"name": "Doing"}, [{"id": "tag-1"}]),          # option ref without an id
+                            ("opt-1", [{"id": "tag-1"}]),                    # not an object
+                            ({"id": "opt-1"}, {"id": "tag-1"}),              # multiple, but not an array
+                            ({"id": "opt-1"}, [{"id": "tag-1"}, {"x": 1}]),  # one ref without an id
+                            ({"id": "opt-1"}, [{"id": 7}])):                 # an id that is not a string
+            row = copy.deepcopy(ROW)
+            row["properties"]["Stage"]["select"] = stage
+            row["properties"]["Tags"]["multi_select"] = tags
+            with self.subTest(stage=stage, tags=tags):
+                result = read_members(self.runtime, derived, row)
+                for value in result["values"].values():
+                    self.assertIsInstance(value, (int, float, str, list, type(None)))
+                expected = [k for k, bad in (("Stage", not isinstance(stage, dict) or "id" not in stage),
+                                             ("Tags", tags != [{"id": "tag-1"}])) if bad]
+                self.assertEqual(result["invalid"], expected)
+                for key, identifier in (("Stage", "c%3Ad"), ("Tags", "e%3Af")):
+                    if key in expected:
+                        self.assertNotIn(identifier, result["values"])
+
+    def test_member_without_value_path_has_no_value(self):
+        row = copy.deepcopy(ROW)
+        del row["properties"]["Estimate"]["number"]
+        result = read_members(self.runtime, derive_class(self.runtime, TABLE), row)
+        self.assertNotIn("a%3Ab", result["values"])
+        self.assertEqual((result["unmatched"], result["invalid"]), ([], []))
+
+    def test_duplicate_definition_ids_get_no_property(self):
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Copy"] = dict(table["properties"]["Estimate"], name="Copy")
+        derived = derive_class(self.runtime, table)
+        self.assertEqual(derived["duplicates"], ["a%3Ab"])
+        self.assertNotIn("a%3Ab", derived["properties"])
+        result = read_members(self.runtime, derived, ROW)
+        self.assertNotIn("a%3Ab", result["values"])
+        self.assertIn("Estimate", result["undescribed"])
+
+    def test_no_describer_gives_an_empty_class(self):
+        # A reference that identifies no describer (absent parent, 404): no class (§5.5).
+        derived = derive_class(self.runtime, {})
+        self.assertEqual(derived, {"properties": {}, "undescribed": [], "duplicates": []})
+        result = read_members(self.runtime, derived, ROW)
+        self.assertEqual(result["values"], {})
+        self.assertEqual(sorted(result["unmatched"]), ["Due", "Estimate", "Stage", "Tags"])
+
     def test_array_definitions_and_key_matching(self):
         runtime = {
             "field": "fields", "keyedBy": "id", "match": "key",
@@ -220,7 +270,7 @@ class ReadingTests(unittest.TestCase):
         derived = derive_class(runtime, form)
         self.assertEqual(derived["properties"]["f1"]["name"], "Name")
         result = read_members(runtime, derived, {"fields": {"f1": "Ada", "f2": "x.png", "f9": "?"}})
-        self.assertEqual(result, {"values": {"f1": "Ada"}, "unmatched": ["f9"], "undescribed": ["f2"]})
+        self.assertEqual(result, {"values": {"f1": "Ada"}, "unmatched": ["f9"], "undescribed": ["f2"], "invalid": []})
 
 
 if __name__ == "__main__":

@@ -74,7 +74,8 @@ def _misplaced(value, location, errors):
 def validate(document, warnings=None):
     """Raise ValueError listing every violation; return None when valid.
 
-    `warnings`, when a list, receives rule-5 checks that could not be made.
+    `warnings`, when a list, receives rule-5 checks that could not be made,
+    and a warning for `keyedBy: name` with `match: key` (§4.1).
     """
     errors = []
     resources = document.get("components", {}).get("crudResources", {})
@@ -101,6 +102,8 @@ def validate(document, warnings=None):
         errors += found
         if found:
             continue
+        if runtime["keyedBy"] == "name" and runtime["match"] == "key" and warnings is not None:
+            warnings.append(f"{where}: keyedBy name with match key races renames; use match id when members carry their id")
         reference_name = runtime["describedBy"]["reference"]
         reference = resource.get("references", {}).get(reference_name)
         if not isinstance(reference, dict):
@@ -130,13 +133,16 @@ def _definitions(runtime, describer):
 
 
 def derive_class(runtime, describer):
-    """§5.1: {"properties": {id: property}, "undescribed": [id]} for one describer.
+    """§5.1: the class one describer defines.
 
-    Each property is {"name", "type", "schema", "description"} plus, for an
-    option type, "options" (option id -> name) and "multiple".
+    Returns {"properties": {id: property}, "undescribed": [id], "duplicates":
+    [id]}. Each property is {"name", "type", "schema", "key"}, with
+    "description" when the document names that field, and for an option type
+    "options" (option id -> name) and "multiple". A definition id that occurs
+    more than once is reported in "duplicates" and gets no property (§5.1).
     """
     fields = runtime["definition"]
-    properties, undescribed = {}, []
+    properties, undescribed, seen, duplicates = {}, [], set(), []
     for key, definition in _definitions(runtime, describer):
         if not isinstance(definition, dict):
             continue
@@ -144,6 +150,11 @@ def derive_class(runtime, describer):
         kind = get_path(definition, fields["type"])
         if not isinstance(identifier, str) or not isinstance(kind, str):
             continue
+        if identifier in seen:
+            if identifier not in duplicates:
+                duplicates.append(identifier)
+            continue
+        seen.add(identifier)
         name = get_path(definition, fields["name"]) if "name" in fields else MISSING
         if name is MISSING:
             name = key if key is not None and runtime["keyedBy"] == "name" else identifier
@@ -165,25 +176,47 @@ def derive_class(runtime, describer):
             }
             prop["multiple"] = described.get("multiple", False)
         properties[identifier] = prop
-    return {"properties": properties, "undescribed": undescribed}
+    for identifier in duplicates:
+        properties.pop(identifier, None)
+        if identifier in undescribed:
+            undescribed.remove(identifier)
+    return {"properties": properties, "undescribed": undescribed, "duplicates": duplicates}
+
+
+def _option_ids(value, spec, multiple):
+    """The option id or ids of an option value, or MISSING when its shape is wrong (§4.5)."""
+    def one(ref):
+        identifier = get_path(ref, spec["valueId"]) if isinstance(ref, dict) else MISSING
+        return identifier if isinstance(identifier, str) else MISSING
+
+    if multiple:
+        if not isinstance(value, list):
+            return MISSING
+        ids = [one(ref) for ref in value]
+        return MISSING if any(i is MISSING for i in ids) else ids
+    return None if value is None else one(value)
 
 
 def read_members(runtime, derived, item):
     """§5.2 to §5.4: one item's values by definition id.
 
     Returns {"values": {id: value}, "unmatched": [member key], "undescribed":
-    [member key]}. An option value is its option id (or a list of them); an
-    option id the definition no longer lists is kept (§5.3 rule 4).
+    [member key], "invalid": [member key]}. An option value is its option id
+    (or a list of them); an option id the definition no longer lists is kept
+    (§5.3 rule 4). A member without a value at its type's `value` path has no
+    value (§4.4). A member whose option value has the wrong shape (not an
+    option reference with an id, or not an array when `multiple`) is
+    "invalid" and has no value.
     """
     members = get_path(item, runtime["field"])
-    values, unmatched, undescribed = {}, [], []
+    result = {"values": {}, "unmatched": [], "undescribed": [], "invalid": []}
     if not isinstance(members, dict):
-        return {"values": values, "unmatched": unmatched, "undescribed": undescribed}
+        return result
     properties = derived["properties"]
     by_key = {}
     for identifier, prop in properties.items():
         by_key[identifier if runtime["keyedBy"] == "id" else prop["name"]] = identifier
-    skipped = set(derived["undescribed"])
+    skipped = set(derived["undescribed"]) | set(derived.get("duplicates", []))
     for key, member in members.items():
         if runtime["match"] == "id":
             identifier = get_path(member, runtime["memberId"]) if isinstance(member, dict) else MISSING
@@ -192,27 +225,25 @@ def read_members(runtime, derived, item):
             if identifier is MISSING and runtime["keyedBy"] == "id" and key in skipped:
                 identifier = key
         if identifier in skipped:
-            undescribed.append(key)
+            result["undescribed"].append(key)
             continue
         prop = properties.get(identifier) if isinstance(identifier, str) else None
         if prop is None:
-            unmatched.append(key)
+            result["unmatched"].append(key)
             continue
-        if "memberType" in runtime:
-            if get_path(member, runtime["memberType"]) != prop["type"]:
-                unmatched.append(key)
-                continue
+        if "memberType" in runtime and get_path(member, runtime["memberType"]) != prop["type"]:
+            result["unmatched"].append(key)
+            continue
         value = get_path(member, runtime["types"][prop["type"]]["value"])
         if value is MISSING:
             continue
         if "options" in prop:
-            spec = runtime["types"][prop["type"]]["options"]
-            if prop["multiple"]:
-                value = [get_path(ref, spec["valueId"]) for ref in value or []]
-            elif value is not None:
-                value = get_path(value, spec["valueId"])
-        values[identifier] = value
-    return {"values": values, "unmatched": unmatched, "undescribed": undescribed}
+            value = _option_ids(value, runtime["types"][prop["type"]]["options"], prop["multiple"])
+            if value is MISSING:
+                result["invalid"].append(key)
+                continue
+        result["values"][identifier] = value
+    return result
 
 
 def _load(path):

@@ -95,9 +95,9 @@ The value of `x-runtime-schema` on a CRUD Resource Object.
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path, in an item, to the object whose members are user-defined values. |
 | `keyedBy` | `"name"` \| `"id"` | **Yes** | What a member's key is: the definition's `name` (Notion) or its `id`. |
-| `match` | `"id"` \| `"key"` | **Yes** | How a member is matched to its definition. `id`: the value at `memberId` in the member equals the definition's `id`, so a member still matches after its column was renamed. `key`: the member's key equals the definition's `name` or `id`, as `keyedBy` says. |
+| `match` | `"id"` \| `"key"` | **Yes** | How a member is matched to its definition. `id`: the value at `memberId` in the member equals the definition's `id`, so a member still matches after its column was renamed. `key`: the member's key equals the definition's `name` or `id`, as `keyedBy` says. With `keyedBy: name`, `match: key` races renames: an item read before a rename and a describer read after it no longer match, and two columns renamed into each other's names swap values. A document SHOULD use `match: id` whenever members carry their definition's id, and a validator SHOULD warn about `keyedBy: name` with `match: key`. |
 | `memberId` | string | Conditional | Dot-path, in a member, to its definition's id. REQUIRED when `match` is `id`. |
-| `memberType` | string | No | Dot-path, in a member, to the definition type the member was written under. When present, a client compares it with the definition's type (§5.3). |
+| `memberType` | string | No | Dot-path, in a member, to the definition type the member was written under. When present, a client compares it with the definition's type (§5.3). RECOMMENDED whenever members carry their type: it is what lets a client detect a value written under a type the definition no longer has. |
 | `describedBy` | Describing Object (§4.2) | **Yes** | Where the definitions are. |
 | `definition` | Definition Fields Object (§4.3) | **Yes** | Where a definition's id, name and type are. |
 | `types` | `Record<string, TypeObject>` (§4.4) | **Yes** | The definition types this document describes, keyed by the value at `definition.type`. A type not listed here is _undescribed_ (§5.4). |
@@ -131,7 +131,7 @@ What a member of one definition type holds.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `value` | string | **Yes** | Dot-path, in the member, to the value (Notion's type-named key: `number`, `select`, `rich_text`). |
+| `value` | string | **Yes** | Dot-path, in the member, to the value (Notion's type-named key: `number`, `select`, `rich_text`). A member in which this path resolves to nothing has no value: not `null`, and not an error. |
 | `schema` | OAS Schema Object | **Yes** | The schema of the value at `value`. Local `$ref`s resolve against the document. |
 | `options` | Options Object (§4.5) | No | Present when the value refers to options the definition lists (a select). |
 | `multiple` | boolean | No | Only with `options`. `true`: the value is an array of option references; `false` (the default): one option reference, or `null`. |
@@ -157,6 +157,10 @@ property per definition whose type has a Type Object. The property is keyed
 by the definition's `id`, named by its `name`, typed by the Type Object's
 `schema`, and, with `options`, limited to the options the definition lists,
 each keyed by its option id. Items that share a describer share the class.
+
+A definition id that occurs more than once in one describer makes that describer ambiguous for the id: the client MUST NOT derive a property for it, and SHOULD report it. Members that match such an id are treated as undescribed (§5.4).
+
+An option value whose shape does not fit its Type Object (an option reference without an id at `valueId`, or a value that is not an array when `multiple` is `true`) is invalid: the client MUST NOT store any value for that member, and SHOULD report it.
 Items with different describers (pages of two Notion data sources) get
 different classes, even when their columns have the same names.
 
@@ -174,6 +178,8 @@ client MUST NOT assign it to a property, and SHOULD report it.
 A definition that no member of an item matches means the item holds no value
 for it. It does not mean the value is `null`, and a client MUST NOT write
 `null` for it on the item's behalf.
+
+Items read before a re-read of their describer keep the values the client derived for them, unless the client interprets them again against the new definitions; a client SHOULD do so for every item of the same read whose members include an unmatched one, and MAY do so for all. Interpreting them again is safe only when values are matched by `id`, and, if the type can have changed, checked against `memberType`.
 
 ### 5.3 Changes to a definition
 
@@ -201,13 +207,13 @@ a list of the provider's types: a provider type left out may be one whose
 values the API truncates (Notion's relations, after 25 references), or one a
 document author has not yet described.
 
-### 5.5 Throttling and access
+### 5.5 Throttling, access and missing describers
 
 Reading a describer is one more request per describer, counted against any
 [Throttling](../throttling/README.md) limit like any other. A describer the
 client cannot read (403, 404) leaves its items without a class: the client
 MUST NOT derive one from the members alone, since member keys carry neither
-the definitions' types nor their options.
+the definitions' types nor their options. The same holds for an item whose reference identifies no describer: the referring fields are absent or `null` (a Reference Object with `required: false`), or bind to an object the describer's read answers 404 for. Its members are all unmatched.
 
 ## 6. Applying via OpenAPI Overlays
 
@@ -333,7 +339,7 @@ A conforming validator MUST check:
 [`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the
 Runtime Schema Object; it covers rules 2, 3, 6, 7 and 8.
 [`validate.py`](validate.py) checks a whole OpenAPI document against it and
-adds rules 1, 4 and 5. It also holds `derive_class` and `read_members`, a
+adds rules 1, 4 and 5, and warns about `keyedBy: name` with `match: key`. It also holds `derive_class` and `read_members`, a
 reference implementation of §5.1 to §5.4 over a describer and items already
 read. From the repository root:
 
@@ -347,7 +353,7 @@ cd openapi-extensions/spec/runtime-schemas
 
 ## Changes
 
-- **0.1.0-draft** (2026-10-08): first draft, for ontola/atomic-plugins
+- **0.1.0-draft** (2026-10-08, revised after review): duplicate definition ids get no property, an option value of the wrong shape is invalid rather than a value, a member without its `value` path has no value, items read before a describer re-read, `match: key` with `keyedBy: name` discouraged, and items whose reference identifies no describer. First draft, for ontola/atomic-plugins
   pieces.md K16 (Notion's per-data-source columns).
 
 ## Sources
