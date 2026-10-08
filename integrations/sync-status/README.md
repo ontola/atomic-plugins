@@ -68,14 +68,14 @@ named with the failure ("Last good sync 3 days ago.").
 
 ### Mapping a syncables client's `pendingWrites()`
 
-For an app whose writes go through `syncables/browser` (Pets; not Notion,
-whose reads use syncables but whose writes are its own `send.ts`) rather
-than its own client, `writes` is: `pending` the entries with `state:
+For an app whose writes go through `syncables/browser` rather than its
+own client (none yet: Pets reads through syncables but writes nothing, and
+Notion's writes are its own `send.ts`), `writes` is: `pending` the entries with `state:
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app: Pets (0.1.3), the one app whose writes go through
-syncables, shows no card yet, and neither does the Money bank-statements app
+done for any app. Pets (0.1.3), which writes nothing, shows no card yet,
+and neither does the Money bank-statements app
 (`money/app/`, 0.4.1), whose writes are its own. GitHub issues (0.4.0, #349)
 counts its own write journal instead (`issue-tracker/app/status.ts`: held
 writes as `pending`; a held write let through once without an answer, and a
@@ -110,7 +110,7 @@ Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
 `view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
 before any sync, after the import, after a failed contacts refresh and on an
 unsynced table.
-Notion's mapping passes in `notion/app/view/status.test.ts` (18 tests) and
+Notion's mapping passes in `notion/app/view/status.test.ts` (19 tests) and
 through the real controller in `notion/app/twoway.test.ts`; the `notion` e2e
 checks the card after the first sync, after a failed sync (with the last good
 sync named) and after Disconnect (read-only).
