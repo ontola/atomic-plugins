@@ -1,0 +1,51 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+info:
+  title: GitHub issue creates with labels as a compound create
+  version: 1.0.0
+# CRUD Causality 0.5.0 compound create (openapi-extensions/spec/crud-causality
+# §4.7) for creating an issue with labels (ontola/atomic-plugins pieces.md K8).
+# Compose after crud-causality-9c5cfb87...-overlay.yaml, which declares the
+# create's x-crud and adds the follow-up operation issues-add-labels. Selected
+# by no dated catalog until syncables reads followUps.
+#
+# GitHub's "Create an issue" takes `labels`, and says: "Only users with push
+# access can set labels for new issues. Labels are silently dropped
+# otherwise." (https://docs.github.com/en/rest/issues/issues#create-an-issue).
+# So the create sends them (create: include), the client compares them with
+# the created issue's `labels[].name`, and adds what is missing with
+# "Add labels to an issue" (https://docs.github.com/en/rest/issues/labels),
+# which can be refused after the issue exists: the create is then partly
+# applied, never sent again. The pinned slice's create body lists only
+# `title` and `body`; the first action adds `labels` from that reference.
+# Declared, not verified against a live account. The issue-tracker app today
+# always sends the label with a second request (create: omit in this
+# vocabulary), which the same follow-up covers.
+#
+# Both actions target paths in the bare document, so the overlay also
+# resolves on its own, as validate_oad_pins.py requires of an overlay no
+# catalog selects.
+actions:
+  - target: $.paths['/repos/{owner}/{repo}/issues'].post.requestBody.content['application/json'].schema.properties
+    update:
+      labels:
+        type: array
+        description: >-
+          Label names. Only users with push access can set labels for new
+          issues; they are silently dropped otherwise.
+        items: {type: string}
+  - target: $.paths['/repos/{owner}/{repo}/issues'].post
+    update:
+      x-crud:
+        followUps:
+          - field: labels
+            create: include
+            itemKey: name
+            operation: issues-add-labels
+            description: >-
+              Adds the labels the create dropped. Refused without write
+              access, after the issue exists: the create is then partly
+              applied.
+            bind:
+              path.issue_number: {from: created, field: number}
+              body.labels: {from: missing, field: labels}
