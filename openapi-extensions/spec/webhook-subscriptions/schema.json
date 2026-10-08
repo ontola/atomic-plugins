@@ -151,7 +151,7 @@
         "receipts": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ttlSeconds", "maxCount"],
+          "required": ["ttlSeconds", "maxCount", "maxCountPerOwner"],
           "properties": {
             "ttlSeconds": {
               "$ref": "#/$defs/seconds",
@@ -160,6 +160,10 @@
             "maxCount": {
               "$ref": "#/$defs/count",
               "description": "Open: proposed 200000."
+            },
+            "maxCountPerOwner": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 20000."
             }
           }
         },
@@ -181,7 +185,7 @@
         "cleanup": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["deadlineSeconds", "maxJobs"],
+          "required": ["deadlineSeconds", "maxJobs", "maxJobsPerOwner"],
           "properties": {
             "deadlineSeconds": {
               "$ref": "#/$defs/seconds",
@@ -190,6 +194,10 @@
             "maxJobs": {
               "$ref": "#/$defs/count",
               "description": "Open: proposed 10000."
+            },
+            "maxJobsPerOwner": {
+              "$ref": "#/$defs/count",
+              "description": "Open: proposed 20."
             }
           }
         },
@@ -326,7 +334,8 @@
             "connection-deleted",
             "standing-lost",
             "deleted",
-            "provisioning-failed"
+            "provisioning-failed",
+            "receipt-limit"
           ]
         },
         "detectedAt": {
