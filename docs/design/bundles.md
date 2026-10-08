@@ -16,7 +16,9 @@ against the current `.atomic-server-ref`.
 Decided by Michiel (2026-09-29):
 
 1. **The catalog lists bundles.** A bundle is the unit a person finds,
-   installs and removes.
+   installs and removes. _(Amended 2026-10-08 by pieces.md D3: matching is
+   by manifest, and bundles group pieces for discovery and search. Whether
+   install and removal go by piece or by bundle is still open.)_
 2. **A bundle holds parts of several kinds.** The kinds include reflectors
    (keeping a native table of a row class in sync with a remote dataset) and
    custom views (ways to show tables of a row class).
