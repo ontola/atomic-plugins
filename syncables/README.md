@@ -362,7 +362,8 @@ update that is not in flight, the client looks for evidence:
 
 `x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
 read from the collection's CRUD Causality definition, which covers its fixed
-`x-list-query`/`x-list-body`, else from its list operation, which counts only
+`listQuery`/`listBody` (or the older `x-list-query`/`x-list-body`), else from
+its list operation, which counts only
 for a collection with neither (the operation may serve several collections;
 this also serves a document without `crudResources`). A `selection` that adds
 or changes a query parameter of the collection makes its reads narrower than
@@ -964,10 +965,20 @@ const { records, ontology, errors } = await readPlatform(document, {
 - **Collections** come from `components.crudResources` (the
   [CRUD Causality Extension](https://github.com/ontola/atomic-plugins/tree/main/openapi-extensions/spec/crud-causality),
   usually added by an overlay). A nested collection runs once per parent
-  record, with its path variables filled in through `identity.bindings`. On a
-  collection, `x-list-query` adds fixed query parameters, `x-list-method: POST`
-  lists with a POST instead of a GET, and `x-list-body` adds fixed JSON body
-  fields. The Collection Object's `envelope: { itemsField: <dot-path> }`
+  record, with its path variables filled in through `identity.bindings`. A
+  Collection Object's fixed request values (CRUD Causality 0.4.0 §4.2.1)
+  define what every read of it sends: `listQuery` adds query parameters with
+  exact string values, `listMethod: POST` lists with a POST instead of a GET,
+  and `listBody` adds the JSON body of that POST; the pagination scheme's
+  fields are merged over them page by page, and a `pageSize` they set stays
+  unless a caller chooses one. The older `x-list-query`, `x-list-method` and
+  `x-list-body` are still read, field by field, when the standard field is
+  absent; when both are present, the standard field applies. The two forms
+  differ as the spec says: `listMethod` is `GET` or `POST` as written, while
+  `x-list-method` is accepted in any case; `listQuery` values are strings,
+  while a non-string `x-list-query` value is sent as its JSON text and `null`
+  as an empty value. The Collection
+  Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
   collection's read with "No items array at <path>", never an empty read.
@@ -1019,6 +1030,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   header whose `rel` lists several relation types (`rel="last next"`) is
   read as the next page, as RFC 8288 and Pagination Schemes §4.4.3 say.
   `parseLinkHeader` takes the relation to look for as a second argument.
+- **Unreleased**: A Collection Object's fixed request values are read from
+  the standard CRUD Causality 0.4.0 fields `listMethod`, `listQuery` and
+  `listBody` (§4.2.1), with the older `x-list-method`, `x-list-query` and
+  `x-list-body` as the fallback, field by field; when both are present the
+  standard field applies. A read sends the path parameters, `listQuery`,
+  `listBody`, then the pagination fields merged over them per page, as
+  before.
 - **Unreleased**: The collection read honours the CRUD Causality Collection
   Object's `envelope.itemsField` (a dot-path to the items array, as the feed
   read already did for `x-deletion-feed`), so a list whose items sit at

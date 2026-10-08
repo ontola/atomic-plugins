@@ -214,7 +214,7 @@ Data flows through four stages, each its own directory under `src/`:
    superseded stays held. Not read under
    `absent: deleted` or `missingRecordChecks: 'none'`.
    The declaration is dropped for a collection a `selection` narrows past its
-   `x-list-query`, and an operation-level one counts only without a fixed
+   `listQuery` (or `x-list-query`), and an operation-level one counts only without a fixed
    query or body. An update in flight when `holdMissing` ran gets
    `holdIfQueued` (not stored) and is held if its outcome leaves it queued;
    a later complete read that returns the record, or `resolveWrite` `retry`
