@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   prepareDocument,
-  readCollections,
   type ApiClient,
   type ApiClientOptions,
   type MissingRecord,
@@ -93,12 +92,18 @@ interface Fake {
   transport: Transport;
   /** Every request as `METHOD /path?query`, the server's base path removed. */
   requests: string[];
+  /**
+   * Answers every request that 'hang' left open, and every later one, with
+   * a 200 echo of its body, so that a client left behind by a test settles
+   * its writes and keeps no timer.
+   */
+  release: () => void;
 }
 
 /**
  * A transport that routes to `handle` with the path relative to the
  * document's server. An unhandled request answers 405, so a test sees it.
- * 'hang' never answers.
+ * 'hang' never answers, until `release()`.
  */
 function fakeFor(
   doc: OpenApiDocument,
@@ -108,6 +113,10 @@ function fakeFor(
     (doc.servers as { url: string }[])[0]!.url,
   ).pathname.replace(/\/$/, '');
   const requests: string[] = [];
+  const echo = (r: TransportRequest): TransportResponse =>
+    json(JSON.parse(r.body ?? '{}'));
+  const hung: (() => void)[] = [];
+  let released = false;
   const transport: Transport = async (r) => {
     const path = r.url.pathname.startsWith(base)
       ? r.url.pathname.slice(base.length)
@@ -115,10 +124,22 @@ function fakeFor(
     const query = r.url.searchParams;
     requests.push(`${r.method} ${path}${query.size ? `?${query}` : ''}`);
     const answer = handle(r, path, query);
-    if (answer === 'hang') return new Promise<TransportResponse>(() => {});
+    if (answer === 'hang') {
+      if (released) return echo(r);
+      return new Promise<TransportResponse>((resolve) => {
+        hung.push(() => resolve(echo(r)));
+      });
+    }
     return answer ?? json({ error: `unhandled ${r.method} ${path}` }, 405);
   };
-  return { transport, requests };
+  return {
+    transport,
+    requests,
+    release: (): void => {
+      released = true;
+      for (const answer of hung.splice(0)) answer();
+    },
+  };
 }
 
 const settle = (ms = 20): Promise<void> =>
@@ -154,45 +175,47 @@ function outboxOf(storage: CrashableStorage): {
 }
 
 describe('Deletion Feeds §2: a change list whose feed is the collection list itself', () => {
-  it('cannot read the list when its items are at a dot-path envelope (gap: the collection read does not use the Collection Object envelope)', async () => {
-    // The feed read uses the declared `envelope.itemsField`
-    // (`data.transactions`); the collection read of the same operation
-    // locates items at a top-level array property or a common envelope
-    // name only, so this list is never read completely, and the feed is
-    // never read.
-    const fake = fakeFor(transactionsFeed, (r, path) => {
-      if (r.method === 'GET' && path === '/budgets/b1/transactions')
-        return json({
-          data: {
-            transactions: [{ id: 't1', amount: '-1200', deleted: false }],
-            server_knowledge: 12,
-          },
-        });
-      return undefined;
-    });
-    const read = await readCollections(transactionsFeed, {
-      transport: fake.transport,
-      constants: { budgetId: 'b1' },
-    });
-    expect(read.collections).toMatchObject([
-      {
-        complete: false,
-        items: [],
-        error: expect.stringMatching(/Could not locate the items array/),
-      },
-    ]);
-    fake.requests.length = 0;
-    const client = createApiClient(transactionsFeed, {
-      transport: fake.transport,
-      constants: { budgetId: 'b1' },
-    });
-    await expect(client.sync()).rejects.toThrow(
-      /Read incomplete: transactions: Could not locate the items array/,
-    );
-    // One list read; no feed read follows an incomplete collection read.
-    expect(fake.requests).toEqual(['GET /budgets/b1/transactions']);
-    expect(await client.list('transactions', { budgetId: 'b1' })).toEqual([]);
-  });
+  // Red until #373: the collection read does not yet use the Collection
+  // Object's `envelope.itemsField`, so this list (items at
+  // `data.transactions`) is not read completely, `sync()` rejects with
+  // "Read incomplete: ... Could not locate the items array", and the feed
+  // (the same operation) is not read. The feed read itself does honour the
+  // envelope.
+  it.fails(
+    'reads the list completely through the Collection Object envelope, then the feed with last_knowledge_of_server=12 on the next sync (#373)',
+    async () => {
+      const rows = [{ id: 't1', amount: '-1200', deleted: false }];
+      const fake = fakeFor(transactionsFeed, (r, path) => {
+        if (r.method === 'GET' && path === '/budgets/b1/transactions')
+          return json({ data: { transactions: rows, server_knowledge: 12 } });
+        return undefined;
+      });
+      const storage = new CrashableStorage();
+      const client = createApiClient(transactionsFeed, {
+        transport: fake.transport,
+        constants: { budgetId: 'b1' },
+        storage,
+      });
+      await client.sync();
+      expect(await client.list('transactions', { budgetId: 'b1' })).toEqual(
+        rows,
+      );
+      // The collection read, then the feed read (the same operation).
+      expect(fake.requests).toEqual([
+        'GET /budgets/b1/transactions',
+        'GET /budgets/b1/transactions',
+      ]);
+      expect(outboxOf(storage).feedCursors).toMatchObject([
+        { cursor: '12', operation: 'listTransactions' },
+      ]);
+      fake.requests.length = 0;
+      await client.sync();
+      expect(fake.requests).toEqual([
+        'GET /budgets/b1/transactions',
+        'GET /budgets/b1/transactions?last_knowledge_of_server=12',
+      ]);
+    },
+  );
 
   it('applies the §6 overlay to a document without the declaration, giving the §2 document', () => {
     const base = withoutDeclaration(transactionsFeed, 'x-deletion-feed');
@@ -404,7 +427,12 @@ describe('Deletion Feeds §7.1: a change list with a status marker', () => {
  */
 function projectTool(
   initial: Row[],
-  hooks: { item?: (gid: string) => Answer } = {},
+  hooks: {
+    item?: (gid: string) => Answer;
+    /** Whether the token is expired; the 412 then carries `expiredBody`. */
+    expired?: (sync: string) => boolean;
+    expiredBody?: Row;
+  } = {},
 ): Fake & { tasks: Map<string, Row>; log: Row[] } {
   const tasks = new Map(initial.map((t) => [String(t['gid']), t]));
   const log: Row[] = [];
@@ -413,11 +441,12 @@ function projectTool(
       return json([...tasks.values()]);
     if (r.method === 'GET' && path === '/projects/p1/events') {
       const sync = query.get('sync');
-      if (sync === null || !/^s\d+$/.test(sync))
+      if (sync === null || !/^s\d+$/.test(sync) || hooks.expired?.(sync))
         return json(
           {
             sync: `s${log.length}`,
             errors: [{ message: 'Sync token invalid' }],
+            ...hooks.expiredBody,
           },
           412,
         );
@@ -443,14 +472,24 @@ const g2 = { gid: 'g2', name: 'Review the plan' };
 const p1 = { projectId: 'p1' };
 
 describe('Deletion Feeds §7.2: an event log', () => {
-  it('takes the fresh token of the first 412 as the cursor and sends it on the next read (§4.2), using no items of that answer', async () => {
-    const fake = projectTool([g1, g2]);
+  it('takes the fresh token of a 412 as the cursor and sends it on the next read (§4.2), using no items of that answer', async () => {
+    // Every 412 carries a tombstone for g1 in `data` (a provider that
+    // answers data with its refusal); it is not a feed read, so the
+    // tombstone is never used.
+    let expired = new Set<string>();
+    const fake = projectTool([g1, g2], {
+      item: unavailable,
+      expired: (sync) => expired.has(sync),
+      expiredBody: { data: [{ action: 'deleted', resource: { gid: 'g1' } }] },
+    });
     const storage = new CrashableStorage();
     const client = createApiClient(projectEventLog, {
+      ...slow,
       transport: fake.transport,
       constants: p1,
       storage,
     });
+    // The first read has no token: 412 with a fresh one.
     await client.sync();
     expect(fake.requests).toEqual([
       'GET /projects/p1/tasks',
@@ -459,11 +498,34 @@ describe('Deletion Feeds §7.2: an event log', () => {
     expect(outboxOf(storage).feedCursors).toMatchObject([
       { cursor: 's0', operation: 'getProjectEvents' },
     ]);
+    expect(outboxOf(storage).feedTombstones).toBeUndefined();
+    // g1 leaves the list with an edit held; the stored token has expired,
+    // and the log moved on, so the fresh token is s1.
+    await hold(client, 'projectTasks', 'g1', p1);
+    fake.tasks.delete('g1');
+    fake.log.push({ action: 'changed', resource: { gid: 'g2' } });
+    expired.add('s0');
     fake.requests.length = 0;
     await client.sync();
     expect(fake.requests).toEqual([
       'GET /projects/p1/tasks',
+      'GET /tasks/g1',
       'GET /projects/p1/events?sync=s0',
+    ]);
+    // The 412's tombstone decided nothing: the GET was undecided (503) and
+    // there was no feed read, so the update fails as unknown, not deleted.
+    expect(client.pendingWrites()).toMatchObject([
+      { id: 'g1', state: 'failed', missingRecord: 'unknown', lastStatus: 503 },
+    ]);
+    expect(outboxOf(storage).feedTombstones).toBeUndefined();
+    // Its fresh token is the cursor of the next read.
+    expect(outboxOf(storage).feedCursors).toMatchObject([{ cursor: 's1' }]);
+    expired = new Set();
+    fake.requests.length = 0;
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /projects/p1/tasks',
+      'GET /projects/p1/events?sync=s1',
     ]);
   });
 
@@ -977,6 +1039,9 @@ describe('pending-edit recovery on the spec documents', () => {
         location: 'Room 2',
       },
     ]);
+    // Let the first client's hung PUT settle, so it leaves no timer behind.
+    fake.release();
+    await vi.waitFor(() => expect(first.pendingWrites()).toEqual([]));
   });
 
   it('a PUT in flight across a restart, the event cancelled meanwhile (§7.1): the restored update fails on the 404, none is sent', async () => {
@@ -1030,6 +1095,9 @@ describe('pending-edit recovery on the spec documents', () => {
       summary: 'Standup, moved',
       location: 'Room 3',
     });
+    // Let the first client's hung PUTs settle, so it leaves no timer behind.
+    fake.release();
+    await vi.waitFor(() => expect(first.pendingWrites()).toEqual([]));
   });
 
   it('a lost answer: a PUT whose transport throws is retried, a POST becomes uncertain and is confirmable', async () => {

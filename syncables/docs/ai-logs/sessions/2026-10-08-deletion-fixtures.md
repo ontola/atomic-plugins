@@ -49,10 +49,23 @@ to the server id, and the state survives a restart), and a refused write
 (422 fails at once, a delete's 404 is satisfied, a 403 blocks the client
 until `authRenewed()`).
 
-No behaviour was changed. The fixtures showed one gap, recorded as a test
-rather than fixed, since it is a feature of the CRUD Causality consumer
-side rather than a bug: the collection read locates items at a top-level
-array property or a common envelope name, not at the Collection Object's
-`envelope.itemsField` dot-path, so the §2 example's list
-(`{ data: { transactions: [...] } }`) is never read completely and its feed
-never read. CLAUDE.md's test inventory was updated.
+No behaviour was changed. The fixtures showed one gap, filed as #373 and
+left for its own change, since it is a feature of the CRUD Causality
+consumer side rather than a bug: the collection read locates items at a
+top-level array property or a common envelope name, not at the Collection
+Object's `envelope.itemsField` dot-path (which the feed read does use), so
+the §2 example's list (`{ data: { transactions: [...] } }`) is not read
+completely and its feed is not read. The §2 test states the spec's
+behaviour and is marked `it.fails` until #373. CLAUDE.md's test inventory
+was updated.
+
+**Review (Opus, PR #372):** the first version of the §2 test asserted
+today's behaviour as expected, locking the gap in, and its fixture's
+Collection Object declared no `envelope` of its own (only the feed did), so
+the fake's `{ data: { transactions } }` body was inconsistent with CRUD
+Causality's default. Fixed as above (the Collection Object's `envelope`
+added, the test rewritten as the spec's behaviour and marked `it.fails`),
+plus: the §7.2 412 test now puts a tombstone in the 412 body and checks it
+is not used; the two restart tests release the first client's hung PUTs so
+no timer is left behind; the session trailer uses the
+`claude-code://sessions/<id>` form.

@@ -362,11 +362,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   the §5 overlay), each test naming the spec statement it checks, plus
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
-  a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). It
-  also records a gap: the collection read does not use the CRUD Causality
-  Collection Object's `envelope.itemsField`, so a list whose items sit at a
-  dot-path (the §2 example, whose feed is the list itself) is never read
-  completely.
+  a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
+  §2 test, whose feed is the list itself and whose Collection Object
+  declares `envelope: { itemsField: data.transactions }`, is `it.fails`
+  until #373: the collection read does not yet use the Collection Object's
+  `envelope.itemsField` (only the feed read does), so that list is not read
+  completely and its feed is not read.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

@@ -70,6 +70,10 @@ export const transactionsFeed: OpenApiDocument = {
         collections: {
           transactions: {
             urlTemplate: '/budgets/{budgetId}/transactions',
+            // The list's own envelope (CRUD Causality §4.2); the feed below
+            // is the same operation, so the two declare the same path, as
+            // CRUD Causality §5 says they should.
+            envelope: { itemsField: 'data.transactions' },
             'x-deletion-feed': {
               operationId: 'listTransactions',
               envelope: { itemsField: 'data.transactions' },
