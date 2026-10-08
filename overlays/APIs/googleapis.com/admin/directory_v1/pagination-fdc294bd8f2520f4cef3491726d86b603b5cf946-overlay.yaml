@@ -1,0 +1,185 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/list
+overlay: 1.0.0
+info:
+  title: Google directory collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/googleapis.com/admin/directory_v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: 'Send opaque nextPageToken as pageToken. Stop only when nextPageToken is absent or
+          empty, not when a page is short or empty. If using fields, include nextPageToken and the item
+          array. Preserve customer/domain/group scope, queries, projection masks, sorting, deleted selection
+          and derived membership flags. Ordinary user listing only: omit event; watch registration is
+          outside this variant. Users-list page tokens are valid for three days, not durable sync checkpoints.'
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/admin/directory/v1/customer/{customerId}/devices/chromeos'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: chromeosdevices
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customerId}/devices/mobile'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: mobiledevices
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customer}/resources/buildings'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: buildings
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customer}/resources/calendars'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customer}/resources/features'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: features
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customer}/roleassignments'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/customer/{customer}/roles'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/groups'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: groups
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/groups/{groupKey}/members'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: members
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/users'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: users
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Ordinary list only: omit event. Preserve customer or domain, projection, query and
+        showDeleted; page tokens expire after three days.'
+- target: $.paths['/admin/directory/v1/{parent}/chrome/printServers'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: printServers
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/{parent}/chrome/printers'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: printers
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/admin/directory/v1/{parent}/chrome/printers:listPrinterModels'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: printerModels
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize

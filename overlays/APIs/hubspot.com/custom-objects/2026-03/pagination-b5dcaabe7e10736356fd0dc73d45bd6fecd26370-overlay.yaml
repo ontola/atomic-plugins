@@ -1,0 +1,36 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://api.hubspot.com/public/api/spec/v2/specs/release/75278/version/2026-03
+overlay: 1.0.0
+info:
+  title: HubSpot custom-objects forward pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/custom-objects/2026-03/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardResults:
+        type: pageToken
+        autoDetect: false
+        description: Copy the opaque paging.next.after unchanged into after. Stop only when the next cursor
+          is absent or empty, not from a short or empty page. Preserve limit and all other request scope.
+          The response item array is results; paging.next.link is not used to construct a cursor. Preserve
+          objectType, archived selection, associations, properties and property-history projection. This
+          is ordinary GET collection traversal; search POST has a separate body contract and is outside
+          this application.
+        request:
+          queryParameters:
+            after:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: results
+          bodyFields:
+            paging.next.after:
+              role: nextCursor
+- target: $.paths['/crm/objects/2026-03/{objectType}'].get
+  update:
+    x-pagination:
+    - scheme: forwardResults
