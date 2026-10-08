@@ -8,12 +8,13 @@ has written and read it against the published GitHub Pages URLs; see each
 plugin's README for which have (money 0.4.0 for `bank-transaction-v1`).
 
 Two top-level folders, split so that everything under the vocabulary's URL
-space is an immutable term and nothing else:
+space is an immutable generated file (a term, or a lens catalog file) and
+nothing else:
 
-| Folder          | Holds                                                                                                                                                                                                           | Published?                              | Changes?                      |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
-| `ontology/`     | Only the generated term files: `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`                                                                                                                          | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
-| `ontology-kit/` | `base.json`, `source.json`, the build and check (`ontology.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), their tests, this README | No                                      | Yes                           |
+| Folder          | Holds                                                                                                                                                                                                                                                                                               | Published?                              | Changes?                      |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
+| `ontology/`     | Only generated files: the terms `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`, and the lens catalog `lenses/` ([LENSES.md](LENSES.md))                                                                                                                                                    | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
+| `ontology-kit/` | `base.json`, `source.json`, `lenses.json`, the build and check (`ontology.mjs`, `lens-catalog.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), the lens interpreter (`lens.mjs`, `lens.d.mts`), their tests, this README | No                                      | Yes                           |
 
 Both are shared code outside the plugin folders, approved by Michiel on #177
 (question 12).
@@ -208,7 +209,15 @@ labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
   rows of another class (say a Time tracker template table) onto a shared
   class, in code, per source shape. This is where a Devonian lens plugs in.
   Whether the lensed side is materialized or computed, and with which grant a
-  lens writes back, is #177 Q14 and not decided.
+  lens writes back, is #177 Q14 and not decided. A catalog lens between two
+  classes becomes such a hook with `resolverLens(file)` from `lens.mjs`.
+
+## The lens catalog
+
+`ontology-kit/lenses.json` defines the shared lens catalog (Q-089), and
+`build` publishes it under `ontology/lenses/` next to the terms, with the
+same immutability and base handling. Format, versioning, review and the
+four release 1 lenses: [LENSES.md](LENSES.md).
 
 ## Plugin e2e tests and the published subjects
 
