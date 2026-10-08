@@ -1085,6 +1085,30 @@ const { records, ontology, errors } = await readPlatform(document, {
   same read stops the collection with an error (rule 5). The value is
   resolved with the WHATWG URL parser once rule 2 has removed the inputs
   parsers disagree on. `resolveLink` (exported) is this rule set on its own.
+- **User-defined fields** (draft
+  [Runtime Schemas](https://github.com/ontola/atomic-plugins/tree/main/openapi-extensions/spec/runtime-schemas)
+  0.1.0, `x-runtime-schema` on a CRUD resource): for items whose fields
+  their users define (Notion pages, whose `properties` their data source
+  describes), `readCollections` reads each describer the items' reference
+  names, once per read and through the same budget, after the items. It
+  returns the class derived from each in `describers` (one property per
+  definition, keyed by the definition's stable id, with its name, type,
+  schema and, for an option type, its options by id; `undescribed` and
+  `duplicates` list the definitions that get none) and each item's members
+  in its snapshot's `runtimeMembers`, in the order of `items`: `values` by
+  definition id (an option value is its option id), and the member keys that
+  are `unmatched` (no definition, or written under another type than the
+  definition's `memberType`), `undescribed` (a type the document does not
+  describe, or a duplicated id) or `invalid` (an option value of the wrong
+  shape). A member whose value path is absent has no value, never `null`.
+  When a member matches no definition, the describer is read once more and
+  the items with an unmatched member are interpreted again; never a third
+  time. A describer that cannot be read is listed with its `error` and no
+  class, and its items' members are all unmatched, as are those of an item
+  whose reference field is absent or `null` (no request is made for it). A
+  declaration the reader cannot use is named in `errors` and the items are
+  read without it. Writes and value conversion are not covered, and
+  `readPlatform` and the client do not use the classes yet.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
   one property per field, typed with Atomic Data datatype URLs. Each record's
   `values` are keyed by property shortname, and `date-time` strings are
@@ -1155,6 +1179,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   read. The validator checks §9 rules 12–17 (rule 18, the window fields
   against the operation's parameters, is left to the spec's validator).
   Exports `WindowReadError`, `halves` and the window types.
+- **Unreleased**: Runtime Schemas 0.1.0-draft (`x-runtime-schema`, #398):
+  `readCollections` reads the describer each item's reference names (once
+  per read, at most once more for a member matching no definition) and
+  returns the derived classes (`CollectionReadResult.describers`) and each
+  item's interpreted members (`CollectionSnapshot.runtimeMembers`), keeping
+  unmatched, undescribed and invalid members apart and never writing `null`
+  for an absent value. Both fields are absent for a document without the
+  extension. Types `RuntimeClass`, `RuntimeDescriber`, `RuntimeMembers` and
+  `RuntimeProperty` are exported.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

@@ -67,6 +67,17 @@ Data flows through four stages, each its own directory under `src/`:
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
    completion/error status. `read/read.ts` adds ontology/type projection.
+   `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
+   extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
+   #398; the spec's `validate.py` `derive_class`/`read_members` are its
+   reference): after the collections, `readCollections` reads each
+   describer the items' reference binds (`describerPath`), once per
+   resource and path, through the read's `Budget`, plus at most one re-read
+   when a member is unmatched (then only the items with an unmatched member
+   are interpreted again), and returns `describers` and per-snapshot
+   `runtimeMembers` (aligned with `items`). Absent values stay absent
+   (`MISSING`, never `null`); a describer that fails keeps its `error` and no
+   class. Its dot-path reader handles `["a.b"]` segments itself.
 
    For compatibility, the client opts into `resources/discover.ts` path-pair
    discovery when CRUD metadata is absent. The mock server still uses that
@@ -423,6 +434,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/read/runtime-schemas.test.ts` runs Runtime Schemas on the spec's
+  §7.1 example (`__tests__/fixtures/runtime-schemas.ts`): the derived class
+  and values, a rename, one describer read per read and the one re-read,
+  absent values, kept unknown options, invalid option shapes, undescribed
+  types, duplicate ids, `memberType`, unreadable or unbound describers, and
+  an unusable declaration.
 - `unit/read/collections.test.ts` covers the Collection Object's
   `envelope.itemsField` in the collection read (#373): the model field, a
   nested dot-path, a missing or non-array path (an incomplete read with

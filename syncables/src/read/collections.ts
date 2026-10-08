@@ -22,6 +22,13 @@ import {
   type WindowRange,
 } from './pages.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import {
+  interpretRuntimeItems,
+  runtimeSchemasOf,
+  type RuntimeDescriber,
+  type RuntimeItem,
+  type RuntimeMembers,
+} from './runtime-schemas.js';
 import type { Transport } from './transport.js';
 
 export interface CollectionReadOptions {
@@ -73,11 +80,24 @@ export interface CollectionSnapshot {
   error?: string;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
+  /**
+   * For a resource that declares `x-runtime-schema` (Runtime Schemas
+   * 0.1.0-draft): each item's user-defined members, interpreted against its
+   * describer's class, in the order of `items`.
+   */
+  runtimeMembers?: RuntimeMembers[];
 }
 
 export interface CollectionReadResult {
   collections: CollectionSnapshot[];
   errors: string[];
+  /**
+   * Present when a read resource declares `x-runtime-schema`: every
+   * describer the items named, read once (twice after an unmatched member),
+   * with the class derived from it or the error that left its items without
+   * one.
+   */
+  describers?: RuntimeDescriber[];
 }
 
 interface Origin {
@@ -280,5 +300,31 @@ export async function readCollections(
     pending = waiting;
   }
   if (options.probe) throw new Error('No collection available to check');
-  return { collections, errors };
+  const schemas = runtimeSchemasOf(doc, errors);
+  if (!schemas.size) return { collections, errors };
+  // Runtime Schemas §5.2: the describers are read in the same read as the
+  // items, after them, through the same budget.
+  const items: RuntimeItem[] = [];
+  for (const snapshot of collections) {
+    if (!schemas.has(snapshot.collection.resource)) continue;
+    const members: RuntimeMembers[] = [];
+    snapshot.runtimeMembers = members;
+    snapshot.items.forEach((item, index) =>
+      items.push({
+        resource: snapshot.collection.resource,
+        item,
+        context: snapshot.pathParams,
+        set: (interpreted) => {
+          members[index] = interpreted;
+        },
+      }),
+    );
+  }
+  const describers = await interpretRuntimeItems(
+    schemas,
+    items,
+    budget,
+    upstream,
+  );
+  return { collections, errors, describers };
 }
