@@ -211,7 +211,7 @@
         "action": "resubscribe",
         "gap": {
           "generation": "gen_fixture_2",
-          "reason": "subscription-age-limit",
+          "reason": "lease-expired",
           "detectedAt": "2026-10-20T09:30:00Z",
           "lastAcknowledged": "cur_g1_2",
           "earliestAvailableCursor": null

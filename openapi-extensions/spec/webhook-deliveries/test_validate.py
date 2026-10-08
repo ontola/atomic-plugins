@@ -8,7 +8,7 @@ import json
 import pathlib
 import unittest
 
-from validate import VerificationError, load, route_delivery, validate, verify_delivery
+from validate import VerificationError, access_path, load, route_delivery, validate, verify_delivery
 
 ROOT = pathlib.Path(__file__).parent
 EXAMPLES = ROOT / "examples"
@@ -105,7 +105,7 @@ class VerificationTests(unittest.TestCase):
     def test_the_timestamp_is_signed(self):
         profile = self.tracker["verificationProfiles"]["projectHook"]
         headers, body = delivery("tracker-deliveries/task-updated-project-hook.json")
-        for stamp in ("1791460801", "+1791460800", " 1791460800", "1791460800.0"):
+        for stamp in ("1791460801", "+1791460800", " 1791460800", "1791460800.0", "0001791460800"):
             with self.assertRaises(VerificationError):
                 verify_delivery(profile, with_header(headers, "Tracker-Timestamp", stamp), body, TRACKER_HOOK_SECRET, FIXTURE_NOW)
 
@@ -151,6 +151,22 @@ class RoutingTests(unittest.TestCase):
         for value in ("", "has space", "x" * 256, "café"):
             with self.assertRaises(VerificationError):
                 route_delivery(document, with_header(headers, "Tracker-Delivery", value), body)
+
+
+class AccessPathTests(unittest.TestCase):
+    def test_parameters_are_single_encoded_segments(self):
+        document = load(EXAMPLES / "github-fixture.yaml")
+        self.assertEqual(access_path(document, "repository", {"owner": "fixture-owner", "repo": "fixture-repo"}),
+                         "/repos/fixture-owner/fixture-repo")
+        self.assertEqual(access_path(document, "repository", {"owner": "a/b", "repo": "c?d#e%f g"}),
+                         "/repos/a%2Fb/c%3Fd%23e%25f%20g")
+
+    def test_dot_segments_missing_and_extra_parameters_are_refused(self):
+        document = load(EXAMPLES / "github-fixture.yaml")
+        for parameters in ({"owner": "..", "repo": "x"}, {"owner": ".", "repo": "x"}, {"owner": "", "repo": "x"},
+                           {"owner": "x"}, {"owner": "x", "repo": "y", "issue_number": "1"}, {"owner": 1, "repo": "x"}):
+            with self.assertRaises(ValueError):
+                access_path(document, "repository", parameters)
 
 
 class RejectionTests(unittest.TestCase):

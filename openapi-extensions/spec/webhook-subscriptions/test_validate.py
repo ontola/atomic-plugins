@@ -79,6 +79,21 @@ class PolicyRejectionTests(unittest.TestCase):
         self.rejects(lambda p: p["sweep"].update(maxIntervalSeconds=61))
         self.rejects(lambda p: p["closed"].update(tombstoneTtlSeconds=2592001))
         self.rejects(lambda p: p["cleanup"].update(deadlineSeconds=2592001))
+        self.rejects(lambda p: p["delivery"].update(maxBodyBytes=p["delivery"]["maxVerifiedBytes"] + 1))
+        self.rejects(lambda p: p["access"].update(maxCheckAgeSeconds=86401))
+        self.rejects(lambda p: p["lease"].update(durationSeconds=43201, renewAfterSeconds=3600)
+                     or p["access"].update(maxCheckAgeSeconds=43202))
+        self.rejects(lambda p: p["receipts"].update(ttlSeconds=1799))
+        self.rejects(lambda p: p.pop("access"))
+        self.rejects(lambda p: p["delivery"].pop("maxVerifiedBytes"))
+
+    def test_boundaries_are_accepted(self):
+        document = load(EXAMPLES / "receiver.yaml")
+        policy = document["x-webhook-subscriptions"]["policy"]
+        policy["receipts"]["ttlSeconds"] = 1800
+        policy["access"]["maxCheckAgeSeconds"] = 86400
+        policy["delivery"]["maxBodyBytes"] = policy["delivery"]["maxVerifiedBytes"] = policy["subscription"]["maxPendingBytes"]
+        validate(document)
 
 
 class RecordRejectionTests(unittest.TestCase):
@@ -126,6 +141,7 @@ class RecordRejectionTests(unittest.TestCase):
         self.rejects("Acknowledgement", 0, lambda a: a.update(cursor=""))
         self.rejects("Renewal", 1, lambda r: r.pop("checkpoint"))
         self.rejects("Error", 0, lambda e: e.update(code="teapot"))
+        validate_record("Error", {"status": "error", "code": "access-check-required"})
 
 
 if __name__ == "__main__":

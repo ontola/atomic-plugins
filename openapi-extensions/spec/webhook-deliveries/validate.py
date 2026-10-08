@@ -275,6 +275,22 @@ def fill(template, values):
     return TEMPLATE_VARIABLE.sub(lambda m: urllib.parse.quote(values[m.group(1)], safe=""), template)
 
 
+def access_path(document, kind, parameters):
+    """The access check's path for a subscriber's parameters (README 4.4.1).
+
+    Every path parameter must be given, and nothing else; each value is
+    percent-encoded as one segment, and `.` and `..` are refused.
+    """
+    template = document["x-webhook-deliveries"]["sources"][kind]["access"]["operation"]["path"]
+    variables = template_variables(template)
+    require(isinstance(parameters, dict) and set(parameters) == set(variables),
+            f"access parameters must be exactly {sorted(variables)}")
+    for name, value in parameters.items():
+        require(isinstance(value, str) and value not in ("", ".", ".."),
+                f"access parameter {name}: a non-empty segment other than . and ..")
+    return fill(template, parameters)
+
+
 def route_delivery(document, headers, body):
     """What a receiver reads from a verified delivery (README 4.3-4.6)."""
     root = document["x-webhook-deliveries"]

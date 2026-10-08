@@ -163,7 +163,7 @@ Timestamp Object:
 | ------------------ | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `in`               | `header`       | **Yes**  |                                                                                                                          |
 | `name`             | string         | **Yes**  | Header name; matched case-insensitively.                                                                                 |
-| `format`           | `unixSeconds`  | **Yes**  | Decimal seconds since 1970-01-01T00:00:00Z, digits only.                                                                 |
+| `format`           | `unixSeconds`  | **Yes**  | Decimal seconds since 1970-01-01T00:00:00Z: 1 to 12 ASCII digits, nothing else.                                          |
 | `toleranceSeconds` | integer, 1–900 | **Yes**  | A delivery whose timestamp differs from the receiver's clock by more than this, in either direction, fails verification. |
 
 A timestamp is only declared when it is signed (`timestampDotRawBody`): an
@@ -195,13 +195,16 @@ Secret Source Object:
 
 A receiver MUST, in this order, for a delivery to an endpoint:
 
-1. refuse a body longer than its own cap, before reading past the cap;
+1. refuse a body longer than its _verification cap_ (Webhook Subscriptions
+   §6, `delivery.maxVerifiedBytes`), before reading past it; the HMAC
+   may be computed while the body streams in;
 2. look up the endpoint's profile and secret; refuse an unknown endpoint;
 3. read the signature header; refuse a missing header, a header given more
    than once, a value without the declared prefix, or a value that does not
    decode to exactly 32 bytes;
 4. for `timestampDotRawBody`, read the timestamp header with the same rules,
-   refuse a value that is not digits only or is outside `toleranceSeconds`;
+   refuse a value that is not 1 to 12 digits or is outside
+   `toleranceSeconds`;
 5. compute HMAC-SHA256 with the secret over the signed content (§4.2) and
    compare it with the decoded signature in **constant time** (a comparison
    whose duration does not depend on where the two values first differ). A
@@ -218,7 +221,13 @@ The body's media type in this version is `application/json` (UTF-8,
 [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)); the receiver parses
 it with a nesting depth limit of its own choosing. A body that verifies but
 does not parse, or exceeds the depth limit, is a verified but uncapturable
-delivery (Webhook Subscriptions §5.3).
+delivery (Webhook Subscriptions §5.3). A verified body that parses but is
+longer than the _retention cap_ (`delivery.maxBodyBytes`, at most the
+verification cap) is routed like any other and then recorded as an
+`oversized-delivery` gap for the subscriptions it routes to, instead of
+being retained. A body over the verification cap is refused unread; since
+nothing about it is verified, no gap can be recorded for it, and the
+consumers' periodic full reads are the fallback.
 
 ### 4.3 Delivery Object
 
@@ -238,11 +247,23 @@ that range, and MAY record a gap for it where its source can be identified
 
 Deduplication: the receiver keys a receipt on the endpoint and the delivery
 id, never on the delivery id alone, so that two hooks (or two providers)
-cannot collide or suppress each other's deliveries. A second delivery with a
-key that has an unexpired receipt is acknowledged to the provider and not
-retained again. Receipts expire (Webhook Subscriptions §6); after that the
-same id is seen as new, so consumers MUST be idempotent per delivery id
-anyway. With `redelivery: newId` or `unspecified`, deduplication does not
+cannot collide or suppress each other's deliveries. It writes a receipt only
+for a delivery it routes to at least one subscription (§4.4.1), in the
+transaction that retains it or records its gap; an unrouted delivery leaves
+no receipt. A second delivery with a key that has an unexpired receipt is
+acknowledged to the provider and not retained again. Receipts expire
+(Webhook Subscriptions §6); after that the same id is seen as new, so
+consumers MUST be idempotent per delivery id anyway. A provider may redeliver
+for longer than receipts live (GitHub lets a delivery be redelivered for
+three days, the pilot keeps receipts for two; §6.2), and such a redelivery
+reaches consumers again.
+
+The receipt TTL MUST exceed twice the largest `toleranceSeconds` of any
+profile the receiver serves, so that a captured delivery cannot be replayed
+within its timestamp tolerance after its receipt is gone; a receiver MUST
+NOT evict a receipt younger than that, even at its receipt cap (it answers
+5xx instead). Validators cannot check this across documents; with the
+900-second ceiling of §4.2, a TTL of at least 1800 seconds always meets it. With `redelivery: newId` or `unspecified`, deduplication does not
 catch provider redeliveries, and consumers' idempotency is the only
 protection.
 
@@ -273,28 +294,44 @@ delivery only to subscriptions that hold a _source binding_: a source kind
 and key, established like this:
 
 1. A subscriber asks to subscribe one of its connections to a source kind,
-   with values for the access operation's path parameters.
+   with values for the access operation's path parameters. The endpoint the
+   subscription will use MUST belong to the same document (the same catalog
+   platform) as the connection; a binding is to that document, source kind
+   and key together, so equal keys of two providers never meet.
 2. The receiver calls the access operation through that connection, with
    the connection's own credential, exactly as an ordinary proxied read would
-   be sent (same allowlist, same credential handling).
+   be sent (same allowlist, same credential handling). It percent-encodes
+   each parameter value as one path segment (RFC 3986 §3.3: `/` and every
+   character outside `unreserved` are encoded) and refuses the values `.`
+   and `..`, so a value cannot reach another path. It does not follow
+   redirects: a 3xx is a check that cannot complete.
 3. Only a 2xx response whose `key` expression selects a key binds the
    subscription to that kind and key. The key comes from the provider's
    response, never from the subscriber or from a delivery.
 
 The receiver MUST repeat that check when a subscription's lease is renewed
-(Webhook Subscriptions §4.3). A check that fails (a 401, 403 or 404, or a
-different key) closes the subscription at once (Webhook Subscriptions §4.1).
-A check that cannot complete (a 5xx, a timeout) leaves the binding as it was
-but does not renew the lease. Two owners who authorized the
+(Webhook Subscriptions §4.3), and MUST NOT return events of a subscription
+whose last passing check is older than `access.maxCheckAgeSeconds` (Webhook
+Subscriptions §6; 12 hours by default): before answering such a fetch it
+runs the check itself, or refuses the fetch with `access-check-required`.
+Revalidation is therefore paced by the receiver, not by how often a consumer
+renews. A check that fails (a 403 or 404, a different key, or a 401 that
+persists after the connection's credential was refreshed once) closes the
+subscription at once (Webhook Subscriptions §4.1). A check that cannot
+complete (a 5xx, a timeout, a redirect, a 401 whose refresh itself failed
+for a transient reason) leaves the binding as it was, does not renew the
+lease and does not count as passing. Two owners who authorized the
 same application, or connections to the same provider account, never share a
 binding: each subscription is checked with its own connection.
 
 A delivery is routed to every subscription with a binding of the event's
-source kind and the delivery's key, that is active (Webhook Subscriptions
-§4.1), that subscribed to the delivery's event type, and whose endpoint is
-the one the delivery arrived at. A delivery with no key, an event type that
-`events` does not declare, or no such subscription is acknowledged to the
-provider and discarded, without creating state for its source.
+source kind and the delivery's key, that is `active` or
+`needs-reconciliation` and not suspended (Webhook Subscriptions §4.1), that
+subscribed to the delivery's event type, and whose endpoint is the one the
+delivery arrived at (and so of the same document). A delivery with no key,
+an event type that `events` does not declare, or no such subscription is
+acknowledged to the provider and discarded, without creating state for its
+source, not even a receipt (§4.3).
 
 #### 4.4.2 Revocation Object
 
@@ -312,9 +349,9 @@ periodic checks of §4.4.1, never wider than they allow.
 | `context` | name                         | No       | A `context` name of that source kind. Present: it matches bindings by that recorded context key; absent: by source key. |
 | `keys`    | body expression; may use `*` | **Yes**  | Selects the affected keys.                                                                                              |
 
-For a verified delivery that matches a revocation, the receiver MUST, in the
-same transaction that records the delivery's receipt, suspend every binding
-of that source kind whose key (or recorded context key) is among the selected
+For a verified delivery that matches a revocation, the receiver MUST, in one
+transaction, suspend every binding of that source kind, among the bindings
+of the endpoint's document, whose key (or recorded context key) is among the selected
 keys, and schedule an access check for each. Deliveries are not routed to a
 suspended binding. A check that fails closes the subscription; one that
 passes resumes routing and records an `access-suspended` gap (Webhook
@@ -381,7 +418,15 @@ A dedicated hook:
 
 - is created by the receiver with the credential of a connection whose
   access check passed for its source; creating one may need a provider
-  permission that reading does not (`description` should say which);
+  permission that reading does not (`description` should say which). Before
+  it calls `create`, the receiver commits the hook's record: its endpoint,
+  that endpoint's URL and the sealed secret, so a lost response can be
+  matched by `list` and no secret is sent that the receiver did not store;
+- is managed (listed, deleted) through the connection that created it. When
+  that connection is deleted while other subscriptions still use the hook,
+  management moves to the connection of one of them whose access check
+  passes; when none is left, the cleanup job (below) fails visibly with the
+  manual steps for the person or the operator;
 - is reused by any later subscription of the same endpoint document, source
   kind and key, so one source has at most one dedicated hook per receiver;
 - is deleted (or, where the provider has no delete, disabled) by the receiver
@@ -416,6 +461,12 @@ Collection Read Object: `resource`, `collection` (a collection of that
 resource) and `bindings` for every variable of the collection's
 `urlTemplate`. When the document has no `crudResources` the names cannot be
 checked, and a validator reports that.
+
+A declared event MUST NOT carry data that is more private than what the
+source's access check (§4.4) proves the subscriber may read: anyone who can
+pass that check receives every declared event of the source. An event
+type whose payload needs a further permission (security alerts, for
+example) is left undeclared in this version.
 
 A delivery is a hint that these objects may have changed, not their state.
 A consumer that acts on it reads them through the API (with its own
@@ -482,6 +533,11 @@ follows:
 - `installation_repositories` (`removed`) and `installation`
   (`deleted`, `suspend`) as revocations.
 
+GitHub lets a delivery be redelivered for three days
+([redelivering webhooks](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)),
+longer than the pilot's 48-hour receipts: a redelivery on the third day is
+seen as new, and consumers' idempotency per delivery id catches it.
+
 The deliveries under [examples/github-deliveries/](examples/github-deliveries/)
 are invented: fake ids, a fake owner and repository, and a signature made
 with a fake secret that appears only in [test_validate.py](test_validate.py).
@@ -510,7 +566,8 @@ It also has two reference functions used by the tests:
 `verify_delivery(profile, headers, body, secret, now)` follows §4.2.1 with
 `hmac.compare_digest`, and `route_delivery(document, headers, body)` returns
 the delivery id, event type, action, source kind and key, context keys,
-revoked keys and the resource and collection reads. They are a check on the
+revoked keys and the resource and collection reads; `access_path(document,
+kind, parameters)` builds an access check's path by the rules of §4.4.1. They are a check on the
 text, not a receiver.
 
 ```sh
@@ -545,9 +602,13 @@ recorded deliveries before a declaration is called verified.
   means a binding has no context until its first delivery; a revocation
   before then is caught only by the next access check. Whether to read the
   context during the access check instead is open.
-- **Periodic revalidation interval.** §4.4.1 requires a check at each
-  renewal (every 12 hours with the pilot defaults). Whether a separate,
-  shorter interval is needed is open.
+- **Revalidation interval.** §4.4.1 bounds the age of the last passing
+  check by `access.maxCheckAgeSeconds` (12 hours by default) whenever events
+  are served, whatever the consumer's renewal pace. Whether deliveries
+  should also stop being retained for a subscription whose check is stale,
+  rather than only not served, is open.
+- **Receipts and long redelivery windows.** A redelivery after receipts
+  expire reaches consumers again (§4.3, §6.2); longer receipts cost storage.
 - **Deletion as an event.** Whether a delivery's action should be declared
   as a deletion hint (like Deletion Feeds' tombstones) is open; this version
   always asks the consumer to read.

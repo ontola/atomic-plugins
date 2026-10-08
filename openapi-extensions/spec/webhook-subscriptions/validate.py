@@ -21,6 +21,8 @@ SCHEMA = json.loads((ROOT / "schema.json").read_text(encoding="utf-8"))
 RECORDS = ("Policy", "Subscription", "Lease", "GapMarker", "ReconciliationRequired", "Event",
            "EventPage", "Acknowledgement", "Renewal", "ReconciliationComplete", "Error")
 THIRTY_DAYS = 2592000
+MAX_CHECK_AGE = 86400
+MIN_RECEIPT_TTL = 2 * 900  # Webhook Deliveries: toleranceSeconds <= 900
 
 
 def require(condition, message):
@@ -50,6 +52,12 @@ def check_policy(policy):
             "policy: subscription.maxPendingEvents <= owner.maxPendingReferences")
     require(policy["delivery"]["maxBodyBytes"] <= sub["maxPendingBytes"],
             "policy: delivery.maxBodyBytes <= subscription.maxPendingBytes, or no delivery could be retained")
+    require(policy["delivery"]["maxBodyBytes"] <= policy["delivery"]["maxVerifiedBytes"],
+            "policy: delivery.maxBodyBytes <= delivery.maxVerifiedBytes")
+    require(policy["access"]["maxCheckAgeSeconds"] <= min(MAX_CHECK_AGE, lease["durationSeconds"]),
+            "policy.access.maxCheckAgeSeconds: at most 86400 and at most lease.durationSeconds")
+    require(policy["receipts"]["ttlSeconds"] >= MIN_RECEIPT_TTL,
+            "policy.receipts.ttlSeconds: at least 1800, twice the largest timestamp tolerance Webhook Deliveries allows")
     require(policy["sweep"]["maxIntervalSeconds"] <= 60, "policy.sweep.maxIntervalSeconds: at most 60")
     require(policy["closed"]["tombstoneTtlSeconds"] <= THIRTY_DAYS, "policy.closed.tombstoneTtlSeconds: at most 30 days")
     require(policy["cleanup"]["deadlineSeconds"] <= THIRTY_DAYS, "policy.cleanup.deadlineSeconds: at most 30 days")

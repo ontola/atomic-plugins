@@ -11,30 +11,39 @@ info:
 x-webhook-subscriptions:
   policy:
     lease:
-      {
-        durationSeconds: 604800,
-        renewAfterSeconds: 43200,
-        progressDeadlineSeconds: 604800,
-      }
+      durationSeconds: 604800
+      renewAfterSeconds: 43200
+      progressDeadlineSeconds: 604800
+    access:
+      maxCheckAgeSeconds: 43200
     subscription:
-      {
-        maxPendingEvents: 10000,
-        maxPendingBytes: 67108864,
-        maxPendingAgeSeconds: 604800,
-      }
+      maxPendingEvents: 10000
+      maxPendingBytes: 67108864
+      maxPendingAgeSeconds: 604800
     owner:
-      {
-        maxPendingBytes: 268435456,
-        maxPendingReferences: 50000,
-        maxActiveSubscriptions: 20,
-      }
-    deployment: { maxInboxBytes: 1073741824 }
-    receipts: { ttlSeconds: 172800, maxCount: 200000 }
-    closed: { tombstoneTtlSeconds: 2592000, maxTombstones: 10000 }
-    cleanup: { deadlineSeconds: 2592000, maxJobs: 10000 }
-    sweep: { maxIntervalSeconds: 60 }
-    delivery: { maxBodyBytes: 26214400, maxJsonDepth: 64 }
-    fetch: { maxEvents: 100, maxWaitSeconds: 25 }
+      maxPendingBytes: 268435456
+      maxPendingReferences: 50000
+      maxActiveSubscriptions: 20
+    deployment:
+      maxInboxBytes: 1073741824
+    receipts:
+      ttlSeconds: 172800
+      maxCount: 200000
+    closed:
+      tombstoneTtlSeconds: 2592000
+      maxTombstones: 10000
+    cleanup:
+      deadlineSeconds: 2592000
+      maxJobs: 10000
+    sweep:
+      maxIntervalSeconds: 60
+    delivery:
+      maxVerifiedBytes: 26214400
+      maxBodyBytes: 8388608
+      maxJsonDepth: 64
+    fetch:
+      maxEvents: 100
+      maxWaitSeconds: 25
 paths:
   /webhooks/{endpointId}:
     post:

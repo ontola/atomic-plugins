@@ -78,14 +78,14 @@ are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/
 
 ### 4.1 States
 
-| State                  | Behaviour                                                                                                                                                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provisioning`         | The receiver runs the access check and, for a dedicated hook, creates or adopts the hook (Webhook Deliveries §4.5.2), retrying under one stable operation identity. Nothing is captured yet.                              |
-| `needs-reconciliation` | Deliveries are captured from the current generation's barrier. The consumer must complete a reconciliation (§4.4) before the receiver calls its history continuous. A new subscription starts here with reason `initial`. |
-| `active`               | Deliveries are captured and history since the last completed reconciliation has no known gap.                                                                                                                             |
-| `expired`              | The lease or progress deadline passed (§4.3). Nothing new is captured; pending payloads are released; the consumer is detached. Terminal for this subscription: a consumer that returns subscribes again.                 |
-| `cleanup-pending`      | The subscription was the last user of a dedicated hook that the receiver created; the receiver deletes it as a bounded cleanup job (§6).                                                                                  |
-| `closed`               | Payload references, binding and cursor are gone. A tombstone (id, state, closing reason, timestamp) is kept for at most the tombstone TTL (§6) so the consumer gets `closed`, not "unknown".                              |
+| State                  | Behaviour                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provisioning`         | The receiver runs the access check and, for a dedicated hook, creates or adopts the hook (Webhook Deliveries §4.5.2), retrying under one stable operation identity. Nothing is captured yet.                                                                                                                                                                       |
+| `needs-reconciliation` | Deliveries are captured from the current generation's barrier. The consumer must complete a reconciliation (§4.4) before the receiver calls its history continuous. A new subscription starts here with reason `initial`.                                                                                                                                          |
+| `active`               | Deliveries are captured and history since the last completed reconciliation has no known gap.                                                                                                                                                                                                                                                                      |
+| `expired`              | The lease or progress deadline passed (§4.3). Nothing new is captured; pending payloads are released in the same transaction; the consumer is detached. Transient: by the next sweep at the latest (`sweep.maxIntervalSeconds`) it moves on to `cleanup-pending` or `closed`, whose tombstone remembers that it expired. A consumer that returns subscribes again. |
+| `cleanup-pending`      | The subscription was the last user of a dedicated hook that the receiver created; the receiver deletes it as a bounded cleanup job (§6).                                                                                                                                                                                                                           |
+| `closed`               | Payload references, binding and cursor are gone. A tombstone (id, state, closing reason, timestamp) is kept for at most the tombstone TTL, within the tombstone cap (§6), so the consumer gets `expired` or `closed`, not "unknown".                                                                                                                               |
 
 Transitions, and nothing else:
 
@@ -97,8 +97,11 @@ Transitions, and nothing else:
 - `active` or `needs-reconciliation` → `expired` at the lease or progress
   deadline; → `cleanup-pending` or `closed` when the consumer deletes the
   subscription, the connection is deleted, the consumer loses its standing
-  (a delegation or runtime removed), or the access check fails at renewal.
-- `expired` → `cleanup-pending` or `closed`.
+  (a delegation or runtime removed), or an access check fails (Webhook
+  Deliveries §4.4.1: at renewal, before serving events, after a revocation;
+  a check that cannot complete is not a failure).
+- `expired` → `cleanup-pending` or `closed`, by the next sweep at the
+  latest.
 - `cleanup-pending` → `closed` when the hook is deleted or its cleanup
   deadline passes.
 
@@ -108,7 +111,9 @@ subscription on a shared application hook goes straight to `closed`; the
 hook is never touched (Webhook Deliveries §4.5.1).
 
 Deleting the connection MUST stop reads for its subscriptions at once (the
-next request fails) and start hook cleanup in the same transaction. A
+next request fails) and start cleanup of the dedicated hooks this leaves
+unused. A hook another connection's subscription still uses stays, and is
+managed through that connection from then on (Webhook Deliveries §4.5.2). A
 subscription's expiry or closing never revokes or deletes the connection.
 
 ### 4.2 Generations and cursors
@@ -133,11 +138,11 @@ a consumer could have edited.
 
 A lease has three deadlines, all from the policy (§6):
 
-| Field                | Default                                                    | Meaning                                                                                                                                   |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `expiresAt`          | renewal + 604800 s (7 days)                                | Without a renewal by then, the subscription expires.                                                                                      |
-| `renewAfter`         | renewal + 43200 s (12 hours)                               | When the consumer should renew next.                                                                                                      |
-| `progressDeadlineAt` | last acknowledgement + 604800 s, while anything is pending | With pending events and no acknowledgement advancing by then, the subscription expires despite renewals. `null` while nothing is pending. |
+| Field                | Default                                                                                                                    | Meaning                                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `expiresAt`          | renewal + 604800 s (7 days)                                                                                                | Without a renewal by then, the subscription expires.                                                     |
+| `renewAfter`         | renewal + 43200 s (12 hours)                                                                                               | When the consumer should renew next.                                                                     |
+| `progressDeadlineAt` | the later of the last acknowledgement and the moment pending became non-empty, + 604800 s; `null` while nothing is pending | With pending events and no acknowledgement advancing by then, the subscription expires despite renewals. |
 
 Only a signed renewal by the subscription's consumer renews a lease. A
 delivery, an OAuth refresh, other requests through the connection, or a UI
@@ -146,6 +151,13 @@ checkpoint (the last cursor it stored, or `null`); a consumer with nothing
 pending may renew without inventing progress. Every renewal repeats the
 source access check (Webhook Deliveries §4.4.1); a failed check closes the
 subscription, a check that cannot complete refuses the renewal.
+
+`renewAfter` is a hint to the consumer, not the bound on access. The
+receiver itself keeps the last passing access check younger than
+`access.maxCheckAgeSeconds` whenever it serves events: a fetch finding it
+older runs the check first, or is refused with `access-check-required`
+(Webhook Deliveries §4.4.1). A consumer that lost access at the provider
+therefore stops receiving events within that age, however it renews.
 
 The receiver MUST enforce both deadlines on the request path (a delivery,
 fetch, acknowledgement or renewal past a deadline finds the subscription
@@ -190,7 +202,7 @@ subscription, and when it cannot tell whether history is complete. Reasons:
 | `subscription-events-limit`, `subscription-bytes-limit`, `subscription-age-limit` | A per-subscription limit (§6) was reached.                                                                  |
 | `owner-limit`                                                                     | The owner's aggregate budget was reached.                                                                   |
 | `deployment-limit`                                                                | The deployment's inbox budget was reached.                                                                  |
-| `oversized-delivery`                                                              | A verified delivery routed to the subscription exceeded the body cap.                                       |
+| `oversized-delivery`                                                              | A verified delivery routed to the subscription was longer than the retention cap (`delivery.maxBodyBytes`). |
 | `uncapturable-delivery`                                                           | A verified delivery routed to the subscription could not be parsed or stored.                               |
 | `access-suspended`                                                                | Routing was suspended by a revocation (Webhook Deliveries §4.4.2) and resumed after a passing access check. |
 | `receiver-restored`                                                               | The receiver's store was restored from a backup or otherwise lost writes.                                   |
@@ -233,6 +245,12 @@ Gap Marker:
 | `lastAcknowledged`        | cursor \| `null` | The consumer's last acknowledged cursor in that generation.                                                                                              |
 | `earliestAvailableCursor` | cursor \| `null` | The earliest event of that generation still retained after `lastAcknowledged`, or `null` if none is. Such events are recent hints, not complete history. |
 
+With `resubscribe`, `gap.reason` says why the subscription ended:
+`lease-expired`, `progress-stalled`, `access-denied` (a failed access
+check), `connection-deleted`, `standing-lost` (the consumer's delegation or
+runtime was removed), `deleted` (by the consumer) or
+`provisioning-failed`.
+
 A receiver MUST NOT skip a consumer to the newest event silently, or
 present expired history as replayable.
 
@@ -243,10 +261,11 @@ after the transaction that retains the payload and its references, or that
 records the gap in their place, has committed. If it can commit neither, it
 answers 5xx, so the provider may retry. A verified delivery that no
 subscription wants is answered 2xx and leaves no state for its source.
-Oversized or otherwise uncapturable deliveries record a gap for the
-subscriptions their source routes to, when their source can be identified
-securely (after verification); otherwise the consumers' periodic full reads
-are the fallback.
+A verified delivery over the retention cap, or one that is otherwise
+uncapturable, records a gap for the subscriptions its source routes to,
+when its source can be identified securely (after verification). A body
+over the verification cap is refused before it is verified, so nothing can
+be recorded for it; the consumers' periodic full reads are the fallback.
 
 A payload shared by several subscriptions is stored once and counted in
 full against each subscription and owner it is retained for, so sharing
@@ -263,55 +282,66 @@ request, never silently drops history.
 x-webhook-subscriptions:
   policy:
     lease:
-      {
-        durationSeconds: 604800,
-        renewAfterSeconds: 43200,
-        progressDeadlineSeconds: 604800,
-      }
+      durationSeconds: 604800
+      renewAfterSeconds: 43200
+      progressDeadlineSeconds: 604800
+    access:
+      maxCheckAgeSeconds: 43200
     subscription:
-      {
-        maxPendingEvents: 10000,
-        maxPendingBytes: 67108864,
-        maxPendingAgeSeconds: 604800,
-      }
+      maxPendingEvents: 10000
+      maxPendingBytes: 67108864
+      maxPendingAgeSeconds: 604800
     owner:
-      {
-        maxPendingBytes: 268435456,
-        maxPendingReferences: 50000,
-        maxActiveSubscriptions: 20,
-      }
-    deployment: { maxInboxBytes: 1073741824 }
-    receipts: { ttlSeconds: 172800, maxCount: 200000 }
-    closed: { tombstoneTtlSeconds: 2592000, maxTombstones: 10000 }
-    cleanup: { deadlineSeconds: 2592000, maxJobs: 10000 }
-    sweep: { maxIntervalSeconds: 60 }
-    delivery: { maxBodyBytes: 26214400, maxJsonDepth: 64 }
-    fetch: { maxEvents: 100, maxWaitSeconds: 25 }
+      maxPendingBytes: 268435456
+      maxPendingReferences: 50000
+      maxActiveSubscriptions: 20
+    deployment:
+      maxInboxBytes: 1073741824
+    receipts:
+      ttlSeconds: 172800
+      maxCount: 200000
+    closed:
+      tombstoneTtlSeconds: 2592000
+      maxTombstones: 10000
+    cleanup:
+      deadlineSeconds: 2592000
+      maxJobs: 10000
+    sweep:
+      maxIntervalSeconds: 60
+    delivery:
+      maxVerifiedBytes: 26214400
+      maxBodyBytes: 8388608
+      maxJsonDepth: 64
+    fetch:
+      maxEvents: 100
+      maxWaitSeconds: 25
 ```
 
-| Field                               | Plan default                                            | Meaning                                                                                                             |
-| ----------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `lease.durationSeconds`             | 604800 (7 days)                                         | §4.3 `expiresAt`.                                                                                                   |
-| `lease.renewAfterSeconds`           | 43200 (12 hours)                                        | §4.3 `renewAfter`. Less than `durationSeconds`.                                                                     |
-| `lease.progressDeadlineSeconds`     | 604800 (7 days)                                         | §4.3 `progressDeadlineAt`.                                                                                          |
-| `subscription.maxPendingEvents`     | 10000                                                   | Pending events per subscription.                                                                                    |
-| `subscription.maxPendingBytes`      | 67108864 (64 MiB)                                       | Pending payload bytes per subscription.                                                                             |
-| `subscription.maxPendingAgeSeconds` | 604800 (7 days)                                         | Age of the oldest pending event.                                                                                    |
-| `owner.maxPendingBytes`             | 268435456 (256 MiB)                                     | Across all of one owner's subscriptions, connections and runtimes.                                                  |
-| `owner.maxPendingReferences`        | 50000                                                   | Pending event references across one owner's subscriptions.                                                          |
-| `owner.maxActiveSubscriptions`      | 20                                                      | Subscriptions not `expired` or `closed`. Creating one more is refused (`quota-exceeded`).                           |
-| `deployment.maxInboxBytes`          | 1073741824 (1 GiB)                                      | Operator-configured; raw payload bytes plus a conservative per-row overhead the receiver states.                    |
-| `receipts.ttlSeconds`               | 172800 (48 hours)                                       | Delivery-id receipts (Webhook Deliveries §4.3).                                                                     |
-| `receipts.maxCount`                 | **open** (proposed 200000)                              | Hard cap; at the cap the oldest receipts expire early.                                                              |
-| `closed.tombstoneTtlSeconds`        | 2592000 (30 days)                                       | Upper bound; at most this.                                                                                          |
-| `closed.maxTombstones`              | **open** (proposed 10000)                               | At the cap the oldest tombstones are purged early.                                                                  |
-| `cleanup.deadlineSeconds`           | 2592000 (30 days)                                       | Hook cleanup jobs give up and are recorded as failed after this.                                                    |
-| `cleanup.maxJobs`                   | **open** (proposed 10000)                               | At the cap new dedicated subscriptions are refused (`capacity-unavailable`).                                        |
-| `sweep.maxIntervalSeconds`          | 60                                                      | The sweeper runs at least this often, in bounded batches.                                                           |
-| `delivery.maxBodyBytes`             | **open** (proposed 26214400, GitHub's documented 25 MB) | Larger bodies are refused before they are read (Webhook Deliveries §4.2.1). At most `subscription.maxPendingBytes`. |
-| `delivery.maxJsonDepth`             | **open** (proposed 64)                                  | Deeper bodies are uncapturable.                                                                                     |
-| `fetch.maxEvents`                   | **open** (proposed 100)                                 | Events per page.                                                                                                    |
-| `fetch.maxWaitSeconds`              | **open** (proposed 25)                                  | Longest long-poll wait.                                                                                             |
+| Field                               | Plan default                                            | Meaning                                                                                                                                                                                                                                |
+| ----------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lease.durationSeconds`             | 604800 (7 days)                                         | §4.3 `expiresAt`.                                                                                                                                                                                                                      |
+| `lease.renewAfterSeconds`           | 43200 (12 hours)                                        | §4.3 `renewAfter`. Less than `durationSeconds`.                                                                                                                                                                                        |
+| `lease.progressDeadlineSeconds`     | 604800 (7 days)                                         | §4.3 `progressDeadlineAt`.                                                                                                                                                                                                             |
+| `access.maxCheckAgeSeconds`         | **open** (proposed 43200, the renewal interval)         | The oldest a passing access check may be when events are served (§4.3). At most 86400.                                                                                                                                                 |
+| `subscription.maxPendingEvents`     | 10000                                                   | Pending events per subscription.                                                                                                                                                                                                       |
+| `subscription.maxPendingBytes`      | 67108864 (64 MiB)                                       | Pending payload bytes per subscription.                                                                                                                                                                                                |
+| `subscription.maxPendingAgeSeconds` | 604800 (7 days)                                         | Age of the oldest pending event.                                                                                                                                                                                                       |
+| `owner.maxPendingBytes`             | 268435456 (256 MiB)                                     | Across all of one owner's subscriptions, connections and runtimes.                                                                                                                                                                     |
+| `owner.maxPendingReferences`        | 50000                                                   | Pending event references across one owner's subscriptions.                                                                                                                                                                             |
+| `owner.maxActiveSubscriptions`      | 20                                                      | Subscriptions in `provisioning`, `needs-reconciliation` or `active`; not `expired`, `cleanup-pending` or `closed`, so a slow hook cleanup never blocks the owner's new subscriptions. Creating one more is refused (`quota-exceeded`). |
+| `deployment.maxInboxBytes`          | 1073741824 (1 GiB)                                      | Operator-configured; raw payload bytes plus a conservative per-row overhead the receiver states.                                                                                                                                       |
+| `receipts.ttlSeconds`               | 172800 (48 hours)                                       | Delivery-id receipts (Webhook Deliveries §4.3). MUST exceed twice the largest `toleranceSeconds` of any profile served; at least 1800 always does.                                                                                     |
+| `receipts.maxCount`                 | **open** (proposed 200000)                              | Hard cap. At the cap the oldest receipts expire early, but never one younger than twice the largest `toleranceSeconds`; when only such receipts are left, new deliveries are answered 5xx.                                             |
+| `closed.tombstoneTtlSeconds`        | 2592000 (30 days)                                       | Upper bound for tombstones of expired and closed subscriptions.                                                                                                                                                                        |
+| `closed.maxTombstones`              | **open** (proposed 10000)                               | At the cap the oldest tombstones are purged early.                                                                                                                                                                                     |
+| `cleanup.deadlineSeconds`           | 2592000 (30 days)                                       | Hook cleanup jobs give up and are recorded as failed after this.                                                                                                                                                                       |
+| `cleanup.maxJobs`                   | **open** (proposed 10000)                               | At the cap new subscriptions that would need a new dedicated hook are refused (`capacity-unavailable`); other subscriptions are not affected.                                                                                          |
+| `sweep.maxIntervalSeconds`          | 60                                                      | The sweeper runs at least this often, in bounded batches.                                                                                                                                                                              |
+| `delivery.maxVerifiedBytes`         | **open** (proposed 26214400, GitHub's documented 25 MB) | The verification cap: larger bodies are refused before they are read (Webhook Deliveries §4.2.1).                                                                                                                                      |
+| `delivery.maxBodyBytes`             | **open** (proposed 8388608)                             | The retention cap: a verified body longer than this is recorded as an `oversized-delivery` gap, not retained. At most `delivery.maxVerifiedBytes` and `subscription.maxPendingBytes`.                                                  |
+| `delivery.maxJsonDepth`             | **open** (proposed 64)                                  | Deeper bodies are uncapturable.                                                                                                                                                                                                        |
+| `fetch.maxEvents`                   | **open** (proposed 100)                                 | Events per page.                                                                                                                                                                                                                       |
+| `fetch.maxWaitSeconds`              | **open** (proposed 25)                                  | Longest long-poll wait.                                                                                                                                                                                                                |
 
 A receiver rejects new subscriptions (`capacity-unavailable`) when it cannot
 keep its sweeps and cleanup within these bounds, and exposes its sweep lag.
@@ -366,8 +396,8 @@ be idempotent per delivery id and read the API for the current state.
 
 Error codes: `unknown-subscription`, `obsolete-generation`,
 `cursor-not-issued`, `cursor-ahead`, `barrier-mismatch`, `quota-exceeded`,
-`capacity-unavailable`, `access-denied`, `rate-limited`, `expired`,
-`closed`.
+`capacity-unavailable`, `access-denied`, `access-check-required`,
+`rate-limited`, `expired`, `closed`.
 
 ## 8. Validation
 
@@ -379,7 +409,11 @@ rules a schema cannot express:
 - `subscription.maxPendingBytes` ≤ `owner.maxPendingBytes` ≤
   `deployment.maxInboxBytes`, and `subscription.maxPendingEvents` ≤
   `owner.maxPendingReferences`;
-- `delivery.maxBodyBytes` ≤ `subscription.maxPendingBytes`;
+- `delivery.maxBodyBytes` ≤ `delivery.maxVerifiedBytes` and ≤
+  `subscription.maxPendingBytes`;
+- `access.maxCheckAgeSeconds` ≤ 86400 and ≤ `lease.durationSeconds`;
+- `receipts.ttlSeconds` ≥ 1800 (twice the largest tolerance Webhook
+  Deliveries allows; the actual tolerances are in other documents);
 - `sweep.maxIntervalSeconds` ≤ 60, `closed.tombstoneTtlSeconds` and
   `cleanup.deadlineSeconds` ≤ 2592000.
 
@@ -398,9 +432,10 @@ python3 validate.py examples/receiver.yaml examples/records.json
 
 ## 9. Open points
 
-- **Unnumbered limits.** `receipts.maxCount`, `closed.maxTombstones`,
-  `cleanup.maxJobs`, `delivery.maxBodyBytes`, `delivery.maxJsonDepth`,
-  `fetch.maxEvents` and `fetch.maxWaitSeconds` have proposed values only.
+- **Unnumbered limits.** `access.maxCheckAgeSeconds`, `receipts.maxCount`,
+  `closed.maxTombstones`, `cleanup.maxJobs`, `delivery.maxVerifiedBytes`,
+  `delivery.maxBodyBytes`, `delivery.maxJsonDepth`, `fetch.maxEvents` and
+  `fetch.maxWaitSeconds` have proposed values only.
   Rate and concurrency limits are not declared at all.
 - **Row overhead.** How the receiver counts per-row and index overhead in
   `deployment.maxInboxBytes` is to be measured (plan, step 7).
@@ -410,8 +445,13 @@ python3 validate.py examples/receiver.yaml examples/records.json
   generation stay fetchable until acknowledged, or are released at once, is
   left to the receiver; consumers must handle both.
 - **Initial state.** Starting new subscriptions in `needs-reconciliation`
-  (reason `initial`) is this draft's choice, not the plan's table, which
-  goes from `provisioning` to `active`.
+  (reason `initial`) is a deliberate departure from the plan's table, which
+  goes from `provisioning` to `active`; the plan now records it. Deliveries
+  are routed in that state (Webhook Deliveries §4.4.1), so nothing is lost
+  during the first reconciliation.
+- **Receipts and redelivery windows.** Receipts live 48 hours; a provider
+  redelivery after that (GitHub allows three days) reaches consumers again,
+  who are idempotent per delivery id.
 - **Fan-out bound.** The plan bounds event fan-out; how many subscriptions
   one source may have is not declared.
 - **SSE.** Notification over server-sent events is deferred.
