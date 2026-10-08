@@ -24,6 +24,7 @@ import { fixtures } from '../localthought/fixtures/index.mjs';
 import {
   civilYear as recorderYear,
   nextLink,
+  REDACTIONS,
   redactor,
 } from './fixtures/moneybird/record.mjs';
 import { civilYear } from './moneybird/read';
@@ -268,8 +269,10 @@ describe('moneybird fixture: always-on checks', () => {
       notes: [],
       contact_people: [],
       events: [],
-      favourite_colour: 'redacted',
+      // A field this list does not know: its key is redacted too.
+      'redacted-key-1': 'redacted',
     });
+    expect(Object.keys(contact)).not.toContain('favourite_colour');
     expect(administration.name).toMatch(/^Redacted administration \d+$/);
     expect(contact.city).toMatch(/^Redacted city \d+$/);
     expect(contact.email).toMatch(/^contact\d+@example\.invalid$/);
@@ -277,7 +280,7 @@ describe('moneybird fixture: always-on checks', () => {
     expect(contact.sales_invoices_url).toBe(
       `https://moneybird.com/${administration.id}/sales_invoices/redacted/all`,
     );
-    expect(redact.unknown()).toEqual(['contact.favourite_colour']);
+    expect(redact.unknown()).toEqual(['contact.<redacted key>']);
 
     // What the app makes of the redacted rows still has a name and an identity.
     expect(contactName(contact as never)).toMatch(/^Redacted company \d+$/);
@@ -404,94 +407,156 @@ describe('moneybird fixture: always-on checks', () => {
     ]);
   });
 
-  it('trusts nothing inside an unknown nested object, and no key that is not a field name', () => {
+  it('trusts nothing inside an unknown nested object: KEEP, KEEP_NUMBERS and id kinds do not apply', () => {
     const redact = redactor();
     const mutation: Row = redact.row('financial_mutation', {
       id: '999000777',
       amount: '-120.5',
       currency: 'EUR',
-      sepa_mandate_id: 'MANDATE-77',
       sepa_fields: {
-        // Familiar names inside an object the list does not know: KEEP does
-        // not apply here, and no id kind is inherited from the mutation.
+        // Familiar names inside an object the list does not know: KEEP and
+        // KEEP_NUMBERS do not apply here, and no id kind is inherited from
+        // the mutation.
         amount: 'free text',
         type: 'SDD',
         currency: 'EUR',
         version: 3,
         id: '999000778',
-        contra_account_id: '999000779',
-        empty: '',
-        flag: true,
-        nothing: null,
-        deeper: { date: '2026-01-20', list: ['a', 1] },
-        user: { name: 'Piet Jansen' },
+        contact_id: '999000779',
+        user: { name: 'Piet Jansen', id: '999000780' },
       },
-      NL02RABO0123456789: { amount: '1.00' },
-      'Contra Account': 'Jansen',
+      extra: { amount: 'Jansen paid', type: 'Jansen', budget: 4000 },
     });
     const text = JSON.stringify(mutation);
     for (const secret of [
-      'MANDATE-77',
       'free text',
       'SDD',
       '999000778',
       '999000779',
-      '2026-01-20',
-      'RABO',
-      'Contra Account',
+      '999000780',
       'Jansen',
-      '1.00',
+      '4000',
     ])
       expect(text, secret).not.toContain(secret);
     expect(mutation).toMatchObject({
       amount: '-120.5',
       currency: 'EUR',
-      sepa_mandate_id: 'redacted',
       sepa_fields: {
         amount: 'redacted',
         type: 'redacted',
         currency: 'redacted',
         version: 'redacted',
         id: 'redacted',
-        contra_account_id: 'redacted',
-        empty: '',
-        flag: true,
-        nothing: null,
-        deeper: { date: 'redacted', list: ['redacted', 'redacted'] },
-        user: { name: 'redacted' },
+        contact_id: 'redacted',
+        user: { name: 'redacted', id: 'redacted' },
       },
+      // `extra` is not a field name the list knows, so its key goes too.
+      'redacted-key-1': {
+        amount: 'redacted',
+        type: 'redacted',
+        budget: 'redacted',
+      },
+    });
+    // Nothing inside got a fake id of any kind (7000… is the mutation's).
+    expect(text.match(/\d{18}/g)).toEqual([mutation.id]);
+  });
+
+  it('keeps an object key only when FIELDS lists it, and reports it without the raw key', () => {
+    const redact = redactor();
+    const mutation: Row = redact.row('financial_mutation', {
+      id: '999000777',
+      NL02RABO0123456789: { amount: '1.00' },
+      // Shaped like a field name, still data.
+      nl02rabo0123456789: 'x',
+      jansen_b_v: { date: '2026-01-20' },
+      'Contra Account': 'Jansen',
+      sepa_fields: { empty: '', flag: true, nothing: null, amount: '2.00' },
+    });
+    const text = JSON.stringify(mutation);
+    for (const secret of [
+      'RABO',
+      'rabo',
+      'jansen',
+      'Jansen',
+      'Contra Account',
+      '1.00',
+      '2.00',
+      '2026-01-20',
+    ])
+      expect(text, secret).not.toContain(secret);
+    expect(mutation).toEqual({
+      id: mutation.id,
       'redacted-key-1': { amount: 'redacted' },
       'redacted-key-2': 'redacted',
+      'redacted-key-3': { date: 'redacted' },
+      'redacted-key-4': 'redacted',
+      sepa_fields: {
+        // Empty, boolean and null values stay, under redacted keys.
+        'redacted-key-5': '',
+        'redacted-key-6': true,
+        'redacted-key-7': null,
+        amount: 'redacted',
+      },
     });
-    expect(Object.keys(mutation)).not.toContain('NL02RABO0123456789');
-    // Reported by full path, never by a raw key.
-    expect(redact.unknown()).toEqual([
+    const report = redact.unknown();
+    for (const secret of ['RABO', 'rabo', 'jansen', 'Contra'])
+      expect(report.join('\n'), secret).not.toContain(secret);
+    expect(report).toEqual([
       'financial_mutation.<redacted key>',
       'financial_mutation.<redacted key>.amount',
+      'financial_mutation.<redacted key>.date',
+      'financial_mutation.sepa_fields.<redacted key>',
       'financial_mutation.sepa_fields.amount',
-      'financial_mutation.sepa_fields.contra_account_id',
-      'financial_mutation.sepa_fields.currency',
-      'financial_mutation.sepa_fields.deeper.date',
-      'financial_mutation.sepa_fields.deeper.list',
-      'financial_mutation.sepa_fields.id',
-      'financial_mutation.sepa_fields.type',
-      'financial_mutation.sepa_fields.user.name',
-      'financial_mutation.sepa_fields.version',
     ]);
-    // The same odd key keeps the same fake across rows.
+    // The same key keeps the same fake across rows.
     const again: Row = redact.row('financial_mutation', {
-      id: '999000777',
-      NL02RABO0123456789: 'x',
+      id: '999000778',
+      NL02RABO0123456789: 'y',
     });
-    expect(Object.keys(again)).toContain('redacted-key-1');
-    // A known nested resource still gets its fakes and reports its path.
+    expect(Object.keys(again)).toEqual(['id', 'redacted-key-1']);
+  });
+
+  it('redacts sepa_mandate_id as REDACTIONS says, string or number', () => {
+    const redact = redactor();
+    const contact: Row = redact.row('contact', {
+      id: '888000222',
+      sepa_mandate_id: 'MANDATE-77',
+    });
+    const numeric: Row = redact.row('contact', {
+      id: '888000223',
+      sepa_mandate_id: 770077,
+    });
+    expect(contact.sepa_mandate_id).toBe('redacted');
+    expect(numeric.sepa_mandate_id).toBe('redacted');
+    expect(JSON.stringify([contact, numeric])).not.toMatch(/MANDATE|770077/);
+    expect(
+      REDACTIONS.find(r => /\bsepa_mandate_id\b/.test(r.field))?.replace,
+    ).toMatch(/"redacted"/);
+  });
+
+  it('reports an unknown field by its full nesting path', () => {
+    const redact = redactor();
     const entry: Row = redact.row('time_entry', {
       id: '999000555',
       user: { id: '999000333', name: 'Piet Jansen', favourite: 'tea' },
+      project: {
+        id: '999000444',
+        name: 'Website',
+        sepa_fields: { deeper: { date: '2026-01-20', list: ['a', 1] } },
+      },
+      contact: { id: '888000222', tax_number: 123456789 },
     });
+    // A known nested resource still gets its fakes.
     expect((entry.user as Row).name).toBe('Redacted user 1');
-    expect((entry.user as Row).favourite).toBe('redacted');
-    expect(redact.unknown()).toContain('time_entry.user.favourite');
+    expect((entry.project as Row).name).toBe('Redacted project 1');
+    expect(JSON.stringify(entry)).not.toMatch(/tea|2026-01-20|123456789/);
+    expect(redact.unknown()).toEqual([
+      'time_entry.contact.tax_number',
+      'time_entry.project.sepa_fields.<redacted key>',
+      'time_entry.project.sepa_fields.<redacted key>.<redacted key>',
+      'time_entry.project.sepa_fields.<redacted key>.date',
+      'time_entry.user.<redacted key>',
+    ]);
   });
 
   it('counts the civil year the way the app does', () => {

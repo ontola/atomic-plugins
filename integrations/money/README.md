@@ -645,8 +645,9 @@ time entries keeps one name), the nested arrays the app never reads to
 `budget`, `paused_duration`, `max_transfer_amount` and `child_order`, to
 `"redacted"` and listed in `api/meta.json` by its full path; inside a
 nested object the list does not know (`sepa_fields`, say) everything is
-redacted whatever its field names, and an object key that is not shaped
-like a field name becomes `redacted-key-<n>`), and never writes the token. Once `api/meta.json` exists, `scenario.mjs` replays the
+redacted whatever its field names, and an object key the recorder's
+`FIELDS` list does not know becomes `redacted-key-<n>`, so a field Moneybird
+adds shows up as a redacted key until it is added there), and never writes the token. Once `api/meta.json` exists, `scenario.mjs` replays the
 recording instead of `synthetic.mjs`, with the same page cap, outage and
 mutation cap, and `this_year` meaning the recording's year;
 `moneybird-fixture.test.ts` proves that replay against an invented `api/`
