@@ -160,7 +160,9 @@ function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
         ? readNestedField(body, path)
         : undefined;
   if (!Array.isArray(array)) {
-    throw new Error(`No items array at ${path || 'the body root'}`);
+    throw new Error(
+      `No items array at ${path || 'the body root'} (the declared envelope.itemsField)`,
+    );
   }
   return array.filter(isRecord);
 }

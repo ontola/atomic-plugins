@@ -51,3 +51,45 @@ collection (`tableRecords`), so Syncables asks for `baseId` and
 `tableIdOrName`; the base and table metadata GET operations are OAuth-covered
 but are not managed collections in this read model. No end-to-end provider
 login or live account data is covered here.
+
+## GitLab
+
+The candidate GitLab fixture composes the candidate dated catalog entry and
+its exact OAD pin, then reads synthetic multi-page projects and per-project
+issues through the built Syncables browser reader. It checks catalog-selected
+`membership=true`, root input discovery, project-to-issue path binding, and
+that only `Link rel=next` advances traversal. It makes no provider requests.
+
+```sh
+npm ci --prefix syncables --ignore-scripts
+npm run build --prefix syncables
+node overlays/tests/runtime_gitlab.mjs
+```
+
+The integration proxy's real catalog and OAuth profile parser has a focused
+ignored test. It checks `read_api`, S256 PKCE support, read-only route coverage,
+and declared pagination inputs:
+
+```sh
+cargo test --manifest-path integration-proxy/Cargo.toml \
+  gitlab_readonly_profile_is_scoped_and_proxy_compatible \
+  -- --ignored --nocapture
+```
+
+After the candidate catalog and OAD pin are publicly reachable, repeat the
+proxy check with `GITLAB_CATALOG_URL` set to the published dated catalog URL.
+See [GitLab read-only provenance](GITLAB_READONLY_PROVENANCE.md) for source,
+scope, pagination, and limitations.
+
+The combined GitLab/Google Tasks candidate also has an ignored proxy parser
+check for Google Tasks' `tasks.readonly` scope, S256 PKCE, and read-only
+operation coverage. It loads the local unpublished 13-platform catalog by
+default:
+
+```sh
+cargo test --manifest-path integration-proxy/Cargo.toml \
+  google_tasks_readonly_profile_is_scoped_and_proxy_compatible \
+  -- --ignored --nocapture
+```
+
+After publication, set `GITLAB_TASKS_CATALOG_URL` to the combined catalog URL.

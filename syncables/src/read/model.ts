@@ -26,6 +26,16 @@ export interface ReadCollection {
   method: ListMethod;
   /** Fixed JSON body fields for a POST list, from `x-list-body`. */
   listBody: Record<string, unknown>;
+  /**
+   * Dot-path to the items array in each list response body, from the
+   * Collection Object's `envelope.itemsField` (CRUD Causality §4.2, the
+   * Envelope Object of Pagination Schemes §4.4.2). Absent when the
+   * declaration is omitted or `null` (the body root is the array), or is not
+   * a non-empty string: the array is then located as before (a top-level
+   * array body, else the schema's array property, else a common envelope
+   * name).
+   */
+  itemsField?: string;
   /** Item URL from the declared identity; absent for a list-only resource. */
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
@@ -159,6 +169,9 @@ export function discoverReadModel(
           listQuery[key] = asText(value);
         }
       }
+      const itemsField = isRecord(col['envelope'])
+        ? col['envelope']['itemsField']
+        : undefined;
       collections.push({
         name,
         resource,
@@ -170,6 +183,9 @@ export function discoverReadModel(
         listBody: isRecord(col['x-list-body'])
           ? structuredClone(col['x-list-body'])
           : {},
+        ...(typeof itemsField === 'string' && itemsField !== ''
+          ? { itemsField }
+          : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
       });
