@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.5.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.6.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, WindowReadError, halves, read_range, resolve_link, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml")
 
 
 def example(name):
@@ -491,6 +491,114 @@ class ReadRangeTests(unittest.TestCase):
                   "request": {"queryParameters": {"n": {"role": "windowRange", "template": "{start}:{end}"}}}}
         result = read_range(scheme, "1", "2", lambda values: next(answers))
         self.assertEqual(result["items"], [{"id": "1", "v": 2}])
+
+
+class ShortPageSchemaTests(unittest.TestCase):
+    def document(self):
+        return example("short-page.yaml")
+
+    def scheme(self, document, name="zeroBasedPages"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_start_only_on_page_and_not_negative(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = -1
+        self.assertInvalid(document, "zeroBasedPages")
+        document = self.document()
+        self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]["start"] = 0
+        self.assertInvalid(document, "sizedPages")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = 1
+        validate(document)
+
+    def test_short_page_fields(self):
+        for mutate in (lambda s: s.pop("size"), lambda s: s.pop("assurance"), lambda s: s.update(size=0),
+                       lambda s: s.update(size="response"), lambda s: s.update(assurance="likely"),
+                       lambda s: s.update(extra=True)):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["shortPage"])
+            self.assertInvalid(document, "zeroBasedPages")
+
+    def test_short_page_only_on_page_number_schemes(self):
+        document = self.document()
+        self.scheme(document)["type"] = "pageToken"
+        self.assertInvalid(document, "zeroBasedPages")
+
+    def test_request_size_needs_a_page_size_field(self):
+        document = self.document()
+        del self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]
+        self.assertInvalid(document, "needs a request field with role pageSize")
+
+    def test_applied_scheme_needs_a_page_field(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["role"] = "x-page"
+        del self.scheme(document)["request"]["queryParameters"]["page"]["start"]
+        self.assertInvalid(document, "needs a request field with role page")
+
+    def test_0_5_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml"):
+            validate(example(name))
+
+
+class ReadPagesTests(unittest.TestCase):
+    def setUp(self):
+        self.document = example("short-page.yaml")
+        self.zero = self.document["components"]["paginationSchemes"]["zeroBasedPages"]
+        self.sized = self.document["components"]["paginationSchemes"]["sizedPages"]
+
+    def provider(self, total, size, first=0, envelope="tasks"):
+        calls = []
+
+        def request(values):
+            calls.append(values)
+            number = values[("queryParameters", "page")] - first
+            page = [{"id": str(i)} for i in range(number * size, min(total, (number + 1) * size))]
+            return {envelope: page} if envelope else page
+
+        return request, calls
+
+    def test_zero_based_pages_start_at_zero_and_end_on_a_short_page(self):
+        request, calls = self.provider(250, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+        self.assertFalse(result["complete"])  # assurance: assumed
+
+    def test_a_full_last_page_needs_one_more_empty_page(self):
+        request, calls = self.provider(200, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result["items"]), 200)
+
+    def test_documented_short_page_makes_the_read_complete(self):
+        request, calls = self.provider(120, 50, first=1, envelope=None)
+        result = read_pages(self.sized, request, page_size=50)
+        self.assertTrue(result["complete"])
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [1, 2, 3])
+        self.assertEqual({c[("queryParameters", "per_page")] for c in calls}, {50})
+
+    def test_request_size_needs_the_page_size(self):
+        with self.assertRaises(ValueError):
+            read_pages(self.sized, lambda values: [])
+
+    def test_an_oversized_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(101)]})
+
+    def test_a_server_that_ignores_the_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(100)]})
+        self.assertIn("repeats", str(raised.exception))
+
+    def test_page_budget_ends_the_read_incomplete(self):
+        request, _ = self.provider(1000, 100)
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, request, max_pages=3)
 
 
 if __name__ == "__main__":

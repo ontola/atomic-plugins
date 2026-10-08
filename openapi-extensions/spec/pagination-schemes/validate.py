@@ -1,14 +1,18 @@
-"""Validate Pagination Schemes 0.5.0 in an OpenAPI document, resolve links and read range windows.
+"""Validate Pagination Schemes 0.6.0 in an OpenAPI document, resolve links, read short-page lists and range windows.
 
 `validate(document)` checks every scheme in `components.paginationSchemes`
 (or the provisional Swagger 2.0 root `x-paginationSchemes`) and every
-operation's `x-pagination` against schema.json (rules 1-4, 8-10 and 12-16),
+operation's `x-pagination` against schema.json (rules 1-4, 8-10, 12-16, 19 and 20),
 that each application names a defined scheme (rule 5), that a `declared` link
 base has the origin of one of each explicitly applying operation's servers
 (rule 11), that a `rangeWindow` scheme has exactly one way of carrying its
 window (rule 14), is applied alone (rule 17) and names parameters the
-operation has (rule 18). Rules 6 and 7 need the response schemas and are not
-checked. Ordinary OpenAPI validation is separate.
+operation has (rule 18), and that a Short Page Object has the request fields
+it needs (rules 21 and 22). Rules 6 and 7 need the response schemas and are
+not checked. Ordinary OpenAPI validation is separate.
+
+`read_pages(...)` is a reference implementation of a page-number read with
+`start` and a Short Page Object (§4.4.5).
 
 `read_range(...)` is a reference implementation of §4.6.3 and §4.6.4: it reads
 one range through a caller-supplied request function, halving full windows,
@@ -212,6 +216,8 @@ def validate(document):
         location = f"{root}.{name}"
         found = _errors(SCHEME_VALIDATOR, scheme, location)
         errors += found
+        if not found:
+            errors += [f"{location}.{problem}" for problem in _short_page_problems(scheme, applied=False)]
         if not found and scheme.get("type") == "rangeWindow":
             problem = _window_carrier_problem(scheme)
             if problem:
@@ -259,6 +265,7 @@ def validate(document):
             errors += found
             if found:
                 continue
+            errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
             if merged.get("type") == "rangeWindow":
                 problem = _window_carrier_problem(merged)
                 if problem:
@@ -391,6 +398,83 @@ def halves(start, end, window):
     middle = first + (width + 1) // 2  # the first unit of the second window
     head_end = middle - 1 if window["bounds"] == "closed" else middle
     return (start, _to_bound(head_end, window)), (_to_bound(middle, window), end)
+
+
+def _role_fields(scheme, role):
+    """[(location, name)] of a scheme's request fields with this role."""
+    return [
+        (location, name)
+        for location in FIELD_LOCATIONS
+        for name, field in scheme.get("request", {}).get(location, {}).items()
+        if isinstance(field, dict) and field.get("role") == role
+    ]
+
+
+def _short_page_problems(scheme, applied):
+    """Rules 21 and 22 (22 only for a scheme applied to an operation)."""
+    short = scheme.get("response", {}).get("shortPage")
+    if not isinstance(short, dict):
+        return []
+    problems = []
+    if short.get("size") == "request" and not _role_fields(scheme, "pageSize"):
+        problems.append("response.shortPage.size: 'request' needs a request field with role pageSize (rule 21)")
+    if applied and not _role_fields(scheme, "page"):
+        problems.append("response.shortPage: needs a request field with role page (rule 22)")
+    return problems
+
+
+class PageReadError(RuntimeError):
+    """A page-number read that ended with an error (§4.4.5 step 3)."""
+
+
+def _items(body, scheme):
+    path = scheme.get("response", {}).get("envelope", {}).get("itemsField")
+    value = body
+    if path:
+        for segment in path.split("."):
+            value = value.get(segment) if isinstance(value, dict) else None
+    if not isinstance(value, list):
+        raise PageReadError("the response holds no item array")
+    return value
+
+
+def read_pages(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+    """A page-number read with `start` and a Short Page Object (§4.3.1, §4.4.5).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `page` field (and the `pageSize` field, when `page_size` is given)
+    to their values, and returns the response body. Returns {"items", "pages",
+    "complete"}: "complete" is True only when a short page ended the read and
+    the assurance is `documented`. Raises PageReadError for a page with more
+    than `size` items, a page that repeats the one before it, or `max_pages`
+    reached; such a read is not complete.
+    """
+    short = scheme["response"]["shortPage"]
+    [page_field] = _role_fields(scheme, "page")
+    location, name = page_field
+    first = scheme["request"][location][name].get("start", 1)
+    size = page_size if short["size"] == "request" else short["size"]
+    if short["size"] == "request" and page_size is None:
+        raise ValueError("size 'request' needs the page size the client sends")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    items, previous, pages = [], None, 0
+    number = first
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise PageReadError(f"stopped after {max_pages} pages; the read is not complete")
+        values = {page_field: number}
+        values.update({field: page_size for field in size_fields})
+        page = _items(request(values), scheme)
+        pages += 1
+        if len(page) > size:
+            raise PageReadError(f"page {number} holds {len(page)} items, more than the declared {size}")
+        ids = [identity(item) for item in page]
+        if page and ids == previous:
+            raise PageReadError(f"page {number} repeats the page before it")
+        items.extend(page)
+        if len(page) < size:
+            return {"items": items, "pages": pages, "complete": short["assurance"] == "documented"}
+        previous, number = ids, number + 1
 
 
 def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):
