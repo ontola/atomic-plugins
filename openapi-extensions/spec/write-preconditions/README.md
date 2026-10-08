@@ -121,6 +121,11 @@ version read from a list response is as good as one from the read, when the
 list returns the same field. A client that has no version for the object
 reads it first; it does not send the write without `header`.
 
+`If-Match` uses the strong comparison of [RFC 9110 §13.1.1](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.1):
+a weak entity tag (`W/"…"`) never matches. A provider whose versions are weak
+entity tags cannot be declared `ifMatch` with `If-Match`; declare
+`readVerify` instead.
+
 ### 4.4 Refusal Object
 
 | Field | Type | Required | Description |
@@ -167,20 +172,38 @@ or `504`, or the provider answered another `5xx` that it does not document as
 
 **Resolving by a read.** The client reads the object (§3) and compares:
 
-* _Update_ (`PUT`, `PATCH`, a `POST` that changes the object):
+Which rule applies follows the write's action: the operation's `x-crud`
+action (`update` or `delete`) when it declares one, else the HTTP method
+(`DELETE` is a delete, anything else an update). The client first checks the
+read against `refuseWhen` (§4.4): when one matches, the object reached a
+refused state in the meantime, and nothing is sent again.
+
+* _Update_:
+  * when every written field holds the value the write set, the write counts
+    as applied;
   * under `ifMatch`, a version equal to the one it sent means the write was
-    not applied;
-  * otherwise, when every written field holds the value the write set, the
-    write counts as applied; when every written field holds its baseline, as
-    not applied, and the client MAY send it again; anything else is a
+    not applied; a different version with the written fields at their
+    baseline means another writer changed the object, which is a conflict
+    (a resend with the old version would only answer a `conflictStatus`);
+  * otherwise, when every written field holds its baseline, the write counts
+    as not applied, and the client MAY send it again; anything else is a
     conflict.
-* _Delete_:
-  * a `404` or `410` means applied, unless a collection of the object's
-    resource declares `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
-    §4.3), when it means unknown;
-  * a 2xx with the object means not applied when the object still matches
-    its baseline (under `ifMatch`, the same version), and a conflict when it
-    changed since.
+* _Delete_. The baseline of a delete is the object as the client last read
+  it before sending: under `ifMatch` its version, otherwise every field the
+  client holds a baseline for.
+  * a 2xx whose body is a read tombstone of the resource
+    ([Deletion Feeds](../deletion-feeds/README.md) §4.4) means applied, for a
+    provider whose delete is a soft delete;
+  * a `404` or `410` means applied only when the document says that a
+    missing object was deleted: a collection of the object's resource
+    declares `notFound: deleted` explicitly or `absent: deleted`
+    ([Collection Completeness](../collection-completeness/README.md)), or the
+    resource has a deletion feed with tombstones. Otherwise it means _gone,
+    not confirmed_: the client stops resending, and does not report a
+    deletion, because a lost permission answers the same;
+  * any other 2xx with the object means not applied when the object still
+    matches its baseline (under `ifMatch`, the same version), and a conflict
+    when it changed since.
 * Any other answer leaves the outcome unknown.
 
 "Applied" means that the object now holds what the write set. A read cannot

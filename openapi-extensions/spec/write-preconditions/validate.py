@@ -160,45 +160,60 @@ def may_send(declaration, baseline, written, current, headers=None):
     return "send", {}
 
 
-def resolve_unknown(declaration, method, baseline, written, read=None, sent_version=None, not_found="deleted"):
+def resolve_unknown(declaration, method, baseline, written, read=None, sent_version=None,
+                    action=None, deletion_confirmed=False, tombstone=None):
     """§4.5 after an unknown outcome.
 
     Returns 'resend' (no read needed), 'read-first', 'applied', 'not-applied',
-    'conflict' or 'unknown'. `written` maps fields to the values the write set
-    (empty for a DELETE); `baseline` maps fields to their last read values;
-    `read` is None (not read yet) or {'status': int, 'body': ..., 'headers': {...}};
-    `sent_version` is the version an ifMatch write sent; `not_found` is the
-    Collection Completeness notFound value for the object's resource.
+    'conflict', 'refused', 'gone-unconfirmed' (a DELETE answered 404/410 without
+    a declaration that a missing object was deleted) or 'unknown'.
+
+    `action` is the operation's x-crud action ('update' or 'delete'); without
+    it the HTTP method decides. `written` maps fields to the values the write
+    set (empty for a delete); `baseline` maps fields to their last read values
+    (for a delete, every field the client holds); `read` is None (not read yet)
+    or {'status': int, 'body': ..., 'headers': {...}}; `sent_version` is the
+    version an ifMatch write sent. `deletion_confirmed` is true when a
+    collection of the resource declares notFound: deleted explicitly or
+    absent: deleted, or the resource has a deletion feed; `tombstone` is the
+    resource's x-read-tombstone ({field, values}) or None.
     """
     declaration = declaration or {}
     kind = declaration.get("kind")
     method = method.lower()
+    is_delete = action == "delete" if action else method == "delete"
     idempotent = declaration.get("idempotent", method in ("put", "delete"))
     if read is None:
         if kind != "readVerify" and idempotent:
             return "resend"
         return "read-first"
     status, body = read.get("status"), read.get("body")
-    if method == "delete":
+    headers = read.get("headers")
+    ok = isinstance(status, int) and 200 <= status < 300
+    if ok and isinstance(body, dict) and refused(declaration, body):
+        return "refused"
+    if is_delete:
         if status in (404, 410):
-            return "unknown" if not_found == "unavailable" else "applied"
-        if not isinstance(status, int) or not 200 <= status < 300:
+            return "applied" if deletion_confirmed else "gone-unconfirmed"
+        if not ok:
             return "unknown"
+        if tombstone and isinstance(body, dict) and any(_same(_field(body, tombstone["field"]), v) for v in tombstone["values"]):
+            return "applied"
         if kind == "ifMatch" and sent_version is not None:
-            unchanged = _same(version_of(declaration, body, read.get("headers")), sent_version)
+            unchanged = _same(version_of(declaration, body, headers), sent_version)
         else:
             unchanged = all(_same(_field(body, f), v) for f, v in baseline.items())
         return "not-applied" if unchanged else "conflict"
-    if not isinstance(status, int) or not 200 <= status < 300 or not written:
+    if not ok or not written:
         return "unknown"
-    if kind == "ifMatch" and sent_version is not None \
-            and _same(version_of(declaration, body, read.get("headers")), sent_version):
-        return "not-applied"
     if all(_same(_field(body, f), v) for f, v in written.items()):
         return "applied"
-    if all(_same(_field(body, f), baseline.get(f)) for f in written):
-        return "not-applied"
-    return "conflict"
+    at_baseline = all(_same(_field(body, f), baseline.get(f)) for f in written)
+    if kind == "ifMatch" and sent_version is not None:
+        if _same(version_of(declaration, body, headers), sent_version):
+            return "not-applied"
+        return "conflict"  # another writer changed the version; a resend with the old one would fail
+    return "not-applied" if at_baseline else "conflict"
 
 
 def _load(path):

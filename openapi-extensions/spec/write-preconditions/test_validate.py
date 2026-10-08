@@ -115,6 +115,11 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(resolve_unknown(IF_MATCH, "PATCH", baseline, written, read({"title": "A", "etag": sent}), sent), "not-applied")
         self.assertEqual(resolve_unknown(IF_MATCH, "PATCH", baseline, written, read({"title": "B", "etag": '"v2"'}), sent), "applied")
         self.assertEqual(resolve_unknown(IF_MATCH, "PATCH", baseline, written, read({"title": "C", "etag": '"v2"'}), sent), "conflict")
+        # A new version with the written fields at their baseline: another writer changed the object.
+        self.assertEqual(resolve_unknown(IF_MATCH, "PATCH", baseline, written, read({"title": "A", "etag": '"v2"'}), sent), "conflict")
+        # The resolution read re-checks refuseWhen.
+        trash = dict(VERIFY)
+        self.assertEqual(resolve_unknown(trash, "PATCH", baseline, written, read({"title": "A", "in_trash": True})), "refused")
         header = {"kind": "ifMatch", "version": {"in": "header", "name": "ETag"}}
         self.assertEqual(resolve_unknown(header, "PATCH", baseline, written,
                                          {"status": 200, "body": {"title": "A"}, "headers": {"etag": sent}}, sent), "not-applied")
@@ -130,8 +135,18 @@ class ClientTests(unittest.TestCase):
         baseline = {"title": "A", "etag": '"v1"'}
         read = lambda body, status=200: {"status": status, "body": body}
         for status in (404, 410):
-            self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, status)), "applied")
-            self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, status), not_found="unavailable"), "unknown")
+            # Without a declaration that a missing object was deleted, a 404 may be lost access.
+            self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, status)), "gone-unconfirmed")
+            self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, status), deletion_confirmed=True), "applied")
+        # A soft delete reads back as a read tombstone.
+        tombstone = {"field": "deleted", "values": [True]}
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read({"title": "A", "deleted": True, "etag": '"v9"'}),
+                                         tombstone=tombstone), "applied")
+        # The x-crud action decides, not the method: a POST .../archive declared as a delete.
+        self.assertEqual(resolve_unknown(VERIFY, "POST", baseline, {}, read(None, 404), action="delete",
+                                         deletion_confirmed=True), "applied")
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {"title": "B"}, read({"title": "B"}), action="update"),
+                         "applied")
         self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read({"title": "A", "etag": '"v1"'})), "not-applied")
         self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read({"title": "C", "etag": '"v2"'})), "conflict")
         self.assertEqual(resolve_unknown(IF_MATCH, "DELETE", baseline, {}, read({"title": "C", "etag": '"v1"'}), '"v1"'), "not-applied")
@@ -161,7 +176,7 @@ class ClientTests(unittest.TestCase):
         refusing = {"kind": "none", "refuseWhen": [{"field": "in_trash", "values": [True]}]}
         self.assertEqual(may_send(refusing, {}, ["x"], None), ("read-first", None))
         header = {"kind": "ifMatch", "version": {"in": "header", "name": "ETag"}}
-        self.assertEqual(may_send(header, {}, ["x"], {"x": 1}, {"etag": '"w/1"'}), ("send", {"If-Match": '"w/1"'}))
+        self.assertEqual(may_send(header, {}, ["x"], {"x": 1}, {"etag": '"1"'}), ("send", {"If-Match": '"1"'}))
         self.assertEqual(may_send(header, {}, ["x"], {"x": 1}, {}), ("read-first", None))
 
 
