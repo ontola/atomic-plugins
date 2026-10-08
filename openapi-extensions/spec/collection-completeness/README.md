@@ -201,12 +201,15 @@ objects are deleted without a read.
 consumer has concluded that their parent object is gone, in one of three
 ways:
 
-1. it was absent from a complete read of a parent-resource collection
-   declared `absent: deleted` (§4.2);
-2. it was absent from a complete read of one declared `absent: removed`, and
-   its own read showed it deleted or unavailable (§4.3);
+1. it was a member of a parent-resource collection declared
+   `absent: deleted`, and is absent from a complete read of it (§4.2);
+2. it was a member of one declared `absent: removed`, is absent from a
+   complete read of it, and its own read showed it deleted or unavailable
+   (§4.3);
 3. a [Deletion Feeds](../deletion-feeds/README.md) tombstone reported it
    deleted: a feed tombstone (§4.3 there) or a read tombstone (§4.4 there).
+   A read tombstone may be restorable (§4.4 there): a later read that shows
+   the parent again supersedes the conclusion and every mark it caused.
 
 A parent object absent from a collection that declares no Completeness Object
 is not concluded gone by that absence, nor by a read made because of it,
@@ -221,17 +224,22 @@ collection; its nested collection is read as before.
 
 A consumer applies it without reading the nested collection or its members:
 that read would answer for a parent that is gone. It applies it only after
-all of the pass's reads, and not to a member that any read of the pass
-returned, in this collection under another parent object or in another
-collection of the member's resource: such a member moved, and is present.
-A failed or missing read of another parent's collection leaves the members it
-would have returned unknown, so a consumer that cannot rule out a move (some
-of the pass's reads of this collection failed) SHOULD mark them unavailable
-rather than deleted until a later pass completes. When the parent object
-returns in a later complete read, or a later read returns a member, the
-marks are superseded by that read. Without `parentAbsent`, a consumer draws
-no conclusion about the members: the nested collection can no longer be read
-completely, so §3 applies.
+all of the pass's reads, and never to a member that any read of the pass
+returned (in this collection under another parent object, or in another
+collection of the member's resource): such a member moved, and is present.
+
+A member can also have moved where the pass did not look. So
+`parentAbsent: deleted` concludes `deleted` only when, in the same pass, the
+parent-resource collection was read completely and every parent object that
+read returned had its nested collection read completely. Otherwise the
+members MUST be marked `unavailable`, whatever `parentAbsent` says. In
+particular, a parent concluded deleted by a tombstone alone (way 3) gives
+`unavailable` unless that condition holds.
+
+When the parent object returns in a later complete read, or a later read
+returns a member, the marks are superseded by that read. Without
+`parentAbsent`, a consumer draws no conclusion about the members: the
+nested collection can no longer be read completely, so §3 applies.
 
 The cascade goes one level only. A member marked by `parentAbsent` is not a
 parent object concluded gone for collections nested in its own resource:
@@ -354,8 +362,11 @@ A conforming document:
   `parentAbsent: deleted` only when every collection of the parent resource
   declares a Completeness Object (on the Collection Object or its list
   operation) and every one that declares `absent: removed` states `notFound`
-  explicitly; MUST give all explicit `notFound` values of one resource's
-  collections the same value, since they describe the same `read`; MUST NOT
+  explicitly; once any collection of a resource states `notFound`, MUST
+  state it on every collection of that resource declared `absent: removed`,
+  all with the same value, since they describe the same `read` (a default on
+  one and an explicit value on another would give one `404` two answers);
+  MUST NOT
   declare `notFound: deleted` or `parentAbsent: deleted` without provider
   documentation for it.
 
@@ -382,7 +393,11 @@ A conforming consumer:
   and not to a member any read of the pass returned (§4.4), and MUST NOT
   cascade it to grandchildren;
 * since 0.2.0: SHOULD treat a `notFound` value it does not recognise as
-  `unavailable`.
+  `unavailable`, and a Completeness Object whose `absent` value it does not
+  recognise as absent (no Completeness Object);
+* since 0.2.0: MUST mark members `unavailable`, not `deleted`, unless the
+  pass read the parent-resource collection and every parent object's nested
+  collection completely (§4.4).
 
 ## 8. Not covered
 

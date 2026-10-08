@@ -70,7 +70,8 @@ def declarations_of(document, resource_name):
         if not isinstance(collection, dict):
             continue
         declaration = collection.get("x-completeness")
-        if declaration is None:
+        fixed = any(k in collection for k in ("listMethod", "listQuery", "listBody", "x-list-method", "x-list-query", "x-list-body"))
+        if declaration is None and not fixed:  # §4.1: an operation's declaration covers no fixed read
             for item in document.get("paths", {}).values():
                 for method in METHODS:
                     operation = item.get(method) if isinstance(item, dict) else None
@@ -88,9 +89,14 @@ def validate(document):
     for resource_name, resource in resources.items():
         if not isinstance(resource, dict):
             continue
-        explicit = {d["notFound"] for d in declarations_of(document, resource_name).values() if d and "notFound" in d}
+        declared = declarations_of(document, resource_name)
+        explicit = {d["notFound"] for d in declared.values() if d and "notFound" in d}
         if len(explicit) > 1:
             errors.append(f"crudResources.{resource_name}: collections declare different notFound values {sorted(map(str, explicit))}")
+        if explicit:
+            defaulted = sorted(n for n, d in declared.items() if d and d.get("absent") == "removed" and "notFound" not in d)
+            if defaulted:
+                errors.append(f"crudResources.{resource_name}: {defaulted} default notFound while another collection states it")
         for name, collection in (resource.get("collections") or {}).items():
             if not isinstance(collection, dict) or "x-completeness" not in collection:
                 continue
@@ -163,14 +169,19 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body):
     return "present"
 
 
-def members_of_gone_parent(declaration, parent_outcome):
+def members_of_gone_parent(declaration, parent_outcome, pass_read_completely=False):
     """§4.4: the outcome for members of a nested collection whose parent is 'deleted' or 'unavailable'.
 
-    None means no conclusion: the declaration has no parentAbsent, or the parent is not gone.
+    `pass_read_completely` is true only when the same pass read the
+    parent-resource collection completely and every parent object it returned
+    had its nested collection read completely; without it a member may have
+    moved where the pass did not look, so the outcome is at most unavailable.
+    Members that any read of the pass returned are present and are not passed
+    here. None means no conclusion: no parentAbsent, or the parent is not gone.
     """
     if parent_outcome not in OUTCOMES or not declaration or "parentAbsent" not in declaration:
         return None
-    if declaration["parentAbsent"] == "deleted" and parent_outcome == "deleted":
+    if declaration["parentAbsent"] == "deleted" and parent_outcome == "deleted" and pass_read_completely:
         return "deleted"
     return "unavailable"
 

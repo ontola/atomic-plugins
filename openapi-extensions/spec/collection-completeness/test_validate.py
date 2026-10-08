@@ -121,6 +121,25 @@ class ClassifyTests(unittest.TestCase):
         for status, body in ((500, None), (403, None), (200, {"id": "other"}), (200, None), (None, None)):
             self.assertEqual(self.classify(status, body), "unknown")
 
+    def test_defaulted_and_explicit_not_found_do_not_mix(self):
+        document = example()
+        lists = document["components"]["crudResources"]["taskList"]["collections"]
+        lists["archived"] = {"urlTemplate": "/users/me/archived-lists", "x-completeness": {"absent": "removed"}}
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("['archived'] default notFound while another collection states it", str(raised.exception))
+        lists["archived"]["x-completeness"]["notFound"] = "unavailable"
+        validate(document)
+
+    def test_operation_declaration_does_not_cover_a_fixed_read(self):
+        document = example()
+        document["components"]["crudResources"]["taskList"]["collections"]["taskLists"].pop("x-completeness")
+        document["components"]["crudResources"]["taskList"]["collections"]["taskLists"]["listQuery"] = {"showAll": "true"}
+        document["paths"]["/users/me/lists"]["get"]["x-completeness"] = {"absent": "removed", "notFound": "unavailable"}
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("has no collection with x-completeness", str(raised.exception))
+
     def test_unrecognised_not_found_counts_as_unavailable(self):
         self.assertEqual(self.classify(404, None, {"absent": "removed", "notFound": "purged"}), "unavailable")
 
@@ -136,7 +155,9 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(members_of_gone_parent(declaration, "present"))
         self.assertIsNone(members_of_gone_parent(declaration, "unknown"))
         cascade = dict(declaration, parentAbsent="deleted")
-        self.assertEqual(members_of_gone_parent(cascade, "deleted"), "deleted")
+        self.assertEqual(members_of_gone_parent(cascade, "deleted", pass_read_completely=True), "deleted")
+        # A pass that did not read every parent's nested collection may have missed a move.
+        self.assertEqual(members_of_gone_parent(cascade, "deleted"), "unavailable")
         self.assertEqual(members_of_gone_parent(cascade, "unavailable"), "unavailable")
         self.assertIsNone(members_of_gone_parent({"absent": "removed"}, "deleted"))
 
