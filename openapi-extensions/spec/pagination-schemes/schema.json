@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
+  "title": "Pagination Schemes 0.4.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3). Covers validation rules 1-4 and 8-10; validate.py adds 5 and 11.",
+  "$ref": "#/$defs/scheme",
+  "$defs": {
+    "scheme": {
+      "type": "object",
+      "required": ["type"],
+      "anyOf": [{ "required": ["request"] }, { "required": ["response"] }],
+      "properties": {
+        "type": { "enum": ["pageNumber", "pageToken", "nextLink", "incrementalSync"] },
+        "description": { "type": "string" },
+        "autoDetect": {
+          "oneOf": [{ "type": "boolean" }, { "$ref": "#/$defs/autoDetect" }]
+        },
+        "request": { "$ref": "#/$defs/request" },
+        "response": { "$ref": "#/$defs/response" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "application": {
+      "type": "object",
+      "required": ["scheme"],
+      "properties": {
+        "scheme": { "type": "string", "minLength": 1 },
+        "overrides": {
+          "description": "Any part of a scheme, deep-merged onto the referenced one (§5). validate.py checks the merged scheme against #/$defs/scheme.",
+          "type": "object"
+        },
+        "description": { "type": "string" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "autoDetect": {
+      "type": "object",
+      "properties": {
+        "matchQueryParams": { "type": "boolean" },
+        "matchBodyFields": { "type": "boolean" },
+        "matchResponseFields": { "type": "boolean" },
+        "matchHeaders": { "type": "boolean" },
+        "requireAll": { "type": "boolean" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "queryParameters": { "$ref": "#/$defs/requestFields" },
+        "bodyFields": { "$ref": "#/$defs/requestFields" },
+        "headerFields": { "$ref": "#/$defs/requestFields" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "requestFields": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/requestField" }
+    },
+    "requestField": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "schema": { "type": "object" },
+        "role": {
+          "anyOf": [
+            { "enum": ["page", "pageSize", "offset", "pageToken", "cursor", "previousPageToken", "syncToken"] },
+            { "type": "string", "pattern": "^x-" }
+          ]
+        },
+        "required": { "type": "boolean" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "envelope": { "$ref": "#/$defs/envelope" },
+        "bodyFields": { "$ref": "#/$defs/responseFields" },
+        "headers": { "$ref": "#/$defs/responseFields" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "envelope": {
+      "type": "object",
+      "properties": {
+        "itemsField": { "type": ["string", "null"] }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "responseFields": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/responseField" }
+    },
+    "responseField": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "schema": { "type": "object" },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "nextPageToken",
+                "nextCursor",
+                "nextLink",
+                "previousPageToken",
+                "previousLink",
+                "nextSyncToken",
+                "totalCount",
+                "totalPages",
+                "pageSize",
+                "currentPage",
+                "offset"
+              ]
+            },
+            { "type": "string", "pattern": "^x-" }
+          ]
+        },
+        "linkResolution": { "$ref": "#/$defs/linkResolution" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false,
+      "if": { "required": ["linkResolution"] },
+      "then": {
+        "required": ["role"],
+        "properties": { "role": { "enum": ["nextLink", "previousLink"] } }
+      }
+    },
+    "linkResolution": {
+      "type": "object",
+      "required": ["base"],
+      "properties": {
+        "base": { "enum": ["request", "server", "declared"] },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^/?#@\\s\\\\]+(?:[/?][^#\\s\\\\]*)?$"
+        },
+        "description": { "type": "string" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false,
+      "if": { "properties": { "base": { "const": "declared" } } },
+      "then": { "required": ["url"] },
+      "else": { "not": { "required": ["url"] } }
+    }
+  }
+}
