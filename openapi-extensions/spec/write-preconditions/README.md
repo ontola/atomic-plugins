@@ -126,8 +126,11 @@ reads it first; it does not send the write without `header`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path to a field of the object. |
-| `values` | array of string, number, boolean or `null` | **Yes** | The write is refused when the field's current value equals one of these (same JSON type and value). |
+| `values` | array of string, number, boolean or `null` | Conditional | The write is refused when the field's current value equals one of these (same JSON type and value; an absent field is `null`). |
+| `present` | `true` | Conditional | The write is refused when the field is present with a value other than `null`, whatever the value (Google Calendar's `recurrence` on a recurring series). |
 | `description` | string | No | Human-readable notes. |
+
+Exactly one of `values` and `present` is given.
 
 A client checks every Refusal Object against the object as it last read it,
 and, for `readVerify`, against the read made just before the write. When one
@@ -244,8 +247,8 @@ A conforming document:
 * gives `header` and `conflictStatus` only with `ifMatch`; `header` a
   nonempty string, `conflictStatus` a nonempty array of unique integers
   400–499;
-* gives each Refusal Object a nonempty `field` and a nonempty `values` array
-  of JSON scalars;
+* gives each Refusal Object a nonempty `field` and exactly one of a nonempty
+  `values` array of JSON scalars and `present: true`;
 * gives `idempotent`, when present, a boolean.
 
 A conforming client:
@@ -282,7 +285,8 @@ python3 validate.py examples/conditional-writes.yaml
 ## Changes
 
 - **0.1.0-draft** (2026-10-08): first version, for ontola/atomic-plugins
-  pieces.md K14, K15 and K17.
+  pieces.md K14, K15 and K17; the Refusal Object's `present: true` covers
+  the read-only-by-predicate half of K18.
 
 ## Reference Implementation
 

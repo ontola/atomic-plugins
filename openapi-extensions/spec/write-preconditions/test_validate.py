@@ -139,6 +139,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, 500)), "unknown")
         self.assertEqual(resolve_unknown({"kind": "none"}, "DELETE", baseline, {}), "resend")
 
+    def test_present_refusal(self):
+        recurring = {"kind": "ifMatch", "version": {"in": "body", "name": "etag"},
+                     "refuseWhen": [{"field": "recurrence", "present": True}]}
+        series = {"etag": '"v"', "recurrence": ["RRULE:FREQ=WEEKLY"]}
+        self.assertEqual(may_send(recurring, {}, ["summary"], series)[0], "refused")
+        self.assertEqual(may_send(recurring, {}, ["summary"], {"etag": '"v"', "recurrence": []})[0], "refused")
+        self.assertEqual(may_send(recurring, {}, ["summary"], {"etag": '"v"'})[0], "send")
+        self.assertEqual(may_send(recurring, {}, ["summary"], {"etag": '"v"', "recurrence": None})[0], "send")
+        document = example()
+        refusals = declaration(document, "/pages/{pageId}", "patch")["refuseWhen"]
+        refusals.append({"field": "recurrence", "present": True})
+        validate(document)
+        for bad in ({"field": "x", "present": False}, {"field": "x", "present": True, "values": [1]}, {"field": "x"}):
+            document = example()
+            declaration(document, "/pages/{pageId}", "patch")["refuseWhen"].append(bad)
+            with self.assertRaises(ValueError):
+                validate(document)
+
     def test_refusals_need_a_read_and_header_versions_are_supported(self):
         refusing = {"kind": "none", "refuseWhen": [{"field": "in_trash", "values": [True]}]}
         self.assertEqual(may_send(refusing, {}, ["x"], None), ("read-first", None))

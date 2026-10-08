@@ -59,10 +59,16 @@ def _check(declaration, method, operation, where, errors):
         if not isinstance(refusal, dict) or not isinstance(refusal.get("field"), str) or not refusal["field"]:
             errors.append(f"{label}.field: expected a nonempty string")
             continue
-        values = refusal.get("values")
-        if not (isinstance(values, list) and values and all(_scalar(v) for v in values)):
-            errors.append(f"{label}.values: expected a nonempty array of JSON scalars")
-        if {k for k in refusal if k not in ("field", "values", "description") and not k.startswith("x-")}:
+        if ("values" in refusal) == ("present" in refusal):
+            errors.append(f"{label}: exactly one of values and present")
+        elif "present" in refusal:
+            if refusal["present"] is not True:
+                errors.append(f"{label}.present: expected true")
+        else:
+            values = refusal["values"]
+            if not (isinstance(values, list) and values and all(_scalar(v) for v in values)):
+                errors.append(f"{label}.values: expected a nonempty array of JSON scalars")
+        if {k for k in refusal if k not in ("field", "values", "present", "description") and not k.startswith("x-")}:
             errors.append(f"{label}: unknown fields")
     if "idempotent" in declaration and not isinstance(declaration["idempotent"], bool):
         errors.append(f"{where}.idempotent: expected a boolean")
@@ -118,7 +124,10 @@ def refused(declaration, current):
     """The first Refusal Object that matches the object, or None."""
     for refusal in (declaration or {}).get("refuseWhen", []):
         value = _field(current, refusal["field"])
-        if any(_same(value, v) for v in refusal["values"]):
+        if refusal.get("present") is True:
+            if value is not None:
+                return refusal
+        elif any(_same(value, v) for v in refusal["values"]):
             return refusal
     return None
 
