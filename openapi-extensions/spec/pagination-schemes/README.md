@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.4.0
+**Spec version:** 0.5.0
 
 ---
 
@@ -20,12 +20,20 @@ The extension can be applied to existing OpenAPI documents without modification 
 components:
   paginationSchemes:
     <scheme-name>:         # Pagination Scheme Object (§4.1)
-      type: pageNumber | pageToken | nextLink | incrementalSync
+      type: pageNumber | pageToken | nextLink | incrementalSync | rangeWindow
       autoDetect: true | false | AutoDetectObject
+      window:              # Range Window Object (§4.6); rangeWindow only
+        unit: day | second | integer
+        format: date | basicDate | dateTime | unixSeconds | integer
+        bounds: closed | halfOpen
+        cap: 100
+        minimumWidth: 1
+        field: /date
       request:             # Request Pagination Fields Object (§4.3)
         queryParameters:
           <param-name>:    # Request Field Object (§4.3.1)
-            role: page | pageSize | offset | pageToken | cursor | previousPageToken | syncToken
+            role: page | pageSize | offset | pageToken | cursor | previousPageToken | syncToken | windowStart | windowEnd | windowRange
+            template: "period:{start}..{end}"   # windowRange only
             required: false
         bodyFields: { ... }   # keys MAY use dot-notation for nested fields, e.g. metadata.continue
         headerFields: { ... }
@@ -65,6 +73,7 @@ Describes a single pagination strategy.
 | `type` | `SchemeType` (§4.2) | **Yes** | The kind of pagination. |
 | `description` | string | No | Human-readable description. |
 | `autoDetect` | boolean \| `AutoDetectObject` (§6.3) | No | Controls auto-detection. Default: `true` (use §6.2 rules). `false` disables auto-detection for this scheme. |
+| `window` | `RangeWindowObject` (§4.6) | Conditional | REQUIRED when `type` is `rangeWindow`, and MUST NOT be present otherwise. Added in 0.5.0. |
 | `request` | `RequestPaginationFieldsObject` (§4.3) | Conditional* | Describes pagination request fields. |
 | `response` | `ResponsePaginationFieldsObject` (§4.4) | Conditional* | Describes pagination response fields. |
 | `x-*` | any | No | Extension fields. |
@@ -78,6 +87,7 @@ Describes a single pagination strategy.
 | `pageNumber` | Page-number or offset-based pagination. The client increments a page number or offset with each request. |
 | `pageToken` | Opaque cursor/token-based pagination. The server returns a token in the response; the client sends it back on the next request. |
 | `nextLink` | Hypermedia-style pagination. The server returns the URL of the next page, either in a response header or body field, as an absolute URL or as a relative reference resolved by §4.4.3. The client follows the resolved URL directly, under the rules of §4.4.4. |
+| `rangeWindow` | Added in 0.5.0. The operation has no page parameter, and each answer holds at most a fixed number of items (the `cap`). The client reads the collection one range of an item field at a time (a date window, say), and splits a window whose answer is full until every window's answer is below the cap. See §4.6. |
 | `incrementalSync` | Delta/change-feed sync. The server returns a sync token on the **last** page of a full listing (instead of, or alongside, a next-page token); the client persists it and sends it back on a future request to receive only items changed since that point. Unlike `pageToken`, the token is not intended to page through the *current* result set — it seeds the *next* sync. |
 
 ### 4.3 Request Pagination Fields Object
@@ -99,6 +109,7 @@ Describes the fields the client sends to control pagination.
 | `schema` | OAS Schema Object | JSON Schema describing the field value. |
 | `role` | `RequestRole` (§4.5) | Semantic role of this field. |
 | `required` | boolean | Whether this field is required. Default: `false`. |
+| `template` | string | Added in 0.5.0, and allowed only when `role` is `windowRange`, where it is REQUIRED. The whole value the client sends, with `{start}` and `{end}` standing for the window's bounds written in the window's `format` (§4.6.2). Each placeholder appears exactly once, and no other `{` or `}` appears. Everything else is sent as written, before the parameter's ordinary serialization (percent-encoding in a query string, for example). |
 | `x-*` | any | Extension fields. |
 
 ### 4.4 Response Pagination Fields Object
@@ -186,6 +197,9 @@ An API whose next links legitimately point at another origin cannot be paged und
 | `cursor` | `pageToken` | Synonym for `pageToken`. |
 | `previousPageToken` | `pageToken` | Opaque token, from a `previousPageToken` response field, used to fetch the page before the current one. |
 | `syncToken` | `incrementalSync` | Identifies a previous sync point. The server returns only items changed since that point. |
+| `windowStart` | `rangeWindow` | The window's lower bound, written in the window's `format`. Used together with one `windowEnd` field. |
+| `windowEnd` | `rangeWindow` | The window's upper bound, written in the window's `format`; inclusive or exclusive as the window's `bounds` says. |
+| `windowRange` | `rangeWindow` | One field that carries both bounds, built from its `template`. Used instead of a `windowStart` and `windowEnd` pair. |
 
 #### Response Roles
 
@@ -202,6 +216,63 @@ An API whose next links legitimately point at another origin cannot be paged und
 | `pageSize` | all | Number of items in the current page (as confirmed by the server). |
 | `currentPage` | `pageNumber` | The current page number (as confirmed by the server). |
 | `offset` | `pageNumber` | The current offset into the result set (as confirmed by the server). |
+
+### 4.6 Range windows
+
+Added in 0.5.0. Some list operations have no page parameter and answer at most a fixed number of items, but can select items by a range of one item field. Moneybird's `GET /{administration_id}/financial_mutations.json` is one: its description says it is "Limited to 100 financial mutations", and its `filter` parameter takes a `period` such as `20130101..20130131`. A `rangeWindow` scheme describes such an operation: which request field carries the range, how a bound is written, how many items an answer holds at most, and how narrow a window can be. A client then reads a range as a set of windows, each answered below the cap.
+
+A `rangeWindow` scheme is never matched by auto-detection (§6): its window field is often a general filter parameter that other operations share, such as Moneybird's `filter`. It applies only to an operation that names it in `x-pagination` (§5), and its `autoDetect`, when present, MUST be `false`.
+
+#### 4.6.1 Range Window Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `unit` | `"day"` \| `"second"` \| `"integer"` | **Yes** | The unit of a window's width and of its bounds: civil days, whole seconds, or integers (a sequence number, say). |
+| `format` | string | **Yes** | How one bound is written (§4.6.2). It MUST fit `unit`. |
+| `bounds` | `"closed"` \| `"halfOpen"` | **Yes** | `closed`: the window `[start, end]` includes both bounds. `halfOpen`: `[start, end)` includes `start` and excludes `end`. There is no default, because a wrong guess either skips or doubles every boundary. |
+| `cap` | integer, at least 1 | **Yes** | The most items one answer holds. An answer with `cap` items or more is _full_ (§4.6.4). |
+| `minimumWidth` | integer, at least 1 | No | The narrowest window, in `unit`s, the operation selects correctly. Default: `1`. |
+| `field` | JSON Pointer string | No | The item field the range selects on, relative to one item, as in the [Filtering proposal](../filtering/README.md)'s `x-filter.field`. A client MAY use it to check that each returned item lies inside its window. When absent, the document makes no claim about which field the operation compares. |
+| `timeZone` | string | No | For `unit: day` only: whose civil days the bounds are, as an IANA time zone name or `unspecified`. Default: `unspecified`. It does not affect completeness (§4.6.4), since adjacent day windows meet whatever the zone; it tells a client which days a range such as "this year" covers. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+A `rangeWindow` scheme's `request` MUST carry the window in exactly one of two ways: one field whose `role` is `windowRange`, with a `template`; or one field whose `role` is `windowStart` and one whose `role` is `windowEnd`. These fields may sit in `queryParameters`, `bodyFields` or `headerFields`. A `rangeWindow` scheme MAY also have a `response` with an `envelope` (§4.4.2) that locates the items.
+
+#### 4.6.2 Bound formats
+
+| `format` | `unit` | A bound is written as | Example |
+|----------|--------|-----------------------|---------|
+| `date` | `day` | An RFC 3339 `full-date` | `2026-01-31` |
+| `basicDate` | `day` | The same date without separators, `YYYYMMDD` | `20260131` |
+| `dateTime` | `second` | An RFC 3339 `date-time` in UTC, with `Z` and without fractional seconds | `2026-01-31T23:59:59Z` |
+| `unixSeconds` | `second` | Whole seconds since 1970-01-01T00:00:00Z, in decimal | `1769903999` |
+| `integer` | `integer` | A decimal integer, with `-` when negative and no leading zeros | `4711` |
+
+Bounds are exact strings in these forms, never floats. A provider format outside this table (a month such as `202601`, or a time zone offset other than `Z`) needs a later version; until then a document does not declare such an operation as a `rangeWindow`.
+
+#### 4.6.3 Reading a range
+
+The range a client reads, `[S, E]` or `[S, E)` as `bounds` says, is the client's choice: like the [Filtering proposal](../filtering/README.md), this extension does not say which items a client should import. The _width_ of a window is its number of `unit`s: `end - start + 1` when `closed`, `end - start` when `halfOpen`.
+
+1. The client SHOULD first request the whole range as one window.
+2. When the answer is not full, its items are the window's items.
+3. When the answer is full and the window is at least `2 × minimumWidth` wide, the client splits it into two adjacent windows and reads each with this same procedure. By default it halves, the first window holding the first `ceil(w / 2)` units of a window of width `w`: with `closed` bounds, `[s, e]` becomes `[s, s + ceil(w/2) - 1]` and `[s + ceil(w/2), e]`; with `halfOpen` bounds, `[s, e)` becomes `[s, s + ceil(w/2))` and `[s + ceil(w/2), e)`. A client MAY split elsewhere, or into more than two windows, as long as the windows are adjacent, each is at least `minimumWidth` wide, and together they are exactly the full window.
+4. When the answer is full and the window is narrower than `2 × minimumWidth`, it cannot be split, and the read ends with an error (§4.6.4).
+5. Every window request sends the same values for every other request field, including the text of a `template` outside `{start}` and `{end}`. A windowed read is a set of requests over one fixed selection.
+
+Each window is one request, so it counts against any [Throttling](../throttling/README.md) limit the operation is under. How a client paces the requests, and how many it allows one read, is its own policy. As an order of magnitude (**estimated**, not a bound): with halving, a range of `w` units holding `n` items spread evenly needs about `1 + 2 × ceil(n / cap) × ceil(log2(w))` requests; items bunched in a few narrow windows need more.
+
+In this version a `rangeWindow` operation has no page parameter, so an operation that applies a `rangeWindow` scheme applies no other scheme (validation rule 17). An API that caps the items one filter reaches across all of its pages needs a later version.
+
+#### 4.6.4 Completeness
+
+1. A window's answer with fewer than `cap` items is _complete for that window_: it holds every item the operation selected for that window when it answered.
+2. An answer with `cap` items or more is _full_, and may have been cut short. A client MUST NOT treat its items as all of the window's items. It MAY keep them, since they are real items, but they do not make the window complete. An answer of exactly `cap` items counts as full even when nothing was left out, because a client cannot tell the two apart.
+3. A read of the range is complete when the windows whose answers were complete for them are adjacent and together cover the range exactly. Windows MAY overlap (when a client re-reads a window, say); the client then keeps one item per identity, as the [CRUD Causality](../crud-causality/README.md) identity of the operation's resource says.
+4. A read that ended with an error (§4.6.3 step 4, a non-2xx answer, or a window the client did not request because of its own request budget) is not complete, and MUST NOT be treated as complete; a consumer of the [Collection Completeness](../collection-completeness/README.md) extension therefore infers nothing about absent objects from it. Whether to keep the items read so far is the client's choice. The Money app (`integrations/money/moneybird/read.ts`) writes nothing.
+5. A complete read is complete for the range only, that is for the items whose selected field lies inside it. An object outside the range that is absent from the read says nothing about that object. A client that combines a windowed read with Collection Completeness applies it to that range-selected view, not to the whole collection.
+6. A windowed read is not a snapshot. An item whose field changes during the read can appear in two windows (and is kept once, by rule 3), or in none, when it moves from a window not yet read into one already read. A client that must not miss such an item re-reads, or uses an operation that offers a snapshot or a change feed.
 
 ---
 
@@ -592,15 +663,60 @@ paginationSchemes:
 
 A `Link: <items?cursor=abc>; rel="next"` header then resolves to `https://api.example.com/v2/items?cursor=abc`, whatever the request URL was. [`examples/declared-base.yaml`](examples/declared-base.yaml) is a complete document of this shape.
 
+### 8.12 Range windows over one filter parameter (Moneybird-style)
+
+```yaml
+paginationSchemes:
+  periodWindows:
+    type: rangeWindow
+    autoDetect: false
+    window:
+      unit: day
+      format: basicDate
+      bounds: closed
+      cap: 100
+      field: /date
+    request:
+      queryParameters:
+        filter:
+          role: windowRange
+          template: "period:{start}..{end}"
+```
+
+Reading the civil year 2026 starts with `filter=period%3A20260101..20261231`. When that answer holds 100 items, the client reads `period:20260101..20260702` (183 days) and `period:20260703..20261231` (182 days), and so on, down to single days. A single day whose answer holds 100 items ends the read with an error. [`examples/range-window.yaml`](examples/range-window.yaml) is a complete document of this shape.
+
+### 8.13 Range windows over a pair of parameters
+
+```yaml
+paginationSchemes:
+  changedWindows:
+    type: rangeWindow
+    autoDetect: false
+    window:
+      unit: second
+      format: dateTime
+      bounds: halfOpen
+      cap: 500
+      field: /updatedAt
+    request:
+      queryParameters:
+        updatedFrom:
+          role: windowStart
+        updatedBefore:
+          role: windowEnd
+```
+
+A full answer for `updatedFrom=2026-01-01T00:00:00Z&updatedBefore=2026-01-01T00:00:10Z` (10 seconds) is read again as `[00:00:00, 00:00:05)` and `[00:00:05, 00:00:10)`. This shape is a neutral example, not a claim about a particular API.
+
 ---
 
 ## 9. Validation
 
 A conforming implementation MUST enforce:
 
-1. `type` MUST be one of `pageNumber`, `pageToken`, `nextLink`, or `incrementalSync`.
+1. `type` MUST be one of `pageNumber`, `pageToken`, `nextLink`, `incrementalSync` or `rangeWindow`.
 2. At least one of `request` or `response` MUST be present.
-3. `role` values in request fields MUST be from: `page`, `pageSize`, `offset`, `pageToken`, `cursor`, `previousPageToken`, `syncToken` — or an `x-` prefixed extension.
+3. `role` values in request fields MUST be from: `page`, `pageSize`, `offset`, `pageToken`, `cursor`, `previousPageToken`, `syncToken`, `windowStart`, `windowEnd`, `windowRange` — or an `x-` prefixed extension.
 4. `role` values in response fields MUST be from: `nextPageToken`, `nextCursor`, `nextLink`, `previousPageToken`, `previousLink`, `nextSyncToken`, `totalCount`, `totalPages`, `pageSize`, `currentPage`, `offset` — or an `x-` prefixed extension.
 5. The `scheme` field in a Pagination Application Object (§5) MUST reference a key that exists in `components.paginationSchemes`.
 6. `itemsField` in an Envelope Object, when present, MUST resolve to a field whose value is an array.
@@ -609,8 +725,15 @@ A conforming implementation MUST enforce:
 9. `base` MUST be one of `request`, `server` or `declared`. `url` MUST be present when `base` is `declared`, and MUST NOT be present otherwise.
 10. `url` MUST be an absolute URL with the scheme `https` or `http`, without userinfo or a fragment.
 11. When a scheme with a `declared` base is applied to an operation through `x-pagination` (§5), after its overrides are merged, the origin of `url` MUST equal the origin of one of the server URLs listed for that operation. A validator that cannot know a listed server's origin statically (a relative server URL, or a variable in its scheme, host or port) skips this check for that operation. An operation that a scheme reaches only by auto-detection (§6) is not checked statically at all. In both cases the runtime rules of §4.4.4 still apply.
+12. `window` MUST be present when `type` is `rangeWindow`, and MUST NOT be present otherwise. Its `unit`, `format`, `bounds` and `cap` are REQUIRED; `cap` and `minimumWidth` are integers of at least 1; `field`, when present, is a JSON Pointer (empty, or starting with `/`); `timeZone` appears only with `unit: day`.
+13. `format` MUST fit `unit`: `date` or `basicDate` with `day`, `dateTime` or `unixSeconds` with `second`, `integer` with `integer`.
+14. The roles `windowStart`, `windowEnd` and `windowRange` appear only in a `rangeWindow` scheme. A `rangeWindow` scheme's `request` has either exactly one `windowRange` field and no `windowStart` or `windowEnd`, or exactly one `windowStart` and exactly one `windowEnd` field and no `windowRange`.
+15. `template` appears only on a field whose `role` is `windowRange`, and such a field MUST have one. It contains `{start}` exactly once and `{end}` exactly once, and no other `{` or `}`.
+16. A `rangeWindow` scheme's `autoDetect`, when present, MUST be `false`.
+17. An operation whose `x-pagination` applies a `rangeWindow` scheme applies exactly one scheme.
+18. When a `rangeWindow` scheme applied to an operation carries its window in `queryParameters` or `headerFields`, after its overrides are merged, each window field MUST name a parameter of that operation (its own or its path item's, by `name` and `in`, `$ref`s to `components.parameters` resolved).
 
-A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows.
+A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows, and the reading and completeness rules of §4.6.3 and §4.6.4 to every windowed read.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -618,18 +741,19 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4 and 8–10. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5 and 11. It also holds `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10 and 12–16. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17 and 18 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
 /tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml
 ```
 
 ## Changes
 
+- **0.5.0** (2026-10-08): adds the `rangeWindow` scheme type for operations that answer at most a fixed number of items and have no page parameter, read one range of an item field at a time (§4.6): the Range Window Object (`window`: unit, bound format, closed or half-open bounds, cap, minimum width, the selected field and the day's time zone), the request roles `windowStart`, `windowEnd` and `windowRange`, the Request Field Object's `template`, the splitting procedure (halving by default), when a windowed read is complete, validation rules 12–18, and `read_range` in the validator. For ontola/atomic-plugins pieces.md K1 (Moneybird's financial mutations). A document valid under 0.4.0 stays valid.
 - **0.4.0** (2026-10-08): `nextLink` and `previousLink` values may be relative references. Adds the Link Resolution Object (`linkResolution` on a Response Field Object, §4.4.3), the link-following rules (§4.4.4: the server's origin only, no userinfo or fragment, an unfollowable link ends the read with an error, the checked URL is the one requested, and loops are detected), the refusal of values parsers disagree on (§4.4.3 rule 2), validation rules 8–11, and the schema, validator and examples. A document valid under 0.3.0 stays valid. A consumer that followed links to another origin may no longer do so.
 - **0.3.0** and earlier: no change log was kept.
 
