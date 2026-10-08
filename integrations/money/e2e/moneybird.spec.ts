@@ -23,7 +23,10 @@
  * the two collections that went on and the rows still there, sync again, then
  * read the typed rows: contacts in the app's table, time entries in its
  * `time-entry-v1` table linked to project and person rows, mutations in its
- * `bank-transaction-v1` table with exact amount strings.
+ * `bank-transaction-v1` table with exact amount strings. From 0.3.0 the
+ * shared sync-status card (Q-084) carries those results: each collection's
+ * count, the failed one's error with its rows kept, and that the app is
+ * read-only and overwrites edits in the imported columns.
  *
  * Second journey (#177 item 14): a hand-made `bank-transaction-v1` table gets
  * the app through "+ Add view", first read-only, then "Sync this table to
@@ -41,7 +44,7 @@ import {
 } from '../../../ontology-kit/terms.mjs';
 
 /** The catalog's version of the Moneybird app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
@@ -89,14 +92,15 @@ test.describe('moneybird integration', () => {
     test.setTimeout(240_000);
     const main = page.getByRole('main');
     const app = page.frameLocator('iframe[title="App"]');
+    const card = app.getByRole('region', { name: 'Sync status' });
 
     // Discovery and installation from the catalog's Drive apps section.
-    const card = await openCatalogCard(page);
+    const entry = await openCatalogCard(page);
     await expect(
-      card.getByRole('heading', { name: 'Moneybird' }),
+      entry.getByRole('heading', { name: 'Moneybird' }),
     ).toBeVisible();
-    await expect(card).toContainText(`Version ${VERSION}`);
-    await card.getByRole('button', { name: 'Install Moneybird' }).click();
+    await expect(entry).toContainText(`Version ${VERSION}`);
+    await entry.getByRole('button', { name: 'Install Moneybird' }).click();
     await expect(main.locator('iframe[title="App"]')).toBeVisible({
       timeout: 45_000,
     });
@@ -106,6 +110,11 @@ test.describe('moneybird integration', () => {
     await expect(app.getByRole('status')).toContainText('Not connected', {
       timeout: 30_000,
     });
+    // The sync-status card is there before any sync, and read-only.
+    await expect(card).toContainText('Not synced yet');
+    await expect(card).toContainText(
+      'Read-only: edits here stay in Atomic. Nothing is sent to Moneybird, and the next sync overwrites edits made here in the columns it imports.',
+    );
     await app.getByRole('button', { name: 'Connect Moneybird' }).click();
     await connectThroughMockProxy(page);
 
@@ -124,35 +133,47 @@ test.describe('moneybird integration', () => {
     ])
       await expect(app.getByRole('checkbox', { name: label })).toBeChecked();
     await app.getByRole('button', { name: 'Import', exact: true }).click();
-    const synced = app.getByRole('status').filter({ hasText: 'Last synced' });
-    await expect(synced).toContainText('5 contacts (5 added', {
-      timeout: 60_000,
-    });
-    await expect(synced).toContainText('4 time entries (4 added');
-    await expect(synced).toContainText('6 mutations (6 added');
+    // The card: each collection counted, the totals, and the live region
+    // (visually hidden now) still carries the same words.
+    await expect(card).toContainText(
+      '15 rows imported: 5 contacts, 4 time entries, 6 mutations',
+      { timeout: 60_000 },
+    );
+    await expect(card).toContainText('Synced just now');
+    await expect(card).toContainText(
+      'Last sync: 15 added, 0 updated, 0 unchanged',
+    );
+    await expect(card).toContainText('Read-only: edits here stay in Atomic.');
+    await expect(app.getByRole('status')).toContainText('5 contacts (5 added');
 
     // Reload: the stored settings are used again. This second contacts read
-    // fails in the synthetic fixture; hours and mutations go on. The status
-    // says the contact rows are kept.
+    // fails in the synthetic fixture; hours and mutations go on. The card
+    // names the failure next to the two that went on, and says the contact
+    // rows are kept.
     await page.reload();
-    await expect(app.getByRole('status')).toContainText('refresh failed', {
+    await expect(card).toContainText('Contacts: refresh failed.', {
       timeout: 60_000,
     });
-    await expect(app.getByRole('status')).toContainText('503');
-    await expect(app.getByRole('status')).toContainText('kept');
-    await expect(app.getByRole('status')).toContainText(
-      '4 time entries (0 added, 0 updated, 4 unchanged)',
+    await expect(card).toContainText('503');
+    await expect(card).toContainText('The contacts imported earlier are kept');
+    await expect(card).toContainText(
+      '10 rows imported: 4 time entries, 6 mutations',
     );
-    await expect(app.getByRole('status')).toContainText(
-      '6 mutations (0 added, 0 updated, 6 unchanged)',
+    await expect(card).toContainText(
+      'Last sync: 0 added, 0 updated, 10 unchanged',
     );
+    await expect(card).toContainText('Press Sync now to try again.');
 
     // The next refresh succeeds and finds every row still there.
     await app.getByRole('button', { name: 'Sync now' }).click();
-    await expect(synced).toContainText(
-      '5 contacts (0 added, 0 updated, 5 unchanged)',
+    await expect(card).toContainText(
+      '15 rows imported: 5 contacts, 4 time entries, 6 mutations',
       { timeout: 60_000 },
     );
+    await expect(card).toContainText(
+      'Last sync: 0 added, 0 updated, 15 unchanged',
+    );
+    await expect(card).not.toContainText('refresh failed');
 
     // Typed rows: the contacts table outside the app, as before.
     const appSubject = new URL(page.url()).searchParams.get('subject')!;
@@ -234,9 +255,10 @@ test.describe('moneybird integration', () => {
     const main = page.getByRole('main');
     const app = page.frameLocator('iframe[title="App"]');
     const status = app.getByRole('status');
+    const card = app.getByRole('region', { name: 'Sync status' });
 
-    const card = await openCatalogCard(page);
-    await card.getByRole('button', { name: 'Install Moneybird' }).click();
+    const entry = await openCatalogCard(page);
+    await entry.getByRole('button', { name: 'Install Moneybird' }).click();
     await expect(main.locator('iframe[title="App"]')).toBeVisible({
       timeout: 45_000,
     });
@@ -308,6 +330,11 @@ test.describe('moneybird integration', () => {
     await expect(status).toContainText('Not synced with Moneybird', {
       timeout: 45_000,
     });
+    // The card says nothing here is overwritten while the table isn't synced.
+    await expect(card).toContainText('Not synced yet');
+    await expect(card).toContainText(
+      'this table is not synced, so nothing here is overwritten',
+    );
     await expect(
       app.getByRole('button', { name: 'Connect Moneybird' }),
     ).toHaveCount(0);
@@ -339,9 +366,14 @@ test.describe('moneybird integration', () => {
       .getByLabel('Administration')
       .selectOption({ label: 'Synthetic Studio B.V.' });
     await app.getByRole('button', { name: 'Import', exact: true }).click();
-    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
-      '6 mutations (6 added',
-      { timeout: 60_000 },
+    await expect(card).toContainText('6 mutations imported', {
+      timeout: 60_000,
+    });
+    await expect(card).toContainText(
+      'Last sync: 6 added, 0 updated, 0 unchanged',
+    );
+    await expect(card).toContainText(
+      'the next sync overwrites edits made here in the columns it imports',
     );
 
     // The rows landed in the person's table, next to theirs, as rows of its

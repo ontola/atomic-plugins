@@ -71,11 +71,28 @@ export const COLLECTIONS_TERM: ContactField = {
   datatype: `${A}/datatypes/string`,
 };
 
+/**
+ * When each collection last refreshed without error, on the App or a
+ * binding: `contacts:<ISO 8601>,hours:<ISO 8601>` (`binding.ts`
+ * `parseLastSync`/`formatLastSync`), one write per sync that refreshed
+ * anything. The sync-status card names the gap after a failed refresh with
+ * it, across page loads (0.3.0).
+ */
+export const LAST_SYNC: ContactField = {
+  key: 'last_sync',
+  shortname: 'moneybird-last-sync',
+  name: 'Moneybird last sync',
+  description:
+    'When this app last refreshed each Moneybird collection without error, as <collection>:<ISO 8601 date and time>, comma-separated. On the App resource or a binding.',
+  datatype: `${A}/datatypes/string`,
+};
+
 /** What a binding holds, for the view and for the sync. */
 export const BINDING_TERMS: ContactField[] = [
   SYNCED_TABLE,
   ADMINISTRATION,
   COLLECTIONS_TERM,
+  LAST_SYNC,
 ];
 
 export const TABLE_NAMES = {

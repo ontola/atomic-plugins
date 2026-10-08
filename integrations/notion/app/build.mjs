@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -71,7 +72,8 @@ export async function build({ outfile } = {}) {
     alias: {
       '@tomic/lib': path('tomic-lib-shim.ts'),
     },
-    plugins: [minifiedStyles(esbuild)],
+    // The shared sync-status card imports card.css?raw (Q-084).
+    plugins: [minifiedStyles(esbuild), cssRawPlugin(esbuild)],
     logLevel: 'silent',
   });
   const text = result.outputFiles[0].text;

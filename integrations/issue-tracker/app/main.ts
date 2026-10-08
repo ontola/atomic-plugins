@@ -25,6 +25,7 @@ import {
   typing,
 } from './model.js';
 import type { ViewArgs } from './store.js';
+import { syncStatusCss } from '../../sync-status/card.js';
 import { APP_CSS } from './styles.js';
 import { liveRegion } from './ui/kit.js';
 import { injectStyles, watchFrame } from './ui/theme.js';
@@ -37,8 +38,7 @@ import {
   type Ui,
 } from './views.js';
 
-const RETRY_FIRST = 4 * 60;
-const RETRY_MAX = 60 * 60;
+import { climbed, freshLadder, planRetry } from './retry.js';
 
 const freshDrafts = (): Drafts => ({
   tab: 'preview',
@@ -49,7 +49,9 @@ const freshDrafts = (): Drafts => ({
 });
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
-  injectStyles(root, APP_CSS);
+  // The kit's and the app's rules, then the shared sync-status card's
+  // (`.ss-*`, Q-084; its light fallbacks are its own, not the kit's).
+  injectStyles(root, `${APP_CSS}\n${syncStatusCss}`);
   root.classList.add('pl-app');
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
@@ -74,7 +76,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   /** Set once the view's first sync has settled; later problems are alerts. */
   let settled = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let retryDelay = RETRY_FIRST;
+  let ladder = freshLadder();
   let retryAt: number | undefined;
   let prefsTimer: ReturnType<typeof setTimeout> | undefined;
   let previous: Map<string, string> | undefined;
@@ -82,8 +84,15 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   const render = () => {
     ui.now = Date.now();
-    if (retryAt) ui.retryIn = Math.max(0, (retryAt - ui.now) / 1000);
-    else delete ui.retryIn;
+
+    if (retryAt) {
+      ui.retryIn = Math.max(0, (retryAt - ui.now) / 1000);
+      ui.retryAt = retryAt;
+    } else {
+      delete ui.retryIn;
+      delete ui.retryAt;
+    }
+
     const state = controller.state();
     const active = doc.activeElement as HTMLElement | null;
     const key =
@@ -142,27 +151,30 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     if (key) byKey(key)?.focus();
   };
 
+  /** The automatic retry after a failure or a rate limit (`retry.ts`). */
   const scheduleRetry = (state: ViewState) => {
-    const failed = state.kind === 'ready' && state.problem?.kind === 'failed';
+    const plan = planRetry(state, retryTimer !== undefined, ladder, Date.now());
+    if (plan.kind === 'keep') return;
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = undefined;
+    retryAt = undefined;
 
-    if (!failed) {
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = undefined;
-      retryAt = undefined;
-      if (state.kind === 'ready' && !state.problem && !state.busy)
-        retryDelay = RETRY_FIRST;
+    if (plan.kind === 'clear') {
+      if (plan.reset) ladder = freshLadder();
 
       return;
     }
 
-    if (retryTimer) return;
-    retryAt = Date.now() + retryDelay * 1000;
-    retryTimer = setTimeout(() => {
-      retryTimer = undefined;
-      retryAt = undefined;
-      retryDelay = Math.min(RETRY_MAX, retryDelay * 2);
-      void controller.sync();
-    }, retryDelay * 1000);
+    retryAt = plan.at;
+    retryTimer = setTimeout(
+      () => {
+        retryTimer = undefined;
+        retryAt = undefined;
+        ladder = climbed(ladder, plan.limited);
+        void controller.sync();
+      },
+      Math.max(0, plan.at - Date.now()),
+    );
   };
 
   /** Rows whose content changed since the last result, for the 1.5 s highlight. */

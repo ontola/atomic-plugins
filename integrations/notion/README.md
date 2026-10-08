@@ -46,9 +46,23 @@ proxy. No credential ever reaches the frame.
   the database count, "Sync details" and a menu (Choose pages in Notion,
   Open data table, Disconnect Notion…); the state's banner; the "N changes
   not sent to Notion yet" strip with its Review sheet (`view/review.ts`);
-  and one card (`view/parts.ts`, `renderStatus`) listing the databases the
-  table syncs with and their row counts, the last sync (when, duration,
-  created/updated/unchanged), the row total and an "Open table" button.
+  then, since 0.5.0, the shared sync-status card first
+  (`integrations/sync-status/`, Q-084; the mapping is `view/status.ts`,
+  pure, one unit test per state in `view/status.test.ts`): when the last
+  sync ran and how it went (a failed sync names the last good one), its
+  added/updated/unchanged counts, the row total, whether edits go back
+  ("Edits here are sent to Notion after you review them.", or read-only
+  with the reason when there is no connection or no proxy), the write queue
+  (changes waiting, held back by a conflict or a refused value, the last
+  Send's failures with their reasons, a PATCH that stood but could not be
+  confirmed here, sends without an answer, sends that wrote nothing), the
+  record's warnings and a "N notes from the last sync" line that opens Sync
+  details; and right below it the databases block (`view/parts.ts`,
+  `renderDatabases`): the databases the table syncs with and their row
+  counts, when the last sync ran and how long it took, and an "Open table"
+  button. Notion's writes do not go through syncables' `pendingWrites()`,
+  so the card is fed from the review list and the send outcomes, as in
+  Clockify.
   People browse and edit the rows with the host's own table and views; the
   app renders no rows. The #89 browsing views of 0.1.0–0.2.0 (table, board,
   list, database chips, side peek, search, sort; `design/DESIGN.md`,
@@ -79,9 +93,11 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 115,818 bytes for
-  0.4.2 (113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
-  document, syncables' read path and devonian's Atomic Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,712 bytes for
+  0.5.0 (115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
+  document, syncables' read path, devonian's Atomic Data API and the shared
+  sync-status card with its `card.css` (through `cssRawPlugin` from
+  `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
 - Dependencies: `syncables@0.19.0` and `devonian@0.6.1` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
@@ -185,8 +201,13 @@ verified against live Notion or the real integration proxy.
   table change it is subscribed to, after a sync), it compares each row with
   its baseline (`changes.ts`, no request to Notion). Any difference is an
   edit, wherever it was made: the app's table, another view, another
-  device. A renamed row counts as a title edit. "N changes in M rows not
-  sent to Notion yet" then shows above the rows.
+  device. A renamed row counts as a title edit. "N changes not sent to
+  Notion yet" then shows above the sync-status card, counted in rows and
+  with the same count as the card and the review's Send button
+  (`changes.ts` `writeQueue`): a row the last Send left to the next sync
+  (no usable answer, or written but not confirmed here) is listed in the
+  review with its outcome but not counted as waiting, and Send leaves it
+  alone.
 - **Sync is three-way per field** (`sync.ts`, `compareOnSync`): a field only
   Notion changed takes Notion's value; a field only the row changed is kept
   and stays in the review; a field both changed to the same value is
@@ -211,9 +232,13 @@ verified against live Notion or the real integration proxy.
   baseline and the row advance only from the page Notion answers with.
 - **Limits.** Notion has no conditional page updates (no ETag or If-Match),
   so an edit made in Notion between the GET and the PATCH, one round trip,
-  is overwritten. A PATCH whose answer is lost is reported as "Unknown
-  whether Notion applied it" and the batch stops; the next sync shows what
-  Notion has. A proxy refusal, a 429 or a 5xx also stops the batch. Nothing
+  is overwritten. A PATCH whose answer is lost, or answered with a 5xx (a
+  gateway may answer 502 or 504 after Notion applied it; 0.5.0), is
+  reported as "Unknown whether Notion applied it" and the batch stops; the
+  next sync shows what Notion has, and the card lists the row as sent
+  without an answer, not as waiting, until a sync succeeds (a failed sync
+  keeps that outcome). A proxy refusal or a 429 also stops
+  the batch; those wrote nothing. Nothing
   is sent while the app is closed (no `afterCommit` hook at the pin).
   Conflicts are kept in memory until the next sync finds them again from
   the baselines. The Notion integration needs Notion's "Update content"
@@ -235,8 +260,11 @@ kit](../LIVE_TESTING.md#the-live-check-kit).
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:
 an install from the catalog's Drive apps section (the committed
 `apps/notion/<version>/ui.js`, served by the lane's dev-server), then Connect, the
-host's consent bar and the mock proxy's consent page, then the status card
-(the database, "3 rows in this table", no table in the frame), the 3 rows in
+host's consent bar and the mock proxy's consent page, then the shared
+sync-status card ("Synced", "3 rows in this table", "Edits here are sent to
+Notion after you review them."; later "Sync failed" with the last good sync
+and, after Disconnect, "Read-only: edits here stay in Atomic.") and the
+databases block (the database, no table in the frame), the 3 rows in
 the host's table with their Status and Tags shown by option name (0.4.0),
 and the columns' datatypes and select-column shape. It then walks the app's states
 against the fixture's scenarios (`setScenario`, `renameOption` drivers): a

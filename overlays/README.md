@@ -56,6 +56,22 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+`catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
+platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
+the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
+`auth-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml` (the
+`googleOnline`/`googleOffline` schemes of Calendar's auth overlay with the one
+scope `https://www.googleapis.com/auth/tasks.readonly`, every operation
+narrowed to it, the writes included, because the proxy's `Provider::from_document`
+needs each operation to name the selected scheme; Google's own scope check
+refuses a write on such a token) and the published pagination overlay, with
+`{"oauthSecurityScheme": "googleOffline"}` selected. It is for the read-only
+Google Tasks drive app (`integrations/google-tasks/`). No proxy release or
+deployment selects it yet; a proxy picks it up through `CATALOG_PATH`, with
+`OAUTH_GOOGLE_TASKS_CLIENT_ID`/`_CLIENT_SECRET` set. Composition is checked by
+`tests/test_identity_overlays.py` (every catalog) and the pin validator; no
+live Google connection has been made with it.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:

@@ -1,13 +1,14 @@
 // @wc-ignore-file
 /**
- * The status view's regions, each a function of a `ViewContext`: the status
- * card (which databases the table syncs with, the last sync, the row count,
- * Open table), sync details, first-import progress, and the per-state
- * banners and empty states. `app.ts` owns the state and calls these on every
- * render. The rows themselves are browsed and edited in the host's table
- * (#177 Q9), not here.
+ * The status view's regions, each a function of a `ViewContext`: the
+ * databases block under the shared sync-status card (which databases the
+ * table syncs with, when the last sync ran, Open table), sync details,
+ * first-import progress, and the per-state banners and empty states.
+ * `app.ts` owns the state and calls these on every render. The rows
+ * themselves are browsed and edited in the host's table (#177 Q9), not here.
  */
 import type { ConnectedState, ViewState } from '../controller.js';
+import type { SyncRecord } from '../record.js';
 import type { SyncProgress } from '../sync.js';
 import { h, icon, type Child } from '../ui/dom.js';
 import { clock, plural, when } from '../ui/format.js';
@@ -56,28 +57,39 @@ export const TYPE_NAMES: Record<string, string> = {
 export const typeName = (type: string) =>
   TYPE_NAMES[type] ?? type.replaceAll('_', ' ');
 
-// ---------------------------------------------------------------- status card
+// ---------------------------------------------------------------- databases
+
+/** The states in which the card's headline is a failure, not the record. */
+const afterFailure = (state: ConnectedState) =>
+  state.kind === 'failed' ||
+  state.kind === 'rate-limited' ||
+  state.kind === 'reauth';
+
+/** "5 new, 2 updated, 3 unchanged", or "nothing to read". */
+const recordCounts = (last: SyncRecord) => {
+  const parts: string[] = [];
+  if (last.created) parts.push(`${last.created} new`);
+  if (last.updated) parts.push(`${last.updated} updated`);
+  if (last.unchanged) parts.push(`${last.unchanged} unchanged`);
+
+  return parts.length ? parts.join(', ') : 'nothing to read';
+};
 
 /**
- * The one card of the status view (#177 Q9): the databases and their row
- * counts, the last sync, the row total, and where to browse and edit.
+ * The Notion block right below the shared sync-status card (`status.ts`,
+ * Q-084): the databases the table syncs with and their row counts, when the
+ * last sync ran and how long it took, where to browse and edit, and "Open
+ * table". The row total, the last sync's outcome and its counts are the
+ * card's. Before 0.5.0 this was the status view's one card (#177 Q9).
  */
-export function renderStatus(ctx: ViewContext): HTMLElement {
+export function renderDatabases(ctx: ViewContext): HTMLElement {
   const { doc, state } = ctx;
   const last = state.last;
-  const total = state.rows.length;
-  const counts: string[] = [];
-
-  if (last) {
-    if (last.created) counts.push(`${last.created} new`);
-    if (last.updated) counts.push(`${last.updated} updated`);
-    if (last.unchanged) counts.push(`${last.unchanged} unchanged`);
-  }
 
   return h(
     doc,
     'section',
-    { class: 'nt-summary', 'aria-label': 'Sync status' },
+    { class: 'nt-summary', 'aria-label': 'Databases synced with this table' },
     h(doc, 'h2', {}, 'Databases synced with this table'),
     ctx.sources.length
       ? h(
@@ -103,35 +115,24 @@ export function renderStatus(ctx: ViewContext): HTMLElement {
             ? 'Notion shares no database with Atomic any more.'
             : 'Known after the first sync.',
         ),
-    h(
-      doc,
-      'dl',
-      { class: 'nt-s-facts' },
-      h(doc, 'dt', {}, 'Last sync'),
+    // When and how long: the card says how long ago and what it did. The
+    // record is the last *good* sync, so after a failure it is labelled so,
+    // with its counts, which the card then no longer shows.
+    last &&
       h(
         doc,
-        'dd',
-        { 'data-key': 'last-sync' },
-        last
-          ? [
-              when(last.at, ctx.now, ctx.locale),
-              ` · took ${Math.max(1, Math.round(last.durationMs / 1000))} s`,
-              counts.length ? ` · ${counts.join(', ')}` : '',
-            ]
-          : 'Not synced yet',
+        'dl',
+        { class: 'nt-s-facts' },
+        h(doc, 'dt', {}, afterFailure(state) ? 'Last good sync' : 'Last sync'),
+        h(
+          doc,
+          'dd',
+          { 'data-key': 'last-sync' },
+          when(last.at, ctx.now, ctx.locale),
+          ` · took ${Math.max(1, Math.round(last.durationMs / 1000))} s`,
+          afterFailure(state) ? ` · ${recordCounts(last)}` : '',
+        ),
       ),
-      h(doc, 'dt', {}, 'Rows'),
-      h(
-        doc,
-        'dd',
-        {},
-        total
-          ? `${plural(total, 'row')} in this table`
-          : ctx.sources.length
-            ? 'None yet: the shared databases have no pages. Add one in Notion, then sync again.'
-            : 'None yet',
-      ),
-    ),
     h(
       doc,
       'p',

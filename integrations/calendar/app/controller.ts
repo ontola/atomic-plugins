@@ -29,6 +29,7 @@ import {
   refresh,
   removeLocal,
   resolveConflict,
+  saveLastSync,
   saveLocal,
   saveMeta,
   send,
@@ -106,6 +107,15 @@ export type ViewState =
       /** The relay has no usable connection left: offer Connect. */
       reconnect: boolean;
       problem: Problem;
+      /** When it failed, for the sync-status card's "Sync failed 4 min ago". */
+      failedAt: Date;
+      /**
+       * What failed: a read (listing calendars, a refresh, the setup writes
+       * around them), or the send of reviewed edits. The card shows a failed
+       * read as the last sync, and a failed send as a problem over the last
+       * good sync.
+       */
+      phase: 'read' | 'send';
       outcomes?: Outcome[];
       /** The last good result; its rows stay on screen under the banner. */
       summary?: ImportSummary;
@@ -345,12 +355,24 @@ export function banner(
 
 export interface Snapshot {
   state: ViewState;
-  /** The imported calendar, once chosen. */
+  /**
+   * The calendar the table is bound to, once chosen: what makes the table
+   * synced. Absent on a table that isn't synced, and on one that is being
+   * set up (the binding made, no calendar chosen yet).
+   */
+  calendarId?: string;
+  /** The imported calendar, once chosen; a placeholder on a table that isn't synced. */
   meta?: CalendarMeta;
   events: CalEvent[];
   /** The last complete preview, even while a new one runs or after an error. */
   summary?: ImportSummary;
   at?: Date;
+  /**
+   * When a full read last succeeded, kept on the table or its binding
+   * (`google-last-sync`), so it survives a reload: names the last good sync
+   * when a read fails or the sync is paused.
+   */
+  lastSync?: Date;
   /** Rows edited here and not sent, known without a preview. */
   pending: number;
   /** Local changes since the last preview: Review needs a fresh one first. */
@@ -440,6 +462,13 @@ export function createController(
   let meta: CalendarMeta | undefined;
   let events: CalEvent[] = [];
   let last: { summary: ImportSummary; at: Date } | undefined;
+  /** When a read last succeeded, from the table or binding, then each refresh. */
+  let lastSync: Date | undefined;
+  /**
+   * The last send's outcomes, kept through a failed read until a successful
+   * refresh settles them (an uncertain send is checked by that refresh).
+   */
+  let outcomes: Outcome[] = [];
   let stale = false;
   /** Whether the table is the app's own; decided on load. */
   let own = true;
@@ -474,7 +503,11 @@ export function createController(
     }
   }
 
-  const fail = (error: unknown, outcomes?: Outcome[]) => {
+  const fail = (
+    error: unknown,
+    withOutcomes?: Outcome[],
+    phase: 'read' | 'send' = 'read',
+  ) => {
     const problem = classify(error);
     report('error', message(error), {
       problem: problem.kind,
@@ -489,7 +522,9 @@ export function createController(
         (error as { reconnect?: boolean }).reconnect === true ||
         spent(error),
       problem,
-      ...(outcomes ? { outcomes } : {}),
+      failedAt: new Date(),
+      phase,
+      ...(withOutcomes ? { outcomes: withOutcomes } : {}),
       ...(last ? { summary: last.summary, at: last.at } : {}),
     });
   };
@@ -507,6 +542,12 @@ export function createController(
       accessRole: 'reader',
     };
     last = undefined;
+    calendarId = undefined;
+    // Paused (bound, grant taken back): when it last synced is still known.
+    lastSync =
+      reason === PAUSED_NOTE
+        ? (await chosenCalendar(store).catch(() => undefined))?.lastSync
+        : undefined;
     events = [];
     // A `reader` role: every event is read only until the table is synced.
     await reload();
@@ -565,9 +606,11 @@ export function createController(
     snapshot(): Snapshot {
       return {
         state,
+        ...(calendarId ? { calendarId } : {}),
         ...(meta ? { meta } : {}),
         events,
         ...(last ? { summary: last.summary, at: last.at } : {}),
+        ...(lastSync ? { lastSync } : {}),
         pending: events.filter(e => e.pending).length,
         stale,
         can: {
@@ -613,6 +656,7 @@ export function createController(
       }
 
       calendarId = chosen.id;
+      lastSync = chosen.lastSync;
       meta = chosen.meta ?? {
         summary: 'Google Calendar',
         color: DEFAULT_COLOR,
@@ -751,6 +795,10 @@ export function createController(
         );
         stale = false;
         last = { summary, at: new Date() };
+        lastSync = last.at;
+        outcomes = [];
+        // Display only: a failure to record the time never fails the sync.
+        await saveLastSync(store, last.at).catch(() => {});
         report(summary.unreadable.length ? 'warn' : 'info', 'Sync finished', {
           total: summary.total,
           added: summary.added,
@@ -768,7 +816,8 @@ export function createController(
         set({ kind: 'ready', at: last.at, summary, outcomes: [] });
       } catch (error) {
         await reload().catch(() => {});
-        fail(error);
+        // The last send's outcomes stay: this read did not settle them.
+        fail(error, outcomes.length ? outcomes : undefined);
       }
     },
 
@@ -786,7 +835,6 @@ export function createController(
       const progress: Array<'sending' | Outcome | undefined> =
         summary.review.map(() => undefined);
       set({ kind: 'sending', summary, progress: [...progress] });
-      let outcomes: Outcome[];
 
       try {
         outcomes = await withConnection(id =>
@@ -806,7 +854,7 @@ export function createController(
       } catch (error) {
         await reload().catch(() => {});
 
-        return fail(error);
+        return fail(error, undefined, 'send');
       }
 
       // The reviewed plan is used up either way: whatever was not sent is
@@ -815,7 +863,7 @@ export function createController(
       await reload();
       const uncertain = outcomes.find(o => o.status === 'uncertain');
       if (uncertain && uncertain.status === 'uncertain')
-        return fail(new Error(uncertain.message), outcomes);
+        return fail(new Error(uncertain.message), outcomes, 'send');
       set({ kind: 'ready', at, summary: last.summary, outcomes });
     },
 

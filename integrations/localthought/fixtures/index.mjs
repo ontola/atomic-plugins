@@ -19,6 +19,8 @@
  * api/ bodies, record.mjs, fixture.test.mjs, the drift guard).
  */
 import googleCalendar from '../../calendar/fixtures/google-calendar/scenario.mjs';
+// Synthetic, not recorded: see google-tasks/fixtures/google-tasks/synthetic.mjs.
+import googleTasks from '../../google-tasks/fixtures/google-tasks/scenario.mjs';
 import githubIssues from '../../issue-tracker/fixtures/github-issues/scenario.mjs';
 // Synthetic until #46 records api/: see issue-tracker/fixtures/todoist/synthetic.mjs.
 import todoist from '../../issue-tracker/fixtures/todoist/scenario.mjs';
@@ -32,6 +34,7 @@ export const fixtures = {
   clockify,
   'github-issues': githubIssues,
   'google-calendar': googleCalendar,
+  'google-tasks': googleTasks,
   moneybird,
   notion,
   pets,

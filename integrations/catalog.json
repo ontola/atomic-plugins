@@ -155,11 +155,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Calendar through the host's consent bar and choose a calendar. It syncs when opened and on Sync now; Send sends the reviewed edits. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One calendar per table, up to 25,000 events per scan. Recurring events (series and instances) and cancelled events are not imported; an imported event cancelled in Google is reported, never deleted. No creating or deleting events in Google. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it) and the table's existing rows are not uploaded. Waits for the stable ontology domain. Mock-tested only: not yet verified against a live Google account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google calendar events agenda week month schedule drive app two-way review",
-    "https://atomicdata.dev/integrations/properties/version": "0.3.1",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.2",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Event",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Events",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-Dpav1FxAR55QleDltgiGDau5GWwgsWR4lE1DBuw1NpGUfzva7KFBrVPXTSZFGDG0"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/calendar/0.3.2/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-n7ZsDzZd12auROdJND0P7VEOKoEjsITs24bmQ5wTInXF2qFug4VIrvY+LyONzQdY"
   },
   {
     "https://atomicdata.dev/properties/localId": "todoist",
@@ -181,6 +181,27 @@
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.2.0/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-B2Q7lcKGnJq7bEP/WPBmC0b7tkAUo8dscvZyDCl2TOilmOSCpGQI/N/3tqUJ0SkT"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "google-tasks",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "google-tasks",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Google Tasks",
+    "https://atomicdata.dev/properties/emoji": "☑️",
+    "https://atomicdata.dev/properties/description": "Bring the Google Tasks lists you tick into an Issues table, read-only.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports the tasks of the Google task lists you tick (completed and hidden ones included) into the app's table as rows of the shared Issue class (issue-v1: title, task/v1 status, notes as the body, and the due day as an exact date), with the task list, the parent task of a subtask, the Google task id and presence as extra columns, so other views of that class can read them. A task that leaves its list is looked up by id once and marked deleted, unavailable or unconfirmed, with when it was last seen; a task completed in Google is closed here because Google still lists it. No row is ever removed.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Tasks through the host's consent bar and tick the task lists to import. Tasks refresh whenever the app is opened, on Sync now and after you tick or untick a list. Nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Google Tasks access is the tasks.readonly scope, so closing, editing or creating a task here is not sent to Google, and a local edit to an imported column is overwritten at the next sync. Subtasks are imported flat, with the parent task's id as a column. A task gone from its list is never assumed completed: when Google's by-id check answers 404 or fails, the row keeps its last known values and says so; at most 50 such checks run per sync. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Google account (Decision Inbox Q-098), including what Google answers by id for a deleted task.",
+    "https://atomicdata.dev/integrations/properties/keywords": "google tasks todo task lists issues read-only drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-E5Asr2u/0Y5u1cJALrkP9XuMZCTnwxyF+DCfx4rAZ1JiX5bZC8T4OAL5P/lhxB6P"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",
@@ -218,11 +239,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Moneybird through the host's consent bar, choose an administration and tick what to import. The chosen collections refresh whenever the app is opened and on Sync now, each on its own: one that fails is reported next to the others. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: nothing is written back to Moneybird. One administration per app. Hours and mutations cover this calendar year only; Moneybird answers at most 100 mutations per request, so a day with 100 or more is refused rather than imported incompletely. Tested against a synthetic fixture, not a real Moneybird account. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "moneybird bookkeeping accounting invoices contacts hours time entries financial mutations bank transactions ledger finance administration drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Contact",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Contacts",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.2.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-thsBlBl724A+WF1UB6470BO/0TEhoM2qQWtepRvbiAcbCgMOMV3Xt9E0qHZi0jPF"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/moneybird/0.3.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-vj2Y6emubJtyxLmP67WliYKzI22tRcnmFqI8dLjR4gjsQQvNJ08/iLIfX7XVs1Lt"
   },
   {
     "https://atomicdata.dev/properties/localId": "timesheets",
@@ -260,11 +281,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is not imported, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "notion database table rows pages two-way review sync status drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.4.2",
+    "https://atomicdata.dev/integrations/properties/version": "0.5.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.4.2/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-UtZI+UAhXTGgkkMdlcJfZko3GC5Cto3OOB4kZHxmtXVUETWqLH5yKYizGtJleBvW"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-ImBCQKWLeSJOT2SumM7X3LN9vhdaG3iQOudeGxOOpwuSt1vNqzLThEroDKX5ggBC"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",
@@ -372,11 +393,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect GitHub through the host's consent bar and choose a repository. It syncs when opened, on Sync now and after each edit made in the app; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One repository per table: the app's own table, and each other Issue table it was asked to sync. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it, so Remove from board isn't offered there), the table itself is never written, and syncing pauses when the grant is taken back. A row added to the table outside the app stays local until you choose Publish to GitHub on it. A status other than exactly one of Todo, Doing, Blocked and Done is shown as it is and not synced. Labels and assignees are shown read-only; milestones and pull requests are not synced, and deletions are never sent to GitHub. One syncing view per app is assumed: two tabs or devices are not guarded. A new issue or comment whose send got no answer is never sent twice: you link it to the issue it became on GitHub, or send it again once GitHub shows no match. Waits for the stable ontology domain. Mock-tested only: not yet verified against live GitHub or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "github issues board kanban tracker two-way review drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.3.1",
+    "https://atomicdata.dev/integrations/properties/version": "0.4.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.3.1/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-5xhZB3VWgUDt/be4ojSNNsJFT3yradHQVu0Es3nDf7bLQlgska0hSHhLmSns6Vq1"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.4.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-5xyXS9k7ZOudcuUHglh1O9AeK8Yh4+caLPUiIsoXOLV6ubNSD2+dKQBGqWSvrKgz"
   },
   {
     "https://atomicdata.dev/properties/localId": "open-cloud-mesh",
