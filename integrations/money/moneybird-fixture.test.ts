@@ -21,7 +21,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { fixtures } from '../localthought/fixtures/index.mjs';
-import { civilYear, nextLink, redactor } from './fixtures/moneybird/record.mjs';
+import {
+  civilYear as recorderYear,
+  nextLink,
+  redactor,
+} from './fixtures/moneybird/record.mjs';
+import { civilYear } from './moneybird/read';
 import scenario, {
   moneybirdFixture,
   PAGE_CAP,
@@ -295,6 +300,112 @@ describe('moneybird fixture: always-on checks', () => {
     ).toBe('https://moneybird.com/api/v2/1/contacts.json?page=2');
     expect(nextLink('<https://x/a?page=1>; rel="first"')).toBeUndefined();
     expect(nextLink(null)).toBeUndefined();
+  });
+
+  it('gives a project, user or contact one fake wherever it appears', () => {
+    const redact = redactor();
+    const user = { id: '999000333', name: 'Piet Jansen' };
+    const project = { id: '999000444', name: 'Website', state: 'active' };
+    const rawContact = {
+      id: '888000222',
+      administration_id: '777000111',
+      company_name: 'Bakkerij Jansen B.V.',
+      firstname: 'Piet',
+      lastname: 'Jansen',
+      city: 'Ons Dorp',
+    };
+    const entry = (id: string, description: string): Row =>
+      redact.row('time_entry', {
+        id,
+        administration_id: '777000111',
+        contact_id: rawContact.id,
+        project_id: project.id,
+        user_id: user.id,
+        description,
+        user,
+        project,
+        contact: rawContact,
+      });
+    const [one, two] = [entry('999000551', 'Call'), entry('999000552', 'Call')];
+    const contact: Row = redact.row('contact', rawContact);
+
+    // Two entries, one project and one user: the same fake ids and names.
+    expect((one.project as Row).id).toBe((two.project as Row).id);
+    expect((one.project as Row).name).toBe((two.project as Row).name);
+    expect((one.user as Row).id).toBe((two.user as Row).id);
+    expect((one.user as Row).name).toBe((two.user as Row).name);
+    expect(one.project_id).toBe((one.project as Row).id);
+    expect(one.user_id).toBe((one.user as Row).id);
+    expect((one.project as Row).name).toMatch(/^Redacted project 1$/);
+    expect((one.user as Row).name).toMatch(/^Redacted user 1$/);
+    // The same description twice is the same fake; a different one is not.
+    expect(one.description).toBe(two.description);
+    expect(entry('999000553', 'Lunch').description).not.toBe(one.description);
+    // A contact nested in an entry and read top-level is the same row.
+    expect(one.contact).toEqual(contact);
+    expect(one.contact_id).toBe(contact.id);
+    expect(contact).toMatchObject({
+      company_name: 'Redacted company 1',
+      firstname: 'Firstname 1',
+      lastname: 'Lastname 1',
+      city: 'Redacted city 1',
+    });
+    // Distinct real values get distinct fakes.
+    expect(
+      redact.row('contact', { ...rawContact, id: '888000223', city: 'Elders' })
+        .city,
+    ).toBe('Redacted city 2');
+  });
+
+  it('keeps only allow-listed numbers; other numbers are redacted and reported', () => {
+    const redact = redactor();
+    const contact: Row = redact.row('contact', {
+      id: 888000222,
+      chamber_of_commerce: 12345678,
+      tax_number: 123456789,
+      customer_id: 42,
+      version: 1788950001,
+      max_transfer_amount: 500,
+    });
+    const mutation: Row = redact.row('financial_mutation', {
+      id: '999000777',
+      contra_account_number: 417164300,
+      account_servicer_transaction_id: 987654,
+      version: 7,
+    });
+    const entry: Row = redact.row('time_entry', {
+      id: '999000555',
+      paused_duration: 1800,
+      project: { id: '999000444', name: 'Website', budget: 4000 },
+    });
+    const text = JSON.stringify([contact, mutation, entry]);
+    for (const secret of ['12345678', '123456789', '417164300', '987654'])
+      expect(text, secret).not.toContain(secret);
+    expect(contact).toMatchObject({
+      chamber_of_commerce: 'redacted',
+      tax_number: 'redacted',
+      customer_id: '1',
+      version: 1788950001,
+      max_transfer_amount: 500,
+    });
+    expect(mutation).toMatchObject({
+      contra_account_number: 'redacted',
+      account_servicer_transaction_id: 'TX-1',
+      version: 7,
+    });
+    expect(entry).toMatchObject({
+      paused_duration: 1800,
+      project: { budget: 4000 },
+    });
+    expect(redact.unknown()).toEqual([
+      'contact.chamber_of_commerce',
+      'contact.tax_number',
+      'financial_mutation.contra_account_number',
+    ]);
+  });
+
+  it('counts the civil year the way the app does', () => {
+    expect(recorderYear()).toBe(civilYear());
   });
 });
 

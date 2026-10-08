@@ -100,9 +100,19 @@ export const REDACTIONS = [
       'read.ts accepts identifiers of digits only.',
   },
   {
+    field: 'any other number (a numeric tax number, account number, reference)',
+    replace:
+      '"redacted" (reported in api/meta.json); only version, budget, ' +
+      'paused_duration, max_transfer_amount and child_order are kept',
+    reason: 'Fail closed on numbers as on strings: a number can identify too.',
+  },
+  {
     field: 'administration.name',
     replace: 'Redacted administration <n>',
-    reason: 'Names the business.',
+    reason:
+      'Names the business. Every name-like fake below is stable per real ' +
+      'value, so a project or user nested in several time entries keeps one ' +
+      'name and a contact reads the same nested and top-level.',
   },
   {
     field: 'contact.company_name, firstname, lastname',
@@ -218,6 +228,19 @@ const KEEP = new Set([
   'credit_card_type',
 ]);
 
+/**
+ * Numbers kept verbatim: record versions and quantities the app reads. Any
+ * other number (a numeric tax number, account number or reference) is
+ * redacted and reported like an unknown string.
+ */
+const KEEP_NUMBERS = new Set([
+  'version',
+  'budget',
+  'paused_duration',
+  'max_transfer_amount',
+  'child_order',
+]);
+
 /** Arrays replaced with [] (user-written content the app never reads). */
 const EMPTIED = new Set([
   'notes',
@@ -300,41 +323,62 @@ export function redactor() {
     return 'other';
   };
 
+  /**
+   * A name-like fake, the same for the same real value every time, so a
+   * project or user nested in several time entries keeps one name (hours.ts
+   * links rows by it) and a contact reads the same nested and top-level.
+   */
+  const fakeName = (kind, raw, label) =>
+    stable(`name:${kind}`, raw, n => `${label} ${n}`);
+  const isId = field => field === 'id' || field.endsWith('_id');
+
   const value = (v, field, resource, row) => {
     if (v === null || typeof v === 'boolean') return v;
-    if (typeof v === 'number')
-      return field === 'id' || field.endsWith('_id')
-        ? fakeId(idKind(field, resource), v)
-        : v;
     if (Array.isArray(v))
       return EMPTIED.has(field)
         ? []
         : v.map(item => value(item, field, resource, row));
     if (typeof v === 'object') return redactRow(NESTED[field] ?? resource, v);
+
+    // Fields that look like ids but are not Moneybird record ids, before the
+    // `*_id` rule: the customer number (a column the app imports) and the
+    // bank's transaction reference.
+    if (field === 'customer_id')
+      return v === '' ? '' : stable('customer_id', v, n => String(n));
+    if (field === 'account_servicer_transaction_id')
+      return v === '' ? '' : stable('transaction', v, n => `TX-${n}`);
+    if (isId(field)) return fakeId(idKind(field, resource), v);
+
+    if (typeof v === 'number') {
+      // Numbers fail closed too: only counters and quantities the app reads
+      // are kept; a numeric account number or tax number is not a number.
+      if (KEEP_NUMBERS.has(field)) return v;
+      unknown.add(`${resource}.${field}`);
+
+      return 'redacted';
+    }
+
     if (KEEP.has(field)) return v;
-    if (field === 'id' || field.endsWith('_id'))
-      return fakeId(idKind(field, resource), v);
 
     if (field === 'name') {
       if (resource === 'administration')
-        return `Redacted administration ${next('administration.name')}`;
-      if (resource === 'user') return `Redacted user ${next('user.name')}`;
+        return fakeName(resource, v, 'Redacted administration');
+      if (resource === 'user') return fakeName(resource, v, 'Redacted user');
       if (resource === 'project')
-        return `Redacted project ${next('project.name')}`;
+        return fakeName(resource, v, 'Redacted project');
       if (resource === 'financial_account')
-        return `Redacted account ${next('account.name')}`;
+        return fakeName(resource, v, 'Redacted account');
     }
 
     if (v === '') return '';
-    if (field === 'company_name')
-      return `Redacted company ${next('company_name')}`;
-    if (field === 'firstname') return `Firstname ${next('firstname')}`;
-    if (field === 'lastname') return `Lastname ${next('lastname')}`;
+    if (field === 'company_name') return fakeName(field, v, 'Redacted company');
+    if (field === 'firstname') return fakeName(field, v, 'Firstname');
+    if (field === 'lastname') return fakeName(field, v, 'Lastname');
     if (field === 'email' || field.endsWith('_to_email'))
       return stable('email', v, n => `contact${n}@example.invalid`);
     if (field === 'address1') return 'Redacted street';
     if (field === 'zipcode') return '1000 AA';
-    if (field === 'city') return `Redacted city ${next('city')}`;
+    if (field === 'city') return fakeName(field, v, 'Redacted city');
     if (
       field === 'address2' ||
       field === 'phone' ||
@@ -342,21 +386,17 @@ export function redactor() {
       field.endsWith('_to_attention')
     )
       return '';
-    if (field === 'customer_id')
-      return stable('customer_id', v, n => String(n));
     if (IBAN_LIKE.has(field)) return fakeIban(v);
     if (field === 'sales_invoices_url')
       return `https://moneybird.com/${fakeId('administration', row.administration_id)}/sales_invoices/redacted/all`;
     if (IDENTIFYING.has(field)) return 'redacted';
     if (field === 'description')
-      return `Redacted description ${next('description')}`;
-    if (field === 'message') return `Redacted message ${next('message')}`;
+      return fakeName(field, v, 'Redacted description');
+    if (field === 'message') return fakeName(field, v, 'Redacted message');
     if (field === 'contra_account_name')
-      return `Redacted counterparty ${next('contra_account_name')}`;
+      return fakeName(field, v, 'Redacted counterparty');
     if (field === 'batch_reference')
       return stable('batch_reference', v, n => `BATCH-${n}`);
-    if (field === 'account_servicer_transaction_id')
-      return stable('transaction', v, n => `TX-${n}`);
     unknown.add(`${resource}.${field}`);
 
     return 'redacted';
@@ -506,6 +546,10 @@ async function main() {
   if (!token) throw new Error('MONEYBIRD_TOKEN must be set');
   const perPage = Number(arg('per-page', '2'));
   const maxPages = Number(arg('max-pages', '3'));
+  if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100)
+    throw new Error('--per-page must be an integer from 1 to 100');
+  if (!Number.isInteger(maxPages) || maxPages < 1)
+    throw new Error('--max-pages must be an integer of at least 1');
   const api = new URL('api/', dir);
   rmSync(api, { recursive: true, force: true });
   mkdirSync(api);

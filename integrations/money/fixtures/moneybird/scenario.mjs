@@ -107,6 +107,10 @@ export function source({ apiDir = API_DIR } = {}) {
       financialMutations: structuredClone(synthetic.financialMutations),
     };
   const meta = loadJson(new URL('meta.json', apiDir));
+  if (!Number.isInteger(Number(meta.year)) || !(Number(meta.year) > 2000))
+    throw new Error(
+      `${new URL('meta.json', apiDir).pathname}: no "year" (the civil year the recording's dated rows fall in); re-run record.mjs`,
+    );
   const administrations = loadJson(
     new URL('GET__administrations.json', apiDir),
   ).body;
