@@ -705,3 +705,19 @@ Validate the full catalog compositions, from this folder, with
 the generated `sources.json` records the source URLs and content hashes.
 Both read overlays under the Pages URL from this checkout and download only
 the pinned OADs.
+
+## GitLab read-only candidate
+
+The 2026-10-08 GitLab candidate uses a read-only OAD subset pinned to the
+official GitLab OpenAPI source. It exposes four GET operations: project list
+and item reads, project issue list and issue item reads. Its authentication
+overlay defines a `gitlabReadOnly` OAuth profile with the `read_api` scope;
+the selected catalog profile limits proxy access to those operations. The
+pagination overlay follows GitLab's RFC 8288 `Link rel=next` URL and adds the
+response header schema omitted by the source OAD. CRUD metadata maps project
+IDs into nested issue collections. `membership=true` lives in the catalog's
+query override, not the shared CRUD description. No rate quota is declared.
+The composition and runtime checks are documented in
+[GitLab read-only provenance](tests/GITLAB_READONLY_PROVENANCE.md) and
+[RUNTIME_VALIDATION.md](tests/RUNTIME_VALIDATION.md). The candidate dated
+catalog selects these overlays; no existing published catalog changes.

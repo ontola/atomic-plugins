@@ -1,0 +1,62 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f6d7940e9865903b9c99c5c1fc2d57d92811eef4/APIs/gitlab.com/v4-readonly/openapi.yaml
+info:
+  title: GitLab read-only projects and issues collections
+  version: 1.0.0
+  description: >-
+    Expose membership-filtered projects and each project's issues as read
+    collections. The project collection keeps membership=true as its query
+    selection; all issue filters remain caller-controlled.
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        project:
+          schema:
+            $ref: '#/components/schemas/APIEntitiesBasicProjectDetails'
+          identity:
+            urlTemplate: /projects/{id}
+            bindings:
+              id:
+                field: id
+          collections:
+            projects:
+              urlTemplate: /projects
+              envelope: {}
+        issue:
+          schema:
+            $ref: '#/components/schemas/APIEntitiesIssue'
+          identity:
+            urlTemplate: /projects/{id}/issues/{issue_iid}
+            bindings:
+              id:
+                field: project_id
+              issue_iid:
+                field: iid
+          collections:
+            projectIssues:
+              urlTemplate: /projects/{id}/issues
+              envelope: {}
+  - target: $.paths['/projects'].get
+    update:
+      x-crud:
+        action: list
+        resource: project
+        collection: projects
+  - target: $.paths['/projects/{id}/issues'].get
+    update:
+      x-crud:
+        action: list
+        resource: issue
+        collection: projectIssues
+  - target: $.paths['/projects/{id}/issues/{issue_iid}'].get
+    update:
+      x-crud:
+        action: read
+        resource: issue
+
+  - target: $.paths['/projects/{id}'].get
+    update:
+      x-crud:
+        action: read
+        resource: project
