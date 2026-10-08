@@ -783,7 +783,7 @@ function declaredIdempotencyHeader(
 /**
  * The Collection Completeness extension's `absent` value for a collection:
  * from its CRUD Causality Collection Object, which covers the collection's
- * own fixed `x-list-query`/`x-list-body`, else from its list operation,
+ * own fixed `listQuery`/`listBody` (or `x-list-query`/`x-list-body`), else from its list operation,
  * which covers only a read that adds nothing to the operation's request (no
  * fixed query or body), since several collections may share that operation.
  */
