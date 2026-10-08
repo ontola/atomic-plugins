@@ -26,6 +26,8 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         key_check_window: crate::KEY_CHECK_WINDOW,
         trust_forwarded_for: crate::config::TrustForwardedFor::None,
         webhooks: None,
+        // Off, like the key-check limit; the limit's own tests turn it on.
+        proxy_limit: None,
         test_upstream: None,
     }
 }

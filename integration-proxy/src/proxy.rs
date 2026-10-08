@@ -390,6 +390,20 @@ pub async fn forward(
     }
 }
 
+/// The per-owner limit on proxied requests: fixed one-minute windows in
+/// memory, per instance, with bounded keys (the webhook routes' limiter).
+/// `0` turns it off.
+pub(crate) fn owner_limiter(
+    per_minute: u32,
+) -> Option<std::sync::Arc<crate::webhooks::limits::Limiter>> {
+    (per_minute > 0).then(|| {
+        std::sync::Arc::new(crate::webhooks::limits::Limiter::new(
+            per_minute,
+            std::time::Duration::from_secs(60),
+        ))
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn forward_inner(
     state: &AppState,
@@ -424,6 +438,14 @@ async fn forward_inner(
         state, security, &record, platform, &method, uri, headers, &body,
     )
     .await?;
+    // Counted per owner only once the caller is authenticated (and admitted
+    // by the access policy), so nobody else can spend an owner's budget,
+    // and before any refresh or upstream call.
+    if let Some(limiter) = &state.proxy_limit {
+        limiter
+            .take(&record.owner, std::time::Instant::now())
+            .map_err(ApiError::RateLimited)?;
+    }
     // Only an authenticated use keeps a connection alive.
     let (delegate, runtime) = match &caller {
         Caller::Owner => (None, None),
@@ -2361,6 +2383,75 @@ mod tests {
             HeaderValue::from_str(&f.owner.legacy_id()).unwrap(),
         );
         assert_eq!(f.send(legacy).await.status(), StatusCode::OK);
+    }
+
+    /// `PROXY_LIMIT_PER_OWNER_PER_MINUTE`: an owner's connections share one
+    /// budget with their delegates; over it the answer is `429
+    /// rate_limited` with `Retry-After`, before any upstream call. Requests
+    /// that fail authentication spend nothing, and other owners are not
+    /// affected.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_proxied_requests_are_limited_per_owner() {
+        let mut f = fixture(61).await;
+        f.state.proxy_limit = owner_limiter(3);
+        assert!(owner_limiter(0).is_none());
+        let app = Agent::new(62);
+        f.security
+            .put_delegation(&f.id, &app.id(), None)
+            .await
+            .unwrap();
+        // Refused callers spend nothing: unsigned, a stranger, a replay.
+        let unsigned = axum::http::Request::builder()
+            .uri(f.path())
+            .body(axum::body::Body::empty())
+            .unwrap();
+        expect_error(
+            f.send(unsigned).await,
+            StatusCode::UNAUTHORIZED,
+            "missing_signature",
+        )
+        .await;
+        for _ in 0..5 {
+            expect_error(
+                f.get_as(&Agent::new(63)).await,
+                StatusCode::FORBIDDEN,
+                "not_delegated",
+            )
+            .await;
+        }
+        // The owner and its delegate share the owner's three.
+        assert_eq!(f.get_as(&f.owner).await.status(), StatusCode::OK);
+        assert_eq!(f.get_as(&app).await.status(), StatusCode::OK);
+        assert_eq!(f.get_as(&f.owner).await.status(), StatusCode::OK);
+        for caller in [&f.owner, &app] {
+            let response = f.get_as(caller).await;
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            let retry: u64 = response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((1..=60).contains(&retry), "{retry}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = body_json(response).await;
+            assert_eq!(body["error"], "rate_limited");
+        }
+        // Another owner, on the same instance, has its own budget.
+        let other = Agent::new(64);
+        let id = f
+            .security
+            .create_connection("clockify", &other.id(), &api_key_credential())
+            .await
+            .unwrap();
+        let request = signed_request(
+            &f.state,
+            &other,
+            "GET",
+            &format!("/proxy/{id}/clockify/workspaces"),
+            vec![],
+        );
+        assert_eq!(f.send(request).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -347,9 +347,42 @@ from catalog platform names. Path-traversal rejection, upstream redirect
 disabling, and the bounded OAD request validation above are implemented.
 The remaining gate for #9 and #10 is provider registration, full JSON Schema
 body validation, further SSRF hardening (e.g. blocking requests to internal
-network ranges), rate limiting of proxied requests (key checks are limited
-per client network, above), and an external review of the token envelope
-format before live credentials are handled.
+network ranges), and an external review of the token envelope format before
+live credentials are handled. Proxied requests are limited per owner (below);
+key checks per client network (above).
+
+## Proxied requests per owner (unreleased)
+
+`/proxy/{connection_id}/{platform}/{path}` is limited per connection owner:
+at most `PROXY_LIMIT_PER_OWNER_PER_MINUTE` requests (default 600; `0` turns
+it off; at most 100,000, larger values stop the proxy at startup) in a fixed
+one-minute window.
+
+- **Whose budget.** The key is the connection's owner (`atomic:agent:…`),
+  whoever signs: the owner, a delegated app, its registered runtimes and its
+  frames all spend the owner's budget, as #54 counts freemium limits per
+  owner. Several connections of one owner share it.
+- **Order.** The request is counted only after authentication (signature,
+  replay, capability and delegation checks) and the access policy have
+  admitted it, so nobody without the owner's or a delegate's key can spend
+  an owner's budget, and before the token refresh, the catalog checks and
+  any upstream call. Over the limit the answer is `429`
+  `{"error":"rate_limited"}` with `Retry-After` (whole seconds until the
+  window ends, at least 1) and `no-store`; nothing reaches the provider.
+- **Scope.** The windows live in this instance's memory, like the webhook
+  routes' limits (the same limiter, `webhooks::limits::Limiter`): with N
+  instances an owner may make up to N times the limit, and a restart starts
+  every window afresh. It bounds what one owner can make this instance
+  send, not the provider's own quota, which `x-throttling` and the
+  forwarded rate-limit headers describe. Memory is bounded: at most 10,000
+  owners are tracked; past that, expired windows are dropped, and if none
+  has expired, every new owner shares one overflow window with the same
+  limit. Owner ids are held in memory only, never stored or logged by the
+  limiter.
+- **Not covered.** Requests that fail before authentication (unsigned,
+  bad signatures, unknown connections) are not counted by this limit; they
+  cost a database lookup and a signature check each, and are bounded only
+  by whatever runs in front of the proxy.
 
 ## Webhook inbox (#369, unreleased)
 

@@ -214,6 +214,7 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 | 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
+| 429 | `rate_limited`, from `/proxy/…` only, with `Retry-After` in seconds: the connection's owner is over `PROXY_LIMIT_PER_OWNER_PER_MINUTE` |
 
 Catalog refusals and upstream failures from `/proxy/…` keep their plain-text
 bodies (`404 method or path is not in the catalog`, `502 upstream request failed`).
@@ -267,6 +268,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables, runs its sweeper and mounts the webhook routes below (ontola/atomic-plugins#369; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. Unreleased. |
 | `WEBHOOK_INGRESS_LIMIT_PER_NETWORK` | no | Refused requests (unknown endpoint, failed verification, oversized body) one client network (an IPv4 address or IPv6 /64, found as `TRUST_FORWARDED_FOR` says) may make to `POST /webhooks/…` per minute; verified deliveries do not count. Over it, the network is refused before any work. Default `120`; `1` to `100000`. Over it: `429` with `Retry-After`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT` | no | Deliveries one existing webhook endpoint accepts per minute, counted before the body is read or verified. Default `600`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
+| `PROXY_LIMIT_PER_OWNER_PER_MINUTE` | no | The most `/proxy/…` requests one connection owner's connections may make in any minute, the owner's delegates, runtimes and frames included. Counted after the caller is authenticated and admitted, before any token refresh or upstream call; over it, `429 rate_limited` with `Retry-After`. A fixed one-minute window in memory, per instance (with N instances an owner may make up to N times this), with at most 10,000 owners tracked (past that, new owners share one overflow window). Defaults to `600`; `0` turns it off; more than `100000` stops the proxy at startup. Unreleased. |
 | `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER` | no | Subscription requests per connection owner per hour, counted before the access check reaches the provider. Default `20`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_SECRET_<PLATFORM>` | with webhooks, per platform | The secret of a platform's shared application hook, as configured at the provider (`<PLATFORM>` is the catalog name, upper case, `-` as `_`). Read only with `WEBHOOKS_ENABLED=true`, for platforms whose composed document declares `x-webhook-deliveries`. Without it, every delivery to that platform is refused and no subscription to it is created. Unreleased. |
 | `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
@@ -514,6 +516,7 @@ private and may change in any release:
 | `AgentId`, `parse_agent_id` | A parsed agent id; `as_str()` is the canonical `atomic:agent:` form. |
 | `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve, recording each request's peer address (`into_make_service_with_connect_info::<SocketAddr>()`) for the key-check limit. A caller that serves `build_app`'s router itself should do the same; without it, and without a trusted `X-Forwarded-For`, all clients share one limit. |
 | `TrustForwardedFor`, `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR` | `Config::trust_forwarded_for` and the default of `Config::key_check_limit_per_hour`. Unreleased. |
+| `DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE`, `MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE` | The default (`600`) and the largest accepted value (`100000`) of `Config::proxy_limit_per_owner_per_minute`. Unreleased. |
 | `WebhookConfig`, `DEFAULT_WEBHOOK_INBOX_MAX_BYTES` | `Config::webhooks` (`WEBHOOKS_ENABLED`, `WEBHOOK_INBOX_MAX_BYTES`); `#[non_exhaustive]`, so build one with `WebhookConfig::default()` and set its fields. Unreleased. |
 | `run() -> ExitCode` | What the binary does: init `tracing` from `RUST_LOG` (default `info`), `Config::from_env`, `serve`, print any `Error` to stderr. |
 | `Error` | Startup/serve failure; `Display` is the one-line message the binary prints. |

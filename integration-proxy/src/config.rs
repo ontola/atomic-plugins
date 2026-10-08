@@ -49,6 +49,11 @@ pub struct Config {
     pub trust_forwarded_for: TrustForwardedFor,
     /// `WEBHOOKS_ENABLED` and the webhook inbox's limits. Off by default.
     pub webhooks: WebhookConfig,
+    /// `PROXY_LIMIT_PER_OWNER_PER_MINUTE`: the most proxied requests the
+    /// connections of one owner (with all their delegates, runtimes and
+    /// frames) may make through this instance in any minute. Defaults to
+    /// [`DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE`]; `0` turns it off.
+    pub proxy_limit_per_owner_per_minute: u32,
 }
 
 /// The webhook inbox (ontola/atomic-plugins#369). Off unless
@@ -233,6 +238,31 @@ pub(crate) fn key_check_limit(value: Option<&str>) -> Result<u32, String> {
     }
 }
 
+/// The default of [`Config::proxy_limit_per_owner_per_minute`]: ten
+/// requests a second on average, enough for a sync that pages through a few
+/// thousand records a minute.
+pub const DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE: u32 = 600;
+
+/// The highest `PROXY_LIMIT_PER_OWNER_PER_MINUTE` accepted; `0` is the way
+/// to turn the limit off.
+pub const MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE: u32 = 100_000;
+
+/// `PROXY_LIMIT_PER_OWNER_PER_MINUTE`: unset or blank means
+/// [`DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE`], `0` means no limit;
+/// anything but a whole number from 0 to
+/// [`MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE`] is refused at startup.
+pub(crate) fn proxy_limit(value: Option<&str>) -> Result<u32, String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if limit <= MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE => Ok(limit),
+            _ => Err(format!(
+                "PROXY_LIMIT_PER_OWNER_PER_MINUTE must be a whole number from 0 (no limit) to {MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE}"
+            )),
+        },
+    }
+}
+
 /// The operator name when `OPERATOR_NAME` is unset: neutral, because the
 /// crate does not know who runs it.
 pub const DEFAULT_OPERATOR_NAME: &str = "this integration proxy";
@@ -373,6 +403,8 @@ impl Config {
             env::var("WEBHOOK_INBOX_MAX_BYTES").ok().as_deref(),
             &|name| env::var(name).ok(),
         )?;
+        let proxy_limit_per_owner_per_minute =
+            proxy_limit(env::var("PROXY_LIMIT_PER_OWNER_PER_MINUTE").ok().as_deref())?;
 
         Ok(Self {
             base_url,
@@ -388,6 +420,7 @@ impl Config {
             key_check_limit_per_hour,
             trust_forwarded_for,
             webhooks,
+            proxy_limit_per_owner_per_minute,
         })
     }
 
@@ -483,6 +516,7 @@ mod tests {
             key_check_limit_per_hour: 0,
             trust_forwarded_for: TrustForwardedFor::None,
             webhooks: WebhookConfig::default(),
+            proxy_limit_per_owner_per_minute: 0,
         };
         assert_eq!(config.public_origin(), "https://proxy.example:8443");
         assert_eq!(config.public_host(), "proxy.example:8443");
@@ -589,6 +623,22 @@ mod tests {
             "https://u:p@atomic.place",
         ] {
             assert!(validate_operator_url(Some(invalid)).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn the_proxy_limit_defaults_to_600_a_minute_and_zero_turns_it_off() {
+        assert_eq!(proxy_limit(None).unwrap(), 600);
+        assert_eq!(proxy_limit(Some("  ")).unwrap(), 600);
+        assert_eq!(proxy_limit(Some("0")).unwrap(), 0);
+        assert_eq!(proxy_limit(Some(" 30 ")).unwrap(), 30);
+        assert_eq!(proxy_limit(Some("100000")).unwrap(), 100_000);
+        for invalid in ["100001", "-1", "1.5", "ten", "4294967296"] {
+            let error = proxy_limit(Some(invalid)).unwrap_err();
+            assert!(
+                error.contains("0 (no limit) to 100000"),
+                "{invalid}: {error}"
+            );
         }
     }
 

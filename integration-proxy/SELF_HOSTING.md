@@ -214,6 +214,7 @@ RUST_LOG=info
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids that may not own connections. |
 | `OPERATOR_NAME` | no, recommended | Who runs this proxy, as the landing page and the consent page name them ("Use Example Org to sync …", "run by Example Org"). The consent page also shows the host of `BASE_URL`. Defaults to `this integration proxy`, and the pages then name no one. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Link for `OPERATOR_NAME` on those pages: an absolute `http(s)` URL without credentials. Anything else stops the proxy at startup. 0.2.1 and later. |
+| `PROXY_LIMIT_PER_OWNER_PER_MINUTE` | no | Most proxied requests per connection owner (delegates, runtimes and frames included) in any minute, per instance, default `600`, `0` for no limit, at most `100000`. Over it: `429 rate_limited` with `Retry-After`. Unreleased. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit, at most `10000`. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
 | `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Same section. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `_CLIENT_SECRET`, `_CLIENT_AUTH_METHOD` | per OAuth platform | See [Registering OAuth apps](#registering-oauth-apps). |

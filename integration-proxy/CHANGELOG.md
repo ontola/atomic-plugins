@@ -32,6 +32,14 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   checked before the access check (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`,
   `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`, `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`;
   new `WebhookConfig` fields).
+- Proxied requests are limited per connection owner (SECURITY.md's release
+  gate): at most `PROXY_LIMIT_PER_OWNER_PER_MINUTE` (default 600, `0` off,
+  at most 100,000) per minute, the owner's delegates, runtimes and frames
+  included, counted after authentication and before any upstream call. Over
+  it, `429 rate_limited` with `Retry-After`. In memory, per instance, with
+  bounded keys. New `Config::proxy_limit_per_owner_per_minute`,
+  `DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE`,
+  `MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE`, `ApiError::RateLimited`.
 
 ## 0.3.0 (2026-10-06)
 

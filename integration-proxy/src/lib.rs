@@ -75,7 +75,9 @@ pub use access::{Access, AccessPolicy, AllowAll, EnvAccessPolicy};
 pub use agent_id::{parse as parse_agent_id, AgentId};
 pub use config::{
     Config, TrustForwardedFor, WebhookConfig, DEFAULT_CATALOG_PATH,
-    DEFAULT_KEY_CHECK_LIMIT_PER_HOUR, DEFAULT_OPERATOR_NAME, DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+    DEFAULT_KEY_CHECK_LIMIT_PER_HOUR, DEFAULT_OPERATOR_NAME,
+    DEFAULT_PROXY_LIMIT_PER_OWNER_PER_MINUTE, DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+    MAX_PROXY_LIMIT_PER_OWNER_PER_MINUTE,
 };
 
 #[derive(Clone)]
@@ -100,6 +102,9 @@ struct AppState {
     trust_forwarded_for: config::TrustForwardedFor,
     /// The webhook inbox and its routes, only with `WEBHOOKS_ENABLED=true`.
     webhooks: Option<Arc<webhooks::Webhooks>>,
+    /// `PROXY_LIMIT_PER_OWNER_PER_MINUTE`, counted per connection owner in
+    /// this instance's memory; `None` when it is `0`.
+    proxy_limit: Option<Arc<webhooks::limits::Limiter>>,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
@@ -262,6 +267,7 @@ pub async fn build_app_with_access(
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
         webhooks,
+        proxy_limit: proxy::owner_limiter(config.proxy_limit_per_owner_per_minute),
         #[cfg(test)]
         test_upstream: None,
     };
