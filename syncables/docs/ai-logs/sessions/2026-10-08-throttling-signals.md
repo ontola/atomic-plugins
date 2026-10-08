@@ -111,3 +111,21 @@ method, compares a pause with the running sync's remaining budget time
 (`Budget.remainingMs()`, tracked as `activeBudget`), re-checks after each
 sleep, and pauses the bucket on a read's `quotaExhausted` without a time
 until the client's base backoff.
+
+## Turn 4
+
+**Human (via the coordinator session, to a worker taking over after the
+previous one stopped on a usage limit):** Finish the second review of #391:
+merge `origin/main` (which brings `listMethod: POST` from #392) with a merge
+commit, then fix the read transport's operation lookup for a POST list
+read; document the downgrade in the changelog.
+
+**Assistant:** Merge commit resolving `conditionalTransport` (this branch's
+method-aware lookup with main's `paginated()` check). A test on the fixed-read
+example's POST search with a bucket of its own: the search's 429 pauses
+`search`, and the next search waits on it (here: stops, past its 1 s
+budget), where a GET-only lookup would have counted it against the default
+bucket and sent it at once (checked by reverting the lookup). The
+Unreleased changelog bullet names the POST-read buckets and the downgrade
+(outbox version 1; an older client drops `notBefore` and
+`throttlingPauses`, so it may send a held write early, never twice).

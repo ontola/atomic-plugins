@@ -1136,7 +1136,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   why, and a read that cannot wait within its time stops with an error. A
   create answered by a 5xx stays uncertain even when a signal matches it.
   The read budget waits the same time for a declared signal, not only for a
-  429.
+  429. A read counts against its own operation's buckets (a POST list read,
+  `listMethod: POST`, against its path's `post`). Downgrading: the outbox
+  stays at version 1, so an older syncables reads it but drops `notBefore`
+  and `throttlingPauses`; it may send a held write before the API's time,
+  but never twice.
   `WriteFailure` gains `throttling` and `signalsDeclared`.
   `declaredThrottling`, `classifyThrottling`, `headerTime` and
   `operationBuckets` are exported.

@@ -22,6 +22,7 @@ import {
   throttledPets,
 } from '../../fixtures/throttling.js';
 import { petsDocument } from '../../fixtures/pets.js';
+import { fixedReads } from '../../fixtures/fixed-reads.js';
 
 // Throttling 0.2.0-draft in the client: the document's x-throttling decides
 // which responses are rate-limit refusals (a matching signal, or a 429) and
@@ -458,6 +459,62 @@ describe('reads and the exhausted buckets they share with writes', () => {
       timeout: 2000,
     });
     expect(fake.writes).toHaveLength(1);
+  });
+});
+
+describe("a POST list read counts against its own operation's buckets", () => {
+  it("pauses and waits on the post operation's x-throttling buckets, not the path's get", async () => {
+    // Only the POST search of the fixed-read example, with a bucket of its
+    // own; the document-wide default is another bucket.
+    const base = structuredClone(fixedReads);
+    const crud = base.components!['crudResources'] as Record<string, unknown>;
+    delete crud['task'];
+    delete base.paths['/lists/{listId}/tasks'];
+    base.paths['/search']!.post!['x-throttling'] = ['search'];
+    const document = prepareDocument({
+      ...base,
+      'x-throttling': {
+        limits: {
+          general: { requests: 100, window: { seconds: 60, kind: 'fixed' } },
+          search: { requests: 10, window: { seconds: 60, kind: 'fixed' } },
+        },
+        applies: ['general'],
+        headers: {
+          'Retry-After': {
+            role: 'retryAfter',
+            unit: 'deltaSecondsOrHttpDate',
+          },
+        },
+        signals: [
+          { status: [429], meaning: 'quotaExhausted', bucket: 'search' },
+        ],
+      },
+    });
+    let answer: TransportResponse = json({ error: 'slow down' }, 429, {
+      'Retry-After': '120',
+    });
+    const requests: TransportRequest[] = [];
+    const c = createApiClient(document, {
+      transport: async (r) => {
+        requests.push(r);
+        return answer;
+      },
+      retry: { baseDelayMs: 10 },
+      limits: { timeoutMs: 1000, maxRetries: 0 },
+    });
+    // The search's 429 pauses the `search` bucket for 120 s.
+    const first = await c.sync().catch((e: unknown) => e);
+    expect(String(first)).toMatch(/429/);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.method).toBe('POST');
+    answer = json({ results: [], next_cursor: null });
+    // The next search counts against `search` (its post's x-throttling), so
+    // it cannot wait 120 s within a 1 s budget; with the get's (absent)
+    // operation it would count against `general` and go out at once.
+    await expect(c.sync()).rejects.toThrow(
+      /holds this request until .* longer than the read's remaining time/,
+    );
+    expect(requests).toHaveLength(1);
   });
 });
 
