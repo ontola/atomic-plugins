@@ -1,0 +1,58 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/de95e5bf40f54e3752281a771a786854038d683b/APIs/clickup.com/v2-readonly/openapi.yaml
+info:
+  title: ClickUp Workspace and task read causality
+  version: 1.0.0
+  description: >-
+    Model authorized Workspaces as the root collection and tasks as a
+    Workspace-scoped child collection. Task.parent remains the provider's
+    subtask field; it does not imply separate subtask CRUD resources.
+actions:
+- target: $.components
+  update:
+    crudResources:
+      workspace:
+        description: A Workspace authorized for the current user.
+        identity:
+          # ClickUp has no Workspace item-read endpoint. This identity template
+          # carries the Workspace id into its child collection request.
+          urlTemplate: /v2/team/{team_Id}
+          bindings:
+            team_Id:
+              field: id
+        collections:
+          workspaces:
+            urlTemplate: /v2/team
+            envelope:
+              itemsField: teams
+      task:
+        description: A task the authenticated user can access in a Workspace.
+        identity:
+          urlTemplate: /v2/task/{task_id}
+          bindings:
+            task_id:
+              field: id
+        collections:
+          workspaceTasks:
+            urlTemplate: /v2/team/{team_Id}/task
+            envelope:
+              itemsField: tasks
+            x-list-query:
+              page: 0
+- target: $.paths['/v2/team'].get
+  update:
+    x-crud:
+      action: list
+      resource: workspace
+      collection: workspaces
+- target: $.paths['/v2/team/{team_Id}/task'].get
+  update:
+    x-crud:
+      action: list
+      resource: task
+      collection: workspaceTasks
+- target: $.paths['/v2/task/{task_id}'].get
+  update:
+    x-crud:
+      action: read
+      resource: task
