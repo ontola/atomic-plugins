@@ -5,6 +5,7 @@
 | Behavior | Coverage |
 | --- | --- |
 | Agent ids: `atomic:agent:` and `did:ad:agent:`, both base64 alphabets, padding, one canonical output; non-agent ids, malformed and weak keys refused | `src/agent_id.rs` |
+| Cross-implementation: atomic-server's golden v2 vectors verify here, each message is rebuilt byte for byte, re-signing with the vector's key gives its signature, other bodies, methods and URLs fail; the vendored copy is atomic-server's file at the recorded commit (its SHA-256 checked, and the copy compared with an `ATOMIC_SERVER_CHECKOUT` when set) | `signature::tests::atomic_server_v2_vectors_verify_here`, `signature::tests::the_vendored_v2_vectors_are_atomic_servers_recorded_file` |
 | v2 message layout and body hash; signed URL from `BASE_URL`, not `Host` | `src/signature.rs`; `proxy::postgres_each_verification_step_fails_closed` (spoofed `Host`, signature over the internal URL) |
 | Each v2 check: missing headers, version 1/other/absent, agent vs public key, invalid agent, ±5 min skew both ways, malformed timestamps, tampered method/URL/origin/scheme/body, a genuine v1 signature | `src/signature.rs`, `proxy::postgres_each_verification_step_fails_closed` |
 | Single use: replayed proxy, frame and management requests | `proxy::postgres_the_owner_signs_requests_that_reach_the_provider_once_each`, `proxy::postgres_a_frame_capability_works_only_with_the_frame_key_and_a_live_delegation`, `connections::postgres_a_management_signature_cannot_be_replayed_with_a_different_body`, `security::nonces_are_single_use` |
@@ -57,6 +58,7 @@ registration or consent behavior, and no real Atomic client (browser
 signed against this proxy yet: signatures in tests come from
 `ed25519-dalek` with the same message layout. The key-check limit's `X-Forwarded-For` handling is tested
 with constructed headers, not behind Heroku's router or a real reverse
-proxy. Cross-implementation test
-vectors (atomic-server `lib/src/authentication_v2_vectors.json`) are not yet
-checked here.
+proxy. Cross-implementation vectors are checked here (atomic-server's
+`lib/src/authentication_v2_vectors.json`, vendored verbatim at the pin), but
+only atomic-server's Rust signer generated them; that its TypeScript signer
+produces the same is atomic-server's own test, not verified here.
