@@ -4,28 +4,34 @@
 (or the provisional Swagger 2.0 root `x-paginationSchemes`) and every
 operation's `x-pagination` against schema.json (rules 1-4 and 8-10), that each
 application names a defined scheme (rule 5), and that a `declared` link base
-has the origin of each operation's server (rule 11). Rules 6 and 7 need the
-response schemas and are not checked. Ordinary OpenAPI validation is separate.
+has the origin of one of each explicitly applying operation's servers (rule
+11). Rules 6 and 7 need the response schemas and are not checked. Ordinary
+OpenAPI validation is separate.
 
 `resolve_link(...)` is a reference implementation of §4.4.3 and §4.4.4: it
 returns the absolute URL to request next, None when there is no next page, or
-raises LinkRefused for a link a consumer must not follow.
+raises LinkRefused for a link a consumer must not follow. It resolves with its
+own implementation of RFC 3986 §5.2 (not urllib's urljoin, which differs on
+some inputs), and the string it returns is the one to request.
 """
 import copy
 import json
 import pathlib
 import re
 import sys
-from urllib.parse import urljoin, urlsplit
-
 from jsonschema import Draft202012Validator
 
 SCHEMA = json.loads((pathlib.Path(__file__).parent / "schema.json").read_text(encoding="utf-8"))
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 LINK_ROLES = ("nextLink", "previousLink")
 DEFAULT_PORTS = {"http": 80, "https": 443}
-# Rule 2 of §4.4.3: whitespace, ASCII control characters and backslashes.
-UNFOLLOWABLE = re.compile(r"[\s\x00-\x1f\x7f\\]")
+# Rule 2 of §4.4.3: whitespace, control characters, backslashes and anything outside ASCII.
+UNFOLLOWABLE = re.compile(r"[\s\x00-\x1f\x7f\\]|[^\x00-\x7f]")
+# Rule 2 of §4.4.3: a scheme not followed by "//", three or more leading slashes, an empty authority.
+SCHEME_PREFIX = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+# RFC 3986 Appendix B.
+URI_PARTS = re.compile(r"^(?:([^:/?#]+):)?(?://([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$")
+AUTHORITY = re.compile(r"^(?:(?P<userinfo>[^@]*)@)?(?P<host>\[[^\]]*\]|[^:]*)(?::(?P<port>[0-9]*))?$")
 
 
 class LinkRefused(ValueError):
@@ -87,15 +93,21 @@ def server_urls(document, item, operation):
 
 
 def origin(url):
-    """(scheme, host, port) of an absolute http(s) URL; None when not statically known."""
-    parts = urlsplit(url)
-    if parts.scheme not in DEFAULT_PORTS or not parts.netloc or "{" in parts.scheme + parts.netloc:
+    """(scheme, host, port) of an absolute http(s) URL; None when not statically known.
+
+    Hosts compare as ASCII-lowercased strings, so a Unicode host and its
+    punycode form differ: such a mismatch fails closed.
+    """
+    scheme, authority, _, _, _ = _split(url)
+    scheme = (scheme or "").lower()
+    if scheme not in DEFAULT_PORTS or not authority or "{" in authority:
         return None
-    try:
-        port = parts.port or DEFAULT_PORTS[parts.scheme]
-    except ValueError:
+    parts = AUTHORITY.match(authority)
+    if not parts or not parts.group("host"):
         return None
-    return (parts.scheme, (parts.hostname or "").lower(), port)
+    port = parts.group("port")
+    port = int(port) if port else DEFAULT_PORTS[scheme]
+    return (scheme, parts.group("host").lower(), port)
 
 
 def _errors(validator, value, location):
@@ -115,10 +127,9 @@ def _link_fields(scheme):
 
 def _declared_url_problem(url):
     """Rule 10 beyond the schema's pattern: an absolute http(s) URL, no userinfo or fragment."""
-    parts = urlsplit(url)
     if origin(url) is None:
         return "url must be an absolute http or https URL"
-    if "@" in parts.netloc:
+    if "@" in _split(url)[1]:
         return "url must not contain userinfo"
     if "#" in url:
         return "url must not contain a fragment"
@@ -172,12 +183,13 @@ def validate(document):
                 if declared is None:
                     errors.append(f"{where}.{field}.linkResolution: url must be an absolute http or https URL")
                     continue
-                for server in server_urls(document, item, operation):
-                    expected = origin(server)
-                    if expected is not None and expected != declared:
-                        errors.append(
-                            f"{where}.{field}.linkResolution.url: origin {declared} differs from server {server!r}"
-                        )
+                servers = server_urls(document, item, operation)
+                known = [origin(server) for server in servers if origin(server) is not None]
+                # Rule 11: one of the operation's servers; a server without a static origin is a runtime check.
+                if known and len(known) == len(servers) and declared not in known:
+                    errors.append(
+                        f"{where}.{field}.linkResolution.url: origin {declared} differs from every server {servers!r}"
+                    )
     if errors:
         raise ValueError("\n".join(errors))
 
@@ -194,28 +206,107 @@ def resolve_link(value, *, request_url, server_url, resolution=None):
     if not isinstance(value, str):
         raise LinkRefused("link is not a string")
     if UNFOLLOWABLE.search(value):
-        raise LinkRefused("link contains whitespace, a control character or a backslash")
+        raise LinkRefused("link contains whitespace, a control character, a backslash or a non-ASCII character")
+    scheme = SCHEME_PREFIX.match(value)
+    rest = value[scheme.end():] if scheme else value
+    if scheme and not rest.startswith("//"):
+        raise LinkRefused("link has a scheme not followed by //")
+    if rest.startswith("///"):
+        raise LinkRefused("link starts with three or more slashes")
+    if rest.startswith("//") and rest[2:3] in ("", "/", "?", "#"):
+        raise LinkRefused("link has an empty authority")
     base_kind = (resolution or {}).get("base", "request")
     if base_kind == "request":
         base = request_url
     elif base_kind == "server":
-        base = server_url if urlsplit(server_url).path.endswith("/") else server_url + "/"
+        base = server_url if _split(server_url)[2].endswith("/") else server_url + "/"
     elif base_kind == "declared":
         base = resolution["url"]
     else:
         raise ValueError(f"unknown linkResolution base {base_kind!r}")
-    resolved = urljoin(base, value)
-    parts = urlsplit(resolved)
-    if "@" in parts.netloc:
-        raise LinkRefused("link contains userinfo")
-    if "#" in value or "#" in resolved:  # urljoin drops an empty fragment ("/next#")
+    if "#" in value:
         raise LinkRefused("link contains a fragment")
+    resolved = rfc3986_resolve(base, value)
+    authority = _split(resolved)[1]
+    if authority is None or "@" in authority:
+        raise LinkRefused("link has no authority or contains userinfo")
     allowed = origin(server_url)
     if allowed is None:
         raise ValueError(f"server URL {server_url!r} is not an absolute http or https URL")
     if origin(resolved) != allowed:
         raise LinkRefused(f"link {resolved!r} leaves the server origin {allowed}")
+    # §4.4.4 rule 4: this exact string is what a consumer requests.
     return resolved
+
+
+def _split(uri):
+    """(scheme, authority, path, query, fragment) by RFC 3986 Appendix B; absent parts are None."""
+    match = URI_PARTS.match(uri)
+    scheme, authority, path, query, fragment = match.groups()
+    return scheme, authority, path or "", query, fragment
+
+
+def remove_dot_segments(path):
+    """RFC 3986 §5.2.4."""
+    output = []
+    while path:
+        if path.startswith("../"):
+            path = path[3:]
+        elif path.startswith("./"):
+            path = path[2:]
+        elif path.startswith("/./"):
+            path = path[2:]
+        elif path == "/.":
+            path = "/"
+        elif path.startswith("/../"):
+            path = path[3:]
+            if output:
+                output.pop()
+        elif path == "/..":
+            path = "/"
+            if output:
+                output.pop()
+        elif path in (".", ".."):
+            path = ""
+        else:
+            start = 1 if path.startswith("/") else 0
+            end = path.find("/", start)
+            end = len(path) if end == -1 else end
+            output.append(path[:end])
+            path = path[end:]
+    return "".join(output)
+
+
+def rfc3986_resolve(base, reference):
+    """RFC 3986 §5.2.2 (strict) and §5.3, without a fragment."""
+    b_scheme, b_authority, b_path, b_query, _ = _split(base)
+    r_scheme, r_authority, r_path, r_query, _ = _split(reference)
+    if r_scheme is not None:
+        scheme, authority, path, query = r_scheme, r_authority, remove_dot_segments(r_path), r_query
+    else:
+        scheme = b_scheme
+        if r_authority is not None:
+            authority, path, query = r_authority, remove_dot_segments(r_path), r_query
+        else:
+            authority = b_authority
+            if r_path == "":
+                path = b_path
+                query = r_query if r_query is not None else b_query
+            else:
+                if r_path.startswith("/"):
+                    path = remove_dot_segments(r_path)
+                elif b_authority is not None and b_path == "":
+                    path = remove_dot_segments("/" + r_path)
+                else:
+                    path = remove_dot_segments(b_path[: b_path.rfind("/") + 1] + r_path)
+                query = r_query
+    result = f"{scheme}:" if scheme is not None else ""
+    if authority is not None:
+        result += "//" + authority
+    result += path
+    if query is not None:
+        result += "?" + query
+    return result
 
 
 def _load(path):

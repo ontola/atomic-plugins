@@ -6,7 +6,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, resolve_link, validate
+from validate import LinkRefused, resolve_link, rfc3986_resolve, validate
 
 ROOT = pathlib.Path(__file__).parent
 EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml")
@@ -96,7 +96,10 @@ class SchemaTests(unittest.TestCase):
         item["servers"] = [{"url": "https://eu.example.com"}]
         validate(document)
         item["get"]["servers"] = [{"url": "https://us.example.com"}]
-        self.assertInvalid(document, "differs from server")
+        self.assertInvalid(document, "differs from every server")
+        # Rule 11 asks for one of the listed servers, so production plus sandbox is valid.
+        item["get"]["servers"] = [{"url": "https://eu.example.com"}, {"url": "https://sandbox.example.com"}]
+        validate(document)
         item["get"]["servers"] = [{"url": "https://{region}.example.com", "variables": {"region": {"default": "us"}}}]
         validate(document)
 
@@ -105,7 +108,7 @@ class SchemaTests(unittest.TestCase):
         application = document["paths"]["/2010-04-01/Accounts/{AccountSid}/Calls.json"]["get"]["x-pagination"][0]
         application["overrides"]["response"]["bodyFields"] = {
             "next_page_uri": {"linkResolution": {"base": "declared", "url": "https://other.example.com/"}}}
-        self.assertInvalid(document, "differs from server")
+        self.assertInvalid(document, "differs from every server")
         application["overrides"]["response"]["bodyFields"]["next_page_uri"]["linkResolution"]["url"] = "https://api.example.com/"
         validate(document)
 
@@ -177,10 +180,41 @@ class ResolveLinkTests(unittest.TestCase):
     def test_links_leaving_the_server_origin_are_refused(self):
         for value in ("https://attacker.example/steal", "//attacker.example/steal", "http://api.example.com/next",
                       "https://api.example.com:8443/next", "https://api.example.com.attacker.example/",
-                      "javascript:alert(1)", "data:text/plain,x", "file:///etc/passwd"):
+                      "javascript:alert(1)", "data:text/plain,x", "file:///etc/passwd",
+                      # Parsers disagree on these (review B1); rule 2 refuses them before resolution.
+                      "///attacker.example/x", "////attacker.example/x", "https:///attacker.example/x",
+                      "https:attacker.example/x", "https:/attacker.example/x", "http:x", "//", "https://",
+                      "//?x", "https://äpi.example.com/x", "https://api.example.com／x"):
             for resolution in (None, {"base": "server"}):
                 with self.subTest(value=value, resolution=resolution), self.assertRaises(LinkRefused):
                     self.resolve(value, resolution)
+
+    def test_rfc3986_section_5_4_examples(self):
+        # RFC 3986 §5.4.1 and §5.4.2 (strict), without the fragment cases.
+        base = "http://a/b/c/d;p?q"
+        cases = {
+            "g:h": "g:h", "g": "http://a/b/c/g", "./g": "http://a/b/c/g", "g/": "http://a/b/c/g/",
+            "/g": "http://a/g", "//g": "http://g", "?y": "http://a/b/c/d;p?y", "g?y": "http://a/b/c/g?y",
+            ";x": "http://a/b/c/;x", "g;x": "http://a/b/c/g;x", "": "http://a/b/c/d;p?q", ".": "http://a/b/c/",
+            "./": "http://a/b/c/", "..": "http://a/b/", "../": "http://a/b/", "../g": "http://a/b/g",
+            "../..": "http://a/", "../../": "http://a/", "../../g": "http://a/g",
+            "../../../g": "http://a/g", "../../../../g": "http://a/g", "/./g": "http://a/g", "/../g": "http://a/g",
+            "g.": "http://a/b/c/g.", ".g": "http://a/b/c/.g", "g..": "http://a/b/c/g..", "..g": "http://a/b/c/..g",
+            "./../g": "http://a/b/g", "./g/.": "http://a/b/c/g/", "g/./h": "http://a/b/c/g/h",
+            "g/../h": "http://a/b/c/h", "g;x=1/./y": "http://a/b/c/g;x=1/y", "g;x=1/../y": "http://a/b/c/y",
+            "g?y/./x": "http://a/b/c/g?y/./x", "g?y/../x": "http://a/b/c/g?y/../x", "http:g": "http:g",
+            "?": "http://a/b/c/d;p?", "//g/../x": "http://g/x",
+        }
+        for reference, expected in cases.items():
+            with self.subTest(reference=reference):
+                self.assertEqual(rfc3986_resolve(base, reference), expected)
+
+    def test_query_only_and_dot_segment_links_resolve_exactly(self):
+        self.assertEqual(self.resolve("?", None), "https://api.example.com/2010-04-01/Accounts/AC0/Calls.json?")
+        self.assertEqual(self.resolve("//api.example.com/a/../b", {"base": "server"}), "https://api.example.com/b")
+        # Climbing past the server's base path stays allowed within the origin (§4.4.3).
+        self.assertEqual(self.resolve("../../x", {"base": "server"}, "https://api.example.com/v1/sub"),
+                         "https://api.example.com/x")
 
     def test_a_declared_base_never_widens_the_allowed_origin(self):
         with self.assertRaises(LinkRefused):
