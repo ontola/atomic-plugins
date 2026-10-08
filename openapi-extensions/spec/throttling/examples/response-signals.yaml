@@ -1,0 +1,55 @@
+openapi: 3.0.3
+info:
+  title: Illustrative rate-limit headers and throttling signals
+  version: 1.0.0
+  description: >-
+    Synthetic. Combines the patterns of the README's GitHub and Google
+    examples; the numbers and messages are not claims about a real provider.
+servers:
+  - url: https://api.example.com
+x-throttling:
+  limits:
+    core:
+      requests: 5000
+      window: { seconds: 3600, kind: fixed }
+      partitionBy: [user]
+  applies: [core]
+  headers:
+    X-RateLimit-Limit: { role: limit }
+    X-RateLimit-Remaining: { role: remaining }
+    X-RateLimit-Used: { role: used }
+    X-RateLimit-Reset: { role: reset, unit: epochSeconds }
+    Retry-After: { role: retryAfter, unit: deltaSecondsOrHttpDate }
+  signals:
+    - status: [403, 429]
+      header: { name: x-ratelimit-remaining, equals: '0' }
+      meaning: quotaExhausted
+      bucket: core
+    - status: [403, 429]
+      header: { name: retry-after, present: true }
+      meaning: throttled
+    - status: [403]
+      body:
+        pointer: /error/errors
+        item: { pointer: /reason, in: [rateLimitExceeded, userRateLimitExceeded] }
+      meaning: throttled
+    - status: [403]
+      body: { pointer: /message, contains: secondary rate limit }
+      meaning: throttled
+      minDelaySeconds: 60
+      description: The message text is an observation, not documented wording.
+paths:
+  /records:
+    get:
+      responses:
+        '200': { description: Records }
+        '403':
+          description: >-
+            Forbidden: a missing permission, or throttling as the signals
+            above describe.
+        '429':
+          description: The API throttled the request.
+          headers:
+            Retry-After:
+              description: Delay-seconds or HTTP-date under RFC 9110.
+              schema: { type: string }
