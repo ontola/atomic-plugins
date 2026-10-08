@@ -1023,6 +1023,8 @@ export function createApiClient(
   const throttling = declaredThrottling(doc);
   /** Buckets a quotaExhausted answer declared exhausted, by identifier ('*' when unnamed), until (ms). */
   const pausedBuckets = new Map<string, number>();
+  /** The running sync's read budget, for what is left of its time while a read waits out a pause. */
+  let activeBudget: Budget | undefined;
   const storage = options.storage ?? new InMemoryStorageAdapter();
   const baseTransport =
     options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch);
@@ -1749,6 +1751,11 @@ export function createApiClient(
               receivedAt: error.receivedAt,
             })
           : undefined;
+      // The earliest retry time holds the write whatever path its class
+      // takes below (uncertain, blocked, failed, retried): set it here, so
+      // that a resolveWrite retry or authRenewed() never sends it earlier.
+      if (throttled?.retryAt !== undefined)
+        write.notBefore = Math.max(write.notBefore ?? 0, throttled.retryAt);
       // An exhausted bucket holds every write counted against it: until the
       // answer's time, or, without one, until this write's own backoff (set
       // below, where the backoff is known).
@@ -2289,7 +2296,12 @@ export function createApiClient(
       upstream.pathname.replace(/\/$/, '').length,
     );
     const matched = findRoute(Object.keys(doc.paths), path);
-    const operation = matched ? doc.paths[matched.template]?.get : undefined;
+    // A POST list read (x-list-method / listMethod POST) is its path's post.
+    const operation = matched
+      ? doc.paths[matched.template]?.[
+          request.method === 'POST' ? 'post' : 'get'
+        ]
+      : undefined;
     const cacheable =
       request.method === 'GET' &&
       !resolveEffectiveScheme(doc, operation ?? { responses: {} });
@@ -2304,17 +2316,30 @@ export function createApiClient(
     // exhausted bucket (a quotaExhausted answer to any request), within the
     // read's time budget, and its own quotaExhausted answer pauses the
     // bucket for every request, writes included.
-    const paused = pauseForOperation(operation);
-    if (paused > 0) {
-      const timeout =
-        options.limits?.timeoutMs ?? DEFAULT_READ_LIMITS.timeoutMs;
-      if (paused > timeout)
+    // Checked again after each sleep, in case another answer extended the
+    // pause meanwhile; a pause that did not move is taken as waited out
+    // (the `sleep` option may return early, in tests).
+    let sleptUntil = 0;
+    for (;;) {
+      const paused = pauseForOperation(operation);
+      if (paused <= 0) break;
+      const until = Date.now() + paused;
+      if (until <= sleptUntil) break;
+      // What is left of the read's time: the running sync's budget, else
+      // the whole limit when no sync is running.
+      const remaining =
+        activeBudget?.remainingMs() ??
+        options.limits?.timeoutMs ??
+        DEFAULT_READ_LIMITS.timeoutMs;
+      if (paused > remaining)
         throw new RetryBeyondDeadline(
-          `A rate limit the API declared exhausted holds this request until ${new Date(Date.now() + paused).toISOString()}, longer than the read's time (${timeout} ms)`,
+          `A rate limit the API declared exhausted holds this request until ${new Date(until).toISOString()}, longer than the read's remaining time (${remaining} ms)`,
         );
       await (options.sleep ?? defaultSleep)(paused);
+      sleptUntil = until;
     }
     const raw = await readTransport({ ...request, headers });
+    const received = Date.now();
     const response = {
       ...raw,
       headers: Object.fromEntries(
@@ -2325,9 +2350,15 @@ export function createApiClient(
       status: response.status,
       headers: response.headers,
       body: response.body,
+      receivedAt: received,
     });
-    if (throttled?.meaning === 'quotaExhausted' && throttled.retryAt) {
-      pauseBucket(throttled.bucket, throttled.retryAt);
+    if (throttled?.meaning === 'quotaExhausted') {
+      // Without a time and a bucket window, the client's base backoff is the
+      // floor, as for a write.
+      pauseBucket(
+        throttled.bucket,
+        throttled.retryAt ?? received + retry.baseDelayMs,
+      );
       await persistLater();
     }
     if (response.status === 304 && cached) return cached;
@@ -3047,13 +3078,19 @@ export function createApiClient(
       options.sleep,
       throttling,
     );
-    const result = await readCollections(doc, {
-      transport: conditionalTransport,
-      constants: options.constants ?? {},
-      legacy,
-      budget,
-      ...(options.selection ? { selection: options.selection } : {}),
-    });
+    activeBudget = budget;
+    let result: Awaited<ReturnType<typeof readCollections>>;
+    try {
+      result = await readCollections(doc, {
+        transport: conditionalTransport,
+        constants: options.constants ?? {},
+        legacy,
+        budget,
+        ...(options.selection ? { selection: options.selection } : {}),
+      });
+    } finally {
+      activeBudget = undefined;
+    }
     const round: SyncRound = {
       feeds: [],
       undecided: [],

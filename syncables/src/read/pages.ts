@@ -92,6 +92,11 @@ export class Budget {
     this.deadline = Date.now() + this.limits.timeoutMs;
   }
 
+  /** Milliseconds left before the read's deadline; 0 once past it. */
+  remainingMs(): number {
+    return Math.max(0, this.deadline - Date.now());
+  }
+
   async send(request: TransportRequest): Promise<TransportResponse> {
     for (let retries = 0; ; retries += 1) {
       if (Date.now() > this.deadline) {

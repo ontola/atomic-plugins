@@ -859,8 +859,14 @@ pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
 tombstones of such a collection. The write fields `lastStatus`
 and `missingRecord`, the state `blocked` and the top-level `authBlock`,
-`feedCursors` and `feedTombstones` were added within version `1`; a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Set `outboxNamespace` to
+`feedCursors` and `feedTombstones` were added within version `1`, as were
+the write field `notBefore` (a throttling answer's earliest retry time) and
+the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that does not parse still blocks the client
+(`status` 0) until `authRenewed()`. Downgrading: an older syncables that
+reads this outbox does not know `notBefore` and `throttlingPauses` and
+drops them, so it may send a held write before the time the API asked for,
+though never a second time; the version stays `1` because every write it
+holds is still one that older client can read and send. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 

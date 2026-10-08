@@ -87,3 +87,27 @@ operation (through `sleep`, within `limits.timeoutMs`, else stops the read
 with an error) and pauses the bucket on a read's `quotaExhausted` answer.
 Tests for each; README, CLAUDE.md and the changelog reworded. Not done
 (nits): integers above 2^53 and `Date.parse`'s leniency.
+
+## Turn 3
+
+**Human (via the coordinator session):** Second review of #391, treated as
+blocking for write safety: an answer that sets `retryAt` but ends on the
+uncertain, blocked or auth path returns before `write.notBefore` is set (a
+create answered 500 with `retry-after: 60` under a `throttled` signal, then
+`resolveWrite({action:'retry'})` re-POSTs at once). Also: document the
+downgrade (an older syncables drops `notBefore` and `throttlingPauses`),
+keep `OUTBOX_VERSION` at 1; nits: compare the read pause with what is left
+of the budget's deadline and re-check after the sleep; a read's
+`quotaExhausted` with no time should pause too; fix the read transport's
+GET-only operation lookup for POST list reads.
+
+**Assistant:** `write.notBefore` is set from the verdict's `retryAt` right
+after the verdict is computed, before any classification path, so an
+uncertain create, a blocked write and a permanently failed write all keep
+it: a `resolveWrite` retry or `authRenewed()` re-queues them and the drain
+waits it out (tests for each path). The README's outbox paragraph documents
+the downgrade. The read transport looks the operation up by the request's
+method, compares a pause with the running sync's remaining budget time
+(`Budget.remainingMs()`, tracked as `activeBudget`), re-checks after each
+sleep, and pauses the bucket on a read's `quotaExhausted` without a time
+until the client's base backoff.

@@ -431,8 +431,107 @@ describe('reads and the exhausted buckets they share with writes', () => {
     expect(c.pendingWrites()).toMatchObject([{ id: '1', state: 'pending' }]);
     // A read cannot wait 120 s within a 1 s budget: it stops with an error.
     await expect(c.sync()).rejects.toThrow(
-      /holds this request until .* longer than the read's time \(1000 ms\)/,
+      /holds this request until .* longer than the read's remaining time/,
     );
+  });
+
+  it("a read's quotaExhausted answer with no time pauses the bucket until the base backoff, as a write's does", async () => {
+    let listAnswer: TransportResponse | undefined = json(
+      { error: 'Too many requests' },
+      429,
+    );
+    const fake = provider(() => undefined, { list: () => listAnswer });
+    const c = createApiClient(
+      doc({ signals: [{ status: [429], meaning: 'quotaExhausted' }] }),
+      {
+        transport: fake.transport,
+        retry: { baseDelayMs: 300, maxDelayMs: 300 },
+        limits: { maxRetries: 0 },
+      },
+    );
+    await expect(c.sync()).rejects.toThrow(/responded 429/);
+    listAnswer = undefined;
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await settle(100);
+    expect(fake.writes).toHaveLength(0);
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 2000,
+    });
+    expect(fake.writes).toHaveLength(1);
+  });
+});
+
+describe('the earliest retry time holds a write whatever path its class takes (#391 review)', () => {
+  const throttledSignal = {
+    signals: [
+      {
+        status: [500, 429, 422],
+        header: { name: 'retry-after', present: true },
+        meaning: 'throttled',
+      },
+    ],
+  };
+
+  it('an uncertain create keeps the time: resolveWrite retry does not re-POST before it', async () => {
+    const fake = provider((_r, n) =>
+      n === 1
+        ? json({ message: 'overloaded' }, 500, { 'retry-after': '60' })
+        : json({ id: 'srv-1', ...JSON.parse(_r.body ?? '{}') }, 201),
+    );
+    const c = await client(doc(throttledSignal), fake);
+    const created = await c.create('/pets', { name: 'Milo' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ state: 'uncertain' }]),
+    );
+    await c.resolveWrite('/pets', String(created['id']), { action: 'retry' });
+    await settle(80);
+    expect(fake.writes).toHaveLength(1);
+    // Queued again (an uncertain create keeps its attempt count), held by
+    // its stored time.
+    expect(c.pendingWrites()).toMatchObject([
+      { type: 'create', state: 'pending' },
+    ]);
+  });
+
+  it('a blocked write keeps the time: authRenewed() does not resend it before it', async () => {
+    const fake = provider((_r, n) =>
+      n === 1
+        ? json({ error: 'slow down' }, 429, { 'retry-after': '60' })
+        : undefined,
+    );
+    const c = await client(doc(throttledSignal), fake, {
+      // A classifier that calls the throttled answer a refused credential.
+      classifyWriteFailure: (f) => (f.status === 429 ? 'auth' : 'retry'),
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ state: 'blocked' }]),
+    );
+    await c.authRenewed();
+    await settle(80);
+    expect(fake.writes).toHaveLength(1);
+    expect(c.pendingWrites()).toMatchObject([{ state: 'pending' }]);
+  });
+
+  it('a failed write keeps the time: resolveWrite retry waits for it', async () => {
+    const fake = provider((_r, n) =>
+      n === 1
+        ? json({ error: 'refused' }, 422, { 'retry-after': '60' })
+        : undefined,
+    );
+    const c = await client(doc(throttledSignal), fake, {
+      classifyWriteFailure: (f) => (f.status === 422 ? 'permanent' : 'retry'),
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ state: 'failed' }]),
+    );
+    await c.resolveWrite('/pets', '1', { action: 'retry' });
+    await settle(80);
+    expect(fake.writes).toHaveLength(1);
+    expect(c.pendingWrites()).toMatchObject([
+      { state: 'pending', attempts: 0 },
+    ]);
   });
 });
 
