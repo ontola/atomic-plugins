@@ -238,6 +238,9 @@ class ClientTests(unittest.TestCase):
         source = {"source": {"resource": "workspace"}, "field": "settings.forceProjects", "values": [True],
                   "when": {"field": "projectId", "values": [None]}}
         validate(document_with({"kind": "none", "refuseWhen": [source]}))
+        with self.assertRaises(ValueError) as raised:
+            validate(document_with({"kind": "none", "refuseWhen": [source], "idempotent": True}))
+        self.assertIn("idempotent: not on a create", str(raised.exception))
         for bad in ({"kind": "none"}, {"kind": "readVerify", "refuseWhen": [source]},
                     {"kind": "none", "refuseWhen": [source, {"field": "in_trash", "values": [True]}]}):
             with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:

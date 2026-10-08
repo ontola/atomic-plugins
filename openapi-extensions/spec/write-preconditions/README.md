@@ -182,7 +182,9 @@ A client checks every Refusal Object against the object as it last read it,
 and, for `readVerify`, against the read made just before the write. When one
 matches, it MUST NOT send the write and reports why. A client that has not
 read the object (a write it composes without a read, under `ifMatch` or
-`none`) MUST read it first when the operation declares `refuseWhen`; a state
+`none`) MUST read it first when the operation declares a Refusal Object
+without a `source` (a Refusal Object with a `source` needs the source object,
+not the write's own object, §4.4.1); a state
 reached after its last read is otherwise missed, and the declaration only
 protects writes whose read is recent. Declare a state here
 when the provider documents it as the object having been taken out of use by
@@ -219,11 +221,14 @@ action (`update` or `delete`) when it declares one, else the HTTP method
 
 _Deletion confirmed_ means the document says that a missing object of this
 resource was deleted, for this object: a [Deletion Feeds](../deletion-feeds/README.md)
-tombstone for this object, a collection of the resource that declares
-`notFound: deleted` explicitly, or one declared `absent: deleted`, which rests
-on [Collection Completeness](../collection-completeness/README.md) §4.2's rule
-that objects do not leave the caller's reach while they exist. A deletion
-feed alone, without a tombstone for this object, is not confirmation.
+tombstone for this object; a collection of the resource that declares
+`notFound: deleted` explicitly; or a collection declared `absent: deleted` that
+the object was a member of when the client last read it, which rests on
+[Collection Completeness](../collection-completeness/README.md) §4.2's rule
+that objects do not leave the caller's reach while they exist. An
+`absent: deleted` collection the object was not read in says nothing about
+it, and a deletion feed alone, without a tombstone for this object, is not
+confirmation.
 
 The client checks the read in this order, and the first rule that applies
 decides:
@@ -252,6 +257,20 @@ decides:
 
 The baseline of a delete is the object as the client last read it before
 sending: under `ifMatch` its version, otherwise every field the client holds.
+
+A resend after rule 5 or 6 is a new send: §4.2 and §4.4 apply to it again,
+including Refusal Objects with a `source`.
+
+_Gone, not confirmed_ ends the write without reporting a deletion: the client
+keeps the record with its last known values and marks it unavailable (as
+[Collection Completeness](../collection-completeness/README.md)
+`notFound: unavailable` does), and a later read that returns the object
+supersedes the mark.
+
+Creates are not covered by this section: a create has no object to read
+before it, and its unknown outcome is CRUD Causality's (an idempotency key,
+or its compound creates, ontola/atomic-plugins pieces.md K8). The validator
+rejects `idempotent` on a create.
 
 **The write's own answer.** The same rules 1 and 2 classify the answer to the
 write itself, on the first send and on any resend: a `404` or `410` to a
@@ -340,7 +359,9 @@ A conforming client:
 
 ## 8. Not covered
 
-* Preconditions on creates (`If-None-Match: *`) and on whole collections.
+* Conditional creates (`If-None-Match: *`), the unknown outcome of a create
+  (§4.5), and preconditions on whole collections. A create may carry only
+  Refusal Objects with a `source` (§4.1).
 * Version fields with too coarse a precision to compare (a modification time
   in minutes). Compare written fields instead.
 * Merging a conflict, or which side wins.

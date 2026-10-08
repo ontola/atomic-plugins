@@ -55,6 +55,8 @@ def _check(declaration, method, operation, where, errors, document=None, path=""
         if declaration.get("kind") != "none" or not refusals or not all(
                 isinstance(r, dict) and "source" in r for r in refusals):
             errors.append(f"{where}: on a create only kind none with source refusals")
+        if "idempotent" in declaration:
+            errors.append(f"{where}.idempotent: not on a create (§4.5 does not cover creates)")
     elif isinstance(crud, dict) and action not in ("update", "delete"):
         errors.append(f"{where}: x-crud action must be update or delete")
     kind = declaration.get("kind")
@@ -257,8 +259,10 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
     (for a delete, every field the client holds); `read` is None (not read
     yet) or {'status': int, 'body': ..., 'headers': {...}}; `sent_version` is
     the version an ifMatch write sent. `deletion_confirmed` is true for a
-    Deletion Feeds tombstone for this object, an explicit notFound: deleted or
-    absent: deleted; `tombstone` is the resource's x-read-tombstone or None.
+    Deletion Feeds tombstone for this object, an explicit notFound: deleted on
+    a collection of the resource, or an absent: deleted collection the object
+    was a member of when last read; `tombstone` is the resource's
+    x-read-tombstone or None.
     """
     declaration = declaration or {}
     kind = declaration.get("kind")
