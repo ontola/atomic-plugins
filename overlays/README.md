@@ -72,6 +72,30 @@ deployment selects it yet; a proxy picks it up through `CATALOG_PATH`, with
 `tests/test_identity_overlays.py` (every catalog) and the pin validator; no
 live Google connection has been made with it.
 
+## Asana and Airtable onboarding catalog
+
+`catalog/2026-10-08-asana-airtable.json` retains the nine entries and pins in
+the production auth-profiles catalog and adds two read-only authentication
+profiles. Asana selects workspace, project, task and user GET operations with
+`workspaces:read`, `projects:read`, `tasks:read` and `users:read`. Airtable selects
+base/schema and record GET operations with `schema.bases:read` and
+`data.records:read`, including offset paging for bases and records. The Airtable
+OAD is an authored, documented subset; it does not claim full API coverage.
+
+Both profiles use S256 PKCE. Airtable supports a confidential client using
+HTTP Basic or a public client without a secret; the registered client’s choice
+is configured through the proxy’s generic credential settings. Selecting this
+catalog does not register applications or prove a real-account connection.
+The operator must configure each application and explicitly switch
+`CATALOG_PATH` after validation. Provider reads are the only operations exposed
+by these two profiles. See the [source and scope evidence](tests/ASANA_AIRTABLE_READONLY_PROVENANCE.md)
+and the focused composition and consumer checks under `tests/`.
+
+Airtable OAuth integrations without a support email, privacy-policy URL and
+terms-of-service URL are limited to authorization by their developer account.
+Supply the operator’s actual policies before advertising general availability;
+a working developer connection does not establish public distribution.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:

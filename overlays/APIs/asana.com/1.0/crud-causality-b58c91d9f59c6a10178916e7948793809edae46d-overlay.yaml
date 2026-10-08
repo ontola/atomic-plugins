@@ -1,0 +1,112 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
+info:
+  title: Asana read-only CRUD causality
+  version: 1.0.0
+  description: >-
+    Read-only resources for workspace, project, task, and user discovery.
+    Response envelopes and identifiers follow the pinned Asana OAD.
+actions:
+- target: $.components
+  update:
+    crudResources:
+      workspace:
+        schema:
+          $ref: '#/components/schemas/WorkspaceCompact'
+        description: An Asana workspace accessible to the connected user.
+        identity:
+          urlTemplate: /workspaces/{workspace_gid}
+          bindings:
+            workspace_gid:
+              field: gid
+        collections:
+          workspaces:
+            urlTemplate: /workspaces
+            envelope:
+              itemsField: data
+      project:
+        schema:
+          $ref: '#/components/schemas/ProjectCompact'
+        description: An Asana project in an accessible workspace.
+        identity:
+          urlTemplate: /projects/{project_gid}
+          bindings:
+            project_gid:
+              field: gid
+        collections:
+          workspaceProjects:
+            urlTemplate: /workspaces/{workspace_gid}/projects
+            envelope:
+              itemsField: data
+      task:
+        schema:
+          $ref: '#/components/schemas/TaskCompact'
+        description: A task in an accessible project.
+        identity:
+          urlTemplate: /tasks/{task_gid}
+          bindings:
+            task_gid:
+              field: gid
+        collections:
+          projectTasks:
+            urlTemplate: /projects/{project_gid}/tasks
+            envelope:
+              itemsField: data
+      user:
+        schema:
+          $ref: '#/components/schemas/UserCompact'
+        description: An Asana user visible to the connected account.
+        identity:
+          urlTemplate: /users/{user_gid}
+          bindings:
+            user_gid:
+              field: gid
+        collections:
+          users:
+            urlTemplate: /users
+            envelope:
+              itemsField: data
+- target: $.paths['/workspaces'].get
+  update:
+    x-crud:
+      action: list
+      resource: workspace
+      collection: workspaces
+- target: $.paths['/workspaces/{workspace_gid}'].get
+  update:
+    x-crud:
+      action: read
+      resource: workspace
+- target: $.paths['/workspaces/{workspace_gid}/projects'].get
+  update:
+    x-crud:
+      action: list
+      resource: project
+      collection: workspaceProjects
+- target: $.paths['/projects/{project_gid}'].get
+  update:
+    x-crud:
+      action: read
+      resource: project
+- target: $.paths['/projects/{project_gid}/tasks'].get
+  update:
+    x-crud:
+      action: list
+      resource: task
+      collection: projectTasks
+- target: $.paths['/tasks/{task_gid}'].get
+  update:
+    x-crud:
+      action: read
+      resource: task
+- target: $.paths['/users'].get
+  update:
+    x-crud:
+      action: list
+      resource: user
+      collection: users
+- target: $.paths['/users/{user_gid}'].get
+  update:
+    x-crud:
+      action: read
+      resource: user
