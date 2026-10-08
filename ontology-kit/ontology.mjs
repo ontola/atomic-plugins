@@ -51,7 +51,9 @@ import {
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  LENS_DIR,
   generateLenses,
+  implementationProblems,
   lensSourceProblems,
   readLensSource,
 } from './lens-catalog.mjs';
@@ -635,7 +637,9 @@ export function publishedProblems(ref, base = root) {
 
     if (!existsSync(file)) {
       problems.push(
-        `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
+        path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
+          ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.`
+          : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
       );
       continue;
     }
@@ -797,6 +801,16 @@ export function check({ base = root, published } = {}) {
     ),
   );
   if (problems.length) return problems;
+  const publishedLenses = new Set(
+    published
+      ? [...publishedTerms(published, base).keys()]
+          .filter(path => path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`))
+          .map(path => path.slice(`${TERMS_DIR}/${LENS_DIR}/`.length))
+      : [],
+  );
+  problems.push(
+    ...implementationProblems(readLensSource(base), base, publishedLenses),
+  );
   problems.push(...freshnessProblems(base));
   if (published) problems.push(...publishedProblems(published, base));
   problems.push(...literalProblems(base), ...gateProblems(base));

@@ -17,13 +17,28 @@
  * - `readOnly: true`: the lens never writes this field's source. A changed
  *   value in a forward `put` throws; an unchanged one is ignored.
  *
- * `version: 1` (ontola/atomic-server#2069's `LensMapping`) is read as the
- * same thing, with every reference a top-level key taken verbatim. The one
- * behavioural difference: `put` writes only the fields whose value changed
- * (Devonian's unchanged-value preservation), where #2069's `lensPut` rewrote
- * every mapped field. The results differ only where a converter would have
- * re-encoded an unchanged value (an ISO string without milliseconds, read and
- * written back through `ms-to-iso`).
+ * `version: 1` (ontola/atomic-server#2069's `LensMapping`, at `bab52555`) is
+ * read as the same thing, with every reference a top-level key taken
+ * verbatim. Differences from #2069's `lens.ts` (LENSES.md lists them too):
+ *
+ * - `put` writes only the fields whose value changed (Devonian's
+ *   unchanged-value preservation); #2069's `lensPut` rewrote every mapped
+ *   field. Results differ where a converter re-encodes an unchanged value.
+ * - Converters are strict: `ms-to-iso` refuses a non-integer or out-of-range
+ *   number and a string that is not a full ISO instant with a time zone
+ *   (including `T24:00`, sub-millisecond digits and years outside
+ *   0000-9999), with `bad-value` or `precision`; #2069 passes other types
+ *   through unchanged and lets `Date.parse` return `NaN`.
+ * - Values must be JSON-like (plain objects, arrays, strings, finite
+ *   numbers, booleans, null; at most 64 levels deep) and are copied; #2069
+ *   passes values through by reference.
+ * - Unknown keys in a mapping or a field are refused; #2069 ignores them.
+ * - The path tokens `__proto__`, `constructor` and `prototype` are refused,
+ *   and only own properties are read or written.
+ * - The parser is `parseMapping` (#2069: `parseLensMapping`) and returns a
+ *   frozen mapping with parsed paths (`storedMapping` gives the plain one).
+ * - Errors are `LensError`s with a stable `code`; messages are lowercase and
+ *   worded differently ("unknown converter", not "Unknown converter").
  *
  * Laws, checked on each catalog lens's examples: GetPut (`put(get(s), s)`
  * equals `s`), PutGet (`get(put(v, s))` equals `v` on the mapped fields) and
@@ -52,25 +67,81 @@ const isPlainObject = value =>
  * Structural equality for JSON-like values: key order is ignored, array
  * order is not, a missing key differs from one set to undefined.
  */
-export function deepEqual(a, b) {
+export function deepEqual(a, b, depth = 0) {
   if (Object.is(a, b)) return true;
+  tooDeep(depth);
 
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
       return false;
 
-    return a.every((item, i) => deepEqual(item, b[i]));
+    return a.every((item, i) => deepEqual(item, b[i], depth + 1));
   }
 
   if (!isPlainObject(a) || !isPlainObject(b)) return false;
   const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
 
-  return keys.every(key => Object.hasOwn(b, key) && deepEqual(a[key], b[key]));
+  return keys.every(
+    key => Object.hasOwn(b, key) && deepEqual(a[key], b[key], depth + 1),
+  );
 }
 
-const clone = value =>
-  value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+/** How deeply a value may nest, so a hostile row cannot overflow the stack. */
+export const MAX_DEPTH = 64;
+
+function tooDeep(depth) {
+  if (depth > MAX_DEPTH)
+    throw new LensError(
+      'bad-value',
+      `a value is nested deeper than ${MAX_DEPTH} levels`,
+    );
+}
+
+/** Sets an own property, even one named `__proto__`. */
+const own = (object, key, value) =>
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+
+/**
+ * A copy of a JSON-like value. Like JSON, it drops object keys whose value is
+ * undefined and turns undefined array items into null; unlike JSON, anything
+ * that is not JSON-like (a non-finite number, a class instance, a function)
+ * is a `bad-value` instead of being converted.
+ */
+function clone(value, depth = 0) {
+  if (value === undefined || value === null) return value;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value))
+      throw new LensError('bad-value', `${value} is not a JSON number`);
+
+    return value;
+  }
+
+  tooDeep(depth);
+
+  if (Array.isArray(value))
+    return value.map(item => clone(item, depth + 1) ?? null);
+
+  if (isPlainObject(value)) {
+    const out = {};
+
+    for (const key of Object.keys(value)) {
+      const item = clone(value[key], depth + 1);
+      if (item !== undefined) own(out, key, item);
+    }
+
+    return out;
+  }
+
+  throw new LensError('bad-value', `a ${typeof value} is not a JSON value`);
+}
 
 // ---------------------------------------------------------------- references
 
@@ -105,6 +176,9 @@ export function pointerTokens(pointer) {
 }
 
 const ARRAY_INDEX = /^(?:0|[1-9][0-9]*)$/;
+
+/** Path tokens that would reach an object's prototype machinery. */
+const FORBIDDEN_TOKENS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /** The tokens a reference addresses: one key, or a pointer's path. */
 function tokensOf(ref, version) {
@@ -150,23 +224,43 @@ function writeAt(row, tokens, value) {
     } else if (!isPlainObject(here))
       throw new LensError('bad-path', `cannot write into a ${typeof here}`);
 
+    const key = Array.isArray(here) ? Number(token) : token;
+
     if (last) {
-      here[Array.isArray(here) ? Number(token) : token] = value;
+      own(here, key, value);
 
       return;
     }
 
-    const key = Array.isArray(here) ? Number(token) : token;
-    if (here[key] === undefined || here[key] === null)
-      here[key] = ARRAY_INDEX.test(tokens[i + 1]) ? [] : {};
+    if (
+      !Object.hasOwn(here, key) ||
+      here[key] === undefined ||
+      here[key] === null
+    )
+      own(here, key, ARRAY_INDEX.test(tokens[i + 1]) ? [] : {});
     here = here[key];
   }
 }
 
 // ---------------------------------------------------------------- converters
 
+/** The instants an ISO string with a four-digit year names, in UTC. */
+const EARLIEST = -62167219200000; // 0000-01-01T00:00:00.000Z
+const LATEST = 253402300799999; // 9999-12-31T23:59:59.999Z
+
 const ISO_INSTANT =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+/** Whether y-m-d is a calendar date (proleptic Gregorian, any year). */
+function validDate(y, mo, d) {
+  const day = new Date(0);
+  day.setUTCFullYear(+y, +mo - 1, +d);
+
+  return day.getUTCDate() === +d && day.getUTCMonth() === +mo - 1;
+}
+
+/** Whether h:m(:s) is a time of day: no 24:00, no leap second. */
+const validTime = (h, mi, s = '00') => +h <= 23 && +mi <= 59 && +s <= 59;
 
 /** Epoch milliseconds of an ISO 8601 instant, refusing lost precision. */
 function isoToMs(value) {
@@ -174,30 +268,41 @@ function isoToMs(value) {
     throw new LensError('bad-value', `expected an ISO 8601 instant string`);
   const m = ISO_INSTANT.exec(value);
   if (!m) throw new LensError('bad-value', `"${value}" is not an ISO instant`);
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms))
+  if (
+    !validDate(m[1], m[2], m[3]) ||
+    !validTime(m[4], m[5], m[6]) ||
+    (m[9] !== undefined && !validTime(m[9], m[10]))
+  )
     throw new LensError('bad-value', `"${value}" is not a valid instant`);
-  const day = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  if (day.getUTCDate() !== +m[3] || day.getUTCMonth() !== +m[2] - 1)
-    throw new LensError('bad-value', `"${value}" is not a calendar date`);
   if (m[7] && /[1-9]/.test(m[7].slice(3)))
     throw new LensError(
       'precision',
       `"${value}" has sub-millisecond digits an Atomic timestamp cannot hold`,
     );
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms) || ms < EARLIEST || ms > LATEST)
+    throw new LensError(
+      'bad-value',
+      `"${value}" is outside the years 0000-9999 in UTC`,
+    );
 
   return ms;
 }
 
-function msToIso(value) {
-  if (!Number.isSafeInteger(value))
-    throw new LensError('bad-value', 'expected integer epoch milliseconds');
+function checkedMs(value) {
+  if (!Number.isSafeInteger(value) || value < EARLIEST || value > LATEST)
+    throw new LensError(
+      'bad-value',
+      'expected integer epoch milliseconds within the years 0000-9999',
+    );
 
-  return new Date(value).toISOString();
+  return value;
 }
 
+const msToIso = value => new Date(checkedMs(value)).toISOString();
+
 function msToIsoSeconds(value) {
-  if (!Number.isSafeInteger(value) || value % 1000 !== 0)
+  if (checkedMs(value) % 1000 !== 0)
     throw new LensError(
       'precision',
       'this side keeps whole seconds; the value has milliseconds',
@@ -206,15 +311,23 @@ function msToIsoSeconds(value) {
   return new Date(value).toISOString().replace(/\.000Z$/, 'Z');
 }
 
-const CIVIL_DAY = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/;
+/**
+ * A civil day or a local date-time, with no time zone. A string with `Z` or
+ * an offset names an instant, whose day depends on where it is read, so it
+ * is refused rather than cut at its UTC day.
+ */
+const LOCAL_DAY =
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?)?$/;
 
 function dayOf(value) {
-  const m = typeof value === 'string' ? CIVIL_DAY.exec(value) : null;
+  const m = typeof value === 'string' ? LOCAL_DAY.exec(value) : null;
   if (!m || m[1] === '0000')
-    throw new LensError('bad-value', `expected a date or date-time string`);
-  const day = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  if (day.getUTCDate() !== +m[3] || day.getUTCMonth() !== +m[2] - 1)
-    throw new LensError('bad-value', `"${value}" is not a calendar date`);
+    throw new LensError(
+      'bad-value',
+      `expected YYYY-MM-DD or a date-time without a time zone, got ${JSON.stringify(value)}`,
+    );
+  if (!validDate(m[1], m[2], m[3]) || (m[4] && !validTime(m[4], m[5], m[6])))
+    throw new LensError('bad-value', `"${value}" is not a valid date`);
 
   return value.slice(0, 10);
 }
@@ -293,6 +406,9 @@ function overlaps(a, b) {
   return true;
 }
 
+/** Mappings `parseMapping` returned, so they are not parsed again. */
+const PARSED = new WeakSet();
+
 /**
  * Reads a stored mapping (an object, or its JSON text) and returns it frozen
  * with each field's parsed paths, or throws a `LensError` saying why it is
@@ -369,10 +485,20 @@ export function parseMapping(input) {
         `${at}: ${name} is one-way, so the field must be readOnly`,
       );
 
+    const sourcePath = tokensOf(field.source, version);
+    const targetPath = tokensOf(field.target, version);
+
+    for (const token of [...sourcePath, ...targetPath])
+      if (FORBIDDEN_TOKENS.has(token))
+        throw new LensError(
+          'bad-reference',
+          `${at}: the path token "${token}" is not allowed`,
+        );
+
     return Object.freeze({
       ...field,
-      sourcePath: Object.freeze(tokensOf(field.source, version)),
-      targetPath: Object.freeze(tokensOf(field.target, version)),
+      sourcePath: Object.freeze(sourcePath),
+      targetPath: Object.freeze(targetPath),
       converter,
     });
   });
@@ -389,11 +515,14 @@ export function parseMapping(input) {
             `Two fields ${side === 'source' ? 'read' : 'write'} ${parsed[i][side]}${parsed[i][side] === parsed[j][side] ? '' : ` and ${parsed[j][side]}`}`,
           );
 
-  return Object.freeze({ version, fields: Object.freeze(parsed) });
+  const result = Object.freeze({ version, fields: Object.freeze(parsed) });
+  PARSED.add(result);
+
+  return result;
 }
 
 const parsedOf = mapping =>
-  mapping?.fields?.[0]?.sourcePath ? mapping : parseMapping(mapping);
+  PARSED.has(mapping) ? mapping : parseMapping(mapping);
 
 /** The mapping as stored: without the parsed paths, keys in a fixed order. */
 export function storedMapping(mapping) {
@@ -480,28 +609,36 @@ export function getAlongPath(steps, row) {
 }
 
 /**
- * The three example-based laws for one lens and one source row, as a list
- * of failures (empty when all hold): GetPut, PutGet for `desired` (a target
- * view) and stable put. Exceptions propagate.
+ * The three example-based laws for one lens and one row, as a list of
+ * failures (empty when all hold): GetPut, and with `desired` (a view in the
+ * other shape) PutGet and stable put. `backward` treats `row` as the
+ * target shape. Exceptions propagate.
  */
-export function lawProblems(mapping, source, desired) {
+export function lawProblems(mapping, row, desired, direction = 'forward') {
+  const parsed = parsedOf(mapping);
+  const forward = direction === 'forward';
+  const at = forward ? '' : ' (backward)';
   const problems = [];
-  const view = lensGet(mapping, source);
-  if (!deepEqual(lensPut(mapping, view, source), source))
-    problems.push('GetPut: putting the unchanged view changed the source');
+  const view = lensGet(parsed, row, direction);
+  if (!deepEqual(lensPut(parsed, view, row, direction), row))
+    problems.push(`GetPut${at}: putting the unchanged view changed the row`);
 
   if (desired !== undefined) {
-    const updated = lensPut(mapping, desired, source);
-    const got = lensGet(mapping, updated);
+    const updated = lensPut(parsed, desired, row, direction);
+    const got = lensGet(parsed, updated, direction);
 
-    for (const field of parsedOf(mapping).fields) {
-      const want = readAt(desired, field.targetPath);
-      if (want !== undefined && !deepEqual(readAt(got, field.targetPath), want))
-        problems.push(`PutGet: ${field.target} did not read back as written`);
+    for (const field of parsed.fields) {
+      if (!forward && !field.converter.put) continue;
+      const path = forward ? field.targetPath : field.sourcePath;
+      const want = readAt(desired, path);
+      if (want !== undefined && !deepEqual(readAt(got, path), want))
+        problems.push(
+          `PutGet${at}: ${forward ? field.target : field.source} did not read back as written`,
+        );
     }
 
-    if (!deepEqual(lensPut(mapping, desired, updated), updated))
-      problems.push('stable put: putting the same view twice changed it');
+    if (!deepEqual(lensPut(parsed, desired, updated, direction), updated))
+      problems.push(`stable put${at}: putting the same view twice changed it`);
   }
 
   return problems;

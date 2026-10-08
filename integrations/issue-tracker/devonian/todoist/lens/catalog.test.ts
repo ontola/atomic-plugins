@@ -31,6 +31,14 @@ const lens = JSON.parse(
     'utf8',
   ),
 ) as { target: { class: string }; examples: Example[] };
+/**
+ * The code lens's message for each refusal code this catalog entry's
+ * examples use. An edit with an error code not listed here fails the test,
+ * so a new refusal in the catalog needs a matching one in the code lens.
+ */
+const refusals: Record<string, RegExp> = {
+  'read-only': /^This lens is read-only$/,
+};
 const resource = (row: Record<string, unknown>) =>
   ({
     '@id': 'https://atomic.example/tasks/one',
@@ -52,12 +60,15 @@ describe('catalog lens todoist-task-issue-v1 agrees with the code lens', () => {
       for (const edit of example.edits ?? []) {
         // The code lens takes a whole row: fill in what the edit leaves out.
         const row = resource({ ...example.target, ...edit.target });
-        if (edit.source)
+
+        if (edit.error === undefined)
           expect(todoistFromAtomic(row, example.source)).toEqual(edit.source);
-        else
+        else {
+          expect(Object.keys(refusals)).toContain(edit.error);
           expect(() => todoistFromAtomic(row, example.source)).toThrow(
-            /read-only/,
+            refusals[edit.error],
           );
+        }
       }
     },
   );

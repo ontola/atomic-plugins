@@ -15,7 +15,11 @@ import {
 interface Example {
   source: RaindropRecord;
   target: Record<string, unknown>;
-  edits?: { target: Record<string, unknown>; source?: RaindropRecord }[];
+  edits?: {
+    target: Record<string, unknown>;
+    source?: RaindropRecord;
+    error?: string;
+  }[];
 }
 const lens = JSON.parse(
   readFileSync(
@@ -26,6 +30,12 @@ const lens = JSON.parse(
     'utf8',
   ),
 ) as { target: { class: string }; examples: Example[] };
+/**
+ * The code lens's message for each refusal code this catalog entry's
+ * examples use. An edit with an error code not listed here fails the test,
+ * so a new refusal in the catalog needs a matching one in the code lens.
+ */
+const refusals: Record<string, RegExp> = {};
 const resource = (row: Record<string, unknown>) =>
   ({
     '@id': 'https://atomic.example/bookmarks/one',
@@ -44,11 +54,18 @@ describe('catalog lens raindrop-bookmark-v1 agrees with the code lens', () => {
       const { [IS_A]: _isA, ...set } = raindropToAtomic(example.source).set!;
       expect(set).toEqual(example.target);
 
-      for (const edit of example.edits ?? [])
-        if (edit.source)
-          expect(
-            raindropFromAtomic(resource(edit.target), example.source),
-          ).toEqual(edit.source);
+      for (const edit of example.edits ?? []) {
+        const row = resource({ ...example.target, ...edit.target });
+
+        if (edit.error === undefined)
+          expect(raindropFromAtomic(row, example.source)).toEqual(edit.source);
+        else {
+          expect(Object.keys(refusals)).toContain(edit.error);
+          expect(() => raindropFromAtomic(row, example.source)).toThrow(
+            refusals[edit.error],
+          );
+        }
+      }
     },
   );
 });

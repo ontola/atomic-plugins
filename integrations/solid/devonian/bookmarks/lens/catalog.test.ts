@@ -15,7 +15,11 @@ import {
 interface Example {
   source: ExpandedNode;
   target: Record<string, unknown>;
-  edits?: { target: Record<string, unknown>; source?: ExpandedNode }[];
+  edits?: {
+    target: Record<string, unknown>;
+    source?: ExpandedNode;
+    error?: string;
+  }[];
 }
 const lens = JSON.parse(
   readFileSync(
@@ -30,6 +34,12 @@ const lens = JSON.parse(
   target: { class: string };
   examples: Example[];
 };
+/**
+ * The code lens's message for each refusal code this catalog entry's
+ * examples use. An edit with an error code not listed here fails the test,
+ * so a new refusal in the catalog needs a matching one in the code lens.
+ */
+const refusals: Record<string, RegExp> = {};
 const resource = (row: Record<string, unknown>) =>
   ({
     '@id': 'https://atomic.example/bookmarks/one',
@@ -51,11 +61,20 @@ describe('catalog lens solid-bookmark-v1 agrees with the code lens', () => {
       ).set!;
       expect(set).toEqual(example.target);
 
-      for (const edit of example.edits ?? [])
-        if (edit.source)
-          expect(
-            solidBookmarkFromAtomic(resource(edit.target), example.source),
-          ).toEqual(edit.source);
+      for (const edit of example.edits ?? []) {
+        const row = resource({ ...example.target, ...edit.target });
+
+        if (edit.error === undefined)
+          expect(solidBookmarkFromAtomic(row, example.source)).toEqual(
+            edit.source,
+          );
+        else {
+          expect(Object.keys(refusals)).toContain(edit.error);
+          expect(() => solidBookmarkFromAtomic(row, example.source)).toThrow(
+            refusals[edit.error],
+          );
+        }
+      }
     },
   );
 });

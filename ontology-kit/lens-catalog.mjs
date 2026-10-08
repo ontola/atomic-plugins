@@ -185,8 +185,73 @@ function resolveLens(name, lens, termsSource, ontologyBase) {
 }
 
 /**
+ * The key a release's one-lens-per-pair rule and the source-is-not-target
+ * rule compare: `endpointKey`, except that a record is its provider and
+ * resource, with or without the `openapi` folder that declares it.
+ */
+function pairKey(endpoint, termsSource, ontologyBase) {
+  if (endpoint.class !== undefined)
+    return (
+      classRef(endpoint.class, termsSource, ontologyBase) ?? endpoint.class
+    );
+  if (endpoint.record)
+    return `record:${endpoint.record.provider}#${endpoint.record.resource}`;
+
+  return endpointKey(endpoint);
+}
+
+const DATATYPE = 'https://atomicdata.dev/datatypes/';
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Why `value` is not of an Atomic datatype, or undefined when it is. */
+export function datatypeProblem(value, datatype) {
+  const kind = datatype.startsWith(DATATYPE)
+    ? datatype.slice(DATATYPE.length)
+    : undefined;
+  const ok = {
+    string: () => typeof value === 'string',
+    markdown: () => typeof value === 'string',
+    slug: () => typeof value === 'string' && /^[a-z0-9-]+$/.test(value),
+    uri: () => typeof value === 'string',
+    atomicURL: () => typeof value === 'string' && /^https?:\/\//.test(value),
+    boolean: () => typeof value === 'boolean',
+    integer: () => Number.isSafeInteger(value),
+    timestamp: () => Number.isSafeInteger(value),
+    float: () => typeof value === 'number' && Number.isFinite(value),
+    date: () => typeof value === 'string' && DAY.test(value),
+    resourceArray: () =>
+      Array.isArray(value) && value.every(v => typeof v === 'string'),
+    json: () => true,
+  }[kind];
+  if (!ok) return `has the unknown datatype ${datatype}`;
+
+  return ok() ? undefined : `is ${JSON.stringify(value)}, not a ${kind} value`;
+}
+
+/**
+ * Example rows on a class endpoint, checked against the datatypes
+ * source.json gives its properties (only those: other vocabularies' terms
+ * are not known here).
+ */
+function rowDatatypeProblems(row, termsSource, ontologyBase) {
+  const problems = [];
+  if (!row || typeof row !== 'object') return problems;
+
+  for (const [shortname, p] of Object.entries(termsSource.properties ?? {})) {
+    const subject = `${ontologyBase}/properties/${shortname}`;
+    if (!Object.hasOwn(row, subject)) continue;
+    const problem = datatypeProblem(row[subject], p.datatype);
+    if (problem) problems.push(`${shortname} ${problem}`);
+  }
+
+  return problems;
+}
+
+/**
  * Problems with lenses.json, given the ontology source it refers to. `base`
- * is the repository root, for the `implementation` and `openapi` paths.
+ * is the repository root, for the `openapi` paths. Whether `implementation`
+ * files exist is `implementationProblems`, which `check` runs only for
+ * lenses that are not published yet.
  */
 export function lensSourceProblems(
   lensSource,
@@ -257,16 +322,14 @@ export function lensSourceProblems(
         problems.push(`${at}: ${side} class is a shortname or a subject`);
     }
 
-    if (lens.implementation !== undefined) {
-      if (
-        typeof lens.implementation !== 'string' ||
-        !lens.implementation.startsWith('integrations/') ||
-        !existsSync(resolve(base, lens.implementation))
-      )
-        problems.push(
-          `${at}: implementation is the repository path of an existing file under integrations/`,
-        );
-    }
+    if (
+      lens.implementation !== undefined &&
+      (typeof lens.implementation !== 'string' ||
+        !/^integrations\/[^\s]+$/.test(lens.implementation))
+    )
+      problems.push(
+        `${at}: implementation is a repository path under integrations/`,
+      );
 
     if (
       lens.limits !== undefined &&
@@ -281,6 +344,13 @@ export function lensSourceProblems(
   }
 
   if (problems.length) return problems;
+
+  for (const [name, lens] of Object.entries(lenses))
+    if (
+      pairKey(lens.source, termsSource, ontologyBase) ===
+      pairKey(lens.target, termsSource, ontologyBase)
+    )
+      problems.push(`lens ${name}: its source and target are the same`);
 
   for (const [name, lens] of Object.entries(lenses)) {
     const at = `lens ${name}`;
@@ -334,6 +404,21 @@ export function lensSourceProblems(
 
     examples.forEach((example, i) => {
       const where = `${at}: example ${i + 1}`;
+      const rows = [
+        ['source', 'source', example.source],
+        ['target', 'target', example.target],
+        ...(example.edits ?? []).flatMap((edit, j) => [
+          ['target', `edit ${j + 1} target`, edit.target],
+          ...(edit.source !== undefined
+            ? [['source', `edit ${j + 1} source`, edit.source]]
+            : []),
+        ]),
+      ];
+
+      for (const [side, label, row] of rows)
+        if (sides[side].kind === 'class')
+          for (const p of rowDatatypeProblems(row, termsSource, ontologyBase))
+            problems.push(`${where}: ${label}: ${p}`);
 
       try {
         const got = lensGet(parsed, example.source);
@@ -342,6 +427,13 @@ export function lensSourceProblems(
             `${where}: get gives ${JSON.stringify(got)}, the example says ${JSON.stringify(example.target)}`,
           );
         for (const p of lawProblems(parsed, example.source))
+          problems.push(`${where}: ${p}`);
+        for (const p of lawProblems(
+          parsed,
+          example.target,
+          undefined,
+          'backward',
+        ))
           problems.push(`${where}: ${p}`);
 
         for (const [j, edit] of (example.edits ?? []).entries()) {
@@ -399,23 +491,12 @@ export function lensSourceProblems(
       }
 
       const lens = lenses[name];
-      let pair;
-
-      try {
-        const key = side =>
-          endpointKey(
-            lens[side].class !== undefined
-              ? {
-                  class:
-                    classRef(lens[side].class, termsSource, ontologyBase) ??
-                    lens[side].class,
-                }
-              : lens[side],
-          );
-        pair = [key('source'), key('target')].sort().join(' <-> ');
-      } catch {
-        continue;
-      }
+      const pair = [
+        pairKey(lens.source, termsSource, ontologyBase),
+        pairKey(lens.target, termsSource, ontologyBase),
+      ]
+        .sort()
+        .join(' <-> ');
 
       if (pairs.has(pair))
         problems.push(
@@ -429,6 +510,32 @@ export function lensSourceProblems(
     if (!listed.has(name)) problems.push(`lens ${name} is in no release`);
 
   return problems;
+}
+
+/**
+ * `implementation` paths that do not exist, for lenses not in `published`
+ * (their names). A published lens file never changes, so its path records
+ * where its code lens was when it was published, and moving that code must
+ * not fail CI; the path is informative, never executed.
+ */
+export function implementationProblems(
+  lensSource,
+  base,
+  published = new Set(),
+) {
+  if (lensSource === undefined) return [];
+
+  return Object.entries(lensSource.lenses ?? {})
+    .filter(
+      ([name, lens]) =>
+        !published.has(name) &&
+        typeof lens.implementation === 'string' &&
+        !existsSync(resolve(base, lens.implementation)),
+    )
+    .map(
+      ([name, lens]) =>
+        `lens ${name}: implementation ${lens.implementation} does not exist`,
+    );
 }
 
 const firstRelease = (lensSource, name) =>

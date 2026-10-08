@@ -123,9 +123,11 @@ export declare function getAlongPath(
 ): Record<string, unknown>;
 export declare function lawProblems(
   mapping: LensMapping,
-  source: unknown,
+  row: unknown,
   desired?: unknown,
+  direction?: LensDirection,
 ): string[];
+export declare const MAX_DEPTH: number;
 export declare function endpointKey(endpoint: Endpoint): string;
 export declare function catalogLensInfo(lens: CatalogLensFile): CatalogLensInfo;
 export declare function resolverLens(lens: CatalogLensFile): ResolverLens;

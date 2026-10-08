@@ -59,7 +59,8 @@
     "No domain guard: the code lens refuses deleted tasks, an empty content and a non-boolean checked; this mapping maps any record it is given.",
     "A task without a due date has no due-date here; the code lens also removes a stale due-date from the row, which a v2 mapping cannot express.",
     "Doing and Blocked have no Todoist equivalent: a row with either status cannot be read back through this lens (unmapped-value).",
-    "Assignee, labels, priority and parent are not mapped."
+    "Assignee, labels, priority and parent are not mapped.",
+    "A due date with a fixed time zone (a date-time ending in Z or an offset) is refused with bad-value: its day depends on the time zone, which day-of does not apply. The code lens takes its UTC day instead."
   ],
   "implementation": "integrations/issue-tracker/devonian/todoist/lens/index.ts",
   "examples": [

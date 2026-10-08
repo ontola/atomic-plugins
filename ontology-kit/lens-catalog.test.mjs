@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { build, check, readSource, root } from './ontology.mjs';
 import {
+  datatypeProblem,
+  implementationProblems,
   lensSourceProblems,
   overlayDeclaresResource,
   readLensSource,
@@ -91,7 +93,7 @@ const put = (dir, path, text) => {
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 
 /** A repository with the fixture ontology and lens catalog built as `main`. */
-function using(run, { catalog = lenses(), base = BASE } = {}) {
+function using(run, { catalog = lenses(), base = BASE, files = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atomic-lenses-'));
 
   try {
@@ -101,6 +103,7 @@ function using(run, { catalog = lenses(), base = BASE } = {}) {
     put(dir, 'ontology-kit/base.json', json({ base }));
     put(dir, 'ontology-kit/source.json', json(terms()));
     put(dir, 'ontology-kit/lenses.json', json(catalog));
+    for (const [path, text] of Object.entries(files)) put(dir, path, text);
     build({ base: dir });
     git(dir, 'add', '-A');
     git(dir, 'commit', '-q', '-m', 'publish');
@@ -268,10 +271,10 @@ test('record endpoints: openapi must be an overlay folder declaring the resource
   c.lenses['shop-thing-v1'].source.record.openapi = 'APIs/todoist.com/1';
   assert.match(problemsOf(c), /is not under APIs\/shop.example\//);
   const d = lenses();
-  d.lenses['shop-thing-v1'].implementation = 'integrations/nowhere.ts';
+  d.lenses['shop-thing-v1'].implementation = 'elsewhere/nowhere.ts';
   assert.match(
     problemsOf(d),
-    /implementation is the repository path of an existing file/,
+    /implementation is a repository path under integrations\//,
   );
 });
 
@@ -360,4 +363,122 @@ test('this repository: every catalog lens parses, and its published file runs', 
       );
     }
   }
+});
+
+test('implementation must exist only while a lens is unpublished', () => {
+  const c = lenses();
+  c.lenses['shop-thing-v1'].implementation = 'integrations/nowhere.ts';
+  assert.equal(problemsOf(c), '');
+  assert.deepEqual(implementationProblems(c, root), [
+    'lens shop-thing-v1: implementation integrations/nowhere.ts does not exist',
+  ]);
+  assert.deepEqual(
+    implementationProblems(c, root, new Set(['shop-thing-v1'])),
+    [],
+  );
+});
+
+test('check: moving the code lens of a published lens does not fail it', () => {
+  const c = lenses();
+  c.lenses['shop-thing-v1'].implementation = 'integrations/shop/lens.ts';
+  using(
+    dir => {
+      rmSync(join(dir, 'integrations/shop/lens.ts'));
+      assert.deepEqual(check({ base: dir, published: 'main' }), []);
+      assert.match(
+        check({ base: dir }).join('\n'),
+        /implementation integrations\/shop\/lens.ts does not exist/,
+      );
+    },
+    { catalog: c, files: { 'integrations/shop/lens.ts': '// lens\n' } },
+  );
+});
+
+test('a published lens may not be deleted, with a lens-specific message', () =>
+  using(dir => {
+    rmSync(join(dir, 'ontology/lenses/shop-thing-v1'));
+    assert.match(
+      check({ base: dir, published: 'main' }).join('\n'),
+      /ontology\/lenses\/shop-thing-v1 is published at main and was deleted\. Published lenses and lens releases stay available/,
+    );
+  }));
+
+test('example rows on a class endpoint must fit source.json datatypes', () => {
+  const c = lenses();
+  const example = c.lenses['shop-thing-v1'].examples[0];
+  example.source.look.colour = 5;
+  example.target.colour = 5;
+  example.edits[0].target.colour = 5;
+  example.edits[0].source.look.colour = 5;
+  assert.match(
+    problemsOf(c),
+    /example 1: target: colour is 5, not a string value/,
+  );
+  assert.match(
+    problemsOf(c),
+    /example 1: edit 1 target: colour is 5, not a string value/,
+  );
+  assert.equal(
+    datatypeProblem('REGULAR', 'https://atomicdata.dev/datatypes/boolean'),
+    '"REGULAR", not a boolean value'.replace(/^/, 'is '),
+  );
+  assert.equal(
+    datatypeProblem(1.5, 'https://atomicdata.dev/datatypes/timestamp'),
+    'is 1.5, not a timestamp value',
+  );
+  assert.equal(
+    datatypeProblem('2026-10-08', 'https://atomicdata.dev/datatypes/date'),
+    undefined,
+  );
+  assert.equal(
+    datatypeProblem(['a'], 'https://atomicdata.dev/datatypes/resourceArray'),
+    undefined,
+  );
+});
+
+test('a record with and without openapi is one pair; source and target must differ', () => {
+  const c = lenses();
+  const l = c.lenses['shop-thing-v1'];
+  l.source = {
+    record: {
+      provider: 'todoist.com',
+      resource: 'task',
+      openapi: 'APIs/todoist.com/1',
+    },
+  };
+  c.lenses['shop-thing-v2'] = structuredClone(l);
+  c.lenses['shop-thing-v2'].source = {
+    record: { provider: 'todoist.com', resource: 'task' },
+  };
+  c.releases.v1.lenses.push('shop-thing-v2');
+  assert.match(
+    problemsOf(c),
+    /shop-thing-v1 and shop-thing-v2 both connect .*record:todoist.com#task/,
+  );
+
+  const d = lenses();
+  d.lenses['shop-thing-v1'].source = { class: 'thing-v1' };
+  assert.match(
+    problemsOf(d),
+    /lens shop-thing-v1: its source and target are the same/,
+  );
+});
+
+test('backward GetPut on example targets passes for a converting lens', () => {
+  const c = lenses();
+  // check also runs GetPut backwards on each example target (lensPut's
+  // unchanged-value rule makes it hold by construction; this guards that a
+  // converting field does not report a false problem).
+  c.lenses['shop-thing-v1'].mapping.fields[1] = {
+    source: '/look/at',
+    target: 'colour',
+    convert: 'ms-to-iso',
+  };
+  c.lenses['shop-thing-v1'].examples = [
+    {
+      source: { title: 'Cup', look: { at: 0 } },
+      target: { [NAME]: 'Cup', colour: '1970-01-01T00:00:00.000Z' },
+    },
+  ];
+  assert.equal(problemsOf(c), '');
 });

@@ -31,6 +31,14 @@ const NAME = 'https://atomicdata.dev/properties/name';
 const START = properties['work-start'].subject;
 const END = properties['work-end'].subject;
 const BILLABLE = properties['work-billable'].subject;
+/**
+ * The code lens's message for each refusal code this catalog entry's
+ * examples use. An edit with an error code not listed here fails the test,
+ * so a new refusal in the catalog needs a matching one in the code lens.
+ */
+const refusals: Record<string, RegExp> = {
+  precision: /^Changed Clockify times require whole seconds$/,
+};
 const code = clockifyEntryLens({
   now: Date.parse('2026-10-08T12:00:00Z'),
   projects: [{ id: 'project-1', name: 'One' }],
@@ -69,10 +77,15 @@ describe('catalog lens clockify-time-entry-v1 agrees with the code lens', () => 
           },
           billable: wanted[BILLABLE] as boolean,
         };
-        if (edit.source)
+
+        if (edit.error === undefined)
           expect(code.put(view, example.source)).toEqual(edit.source);
-        else
-          expect(() => code.put(view, example.source)).toThrow(/whole seconds/);
+        else {
+          expect(Object.keys(refusals)).toContain(edit.error);
+          expect(() => code.put(view, example.source)).toThrow(
+            refusals[edit.error],
+          );
+        }
       }
     },
   );

@@ -40,7 +40,7 @@ amends that sentence. Why there, and not in a new top-level folder:
 
 The alternative, a top-level `lenses/` folder with its own base, needs a
 second immutability check and a workflow change. **Michiel decides** (open
-point L-A below); until then the amended sentence is a proposal in the
+point L-A below, Decision Inbox Q-106); until then the amended sentence is a proposal in the
 pull request that adds it.
 
 ## Versioning: published lens files are immutable
@@ -85,19 +85,19 @@ A release, `ontology/lenses/v<N>`:
 
 A lens, `ontology/lenses/<name>-v<N>`:
 
-| Key              | Value                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| `@id`            | Its own URL                                                                                   |
-| `lensFormat`     | `1`                                                                                           |
-| `release`        | The first release that listed it                                                              |
-| `name`           | What a menu shows, `Source ↔ Target`                                                          |
-| `description`    | One or two sentences                                                                          |
-| `source`         | An endpoint (below)                                                                           |
-| `target`         | An endpoint                                                                                   |
-| `mapping`        | A `LensMapping`, version 2 (below)                                                            |
-| `limits`         | Optional: what the mapping does not do that a reader could expect, one sentence each          |
-| `implementation` | Optional: the repository path of the code lens it was derived from; informative, not executed |
-| `examples`       | At least one `{ source, target, edits? }`; `check` runs every one (below)                     |
+| Key              | Value                                                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@id`            | Its own URL                                                                                                                                                                                                             |
+| `lensFormat`     | `1`                                                                                                                                                                                                                     |
+| `release`        | The first release that listed it                                                                                                                                                                                        |
+| `name`           | What a menu shows, `Source ↔ Target`                                                                                                                                                                                    |
+| `description`    | One or two sentences                                                                                                                                                                                                    |
+| `source`         | An endpoint (below)                                                                                                                                                                                                     |
+| `target`         | An endpoint                                                                                                                                                                                                             |
+| `mapping`        | A `LensMapping`, version 2 (below)                                                                                                                                                                                      |
+| `limits`         | Optional: what the mapping does not do that a reader could expect, one sentence each                                                                                                                                    |
+| `implementation` | Optional: the repository path of the code lens it was derived from when published; informative, never executed. `check` requires the file only while the lens is unpublished, so moving the code later does not fail CI |
+| `examples`       | At least one `{ source, target, edits? }`; `check` runs every one (below)                                                                                                                                               |
 
 In `lenses.json`, a class endpoint may name a shared class by its name
 (`"time-entry-v1"`), and a reference on a class endpoint, or a key of an
@@ -146,17 +146,26 @@ decide O8.
   ignored. Reading, and writing the table from the provider side, are
   unaffected.
 
-| Converter           | Source → target                                 | Inverse                                                      |
-| ------------------- | ----------------------------------------------- | ------------------------------------------------------------ |
-| `identity`          | The value, copied                               | The same                                                     |
-| `ms-to-iso`         | Epoch ms → ISO 8601 (`toISOString`), from #2069 | Refuses sub-millisecond digits                               |
-| `iso-to-ms`         | ISO 8601 instant (Z or offset) → epoch ms       | `toISOString`, with milliseconds                             |
-| `iso-seconds-to-ms` | The same, for a side that keeps whole seconds   | Refuses milliseconds (`precision`); writes `…:SSZ`           |
-| `map`               | `args.pairs: [[source, target], …]`, one-to-one | The same table backwards; an unlisted value `unmapped-value` |
-| `day-of`            | A date or date-time string → `YYYY-MM-DD`       | None: one-way, only on a `readOnly` field                    |
+| Converter           | Source → target                                                                                   | Inverse                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `identity`          | The value, copied                                                                                 | The same                                                     |
+| `ms-to-iso`         | Epoch ms → ISO 8601 (`toISOString`), from #2069                                                   | Refuses sub-millisecond digits                               |
+| `iso-to-ms`         | ISO 8601 instant (Z or offset) → epoch ms                                                         | `toISOString`, with milliseconds                             |
+| `iso-seconds-to-ms` | The same, for a side that keeps whole seconds                                                     | Refuses milliseconds (`precision`); writes `…:SSZ`           |
+| `map`               | `args.pairs: [[source, target], …]`, one-to-one                                                   | The same table backwards; an unlisted value `unmapped-value` |
+| `day-of`            | `YYYY-MM-DD`, or a date-time with no time zone, → `YYYY-MM-DD`; `Z` or an offset is a `bad-value` | None: one-way, only on a `readOnly` field                    |
 
 Every converter refuses values outside its domain (`bad-value`) instead of
-coercing them, and none loses precision silently.
+coercing them, and none loses precision silently. Instants must be valid
+times of day (no `T24:00`, no leap second) in the years 0000-9999 UTC, so
+that every value round-trips through `toISOString`. `day-of` refuses an
+instant (`Z` or an offset) because its civil day depends on the time zone it
+is read in, which a mapping cannot know.
+
+Values must be JSON-like (plain objects, arrays, strings, finite numbers,
+booleans, null) and nest at most 64 levels; anything else is a `bad-value`.
+The path tokens `__proto__`, `constructor` and `prototype` are refused, and
+only own properties are read or written.
 
 **Semantics.** `get` reads each source reference and writes the converted
 value at the target reference; an absent source leaves the target absent,
@@ -170,9 +179,11 @@ one place inside another (`/a` and `/a/b`). The backward direction swaps
 roles and skips one-way fields.
 
 **Laws**, checked on every catalog example: GetPut
-(`put(get(s), s) = s`), PutGet (`get(put(v, s)) = v` on the mapped fields)
-and stable put (putting the same view twice changes nothing more). They hold
-on the examples, which is evidence, not a proof over all values.
+(`put(get(s), s) = s`) forward on the example source and backward on the
+example target; and for each edit, forward PutGet (`get(put(v, s)) = v` on
+the mapped fields) and stable put (putting the same view twice changes
+nothing more). PutGet and stable put are not checked backward. They hold on
+the examples, which is evidence, not a proof over all values.
 
 ### Examples
 
@@ -192,11 +203,31 @@ converters `identity` and `ms-to-iso`; #2069's own test cases pass against it
 
 Migration for #2069 (batch 2): parse version 2 as well (or use `lens.mjs`),
 and pass `mappingVersion` through, so a host that only runs v1 skips a v2
-lens instead of failing its offers. One behaviour differs: v1's `lensPut`
-rewrote every mapped field, v2 writes only changed ones. The results are the
-same except where a converter re-encodes an unchanged value (an ISO string
-without milliseconds, read and written back through `ms-to-iso`). Drive-local
-lenses stored as v1 keep working.
+lens instead of failing its offers. Drive-local lenses stored as v1 keep
+working, except where they relied on what `lens.mjs` refuses. Every
+difference from #2069's `lens.ts` at `bab52555`:
+
+- **Put:** v1's `lensPut` rewrote every mapped field, v2 writes only changed
+  ones. The results are the same except where a converter re-encodes an
+  unchanged value (an ISO string without milliseconds, read and written back
+  through `ms-to-iso`).
+- **Strict converters:** #2069's `ms-to-iso` passes a non-number (get) or
+  non-string (put) through unchanged and lets `Date.parse` return `NaN`;
+  `lens.mjs` refuses a non-integer, out-of-range or non-ISO value, an ISO
+  string without a time zone, `T24:00` and sub-millisecond digits.
+- **Values:** #2069 passes values by reference and accepts anything;
+  `lens.mjs` copies them and refuses non-JSON-like or too deeply nested ones.
+- **Unknown keys** in a mapping or a field are refused; #2069 ignores them.
+- **Path tokens** `__proto__`, `constructor` and `prototype` are refused,
+  and only own properties are read (#2069 reads `row[from]`, inherited
+  ones included).
+- **Exports:** the parser is `parseMapping` (#2069: `parseLensMapping`) and
+  returns a frozen mapping with parsed paths; `storedMapping` gives the plain
+  form. `lensGet`, `lensPut`, `getAlongPath` and `CONVERTERS` keep #2069's
+  names.
+- **Errors** are `LensError`s with a stable `code`. Messages are lowercase
+  and worded differently ("unknown converter", where #2069's test matches
+  `/Unknown converter/`); match on `code`, not on the message.
 
 `catalogLensInfo(file)` returns #2069's `CatalogLens` shape (`subject`,
 `name`, `source`, `target`, `mapping`) plus `mappingVersion`. All four
@@ -223,9 +254,12 @@ would skip all of them.
 
 The catalog does not chain anything; the host does, with
 `MAX_LENS_HOPS = 2` (#2069). Every catalog lens has a `put`, so every lens is
-two-way and can be walked both ways. Reading a `readOnly` field as still
-"two-way" (the lens has a put, which refuses edits to that field) is this
-format's interpretation of Q-091; see open point L-B.
+two-way and can be walked both ways.
+
+**Decided (L-B, by the coordinator, citing Q-091, 2026-10-08):** a lens whose
+put refuses edits to some read-only fields counts as two-way. Q-091 excluded
+one-way lenses that make a whole piece read-only, not refusals of single
+fields.
 
 ## Release 1
 
@@ -297,9 +331,14 @@ class or property; a reference of the wrong kind for its endpoint; a mapping
 `parseMapping` refuses; a target (or source) field that is not a field of the
 shared class it names, or a required field of that class left unmapped; a
 missing example or one whose `get`, `put`, laws or expected refusal fail; an
+example row on a class endpoint whose value for one of `source.json`'s
+properties does not fit that property's datatype (a string on a boolean, a
+non-integer timestamp); a lens whose source and target are the same; an
 `openapi` folder without an overlay declaring the resource; a missing
-`implementation` file; a release listing an undefined lens, a lens in no
-release, two lenses for one pair in a release; a stale or stray file under
+`implementation` file, for a lens not yet published at `--published`; a
+release listing an undefined lens, a lens in no release, two lenses for one
+pair in a release (a record counts as its provider and resource, with or
+without `openapi`); a stale or stray file under
 `ontology/lenses/`; and, with `--published`, a changed or deleted published
 lens file.
 
@@ -325,8 +364,7 @@ them to the list in `.github/workflows/ci.yml` needs a push with the
 
 | #   | Open point                                                                                                                                         | Recommendation                                                                                                                     |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| L-A | Where lens files are published: under `ontology/lenses/` (needs AGENTS.md's `ontology/` rule amended) or a new top-level folder                    | `ontology/lenses/`, for the reasons in "Where it lives"                                                                            |
-| L-B | Q-091 "two-way only" with read-only fields                                                                                                         | Accept: a lens is two-way when it has a put; a read-only field refuses edits, as Devonian's `readOnlyLens` does                    |
+| L-A | (Q-106) Where lens files are published: under `ontology/lenses/` (needs AGENTS.md's `ontology/` rule amended) or a new top-level folder            | `ontology/lenses/`, for the reasons in "Where it lives"                                                                            |
 | L-C | The github.io gate (pieces.md O11): lens files carry the temporary base, as terms do                                                               | No host loads the catalog outside #2069's flag until the stable domain is in `base.json`; the release URL then moves with the base |
 | L-D | Endpoint keys for record and rdf endpoints vs. the I1 declaration (O8)                                                                             | Settle with the I1 spec; until then the keys are provisional and no host should persist them                                       |
 | L-E | Whether lens files should also be Atomic resources (JSON-AD with a shared `lens` class), so a drive can copy a catalog lens into a drive-local one | Later, with the host loader; plain JSON is enough to fetch and run                                                                 |

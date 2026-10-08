@@ -356,3 +356,122 @@ test('resolverLens adapts a class-to-class lens to resolver.mjs hooks', async ()
     LensError,
   );
 });
+
+test('day-of takes a civil day or a local date-time, never an instant', () => {
+  const day = CONVERTERS['day-of'].get;
+  assert.equal(day('2026-10-08'), '2026-10-08');
+  assert.equal(day('2026-10-08T18:00'), '2026-10-08');
+  assert.equal(day('2026-10-08T18:00:00.5'), '2026-10-08');
+  for (const bad of [
+    '2026-10-08T22:30:00Z',
+    '2026-10-08T22:30:00+02:00',
+    '2026-10-08T22:30:00-05:00',
+    '2026-10-08Tgarbage',
+    '2026-10-08T24:00',
+    '2026-10-08T23:60',
+    '2026-02-29',
+    '0000-01-01',
+    20261008,
+  ])
+    code(() => day(bad), 'bad-value');
+});
+
+test('instants: no 24:00, no bad offsets, years 0000-9999 only', () => {
+  const toMs = CONVERTERS['iso-to-ms'].get;
+  for (const bad of [
+    '2026-10-05T24:00:00Z',
+    '2026-10-05T23:60:00Z',
+    '2026-10-05T23:59:60Z',
+    '2026-10-05T10:00:00+24:00',
+    '2026-10-05T10:00:00+01:60',
+    '0000-01-01T00:00:00+01:00',
+  ])
+    code(() => toMs(bad), 'bad-value');
+  assert.equal(toMs('0000-01-01T00:00:00Z'), -62167219200000);
+  for (const bad of [8.64e15, 253402300800000, -62167219200001, NaN, '1'])
+    code(() => CONVERTERS['ms-to-iso'].get(bad), 'bad-value');
+  code(() => CONVERTERS['iso-seconds-to-ms'].put(-62167219201000), 'bad-value');
+});
+
+test('path tokens cannot reach prototypes', () => {
+  for (const ref of ['/__proto__', '/a/constructor', '/prototype/x'])
+    code(
+      () =>
+        parseMapping({ version: 2, fields: [{ source: '/a', target: ref }] }),
+      'bad-reference',
+    );
+  code(
+    () =>
+      parseMapping({
+        version: 1,
+        fields: [{ source: 'a', target: '__proto__' }],
+      }),
+    'bad-reference',
+  );
+  // An inherited name is just a key: written as an own property.
+  const m = { version: 2, fields: [{ source: '/a', target: '/toString/x' }] };
+  const got = lensGet(m, { a: 1 });
+  assert.ok(Object.hasOwn(got, 'toString'));
+  assert.deepEqual(got.toString, { x: 1 });
+  assert.equal(typeof Object.prototype.toString, 'function');
+  assert.deepEqual(lensPut(m, { toString: { x: 2 } }, { a: 1 }), { a: 2 });
+  // An own __proto__ key in a row is copied as data, not as a prototype.
+  const hostile = JSON.parse('{"a": 1, "__proto__": {"polluted": true}}');
+  const put = lensPut(m, { toString: { x: 3 } }, hostile);
+  assert.equal(Object.getPrototypeOf(put), Object.prototype);
+  assert.equal(put.polluted, undefined);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(put, '__proto__').value, {
+    polluted: true,
+  });
+});
+
+test('only parseMapping output skips validation', () => {
+  const forged = {
+    version: 2,
+    fields: [
+      {
+        source: '/a',
+        target: 'not a reference',
+        sourcePath: ['a'],
+        targetPath: ['__proto__'],
+        converter: CONVERTERS.identity,
+      },
+    ],
+  };
+  code(() => lensGet(forged, { a: 1 }), 'bad-mapping');
+  const parsed = parseMapping({
+    version: 2,
+    fields: [{ source: '/a', target: NAME }],
+  });
+  assert.deepEqual(lensGet(parsed, { a: 1 }), { [NAME]: 1 });
+});
+
+test('values must be JSON-like and at most 64 levels deep', () => {
+  const m = { version: 2, fields: [{ source: '/a', target: NAME }] };
+  let deep = 1;
+  for (let i = 0; i < 100; i++) deep = { d: deep };
+  code(() => lensGet(m, { a: deep }), 'bad-value');
+  code(() => deepEqual(deep, structuredClone(deep)), 'bad-value');
+  code(() => lensGet(m, { a: NaN }), 'bad-value');
+  code(() => lensGet(m, { a: new Date(0) }), 'bad-value');
+  code(() => lensGet(m, { a: () => 1 }), 'bad-value');
+});
+
+test('lawProblems runs backwards too', () => {
+  const m = {
+    version: 2,
+    fields: [
+      { source: '/n', target: NAME },
+      { source: '/due', target: START, convert: 'day-of', readOnly: true },
+    ],
+  };
+  assert.deepEqual(
+    lawProblems(
+      m,
+      { [NAME]: 'x', [START]: '2026-10-08' },
+      { n: 'y' },
+      'backward',
+    ),
+    [],
+  );
+});
