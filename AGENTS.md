@@ -277,15 +277,19 @@ limit and its comment in the same commit. See
 The shared row classes of [#177](https://github.com/ontola/atomic-plugins/issues/177)
 (event, issue, time entry, bank transaction), which several plugins sync into
 so that a plugin's view works on any table of that class. `ontology/` holds
-only the generated term files, which the same Pages publish serves at
-`https://ontola.github.io/atomic-plugins/ontology/<path>`, each file at its
-own subject. `ontology-kit/` holds everything else: `base.json` (the one place
-the base URL is written), `source.json`, `ontology.mjs` (`build` and `check`),
-the generated subject constants `terms.mjs`, and the strict field resolver
-`resolver.mjs` that plugin views bundle. Never edit `ontology/` or
-`terms.mjs` by hand: edit `source.json` or `base.json` and run
-`node ontology-kit/ontology.mjs build`. A term file that is on `main` is never
-changed or deleted, apart from a base move; CI's
+only generated files: the term files, and the shared lens catalog under
+`ontology/lenses/` (Q-089; this second kind is proposed in the pull request
+that adds it and waits for Michiel's OK, see
+[`ontology-kit/LENSES.md`](ontology-kit/LENSES.md)). The same Pages publish
+serves them at `https://ontola.github.io/atomic-plugins/ontology/<path>`, each
+file at its own subject. `ontology-kit/` holds everything else: `base.json`
+(the one place the base URL is written), `source.json`, `lenses.json`,
+`ontology.mjs` (`build` and `check`), the generated subject constants
+`terms.mjs`, the strict field resolver `resolver.mjs` and the lens
+interpreter `lens.mjs` that plugins bundle. Never edit `ontology/` or
+`terms.mjs` by hand: edit `source.json`, `lenses.json` or `base.json` and run
+`node ontology-kit/ontology.mjs build`. A file under `ontology/` that is on
+`main` is never changed or deleted, apart from a base move; CI's
 `ontology.mjs check --published origin/main` enforces that. While the base is
 on github.io, every catalog entry that uses it must be `enabled: false`, which
 the same check enforces. See [`ontology-kit/README.md`](ontology-kit/README.md).
