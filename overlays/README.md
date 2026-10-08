@@ -96,6 +96,20 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Throttling response signals
+
+Three standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
+`headers` and `signals`; no dated catalog selects them.
+`tests/test_throttling_overlays.py` composes each with its pinned OAD and
+classifies synthetic responses shaped as the provider documents them. No
+provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/throttling-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` (epoch seconds), `retry-after` (seconds); 403/429 with remaining `0` as `quotaExhausted`, with `retry-after` or a secondary-limit message as `throttled` (60 s minimum). | [Rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). The message text is observed, not documented. |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | 403/429 with `rateLimitExceeded` or `userRateLimitExceeded` in `error.errors[].reason` as `throttled`; standard `Retry-After`. | Inferred from the [Calendar error guide](https://developers.google.com/workspace/calendar/api/guides/errors); the [Tasks limits page](https://developers.google.com/workspace/tasks/limits) documents no error responses. |
+| [Moneybird v2-readonly v2](APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's 150-per-300-s source-IP bucket, standard `Retry-After`, and 429 as `quotaExhausted` on that bucket. `RateLimit-*` are not declared: no documented units. | [Introduction, Throttling](https://developer.moneybird.com/introduction) |
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
