@@ -68,6 +68,63 @@ async fn slot<'a>(
         .ok()
 }
 
+enum ReadError {
+    TooLarge,
+    Broken,
+}
+
+/// Reads a body up to `cap` bytes, telling a body over the cap from a broken
+/// upload.
+async fn read_capped(mut body: Body, cap: usize) -> Result<Vec<u8>, ReadError> {
+    use axum::body::HttpBody as _;
+    let mut buffer = Vec::new();
+    while let Some(frame) =
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await
+    {
+        let frame = frame.map_err(|_| ReadError::Broken)?;
+        if let Ok(data) = frame.into_data() {
+            if buffer.len() + data.len() > cap {
+                return Err(ReadError::TooLarge);
+            }
+            buffer.extend_from_slice(&data);
+        }
+    }
+    Ok(buffer)
+}
+
+/// One body being read for an endpoint, counted until dropped.
+struct EndpointRead<'a> {
+    gate: &'a super::IngressGate,
+    endpoint: String,
+}
+
+impl<'a> EndpointRead<'a> {
+    fn take(gate: &'a super::IngressGate, endpoint: &str) -> Option<Self> {
+        let mut reading = gate.reading.lock().unwrap_or_else(|e| e.into_inner());
+        let count = reading.entry(endpoint.to_owned()).or_insert(0);
+        if *count >= gate.reads_per_endpoint {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            gate,
+            endpoint: endpoint.to_owned(),
+        })
+    }
+}
+
+impl Drop for EndpointRead<'_> {
+    fn drop(&mut self) {
+        let mut reading = self.gate.reading.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = reading.get_mut(&self.endpoint) {
+            *count -= 1;
+            if *count == 0 {
+                reading.remove(&self.endpoint);
+            }
+        }
+    }
+}
+
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
@@ -90,7 +147,7 @@ pub async fn receive(
     }
     let gate = &webhooks.gate;
     let hook = {
-        let Some(_slot) = slot(&gate.database, gate.wait).await else {
+        let Some(_slot) = slot(&gate.lookups, gate.wait).await else {
             return answer(StatusCode::SERVICE_UNAVAILABLE);
         };
         match webhooks.store.hook_by_endpoint(&endpoint_id).await {
@@ -129,13 +186,16 @@ pub async fn receive(
     // Only now is the body read: at most the cap, within the read timeout,
     // and only by a bounded number of requests at once.
     let body = {
+        let Some(_endpoint_slot) = EndpointRead::take(gate, &endpoint_id) else {
+            return answer(StatusCode::SERVICE_UNAVAILABLE);
+        };
         let Some(_slot) = slot(&gate.reads, gate.wait).await else {
             return answer(StatusCode::SERVICE_UNAVAILABLE);
         };
-        match tokio::time::timeout(gate.read_timeout, axum::body::to_bytes(body, cap)).await {
+        match tokio::time::timeout(gate.read_timeout, read_capped(body, cap)).await {
             Err(_) => return answer(StatusCode::REQUEST_TIMEOUT),
-            // Over the cap (or a broken upload): nothing was kept.
-            Ok(Err(_)) => return answer(StatusCode::PAYLOAD_TOO_LARGE),
+            Ok(Err(ReadError::TooLarge)) => return answer(StatusCode::PAYLOAD_TOO_LARGE),
+            Ok(Err(ReadError::Broken)) => return answer(StatusCode::BAD_REQUEST),
             Ok(Ok(bytes)) => bytes,
         }
     };

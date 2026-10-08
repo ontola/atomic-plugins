@@ -147,13 +147,7 @@ pub(crate) enum RefreshFailure {
     Unavailable,
 }
 
-async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> Result<(), ()> {
-    refresh_token_detailed(state, credential)
-        .await
-        .map_err(|_| ())
-}
-
-async fn refresh_token_detailed(
+async fn refresh_token(
     state: &AppState,
     credential: &mut StoredCredential,
 ) -> Result<(), RefreshFailure> {
@@ -217,11 +211,12 @@ async fn refresh_connection(
     security: &Security,
     connection_id: &str,
     credential: &mut StoredCredential,
-) -> Result<(), ()> {
+) -> Result<(), RefreshFailure> {
     const ATTEMPTS: usize = 50;
     const WAIT: std::time::Duration = std::time::Duration::from_millis(200);
-    let reload = |record: Option<ConnectionRecord>| -> Result<StoredCredential, ()> {
-        serde_json::from_slice(&record.ok_or(())?.credential).map_err(|_| ())
+    let reload = |record: Option<ConnectionRecord>| -> Result<StoredCredential, RefreshFailure> {
+        serde_json::from_slice(&record.ok_or(RefreshFailure::Unavailable)?.credential)
+            .map_err(|_| RefreshFailure::Unavailable)
     };
     for _ in 0..ATTEMPTS {
         if !needs_refresh(credential) {
@@ -230,7 +225,7 @@ async fn refresh_connection(
         if security
             .claim_refresh_lease(connection_id)
             .await
-            .map_err(|_| ())?
+            .map_err(|_| RefreshFailure::Unavailable)?
         {
             // Another caller may have finished a refresh between our read
             // and our claim; start from the row as it is now.
@@ -243,20 +238,21 @@ async fn refresh_connection(
                 let _ = security.release_refresh_lease(connection_id).await;
                 return Ok(());
             }
-            if refresh_token(state, credential).await.is_err() {
+            if let Err(failure) = refresh_token(state, credential).await {
                 let _ = security.release_refresh_lease(connection_id).await;
-                return Err(());
+                return Err(failure);
             }
-            let serialized = serde_json::to_vec(&*credential).map_err(|_| ())?;
+            let serialized =
+                serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
             return security
                 .store_refreshed_connection(connection_id, &serialized)
                 .await
-                .map_err(|_| ());
+                .map_err(|_| RefreshFailure::Unavailable);
         }
         tokio::time::sleep(WAIT).await;
         *credential = reload(security.load_connection(connection_id).await.ok().flatten())?;
     }
-    Err(())
+    Err(RefreshFailure::Unavailable)
 }
 
 /// How a request was allowed to use a connection.
@@ -670,23 +666,40 @@ pub(crate) enum ReceiverReply {
 }
 
 /// A connection's credential is force-refreshed on a 401 at most once a
-/// minute: a token issued that recently and still refused means no access,
-/// and a caller cannot make the proxy spend refresh tokens in a loop.
+/// minute after a refresh that succeeded, so a caller cannot make the proxy
+/// spend refresh tokens in a loop. Only a successful refresh arms it: a
+/// failed one leaves the next 401 free to try again.
 const FORCED_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
-fn forced_recently(connection_id: &str) -> bool {
-    use std::collections::HashMap;
+fn refreshes() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
     use std::sync::{LazyLock, Mutex};
-    static LAST: LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
+    static LAST: LazyLock<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
         LazyLock::new(Default::default);
+    &LAST
+}
+
+/// Whether the connection's token was force-refreshed successfully within
+/// the cooldown.
+fn refreshed_recently(connection_id: &str) -> bool {
     let now = std::time::Instant::now();
-    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut last = refreshes().lock().unwrap_or_else(|e| e.into_inner());
     last.retain(|_, at| now.duration_since(*at) < FORCED_REFRESH_COOLDOWN);
-    if last.contains_key(connection_id) {
-        return true;
+    last.contains_key(connection_id)
+}
+
+fn mark_refreshed(connection_id: &str) {
+    refreshes()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(connection_id.to_owned(), std::time::Instant::now());
+}
+
+/// The OAuth access token of a credential, if it has one.
+fn access_token(credential: &StoredCredential) -> Option<&str> {
+    match credential {
+        StoredCredential::OAuth { access_token, .. } => Some(access_token),
+        _ => None,
     }
-    last.insert(connection_id.to_owned(), now);
-    false
 }
 
 /// A request the proxy makes on its own behalf through a connection, for
@@ -739,11 +752,10 @@ pub(crate) async fn receiver_call(
     }
     target.set_path(&request_path);
     target.set_query(None);
-    if refresh_connection(state, security, connection_id, &mut credential)
-        .await
-        .is_err()
-    {
-        return ReceiverReply::Unreachable;
+    match refresh_connection(state, security, connection_id, &mut credential).await {
+        Ok(()) => {}
+        Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
+        Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
     }
     let mut refreshed = false;
     loop {
@@ -766,17 +778,34 @@ pub(crate) async fn receiver_call(
             return ReceiverReply::Unreachable;
         };
         let status = upstream.status();
-        if status == StatusCode::UNAUTHORIZED
-            && !refreshed
-            && can_refresh(&credential)
-            && !forced_recently(connection_id)
-        {
+        if status == StatusCode::UNAUTHORIZED && !refreshed && can_refresh(&credential) {
+            refreshed = true;
+            if refreshed_recently(connection_id) {
+                // Refreshed successfully under a minute ago, perhaps by a
+                // concurrent call while this one used the older token: use
+                // the stored token if it changed; otherwise nothing is known
+                // yet, which is not a refusal.
+                let stored = security
+                    .load_connection(connection_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|record| {
+                        serde_json::from_slice::<StoredCredential>(&record.credential).ok()
+                    });
+                match stored {
+                    Some(stored) if access_token(&stored) != access_token(&credential) => {
+                        credential = stored;
+                        continue;
+                    }
+                    _ => return ReceiverReply::Unreachable,
+                }
+            }
             match force_refresh(state, security, connection_id, &mut credential).await {
-                Ok(()) => {}
+                Ok(()) => mark_refreshed(connection_id),
                 Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
                 Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
             }
-            refreshed = true;
             continue;
         }
         return match read_bounded_body(upstream, MAX_CHECK_RESPONSE).await {
@@ -831,7 +860,7 @@ async fn force_refresh(
         let _ = security.release_refresh_lease(connection_id).await;
         return Ok(());
     }
-    if let Err(failure) = refresh_token_detailed(state, credential).await {
+    if let Err(failure) = refresh_token(state, credential).await {
         let _ = security.release_refresh_lease(connection_id).await;
         return Err(failure);
     }
@@ -918,12 +947,192 @@ fn upstream_request(
 mod tests {
     use super::*;
 
+    /// An OAuth connection on a stand-in provider: `/items` answers 200
+    /// only for `Bearer new-token`; the token endpoint answers from
+    /// `token_answers` in turn (then 200 with `new-token`). When the
+    /// returned `store_on_old` holds a credential, the provider stores it
+    /// before answering a request with the old token: a concurrent call's
+    /// refresh, landing between this call's read and its 401.
+    #[allow(clippy::type_complexity)]
+    async fn oauth_receiver(
+        token_answers: Vec<StatusCode>,
+        expires_at: Option<u64>,
+    ) -> (
+        AppState,
+        Security,
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<tokio::sync::Mutex<Option<Vec<u8>>>>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let security = security().await;
+        let credential = serde_json::to_vec(&StoredCredential::OAuth {
+            provider: "github-issues".into(),
+            access_token: "old-token".into(),
+            refresh_token: Some("a-refresh-token".into()),
+            expires_at,
+        })
+        .unwrap();
+        let id = security
+            .create_connection("github-issues", &Agent::new(48).id(), &credential)
+            .await
+            .unwrap();
+        let token_requests = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = token_requests.clone();
+        let answers = std::sync::Arc::new(std::sync::Mutex::new(token_answers));
+        let store_on_old: std::sync::Arc<tokio::sync::Mutex<Option<Vec<u8>>>> = Default::default();
+        let (pending, store, connection) = (store_on_old.clone(), security.clone(), id.clone());
+        let upstream = axum::Router::new()
+            .route(
+                "/token",
+                axum::routing::post(move || {
+                    let counter = counter.clone();
+                    let answers = answers.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        let status = {
+                            let mut answers = answers.lock().unwrap();
+                            if answers.is_empty() {
+                                StatusCode::OK
+                            } else {
+                                answers.remove(0)
+                            }
+                        };
+                        if status != StatusCode::OK {
+                            return (status, axum::Json(json!({"error": "invalid_grant"})))
+                                .into_response();
+                        }
+                        axum::Json(json!({"access_token": "new-token", "expires_in": 3600}))
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/items",
+                axum::routing::get(move |headers: HeaderMap| {
+                    let (pending, store, connection) =
+                        (pending.clone(), store.clone(), connection.clone());
+                    async move {
+                        let bearer = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+                        if bearer == Some("Bearer new-token") {
+                            return axum::Json(json!([{"id": 1}])).into_response();
+                        }
+                        if let Some(newer) = pending.lock().await.take() {
+                            store
+                                .store_refreshed_connection(&connection, &newer)
+                                .await
+                                .unwrap();
+                        }
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut s = state(Some(security.clone()));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "github-issues",
+            json!({
+                "servers": [{"url": upstream_url}],
+                "components": {"securitySchemes": {"oauth": {"type": "oauth2", "flows": {
+                    "authorizationCode": {
+                        "authorizationUrl": "https://auth.example/authorize",
+                        "tokenUrl": "https://auth.example/token",
+                        "scopes": {"read": "Read items"}
+                    }
+                }}}},
+                "security": [{"oauth": ["read"]}],
+                "paths": {"/items": {"get": {}}}
+            }),
+            json!({}),
+        );
+        s.test_upstream = Some(upstream_url);
+        (s, security, id, token_requests, store_on_old)
+    }
+
+    async fn check(s: &AppState, security: &Security, id: &str) -> ReceiverReply {
+        receiver_call(s, security, id, "github-issues", Method::GET, "/items").await
+    }
+
+    /// Review of #394, N2: a refresh that fails for a passing reason does
+    /// not arm the cooldown, so the next 401 tries again and succeeds.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_failed_forced_refresh_does_not_arm_the_cooldown() {
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, tokens, _) =
+            oauth_receiver(vec![StatusCode::SERVICE_UNAVAILABLE], Some(far)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Unreachable
+        ));
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Answered(StatusCode::OK, _)
+        ));
+        assert_eq!(tokens.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Review of #394, N2: within the cooldown a 401 retries with a token a
+    /// concurrent call stored meanwhile, and is otherwise unknown, never a
+    /// refusal; no second refresh is spent either way.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_within_the_cooldown_a_401_is_retried_with_a_newer_token_or_unknown() {
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, tokens, store_on_old) = oauth_receiver(vec![], Some(far)).await;
+        // Another call refreshed successfully a moment ago.
+        mark_refreshed(&id);
+        // Its token is not stored: nothing new is known.
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Unreachable
+        ));
+        // It is stored while this call holds the old token: reloaded, retried.
+        *store_on_old.lock().await = Some(
+            serde_json::to_vec(&StoredCredential::OAuth {
+                provider: "github-issues".into(),
+                access_token: "new-token".into(),
+                refresh_token: Some("a-refresh-token".into()),
+                expires_at: Some(far),
+            })
+            .unwrap(),
+        );
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Answered(StatusCode::OK, _)
+        ));
+        assert_eq!(tokens.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A refused refresh (`invalid_grant`) is a refusal, on expiry and on a
+    /// 401 alike, not an unknown.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_refused_refresh_is_a_refusal_on_expiry_and_on_401() {
+        let (s, security, id, _, _) = oauth_receiver(vec![StatusCode::BAD_REQUEST], Some(0)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![StatusCode::BAD_REQUEST], Some(far)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+    }
+
     #[test]
-    fn a_connection_is_force_refreshed_at_most_once_a_minute() {
+    fn only_a_successful_refresh_arms_the_cooldown() {
         let connection = format!("cooldown-{}", rand::random::<u64>());
-        assert!(!forced_recently(&connection));
-        assert!(forced_recently(&connection));
-        assert!(!forced_recently(&format!("{connection}-other")));
+        assert!(!refreshed_recently(&connection));
+        assert!(!refreshed_recently(&connection), "asking does not arm it");
+        mark_refreshed(&connection);
+        assert!(refreshed_recently(&connection));
+        assert!(!refreshed_recently(&format!("{connection}-other")));
     }
     use crate::agent_id::test_signer::Agent;
     use crate::capability::{mint, Claims};

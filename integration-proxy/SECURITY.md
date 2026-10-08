@@ -460,12 +460,15 @@ generic code.
 - **Bounded before authentication.** Before any body byte is read, the
   endpoint id must have its 43-character shape, a declared
   `Content-Length` over the verification cap (25 MiB) is refused (`413`),
-  and the endpoint's hook is looked up. Then the body is read, at most the
-  cap, within 10 seconds (`408`), by at most 8 requests at once (so at
-  most 8 x 25 MiB is held); at most 2 deliveries use the database at once,
-  so consumer routes and the sweeper always find one of the inbox's four
-  connections. Every wait is bounded: a slot or pooled connection not free
-  within a few seconds is a `503`.
+  and the endpoint's hook is looked up, at most one lookup at a time, apart
+  from the deliveries' own database slots, so a flood of unknown ids cannot
+  starve verified deliveries. Then the body is read, at most the cap,
+  within 10 seconds (`408`; a broken upload is `400`), by at most 8
+  requests at once and 4 per endpoint (so at most 8 x 25 MiB is held, and
+  one endpoint cannot hold every slot); at most 2 deliveries use the
+  database at once, so consumer routes and the sweeper always find one of
+  the inbox's four connections. Every wait is bounded: a slot or pooled
+  connection not free within a few seconds is a `503`.
 - **Verification before parsing.** The endpoint's profile and secret are
   looked up, the HMAC-SHA256 over the exact bytes is compared in constant
   time (`Mac::verify_slice`), and only then is anything in the body or the
@@ -480,9 +483,13 @@ generic code.
   each, and `.`, `..` and missing parameters are refused. The check is sent
   like a proxied request (catalog allowlist, credential binding, no
   redirects, no caller headers), and a 401 forces one token refresh before
-  it counts, at most once a minute per connection. A refresh the token
-  endpoint refuses (`400`/`401`, such as `invalid_grant`) is a failed
-  check; one that cannot complete is not. A revocation delivery suspends the bindings it names until
+  it counts. After a refresh that succeeded, the next minute's 401s on that
+  connection refresh nothing: they use the stored token if another call
+  replaced it meanwhile, and are otherwise unknown (never a failed check),
+  so concurrent checks on one connection spend one refresh token. A failed
+  refresh does not start that minute. A refresh the token endpoint refuses
+  (`400`/`401`, such as `invalid_grant`), on a 401 or because the token
+  expired, is a failed check; one that cannot complete is not. A revocation delivery suspends the bindings it names until
   the next check: a failure closes them, a pass resumes with an
   `access-suspended` gap.
 - **Consumers.** Every route is signed by the subscription's consumer, and
@@ -494,7 +501,8 @@ generic code.
   same row (shared) first, so one created during a deletion never outlives
   it. Long polls are woken only by their own subscription's deliveries,
   and at most 4 per consumer and 256 in all wait at once; past that a poll
-  answers at once. No events are served on an access check older than
+  is answered `429` with `Retry-After`. A poll whose client goes away
+  leaves nothing registered. No events are served on an access check older than
   12 hours: the receiver runs the check itself first.
 - **No provider writes.** Subscriptions use the platform's shared
   application hook only. Dedicated hooks are not created by this release,

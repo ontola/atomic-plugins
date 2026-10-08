@@ -379,14 +379,25 @@ pub async fn events(
     let requested = Duration::from_secs(query.wait.unwrap_or(0)).min(MAX_WAIT);
     // A waiting slot, within the caps per consumer and in all; without one
     // the request answers at once instead of waiting.
-    let waiting = WaitingSlot::take(&webhooks, &binding.consumer, !requested.is_zero());
-    let wait = if waiting.is_some() {
-        requested
+    let waiting = if requested.is_zero() {
+        None
     } else {
-        Duration::ZERO
+        match WaitingSlot::take(&webhooks, &binding.consumer) {
+            Some(slot) => Some(slot),
+            // Over the caps: try again shortly rather than poll at once.
+            None => {
+                let mut response = inbox_error(InboxError::CapacityUnavailable);
+                *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, "5".parse().unwrap());
+                return response;
+            }
+        }
     };
-    let deadline = tokio::time::Instant::now() + wait;
-    let waker = webhooks.store.waiter(&id);
+    let deadline = tokio::time::Instant::now() + requested;
+    // Released on drop, also when the client goes away mid-poll.
+    let waker = Waiter::new(webhooks.store.clone(), &id);
     let mut checked = false;
     let response = loop {
         // Registered before the read, so a delivery stored between the read
@@ -429,9 +440,39 @@ pub async fn events(
             Err(error) => break inbox_error(error),
         }
     };
-    webhooks.store.release_waiter(&id, waker);
+    drop(waker);
     drop(waiting);
     response
+}
+
+/// A long poll's wakeup, released from the store's map on drop.
+struct Waiter {
+    store: Arc<super::Store>,
+    id: String,
+    notify: Option<Arc<tokio::sync::Notify>>,
+}
+
+impl Waiter {
+    fn new(store: Arc<super::Store>, id: &str) -> Self {
+        let notify = store.waiter(id);
+        Self {
+            store,
+            id: id.to_owned(),
+            notify: Some(notify),
+        }
+    }
+
+    fn notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.notify.as_ref().expect("held until drop").notified()
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        if let Some(notify) = self.notify.take() {
+            self.store.release_waiter(&self.id, notify);
+        }
+    }
 }
 
 /// One waiting long poll, counted per consumer and in all until dropped.
@@ -441,10 +482,7 @@ struct WaitingSlot {
 }
 
 impl WaitingSlot {
-    fn take(webhooks: &Arc<Webhooks>, consumer: &str, wants: bool) -> Option<Self> {
-        if !wants {
-            return None;
-        }
+    fn take(webhooks: &Arc<Webhooks>, consumer: &str) -> Option<Self> {
         let mut waiting = webhooks.waiting.lock().unwrap_or_else(|e| e.into_inner());
         let total: usize = waiting.values().sum();
         let mine = waiting.get(consumer).copied().unwrap_or(0);

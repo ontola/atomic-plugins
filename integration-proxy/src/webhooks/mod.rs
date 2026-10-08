@@ -37,6 +37,14 @@ pub use store::Store;
 pub struct IngressGate {
     /// Bodies being read at once; each is at most the verification cap.
     pub reads: tokio::sync::Semaphore,
+    /// Endpoint lookups at once, apart from the deliveries' database slots,
+    /// so a flood of unknown ids cannot take those slots from verified
+    /// deliveries.
+    pub lookups: tokio::sync::Semaphore,
+    /// Bodies read at once for one endpoint, so one endpoint (or one
+    /// attacker at it) cannot hold every read slot.
+    pub reads_per_endpoint: usize,
+    pub reading: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     /// Deliveries using the database at once (lookup, revocation, store),
     /// fewer than the inbox pool's four connections, so consumer routes and
     /// the sweeper always find one.
@@ -51,11 +59,19 @@ pub struct IngressGate {
 pub const INGRESS_READS: usize = 8;
 /// Deliveries using the database at once.
 pub const INGRESS_DATABASE: usize = 2;
+/// Endpoint lookups at once (the third of the pool's four connections at
+/// most; the fourth stays free for consumer routes and the sweeper).
+pub const INGRESS_LOOKUPS: usize = 1;
+/// Bodies read at once per endpoint.
+pub const INGRESS_READS_PER_ENDPOINT: usize = 4;
 
 impl Default for IngressGate {
     fn default() -> Self {
         Self {
             reads: tokio::sync::Semaphore::new(INGRESS_READS),
+            lookups: tokio::sync::Semaphore::new(INGRESS_LOOKUPS),
+            reads_per_endpoint: INGRESS_READS_PER_ENDPOINT,
+            reading: Default::default(),
             database: tokio::sync::Semaphore::new(INGRESS_DATABASE),
             read_timeout: std::time::Duration::from_secs(10),
             wait: std::time::Duration::from_secs(3),

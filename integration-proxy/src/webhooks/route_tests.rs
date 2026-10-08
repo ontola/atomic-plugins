@@ -1304,17 +1304,34 @@ async fn long_polls_wake_per_subscription_and_are_capped() {
     )
     .await;
     assert_eq!(page["events"][0]["deliveryId"], "d-1");
+    // Acknowledged, so the next polls have nothing and wait.
+    let acknowledged = env
+        .post(
+            &alice,
+            &format!("/subscriptions/{}/ack", ids[0]),
+            json!({"generation": page["generation"], "cursor": page["events"][0]["cursor"]}),
+        )
+        .await;
+    assert_eq!(acknowledged.status(), StatusCode::OK);
 
-    // Four waiting polls of one consumer; a fifth answers at once.
+    // Four waiting polls of one consumer; a fifth is told to retry.
     let waiting: Vec<_> = (0..4).map(|_| poll(&ids[0])).collect();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let waiters =
+        |webhooks: &Webhooks| -> usize { webhooks.waiting.lock().unwrap().values().sum() };
+    let webhooks = env.state.webhooks.clone().unwrap();
+    eventually("four polls waiting", || waiters(&webhooks) == 4).await;
     let started = std::time::Instant::now();
     let extra = poll(&ids[0]).await.unwrap();
-    assert_eq!(extra.status(), StatusCode::OK);
+    assert_eq!(extra.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(extra.headers().contains_key("retry-after"));
     assert!(started.elapsed() < Duration::from_secs(5), "not waiting");
+    // Cancelled polls (clients gone) leave no wakeup behind.
+    assert_eq!(env.store.waiter_count(), 1);
     for task in waiting {
         task.abort();
     }
+    eventually("no wakeup left", || env.store.waiter_count() == 0).await;
+    assert_eq!(waiters(&webhooks), 0);
     env.drop_schema().await;
 }
 
@@ -1394,4 +1411,69 @@ async fn a_former_consumer_cannot_read_a_closed_subscription() {
     let response = env.get(&app, &format!("/subscriptions/{sub}")).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     env.drop_schema().await;
+}
+
+/// A broken upload is a 400, not a 413; one endpoint cannot hold every read
+/// slot.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn broken_uploads_and_the_per_endpoint_read_cap() {
+    let env = env(small()).await;
+    let alice = Agent::new(104);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    let broken = futures_util::stream::iter([
+        Ok(axum::body::Bytes::from_static(b"{\"kind\"")),
+        Err(std::io::Error::other("connection reset")),
+    ]);
+    let request = Request::post(format!("/webhooks/{endpoint}"))
+        .body(Body::from_stream(broken))
+        .unwrap();
+    assert_eq!(env.send(request).await.status(), StatusCode::BAD_REQUEST);
+
+    let state = with_gate(&env, |gate| {
+        gate.reads_per_endpoint = 1;
+        gate.wait = Duration::from_millis(200);
+    });
+    let slow = {
+        let state = state.clone();
+        let request = Request::post(format!("/webhooks/{endpoint}"))
+            .body(never_ending())
+            .unwrap();
+        tokio::spawn(async move { crate::router(state).oneshot(request).await })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let request = env.signed_delivery(&endpoint, "d-1", &task("p-100", "t/1"));
+    let response = crate::router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the endpoint's one read slot is taken"
+    );
+    slow.abort();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let request = env.signed_delivery(&endpoint, "d-1", &task("p-100", "t/1"));
+    assert_eq!(
+        crate::router(state)
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT,
+        "released when the slow upload went away"
+    );
+    env.drop_schema().await;
+}
+
+/// Waits up to ten seconds for `condition`, checking every 20 ms.
+async fn eventually(what: &str, condition: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for: {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

@@ -741,6 +741,12 @@ impl Store {
         }
     }
 
+    /// How many subscriptions have a long-poll wakeup registered.
+    #[cfg(test)]
+    pub(crate) fn waiter_count(&self) -> usize {
+        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
     /// Takes a pooled connection and keeps it.
     #[cfg(test)]
     pub(crate) async fn hold_connection(&self) -> super::pool::PooledClient<'_> {
