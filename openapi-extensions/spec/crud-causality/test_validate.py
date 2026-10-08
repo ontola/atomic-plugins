@@ -5,7 +5,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import compound_create, read_request, validate
+from validate import compound_create, continue_compound_create, read_request, validate
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -245,25 +245,63 @@ class CompoundCreateValidationTests(unittest.TestCase):
         validate(example())
 
 
+class CompoundCreateRuleTests(unittest.TestCase):
+    """Review of #413: rule 24 for query and header parameters, header case, $ref path items."""
+
+    LABELS = TICKETS + "/{number}/labels"
+
+    def follow_up(self, document):
+        return document["paths"][TICKETS]["post"]["x-crud"]["followUps"][0]
+
+    def test_required_query_and_header_parameters_must_be_bound(self):
+        for kind in ("query", "header"):
+            document = compound()
+            document["paths"][self.LABELS]["post"]["parameters"] = [
+                {"name": "X-Token" if kind == "header" else "token", "in": kind, "required": True,
+                 "schema": {"type": "string"}}]
+            with self.subTest(kind=kind), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn(f"required {kind} parameter", str(raised.exception))
+
+    def test_header_bind_names_compare_case_insensitively(self):
+        document = compound()
+        document["paths"][self.LABELS]["post"]["parameters"] = [
+            {"name": "X-Token", "in": "header", "required": True, "schema": {"type": "string"}}]
+        self.follow_up(document)["bind"]["header.x-token"] = {"from": "planned", "field": "title"}
+        validate(document)
+
+    def test_path_item_ref_is_resolved(self):
+        document = compound()
+        document.setdefault("components", {})["pathItems"] = {"labels": document["paths"].pop(self.LABELS)}
+        document["paths"][self.LABELS] = {"$ref": "#/components/pathItems/labels"}
+        validate(document)
+
+
 class CompoundCreateTests(unittest.TestCase):
     PLANNED = {"title": "Fix", "labels": ["doing", "bug"], "watchers": ["ada"]}
 
     def setUp(self):
-        self.crud = compound()["paths"][TICKETS]["post"]["x-crud"]
+        self.document = compound()
+        self.crud = self.document["paths"][TICKETS]["post"]["x-crud"]
         self.sent = []
+        self.bound = []
 
-    def run_create(self, created, follow_up_outcomes=(), outcome="ok"):
+    def run_create(self, created, follow_up_outcomes=(), outcome="ok", location=None, planned=None):
         outcomes = list(follow_up_outcomes)
 
         def send_create(body):
             self.sent.append(("create", body))
-            return outcome, created
+            return outcome, created, location
 
         def send_follow_up(operation, request):
             self.sent.append((operation, request))
-            return outcomes.pop(0) if outcomes else "ok"
+            result = outcomes.pop(0) if outcomes else "ok"
+            if isinstance(result, Exception):
+                raise result
+            return result
 
-        return compound_create(self.crud, self.PLANNED, send_create, send_follow_up, {"project": "p1"})
+        return compound_create(self.document, self.crud, planned or self.PLANNED, send_create, send_follow_up,
+                               {"project": "p1"}, on_created=self.bound.append)
 
     def test_include_field_applied_by_the_create_needs_no_follow_up(self):
         created = {"number": 7, "title": "Fix", "labels": [{"name": "doing"}, {"name": "bug"}]}
@@ -274,35 +312,79 @@ class CompoundCreateTests(unittest.TestCase):
         self.assertEqual(self.sent[1][1], {"path": {"project": "p1", "number": 7}, "query": {}, "header": {}, "body": ["ada"]})
 
     def test_silently_dropped_labels_are_added_by_the_follow_up(self):
-        created = {"number": 7, "title": "Fix", "labels": [{"name": "bug"}]}
-        result = self.run_create(created)
+        result = self.run_create({"number": 7, "title": "Fix", "labels": [{"name": "bug"}]})
         self.assertEqual(result["state"], "applied")
         operation, request = self.sent[1]
         self.assertEqual(operation, "addTicketLabels")
         self.assertEqual(request["body"], {"labels": ["doing"]})
         self.assertEqual(request["path"], {"project": "p1", "number": 7})
 
-    def test_refused_follow_up_leaves_it_partly_applied_and_never_resends_the_create(self):
-        created = {"number": 7, "title": "Fix", "labels": []}
-        result = self.run_create(created, ["refused"])
+    def test_refused_follow_up_stops_there_and_marks_the_rest_not_sent(self):
+        result = self.run_create({"number": 7, "title": "Fix", "labels": []}, ["refused"])
         self.assertEqual(result["state"], "partlyApplied")
         self.assertEqual(result["created"]["number"], 7)
-        self.assertEqual([s[0] for s in self.sent], ["create", "addTicketLabels"])  # stops at the refusal
-        self.assertEqual([p[0] for p in result["pending"]], ["addTicketLabels", "setTicketWatchers"])
-        self.assertEqual(sum(1 for s in self.sent if s[0] == "create"), 1)
+        self.assertEqual([s[0] for s in self.sent], ["create", "addTicketLabels"])
+        self.assertEqual([(p["operation"], p["reason"]) for p in result["pending"]],
+                         [("addTicketLabels", "refused"), ("setTicketWatchers", "notSent")])
 
-    def test_unknown_follow_up_outcome_is_partly_applied(self):
+    def test_unknown_follow_up_outcome_is_reported_as_unknown(self):
         result = self.run_create({"number": 7, "labels": [{"name": "doing"}, {"name": "bug"}]}, ["unknown"])
         self.assertEqual(result["state"], "partlyApplied")
-        self.assertEqual([p[0] for p in result["pending"]], ["setTicketWatchers"])
+        self.assertEqual([(p["operation"], p["reason"]) for p in result["pending"]], [("setTicketWatchers", "unknown")])
 
-    def test_refused_or_unknown_create_sends_no_follow_up(self):
-        for outcome, state in (("refused", "refused"), ("unknown", "uncertain")):
-            self.sent = []
-            with self.subTest(outcome=outcome):
-                result = self.run_create(None, outcome=outcome)
-                self.assertEqual(result, {"state": state, "created": None, "pending": []})
-                self.assertEqual(len(self.sent), 1)
+    def test_refused_create_sends_no_follow_up(self):
+        result = self.run_create(None, outcome="refused")
+        self.assertEqual(result, {"state": "refused", "created": None, "pending": []})
+        self.assertEqual(len(self.sent), 1)
+
+    def test_uncertain_create_keeps_the_planned_follow_ups_and_can_resume(self):
+        result = self.run_create(None, outcome="unknown")
+        self.assertEqual(result["state"], "uncertain")
+        self.assertEqual(result["planned"], ["labels", "watchers"])
+        self.assertEqual(len(self.sent), 1)
+        # The object is found by a read: continue from step 3 with it, never sending the create again.
+        found = {"number": 9, "title": "Fix", "labels": [{"name": "doing"}]}
+        resumed = continue_compound_create(self.crud, self.PLANNED, found,
+                                           lambda op, req: self.sent.append((op, req)) or "ok", {"project": "p1"})
+        self.assertEqual(resumed["state"], "applied")
+        self.assertEqual([s[0] for s in self.sent], ["create", "addTicketLabels", "setTicketWatchers"])
+        self.assertEqual(self.sent[1][1]["body"], {"labels": ["bug"]})
+
+    def test_identity_from_location_when_the_body_lacks_it(self):
+        self.crud["url"] = {"source": "header", "name": "Location"}
+        result = self.run_create({"title": "Fix", "labels": []}, location="https://api.example.com/v1/projects/p1/tickets/12")
+        self.assertEqual(result["state"], "applied")
+        self.assertEqual(self.sent[1][1]["path"]["number"], "12")
+
+    def test_no_identity_leaves_the_object_unbound_and_sends_nothing_more(self):
+        for crud_url, created, location in (({"source": "template"}, {}, None),
+                                            ({"source": "header", "name": "Location"}, {"number": 7}, None),
+                                            ({"source": "header", "name": "Location"}, {}, "https://api.example.com/other/1")):
+            self.sent, self.bound = [], []
+            self.crud["url"] = crud_url
+            with self.subTest(url=crud_url, location=location):
+                result = self.run_create(created, location=location)
+                self.assertEqual(result["state"], "unbound")
+                self.assertEqual([s[0] for s in self.sent], ["create"])
+                self.assertEqual(self.bound, [])
+
+    def test_binding_is_recorded_before_a_follow_up_that_raises(self):
+        with self.assertRaises(ConnectionError):
+            self.run_create({"number": 7, "labels": []}, [ConnectionError("network")])
+        self.assertEqual([b["number"] for b in self.bound], [7])  # a retry resumes; it never creates again
+        self.assertEqual([s[0] for s in self.sent].count("create"), 1)
+
+    def test_unresolved_bind_is_never_sent(self):
+        # A planned object without watchers skips that follow-up; one whose created field is absent cannot be sent.
+        self.crud["followUps"][1]["bind"]["path.number"] = {"from": "created", "field": "missingField"}
+        result = self.run_create({"number": 7, "labels": [{"name": "doing"}, {"name": "bug"}]})
+        self.assertEqual(result["state"], "partlyApplied")
+        self.assertEqual(result["pending"], [{"operation": "setTicketWatchers", "request": None, "reason": "notSent"}])
+        self.assertEqual([s[0] for s in self.sent], ["create"])
+        self.sent = []
+        result = self.run_create({"number": 7, "labels": []}, planned={"title": "Fix", "labels": ["doing"]})
+        self.assertEqual(result["state"], "applied")
+        self.assertEqual([s[0] for s in self.sent], ["create", "addTicketLabels"])
 
 
 if __name__ == "__main__":

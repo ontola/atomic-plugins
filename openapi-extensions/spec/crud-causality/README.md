@@ -364,29 +364,51 @@ A BindSource is an object with `from` and `field`:
 
 1. The client sends the create, with every `include` field and without every
    `omit` field.
-2. When the create is refused (4xx), nothing was applied, and the logical
-   create is refused. When its outcome is unknown (a timeout, a 5xx after
-   which the object may exist), the logical create is uncertain, and the
-   client sends no follow-up until it knows whether the object exists.
-3. When the create succeeds, the object exists. Before it sends anything
-   else, the client records the logical create as bound to the created
-   object's identity (§4.3.2). From then on it MUST NOT send the create
-   again for this logical create, whatever happens to the follow-ups.
+2. A 4xx answer refuses the request: nothing was applied, and the logical
+   create is refused. This holds only where the API applies nothing before
+   it refuses, as HTTP intends; an API that documents a 4xx after which the
+   object may exist (a `409` for a duplicate that an earlier attempt of the
+   same create made, say) makes that answer an unknown outcome. When the
+   outcome is unknown (no answer, a timeout, a 5xx after which the object may
+   exist), the logical create is _uncertain_. The client keeps its planned
+   follow-ups, sends none of them, and MUST NOT send the create again until
+   it has established that the object does not exist (an idempotency key the
+   API honours, or a read that would show it). When it finds the object
+   instead, it continues from step 3 with the object it read as the created
+   object.
+3. When the create succeeds, the object exists. The client determines its
+   identity as §4.3.2 says (the `Location` header, a body field, or the
+   template over the response body and `addedFields`). It records the
+   logical create as bound to that identity before it sends anything else,
+   and from then on MUST NOT send the create again for this logical create.
+   When the identity cannot be determined (an empty body where the template
+   needs a field, a missing `Location`), the object exists but is _unbound_:
+   the client MUST NOT send the create again, sends no follow-up, and reports
+   the logical create as unbound until it finds the object by other means
+   (a read of the collection), when it continues from step 4.
 4. For each follow-up in order, the client works out what is missing: for
    `omit`, the planned value; for `include`, the planned value minus what
    the create response shows at `field` (for an array, the planned items
    whose value, through `itemKey`, is not among the response's items; for
    anything else, the planned value unless the response's value equals it).
-   When nothing is missing, it skips the follow-up. Otherwise it sends the
-   follow-up, filled by `bind`, and waits for its answer before the next.
+   When nothing is missing (the planned object has no value at `field`, or
+   the create applied all of it), it skips the follow-up. Otherwise it fills
+   the follow-up request by `bind`. A BindSource that resolves to nothing
+   (`from: created` with no value at `field` in the created object, say)
+   leaves the request unresolved: the client MUST NOT send a request with an
+   unresolved value, and treats the follow-up as not sent (step 6). It sends
+   a resolved follow-up and waits for its answer before the next.
 5. When every follow-up succeeded or was skipped, the logical create is
    applied.
-6. When a follow-up is refused, or its outcome is unknown, the logical
-   create is _partly applied_. The object exists with the create's fields
-   and the follow-ups that succeeded. The client MUST keep it bound (step 3)
-   and MUST NOT report the logical create as either refused or applied. What
-   is still missing becomes a pending update of the bound object, which the
-   client sends, retries or puts to review as it does any update. Whether a
+6. When a follow-up is refused, its outcome is unknown, or it cannot be
+   resolved, the logical create is _partly applied_. The object exists with
+   the create's fields and the follow-ups that succeeded. The client stops
+   there: it does not send the later follow-ups in this attempt, since they
+   may depend on the one that failed, and keeps each as pending, marked
+   `refused`, `unknown` or `notSent`. It MUST keep the object bound (step 3)
+   and MUST NOT report the logical create as either refused or applied. The
+   pending follow-ups are updates of the bound object, which the client
+   sends, retries or puts to review as it does any update. Whether a
    follow-up whose outcome is unknown may simply be sent again is a property
    of that operation, outside this section; until the document says, the
    client reads the object back before sending it again.
@@ -725,7 +747,7 @@ A conforming implementation MUST enforce:
 21. Every Follow-up Object has `field`, `create` (`include` or `omit`), `operation` and `bind`; `field` and `itemKey` are dot-paths.
 22. `operation` MUST be the `operationId` of exactly one operation in the document, whose `x-crud` has `action: update` and the same `resource` as the create.
 23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
-24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name.
+24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name. Every required query or header parameter of the follow-up operation is bound by a `query.<name>` or `header.<name>` key. Header names compare case-insensitively, here and in rule 23.
 
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
@@ -738,7 +760,7 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 document: the collection reads of §4.2.1 and the resource and collection names
 they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
 rules. It also holds `read_request`, which builds the first request of a read
-(§4.2.1 steps 1–3, with the `x-list-*` fallback), and `compound_create`, a reference implementation of §4.7.2 over a caller-supplied request function. [`examples/compound-create.yaml`](examples/compound-create.yaml) is a synthetic document with a compound create. [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
+(§4.2.1 steps 1–3, with the `x-list-*` fallback), and `compound_create` and `continue_compound_create`, a reference implementation of §4.7.2 over caller-supplied request functions, with `created_identity` reading the created object's identity back as §4.3.2 says. [`examples/compound-create.yaml`](examples/compound-create.yaml) is a synthetic document with a compound create. [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
 is a synthetic document with a fixed-query `GET` collection and a `POST`
 search collection. From the repository root:
 
