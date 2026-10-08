@@ -1,0 +1,202 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://www.twilio.com/docs/conversations-classic/api/conversation-resource
+overlay: 1.0.0
+info:
+  title: Twilio Conversations collection links
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/twilio.com/twilio_conversations_v1/1.55.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedCollections:
+        type: nextLink
+        autoDetect: false
+        description: Follow the complete returned next-page link, preserving resource scope, filters and
+          page size. Stop when the link is null, empty or absent; never increment Page or construct a
+          PageToken. The pinned JSON response declares meta.next_page_url. Do not follow meta.url or previous_page_url
+          as the forward continuation.
+        request:
+          queryParameters:
+            PageSize:
+              role: pageSize
+        response:
+          bodyFields:
+            meta.next_page_url:
+              role: nextLink
+- target: $.paths['/v1/Configuration/Addresses'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: address_configurations
+- target: $.paths['/v1/Conversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/v1/Conversations/{ConversationSid}/Messages'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: messages
+- target: $.paths['/v1/Conversations/{ConversationSid}/Messages/{MessageSid}/Receipts'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: delivery_receipts
+- target: $.paths['/v1/Conversations/{ConversationSid}/Participants'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+- target: $.paths['/v1/Conversations/{ConversationSid}/Webhooks'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: webhooks
+- target: $.paths['/v1/Credentials'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: credentials
+- target: $.paths['/v1/ParticipantConversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/v1/Roles'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: roles
+- target: $.paths['/v1/Services'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: services
+- target: $.paths['/v1/Services/{ChatServiceSid}/Bindings'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: bindings
+- target: $.paths['/v1/Services/{ChatServiceSid}/Conversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/v1/Services/{ChatServiceSid}/Conversations/{ConversationSid}/Messages'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: messages
+- target: $.paths['/v1/Services/{ChatServiceSid}/Conversations/{ConversationSid}/Messages/{MessageSid}/Receipts'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: delivery_receipts
+- target: $.paths['/v1/Services/{ChatServiceSid}/Conversations/{ConversationSid}/Participants'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+- target: $.paths['/v1/Services/{ChatServiceSid}/Conversations/{ConversationSid}/Webhooks'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: webhooks
+- target: $.paths['/v1/Services/{ChatServiceSid}/ParticipantConversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/v1/Services/{ChatServiceSid}/Roles'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: roles
+- target: $.paths['/v1/Services/{ChatServiceSid}/Users'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: users
+- target: $.paths['/v1/Services/{ChatServiceSid}/Users/{UserSid}/Conversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/v1/Users'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: users
+- target: $.paths['/v1/Users/{UserSid}/Conversations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations

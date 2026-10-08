@@ -1,0 +1,98 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://www.twilio.com/docs/messaging/api/service-resource
+overlay: 1.0.0
+info:
+  title: Twilio Messaging collection links
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/twilio.com/twilio_messaging_v1/1.55.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedCollections:
+        type: nextLink
+        autoDetect: false
+        description: Follow the complete returned next-page link, preserving resource scope, filters and
+          page size. Stop when the link is null, empty or absent; never increment Page or construct a
+          PageToken. The pinned JSON response declares meta.next_page_url. Do not follow meta.url or previous_page_url
+          as the forward continuation.
+        request:
+          queryParameters:
+            PageSize:
+              role: pageSize
+        response:
+          bodyFields:
+            meta.next_page_url:
+              role: nextLink
+- target: $.paths['/v1/Services'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: services
+- target: $.paths['/v1/Services/{MessagingServiceSid}/ChannelSenders'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: senders
+- target: $.paths['/v1/Services/{MessagingServiceSid}/Compliance/Usa2p'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: compliance
+- target: $.paths['/v1/Services/{ServiceSid}/AlphaSenders'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: alpha_senders
+- target: $.paths['/v1/Services/{ServiceSid}/PhoneNumbers'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: phone_numbers
+- target: $.paths['/v1/Services/{ServiceSid}/ShortCodes'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: short_codes
+- target: $.paths['/v1/Tollfree/Verifications'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: verifications
+- target: $.paths['/v1/a2p/BrandRegistrations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/v1/a2p/BrandRegistrations/{BrandSid}/Vettings'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: data

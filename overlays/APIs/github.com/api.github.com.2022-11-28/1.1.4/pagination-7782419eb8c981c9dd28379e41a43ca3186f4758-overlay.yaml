@@ -1,0 +1,58 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+overlay: 1.0.0
+info:
+  title: GitHub REST 2022-11-28 repository and issue collection links
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7782419eb8c981c9dd28379e41a43ca3186f4758/APIs/github.com/api.github.com.2022-11-28/1.1.4/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedArrays:
+        type: nextLink
+        autoDetect: false
+        description: 'Follow only the next relation in the Link response header. The response body is
+          the item array; no envelope is added. Preserve filters, sorting, per_page and the X-GitHub-Api-Version:
+          2022-11-28 header for this pinned API version. Do not calculate a page number or terminate from
+          a short page; stop when no next relation remains.'
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+        response:
+          headers:
+            Link:
+              role: nextLink
+- target: $.paths['/repos/{owner}/{repo}/issues'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/repos/{owner}/{repo}/pulls'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/repos/{owner}/{repo}/issues/comments'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/repos/{owner}/{repo}/labels'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/repos/{owner}/{repo}/milestones'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/users/{username}/repos'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/user/repos'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/orgs/{org}/repos'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays

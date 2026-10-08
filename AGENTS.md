@@ -314,8 +314,11 @@ fixes, and PR completion within the existing authorization. A status update,
 passing local tests, or opening a draft PR is not a stopping point when necessary
 work remains. Do not wait for another "go" between these steps.
 
-Pause only when further progress requires a user decision, missing access, an
-external dependency, or an action outside the existing authorization. State the
+An explicit request from Michiel to pause or stop takes precedence: pause promptly
+and preserve unfinished work for resumption.
+
+Otherwise, pause only when further progress requires a user decision, missing
+access, an external dependency, or an action outside the existing authorization. State the
 specific blocker, who can remove it, and what remains; continue independent work
 where possible. Existing merge gates and publication permissions still apply.
 Completing an agreed part of a larger issue does not authorize unrelated work or
