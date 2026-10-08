@@ -74,9 +74,10 @@ Notion's writes are its own `send.ts`), `writes` is: `pending` the entries with 
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app. Pets (0.1.3), which writes nothing, shows no card yet,
-and neither does the Money bank-statements app
-(`money/app/`, 0.4.1), whose writes are its own. GitHub issues (0.4.0, #349)
+done for any app. Pets (0.1.3), which writes nothing, shows no card yet.
+The Money bank-statements app (`money/app/`, 0.4.2) adopted the card with
+no `writes`: it has no provider, so it is read-only with a note saying why,
+and dates the last import instead of a sync. GitHub issues (0.4.0, #349)
 counts its own write journal instead (`issue-tracker/app/status.ts`: held
 writes as `pending`; a held write let through once without an answer, and a
 create GitHub never answered, as `uncertain`). Todoist (0.2.0, #344) and
@@ -110,6 +111,10 @@ Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
 `view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
 before any sync, after the import, after a failed contacts refresh and on an
 unsynced table.
+Money's mapping passes in `money/app/status.test.ts` (13 tests), its DOM in
+`money/app/view.test.ts`, and the `money` lane's `money.spec.ts` checks the
+card after the MT940 import into the app's own table ("Synced just now",
+"Last sync: 2 added", read-only with the no-provider note).
 Notion's mapping passes in `notion/app/view/status.test.ts` (19 tests) and
 through the real controller in `notion/app/twoway.test.ts`; the `notion` e2e
 checks the card after the first sync, after a failed sync (with the last good
