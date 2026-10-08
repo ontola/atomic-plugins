@@ -288,6 +288,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
       });
       await client.sync();
       expect(fake.itemGets).toEqual(['1']);
+      // The report carries the last known values (the confirmed copy).
       expect(reports).toEqual([
         {
           resource: 'pets',
@@ -295,6 +296,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
           evidence: 'unavailable',
           source: 'read',
           status,
+          record: rex,
         },
       ]);
       // §4.3: never reported as deleted; the queued write is held for a
@@ -326,10 +328,23 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
       });
     });
 
+  it('reads an unrecognised notFound value as unavailable, the safe direction', async () => {
+    const { client, reports } = await editedThenMissing({
+      doc: document({ completeness: { absent: 'removed', notFound: 'gone' } }),
+      item: gone(404),
+    });
+    await client.sync();
+    expect(reports).toMatchObject([
+      { evidence: 'unavailable', source: 'read' },
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', missingRecord: 'unavailable' },
+    ]);
+  });
+
   for (const [label, completeness] of [
     ['no notFound', { absent: 'removed' }],
     ['notFound: deleted', { absent: 'removed', notFound: 'deleted' }],
-    ['an unrecognised notFound value', { absent: 'removed', notFound: 'gone' }],
   ] as const)
     it(`keeps the default, deleted, with ${label}`, async () => {
       const { client, reports } = await editedThenMissing({
@@ -465,6 +480,34 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     ]);
   });
 
+  it('fails a DELETE queued behind the update of an unavailable record instead of sending it', async () => {
+    const { client, fake, unblock } = await editedThenMissing({
+      doc: document({ completeness: UNAVAILABLE }),
+      item: gone(404),
+    });
+    await client.remove('/pets', '1');
+    await client.sync();
+    // §4.3: no write queued for the record is sent without a decision.
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed', missingRecord: 'unavailable' },
+      {
+        type: 'delete',
+        state: 'failed',
+        missingRecord: 'unavailable',
+        lastStatus: 404,
+        lastError: expect.stringMatching(/unavailable at the provider/),
+      },
+    ]);
+    unblock();
+    await settle();
+    expect(fake.writes).toEqual([]);
+    // The decision: drop both.
+    await client.resolveWrite('/pets', '1', { action: 'discard' });
+    expect(client.pendingWrites()).toEqual([]);
+    await settle();
+    expect(fake.writes).toEqual([]);
+  });
+
   it('stores and restores missingRecord: unavailable on a failed update', async () => {
     const { client, storage } = await editedThenMissing({
       doc: document({ completeness: UNAVAILABLE }),
@@ -507,6 +550,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
         evidence: 'unavailable',
         source: 'read',
         status: 404,
+        record: tom,
       },
     ]);
     // As for every record without writes, the complete read pruned the
@@ -550,6 +594,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
           evidence: 'unavailable',
           source: 'read',
           status: 404,
+          record: rex,
         },
       ]);
       expect(client.pendingWrites()).toMatchObject([
@@ -610,6 +655,8 @@ function taskProvider(
             (l) => !fake.hidden.has(String(l['id'])),
           ),
         );
+      if (r.method === 'GET' && path === '/users/me/starred')
+        return response([]);
       if (r.method === 'GET' && parts[1] === 'users' && parts[4]) {
         const list = fake.listRead?.(parts[4]) ?? undefined;
         if (list) return list;
@@ -626,6 +673,14 @@ function taskProvider(
         return task ? response(task) : response({ error: 'gone' }, 404);
       fake.writes.push(r);
       if (fake.blocked) return response({ error: 'invented' }, 503);
+      if (r.method === 'POST' && listTasks) {
+        const created = {
+          ...JSON.parse(r.body ?? '{}'),
+          id: `n${fake.writes.length}`,
+        };
+        listTasks.set(String(created['id']), created);
+        return response(created, 201);
+      }
       if (r.method === 'PUT' && listTasks) {
         const updated = { ...JSON.parse(r.body ?? '{}'), id: parts[4] };
         listTasks.set(parts[4] ?? '', updated);
@@ -728,6 +783,7 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
         evidence: 'unavailable',
         source: 'read',
         status: 404,
+        record: L2,
       },
       {
         resource: 'listTasks',
@@ -735,6 +791,7 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
         context: { listId: 'L2' },
         evidence: 'unavailable',
         source: 'parent',
+        record: t2,
       },
       {
         resource: 'listTasks',
@@ -742,6 +799,7 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
         context: { listId: 'L2' },
         evidence: 'unavailable',
         source: 'parent',
+        record: t3,
       },
     ]);
     // Nothing is pruned: the tasks keep their last known values.
@@ -948,6 +1006,122 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     fake.lists.delete('L2');
     await client.sync();
     expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
+  });
+
+  it('cascades a deletion only from a stated conclusion: a 404 under the notFound default makes the tasks unavailable', async () => {
+    // The parent resource's first collection, which supplies listId, has
+    // no declaration; another of its collections states notFound. The 404
+    // is deleted by the default for the list itself (a 0.1.0 reading), but
+    // a permission 404 must not cascade as a deletion of the tasks.
+    const doc = nestedDocument((resources, paths) => {
+      resources['taskList']!['collections'] = {
+        taskLists: { urlTemplate: '/users/me/lists' },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed', notFound: 'unavailable' },
+        },
+      };
+      paths['/users/me/starred'] = {
+        get: { responses: { '200': { description: 'Starred lists' } } },
+      };
+      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
+        'deleted';
+    });
+    const { client, fake, reports } = await listsThenGone({ doc, edit: true });
+    await client.sync();
+    expect(fake.requests).toContain('GET /users/me/lists/L2');
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'deleted', 'read'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      { id: 't2', state: 'failed', missingRecord: 'unavailable' },
+    ]);
+  });
+
+  it('parks a create into the nested scope of an unavailable parent instead of sending it', async () => {
+    const doc = nestedDocument((_, paths) => {
+      (paths['/lists/{listId}/tasks'] as Record<string, Row>)['post'] = {
+        requestBody: { content: { 'application/json': { schema: {} } } },
+        responses: { '201': { description: 'Created' } },
+      };
+    });
+    const { client, fake } = await listsThenGone({
+      doc,
+      client: { missingRecordChecks: 'all' },
+    });
+    await client.sync();
+    const created = await client.create(
+      'listTasks',
+      { title: 'New' },
+      { listId: 'L2' },
+    );
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        type: 'create',
+        id: created['id'],
+        state: 'failed',
+        missingRecord: 'unavailable',
+        lastError: expect.stringMatching(
+          /unavailable at the provider \(its parent taskList L2 of taskLists/,
+        ),
+      },
+    ]);
+    // Visible meanwhile, as a parked create is.
+    expect(
+      await client.get('listTasks', String(created['id']), { listId: 'L2' }),
+    ).toMatchObject({ title: 'New' });
+    // A create into a list that is still there goes out.
+    await client.create('listTasks', { title: 'Other' }, { listId: 'L1' });
+    await vi.waitFor(() =>
+      expect(fake.writes.map((w) => `${w.method} ${w.url.pathname}`)).toEqual([
+        'POST /lists/L1/tasks',
+      ]),
+    );
+  });
+
+  it('concludes a new edit of a member under an unavailable parent at once, and sends edits again once the list is back', async () => {
+    const { client, fake } = await listsThenGone({
+      client: { missingRecordChecks: 'all' },
+    });
+    await client.sync();
+    // Nothing was pruned, so the record is still confirmed locally; the
+    // edit is still not sent as a PUT on a record the caller cannot read.
+    await client.update(
+      'listTasks',
+      't3',
+      { title: 'Book a bigger room' },
+      { listId: 'L2' },
+    );
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        id: 't3',
+        state: 'failed',
+        missingRecord: 'unavailable',
+        lastError: expect.stringMatching(
+          /its parent taskList L2 of taskLists was concluded unavailable/,
+        ),
+      },
+    ]);
+    expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual({
+      ...t3,
+      title: 'Book a bigger room',
+    });
+    // The list returns: the read of its tasks lifts the mark.
+    fake.hidden.delete('L2');
+    fake.lists.set('L2', L2);
+    await client.sync();
+    await client.update('listTasks', 't3', { due: 'Monday' }, { listId: 'L2' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    expect(JSON.parse(fake.writes[0]?.body ?? '{}')).toEqual({
+      ...t3,
+      due: 'Monday',
+    });
   });
 
   it('parentAbsent: deleted under a parent concluded unavailable makes the tasks unavailable', async () => {

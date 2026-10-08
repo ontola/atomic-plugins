@@ -235,18 +235,28 @@ Data flows through four stages, each its own directory under `src/`:
    `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
    the collection that supplies its path variable in `nestedUnder`, from
    `model.providers`, skipping variables `constants` fix; dropped with two
-   or more parent resources, and `deleted` read as `unavailable` unless
-   `parentStatesNotFound`: every `absent: removed` collection of the parent
-   states `notFound`), every parent
+   or more parent resources), every parent
    record concluded `deleted` or `unavailable` (declaration, GET or feed, at
    the same three points as `reportMissing`) has `applyParentAbsent` conclude
    the records last read under it (`nestedScopes`: confirmed records and
    writes in scopes whose variable is the parent id) as `deleted` (only
-   `parentAbsent: deleted` under a deleted parent) or `unavailable`, with
-   `source: 'parent'`, failing their heads through `failMissing` and
-   skipping a member a write settled on since the sync began; nothing is
-   pruned. Under `'pending'`, a `vanished` parent is GETed when
-   `nestedWritesUnder` finds unsettled writes under it.
+   `parentAbsent: deleted` under a parent concluded deleted by a
+   declaration, a tombstone or a 404/410 under a stated `notFound: deleted`;
+   a 404/410 under the default is `Evidence.defaulted`, from
+   `route.notFoundExplicit`, and cascades `unavailable`) or `unavailable`,
+   with `source: 'parent'` and the last known values as `record`, failing
+   their heads through `failMissing` and skipping a member a write settled
+   on since the sync began; nothing is pruned. `failMissing` on
+   `unavailable` also fails the rest of the record's queue in order,
+   deletes included, and parks a create in place (state `failed`,
+   `missingRecord`), stopping at a head in flight, not stored or already
+   parked. Each concluded nested scope is marked in `goneParents` (in
+   memory, cleared by a complete read of the scope); `update()` into a
+   marked scope, and `create()` into one whose parent is unavailable, are
+   enqueued held and concluded at once (`concludeNew`). An unrecognised
+   `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
+   parent is GETed when `nestedWritesUnder` finds unsettled writes under
+   it, with a revision check around the GET.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
    confirmed copy (`setLastKnown` on every refresh and settled response;
@@ -402,7 +412,13 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   GET for a vanished list without writes under it, `parentAbsent: deleted`
   under a declared-deleted parent (no GET at all) and under an unavailable
   one, and no conclusion for a parent that still exists, without the field,
-  with an unrecognised value, or with it on the list operation.
+  with an unrecognised value, or with it on the list operation; the #399
+  review: no cascade of a deletion from a 404 under the `notFound` default,
+  a DELETE behind an unavailable record's update failed rather than sent, a
+  create into an unavailable parent's scope parked, a new edit of a member
+  under an unavailable parent concluded at once and sent again after the
+  parent returns, `record` on unavailable reports, and an unrecognised
+  `notFound` read as `unavailable`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored

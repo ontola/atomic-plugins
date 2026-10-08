@@ -210,7 +210,11 @@ export interface MissingRecord {
   source: 'declaration' | 'feed' | 'read' | 'parent' | 'none';
   /** The status the GET answered, when one answered. */
   status?: number;
-  /** For `filtered`: the record the GET returned. */
+  /**
+   * For `filtered`: the record the GET returned. For `unavailable`: the
+   * last known values the client keeps, when it has them (a record it had
+   * confirmed before the read, or the last known copy of its writes).
+   */
   record?: Record<string, unknown>;
 }
 
@@ -614,6 +618,12 @@ interface ClientRoute {
    */
   notFoundMeansUnavailable?: boolean;
   /**
+   * The collection states `notFound` itself. Without it a 404 or 410 is
+   * `deleted` by the spec's default only, which never cascades to the
+   * members of a nested collection as a deletion (§4.4).
+   */
+  notFoundExplicit?: boolean;
+  /**
    * `x-completeness: { parentAbsent }` on a nested collection: what its
    * members mean once the parent object that supplies one of its path
    * variables is concluded deleted or unavailable (Collection Completeness
@@ -818,8 +828,14 @@ function declaredIdempotencyHeader(
 /** A parsed Completeness Object (draft Collection Completeness extension, §4.1). */
 interface Completeness {
   absent: 'deleted' | 'removed';
-  /** §4.3; `deleted` when the field is absent or has another value. */
+  /**
+   * §4.3; `deleted` when the field is absent (the spec's default), and
+   * `unavailable` for a value that is not `deleted` or `unavailable`, the
+   * safe direction for a declaration the client cannot read.
+   */
   notFound: 'deleted' | 'unavailable';
+  /** Whether the document states `notFound` itself, as one of its values. */
+  notFoundExplicit: boolean;
   /** §4.4; only from a Collection Object, and only a recognised value. */
   parentAbsent?: 'deleted' | 'unavailable';
 }
@@ -831,9 +847,9 @@ interface Completeness {
  * operation, which covers only a read that adds nothing to the operation's
  * request (no fixed query or body), since several collections may share that
  * operation. A declaration whose `absent` is not `deleted` or `removed` is
- * ignored; a `notFound` that is not `deleted` or `unavailable` takes the
- * spec's default, `deleted`; a `parentAbsent` that is not one of those, or
- * that sits on the operation, is ignored.
+ * ignored; a `notFound` that is not `deleted` or `unavailable` is read as
+ * `unavailable`; a `parentAbsent` that is not one of those, or that sits on
+ * the operation, is ignored.
  */
 function declaredCompleteness(
   document: OpenApiDocument,
@@ -865,10 +881,14 @@ function declaredCompleteness(
   const absent = declared['absent'];
   if (absent !== 'deleted' && absent !== 'removed') return undefined;
   const parentAbsent = declared['parentAbsent'];
+  const notFound = declared['notFound'];
   return {
     absent,
     notFound:
-      declared['notFound'] === 'unavailable' ? 'unavailable' : 'deleted',
+      notFound === undefined || notFound === 'deleted'
+        ? 'deleted'
+        : 'unavailable',
+    notFoundExplicit: notFound === 'deleted' || notFound === 'unavailable',
     ...(onCollection &&
     (parentAbsent === 'deleted' || parentAbsent === 'unavailable')
       ? { parentAbsent }
@@ -977,34 +997,6 @@ function declaredReadTombstone(
   );
 }
 
-/**
- * Whether every Collection Object of `resource` whose Completeness Object
- * says `absent: removed` states `notFound` itself (Collection Completeness
- * 0.2.0 §4.4: what `parentAbsent: deleted` on a nested collection needs).
- * `absent: deleted` collections may not carry `notFound`, so they pass.
- */
-function parentStatesNotFound(
-  document: OpenApiDocument,
-  resource: string,
-): boolean {
-  const resources = document.components?.['crudResources'];
-  const definition = isRecord(resources) ? resources[resource] : undefined;
-  const collections = isRecord(definition)
-    ? definition['collections']
-    : undefined;
-  if (!isRecord(collections)) return true;
-  return Object.values(collections).every((collection) => {
-    const declared = isRecord(collection)
-      ? collection['x-completeness']
-      : undefined;
-    if (!isRecord(declared) || declared['absent'] !== 'removed') return true;
-    return (
-      declared['notFound'] === 'deleted' ||
-      declared['notFound'] === 'unavailable'
-    );
-  });
-}
-
 function clientRoutes(
   document: OpenApiDocument,
   collections: ReadCollection[],
@@ -1045,6 +1037,7 @@ function clientRoutes(
     if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
     if (completeness?.notFound === 'unavailable')
       route.notFoundMeansUnavailable = true;
+    if (completeness?.notFoundExplicit) route.notFoundExplicit = true;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -1106,11 +1099,14 @@ export function createApiClient(
   // §4.4: the nested collections that declare parentAbsent, by the
   // collection whose records supply their path variable (`param`). The
   // declaration needs exactly one parent resource; with more it is ignored.
-  // `parentAbsent: deleted` also needs every `absent: removed` collection of
-  // the parent to state `notFound` itself, so that a 404 the parent's read
-  // answers for a missing permission cannot cascade as a deletion through
-  // the `deleted` default; without that it counts as `unavailable`. A
-  // variable a constant fixes has no parent object to go missing.
+  // A variable a constant fixes has no parent object to go missing. Whether
+  // `parentAbsent: deleted` may cascade a deletion is decided per parent
+  // record, from how it was concluded (`Evidence.defaulted`).
+  // Nested scopes whose parent is concluded gone, until a complete read of
+  // the scope (the parent returned): new writes into them are concluded at
+  // once. In memory only: after a restart, a member's failed writes still
+  // carry `missingRecord`, but a member without writes is not marked.
+  const goneParents = new Map<string, Evidence>();
   const nestedUnder = new Map<
     string,
     { route: ClientRoute; param: string }[]
@@ -1135,11 +1131,6 @@ export function createApiClient(
       delete route.parentAbsent;
       continue;
     }
-    if (
-      route.parentAbsent === 'deleted' &&
-      !parentStatesNotFound(doc, parent[0])
-    )
-      route.parentAbsent = 'unavailable';
     for (const { param, collection } of parent[1]) {
       if (options.constants && param in options.constants) continue;
       nestedUnder.set(collection, [
@@ -2314,6 +2305,12 @@ export function createApiClient(
     source: MissingRecord['source'];
     status?: number;
     record?: Record<string, unknown>;
+    /**
+     * A `deleted` from a 404 or 410 that the collection's `notFound` did
+     * not state (the spec's default): fails the record's own writes as
+     * before, but never cascades to a nested collection as a deletion.
+     */
+    defaulted?: true;
     /** Why, for `lastError`. */
     detail: string;
   }
@@ -2390,7 +2387,58 @@ export function createApiClient(
       released.add(head);
       failed = true;
     }
+    // §4.3: nothing queued for an unavailable record is sent without a
+    // decision, deletes included. The rest of the queue fails in order (a
+    // failed write stays older than every queued one); a create is parked
+    // in place, as a refused create is, and holds back what follows it. A
+    // head in flight, not yet stored, or already parked ends this.
+    if (found.evidence === 'unavailable')
+      for (;;) {
+        const head = writeQueues.get(key)?.[0];
+        if (
+          !head ||
+          head.sending ||
+          head.durable === false ||
+          head.state !== 'pending'
+        )
+          break;
+        if (head.type === 'create') {
+          head.state = 'failed';
+          head.lastError = missingMessage(head, found);
+          delete head.awaitingRefresh;
+        } else failWrite(head, missingMessage(head, found), previous);
+        head.missingRecord = 'unavailable';
+        if (found.status !== undefined) head.lastStatus = found.status;
+        released.add(head);
+        failed = true;
+        if (head.type === 'create') break;
+      }
     return failed;
+  }
+
+  /**
+   * A new write into a nested scope whose parent is concluded gone
+   * (`goneParents`): concluded at once with the parent's conclusion, so it
+   * is not sent on a record the client cannot read.
+   */
+  async function concludeNew(
+    scope: string,
+    id: string,
+    found: Evidence,
+  ): Promise<void> {
+    const released = new Set<QueuedWrite>();
+    if (
+      failMissing(
+        scope,
+        id,
+        found,
+        remote(scope).get(id) ?? lastKnownFor(scope, id),
+        released,
+      )
+    ) {
+      await persistLater();
+      await rebuild(scope, id);
+    }
   }
 
   function missingMessage(write: QueuedWrite, found: Evidence): string {
@@ -2662,6 +2710,7 @@ export function createApiClient(
             source: 'read',
             status,
             detail: `GET ${path} answered ${status}`,
+            ...(route.notFoundExplicit ? {} : { defaulted: true }),
           };
     if (status >= 200 && status < 300) {
       let body: unknown;
@@ -2716,7 +2765,11 @@ export function createApiClient(
     context: Record<string, string>,
     id: string,
     found: Evidence,
+    lastKnown?: Record<string, unknown>,
   ): void {
+    const record =
+      found.record ??
+      (found.evidence === 'unavailable' ? lastKnown : undefined);
     try {
       options.onMissingRecord?.({
         resource: route.collection.name,
@@ -2725,7 +2778,7 @@ export function createApiClient(
         evidence: found.evidence,
         source: found.source,
         ...(found.status !== undefined ? { status: found.status } : {}),
-        ...(found.record ? { record: structuredClone(found.record) } : {}),
+        ...(record ? { record: structuredClone(record) } : {}),
       });
     } catch {
       // A failing callback does not stop the sync.
@@ -2810,11 +2863,22 @@ export function createApiClient(
     for (const { route: nested, param } of nestedUnder.get(
       route.collection.name,
     ) ?? []) {
+      // A deletion cascades only from a conclusion the document stands
+      // behind: `absent: deleted`, a tombstone, or a 404/410 under a stated
+      // `notFound: deleted`; never from the `notFound` default.
       const evidence: MissingRecordEvidence =
-        nested.parentAbsent === 'deleted' && found.evidence === 'deleted'
+        nested.parentAbsent === 'deleted' &&
+        found.evidence === 'deleted' &&
+        !found.defaulted
           ? 'deleted'
           : 'unavailable';
       for (const { scope, context } of nestedScopes(nested, param, id)) {
+        const conclusion: Evidence = {
+          evidence,
+          source: 'parent',
+          detail: `its parent ${route.collection.resource} ${id} of ${route.collection.name} was concluded ${found.evidence}: ${found.detail}`,
+        };
+        goneParents.set(scope, conclusion);
         const members = new Set([
           ...remote(scope).keys(),
           ...allWrites()
@@ -2828,21 +2892,10 @@ export function createApiClient(
             (recordRevisions.get(key) ?? 0)
           )
             continue;
-          const conclusion: Evidence = {
-            evidence,
-            source: 'parent',
-            detail: `its parent ${route.collection.resource} ${id} of ${route.collection.name} was concluded ${found.evidence}: ${found.detail}`,
-          };
-          reportMissing(nested, context, member, conclusion);
-          if (
-            failMissing(
-              scope,
-              member,
-              conclusion,
-              remote(scope).get(member),
-              released,
-            )
-          )
+          const lastKnown =
+            remote(scope).get(member) ?? lastKnownFor(scope, member);
+          reportMissing(nested, context, member, conclusion, lastKnown);
+          if (failMissing(scope, member, conclusion, lastKnown, released))
             touched.push({ scope, id: member });
         }
       }
@@ -2962,7 +3015,13 @@ export function createApiClient(
       }
       if (!found) continue;
       evidence.set(id, found);
-      reportMissing(route, context, id, found);
+      reportMissing(
+        route,
+        context,
+        id,
+        found,
+        previous.get(id) ?? lastKnownFor(scope, id),
+      );
     }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
@@ -3009,6 +3068,7 @@ export function createApiClient(
         !nestedWritesUnder(route, id)
       )
         continue;
+      const revision = recordRevisions.get(keyFor(scope, id)) ?? 0;
       const found = await findEvidence(route, context, id, budget);
       if (undecided(found))
         sync.undecided.push({
@@ -3016,12 +3076,15 @@ export function createApiClient(
           context,
           id,
           ...(found ? { found } : {}),
-          revision: recordRevisions.get(keyFor(scope, id)) ?? 0,
-          previous: undefined,
+          revision,
+          previous: previous.get(id),
           vanished: true,
         });
       else if (found) {
-        reportMissing(route, context, id, found);
+        // A write to it settled during the GET: a later sync decides.
+        if ((recordRevisions.get(keyFor(scope, id)) ?? 0) !== revision)
+          continue;
+        reportMissing(route, context, id, found, previous.get(id));
         nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
     }
@@ -3077,7 +3140,13 @@ export function createApiClient(
             ? feedEvidence(route)
             : record.found;
         if (!found) continue;
-        reportMissing(route, record.context, record.id, found);
+        reportMissing(
+          route,
+          record.context,
+          record.id,
+          found,
+          record.previous ?? lastKnownFor(scope, record.id),
+        );
         if (
           !record.vanished &&
           failMissing(scope, record.id, found, record.previous, released)
@@ -3157,6 +3226,8 @@ export function createApiClient(
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const context = contextFor(route, snapshot.pathParams);
       const scope = scopeFor(route, context);
+      // Read completely: its parent is back, and so are its members.
+      goneParents.delete(scope);
       const previous = lastSyncedItems.get(scope);
       const differs = hasChanges(
         previous,
@@ -3315,6 +3386,11 @@ export function createApiClient(
           ? crypto.randomUUID()
           : String(data[route.collection.idField]);
       const record = { ...data, [route.collection.idField]: id };
+      // Into a nested scope whose parent is unavailable: not sent without a
+      // decision (parked, like a refused create). Under a deleted parent it
+      // is sent; the provider answers for the parent.
+      const gone = goneParents.get(scope);
+      const held = gone?.evidence === 'unavailable';
       await enqueue({
         route,
         scope,
@@ -3322,10 +3398,12 @@ export function createApiClient(
         id,
         type: 'create',
         data: record,
+        ...(held ? { awaitingRefresh: true } : {}),
         ...(route.idempotencyHeader
           ? { idempotencyKey: crypto.randomUUID() }
           : {}),
       });
+      if (gone && held) await concludeNew(scope, id, gone);
       return record;
     },
     async update(
@@ -3354,6 +3432,10 @@ export function createApiClient(
         !remote(scope).has(id) &&
         Boolean(failed?.some((w) => w.missingRecord)) &&
         !writeQueues.get(key)?.some((w) => w.type === 'create');
+      // Its parent is concluded gone and the collection not read since: the
+      // record is still there locally (nothing is pruned), so the edit is
+      // held and concluded like the record's earlier writes were.
+      const gone = goneParents.get(scope);
       // The visible record carries failed changes; seeding from it would send
       // them implicitly. With failed writes, seed from their last known record.
       const seed = failed
@@ -3371,7 +3453,7 @@ export function createApiClient(
         id,
         type: 'update',
         changes: data,
-        ...(stillMissing ? { awaitingRefresh: true } : {}),
+        ...(stillMissing || gone ? { awaitingRefresh: true } : {}),
         ...(confirmedRecord
           ? {
               base: Object.fromEntries(
@@ -3380,6 +3462,7 @@ export function createApiClient(
             }
           : {}),
       });
+      if (gone) await concludeNew(scope, id, gone);
       return record;
     },
     async remove(resource, id, supplied): Promise<void> {
@@ -3450,6 +3533,8 @@ export function createApiClient(
         }
         if (resolution.action === 'confirm') head.confirmedId = resolution.id;
         if (head.state === 'failed') head.attempts = 0;
+        // Describes the failure, which this retry leaves behind.
+        delete head.missingRecord;
         head.state = 'pending';
         await persistLater();
         if (!draining.has(key)) void drainQueue(key);

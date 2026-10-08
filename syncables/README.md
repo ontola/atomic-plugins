@@ -358,7 +358,7 @@ update that is not in flight, the client looks for evidence:
 | Evidence | Found by | The held updates |
 | --- | --- | --- |
 | `deleted` | The collection is declared complete with `x-completeness: { absent: deleted }` (no request is made), a tombstone the collection's [deletion feed](#deletion-feeds) reported in an earlier sync is stored for it and this sync's feed read does not report it restored (no GET is made), a GET of the record answers 404 or 410 (unless the collection declares `notFound: unavailable`, next row), or 2xx with the record carrying the resource's [read tombstone](#read-tombstones) marker, or the GET did not decide and this sync's feed read has a tombstone for it | Fail, oldest first: `state: 'failed'`, `missingRecord: 'deleted'`, `lastError` "Record <id> was deleted at the provider (...)", `lastStatus` the GET's status (none without a GET) |
-| `unavailable` | The collection declares `x-completeness: { absent: removed, notFound: unavailable }` and a GET of the record answers 404 or 410: this caller can no longer read the record, and the API does not say whether it was deleted, moved out of reach, or access was lost (Collection Completeness 0.2.0 §4.3); for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unavailable'` and `lastError` "Record <id> is unavailable at the provider (...)"; never reported as deleted. The last known values stay, with the edits on top, until `resolveWrite` retries or discards them. A later complete read that returns the record, or a 2xx GET of it when a new update of the record is checked, supersedes the mark for new updates; the failed ones still wait for the decision |
+| `unavailable` | The collection declares `x-completeness: { absent: removed, notFound: unavailable }` and a GET of the record answers 404 or 410: this caller can no longer read the record, and the API does not say whether it was deleted, moved out of reach, or access was lost (Collection Completeness 0.2.0 §4.3); for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unavailable'` and `lastError` "Record <id> is unavailable at the provider (...)"; never reported as deleted. Every other write queued for the record fails too, deletes included (a create is parked in place, as a refused create is), so nothing is sent without a decision. The last known values stay, with the edits on top, until `resolveWrite` retries or discards them. A later complete read that returns the record, or a 2xx GET of it when a new update of the record is checked, supersedes the mark for new updates; the failed ones still wait for the decision |
 | `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id, and that is not a read tombstone | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
@@ -376,7 +376,7 @@ not been verified against a real provider.
 
 What that GET's 404 or 410 means is the declaration's `notFound` (0.2.0
 §4.3): `deleted` when the field is absent (the default, as 0.1.0 consumers
-read it) or has a value other than `unavailable`; `unavailable` means the
+read it), `unavailable` for a value the client does not recognise; `unavailable` means the
 record is kept with its last known values and its queued updates fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
 reported as deleted, until the app decides (`resolveWrite`). The field is
@@ -392,22 +392,31 @@ resource's `identity.bindings` binds, `/lists/{listId}/tasks` under task
 lists) can declare `parentAbsent: deleted | unavailable` on its Collection
 Object (0.2.0 §4.4; ignored on the list operation, for a variable a
 `constants` entry fixes, and on a collection whose path variables two or
-more other resources bind, which the spec does not describe). The spec
-requires `parentAbsent: deleted` to come with an explicit `notFound` on
-every `absent: removed` collection of the parent resource, so that a 404
-the parent's read answers for a missing permission cannot cascade as a
-deletion through the `deleted` default; where a document omits that, the
-client reads the declaration as `unavailable`. Once a record of the parent collection is
-concluded gone, by its declaration (`absent: deleted`), by the GET
-(404/410 per `notFound`, or a read tombstone) or by a feed tombstone, the
-records last read under it in that nested collection are concluded too,
-without a request: `deleted` only for `parentAbsent: deleted` under a
-parent concluded deleted, else `unavailable`. Each is reported to
-`onMissingRecord` with `source: 'parent'` and its `context`, and its held
-updates fail with that `missingRecord`, as above; a parent whose GET shows
-it still exists (`filtered`), or whose fate is `unknown`, concludes nothing.
-Nothing is pruned: the records keep their last known values until the
-parent returns in a complete read and the nested collection is read again.
+more other resources bind, which the spec does not describe). Once a record
+of the parent collection is concluded gone, by its declaration
+(`absent: deleted`), by the GET (404/410 per `notFound`, or a read
+tombstone) or by a feed tombstone, the records last read under it in that
+nested collection are concluded too, without a request: `deleted` only for
+`parentAbsent: deleted` under a parent concluded deleted by a conclusion
+the document stands behind (`absent: deleted`, a tombstone, or a 404/410
+under a stated `notFound: deleted`), else `unavailable`. A 404 that is
+`deleted` only by the `notFound` default (the parent's collection declares
+no `notFound`, or no Completeness Object at all) never cascades as a
+deletion: a missing permission answered as 404 must not delete the members.
+Each member is reported to `onMissingRecord` with `source: 'parent'`, its
+`context` and its last known values, and its held updates fail with that
+`missingRecord`, as above (under `unavailable`, every write queued for it,
+as above); a parent whose GET shows it still exists (`filtered`), or whose
+fate is `unknown`, concludes nothing. Nothing is pruned: the records keep
+their last known values until the parent returns in a complete read and the
+nested collection is read again. Until then the nested scope is marked: a
+new `update()` of a member is concluded at once like the earlier writes
+were (failed, not sent as a PUT on a record the caller cannot read), and a
+new `create()` into the scope of an unavailable parent is parked the same
+way; under a deleted parent a create is sent, and the provider answers for
+the parent. The mark is in memory only: after a restart, a member's failed
+writes still carry `missingRecord` and hold a new edit, but a member without
+writes is not marked until the parent is concluded again.
 So that a queued edit under a vanished parent is not sent blindly, the
 default `missingRecordChecks: 'pending'` also checks a vanished parent
 record without writes of its own when a nested collection declaring
@@ -428,6 +437,10 @@ and any 429 the budget hands back (it waits out a usable `Retry-After` up to
 first queued write of its record fails after three syncs that did not release
 it, with `lastError` "Waiting for a complete refresh", as a restored update
 does ([below](#durable-outbox-and-restarts)).
+
+A record whose first queued write is a delete, with no update ahead of it,
+is not checked: the delete is sent, and a 404 or 410 settles it
+(`satisfied`, see [Failure classes](#failure-classes)).
 
 Only the first queued write of a record is failed, and only when no earlier
 write of the record is in flight. An update already in flight when the read
@@ -464,7 +477,10 @@ const client = createApiClient(doc, {
 ```
 
 `onMissingRecord` is called for every record checked, with the GET's status
-(when a GET answered) and, for `filtered`, the returned record. `missingRecordChecks: 'all'` also
+(when a GET answered) and, for `filtered`, the returned record; for
+`unavailable`, `record` holds the last known values when the client has
+them (the copy confirmed before the read, or the last known copy of the
+record's writes). `missingRecordChecks: 'all'` also
 checks records without unsettled writes: those the client had confirmed and
 that a read drops from its confirmed copy, once, in that sync (a record the
 budget did not cover is not checked later); the report changes nothing in
@@ -1077,8 +1093,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   pruned. The default `missingRecordChecks: 'pending'` now also checks a
   vanished parent record without writes when such a nested collection has
   unsettled writes under it. The declaration is ignored with two or more
-  parent resources, and `deleted` is read as `unavailable` unless the
-  parent's `absent: removed` collections state `notFound`.
+  parent resources; a deletion cascades only from a conclusion the document
+  stands behind (`absent: deleted`, a tombstone, a 404/410 under a stated
+  `notFound: deleted`), never from the `notFound` default. Under
+  `unavailable`, every write queued for the record fails, deletes included,
+  and a create is parked; a nested scope whose parent is gone is marked
+  until it is read again, and a new `update()` or `create()` into it is
+  concluded at once. An unrecognised `notFound` value is read as
+  `unavailable`. `unavailable` reports carry `record`, the last known
+  values.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

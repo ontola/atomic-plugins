@@ -101,3 +101,44 @@ a parent `absent: removed` without `notFound` whose 404 concludes the list
 deleted by the default but its tasks only unavailable, and a two-parent
 collection (`/owners/{ownerId}/lists/{listId}/tasks`) that draws no
 conclusion. README, CLAUDE.md and the changelog updated.
+
+## Turn 3
+
+**Human (via the coordinator session):** The Opus review of the draft PR
+(#399) found three blockers and nits. B1: a parent collection without
+`x-completeness`, or with a defaulted `notFound`, cascades a permission 404
+into `deleted` for its members (the resource's first collection is the
+provider). Cascade `deleted` only from an `absent: deleted` declaration, a
+read or feed tombstone, or a 404 under an explicit `notFound: deleted`;
+otherwise `unavailable`; mark defaulted evidence. B2: a DELETE queued behind
+an update of an unavailable record is sent without a decision; fail or hold
+the rest of the queue, deletes included, and a create into an unavailable
+parent's nested scope. B3: `stillMissing` relies on absence from the
+confirmed records, which `parentAbsent` never prunes, so a new edit of a
+member goes out as a full PUT. Nits: an unrecognised `notFound` as
+`unavailable`; a revision check on the vanished parent's immediate cascade;
+a README line on a lone queued DELETE; `record` on `unavailable` reports.
+
+**Assistant:** `declaredCompleteness` keeps `notFoundExplicit`, the route
+carries it, and a 404/410 read as `deleted` without a stated `notFound` is
+marked `Evidence.defaulted`; `applyParentAbsent` cascades a deletion only
+from an undefaulted `deleted`, so a parent whose collection declares nothing
+(or omits `notFound`) makes its members `unavailable`. The static
+`parentStatesNotFound` check was dropped in favour of that. `failMissing`
+on `unavailable` fails the rest of the record's queue in order, deletes
+included, and parks a create in place with `missingRecord`, stopping at a
+head in flight, not yet stored or already parked; `resolveWrite` retry on a
+parked head clears the mark. Each concluded nested scope is marked in
+memory (`goneParents`, cleared by a complete read of the scope); `update()`
+into a marked scope, and `create()` into one whose parent is unavailable,
+are enqueued held and concluded at once (`concludeNew`), so neither is sent
+on a record the caller cannot read; a create under a deleted parent is still
+sent. An unrecognised `notFound` is read as `unavailable`; the vanished
+parent's cascade skips a record a write settled on during the GET;
+`unavailable` reports carry the last known values as `record`; the README
+says a lone queued DELETE is not checked. Six tests added or changed (a 404
+under the default with the provider collection undeclared, the DELETE
+behind the update, the parked create, the new edit of a member and its
+sending after the parent returns, the unrecognised value, `record` in the
+reports). The mark is not stored: after a restart a member without writes is
+not marked until the parent is concluded again (documented).
