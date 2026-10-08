@@ -9,6 +9,10 @@ earlier decision, it says so. Facts about the host were taken from #177 §1.1,
 which checked them at atomic-server `2567fc30b`. They were not re-checked
 against the current `.atomic-server-ref`.
 
+See also [`pieces.md`](pieces.md) (2026-10-08), Michiel's later target of
+views, integrations and lenses from two catalogs. Whether it replaces this
+document is Decision Inbox Q-100, which is open.
+
 Decided by Michiel (2026-09-29):
 
 1. **The catalog lists bundles.** A bundle is the unit a person finds,
