@@ -94,7 +94,7 @@ Object only with `kind: none` and Refusal Objects that all have a `source`
 | `kind` | A client |
 |--------|----------|
 | `ifMatch` | Sends the object's version, as last read (§4.3), in `header`. A response with a status in `conflictStatus` means the object changed since that read and the write was not applied: a conflict. Declare it only when the provider documents the conditional request for this operation. |
-| `readVerify` | Reads the object (§3) just before the write. When any written field's current value differs from its baseline, the write is a conflict and is not sent. Otherwise it sends the write unconditionally. A change made between that read and the write is overwritten; this kind narrows the window, it does not close it. Declare it for a provider that documents no conditional request for the operation. |
+| `readVerify` | Reads the object (§3) just before the write. When any written field's current value differs from its baseline, the write is a conflict and is not sent. A delete writes no field: for a delete, every field the client holds a baseline for is compared. Otherwise it sends the write unconditionally. A change made between that read and the write is overwritten; this kind narrows the window, it does not close it. Declare it for a provider that documents no conditional request for the operation. |
 | `none` | Sends the write unconditionally. The document states that the provider offers no precondition and that a client is not expected to read first: last writer wins. |
 
 Without `x-write-precondition`, the document says nothing about
@@ -215,37 +215,50 @@ or `504`, or the provider answered another `5xx` that it does not document as
 
 Which rule applies follows the write's action: the operation's `x-crud`
 action (`update` or `delete`) when it declares one, else the HTTP method
-(`DELETE` is a delete, anything else an update). The client first checks the
-read against `refuseWhen` (§4.4): when one matches, the object reached a
-refused state in the meantime, and nothing is sent again.
+(`DELETE` is a delete, anything else an update).
 
-* _Update_:
-  * when every written field holds the value the write set, the write counts
-    as applied;
-  * under `ifMatch`, a version equal to the one it sent means the write was
-    not applied; a different version with the written fields at their
-    baseline means another writer changed the object, which is a conflict
-    (a resend with the old version would only answer a `conflictStatus`);
-  * otherwise, when every written field holds its baseline, the write counts
-    as not applied, and the client MAY send it again; anything else is a
-    conflict.
-* _Delete_. The baseline of a delete is the object as the client last read
-  it before sending: under `ifMatch` its version, otherwise every field the
-  client holds a baseline for.
-  * a 2xx whose body is a read tombstone of the resource
-    ([Deletion Feeds](../deletion-feeds/README.md) §4.4) means applied, for a
-    provider whose delete is a soft delete;
-  * a `404` or `410` means applied only when the document says that a
-    missing object was deleted: a collection of the object's resource
-    declares `notFound: deleted` explicitly or `absent: deleted`
-    ([Collection Completeness](../collection-completeness/README.md)), or the
-    resource has a deletion feed with tombstones. Otherwise it means _gone,
-    not confirmed_: the client stops resending, and does not report a
-    deletion, because a lost permission answers the same;
-  * any other 2xx with the object means not applied when the object still
-    matches its baseline (under `ifMatch`, the same version), and a conflict
-    when it changed since.
-* Any other answer leaves the outcome unknown.
+_Deletion confirmed_ means the document says that a missing object of this
+resource was deleted, for this object: a [Deletion Feeds](../deletion-feeds/README.md)
+tombstone for this object, a collection of the resource that declares
+`notFound: deleted` explicitly, or one declared `absent: deleted`, which rests
+on [Collection Completeness](../collection-completeness/README.md) §4.2's rule
+that objects do not leave the caller's reach while they exist. A deletion
+feed alone, without a tombstone for this object, is not confirmation.
+
+The client checks the read in this order, and the first rule that applies
+decides:
+
+1. `404` or `410`: the object is gone. For a delete, the write counts as
+   applied when deletion is confirmed, and is otherwise _gone, not
+   confirmed_. For an update, the outcome is _gone_. Either way the client
+   stops resending: a resent `PUT` could recreate the object. It reports a
+   deletion only when it is confirmed.
+2. A 2xx whose body is a read tombstone of the resource (Deletion Feeds
+   §4.4): for a delete, applied (a soft delete); for an update, _gone_ as in
+   rule 1, with the deletion confirmed.
+3. For an update, every written field holds the value the write set: applied.
+4. A Refusal Object (§4.4) matches the object's own state: _refused_, and
+   nothing is sent again. Refusal Objects with a `source` are not re-checked
+   here.
+5. Under `ifMatch`, the version equals the one sent: not applied, and the
+   client MAY send the write again. A different version is a conflict for an
+   update (another writer changed the object, and a resend with the old
+   version would only answer a `conflictStatus`), and for a delete.
+6. Otherwise, compare with the baseline: when every written field (for a
+   delete, every field the client holds a baseline for) still holds its
+   baseline, the write was not applied and the client MAY send it again;
+   anything else is a conflict.
+7. Any other answer leaves the outcome unknown.
+
+The baseline of a delete is the object as the client last read it before
+sending: under `ifMatch` its version, otherwise every field the client holds.
+
+**The write's own answer.** The same rules 1 and 2 classify the answer to the
+write itself, on the first send and on any resend: a `404` or `410` to a
+delete counts as applied only when deletion is confirmed, and is otherwise
+gone, not confirmed; a `404` or `410` to an update means gone. A client never
+reports a deletion it has not confirmed.
+
 
 "Applied" means that the object now holds what the write set. A read cannot
 tell this write from another writer that set the same values in the

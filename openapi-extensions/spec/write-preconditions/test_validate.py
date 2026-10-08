@@ -5,7 +5,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import may_send, resolve_unknown, validate
+from validate import may_send, resolve_unknown, validate, write_answer
 
 ROOT = pathlib.Path(__file__).parent
 IF_MATCH = {"kind": "ifMatch", "version": {"in": "body", "name": "etag"}}
@@ -153,6 +153,34 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(resolve_unknown(IF_MATCH, "DELETE", baseline, {}, read({"title": "A", "etag": '"v2"'}), '"v1"'), "conflict")
         self.assertEqual(resolve_unknown(VERIFY, "DELETE", baseline, {}, read(None, 500)), "unknown")
         self.assertEqual(resolve_unknown({"kind": "none"}, "DELETE", baseline, {}), "resend")
+
+    def test_resolution_order_and_gone_objects(self):
+        read = lambda body, status=200: {"status": status, "body": body}
+        tombstone = {"field": "in_trash", "values": [True]}
+        # A trash PATCH that set in_trash: the written value holds, so applied, not refused.
+        self.assertEqual(resolve_unknown(VERIFY, "PATCH", {"in_trash": False}, {"in_trash": True},
+                                         read({"in_trash": True})), "applied")
+        # A soft DELETE reads back as a tombstone that refuseWhen also matches: applied.
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read({"title": "A", "in_trash": True}),
+                                         tombstone=tombstone), "applied")
+        # An update whose object is gone stops: a resent PUT could recreate it.
+        for status in (404, 410):
+            self.assertEqual(resolve_unknown(VERIFY, "PUT", {"title": "A"}, {"title": "B"}, read(None, status)), "gone")
+        self.assertEqual(resolve_unknown(VERIFY, "PATCH", {"title": "A"}, {"title": "B"}, read({"title": "A", "in_trash": True}),
+                                         tombstone=tombstone), "gone")
+
+    def test_the_writes_own_answer(self):
+        self.assertEqual(write_answer("delete", 404), "gone-unconfirmed")
+        self.assertEqual(write_answer("delete", 410, deletion_confirmed=True), "applied")
+        self.assertEqual(write_answer("update", 404), "gone")
+        self.assertIsNone(write_answer("delete", 204))
+        self.assertIsNone(write_answer("update", 412))
+
+    def test_read_verify_delete_compares_every_baseline_field(self):
+        baseline = {"title": "A", "notes": "n"}
+        self.assertEqual(may_send(VERIFY, baseline, [], {"title": "A", "notes": "n"}, action="delete"), ("send", {}))
+        self.assertEqual(may_send(VERIFY, baseline, [], {"title": "A", "notes": "changed"}, action="delete"),
+                         ("conflict", ["notes"]))
 
     def test_present_refusal(self):
         recurring = {"kind": "ifMatch", "version": {"in": "body", "name": "etag"},
