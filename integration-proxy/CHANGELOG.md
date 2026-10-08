@@ -27,6 +27,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   Deleting a connection ends its subscriptions in the same transaction.
   Subscriptions use shared application hooks only; no provider hook is
   created.
+- Webhook rate limits: deliveries per client network and per endpoint,
+  checked before verification, and subscription requests per owner,
+  checked before the access check (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`,
+  `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`, `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`;
+  new `WebhookConfig` fields).
 
 ## 0.3.0 (2026-10-06)
 

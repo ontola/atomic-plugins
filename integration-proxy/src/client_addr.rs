@@ -1,8 +1,9 @@
-//! The client network a key check is counted against
-//! (`KEY_CHECK_LIMIT_PER_HOUR`, `TRUST_FORWARDED_FOR`).
+//! The client network a key check, or a webhook delivery, is counted
+//! against (`KEY_CHECK_LIMIT_PER_HOUR`, `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`,
+//! `TRUST_FORWARDED_FOR`).
 //!
-//! Nothing here is used for anything but that limit: no address is stored,
-//! logged or compared otherwise.
+//! Nothing here is used for anything but those limits: no address is
+//! stored, logged or compared otherwise.
 
 use std::net::{IpAddr, SocketAddr};
 

@@ -1466,6 +1466,78 @@ async fn broken_uploads_and_the_per_endpoint_read_cap() {
     env.drop_schema().await;
 }
 
+fn with_limits(env: &Env, endpoint: u32, network: u32, owner: u32) -> AppState {
+    let config = crate::config::WebhookConfig {
+        ingress_per_endpoint_per_minute: endpoint,
+        ingress_per_network_per_minute: network,
+        subscribe_per_owner_per_hour: owner,
+        ..Default::default()
+    };
+    let mut state = env.state.clone();
+    state.webhooks = Some(Arc::new(Webhooks::with_limits(
+        env.store.clone(),
+        BTreeMap::from([("tracker".to_owned(), TRACKER_SECRET.to_vec())]),
+        super::limits::Limits::from_config(&config),
+    )));
+    state
+}
+
+/// Ingress is limited per client network, then per endpoint, before any
+/// verification work: a refused request writes nothing and says when to
+/// retry.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn ingress_is_rate_limited_per_network_and_per_endpoint() {
+    let mut env = env(small()).await;
+    let alice = Agent::new(96);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    env.state.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+    let state = with_limits(&env, 3, 2, 20);
+    let from = |network: &str, id: &str| {
+        let mut request = env.signed_delivery(&endpoint, id, &task("p-100", id));
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", network.parse().unwrap());
+        request
+    };
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    assert_eq!(
+        send(from("198.51.100.1", "a1")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(from("198.51.100.1", "a2")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let limited = send(from("198.51.100.1", "a3")).await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key("retry-after"));
+    // Unverified junk counts too: it is limited before the HMAC is computed.
+    let mut junk = from("198.51.100.1", "a4");
+    junk.headers_mut()
+        .insert("tracker-signature", "v1=00".parse().unwrap());
+    assert_eq!(send(junk).await.status(), StatusCode::TOO_MANY_REQUESTS);
+    // Another network has its own allowance, until the endpoint's is used up.
+    assert_eq!(
+        send(from("203.0.113.9", "b1")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(from("203.0.113.10", "c1")).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_event_refs").await,
+        3
+    );
+    env.drop_schema().await;
+}
+
 /// Waits up to ten seconds for `condition`, checking every 20 ms.
 async fn eventually(what: &str, condition: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -1476,4 +1548,51 @@ async fn eventually(what: &str, condition: impl Fn() -> bool) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// Subscription requests are limited per owner before the access check
+/// reaches the provider.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn subscribing_is_rate_limited_per_owner() {
+    let env = env(small()).await;
+    let alice = Agent::new(97);
+    let bob = Agent::new(98);
+    let ac = env
+        .connection("tracker", &alice, "key-a", &["p-1", "p-2", "p-3"])
+        .await;
+    let bc = env.connection("tracker", &bob, "key-b", &["p-9"]).await;
+    let state = with_limits(&env, 600, 120, 2);
+    let subscribe = |agent: &Agent, connection: &str, project: &str| {
+        let body =
+            json!({"source": "project", "parameters": {"projectId": project}, "events": ["task"]});
+        signed_request(
+            &state,
+            agent,
+            "POST",
+            &format!("/connections/{connection}/subscriptions"),
+            serde_json::to_vec(&body).unwrap(),
+        )
+    };
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    assert_eq!(
+        send(subscribe(&alice, &ac, "p-1")).await.status(),
+        StatusCode::CREATED
+    );
+    // A refused access check counts as well: it reached the provider.
+    assert_eq!(
+        send(subscribe(&alice, &ac, "p-404")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let limited = send(subscribe(&alice, &ac, "p-3")).await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key("retry-after"));
+    assert_eq!(
+        send(subscribe(&bob, &bc, "p-9")).await.status(),
+        StatusCode::CREATED
+    );
+    env.drop_schema().await;
 }

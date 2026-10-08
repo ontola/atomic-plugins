@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -128,6 +128,7 @@ impl Drop for EndpointRead<'_> {
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
@@ -136,6 +137,20 @@ pub async fn receive(
     };
     if !endpoint_shaped(&endpoint_id) {
         return answer(StatusCode::NOT_FOUND);
+    }
+    // Rate limits before any verification work: per client network first,
+    // so one sender cannot use up an endpoint's allowance alone.
+    let now = std::time::Instant::now();
+    let network = crate::client_addr::client_network(
+        state.trust_forwarded_for,
+        &headers,
+        peer.map(|ConnectInfo(peer)| peer),
+    );
+    if let Err(retry) = webhooks.limits.ingress_per_network.take(&network, now) {
+        return super::limits::too_many(retry);
+    }
+    if let Err(retry) = webhooks.limits.ingress_per_endpoint.take(&endpoint_id, now) {
+        return super::limits::too_many(retry);
     }
     let cap = webhooks.store.policy().max_verified_bytes as usize;
     let declared = headers
