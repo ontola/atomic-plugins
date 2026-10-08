@@ -48,16 +48,17 @@ def _object(value, where, errors, on_collection):
         errors.append(f"{where}.description: expected a string")
 
 
+
 def parents(document, resource_name, collection):
-    """Parent resources of a collection: other resources whose identity binds one of its path variables."""
+    """Parent resources of a collection: {path variable: [other resources whose identity binds it]}."""
     variables = set(VARIABLE.findall(collection.get("urlTemplate", "")))
     found = {}
     for name, resource in _resources(document).items():
         if name == resource_name or not isinstance(resource, dict):
             continue
         bindings = (resource.get("identity") or {}).get("bindings") or {}
-        for variable in variables & set(bindings):
-            found[variable] = name
+        for variable in sorted(variables & set(bindings)):
+            found.setdefault(variable, []).append(name)
     return found
 
 
@@ -73,14 +74,23 @@ def validate(document):
             where = f"crudResources.{resource_name}.collections.{name}.x-completeness"
             declaration = collection["x-completeness"]
             _object(declaration, where, errors, on_collection=True)
-            if isinstance(declaration, dict) and "parentAbsent" in declaration:
-                found = parents(document, resource_name, collection)
-                if not found:
-                    errors.append(f"{where}.parentAbsent: the collection is not nested (§4.4)")
-                for variable, parent in found.items():
-                    collections = (resources[parent].get("collections") or {}).values()
-                    if not any(isinstance(c, dict) and "x-completeness" in c for c in collections):
-                        errors.append(f"{where}.parentAbsent: parent {parent} ({{{variable}}}) has no collection with x-completeness")
+            if not isinstance(declaration, dict) or "parentAbsent" not in declaration:
+                continue
+            found = parents(document, resource_name, collection)
+            candidates = sorted({parent for names in found.values() for parent in names})
+            if not candidates:
+                errors.append(f"{where}.parentAbsent: the collection is not nested (§4.4)")
+                continue
+            if len(candidates) > 1:
+                errors.append(f"{where}.parentAbsent: more than one parent resource {candidates} (§4.4)")
+                continue
+            parent = candidates[0]
+            declarations = [c["x-completeness"] for c in (resources[parent].get("collections") or {}).values()
+                            if isinstance(c, dict) and isinstance(c.get("x-completeness"), dict)]
+            if not declarations:
+                errors.append(f"{where}.parentAbsent: parent {parent} has no collection with x-completeness")
+            elif declaration.get("parentAbsent") == "deleted" and not all("notFound" in d for d in declarations):
+                errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every collection of {parent}")
     for path, item in document.get("paths", {}).items():
         if not isinstance(item, dict):
             continue

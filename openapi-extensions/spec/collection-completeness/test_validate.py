@@ -64,6 +64,20 @@ class ValidationTests(unittest.TestCase):
                      d["components"]["crudResources"]["taskList"]["collections"]["taskLists"].pop("x-completeness"),
                      "has no collection with x-completeness")
 
+        def second_parent(document):
+            document["components"]["crudResources"]["owner"] = {
+                "identity": {"urlTemplate": "/owners/{listId}", "bindings": {"listId": {"field": "id"}}},
+                "collections": {"owners": {"urlTemplate": "/owners", "x-completeness": {"absent": "removed"}}}}
+        self.invalid(second_parent, "more than one parent resource ['owner', 'taskList']")
+
+        def cascade_without_not_found(document):
+            completeness(document)["parentAbsent"] = "deleted"
+            completeness(document, "taskList", "taskLists").pop("notFound")
+        self.invalid(cascade_without_not_found, "deleted needs an explicit notFound")
+        document = example()
+        completeness(document)["parentAbsent"] = "deleted"  # parent states notFound: unavailable explicitly
+        validate(document)
+
         def on_operation(document):
             document["paths"]["/lists/{listId}/tasks"]["get"]["x-completeness"] = copy.deepcopy(completeness(document))
         self.invalid(on_operation, "only on a Collection Object")
