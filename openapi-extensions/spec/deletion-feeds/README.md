@@ -197,11 +197,12 @@ still answers 2xx without a read tombstone (archived, in a trash it can be
 restored from) is not a deletion, and its marker MUST NOT be declared as a
 tombstone value.
 
-The converse does not hold everywhere: where a collection declares
-`notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
-0.2.0-draft, §4.3), a `404` or `410` from the read of one of its absent
-objects is not evidence of deletion. Only a tombstone, a read tombstone, or a
-`404`/`410` under the `deleted` default is.
+The converse does not hold everywhere: where a collection of a resource
+states `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
+0.2.0-draft, §4.3), a `404` or `410` from any read of that resource's objects,
+through whichever collection they were reached, is not evidence of deletion.
+Only a tombstone, a read tombstone, or a `404`/`410` under `notFound: deleted`
+or its default is.
 
 ### 4.4 Read Tombstones
 

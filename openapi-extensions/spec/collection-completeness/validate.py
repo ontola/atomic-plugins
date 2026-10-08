@@ -42,8 +42,8 @@ def _object(value, where, errors, on_collection):
     if "parentAbsent" in value:
         if not on_collection:
             errors.append(f"{where}.parentAbsent: only on a Collection Object")
-        elif value["parentAbsent"] not in OUTCOMES:
-            errors.append(f"{where}.parentAbsent: expected deleted or unavailable")
+        elif value["parentAbsent"] != "unavailable":
+            errors.append(f"{where}.parentAbsent: expected unavailable (0.2.0 has no deleted cascade)")
     if "description" in value and not isinstance(value["description"], str):
         errors.append(f"{where}.description: expected a string")
 
@@ -117,12 +117,7 @@ def validate(document):
             declarations = declarations_of(document, parent)
             if not any(declarations.values()):
                 errors.append(f"{where}.parentAbsent: parent {parent} has no collection with x-completeness")
-            elif declaration.get("parentAbsent") == "deleted":
-                undeclared = sorted(n for n, d in declarations.items() if d is None)
-                if undeclared:
-                    errors.append(f"{where}.parentAbsent: deleted needs a Completeness Object on every collection of {parent}; {undeclared} declare none")
-                if not all("notFound" in d for d in declarations.values() if d and d.get("absent") == "removed"):
-                    errors.append(f"{where}.parentAbsent: deleted needs an explicit notFound on every absent: removed collection of {parent}")
+
     for path, item in document.get("paths", {}).items():
         if not isinstance(item, dict):
             continue
@@ -148,14 +143,19 @@ def _same(a, b):
     return type(a) is type(b) and a == b
 
 
-def classify_read(declaration, tombstone, id_field, object_id, status, body):
+def classify_read(declaration, tombstone, id_field, object_id, status, body, resource_not_found=None):
     """§4.3: 'present', 'deleted', 'unavailable' or 'unknown' for one read of an absent object.
 
     `declaration` is the collection's Completeness Object (or None), `tombstone`
-    the resource's x-read-tombstone (or None), `body` the parsed JSON body (or None).
+    the resource's x-read-tombstone (or None), `body` the parsed JSON body (or
+    None). `resource_not_found` is the notFound any collection of the resource
+    states (resource_not_found(document, resource)); it applies to every read
+    of the resource's objects, through any collection (§4.3).
     """
     if status in (404, 410):
-        value = (declaration or {}).get("notFound", "deleted")
+        if declaration is not None and declaration.get("absent") not in ABSENT:
+            declaration = None  # §7: an unrecognised absent value means no Completeness Object
+        value = resource_not_found or (declaration or {}).get("notFound", "deleted")
         return value if value in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
     if not isinstance(status, int) or not 200 <= status < 300:
         return "unknown"
@@ -169,20 +169,22 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body):
     return "present"
 
 
-def members_of_gone_parent(declaration, parent_outcome, pass_read_completely=False):
-    """§4.4: the outcome for members of a nested collection whose parent is 'deleted' or 'unavailable'.
+def resource_not_found(document, resource_name):
+    """The notFound any collection of the resource states, or None; it covers every read of its objects (§4.3)."""
+    values = {d["notFound"] for d in declarations_of(document, resource_name).values()
+              if d and d.get("absent") in ABSENT and "notFound" in d}
+    return values.pop() if len(values) == 1 else ("unavailable" if values else None)
 
-    `pass_read_completely` is true only when the same pass read the
-    parent-resource collection completely and every parent object it returned
-    had its nested collection read completely; without it a member may have
-    moved where the pass did not look, so the outcome is at most unavailable.
-    Members that any read of the pass returned are present and are not passed
-    here. None means no conclusion: no parentAbsent, or the parent is not gone.
+
+def members_of_gone_parent(declaration, parent_outcome):
+    """§4.4: 'unavailable' for members of a nested collection whose parent is concluded gone.
+
+    `parent_outcome` is 'deleted' or 'unavailable'. None means no conclusion:
+    no parentAbsent, or the parent is not gone. 0.2.0 has no deleted cascade,
+    and an unrecognised parentAbsent value also means unavailable (§7).
     """
     if parent_outcome not in OUTCOMES or not declaration or "parentAbsent" not in declaration:
         return None
-    if declaration["parentAbsent"] == "deleted" and parent_outcome == "deleted" and pass_read_completely:
-        return "deleted"
     return "unavailable"
 
 

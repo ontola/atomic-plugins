@@ -6,7 +6,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import classify_read, members_of_gone_parent, validate
+from validate import classify_read, members_of_gone_parent, resource_not_found, validate
 
 ROOT = pathlib.Path(__file__).parent
 TOMBSTONE = {"field": "deleted", "values": [True]}
@@ -70,27 +70,10 @@ class ValidationTests(unittest.TestCase):
                 "collections": {"owners": {"urlTemplate": "/owners", "x-completeness": {"absent": "removed"}}}}
         self.invalid(second_parent, "more than one parent resource ['owner', 'taskList']")
 
-        def cascade_without_not_found(document):
-            completeness(document)["parentAbsent"] = "deleted"
-            completeness(document, "taskList", "taskLists").pop("notFound")
-        self.invalid(cascade_without_not_found, "deleted needs an explicit notFound")
+        # 0.2.0 has no deleted cascade.
+        self.invalid(lambda d: completeness(d).update(parentAbsent="deleted"), "expected unavailable")
+        # An operation-level declaration counts for its collection.
         document = example()
-        completeness(document)["parentAbsent"] = "deleted"  # parent (absent: removed) states notFound explicitly
-        validate(document)
-        # The natural cascade: a parent collection declared absent: deleted needs (and allows) no notFound.
-        parent = completeness(document, "taskList", "taskLists")
-        parent.pop("notFound")
-        parent["absent"] = "deleted"
-        validate(document)
-
-        # A parent collection without a Completeness Object blocks a deleted cascade.
-        def undeclared_parent_collection(document):
-            completeness(document)["parentAbsent"] = "deleted"
-            document["components"]["crudResources"]["taskList"]["collections"]["shared"] = {"urlTemplate": "/shared/lists"}
-        self.invalid(undeclared_parent_collection, "['shared'] declare none")
-        # ...unless its list operation declares one.
-        document = example()
-        completeness(document)["parentAbsent"] = "deleted"
         document["components"]["crudResources"]["taskList"]["collections"]["shared"] = {"urlTemplate": "/shared/lists"}
         document["paths"]["/shared/lists"] = {"get": {"x-crud": {"action": "list", "resource": "taskList", "collection": "shared"},
                                                       "x-completeness": {"absent": "removed", "notFound": "unavailable"},
@@ -151,16 +134,25 @@ class ClassifyTests(unittest.TestCase):
     def test_members_of_a_gone_parent(self):
         declaration = completeness(example())
         self.assertEqual(members_of_gone_parent(declaration, "unavailable"), "unavailable")
+        # Even a parent concluded deleted only makes its members unavailable in 0.2.0.
         self.assertEqual(members_of_gone_parent(declaration, "deleted"), "unavailable")
+        self.assertEqual(members_of_gone_parent(dict(declaration, parentAbsent="cascade"), "deleted"), "unavailable")
         self.assertIsNone(members_of_gone_parent(declaration, "present"))
         self.assertIsNone(members_of_gone_parent(declaration, "unknown"))
-        cascade = dict(declaration, parentAbsent="deleted")
-        self.assertEqual(members_of_gone_parent(cascade, "deleted", pass_read_completely=True), "deleted")
-        # A pass that did not read every parent's nested collection may have missed a move.
-        self.assertEqual(members_of_gone_parent(cascade, "deleted"), "unavailable")
-        self.assertEqual(members_of_gone_parent(cascade, "unavailable"), "unavailable")
         self.assertIsNone(members_of_gone_parent({"absent": "removed"}, "deleted"))
 
+    def test_resource_wide_not_found(self):
+        document = example()
+        # The task resource states unavailable; a read reached through an undeclared collection uses it.
+        document["components"]["crudResources"]["task"]["collections"]["starred"] = {"urlTemplate": "/starred"}
+        value = resource_not_found(document, "task")
+        self.assertEqual(value, "unavailable")
+        self.assertEqual(classify_read(None, TOMBSTONE, "id", "t1", 404, None, value), "unavailable")
+        self.assertEqual(classify_read({"absent": "removed"}, TOMBSTONE, "id", "t1", 404, None, value), "unavailable")
+        self.assertIsNone(resource_not_found({"components": {"crudResources": {"x": {"collections": {}}}}}, "x"))
+
+    def test_unrecognised_absent_means_no_declaration(self):
+        self.assertEqual(classify_read({"absent": "gone", "notFound": "unavailable"}, None, "id", "t1", 404, None), "deleted")
 
 if __name__ == "__main__":
     unittest.main()

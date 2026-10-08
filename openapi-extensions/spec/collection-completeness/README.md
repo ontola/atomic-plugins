@@ -115,7 +115,7 @@ selection, is not a complete read (§3) under either placement.
 |-------|------|----------|-------------|
 | `absent` | `deleted` \| `removed` | **Yes** | What it means when an object that was a member is absent from a complete read. See §4.2. |
 | `notFound` | `deleted` \| `unavailable` | No | Since 0.2.0. What a `404` or `410` from the resource's `read` operation means for an object absent from a complete read. See §4.3. Default: `deleted`. Not allowed with `absent: deleted`. |
-| `parentAbsent` | `deleted` \| `unavailable` | No | Since 0.2.0. What the members of this collection mean when the object that supplies one of its path variables is absent from a complete read of its own collection. See §4.4. Only on a Collection Object. |
+| `parentAbsent` | `unavailable` | No | Since 0.2.0. The members of this collection are unavailable once the object that supplies one of its path variables is concluded gone. See §4.4. Only on a Collection Object. |
 | `description` | string | No | Human-readable description. |
 | `x-*` | any | No | Extension fields. |
 
@@ -170,6 +170,13 @@ say, or documents other causes (a missing permission answered as `404`, a
 deleted container). The default is `deleted` because 0.1.0 consumers read a
 `404` that way; a new declaration SHOULD state `notFound` explicitly.
 
+`notFound` describes the resource's `read`, not one collection. Once any
+collection of a resource states it, that value applies to every read of that
+resource's objects, including an object reached through a collection that
+declares no Completeness Object or leaves `notFound` out; every
+`absent: removed` collection of the resource then states the same value
+(§7).
+
 `notFound` is not allowed with `absent: deleted`: such a collection's absent
 objects are deleted without a read, and §4.2 already says that their read
 answers `404` or `410`.
@@ -189,17 +196,16 @@ requires exactly one parent: a collection with path variables bound by two
 or more other resources has no single parent object, and this version does
 not describe it.
 
-`parentAbsent: deleted` also requires every collection of the parent
-resource to declare a Completeness Object, and every one of those that
-declares `absent: removed` to state `notFound` explicitly, so that a `404` the
-parent's read answers for a missing permission cannot cascade as a deletion
-of its members through the `deleted` default. A parent collection declared
-`absent: deleted` needs no `notFound` (none is allowed there): its absent
-objects are deleted without a read.
+`parentAbsent` takes one value in this version, `unavailable`. Once a
+consumer has concluded that a parent object is gone (deleted or unavailable),
+in one of the three ways below, every member last read in that parent
+object's collection is marked `unavailable`, as `notFound: unavailable`
+(§4.3) defines: it can no longer be read through this collection, and its
+fate is not known. Deleting a member needs evidence about the member itself:
+its own read, its own tombstone, or its absence from a complete read of a
+collection declared `absent: deleted`.
 
-`parentAbsent` says what the members of a nested collection mean once a
-consumer has concluded that their parent object is gone, in one of three
-ways:
+The three ways to conclude a parent object gone:
 
 1. it was a member of a parent-resource collection declared
    `absent: deleted`, and is absent from a complete read of it (§4.2);
@@ -208,42 +214,26 @@ ways:
    (§4.3);
 3. a [Deletion Feeds](../deletion-feeds/README.md) tombstone reported it
    deleted: a feed tombstone (§4.3 there) or a read tombstone (§4.4 there).
-   A read tombstone may be restorable (§4.4 there): a later read that shows
-   the parent again supersedes the conclusion and every mark it caused.
 
 A parent object absent from a collection that declares no Completeness Object
-is not concluded gone by that absence, nor by a read made because of it,
-since nothing says what such a read's `404` means; only way 3 applies to it.
-A parent object that its read shows still exists has only left that
-collection; its nested collection is read as before.
+is not concluded gone by that absence; its own read then classifies it under
+the resource's `notFound`, as above. A parent object that its read shows
+still exists has only left that collection; its nested collection is read as
+before.
 
-| `parentAbsent` | Meaning for each member last read in that parent object's collection |
-|----------------|-----------------------------------------------------------------------|
-| `deleted` | Deleted with its parent, when the parent was concluded deleted. Declare it only when the provider documents that deleting the parent deletes its members, and when parent objects do not leave the caller's reach while they exist (as §4.2 requires of `absent: deleted`): otherwise an unshared parent would look deleted and take its members with it. For a parent concluded unavailable, the members are unavailable too. |
-| `unavailable` | As `notFound: unavailable` (§4.3): it can no longer be read through this collection, and its fate is not known. |
+A consumer applies `parentAbsent` without reading the nested collection: that
+read would answer for a parent that is gone. It does not mark a member that a
+read of the pass returned (it moved, and is present). A later read that
+returns the parent or a member supersedes the marks. Without `parentAbsent`, a
+consumer draws no conclusion about the members: the nested collection can no
+longer be read completely, so §3 applies. The marks go one level only: a
+member marked unavailable is not a parent concluded gone for collections
+nested in its own resource.
 
-A consumer applies it without reading the nested collection or its members:
-that read would answer for a parent that is gone. It applies it only after
-all of the pass's reads, and never to a member that any read of the pass
-returned (in this collection under another parent object, or in another
-collection of the member's resource): such a member moved, and is present.
-
-A member can also have moved where the pass did not look. So
-`parentAbsent: deleted` concludes `deleted` only when, in the same pass, the
-parent-resource collection was read completely and every parent object that
-read returned had its nested collection read completely. Otherwise the
-members MUST be marked `unavailable`, whatever `parentAbsent` says. In
-particular, a parent concluded deleted by a tombstone alone (way 3) gives
-`unavailable` unless that condition holds.
-
-When the parent object returns in a later complete read, or a later read
-returns a member, the marks are superseded by that read. Without
-`parentAbsent`, a consumer draws no conclusion about the members: the
-nested collection can no longer be read completely, so §3 applies.
-
-The cascade goes one level only. A member marked by `parentAbsent` is not a
-parent object concluded gone for collections nested in its own resource:
-their members draw no conclusion from it.
+**Later versions.** A `deleted` cascade (members deleted with their parent)
+is left out of this version. It needs a stronger guarantee than this version
+can state: that members never move out of their parent and never leave the
+caller's reach while it exists.
 
 ## 5. Applying via OpenAPI Overlays
 
@@ -354,21 +344,15 @@ A conforming document:
   over a list from which objects are removed, typically), unless consumers
   can tell such a read apart; otherwise an object skipped by the paging looks
   absent;
-* since 0.2.0: MUST give `notFound` and `parentAbsent`, when present, one of
-  the values in §4.3 and §4.4; MUST NOT declare `notFound` together with
-  `absent: deleted`; MUST declare `parentAbsent` only on a Collection Object
-  of a nested collection (§4.4) with exactly one parent resource, which has
-  at least one collection with a Completeness Object; MUST declare
-  `parentAbsent: deleted` only when every collection of the parent resource
-  declares a Completeness Object (on the Collection Object or its list
-  operation) and every one that declares `absent: removed` states `notFound`
-  explicitly; once any collection of a resource states `notFound`, MUST
-  state it on every collection of that resource declared `absent: removed`,
-  all with the same value, since they describe the same `read` (a default on
-  one and an explicit value on another would give one `404` two answers);
-  MUST NOT
-  declare `notFound: deleted` or `parentAbsent: deleted` without provider
-  documentation for it.
+* since 0.2.0: MUST give `notFound`, when present, one of the values in
+  §4.3, and `parentAbsent`, when present, the value `unavailable`; MUST NOT
+  declare `notFound` together with `absent: deleted`; MUST declare
+  `parentAbsent` only on a Collection Object of a nested collection (§4.4)
+  with exactly one parent resource, which has at least one collection with a
+  Completeness Object; once any collection of a resource states `notFound`,
+  MUST state it, with the same value, on every collection of that resource
+  declared `absent: removed`; MUST NOT declare `notFound: deleted` without
+  provider documentation for it.
 
 A conforming consumer:
 
@@ -384,20 +368,16 @@ A conforming consumer:
   report an `unavailable` object as deleted or infer another state from it;
 * since 0.2.0: MUST NOT send a write it queued for an `unavailable` object
   without its user's or application's decision;
+* since 0.2.0: MUST apply a resource's stated `notFound` to every read of its
+  objects, through any collection (§4.3);
 * since 0.2.0: MUST NOT apply `parentAbsent` before it has concluded, in one
-  of the three ways of §4.4 (§4.2, §4.3 or a Deletion Feeds tombstone), that
-  the parent object is deleted or unavailable; in particular not from a
-  parent's absence from a collection that declares no Completeness Object, nor
-  from a read made because of it under the `notFound` default;
-* since 0.2.0: MUST apply `parentAbsent` only after all of the pass's reads,
-  and not to a member any read of the pass returned (§4.4), and MUST NOT
-  cascade it to grandchildren;
-* since 0.2.0: SHOULD treat a `notFound` value it does not recognise as
-  `unavailable`, and a Completeness Object whose `absent` value it does not
-  recognise as absent (no Completeness Object);
-* since 0.2.0: MUST mark members `unavailable`, not `deleted`, unless the
-  pass read the parent-resource collection and every parent object's nested
-  collection completely (§4.4).
+  of the three ways of §4.4, that the parent object is gone, and MUST then
+  mark the members `unavailable`, never `deleted`; MUST NOT mark a member a
+  read of the pass returned, nor cascade further;
+* since 0.2.0: SHOULD treat a value it does not recognise as follows: a
+  Completeness Object whose `absent` it does not recognise as absent (it
+  checks `absent` before using any other field of the declaration); a
+  `notFound` as `unavailable`; a `parentAbsent` as `unavailable`.
 
 ## 8. Not covered
 
@@ -432,8 +412,9 @@ python3 validate.py examples/nested-tasks.yaml
 
 - **0.2.0-draft** (2026-10-08): adds `notFound` (§4.3: what a `404` or `410`
   from reading an absent object means, `deleted` by default or
-  `unavailable`) and `parentAbsent` (§4.4: what the members of a nested
-  collection mean once their parent object is gone), with document and
+  `unavailable`, resource-wide once stated) and `parentAbsent` (§4.4: the
+  members of a nested collection are `unavailable` once their parent object
+  is gone; a `deleted` cascade is left to a later version), with document and
   consumer rules, an example, a validator and tests. A 0.1.0 document stays
   valid and means the same.
 - 0.1.0-draft, 2026-10-08, wording only, no version change: §3 and §4.1
