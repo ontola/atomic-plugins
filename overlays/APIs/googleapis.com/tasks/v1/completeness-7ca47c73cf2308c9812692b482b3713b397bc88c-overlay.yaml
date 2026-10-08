@@ -1,0 +1,51 @@
+# Reviewed 2026-10-08 against the pinned OAD.
+# Source: the pinned OAD: tasklists.list "Returns all the authenticated user's task lists";
+# Task.deleted "Flag indicating whether the task has been deleted"; tasks.list's
+# showCompleted/showHidden/showDeleted descriptions.
+# Needs Collection Completeness 0.2.0-draft (notFound, parentAbsent), Deletion Feeds
+# 0.2.0-draft (x-read-tombstone) and CRUD Causality 0.4.0 (listQuery). Meant to compose
+# with crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml, in either
+# order: it deep-merges into components.crudResources. Not with v1 (#378) alone: its
+# tasks collection does not fix showHidden=true, so its read leaves hidden tasks out and
+# is not complete.
+overlay: 1.0.0
+info:
+  title: Google Tasks v1 collection completeness and read tombstones
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        taskList:
+          collections:
+            taskLists:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  tasklists.list returns all the user's task lists and takes no
+                  filter. Google does not document how a list leaves it other
+                  than deletion, nor what a 404 from tasklists.get means, so
+                  absence is declared removed and a 404 unavailable.
+        task:
+          x-read-tombstone:
+            field: deleted
+            values: [true]
+          collections:
+            tasks:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                parentAbsent: unavailable
+                description: >-
+                  A complete read sends showCompleted=true and showHidden=true
+                  (the collection's listQuery) and every page; it then returns
+                  every task of the list that is not deleted. A task leaves it
+                  when deleted (a read then answers 200 with deleted true, as
+                  Task.deleted documents) and possibly in other ways Google
+                  does not document, so absence is removed. Google does not
+                  document what a 404 from tasks.get means (a purged task, a
+                  deleted list, lost access), so it is unavailable. Google does
+                  not document whether deleting a list deletes its tasks, so
+                  they become unavailable, not deleted, when a list is gone.

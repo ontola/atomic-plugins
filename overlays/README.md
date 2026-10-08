@@ -109,6 +109,20 @@ fixed read is the request the drive app sends. No provider was called.
 | [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes, the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded. | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
 | [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false`, and the event update declares `mode: patch` with `patchFormat: jsonMergePatch`. | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
 
+## Completeness and read outcomes
+
+Two standalone overlays declare [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md#43-reading-an-absent-object)
+(`absent`, `notFound`, `parentAbsent`) and Deletion Feeds `x-read-tombstone`;
+no dated catalog selects them. Each applies after the crud-causality overlay
+whose resources it targets. `tests/test_completeness_overlays.py` composes
+them and classifies synthetic read answers as the drive apps document them.
+No provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | After `crud-causality-v2` only. Task lists and tasks: `absent: removed`, `notFound: unavailable`; tasks also `parentAbsent: unavailable`; `deleted: true` as a read tombstone. | The pinned OAD (`tasklists.list`, `Task.deleted`); Google documents no meaning for a `404`. |
+| [Todoist v1](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) | Active tasks: `absent: removed`, `notFound: unavailable`; `is_deleted: true` as a read tombstone. | The pinned OAD ("Get active tasks"); the [API v1 reference](https://developer.todoist.com/api/v1/) through a search summary. A completed task's read by id is not verified (#46). |
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:

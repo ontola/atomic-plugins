@@ -1,0 +1,38 @@
+# Reviewed 2026-10-08 against the pinned OAD and provider documentation.
+# Source: the pinned OAD: GET /tasks "Get active tasks"; Task has checked and is_deleted.
+# Source: https://developer.todoist.com/api/v1/ (Task object: is_deleted, whether the task
+# is marked as deleted; checked, whether it is completed). Read through a search summary;
+# the reference page did not render in full for the reviewer's tool.
+# Needs Collection Completeness 0.2.0-draft (notFound) and Deletion Feeds 0.2.0-draft
+# (x-read-tombstone). Meant to compose with crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml,
+# in either order: it deep-merges into components.crudResources rather than targeting
+# the task resource, so on the bare OAD it adds only these two declarations.
+overlay: 1.0.0
+info:
+  title: Todoist API v1 task completeness and read tombstones
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/ac07532b0a0ac101cf8bae2a54177fb1d8ea3779/APIs/todoist.com/1/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        task:
+          x-read-tombstone:
+            field: is_deleted
+            values: [true]
+          collections:
+            tasks:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  GET /tasks without project_id (the one filter the pinned OAD
+                  declares), following every cursor, returns the account's
+                  active tasks only. A task leaves it when completed (a read
+                  then returns it with checked true, which is a value of the
+                  task, not its absence), when deleted (is_deleted true), or
+                  when moved out of the connection's reach; absence is
+                  therefore removed. Todoist does not document what a 404 from
+                  GET /tasks/{task_id} means, so it is unavailable. Whether a
+                  completed task is still readable by id is not verified
+                  (integrations/issue-tracker/README.md, #46).
