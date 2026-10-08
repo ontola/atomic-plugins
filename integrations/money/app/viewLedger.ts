@@ -54,6 +54,8 @@ export interface Ctx {
   width: number;
   locale?: string;
   today: string;
+  /** Epoch ms, for the status card's "ago"; `Date.now()` when absent. */
+  now?: number;
 }
 
 export const narrow = (width: number) => width < 560;

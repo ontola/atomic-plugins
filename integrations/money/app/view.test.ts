@@ -442,6 +442,47 @@ describe('Money view: import sheet', () => {
   });
 });
 
+describe('Money view: the sync-status card (Q-084)', () => {
+  const card = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('section[aria-label="Sync status"]');
+
+  it('comes first after the tabs on Transactions and Imports, read-only, and not on Sources', async () => {
+    const root = await open(fakeStore({ rows: sampleRows() }));
+    const region = card(root)!;
+    expect(region).not.toBeNull();
+    expect(region.previousElementSibling?.getAttribute('role')).toBe('tablist');
+    expect(text(region)).toContain('Read-only: edits here stay in Atomic.');
+    expect(text(region)).toContain('There is no bank connection');
+    expect(text(region)).toMatch(/\d+ transactions/);
+    // The card is never a live region: the pill stays the one status.
+    expect(region.getAttribute('role')).not.toBe('status');
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    // Its styles ride in the app's one style element.
+    expect(
+      document.querySelector('style#money-app-styles')?.textContent,
+    ).toContain('.ss-head');
+
+    const tabs = [...root.querySelectorAll<HTMLElement>('[role="tab"]')];
+    tabs.find(t => text(t).startsWith('Imports'))!.click();
+    expect(card(root)!.previousElementSibling?.getAttribute('role')).toBe(
+      'tablist',
+    );
+    tabs.find(t => text(t) === 'Sources')!.click();
+    expect(card(root)).toBeNull();
+  });
+
+  it('on the first run: not synced yet, 0 transactions, above the invitation', async () => {
+    const root = await open(fakeStore());
+    const region = card(root)!;
+    expect(text(region)).toContain('Not synced yet');
+    expect(text(region)).toContain('0 transactions in this table');
+    expect(
+      region.compareDocumentPosition(root.querySelector('.pl-empty')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
 describe('Money view: imports tab', () => {
   it('lists statements and opens one as a filter on Transactions', async () => {
     const root = await open(fakeStore({ rows: sampleRows() }));

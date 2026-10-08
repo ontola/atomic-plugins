@@ -156,8 +156,13 @@ export interface State {
   limit: number;
   /** Subject of the row whose detail is open. */
   selected?: string;
-  /** Rows that arrived through the table subscription since the last load. */
-  arrived?: { count: number };
+  /**
+   * Rows that arrived through the table subscription since the last load,
+   * and when (epoch ms): the import that just finished, for the status card.
+   */
+  arrived?: { count: number; at: number };
+  /** When the last load failed (epoch ms), while `view` is the error. */
+  failedAt?: number;
   /** Saves of the open row's annotations, by field. */
   edits: Partial<Record<NoteKey, Edit>>;
   /** What is typed but not yet saved, by field; kept across re-renders. */
@@ -323,7 +328,7 @@ export function createController(
       rows,
       incomplete,
       view: settled(rows, incomplete),
-      ...(arrived ? { arrived: { count: arrived } } : {}),
+      ...(arrived ? { arrived: { count: arrived, at: Date.now() } } : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -440,7 +445,7 @@ export function createController(
     update({ edits: { ...state.edits, [field]: edit } });
 
   const fail = (message: string) =>
-    update({ view: { kind: 'error', message } });
+    update({ view: { kind: 'error', message }, failedAt: Date.now() });
 
   return {
     state: () => state,
@@ -536,6 +541,7 @@ export function createController(
           filters: noFilters(defaultPeriod(rows, today())),
           limit: WINDOW,
           arrived: undefined,
+          failedAt: undefined,
         });
         unsubscribe?.();
         unsubscribe = store.subscribe(table, queueRefresh);

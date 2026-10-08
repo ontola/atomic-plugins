@@ -6,8 +6,8 @@ This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
 on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
 the pin when this was first verified, includes it; see [Verified](#verified)
-for the pins it was last run against, the current pin `a12b74a` included
-(0.4.1, 2026-10-02).
+for the pins it was last run against, the current pin `0fa9c07` included
+(0.4.2, 2026-10-08).
 
 The importer below is one of two ways in. Since 0.4.0 the Money app
 (`app/`) also imports statements by itself, into a table of the shared
@@ -193,6 +193,36 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   so on this host such a row has an empty account, currency or amount, or
   comes from a lens or another writer. A row with all four fields but an
   amount that is not one stays in the ledger as "Not a valid amount".
+- **The sync-status card (0.4.2, Q-084).** The shared card from
+  [`integrations/sync-status/`](../sync-status/README.md) sits first on the
+  Transactions and Imports tabs (not on Sources, which lists where
+  transactions can come from); `app/status.ts` maps the state onto it, pure,
+  with a test per state in `app/status.test.ts`. What it says, truthfully for
+  an app with no provider: the write-back line is "Read-only: edits here stay
+  in Atomic." in every state, followed by "There is no bank connection:
+  transactions come in from the MT940 and camt.053 files you import, and the
+  category and note you add are saved in this table." (plus, on a table whose
+  rows this app may not edit yet, "Saving a category or note asks you to
+  allow editing first.", or after a refusal, "Editing the rows was refused,
+  so a category or note cannot be saved until you allow it."); the "sync" it
+  dates is the last import: an import that finished in this view ("Synced
+  just now", "Last sync: 2 added, 0 updated, 4 unchanged"), else the newest
+  `imported` stamp among the stored statements ("Synced 3 days ago"); the
+  rows line counts the complete rows and the statements they came from ("6
+  transactions from 2 statements"). A table whose statements are only derived
+  from its rows (an older importer table, a hand-made shared-class table)
+  records no import date, so the card reads "Not synced yet" over the rows
+  and the rows line says "when they were imported is not recorded" rather
+  than inventing a date. Loading and an import's steps show as busy ("Reading
+  the file…", "Importing 3 of 10…"); a load error is the failed sync with
+  when it failed (`state.failedAt`, 0.4.2) and "Try again."; an import that
+  stopped midway is a problem ("The import stopped before every row was
+  written.", the rows written so far are kept, check the same file again).
+  Incomplete rows are ignored groups by what they miss, named, with "Open
+  row" when the host can show a row and the group has one. The card is a
+  region, not a live region: the header's pill stays the one `role="status"`.
+  Its CSS comes through `cssRawPlugin` from `integrations/sync-status/build.mjs`
+  and is appended to the app's one `<style>` element.
 - **Detail**: the bank's fields read-only with the verbatim narrative;
   category and note (`money-category`, `money-note`) saved on change. The
   host lets an app edit the rows of the table it views only after the
@@ -326,6 +356,19 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.2 (`plugin.js` sha256
+`2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.2/ui.js`, 120,305 bytes) the five tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-08 against the
+pin `0fa9c07` (the build VPS's source build of it), in 5.4 minutes. What the
+run adds over 0.4.1: after the MT940 import into the app's own table, the
+sync-status card reads "Synced just now", "Last sync: 2 added", "2
+transactions" and "Read-only: edits here stay in Atomic. There is no bank
+connection". Not verified end to end: the card on the importer's table, on a
+table without import dates, after a load error or a stopped import, and
+with incomplete rows (`app/status.test.ts` and `app/view.test.ts` only).
 
 At 0.4.1 (`plugin.js` sha256
 `b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again

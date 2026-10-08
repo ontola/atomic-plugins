@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -295,6 +295,15 @@ test.describe('money integration', () => {
     await expect(app.getByRole('status').first()).toContainText('Imported 2', {
       timeout: 60_000,
     });
+    // The shared sync-status card (Q-084) dates the import and stays
+    // read-only: there is no provider to send anything to.
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('Last sync: 2 added');
+    await expect(syncCard).toContainText('2 transactions');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
     const lunch = app.getByRole('button', { name: /Fixture lunch/ });
     await expect(lunch).toBeVisible();
     await expect(

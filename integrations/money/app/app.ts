@@ -8,6 +8,7 @@ import { decodeStatement } from './check.js';
 import { createController, type ImportPort, type State } from './controller.js';
 import { MONEY_CSS } from './styles.js';
 import type { PluginStore } from './store.js';
+import { syncStatusCss } from '../../sync-status/card.js';
 import { installStyles } from './ui/components.js';
 import { isTyping, replaceKeepingFocus, trapTab } from './ui/focus.js';
 import { renderApp, type Actions } from './view.js';
@@ -23,6 +24,8 @@ export interface MountOptions {
   importer?: ImportPort;
   /** Yield between import check steps (the harness holds one). */
   tick?: () => Promise<void>;
+  /** Epoch ms for the status card's "ago"; `Date.now` by default. */
+  now?: () => number;
 }
 
 /** Renders the app into `root`. `view()` is this with the browser's defaults. */
@@ -33,7 +36,8 @@ export async function mount(
 ): Promise<void> {
   const doc = root.ownerDocument;
   const win = doc.defaultView ?? window;
-  installStyles(doc, 'money-app-styles', MONEY_CSS);
+  // The shared sync-status card's rules after the app's, in the one element.
+  installStyles(doc, 'money-app-styles', `${MONEY_CSS}\n${syncStatusCss}`);
   root.classList.add('pl-app');
 
   // The host's light/dark setting, for native controls and scrollbars; the
@@ -157,7 +161,13 @@ export async function mount(
     current = state;
     replaceKeepingFocus(root, [
       ...renderApp(
-        { state, width, locale, today: controller.today() },
+        {
+          state,
+          width,
+          locale,
+          today: controller.today(),
+          now: (options.now ?? Date.now)(),
+        },
         actions,
       ),
       fileInput,

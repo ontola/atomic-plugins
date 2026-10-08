@@ -975,7 +975,7 @@ var manifest = {
   schemaVersion: 2,
   name: "bank-statements",
   namespace: "atomic-plugins",
-  version: "0.4.1",
+  version: "0.4.2",
   description: "Import bank transactions from MT940 and camt.053 statement exports.",
   operations: [],
   secrets: [],

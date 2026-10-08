@@ -323,7 +323,7 @@ describe('importing through the host (atomic-server#1774)', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(controller.state().rows).toHaveLength(2);
-    expect(controller.state().arrived).toEqual({ count: 2 });
+    expect(controller.state().arrived).toMatchObject({ count: 2 });
     expect(controller.state().statements).toHaveLength(1);
   });
 

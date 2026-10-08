@@ -7,7 +7,8 @@
  *
  * Needs an atomic-server checkout's `browser/` beside `integrations/` (see
  * AGENTS.md), for esbuild. No npm dependencies: the statement readers come
- * from this package (`../statement.ts`), the rest is plain DOM.
+ * from this package (`../statement.ts`), the shared sync-status card from
+ * `integrations/sync-status/` (Q-084), the rest is plain DOM.
  * No code splitting and no CSS file: "a plugin in the drive is one module".
  */
 import { createHash } from 'node:crypto';
@@ -15,6 +16,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -64,7 +66,8 @@ export async function build({ outfile } = {}) {
     splitting: false,
     legalComments: 'none',
     minify: true,
-    plugins: [minifiedStylesheets(esbuild)],
+    // The shared sync-status card's `card.css?raw` comes through cssRawPlugin.
+    plugins: [minifiedStylesheets(esbuild), cssRawPlugin(esbuild)],
     write: false,
     outfile: outfile ?? path('dist/ui.js'),
     logLevel: 'silent',

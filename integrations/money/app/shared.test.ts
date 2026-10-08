@@ -406,7 +406,7 @@ describe('importing into the app’s own table by its own writes (write.ts)', ()
     await settle();
     const state = controller.state();
     expect(state.rows).toHaveLength(2);
-    expect(state.arrived).toEqual({ count: 2 });
+    expect(state.arrived).toMatchObject({ count: 2 });
     expect(state.statements).toEqual([
       expect.objectContaining({
         account: 'NL00BUNQ0000000000',
