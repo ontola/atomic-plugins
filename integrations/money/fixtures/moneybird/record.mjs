@@ -193,8 +193,27 @@ export const REDACTIONS = [
   },
   {
     field: 'any other string field',
-    replace: 'redacted (reported in api/meta.json)',
+    replace: 'redacted (reported in api/meta.json, by its full path)',
     reason: 'Fail closed on fields this list does not know about.',
+  },
+  {
+    field:
+      'any nested object other than user, project and contact (sepa_fields, an unexpected extra)',
+    replace:
+      'every string and number inside "redacted" and reported, KEEP and ' +
+      'KEEP_NUMBERS not applied; null, booleans and "" kept',
+    reason:
+      'This list knows the fields of seven resources; an object it does ' +
+      'not know could hold anything under a familiar name (amount, type).',
+  },
+  {
+    field:
+      'an object key that is not shaped like a field name (not snake_case)',
+    replace:
+      'redacted-key-<n>, stable per key; reported as <path>.<redacted key>',
+    reason:
+      'A key can be data too (an IBAN keying a map, say), so it never ' +
+      'reaches the output or meta.json as written.',
   },
 ];
 
@@ -332,28 +351,59 @@ export function redactor() {
     stable(`name:${kind}`, raw, n => `${label} ${n}`);
   const isId = field => field === 'id' || field.endsWith('_id');
 
-  const value = (v, field, resource, row) => {
-    if (v === null || typeof v === 'boolean') return v;
-    if (Array.isArray(v))
-      return EMPTIED.has(field)
-        ? []
-        : v.map(item => value(item, field, resource, row));
-    if (typeof v === 'object') return redactRow(NESTED[field] ?? resource, v);
+  /**
+   * An object key is kept only when it is shaped like an API field name
+   * (snake_case); anything else (`{ "NL02RABO0123456789": … }`, say) is
+   * data, so it becomes `redacted-key-<n>` and is reported as `<redacted
+   * key>`, never by its raw text.
+   */
+  const KEY = /^[a-z][a-z0-9_]*$/;
+  const safeKey = k =>
+    KEY.test(k) ? k : stable('key', k, n => `redacted-key-${n}`);
 
-    // Fields that look like ids but are not Moneybird record ids, before the
-    // `*_id` rule: the customer number (a column the app imports) and the
-    // bank's transaction reference.
+  /**
+   * `known` says whether `row` is a resource this list knows (a top-level
+   * record, or a `user`, `project` or `contact` nested in one). Inside any
+   * other nested object (`sepa_fields`, an unexpected `extra`) nothing is
+   * trusted: KEEP and KEEP_NUMBERS do not apply, no fake kind is inherited,
+   * every string and number is "redacted" and reported with its full path.
+   */
+  const value = (v, field, { resource, row, path, known }) => {
+    if (v === null || typeof v === 'boolean' || v === '') return v;
+    const here = { resource, row, path, known };
+    if (Array.isArray(v))
+      return known && EMPTIED.has(field)
+        ? []
+        : v.map(item => value(item, field, here));
+
+    if (typeof v === 'object') {
+      const nested = known ? NESTED[field] : undefined;
+
+      return redactRow(nested ?? resource, v, path, nested !== undefined);
+    }
+
+    if (!known) {
+      unknown.add(path);
+
+      return 'redacted';
+    }
+
+    // Identifying strings the table lists as plainly redacted, before the
+    // `*_id` rule (sepa_mandate_id); then fields that look like ids but are
+    // not Moneybird record ids: the customer number (a column the app
+    // imports) and the bank's transaction reference.
+    if (IDENTIFYING.has(field) && typeof v === 'string') return 'redacted';
     if (field === 'customer_id')
-      return v === '' ? '' : stable('customer_id', v, n => String(n));
+      return stable('customer_id', v, n => String(n));
     if (field === 'account_servicer_transaction_id')
-      return v === '' ? '' : stable('transaction', v, n => `TX-${n}`);
+      return stable('transaction', v, n => `TX-${n}`);
     if (isId(field)) return fakeId(idKind(field, resource), v);
 
     if (typeof v === 'number') {
       // Numbers fail closed too: only counters and quantities the app reads
       // are kept; a numeric account number or tax number is not a number.
       if (KEEP_NUMBERS.has(field)) return v;
-      unknown.add(`${resource}.${field}`);
+      unknown.add(path);
 
       return 'redacted';
     }
@@ -389,7 +439,6 @@ export function redactor() {
     if (IBAN_LIKE.has(field)) return fakeIban(v);
     if (field === 'sales_invoices_url')
       return `https://moneybird.com/${fakeId('administration', row.administration_id)}/sales_invoices/redacted/all`;
-    if (IDENTIFYING.has(field)) return 'redacted';
     if (field === 'description')
       return fakeName(field, v, 'Redacted description');
     if (field === 'message') return fakeName(field, v, 'Redacted message');
@@ -397,14 +446,25 @@ export function redactor() {
       return fakeName(field, v, 'Redacted counterparty');
     if (field === 'batch_reference')
       return stable('batch_reference', v, n => `BATCH-${n}`);
-    unknown.add(`${resource}.${field}`);
+    unknown.add(path);
 
     return 'redacted';
   };
 
-  const redactRow = (resource, row) =>
+  /**
+   * One object: `resource` names what it is (for the fake kinds), `path`
+   * where it sits (for the report, e.g. `time_entry.user`), `known`
+   * whether this list knows it (see `value`).
+   */
+  const redactRow = (resource, row, path = resource, known = true) =>
     Object.fromEntries(
-      Object.entries(row).map(([k, v]) => [k, value(v, k, resource, row)]),
+      Object.entries(row).map(([k, v]) => {
+        const key = safeKey(k);
+        const at = `${path}.${key === k ? k : '<redacted key>'}`;
+        if (key !== k) unknown.add(at);
+
+        return [key, value(v, k, { resource, row, path: at, known })];
+      }),
     );
 
   return {

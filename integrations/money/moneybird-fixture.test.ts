@@ -404,6 +404,96 @@ describe('moneybird fixture: always-on checks', () => {
     ]);
   });
 
+  it('trusts nothing inside an unknown nested object, and no key that is not a field name', () => {
+    const redact = redactor();
+    const mutation: Row = redact.row('financial_mutation', {
+      id: '999000777',
+      amount: '-120.5',
+      currency: 'EUR',
+      sepa_mandate_id: 'MANDATE-77',
+      sepa_fields: {
+        // Familiar names inside an object the list does not know: KEEP does
+        // not apply here, and no id kind is inherited from the mutation.
+        amount: 'free text',
+        type: 'SDD',
+        currency: 'EUR',
+        version: 3,
+        id: '999000778',
+        contra_account_id: '999000779',
+        empty: '',
+        flag: true,
+        nothing: null,
+        deeper: { date: '2026-01-20', list: ['a', 1] },
+        user: { name: 'Piet Jansen' },
+      },
+      NL02RABO0123456789: { amount: '1.00' },
+      'Contra Account': 'Jansen',
+    });
+    const text = JSON.stringify(mutation);
+    for (const secret of [
+      'MANDATE-77',
+      'free text',
+      'SDD',
+      '999000778',
+      '999000779',
+      '2026-01-20',
+      'RABO',
+      'Contra Account',
+      'Jansen',
+      '1.00',
+    ])
+      expect(text, secret).not.toContain(secret);
+    expect(mutation).toMatchObject({
+      amount: '-120.5',
+      currency: 'EUR',
+      sepa_mandate_id: 'redacted',
+      sepa_fields: {
+        amount: 'redacted',
+        type: 'redacted',
+        currency: 'redacted',
+        version: 'redacted',
+        id: 'redacted',
+        contra_account_id: 'redacted',
+        empty: '',
+        flag: true,
+        nothing: null,
+        deeper: { date: 'redacted', list: ['redacted', 'redacted'] },
+        user: { name: 'redacted' },
+      },
+      'redacted-key-1': { amount: 'redacted' },
+      'redacted-key-2': 'redacted',
+    });
+    expect(Object.keys(mutation)).not.toContain('NL02RABO0123456789');
+    // Reported by full path, never by a raw key.
+    expect(redact.unknown()).toEqual([
+      'financial_mutation.<redacted key>',
+      'financial_mutation.<redacted key>.amount',
+      'financial_mutation.sepa_fields.amount',
+      'financial_mutation.sepa_fields.contra_account_id',
+      'financial_mutation.sepa_fields.currency',
+      'financial_mutation.sepa_fields.deeper.date',
+      'financial_mutation.sepa_fields.deeper.list',
+      'financial_mutation.sepa_fields.id',
+      'financial_mutation.sepa_fields.type',
+      'financial_mutation.sepa_fields.user.name',
+      'financial_mutation.sepa_fields.version',
+    ]);
+    // The same odd key keeps the same fake across rows.
+    const again: Row = redact.row('financial_mutation', {
+      id: '999000777',
+      NL02RABO0123456789: 'x',
+    });
+    expect(Object.keys(again)).toContain('redacted-key-1');
+    // A known nested resource still gets its fakes and reports its path.
+    const entry: Row = redact.row('time_entry', {
+      id: '999000555',
+      user: { id: '999000333', name: 'Piet Jansen', favourite: 'tea' },
+    });
+    expect((entry.user as Row).name).toBe('Redacted user 1');
+    expect((entry.user as Row).favourite).toBe('redacted');
+    expect(redact.unknown()).toContain('time_entry.user.favourite');
+  });
+
   it('counts the civil year the way the app does', () => {
     expect(recorderYear()).toBe(civilYear());
   });
