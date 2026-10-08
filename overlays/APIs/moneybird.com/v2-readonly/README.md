@@ -38,8 +38,11 @@ declares `GET /{administration_id}/financial_mutations.json` as a
 https://developer.moneybird.com/api/financial_mutations/), so a client reads
 a range of days as `filter=period:YYYYMMDD..YYYYMMDD` windows and halves a
 window whose answer holds 100 mutations, down to single days. A single day
-with 100 mutations ends the read with an error. This is what the Money app's
-`integrations/money/moneybird/read.ts` does in code today. Declared, not
+with 100 mutations ends the read with an error. The Money app's
+`integrations/money/moneybird/read.ts` splits windows the same way in code
+today, but asks its first window as the named `period:this_year`. Moneybird's
+financial mutations synchronization API, which the pinned read-only document
+does not include, is the documented alternative for reading more than 100. Declared, not
 verified against a live administration: that the period bounds are
 inclusive (inferred from the documented example `20130101..20130131`), that
 a one-day period is accepted, which mutation field the period compares

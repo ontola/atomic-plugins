@@ -5,7 +5,10 @@ the order the dated catalogs list them, and then the unpublished
 pagination-range-window overlay. Checks that the result is a valid OpenAPI
 document, that the Pagination Schemes reference validator accepts it, and
 that the reference read_range splits windows as the Money app's reader does
-(integrations/money/moneybird/read.ts). No provider requests are made.
+(integrations/money/moneybird/read.ts). Only the splitting is compared: the
+Money app asks its first window as Moneybird's named period:this_year, and
+read_range asks every window, the first included, as an explicit range. No
+provider requests are made.
 
 Use --directory for an openapi-directory checkout that has the pinned
 commit (a blobless clone is enough); otherwise the pinned raw URL is
@@ -110,7 +113,8 @@ class MoneybirdRangeWindowTests(unittest.TestCase):
         return request, calls
 
     def test_windows_split_like_the_money_app(self):
-        # read.ts halves 20260101..20261231 into ..20260702 and 20260703..
+        # Only the splitting matches read.ts, which halves 20260101..20261231 into
+        # ..20260702 and 20260703..; its first request is period:this_year instead.
         dates = [f"2026{m:02d}15" for m in range(1, 13) for _ in range(20)]  # 240 mutations
         request, calls = self.provider(dates)
         result = read_range(self.scheme, "20260101", "20261231", request)
