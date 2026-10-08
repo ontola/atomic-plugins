@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       devonian:
-        specifier: 0.6.1
-        version: 0.6.1(syncables@0.19.0)
+        specifier: 0.9.0
+        version: 0.9.0(syncables@0.19.0)
       syncables:
         specifier: 0.19.0
         version: 0.19.0
@@ -92,8 +92,8 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  devonian@0.6.1:
-    resolution: {integrity: sha512-l91vnDrkO1BCLAGPvtLRhdi1ccYTklW4mkEEsTwwMsrOeMEbs5XtjJ5Npa3rQaP2YMXo7vYUXhNlWNXBHuTayQ==}
+  devonian@0.9.0:
+    resolution: {integrity: sha512-eejJbiBgMDCIkLHS8KvzJsDVAK+ce8zu9pw9JucX0X+n8+Ym4u+WSrBwyTwJwxwQhKU44f7hmz0mQdQWCCizzw==}
     engines: {node: '>= 22.11 < 23'}
     peerDependencies:
       '@tomic/lib': '>=0.40.0'
@@ -224,7 +224,7 @@ snapshots:
   detect-libc@2.1.2:
     optional: true
 
-  devonian@0.6.1(syncables@0.19.0):
+  devonian@0.9.0(syncables@0.19.0):
     dependencies:
       '@automerge/automerge-repo': 2.5.6
       effect: 3.22.2
