@@ -9,14 +9,14 @@ ordinary OpenAPI validation are separate.
 
 `read_request(document, resource, collection, context)` returns the request a
 read's first page sends (§4.2.1, steps 1-3), as a reference for consumers.
-`compound_create(crud, planned, send_create, send_follow_up, context)` makes a
-compound create as §4.7.2 says, and `validate` checks its `followUps`.
+`compound_create(document, crud, planned, send_create, send_follow_up, ...)` makes a
+compound create as §4.7.2 says (`continue_compound_create` resumes one), and `validate` checks its `followUps`.
 """
 import copy
 import json
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 VARIABLE = re.compile(r"\{([^{}]+)\}")
@@ -312,6 +312,7 @@ def _well_formed_path(value):
 def _operation_by_id(document, operation_id):
     found = []
     for path, item in (document.get("paths") or {}).items():
+        item = _resolve(document, item)
         if not isinstance(item, dict):
             continue
         for method in METHODS:
@@ -322,13 +323,21 @@ def _operation_by_id(document, operation_id):
 
 
 def _parameters(document, item, operation):
+    """{(in, name)}: the operation's own and its path item's parameters; header names lower-cased."""
     found = {}
     for source in (item, operation):
         for raw in source.get("parameters") or []:
             parameter = _resolve(document, raw)
-            if isinstance(parameter, dict) and "name" in parameter and "in" in parameter:
-                found[(parameter["in"], parameter["name"])] = parameter
+            if isinstance(parameter, dict) and isinstance(parameter.get("name"), str) and "in" in parameter:
+                name = parameter["name"].lower() if parameter["in"] == "header" else parameter["name"]
+                found[(parameter["in"], name)] = parameter
     return found
+
+
+def _bind_key(key):
+    """(kind, name) of a bind key, the header name lower-cased."""
+    kind, _, name = key.partition(".")
+    return kind, name.lower() if kind == "header" else name
 
 
 def _follow_up_errors(document, crud, where, create_item, create_operation):
@@ -376,14 +385,16 @@ def _follow_up_errors(document, crud, where, create_item, create_operation):
             errors.append(f"{at}.bind: {follow_up['operation']!r} declares no JSON request body (rule 23)")
         if "body" in bind and len(body_keys) > 1:
             errors.append(f"{at}.bind: body excludes body.<field> keys (rule 23)")
+        bound = set()
         for key, source in bind.items():
-            kind, _, name = key.partition(".")
+            kind, name = _bind_key(key)
             if kind == "body":
                 if key != "body" and not _well_formed_path(name):
                     errors.append(f"{at}.bind.{key}: expected body.<dot-path> (rule 23)")
             elif kind in ("path", "query", "header") and name:
+                bound.add((kind, name))
                 if (kind, name) not in parameters:
-                    errors.append(f"{at}.bind.{key}: {follow_up['operation']!r} has no {kind} parameter {name!r} (rule 23)")
+                    errors.append(f"{at}.bind.{key}: {follow_up['operation']!r} has no {kind} parameter {key.partition('.')[2]!r} (rule 23)")
             else:
                 errors.append(f"{at}.bind.{key}: expected body, body.<dot-path>, path.<name>, query.<name> or header.<name> (rule 23)")
             if not isinstance(source, dict) or source.get("from") not in BIND_FROM \
@@ -392,12 +403,20 @@ def _follow_up_errors(document, crud, where, create_item, create_operation):
             elif source["from"] == "missing" and source["field"] != follow_up.get("field"):
                 errors.append(f"{at}.bind.{key}: from missing needs the follow-up's own field (rule 23)")
         for (kind, name), parameter in parameters.items():
-            if kind == "path" and f"path.{name}" not in bind and name not in create_path:
+            if (kind, name) in bound:
+                continue
+            if kind == "path" and name not in create_path:
                 errors.append(f"{at}.bind: path parameter {name!r} is neither bound nor carried from the create (rule 24)")
+            elif kind in ("query", "header") and parameter.get("required"):
+                errors.append(f"{at}.bind: required {kind} parameter {parameter['name']!r} is not bound (rule 24)")
     return errors
 
 
 MISSING = object()
+
+
+class Unresolved(ValueError):
+    """A follow-up request with a bound value that resolves to nothing (§4.7.2 step 4)."""
 
 
 def get_path(value, path):
@@ -425,6 +444,49 @@ def _drop_path(target, path):
     target.pop(segments[-1], None)
 
 
+def created_identity(document, crud, created, location=None):
+    """§4.3.2: the identity fields of a created object, or None when they cannot be determined.
+
+    `created` is the response body (or None), `location` the `Location`
+    header (or None). Returns {field: value} for every bound identity
+    variable; a value read back from the URL is a string.
+    """
+    resource = _resources(document).get(crud.get("resource"), {})
+    identity = resource.get("identity") or {}
+    template, bindings = identity.get("urlTemplate"), identity.get("bindings") or {}
+    if not isinstance(template, str) or not bindings:
+        return None
+    source = (crud.get("url") or {}).get("source")
+    url = None
+    if source == "header":
+        url = location
+    elif source == "bodyField":
+        found = get_path(created or {}, (crud.get("url") or {}).get("name", ""))
+        url = found if isinstance(found, str) else None
+    if source in ("header", "bodyField"):
+        if not isinstance(url, str):
+            return None
+        pattern = "".join(
+            f"(?P<{re.sub(r'[^0-9A-Za-z_]', '_', part[1:-1])}>[^/?#]+)" if part.startswith("{") else re.escape(part)
+            for part in re.split(r"(\{[^{}]+\})", template)
+        )
+        match = re.search(pattern + r"(?:[?#]|$)", url)
+        if not match:
+            return None
+        values = {}
+        for variable, binding in bindings.items():
+            group = re.sub(r"[^0-9A-Za-z_]", "_", variable)
+            values[binding.get("field")] = unquote(match.group(group))
+        return values
+    values = {}
+    for variable, binding in bindings.items():
+        value = get_path(created or {}, binding.get("field", ""))
+        if value is MISSING or value is None:
+            return None
+        values[binding.get("field")] = value
+    return values
+
+
 def missing_value(follow_up, planned, created):
     """§4.7.2 step 4: the part of the planned value the create did not apply, or MISSING for none."""
     wanted = get_path(planned, follow_up["field"])
@@ -443,13 +505,19 @@ def missing_value(follow_up, planned, created):
 
 
 def follow_up_request(follow_up, planned, created, missing, context):
-    """The follow-up request filled by `bind`: {"path", "query", "header", "body"}."""
+    """The follow-up request filled by `bind`: {"path", "query", "header", "body"}.
+
+    Raises Unresolved when a BindSource resolves to nothing: such a request
+    is never sent (§4.7.2 step 4).
+    """
     request = {"path": dict(context or {}), "query": {}, "header": {}, "body": None}
     for key, source in follow_up["bind"].items():
         if source["from"] == "missing":
             value = missing
         else:
             value = get_path(created if source["from"] == "created" else planned, source["field"])
+        if value is MISSING:
+            raise Unresolved(f"bind {key}: no {source['from']} value at {source['field']}")
         kind, _, name = key.partition(".")
         if kind == "body":
             if key == "body":
@@ -462,40 +530,69 @@ def follow_up_request(follow_up, planned, created, missing, context):
     return request
 
 
-def compound_create(crud, planned, send_create, send_follow_up, context=None):
+def continue_compound_create(crud, planned, created, send_follow_up, context=None):
+    """§4.7.2 steps 4-6 for a bound object: `created` is the create's answer, or the object read back.
+
+    Returns {"state": "applied" | "partlyApplied", "created", "pending":
+    [{"operation", "request" or None, "reason": "refused" | "unknown" |
+    "notSent"}]}. It stops at the first follow-up that is refused, unknown or
+    unresolved; the rest are pending as notSent.
+    """
+    pending = []
+    for follow_up in crud.get("followUps", []):
+        missing = missing_value(follow_up, planned, created)
+        if missing is MISSING:
+            continue
+        try:
+            request = follow_up_request(follow_up, planned, created, missing, context)
+        except Unresolved:
+            request = None
+        if pending or request is None:
+            pending.append({"operation": follow_up["operation"], "request": request, "reason": "notSent"})
+            continue
+        outcome = send_follow_up(follow_up["operation"], request)
+        if outcome != "ok":
+            reason = "refused" if outcome == "refused" else "unknown"
+            pending.append({"operation": follow_up["operation"], "request": request, "reason": reason})
+    return {"state": "partlyApplied" if pending else "applied", "created": created, "pending": pending}
+
+
+def compound_create(document, crud, planned, send_create, send_follow_up, context=None, on_created=None):
     """A reference implementation of §4.7.2.
 
-    `send_create(body)` returns ("ok", created object), ("refused", None) or
-    ("unknown", None). `send_follow_up(operation_id, request)` returns "ok",
-    "refused" or "unknown". `context` holds the create request's path
-    parameters, carried to follow-ups that do not bind them. Returns
-    {"state": "refused" | "uncertain" | "applied" | "partlyApplied",
-    "created": the created object or None, "pending": [(operation_id,
-    request)] still to send as updates of the bound object}.
+    `send_create(body)` returns ("ok", body, location), ("refused", None,
+    None) or ("unknown", None, None); `location` is the `Location` header or
+    None. `on_created(created)` runs once the object is bound, before any
+    follow-up, so a caller records the binding first (a follow-up that
+    raises then leaves the binding recorded). `send_follow_up(operation_id,
+    request)` returns "ok", "refused" or "unknown". `context` holds the
+    create request's path parameters. Returns a dict with "state":
+    "refused", "uncertain" (with "planned" follow-up fields; resume with
+    continue_compound_create once the object is found), "unbound" (the
+    object exists, its identity unknown; no follow-up sent), "applied" or
+    "partlyApplied".
     """
     follow_ups = crud.get("followUps", [])
     body = copy.deepcopy(planned)
     for follow_up in follow_ups:
         if follow_up["create"] == "omit":
             _drop_path(body, follow_up["field"])
-    outcome, created = send_create(body)
+    outcome, created, location = send_create(body)
     if outcome == "refused":
         return {"state": "refused", "created": None, "pending": []}
     if outcome != "ok":
-        return {"state": "uncertain", "created": None, "pending": []}
-    pending, failed = [], False
-    for follow_up in follow_ups:
-        missing = missing_value(follow_up, planned, created)
-        if missing is MISSING:
-            continue
-        request = follow_up_request(follow_up, planned, created, missing, context)
-        if failed:
-            pending.append((follow_up["operation"], request))
-            continue
-        if send_follow_up(follow_up["operation"], request) != "ok":
-            failed = True
-            pending.append((follow_up["operation"], request))
-    return {"state": "partlyApplied" if failed else "applied", "created": created, "pending": pending}
+        planned_fields = [f["field"] for f in follow_ups if get_path(planned, f["field"]) is not MISSING]
+        return {"state": "uncertain", "created": None, "pending": [], "planned": planned_fields}
+    identity = created_identity(document, crud, created, location)
+    if identity is None:
+        return {"state": "unbound", "created": created, "pending": []}
+    created = dict(created) if isinstance(created, dict) else {}
+    for field, value in identity.items():
+        if get_path(created, field) is MISSING:
+            _set_path(created, field, value)
+    if on_created is not None:
+        on_created(created)
+    return continue_compound_create(crud, planned, created, send_follow_up, context)
 
 
 def read_request(document, resource, collection, context):
