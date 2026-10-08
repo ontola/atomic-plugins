@@ -8,6 +8,9 @@ use serde_json::json;
 
 use crate::catalog::Catalog;
 
+type MethodPath<'a> = (&'a str, &'a str);
+type RouteSet<'a> = &'a [MethodPath<'a>];
+
 fn catalog(platform: &str, source: &str, selection: serde_json::Value) -> Catalog {
     Catalog::from_test_document(platform, serde_yaml::from_str(source).unwrap(), selection)
 }
@@ -170,7 +173,7 @@ async fn published_asana_airtable_profiles_are_read_only_and_proxy_compatible() 
         );
         assert!(provider.use_pkce, "{platform} must use S256 PKCE");
 
-        let (reads, writes): (&[(&str, &str)], &[(&str, &str)]) = match platform {
+        let (reads, writes): (RouteSet<'_>, RouteSet<'_>) = match platform {
             "asana" => (
                 &[
                     ("GET", "/api/1.0/workspaces"),
@@ -221,7 +224,7 @@ async fn published_asana_airtable_profiles_are_read_only_and_proxy_compatible() 
         "OAUTH_AIRTABLE_CLIENT_SECRET",
         "OAUTH_AIRTABLE_CLIENT_AUTH_METHOD",
     ];
-    let previous: Vec<_> = names.iter().map(|key| std::env::var_os(key)).collect();
+    let previous: Vec<_> = names.iter().map(std::env::var_os).collect();
     std::env::set_var(names[0], "runtime-test-client");
     std::env::set_var(names[1], "runtime-test-secret");
     for method in ["client_secret_basic", "none"] {
