@@ -69,3 +69,36 @@ plus: the §7.2 412 test now puts a tombstone in the 412 body and checks it
 is not used; the two restart tests release the first client's hung PUTs so
 no timer is left behind; the session trailer uses the
 `claude-code://sessions/<id>` form.
+
+## Turn 2
+
+**Human (via the coordinator session):** Issue #373: read the CRUD
+Causality Collection Object's `envelope.itemsField` (and any other envelope
+fields the spec defines) in the collection read, in `src/read/model.ts` and
+`src/read/pages.ts`. No new spec is needed. Keep it bounded and backward
+compatible (no envelope means today's behaviour), flip the §2 `it.fails`
+test to passing, and add tests for a nested path, a missing path (a clear
+error, not a silent empty read), and the feed read staying consistent. Base
+on the fixtures PR's head if it has not merged.
+
+**Assistant:** Based the work on the fixtures PR (#372, not yet merged).
+`ReadCollection` gained `itemsField`, read from the Collection Object's
+`envelope.itemsField` when it is a non-empty string (omitted, `null`, an
+empty string or a non-string leave it absent); `readCollections` passes it
+to `walkPages`, which already took an `itemsField` for the feed read, so
+the collection read and the feed read of one operation now share the
+declaration. Without it, `pageItems` locates the array as before. The
+error for a declared path that holds no array now names the declaration
+("No items array at <path> (the declared envelope.itemsField)"); such a
+read is incomplete and `sync()` rejects, never an empty collection. The
+Envelope Object has no field other than `itemsField` (and `x-*`), so
+nothing else was read; the same object's placement on a pagination
+scheme's `response.envelope` is not in syncables' pagination types and was
+left out, as a possible follow-up. New
+`__tests__/unit/read/collections.test.ts` (the model field, a nested path,
+missing and non-array paths, no heuristic once declared, the unchanged
+heuristic without a declaration), and the §2 `it.fails` test became three
+passing tests (list and feed through the shared envelope with the numeric
+cursor sent back in decimal form; a `deleted: true` tombstone found through
+the identity binding; `"true"` is not `true`). README (collection
+declarations, an Unreleased changelog entry) and CLAUDE.md updated.
