@@ -36,3 +36,27 @@ the parser cases (`rel="last next"`, `NEXT`, unquoted, `nextish`, a
 the spec's examples (a `linkResolution.base` typo fails `paginate` and
 leaves a collection read incomplete with no request; a `rel="last next"`
 header pages on). CLAUDE.md, README (Unreleased changelog) updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** The rest of #384 (items 3–10), on
+a branch stacked on items 1–2.
+
+**Assistant:** (3) `resolveLink` refuses an `@` in the raw authority, so an
+empty userinfo (`//@host/x`, `https://:@host/x`), which a WHATWG parser
+drops, is refused like the reference does. (4) It refuses a server URL or a
+result whose scheme is not http(s) before comparing origins, since every
+such origin is the string "null". (5) The validator's rule 10 uses the spec
+schema's pattern for `linkResolution.url`, and checks a scheme-level
+`envelope`. (6) A declared items array with a non-object item fails the page
+("Item <n> at <path> is not an object"); the deletion feed read opts into
+skipping, as its README says. (7) `envelope.itemsField: null` or `""` means
+the body root for the list read (strict, no heuristic) and the feed alike;
+omitted keeps the heuristic. (8) `splitPath` handles `["a.b"]` escapes in
+`readNestedField`/`setNestedField`. (9) The "(the declared
+envelope.itemsField)" suffix is dropped when the path is the body root.
+(10) `walkPages` falls back to the pagination scheme's own
+`response.envelope` (typed on `ResponsePaginationFieldsObject`), and
+`ApiClient.paginate` passes the matching Collection Object's envelope
+through a new `PaginateOptions.itemsField`. Three new test files; README,
+CLAUDE.md and an Unreleased changelog bullet.

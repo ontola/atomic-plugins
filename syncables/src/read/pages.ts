@@ -151,20 +151,35 @@ export function pageItems(
   return array.filter(isRecord);
 }
 
-/** The array at a dot-path of the body (`''`: the body), its objects only. */
-function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
+/**
+ * The array at a dot-path of the body (`''`: the body). An item that is not
+ * an object is an error, so an array of strings never reads as empty
+ * (#384); a feed read (`skipNonObjects`) skips such items instead, as its
+ * documentation says.
+ */
+function itemsAt(
+  body: unknown,
+  path: string,
+  skipNonObjects = false,
+): Record<string, unknown>[] {
   const array =
     path === ''
       ? body
       : isRecord(body)
         ? readNestedField(body, path)
         : undefined;
+  const where = path
+    ? `${path} (the declared envelope.itemsField)`
+    : 'the body root';
   if (!Array.isArray(array)) {
-    throw new Error(
-      `No items array at ${path || 'the body root'} (the declared envelope.itemsField)`,
-    );
+    throw new Error(`No items array at ${where}`);
   }
-  return array.filter(isRecord);
+  if (skipNonObjects) return array.filter(isRecord);
+  const odd = array.findIndex((item) => !isRecord(item));
+  if (odd !== -1) {
+    throw new Error(`Item ${odd} at ${where} is not an object`);
+  }
+  return array as Record<string, unknown>[];
 }
 
 /** Fills `{name}` path variables, percent-encoding each value. */
@@ -196,9 +211,12 @@ export interface PageWalk {
   pageSize?: number;
   /**
    * Dot-path to the items array in each body, `''` for the body itself.
-   * Without it, `pageItems` locates the array.
+   * Without it, the pagination scheme's own `response.envelope` applies,
+   * and without that `pageItems` locates the array.
    */
   itemsField?: string;
+  /** Skip items that are not objects instead of failing the page (the deletion feed read). */
+  skipNonObjects?: boolean;
 }
 
 export interface Page {
@@ -304,10 +322,20 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
+    // The caller's envelope (a Collection Object's), else the scheme's own
+    // (Pagination Schemes §4.4.2; `null` means the body root), else located.
+    const schemeEnvelope = scheme?.response?.envelope;
+    const itemsField =
+      walk.itemsField ??
+      (schemeEnvelope === undefined
+        ? undefined
+        : typeof schemeEnvelope.itemsField === 'string'
+          ? schemeEnvelope.itemsField
+          : '');
     const items =
-      walk.itemsField === undefined
+      itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, walk.itemsField);
+        : itemsAt(body, itemsField, walk.skipNonObjects);
     itemsSoFar += items.length;
     yield { url, items, body };
 

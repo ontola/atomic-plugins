@@ -861,7 +861,10 @@ function declaredDeletionFeed(
   if (envelope !== undefined) {
     if (!isRecord(envelope)) return undefined;
     const field = envelope['itemsField'];
-    if (field !== undefined && typeof field !== 'string') return undefined;
+    // Omitted, null or "" mean the body root (Pagination Schemes §4.4.2);
+    // another non-string does not parse.
+    if (field !== undefined && field !== null && typeof field !== 'string')
+      return undefined;
     feed.itemsField = field ?? '';
   }
   if (idField !== undefined) {
@@ -2359,6 +2362,8 @@ export function createApiClient(
             : {},
         body: {},
         itemsField: feed.itemsField,
+        // Items that are not objects are skipped, as the README says.
+        skipNonObjects: true,
       })) {
         body = page.body;
         count += page.items.length;
@@ -3282,8 +3287,14 @@ export function createApiClient(
       ) {
         throw new Error(`No ${method} operation found for path "${path}"`);
       }
+      // The Collection Object's envelope applies to its own list operation,
+      // as in sync() (#384).
+      const envelope = routes.find(
+        (r) => r.collection.url === template && r.collection.method === method,
+      )?.collection.itemsField;
       return paginateOperation(doc, {
         ...pagination,
+        ...(envelope === undefined ? {} : { itemsField: envelope }),
         path: template,
         transport: readTransport,
         pathParams: {

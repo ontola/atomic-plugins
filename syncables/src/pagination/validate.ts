@@ -77,18 +77,36 @@ function checkLinkResolution(
   }
 }
 
+/**
+ * The spec schema's pattern for `linkResolution.url`: `http(s)://`, a host
+ * without `/`, `?`, `#`, `@`, whitespace or a backslash, then an optional
+ * path or query without `#`, whitespace or a backslash. Stricter than the
+ * WHATWG parser, which accepts `https:api…`, `https:/…`, backslashes and
+ * spaces (#384).
+ */
+const DECLARED_URL = /^https?:\/\/[^/?#@\s\\]+(?:[/?][^#\s\\]*)?$/;
+
 function isAbsoluteHttpUrl(value: string): boolean {
-  if (value.includes('#')) return false;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === 'https:' || url.protocol === 'http:') &&
-      !url.username &&
-      !url.password
-    );
-  } catch {
-    return false;
+  return DECLARED_URL.test(value);
+}
+
+/**
+ * Spec §4.4.2 and §9 rule 6: a scheme-level `response.envelope`, when
+ * present, is an object whose `itemsField` is a string or `null`.
+ */
+function checkEnvelope(
+  path: string,
+  envelope: unknown,
+  errors: string[],
+): void {
+  if (envelope === undefined) return;
+  if (typeof envelope !== 'object' || envelope === null) {
+    errors.push(`${path}.envelope must be an object`);
+    return;
   }
+  const field = (envelope as Record<string, unknown>)['itemsField'];
+  if (field !== undefined && field !== null && typeof field !== 'string')
+    errors.push(`${path}.envelope.itemsField must be a string or null`);
 }
 
 /**
@@ -142,6 +160,7 @@ export function validatePaginationScheme(
     }
   }
 
+  checkEnvelope(`${path}.response`, scheme.response?.envelope, errors);
   for (const [fieldName, field] of Object.entries(
     scheme.response?.bodyFields ?? {},
   )) {

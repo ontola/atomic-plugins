@@ -971,9 +971,15 @@ const { records, ontology, errors } = await readPlatform(document, {
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
   collection's read with "No items array at <path>", never an empty read.
-  Without it (or with `itemsField: null`), the array is located as before: a
-  top-level array body, else the response schema's array property, else a
-  common envelope name (`items`, `data`, `results`, `records`, `content`).
+  `itemsField: null` (or `""`) says the body root is the array, and an item
+  that is not an object fails the read ("Item <n> at <path> is not an
+  object") instead of being dropped. Without an envelope, the pagination
+  scheme's own `response.envelope` applies (Pagination Schemes §4.4.2); else
+  the array is located as before: a top-level array body, else the response
+  schema's array property, else a common envelope name (`items`, `data`,
+  `results`, `records`, `content`). `ApiClient.paginate` applies the
+  Collection Object's envelope to its own list operation too. Dot-paths may
+  bracket-escape a segment that holds a `.` (`meta["page.info"].next`).
 - **Pagination** follows the operation's pagination scheme: page numbers or
   offsets, page tokens or cursors, and next links in the body or a `Link`
   header. A cursor declared in `request.bodyFields` travels in the JSON body
@@ -1011,6 +1017,18 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Pagination Schemes 0.4.0 and envelope conformance (#384
+  items 3–10): `resolveLink` refuses userinfo in the raw authority (an empty
+  `//@host/x` included) and any server URL or result that is not http(s);
+  the validator's `linkResolution.url` rule follows the spec schema's
+  pattern; a declared items array with a non-object item fails the read
+  instead of reading as empty (the deletion feed still skips such items);
+  `envelope.itemsField: null` or `""` means the body root for the list read
+  and the feed alike; dot-paths accept bracket escapes (`["a.b"]`); the
+  "declared envelope" suffix is gone from the body-root error; the pagination
+  scheme's own `response.envelope` is read, and `ApiClient.paginate`
+  applies the Collection Object's envelope. Behaviour change: a Collection
+  Object with `itemsField: null` no longer falls back to the heuristic.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo
