@@ -60,3 +60,23 @@ envelope.itemsField)" suffix is dropped when the path is the body root.
 `ApiClient.paginate` passes the matching Collection Object's envelope
 through a new `PaginateOptions.itemsField`. Three new test files; README,
 CLAUDE.md and an Unreleased changelog bullet.
+
+## Turn 3
+
+**Human (via the coordinator session, to a worker taking over after the
+previous one stopped on a usage limit):** #406 conflicts with main in
+`src/read/model.ts` after #392. Merge `origin/main` in with a merge commit,
+keep both #392's `listField`/`listMethod`/`listQuery`/`listBody` and the
+envelope changes, fix `ApiClient.paginate` picking the first route's
+envelope when several fixed-read collections share one URL and method, and
+add a changelog line that the scheme-level `response.envelope` is now
+strict (Zendesk and Google overlays).
+
+**Assistant:** Merge commit resolving `read/model.ts` (the `listField`
+lookups from #392, the `itemsField` null/`""` handling from #406).
+`paginate` now considers only the collections on that URL and method whose
+fixed query and body the call sends, keeps those fixing the most values,
+and applies their envelope when they agree; otherwise none (the scheme's
+own envelope or the heuristic). Two tests in `envelope.test.ts` (two fixed
+reads on one URL; an unfixed and a fixed one). The Unreleased changelog
+bullet names the strict scheme-level envelope and the affected overlays.

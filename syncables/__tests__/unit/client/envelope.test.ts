@@ -74,6 +74,69 @@ describe('ApiClient.paginate applies the Collection Object envelope (item 10b)',
       { id: 'e2' },
     ]);
   });
+
+  it('picks, among several fixed-read collections on one URL, the one whose fixed query the call sends', async () => {
+    // Two collections over /entries (CRUD Causality 0.4.0 fixed reads) with
+    // different envelopes; a call with neither query matches none.
+    const two = structuredClone(doc);
+    const collections = (
+      two.components!['crudResources'] as Record<
+        string,
+        Record<string, unknown>
+      >
+    )['entry']!['collections'] as Record<string, Record<string, unknown>>;
+    delete collections['entries']!['x-deletion-feed'];
+    collections['entries']!['listQuery'] = { state: 'open' };
+    collections['archived'] = {
+      urlTemplate: '/entries',
+      listQuery: { state: 'archived' },
+      envelope: { itemsField: 'archive.rows' },
+    };
+    const transport = vi.fn<Transport>(async ({ url }) =>
+      url.searchParams.get('state') === 'archived'
+        ? reply({ archive: { rows: [{ id: 'a1' }] }, data: { entries: [] } })
+        : reply({ data: { entries: [{ id: 'e1' }] }, items: [{ id: 'x' }] }),
+    );
+    const client = createApiClient(two, { transport });
+    expect(
+      await client.paginate('/entries', { query: { state: 'open' } }),
+    ).toEqual([{ id: 'e1' }]);
+    expect(
+      await client.paginate('/entries', { query: { state: 'archived' } }),
+    ).toEqual([{ id: 'a1' }]);
+    // Neither collection's query: no Collection envelope, the heuristic
+    // finds `items`.
+    expect(await client.paginate('/entries')).toEqual([{ id: 'x' }]);
+  });
+
+  it('prefers the collection that fixes the most values the call sends', async () => {
+    // An unfixed collection and a fixed one share /entries: a call sending
+    // state=archived matches both, and the fixed one's envelope applies.
+    const two = structuredClone(doc);
+    const collections = (
+      two.components!['crudResources'] as Record<
+        string,
+        Record<string, unknown>
+      >
+    )['entry']!['collections'] as Record<string, Record<string, unknown>>;
+    delete collections['entries']!['x-deletion-feed'];
+    collections['archived'] = {
+      urlTemplate: '/entries',
+      listQuery: { state: 'archived' },
+      envelope: { itemsField: 'archive.rows' },
+    };
+    const transport = vi.fn<Transport>(async () =>
+      reply({
+        archive: { rows: [{ id: 'a1' }] },
+        data: { entries: [{ id: 'e1' }] },
+      }),
+    );
+    const client = createApiClient(two, { transport });
+    expect(
+      await client.paginate('/entries', { query: { state: 'archived' } }),
+    ).toEqual([{ id: 'a1' }]);
+    expect(await client.paginate('/entries')).toEqual([{ id: 'e1' }]);
+  });
 });
 
 describe('a deletion feed whose envelope is itemsField: null (item 7)', () => {

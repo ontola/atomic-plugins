@@ -1038,8 +1038,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   and the feed alike; dot-paths accept bracket escapes (`["a.b"]`); the
   "declared envelope" suffix is gone from the body-root error; the pagination
   scheme's own `response.envelope` is read, and `ApiClient.paginate`
-  applies the Collection Object's envelope. Behaviour change: a Collection
-  Object with `itemsField: null` no longer falls back to the heuristic.
+  applies the Collection Object's envelope (when several fixed-read
+  collections share the URL, the one fixing the most of the query and body
+  values the call sends; none when that leaves none, or several with
+  different envelopes). Behaviour changes: a
+  Collection Object with `itemsField: null` no longer falls back to the
+  heuristic, and a pagination scheme's `response.envelope` is now strict
+  too, so a body without an array at its `itemsField` fails the read where
+  it used to be located by the heuristic; the Zendesk and Google overlays
+  declare one and are affected.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo
