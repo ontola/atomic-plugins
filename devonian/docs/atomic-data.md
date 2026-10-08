@@ -153,7 +153,7 @@ credentials, subscriptions, identity lookups, or durable synchronization state.
   through. There is no reverse mapping yet.
 
 None of these lenses is part of this package any more (see the README's
-"Unreleased" note). Calendar's projection helpers still require the consuming
+"Passive platform lenses" section). Calendar's projection helpers still require the consuming
 application's compatible `@tomic/lib` calendar helpers. The Calendar lens
 folder keeps its previous adapter, projection, recurrence, types, and sync
 modules next to `lens/`.

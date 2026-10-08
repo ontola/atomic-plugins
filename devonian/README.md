@@ -17,7 +17,7 @@ See the [Atomic Data guide](docs/atomic-data.md) for the API, supported JSON-AD 
 
 ## Value lens algebra
 
-The `devonian/lenses` entry (new in 0.9.0) (also exported from the root) composes pure,
+The `devonian/lenses` entry (new in 0.9.0, and also exported from the root) composes pure,
 synchronous field and custom mappings. Explicit source ownership, unchanged-value
 preservation and executable round-trip checks let a provider expose an editable
 view while retaining fields and representations the view cannot express. GitHub
