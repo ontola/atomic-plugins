@@ -1,0 +1,115 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+info:
+  title: Notion API Runtime Schemas (page properties described by their data source)
+  version: '2026-03-11'
+# Runtime Schemas 0.1.0-draft (openapi-extensions/spec/runtime-schemas) for
+# the read-only page resource of crud-causality-0c8e2296...-overlay.yaml,
+# which this overlay must follow in a catalog. Selected by no dated catalog
+# until syncables reads x-runtime-schema.
+#
+# The second action targets $.components rather than the page resource, so
+# that it also resolves against the bare OAD, as validate_oad_pins.py
+# requires of an overlay no catalog selects. After the crud-causality
+# overlay it deep-merges into that overlay's page resource; on its own it
+# would leave a page resource without an identity.
+#
+# A page's `properties` is keyed by property name; each value carries the
+# property's `id`, its `type` and the value under a key named after the type
+# (developers.notion.com/reference/page-property-values). The data source's
+# `properties`, read with GET /data_sources/{data_source_id}, is keyed by
+# name too; each definition has `id`, `name`, `type` and `description`, and
+# "A property's `id` stays the same when its name changes"; select,
+# multi_select and status options have a stable `id`, a `name` and a
+# `color` (developers.notion.com/reference/data-source-properties).
+#
+# The types are the ten the Notion app's lens projects today
+# (integrations/notion/devonian/notion/lens/projection.ts). Every other
+# Notion type is undescribed on purpose: relations and people are truncated
+# after 25 entries, and formula, rollup and the timestamp types are
+# computed. The value schemas follow the documentation; they are declared,
+# not verified against a live workspace.
+actions:
+  - target: $.components.schemas
+    update:
+      NotionRichText:
+        type: array
+        description: Rich text objects; formatted text has no lossless plain form.
+        items: {$ref: '#/components/schemas/JsonObject'}
+      NotionSelectOption:
+        type: object
+        required: [id, name]
+        properties:
+          id: {type: string}
+          name: {type: string}
+          color: {type: string}
+  - target: $.components
+    update:
+      crudResources:
+        page:
+          references:
+            data_source:
+              resource: data_source
+              bindings:
+                data_source_id: {field: parent.data_source_id}
+              description: The data source the page is a row of, whose properties describe the page's.
+          x-runtime-schema:
+            description: >-
+              Each page's properties are the columns of its data source, read
+              with GET /data_sources/{data_source_id} and matched by stable
+              property id, so a renamed column keeps its values.
+            field: properties
+            keyedBy: name
+            match: id
+            memberId: id
+            memberType: type
+            describedBy:
+              reference: data_source
+              definitions: properties
+              shape: map
+            definition:
+              id: id
+              name: name
+              type: type
+              description: description
+            types:
+              title:
+                value: title
+                schema: {$ref: '#/components/schemas/NotionRichText'}
+              rich_text:
+                value: rich_text
+                schema: {$ref: '#/components/schemas/NotionRichText'}
+              number:
+                value: number
+                schema: {type: number, nullable: true}
+              checkbox:
+                value: checkbox
+                schema: {type: boolean}
+              url:
+                value: url
+                schema: {type: string, nullable: true}
+              email:
+                value: email
+                schema: {type: string, nullable: true}
+              phone_number:
+                value: phone_number
+                schema: {type: string, nullable: true}
+              select:
+                value: select
+                schema:
+                  nullable: true
+                  allOf: [{$ref: '#/components/schemas/NotionSelectOption'}]
+                options: {field: select.options, id: id, name: name, valueId: id}
+              status:
+                value: status
+                schema:
+                  nullable: true
+                  allOf: [{$ref: '#/components/schemas/NotionSelectOption'}]
+                options: {field: status.options, id: id, name: name, valueId: id}
+              multi_select:
+                value: multi_select
+                schema:
+                  type: array
+                  items: {$ref: '#/components/schemas/NotionSelectOption'}
+                options: {field: multi_select.options, id: id, name: name, valueId: id}
+                multiple: true
