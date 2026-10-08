@@ -6,7 +6,10 @@ This page is the short runbook, and what needs whose OK.
 
 ## What needs an OK
 
-- **Droplet deploys** have Michiel's standing OK.
+- **Deploys to user testing** (the catalog, the moderator and the
+  atomic-server image) have Michiel's standing OK, Decision Inbox Q-104
+  (2026-10-08), after checking on the server that no session is in progress
+  ([working-model.md](working-model.md)).
 - **Restarting the moderator or atomic-server ends sessions in progress.**
   Warn on [#227](https://github.com/ontola/atomic-plugins/issues/227) first,
   and restart only when no session is running.
