@@ -26,6 +26,11 @@ import {
   root,
   sourceProblems,
 } from './ontology.mjs';
+// CI's shared-checks job names its test files one by one, and agents cannot
+// change .github/workflows/; the lens catalog's tests run from here until
+// the job lists them itself (ontology-kit/LENSES.md, "Checks").
+import './lens.test.mjs';
+import './lens-catalog.test.mjs';
 
 const BASE = 'https://vocab.example/ontology';
 const PAGES = 'https://someone.github.io/repo/ontology';

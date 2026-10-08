@@ -8,6 +8,8 @@
  *   ontology/v<N>                     one release index (an Atomic Ontology)
  *   ontology/classes/<name>-v<N>      one Atomic Class per file
  *   ontology/properties/<shortname>   one Atomic Property per file
+ *   ontology/lenses/...               the lens catalog, from lenses.json
+ *                                     (lens-catalog.mjs, LENSES.md)
  *   ontology-kit/terms.mjs, terms.d.mts   the same subjects as constants
  *
  * The term files are JSON-AD with absolute subjects and no file extension:
@@ -48,6 +50,13 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  LENS_DIR,
+  generateLenses,
+  implementationProblems,
+  lensSourceProblems,
+  readLensSource,
+} from './lens-catalog.mjs';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -288,10 +297,16 @@ export const render = resource => `${JSON.stringify(resource, null, 2)}\n`;
 
 /**
  * Every file `build` writes, as a map from repository-relative path to its
- * text. Throws on a source problem.
+ * text. Throws on a source problem. `lensSource` is lenses.json, when the
+ * repository at `repo` has one.
  */
-export function generate(source, ontologyBase) {
-  const problems = sourceProblems(source);
+export function generate(source, ontologyBase, lensSource, repo = root) {
+  const problems = [
+    ...sourceProblems(source),
+    ...(sourceProblems(source).length
+      ? []
+      : lensSourceProblems(lensSource, source, ontologyBase, repo)),
+  ];
   if (problems.length) throw new Error(problems.join('\n'));
   const s = subjects(ontologyBase);
   const ref = (kind, value) =>
@@ -346,6 +361,12 @@ export function generate(source, ontologyBase) {
     if (p.classtype) doc[atomic.classtype] = ref('class', p.classtype);
     files.set(`${TERMS_DIR}/properties/${shortname}`, render(doc));
   }
+
+  for (const [path, text] of generateLenses(lensSource, source, ontologyBase, {
+    render,
+    termsDir: TERMS_DIR,
+  }))
+    files.set(path, text);
 
   files.set(`${KIT_DIR}/terms.mjs`, termsModule(source, ontologyBase));
   files.set(`${KIT_DIR}/terms.d.mts`, termsTypes(source));
@@ -497,7 +518,12 @@ function filesUnder(dir, base) {
  * were published).
  */
 export function build({ base = root } = {}) {
-  const files = generate(readSource(base), readBase(base));
+  const files = generate(
+    readSource(base),
+    readBase(base),
+    readLensSource(base),
+    base,
+  );
 
   for (const stale of filesUnder(resolve(base, TERMS_DIR), base))
     if (!files.has(stale)) rmSync(resolve(base, stale));
@@ -512,7 +538,12 @@ export function build({ base = root } = {}) {
 
 /** Generated files that differ from a fresh build, and stray term files. */
 export function freshnessProblems(base = root) {
-  const files = generate(readSource(base), readBase(base));
+  const files = generate(
+    readSource(base),
+    readBase(base),
+    readLensSource(base),
+    base,
+  );
   const problems = [];
   const fix =
     'run `node ontology-kit/ontology.mjs build` and commit the result';
@@ -527,7 +558,7 @@ export function freshnessProblems(base = root) {
   for (const path of filesUnder(resolve(base, TERMS_DIR), base))
     if (!files.has(path))
       problems.push(
-        `${path}: ${TERMS_DIR}/ holds only the build's term files (v<N>, classes/, properties/)`,
+        `${path}: ${TERMS_DIR}/ holds only the build's files (term files v<N>, classes/, properties/, and the lens catalog lenses/)`,
       );
 
   return problems;
@@ -606,7 +637,9 @@ export function publishedProblems(ref, base = root) {
 
     if (!existsSync(file)) {
       problems.push(
-        `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
+        path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
+          ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.`
+          : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
       );
       continue;
     }
@@ -621,7 +654,9 @@ export function publishedProblems(ref, base = root) {
     }
 
     problems.push(
-      `${path} is published at ${ref} and was changed. Published terms are immutable: restore it, and publish the change as a new term (a new property shortname, or <class>-v<N+1>).`,
+      path.startsWith(`${TERMS_DIR}/lenses/`)
+        ? `${path} is published at ${ref} and was changed. Published lenses and lens releases are immutable: restore it, and publish the change as <lens>-v<N+1> in a new release lenses/v<N+1>.`
+        : `${path} is published at ${ref} and was changed. Published terms are immutable: restore it, and publish the change as a new term (a new property shortname, or <class>-v<N+1>).`,
     );
   }
 
@@ -757,6 +792,25 @@ export function gateProblems(base = root) {
 export function check({ base = root, published } = {}) {
   const problems = sourceProblems(readSource(base));
   if (problems.length) return problems;
+  problems.push(
+    ...lensSourceProblems(
+      readLensSource(base),
+      readSource(base),
+      readBase(base),
+      base,
+    ),
+  );
+  if (problems.length) return problems;
+  const publishedLenses = new Set(
+    published
+      ? [...publishedTerms(published, base).keys()]
+          .filter(path => path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`))
+          .map(path => path.slice(`${TERMS_DIR}/${LENS_DIR}/`.length))
+      : [],
+  );
+  problems.push(
+    ...implementationProblems(readLensSource(base), base, publishedLenses),
+  );
   problems.push(...freshnessProblems(base));
   if (published) problems.push(...publishedProblems(published, base));
   problems.push(...literalProblems(base), ...gateProblems(base));
@@ -796,8 +850,10 @@ if (
     const problems = check({ published });
     for (const p of problems) console.error(p);
     if (problems.length) process.exit(1);
+    const all = filesUnder(resolve(root, TERMS_DIR), root);
+    const lenses = all.filter(p => p.startsWith(`${TERMS_DIR}/lenses/`));
     console.info(
-      `ontology: ${filesUnder(resolve(root, TERMS_DIR), root).length} term file(s) match a fresh build from ${readBase()}` +
+      `ontology: ${all.length - lenses.length} term file(s) and ${lenses.length} lens catalog file(s) match a fresh build from ${readBase()}` +
         (published ? `; none published at ${published} changed` : ''),
     );
   } else {
