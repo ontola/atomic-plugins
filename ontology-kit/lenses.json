@@ -152,7 +152,7 @@
         "A task without a due date has no due-date here; the code lens also removes a stale due-date from the row, which a v2 mapping cannot express.",
         "Doing and Blocked have no Todoist equivalent: a row with either status cannot be read back through this lens (unmapped-value).",
         "Assignee, labels, priority and parent are not mapped.",
-        "A due date with a fixed time zone (a date-time ending in Z or an offset) is refused with bad-value: its day depends on the time zone, which day-of does not apply. The code lens takes its UTC day instead."
+        "A task whose due date has a fixed time zone (a date-time ending in Z or an offset) cannot be read through this lens: get refuses the whole task with bad-value, because the due date's day depends on the time zone, which day-of does not apply. The code lens takes its UTC day instead."
       ],
       "implementation": "integrations/issue-tracker/devonian/todoist/lens/index.ts",
       "examples": [
