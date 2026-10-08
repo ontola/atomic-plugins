@@ -5,6 +5,7 @@ import type {
 } from '../openapi/types.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { locateItemsField } from '../pagination/items.js';
+import { resolveLink } from '../pagination/links.js';
 import {
   buildBody,
   buildQuery,
@@ -159,7 +160,9 @@ function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
         ? readNestedField(body, path)
         : undefined;
   if (!Array.isArray(array)) {
-    throw new Error(`No items array at ${path || 'the body root'}`);
+    throw new Error(
+      `No items array at ${path || 'the body root'} (the declared envelope.itemsField)`,
+    );
   }
   return array.filter(isRecord);
 }
@@ -317,25 +320,33 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       response.headers,
       itemsSoFar,
     );
-    if (!state.hasNextPage) {
+    // A link the response carried, whatever its type: `resolveLink` decides
+    // whether it is followed, so a value that is not a string is refused
+    // rather than taken as the last page.
+    const linkPresent =
+      state.nextLinkValue !== undefined &&
+      state.nextLinkValue !== null &&
+      state.nextLinkValue !== '';
+    if (!state.hasNextPage && !linkPresent) {
       return;
     }
 
     if (
       scheme.type === 'nextLink' ||
-      (state.nextLink !== null && state.nextPageToken === null)
+      (linkPresent && state.nextPageToken === null)
     ) {
-      if (state.nextLink === null) {
+      // Pagination Schemes 0.4.0 §4.4.3–§4.4.4: resolved against the
+      // request URL, the server URL or a declared base, then checked (the
+      // server's origin only, no userinfo or fragment). A refused link
+      // throws `LinkRefused`: the read ends with an error, never as the
+      // last page. The URL requested is exactly the checked object.
+      const link = resolveLink(state.nextLinkValue, {
+        requestUrl: url,
+        serverUrl: upstream,
+        resolution: state.nextLinkResolution,
+      });
+      if (link === null) {
         return;
-      }
-      const link = new URL(state.nextLink, url);
-      if (
-        link.origin !== upstream.origin ||
-        link.username ||
-        link.password ||
-        link.hash
-      ) {
-        throw new Error('Pagination left the API origin');
       }
       next = link;
     } else {

@@ -34,12 +34,19 @@ Proposed lifecycle:
 
 | State | Behavior |
 | --- | --- |
-| provisioning | Bounded operation to create/attach a hook; retry by stable operation identity. |
+| provisioning | Bounded operation to create/attach a hook; retry by stable operation identity. Then needs-reconciliation with reason `initial`, not active (deliberate departure, below). |
 | active | Accept scoped events while the consumer lease is valid. |
-| needs-reconciliation | History has a gap; retain only bounded recent events and expose the gap. |
-| expired | Stop retaining new payloads; expire existing backlog and detach the consumer. |
+| needs-reconciliation | History has a gap, or none exists yet (`initial`); keep capturing and routing within the limits and expose the gap. |
+| expired | Stop retaining new payloads; expire existing backlog and detach the consumer. Transient: closed (or cleanup-pending) by the next sweep, keeping only a bounded tombstone. |
 | cleanup-pending | Disable/delete a dedicated managed provider hook if no consumer needs it. |
 | closed | Purge payloads, bindings and expired receipt/cleanup records according to policy. |
+
+Departure, decided in #369 step 1: a new subscription goes from
+provisioning to needs-reconciliation (reason `initial`), not to active,
+because its consumer has no history before the capture barrier and must
+complete a full read first. Deliveries are captured and routed in
+needs-reconciliation, so nothing is lost meanwhile. See
+[Webhook Subscriptions §4.1](../../openapi-extensions/spec/webhook-subscriptions/README.md).
 
 Start with a seven-day lease, renewed by a signed consumer heartbeat every
 12 hours. Incoming webhooks, OAuth refresh, ordinary proxy traffic and merely

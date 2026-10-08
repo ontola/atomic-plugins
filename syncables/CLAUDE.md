@@ -61,7 +61,10 @@ Data flows through four stages, each its own directory under `src/`:
 
 2. **Resource discovery** — `read/model.ts` reads `components.crudResources`
    for both the one-off reader and local replica: named collections, identity
-   fields, parent bindings and GET/POST list configuration. `read/collections.ts`
+   fields, parent bindings, GET/POST list configuration and the Collection
+   Object's `envelope.itemsField` (`ReadCollection.itemsField`, a dot-path
+   the collection read passes to `walkPages`; without it `pageItems`
+   locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
    completion/error status. `read/read.ts` adds ontology/type projection.
 
@@ -288,7 +291,22 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
 - `response-parser.ts` parses that state back out of a response
   (`bodyFields` keys may be dotted paths into nested objects, e.g.
   `pagination.total_count`; `headers` supports RFC 8288 `Link` parsing for
-  `nextLink`-role headers) and derives `hasNextPage`.
+  `nextLink`-role headers) and derives `hasNextPage`. The `nextLink` value
+  is kept raw (`nextLinkValue`, never coerced) with the field's
+  `linkResolution` (`nextLinkResolution`).
+- `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
+  0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
+  `null`/`""` means no next page; a non-string, whitespace, a control
+  character, a backslash, a non-ASCII character, three or more leading
+  slashes, a scheme without `//host`, an empty authority, or a `#` in the
+  raw value is refused (rule 2); the rest is resolved with WHATWG `new URL`
+  against the request URL, the server URL as a directory (`base: server`)
+  or the declared `url`, and refused unless it has the server's origin and
+  no userinfo or fragment. `walkPages` requests exactly the returned `URL`
+  object (§4.4.4 rule 4) and keeps its repeated-page check (rule 5); a
+  `LinkRefused` ends the read with an error, never as the last page. The validator checks
+  `linkResolution` (§9 rules 8–10) and accepts the roles added up to 0.4.0;
+  `incrementalSync` schemes are still not implemented.
 
 **Pagination is orthogonal to the collection/item resource model.** In
 real APIs, the paths that pair into a "resource" (batch-get-by-IDs style,
@@ -355,6 +373,25 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   documents), malformed declarations, the in-flight head and the budget,
   no storing, restarts, and precedence against `x-completeness` and stored
   and feed tombstones.
+- `unit/client/deletion-declarations.test.ts` runs the deletion
+  declarations as the draft specs' own examples
+  (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
+  §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
+  the §5 overlay), each test naming the spec statement it checks, plus
+  pending-edit recovery on those documents (a PUT in flight across a
+  restart, with and without the record deleted meanwhile; a lost answer on
+  a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
+  §2 tests, whose feed is the list itself and whose Collection Object
+  declares `envelope: { itemsField: data.transactions }`, check that the
+  collection read and the feed read share that envelope (#373), with the
+  numeric cursor sent back in decimal form, a `deleted: true` tombstone
+  found through the identity binding, and `"true"` not taken for `true`.
+- `unit/read/collections.test.ts` covers the Collection Object's
+  `envelope.itemsField` in the collection read (#373): the model field, a
+  nested dot-path, a missing or non-array path (an incomplete read with
+  "No items array at <path>", never an empty one), no heuristic once an
+  envelope is declared, and the unchanged heuristic without a declaration,
+  with `itemsField: null`, or with one that is not a string.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

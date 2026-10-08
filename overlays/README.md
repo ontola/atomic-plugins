@@ -710,3 +710,43 @@ Validate the full catalog compositions, from this folder, with
 the generated `sources.json` records the source URLs and content hashes.
 Both read overlays under the Pages URL from this checkout and download only
 the pinned OADs.
+
+## GitLab read-only candidate
+
+The 2026-10-08 GitLab candidate uses a read-only OAD subset pinned to the
+official GitLab OpenAPI source. It exposes four GET operations: project list
+and item reads, project issue list and issue item reads. Its authentication
+overlay defines a `gitlabReadOnly` OAuth profile with the `read_api` scope;
+the selected catalog profile limits proxy access to those operations. The
+pagination overlay follows GitLab's RFC 8288 `Link rel=next` URL and adds the
+response header schema omitted by the source OAD. CRUD metadata maps project
+IDs into nested issue collections. `membership=true` lives in the catalog's
+query override, not the shared CRUD description. No rate quota is declared.
+The composition and runtime checks are documented in
+[GitLab read-only provenance](tests/GITLAB_READONLY_PROVENANCE.md) and
+[RUNTIME_VALIDATION.md](tests/RUNTIME_VALIDATION.md). The candidate dated
+catalog selects these overlays; no existing published catalog changes.
+
+## GitLab and Google Tasks onboarding candidates
+
+`catalog/2026-10-08-gitlab.json` preserves the eleven production entries from
+the Asana/Airtable catalog and adds the four-GET GitLab v4 subset.
+`catalog/2026-10-08-gitlab-tasks.json` additionally selects Google Tasks'
+`googleTasksReadOnly` authentication profile. Unlike the earlier Tasks
+catalog, this profile permits only task-list listing, task listing and a
+single-task read; it refuses writes at the proxy as well as requesting
+`https://www.googleapis.com/auth/tasks.readonly` from Google. Its new CRUD
+metadata lets the generic importer walk task lists into their task collections.
+
+These catalogs are prepared deployment choices. Publishing them does not
+register OAuth clients or activate them on localthought.io. Register the
+corresponding clients and exact callbacks, configure their provider-specific
+Heroku credentials, then explicitly select the appropriate dated catalog.
+Google Cloud consent audience, testing and verification remain registration
+requirements; this metadata makes no public-distribution claim.
+
+Validation includes all-catalog composition, immutable revision/target checks,
+actual two-page Syncables imports for each new platform and both profiles in
+the proxy parser. The Google Tasks importer fixture is
+`tests/google_tasks_syncables.test.ts`; its composition checks are
+`tests/test_google_tasks_readonly.py`. Real-account sync is not certified.

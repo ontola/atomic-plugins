@@ -592,12 +592,7 @@ async function start() {
   updateStart();
   // The data-browser reads the catalog URL from this origin's storage.
   localStorage.setItem('plugin-catalog-url', CATALOG_URL);
-  const width = Math.round(screen.availWidth * 0.62);
-  const app = window.open(
-    '/app/dev-drive',
-    'atomic-usertest-app',
-    `popup,width=${width},height=${screen.availHeight},left=${screen.availWidth - width},top=0`,
-  );
+  const app = openAtomic();
 
   if (!Recognition || typedChosen) inputMode = 'typed';
   let media;
@@ -616,6 +611,7 @@ async function start() {
       }),
     }));
     await startRecording(media);
+    showReopen();
   } catch (error) {
     console.error(error);
     app?.close();
@@ -678,6 +674,37 @@ async function loadPlans() {
 
   $('plan').value = fallback ?? '';
   showSamples();
+  showReopen();
+}
+
+/** Where the tester's Atomic window opens: the chosen plan's start page (a
+ * `/app/…` path the moderator already checked), else a fresh drive. */
+function startPath() {
+  const start = plans.find(p => p.id === $('plan').value)?.start;
+
+  return typeof start === 'string' && start.startsWith('/app/')
+    ? start
+    : '/app/dev-drive';
+}
+
+/** Opens (or reuses) the side window with the plan's start page. */
+function openAtomic() {
+  const width = Math.round(screen.availWidth * 0.62);
+
+  return window.open(
+    startPath(),
+    'atomic-usertest-app',
+    `popup,width=${width},height=${screen.availHeight},left=${screen.availWidth - width},top=0`,
+  );
+}
+
+/** Offers to open the chosen plan's start page again (in the same window),
+ * for plans that have one, and only once a session is running: a visit
+ * before Start would already set up what the session's first visit should
+ * (the split-pieces start page seeds on its first visit). */
+function showReopen() {
+  const start = plans.find(p => p.id === $('plan').value)?.start;
+  $('reopen').hidden = !start || !session;
 }
 
 /** Links the chosen plan's sample files, or hides the card. */
@@ -939,6 +966,8 @@ $('voice-try').addEventListener('click', testSpeaker);
 $('retry').addEventListener('click', () => retryAction?.());
 $('plan').addEventListener('change', rememberPlan);
 $('plan').addEventListener('change', showSamples);
+$('plan').addEventListener('change', showReopen);
+$('reopen-button').addEventListener('click', () => openAtomic());
 $('start').addEventListener('click', start);
 $('end').addEventListener('click', () => finish());
 // Hands over at once, with whatever was heard so far.

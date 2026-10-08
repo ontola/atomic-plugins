@@ -967,14 +967,34 @@ const { records, ontology, errors } = await readPlatform(document, {
   record, with its path variables filled in through `identity.bindings`. On a
   collection, `x-list-query` adds fixed query parameters, `x-list-method: POST`
   lists with a POST instead of a GET, and `x-list-body` adds fixed JSON body
-  fields.
+  fields. The Collection Object's `envelope: { itemsField: <dot-path> }`
+  (CRUD Causality §4.2) says where each list response holds its array of
+  items (`data.transactions`, say); a body without an array there fails that
+  collection's read with "No items array at <path>", never an empty read.
+  Without it (or with `itemsField: null`), the array is located as before: a
+  top-level array body, else the response schema's array property, else a
+  common envelope name (`items`, `data`, `results`, `records`, `content`).
 - **Pagination** follows the operation's pagination scheme: page numbers or
   offsets, page tokens or cursors, and next links in the body or a `Link`
   header. A cursor declared in `request.bodyFields` travels in the JSON body
   of a POST. Notion's `/v1/search` and `/v1/databases/{id}/query` work this
   way (`start_cursor` in the request, `next_cursor` in the response). A next
-  link to another origin, or a page that repeats, stops that collection with
-  an error.
+  link may be a relative reference (Pagination Schemes 0.4.0 §4.4.3): it is
+  resolved against the URL of the request that returned it, or, with the
+  field's `linkResolution`, against the server URL as a directory
+  (`base: server`, classic Twilio's `next_page_uri`) or a declared URL
+  (`base: declared`, `url`), also when an `x-pagination` override adds it.
+  Every link followed must stay on the server's origin (scheme, host and
+  port) and carry no userinfo or fragment, and must be a string without
+  whitespace, control characters, backslashes or non-ASCII characters, not
+  starting with three slashes, with no scheme that lacks `//` and a host,
+  and no empty authority (§4.4.3 rule 2, §4.4.4). A link that fails is never
+  requested and the read ends with an error, not as the last page; `null`,
+  an absent field or `""` means the last page. The URL requested is exactly
+  the one checked (§4.4.4 rule 4), and a link that repeats a page of the
+  same read stops the collection with an error (rule 5). The value is
+  resolved with the WHATWG URL parser once rule 2 has removed the inputs
+  parsers disagree on. `resolveLink` (exported) is this rule set on its own.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
   one property per field, typed with Atomic Data datatype URLs. Each record's
   `values` are keyed by property shortname, and `date-time` strings are
@@ -991,6 +1011,28 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: The collection read honours the CRUD Causality Collection
+  Object's `envelope.itemsField` (a dot-path to the items array, as the feed
+  read already did for `x-deletion-feed`), so a list whose items sit at
+  `data.transactions` reads completely and its deletion feed is read. A body
+  without an array at the declared path fails the collection's read with a
+  clear error. Without the declaration, items are located as before
+  (ontola/atomic-plugins#373).
+- **Unreleased**: Relative next links (Pagination Schemes 0.4.0 §4.4.3,
+  §4.4.4): a `nextLink` value is resolved against the request URL, or per
+  the field's `linkResolution` against the server URL or a declared base,
+  then checked before it is requested: the server's origin only, no
+  userinfo or fragment, a string without whitespace, control characters,
+  backslashes or non-ASCII characters, no three leading slashes, no scheme
+  without `//host`, no empty authority. A refused link ends the read with an
+  error instead of being requested or taken as the last page (before, a
+  non-string value was coerced, and `/next#` was followed); `""` ends
+  paging; the URL requested is exactly the checked one.
+  `resolveLink`/`LinkRefused` are exported. The scheme validator accepts the roles added up to 0.4.0
+  (`previousLink`, `previousPageToken`, `nextSyncToken`, `offset`,
+  `syncToken`) and checks `linkResolution` (§9 rules 8–10). The
+  `incrementalSync` scheme type and the scheme-level `response.envelope`
+  are still not read.
 - **0.20.0**: A queued update (PUT or PATCH) whose record a complete
   refresh no longer returns is held rather than sent on its last known copy,
   in memory as after a restart; the client checks the record, within the

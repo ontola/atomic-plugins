@@ -1,0 +1,11 @@
+{
+  "note": "Invented Example Tracker delivery to the shared application hook, signed with the fake secret in test_validate.py.",
+  "headers": [
+    ["Tracker-Delivery", "d-0001"],
+    [
+      "Tracker-Signature",
+      "v1=bb6834ee01452076e2c7fec70246784f45f9e46a07e48a28f96248047f50839d"
+    ]
+  ],
+  "body": "{\"kind\":\"task\",\"change\":\"updated\",\"project\":{\"id\":\"p-100\",\"workspace\":\"w-1\"},\"task\":{\"id\":\"t/7\",\"title\":\"Fixture task\"}}"
+}

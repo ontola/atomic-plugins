@@ -18,14 +18,18 @@ describe('validatePaginationScheme', () => {
       request: { queryParameters: { offset: { role: 'offset' } } },
     });
     expect(errors).toEqual([
-      expect.stringContaining('type must be one of pageNumber, pageToken, or nextLink'),
+      expect.stringContaining(
+        'type must be one of pageNumber, pageToken, or nextLink',
+      ),
     ]);
   });
 
   it('requires at least one of request or response', () => {
     const errors = validatePaginationScheme('broken', { type: 'pageToken' });
     expect(errors).toEqual([
-      expect.stringContaining('must define at least one of "request" or "response"'),
+      expect.stringContaining(
+        'must define at least one of "request" or "response"',
+      ),
     ]);
   });
 
@@ -49,7 +53,7 @@ describe('validatePaginationScheme', () => {
       type: 'pageToken',
       response: {
         // @ts-expect-error deliberately invalid for the test
-        bodyFields: { offset: { role: 'offset' } },
+        bodyFields: { offset: { role: 'pageToken' } },
       },
     });
     expect(errors).toEqual([

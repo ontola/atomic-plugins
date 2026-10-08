@@ -1,0 +1,42 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f6d7940e9865903b9c99c5c1fc2d57d92811eef4/APIs/gitlab.com/v4-readonly/openapi.yaml
+info:
+  title: GitLab read-only OAuth authentication profile
+  version: 1.0.0
+  description: >-
+    OAuth authorization-code access limited to read_api for project discovery
+    and project issues. GitLab supports PKCE with S256, but does not require it.
+    Scope, PKCE, and token-endpoint client authentication follow GitLab's OAuth
+    documentation, checked 2026-10-08.
+actions:
+  - target: $.components.securitySchemes.oauth2
+    update:
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          token_endpoint_auth_methods_supported: [client_secret_basic, client_secret_post]
+          code_challenge_methods_supported: [S256]
+        authorizationCode:
+          pkce:
+            requirement: optional
+  - target: $.paths['/projects'].get
+    update:
+      security:
+        - oauth2: [read_api]
+  - target: $.paths['/projects/{id}'].get
+    update:
+      security:
+        - oauth2: [read_api]
+  - target: $.paths['/projects/{id}/issues'].get
+    update:
+      security:
+        - oauth2: [read_api]
+  - target: $.paths['/projects/{id}/issues/{issue_iid}'].get
+    update:
+      security:
+        - oauth2: [read_api]
+  - target: $.components
+    update:
+      x-authentication-profiles:
+        gitlabReadOnly:
+          securityScheme: oauth2
+          description: Read membership-filtered projects and their issues with the read_api OAuth scope.

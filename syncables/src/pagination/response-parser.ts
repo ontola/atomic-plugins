@@ -1,4 +1,5 @@
 import type {
+  LinkResolutionObject,
   PaginationResponseState,
   PaginationSchemeObject,
   ResponseRole,
@@ -81,8 +82,13 @@ function extractByRole(
   scheme: PaginationSchemeObject,
   body: Record<string, unknown>,
   headers: Record<string, string>,
-): Map<ResponseRole, unknown> {
+): {
+  roles: Map<ResponseRole, unknown>;
+  /** The `linkResolution` of the field that supplied `nextLink`. */
+  nextLinkResolution: LinkResolutionObject | null;
+} {
   const roles = new Map<ResponseRole, unknown>();
+  let nextLinkResolution: LinkResolutionObject | null = null;
 
   for (const [path, field] of Object.entries(
     scheme.response?.bodyFields ?? {},
@@ -91,6 +97,8 @@ function extractByRole(
     const value = readNestedField(body, path);
     if (value !== undefined) {
       roles.set(field.role, value);
+      if (field.role === 'nextLink')
+        nextLinkResolution = field.linkResolution ?? null;
     }
   }
 
@@ -103,13 +111,16 @@ function extractByRole(
     if (raw === undefined) continue;
     if (field.role === 'nextLink') {
       const parsed = parseLinkHeader(raw);
-      if (parsed) roles.set('nextLink', parsed);
+      if (parsed) {
+        roles.set('nextLink', parsed);
+        nextLinkResolution = field.linkResolution ?? null;
+      }
     } else {
       roles.set(field.role, raw);
     }
   }
 
-  return roles;
+  return { roles, nextLinkResolution };
 }
 
 /**
@@ -166,13 +177,22 @@ export function parsePaginationState(
   headers: Record<string, string> = {},
   itemsFetchedSoFar?: number,
 ): PaginationResponseState {
-  const roles = extractByRole(scheme, body, headers);
+  const { roles, nextLinkResolution } = extractByRole(scheme, body, headers);
 
+  // The link is kept as the response carried it: `resolveLink` decides
+  // whether it is followed (spec 0.4.0 §4.4.3), and a value that is not a
+  // string is refused there rather than coerced.
+  const nextLinkValue = roles.get('nextLink');
   const state: PaginationResponseState = {
     nextPageToken: toStringOrNull(
       roles.get('nextPageToken') ?? roles.get('nextCursor') ?? null,
     ),
-    nextLink: toStringOrNull(roles.get('nextLink') ?? null),
+    nextLink:
+      typeof nextLinkValue === 'string' && nextLinkValue !== ''
+        ? nextLinkValue
+        : null,
+    nextLinkValue,
+    nextLinkResolution,
     currentPage: toNumberOrNull(roles.get('currentPage') ?? null),
     totalCount: toNumberOrNull(roles.get('totalCount') ?? null),
     totalPages: toNumberOrNull(roles.get('totalPages') ?? null),

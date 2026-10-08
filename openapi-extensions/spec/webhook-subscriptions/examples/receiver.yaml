@@ -1,0 +1,194 @@
+openapi: 3.1.0
+info:
+  title: Webhook receiver (illustrative)
+  version: 0.1.0
+  description: >
+    A receiver document with the x-webhook-subscriptions policy at the plan's
+    pilot defaults, and the proposed consumer routes of README section 7.
+    None of these routes exists. Every consumer route is signed with the
+    receiver's existing agent signature; that is described in prose, not as
+    a security scheme. Values marked "open" in README section 6 are proposals.
+x-webhook-subscriptions:
+  policy:
+    lease:
+      durationSeconds: 604800
+      renewAfterSeconds: 43200
+      progressDeadlineSeconds: 604800
+    access:
+      maxCheckAgeSeconds: 43200
+    subscription:
+      maxPendingEvents: 10000
+      maxPendingBytes: 67108864
+      maxPendingAgeSeconds: 604800
+    owner:
+      maxPendingBytes: 268435456
+      maxPendingReferences: 50000
+      maxActiveSubscriptions: 20
+    deployment:
+      maxInboxBytes: 1073741824
+    receipts:
+      ttlSeconds: 172800
+      maxCount: 200000
+    closed:
+      tombstoneTtlSeconds: 2592000
+      maxTombstones: 10000
+    cleanup:
+      deadlineSeconds: 2592000
+      maxJobs: 10000
+    sweep:
+      maxIntervalSeconds: 60
+    delivery:
+      maxVerifiedBytes: 26214400
+      maxBodyBytes: 8388608
+      maxJsonDepth: 64
+    fetch:
+      maxEvents: 100
+      maxWaitSeconds: 25
+paths:
+  /webhooks/{endpointId}:
+    post:
+      summary: Provider-facing receipt (Webhook Deliveries 4.2.1, this spec 5.3)
+      parameters:
+        - {
+            name: endpointId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '204':
+          {
+            description: 'Verified and durably retained, recorded as a gap, or not wanted.',
+          }
+        '401': { description: Verification failed; nothing was written. }
+        '413': { description: Body over delivery.maxBodyBytes. }
+        '503':
+          {
+            description: Neither the payload nor a gap could be committed; the provider may retry.,
+          }
+  /connections/{connectionId}/subscriptions:
+    post:
+      summary: Create a subscription for a source of this connection
+      parameters:
+        - {
+            name: connectionId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, parameters, events]
+              properties:
+                source:
+                  {
+                    type: string,
+                    description: A source kind of the platform's x-webhook-deliveries.,
+                  }
+                parameters:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Path parameters of that source's access operation.
+                events: { type: array, items: { type: string } }
+      responses:
+        '201':
+          description: Provisioning, or needing its initial reconciliation.
+          content:
+            application/json:
+              schema: { $ref: '../schema.json#/$defs/Subscription' }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /subscriptions/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    get:
+      responses:
+        '200': { $ref: '#/components/responses/Subscription' }
+        '404': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+    delete:
+      responses:
+        '200': { $ref: '#/components/responses/Subscription' }
+  /subscriptions/{subscriptionId}/renew:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '../schema.json#/$defs/Renewal' }
+      responses:
+        '200': { $ref: '#/components/responses/Subscription' }
+        '409': { $ref: '#/components/responses/ReconciliationRequired' }
+        '410': { $ref: '#/components/responses/Error' }
+  /subscriptions/{subscriptionId}/events:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    get:
+      parameters:
+        - { name: generation, in: query, schema: { type: string } }
+        - { name: after, in: query, schema: { type: string } }
+        - { name: wait, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: A page, possibly with a reconciliation-required result.
+          content:
+            application/json:
+              schema: { $ref: '../schema.json#/$defs/EventPage' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/ReconciliationRequired' }
+  /subscriptions/{subscriptionId}/ack:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '../schema.json#/$defs/Acknowledgement' }
+      responses:
+        '200':
+          description: The acknowledged cursor after this request.
+          content:
+            application/json:
+              schema: { $ref: '../schema.json#/$defs/Acknowledgement' }
+        '409': { $ref: '#/components/responses/Error' }
+  /subscriptions/{subscriptionId}/reconciled:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '../schema.json#/$defs/ReconciliationComplete' }
+      responses:
+        '200': { $ref: '#/components/responses/Subscription' }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    subscriptionId:
+      {
+        name: subscriptionId,
+        in: path,
+        required: true,
+        schema: { type: string },
+      }
+  responses:
+    Subscription:
+      description: The subscription.
+      content:
+        application/json:
+          schema: { $ref: '../schema.json#/$defs/Subscription' }
+    ReconciliationRequired:
+      description: The consumer must reconcile or subscribe again.
+      content:
+        application/json:
+          schema: { $ref: '../schema.json#/$defs/ReconciliationRequired' }
+    Error:
+      description: A refused request.
+      content:
+        application/json:
+          schema: { $ref: '../schema.json#/$defs/Error' }

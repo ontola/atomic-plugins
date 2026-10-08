@@ -241,3 +241,108 @@ async fn asana_airtable_profiles_are_read_only_and_proxy_compatible() {
         }
     }
 }
+
+/// Load the candidate GitLab catalog through the proxy's real composition and
+/// OAuth profile parser. This downloads its immutable OAD pin; set
+/// GITLAB_CATALOG_URL after Pages publication to check the public copy.
+#[tokio::test]
+#[ignore = "downloads the pinned GitLab OAD sources; set GITLAB_CATALOG_URL for the Pages run"]
+async fn gitlab_readonly_profile_is_scoped_and_proxy_compatible() {
+    let client = crate::build_http_client();
+    let catalog = if let Ok(url) = std::env::var("GITLAB_CATALOG_URL") {
+        Catalog::load(&url, &client).await
+    } else {
+        Catalog::load_checked_in_file(&client, "catalog/2026-10-08-gitlab.json").await
+    }
+    .expect("GitLab catalog and its immutable OAD/overlay pins must load");
+
+    let provider = catalog
+        .oauth_provider("gitlab")
+        .unwrap_or_else(|error| panic!("GitLab read-only profile must parse: {error}"));
+    assert_eq!(provider.scopes, vec!["read_api"]);
+    assert!(
+        provider.use_pkce,
+        "GitLab profile should use supported S256 PKCE"
+    );
+
+    for path in [
+        "/api/v4/projects",
+        "/api/v4/projects/41",
+        "/api/v4/projects/41/issues",
+        "/api/v4/projects/41/issues/2",
+    ] {
+        assert!(
+            catalog.allows("gitlab", "GET", path).is_some(),
+            "read_api profile must allow GET {path}"
+        );
+    }
+    assert!(catalog
+        .allows("gitlab", "POST", "/api/v4/projects")
+        .is_none());
+    assert!(catalog.allows("gitlab", "GET", "/api/v4/users").is_none());
+    catalog
+        .validate_request(
+            "gitlab",
+            "GET",
+            "/api/v4/projects",
+            Some("membership=true&per_page=100&page=2"),
+            None,
+            false,
+        )
+        .expect("the selected collection filters and pagination inputs must parse");
+}
+
+/// Parse the Google Tasks read-only profile from the unpublished combined
+/// candidate catalog. Set GITLAB_TASKS_CATALOG_URL after Pages publication to
+/// exercise the public copy.
+#[tokio::test]
+#[ignore = "downloads the pinned candidate OAD sources; set GITLAB_TASKS_CATALOG_URL for the Pages run"]
+async fn google_tasks_readonly_profile_is_scoped_and_proxy_compatible() {
+    let client = crate::build_http_client();
+    let catalog = if let Ok(url) = std::env::var("GITLAB_TASKS_CATALOG_URL") {
+        Catalog::load(&url, &client).await
+    } else {
+        Catalog::load_checked_in_file(&client, "catalog/2026-10-08-gitlab-tasks.json").await
+    }
+    .expect("combined candidate catalog and its immutable OAD/overlay pins must load");
+
+    let provider = catalog
+        .oauth_provider("google-tasks")
+        .unwrap_or_else(|error| panic!("Google Tasks read-only profile must parse: {error}"));
+    assert_eq!(
+        provider.scopes,
+        vec!["https://www.googleapis.com/auth/tasks.readonly"]
+    );
+    assert!(
+        provider.use_pkce,
+        "Google Tasks profile should use S256 PKCE"
+    );
+
+    for path in [
+        "/tasks/v1/users/@me/lists",
+        "/tasks/v1/lists/list-1/tasks",
+        "/tasks/v1/lists/list-1/tasks/task-1",
+    ] {
+        assert!(
+            catalog.allows("google-tasks", "GET", path).is_some(),
+            "read-only profile must allow GET {path}"
+        );
+    }
+    assert!(catalog
+        .allows("google-tasks", "POST", "/tasks/v1/lists/list-1/tasks")
+        .is_none());
+    assert!(catalog
+        .allows(
+            "google-tasks",
+            "PATCH",
+            "/tasks/v1/lists/list-1/tasks/task-1"
+        )
+        .is_none());
+    assert!(catalog
+        .allows(
+            "google-tasks",
+            "DELETE",
+            "/tasks/v1/lists/list-1/tasks/task-1"
+        )
+        .is_none());
+}
