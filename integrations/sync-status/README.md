@@ -74,7 +74,13 @@ than its own client, `writes` is: `pending` the entries with `state:
 'pending'` or `'blocked'`; `held` those with `awaitingRefresh: true`;
 `failed` the `state: 'failed'` entries, with `title` from the record and
 `reason` from `lastError`; `uncertain` the `state: 'uncertain'` ones. Not yet
-done for any app: issue-tracker and money adopt the card in follow-ups.
+done for any app: Pets (0.1.3), the one app whose writes go through
+syncables, shows no card yet, and neither does the Money bank-statements app
+(`money/app/`, 0.4.1), whose writes are its own. GitHub issues (0.4.0, #349)
+counts its own write journal instead (`issue-tracker/app/status.ts`: held
+writes as `pending`; a held write let through once without an answer, and a
+create GitHub never answered, as `uncertain`). Todoist (0.2.0, #344) and
+Google Tasks (0.1.0, #355) are read-only and set no `writes`.
 Notion (0.5.0) counts its own review list and send outcomes, like Clockify
 (`notion/app/view/status.ts`, on `changes.ts` `writeQueue`, which its strip,
 Send button and controller share). Google Calendar (0.3.2) has its own client and counts its review
@@ -108,5 +114,23 @@ Notion's mapping passes in `notion/app/view/status.test.ts` (18 tests) and
 through the real controller in `notion/app/twoway.test.ts`; the `notion` e2e
 checks the card after the first sync, after a failed sync (with the last good
 sync named) and after Disconnect (read-only).
+Todoist's mapping passes in `issue-tracker/todoist-app/status.test.ts` (10
+tests); the `issue-tracker` lane's `todoist.spec.ts` checks the card before a
+connection (not synced yet, read-only), after the import ("5 tasks from
+Todoist", read-only), after a task was completed in Todoist ("1 task is
+completed in Todoist: closed here and kept in the table.", with the task
+named under "Which") and one made unreachable ("1 task can no longer be
+reached in Todoist …"), and on a row missing its Name ("Open row").
+GitHub issues' mapping passes in `issue-tracker/app/status.test.ts` (17
+tests, every `ViewState`); `issue-tracker.spec.ts` checks the headline, the
+write-back sentence and the row count after the first sync, "Sync failed"
+with "Review the conflict below." after a conflict, and the read-only line on
+a hand-made `issue-v1` table that isn't synced.
+Google Tasks' mapping passes in `google-tasks/app/status.test.ts` (12
+tests); the `google-tasks` lane's spec checks the card before a connection,
+with no task list chosen ("Last sync: nothing to read"), after the import
+("5 tasks from Google Tasks"), after a task was deleted in Google Tasks
+("kept here as last read; not closed."), and on a row missing its Name
+("Open row").
 Nothing here has been seen by a user tester yet: the wording is a sensible
 default, not a verified fix for findings #6, #7 and #14.
