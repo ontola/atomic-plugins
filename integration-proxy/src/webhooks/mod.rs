@@ -32,10 +32,48 @@ mod tests;
 pub use policy::Policy;
 pub use store::Store;
 
+/// How much ingress work runs at once, and for how long (review of #394):
+/// what an unauthenticated sender can make the receiver hold.
+pub struct IngressGate {
+    /// Bodies being read at once; each is at most the verification cap.
+    pub reads: tokio::sync::Semaphore,
+    /// Deliveries using the database at once (lookup, revocation, store),
+    /// fewer than the inbox pool's four connections, so consumer routes and
+    /// the sweeper always find one.
+    pub database: tokio::sync::Semaphore,
+    /// How long a body may take to arrive.
+    pub read_timeout: std::time::Duration,
+    /// How long a delivery waits for a slot before `503`.
+    pub wait: std::time::Duration,
+}
+
+/// Bodies read at once (at most 8 x 25 MiB held).
+pub const INGRESS_READS: usize = 8;
+/// Deliveries using the database at once.
+pub const INGRESS_DATABASE: usize = 2;
+
+impl Default for IngressGate {
+    fn default() -> Self {
+        Self {
+            reads: tokio::sync::Semaphore::new(INGRESS_READS),
+            database: tokio::sync::Semaphore::new(INGRESS_DATABASE),
+            read_timeout: std::time::Duration::from_secs(10),
+            wait: std::time::Duration::from_secs(3),
+        }
+    }
+}
+
+/// Long polls waiting at once: in all, and per consumer agent.
+pub const MAX_WAITERS: usize = 256;
+pub const MAX_WAITERS_PER_CONSUMER: usize = 4;
+
 /// The inbox and the operator-configured shared-hook secrets.
 pub struct Webhooks {
     pub store: Arc<Store>,
     shared_secrets: BTreeMap<String, Vec<u8>>,
+    pub gate: IngressGate,
+    /// Long polls waiting, per consumer.
+    pub waiting: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 
 impl Webhooks {
@@ -43,6 +81,8 @@ impl Webhooks {
         Self {
             store,
             shared_secrets,
+            gate: IngressGate::default(),
+            waiting: Default::default(),
         }
     }
 

@@ -83,7 +83,8 @@ pub async fn check_access(
             _,
         ) => Checked::Failed,
         ReceiverReply::Answered(..) | ReceiverReply::Unreachable => Checked::Unavailable,
-        ReceiverReply::Refused("unknown-connection" | "platform-mismatch") => Checked::Failed,
+        ReceiverReply::Refused("unknown-connection" | "platform-mismatch")
+        | ReceiverReply::RefreshRefused => Checked::Failed,
         ReceiverReply::Refused(reason) => Checked::Invalid(reason),
     }
 }
@@ -134,6 +135,7 @@ async fn find_hook(
             return Err(CleanupError::Retry("unavailable"))
         }
         ReceiverReply::Refused(_) => return Err(CleanupError::Permanent("not-allowlisted")),
+        ReceiverReply::RefreshRefused => return Err(CleanupError::Permanent("refresh-refused")),
     };
     let listed: serde_json::Value =
         serde_json::from_slice(&body).map_err(|_| CleanupError::Retry("unreadable-list"))?;
@@ -249,6 +251,7 @@ impl HookDeleter for ProviderHookDeleter {
                     Err(CleanupError::Retry("unavailable"))
                 }
                 ReceiverReply::Refused(_) => Err(CleanupError::Permanent("not-allowlisted")),
+                ReceiverReply::RefreshRefused => Err(CleanupError::Permanent("refresh-refused")),
             }
         }
     }

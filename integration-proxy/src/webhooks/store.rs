@@ -661,8 +661,10 @@ pub struct Store {
     /// When this store started; stands in for the last sweep until the
     /// first one ran.
     started_at: SystemTime,
-    /// Woken after a delivery is retained or a gap recorded, for long polls.
-    pub(crate) notify: tokio::sync::Notify,
+    /// Long-poll wakeups, per subscription: woken after a delivery is
+    /// retained or a gap recorded for that subscription only.
+    waiters:
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>,
     #[cfg(test)]
     pub(crate) fail_before_commit: std::sync::atomic::AtomicBool,
 }
@@ -698,7 +700,7 @@ impl Store {
             policy,
             cursors: CursorKey::new(security.derive_subkey(super::cursor::SUBKEY_LABEL)),
             started_at: SystemTime::now(),
-            notify: tokio::sync::Notify::new(),
+            waiters: Default::default(),
             #[cfg(test)]
             fail_before_commit: std::sync::atomic::AtomicBool::new(false),
         })
@@ -706,6 +708,43 @@ impl Store {
 
     pub fn policy(&self) -> &Policy {
         &self.policy
+    }
+
+    /// The wakeup of one subscription, for a long poll. Dropped from the
+    /// map when its last waiter is gone ([`Store::release_waiter`]).
+    pub(crate) fn waiter(&self, id: &str) -> std::sync::Arc<tokio::sync::Notify> {
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    pub(crate) fn release_waiter(&self, id: &str, notify: std::sync::Arc<tokio::sync::Notify>) {
+        let mut waiters = self.waiters.lock().unwrap_or_else(|e| e.into_inner());
+        drop(notify);
+        if waiters
+            .get(id)
+            .is_some_and(|n| std::sync::Arc::strong_count(n) == 1)
+        {
+            waiters.remove(id);
+        }
+    }
+
+    fn wake(&self, ids: &[String]) {
+        let waiters = self.waiters.lock().unwrap_or_else(|e| e.into_inner());
+        for id in ids {
+            if let Some(notify) = waiters.get(id) {
+                notify.notify_waiters();
+            }
+        }
+    }
+
+    /// Takes a pooled connection and keeps it.
+    #[cfg(test)]
+    pub(crate) async fn hold_connection(&self) -> super::pool::PooledClient<'_> {
+        self.pool.hold().await
     }
 
     /// Tests run on a simulated clock: the store's start moves with it.
@@ -1554,6 +1593,16 @@ impl Store {
         }
         let mut client = self.pool.get().await.map_err(InboxError::Database)?;
         let tx = client.transaction().await?;
+        // The connection row first, shared: a concurrent deletion (which
+        // takes it first, exclusively) either runs before this and leaves
+        // nothing to subscribe, or after, and then ends this subscription.
+        let connection_platform: Option<String> = tx
+            .query_opt(
+                "SELECT platform FROM agent_connections WHERE connection_id = $1 AND owner = $2 FOR SHARE",
+                &[&new.connection_id, &new.owner],
+            )
+            .await?
+            .map(|row| row.get(0));
         let mut owners = Self::lock_owners(&tx, std::slice::from_ref(&new.owner)).await?;
         let deployment = Self::lock_deployment(&tx).await?;
         let hook = tx
@@ -1568,13 +1617,6 @@ impl Store {
         let platform: String = hook.get(1);
         // The connection must be of the hook's document (Webhook Deliveries
         // §4.4.1), so equal keys of two providers never meet.
-        let connection_platform: Option<String> = tx
-            .query_opt(
-                "SELECT platform FROM agent_connections WHERE connection_id = $1 AND owner = $2",
-                &[&new.connection_id, &new.owner],
-            )
-            .await?
-            .map(|row| row.get(0));
         if connection_platform.as_deref() != Some(platform.as_str()) {
             return Err(InboxError::UnknownConnection);
         }
@@ -1834,8 +1876,13 @@ impl Store {
         Self::save_owners(&tx, &owners).await?;
         Self::save_deployment(&tx, &deployment).await?;
         self.commit(tx).await?;
+        let woken: Vec<String> = subs
+            .iter()
+            .filter(|row| row.state.captures())
+            .map(|row| row.id.clone())
+            .collect();
         if outcome.retained > 0 || outcome.gaps > 0 {
-            self.notify.notify_waiters();
+            self.wake(&woken);
         }
         Ok(outcome)
     }
@@ -2473,6 +2520,19 @@ impl Store {
     ) -> Result<bool> {
         let mut client = self.pool.get().await.map_err(InboxError::Database)?;
         let tx = client.transaction().await?;
+        // The connection row first, exclusively: a subscription being created
+        // for it either committed already (and is found below) or waits and
+        // then finds no connection.
+        let owned = tx
+            .query_opt(
+                "SELECT 1 FROM agent_connections WHERE connection_id = $1 AND owner = $2 FOR UPDATE",
+                &[&connection_id, &owner_id],
+            )
+            .await?
+            .is_some();
+        if !owned {
+            return Ok(false);
+        }
         let ids: Vec<String> = tx
             .query(
                 &format!(

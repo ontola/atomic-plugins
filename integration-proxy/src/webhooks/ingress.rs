@@ -1,19 +1,22 @@
 //! `POST /webhooks/{endpointId}`: the provider-facing receiver (Webhook
 //! Deliveries §4.2.1–§4.4, Webhook Subscriptions §5.3).
 //!
-//! In order: the body is capped while it is read (the route's body limit is
-//! the verification cap); the endpoint's hook, profile and secret are looked
-//! up; the signature is verified over the exact bytes; only then is the body
-//! scanned for depth and parsed; revocations are applied; the delivery is
-//! routed and stored in one transaction. A 2xx goes out only after that
-//! transaction committed, or when nothing is to be kept.
+//! In order, before any body byte is read: the endpoint id's shape, a
+//! `Content-Length` over the verification cap (413), and the endpoint's
+//! hook, profile and secret, looked up under a bounded database slot. Then
+//! the body is read, at most the cap, under a bounded read slot and a read
+//! timeout; the signature is verified over the exact bytes; only then is
+//! the body scanned for depth and parsed; revocations are applied; the
+//! delivery is routed and stored in one transaction. A 2xx goes out only
+//! after that transaction committed, or when nothing is to be kept. Every
+//! wait is bounded: a slot not free in time is a 503.
 
 use std::collections::BTreeMap;
 
 use axum::{
-    body::Bytes,
+    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 
@@ -29,22 +32,72 @@ fn answer(status: StatusCode) -> Response {
     status.into_response()
 }
 
+/// An endpoint id: 43 characters of base64url (256 random bits).
+fn endpoint_shaped(id: &str) -> bool {
+    id.len() == 43
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Logs refused deliveries at most once per ten seconds, with how many.
+fn log_refused(reason: &str, platform: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static REFUSED: AtomicU64 = AtomicU64::new(0);
+    let refused = REFUSED.fetch_add(1, Ordering::Relaxed) + 1;
+    let now = crate::now_secs();
+    let last = LAST.load(Ordering::Relaxed);
+    if now >= last + 10
+        && LAST
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        REFUSED.store(0, Ordering::Relaxed);
+        tracing::info!(reason, platform, refused, "webhook deliveries refused");
+    }
+}
+
+async fn slot<'a>(
+    semaphore: &'a tokio::sync::Semaphore,
+    wait: std::time::Duration,
+) -> Option<tokio::sync::SemaphorePermit<'a>> {
+    tokio::time::timeout(wait, semaphore.acquire())
+        .await
+        .ok()?
+        .ok()
+}
+
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let Some(webhooks) = state.webhooks.clone() else {
         return answer(StatusCode::NOT_FOUND);
     };
-    if endpoint_id.len() != 43 {
+    if !endpoint_shaped(&endpoint_id) {
         return answer(StatusCode::NOT_FOUND);
     }
-    let hook = match webhooks.store.hook_by_endpoint(&endpoint_id).await {
-        Ok(Some(hook)) => hook,
-        Ok(None) => return answer(StatusCode::NOT_FOUND),
-        Err(_) => return answer(StatusCode::SERVICE_UNAVAILABLE),
+    let cap = webhooks.store.policy().max_verified_bytes as usize;
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > cap as u64) {
+        return answer(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let gate = &webhooks.gate;
+    let hook = {
+        let Some(_slot) = slot(&gate.database, gate.wait).await else {
+            return answer(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        match webhooks.store.hook_by_endpoint(&endpoint_id).await {
+            Ok(Some(hook)) => hook,
+            Ok(None) => return answer(StatusCode::NOT_FOUND),
+            Err(_) => return answer(StatusCode::SERVICE_UNAVAILABLE),
+        }
     };
     let Some(deliveries) = super::provider::deliveries(&state, &hook.platform) else {
         return answer(StatusCode::NOT_FOUND);
@@ -70,10 +123,32 @@ pub async fn receive(
     };
     let Some(secret) = secret else {
         // No secret, no delivery (Webhook Deliveries §4.2).
+        log_refused("no-secret", &hook.platform);
         return answer(StatusCode::UNAUTHORIZED);
     };
+    // Only now is the body read: at most the cap, within the read timeout,
+    // and only by a bounded number of requests at once.
+    let body = {
+        let Some(_slot) = slot(&gate.reads, gate.wait).await else {
+            return answer(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        match tokio::time::timeout(gate.read_timeout, axum::body::to_bytes(body, cap)).await {
+            Err(_) => return answer(StatusCode::REQUEST_TIMEOUT),
+            // Over the cap (or a broken upload): nothing was kept.
+            Ok(Err(_)) => return answer(StatusCode::PAYLOAD_TOO_LARGE),
+            Ok(Ok(bytes)) => bytes,
+        }
+    };
     if let Err(refused) = verify(&profile, &headers, &body, &secret, crate::now_secs()) {
-        tracing::info!(?refused, platform = %hook.platform, "webhook delivery refused");
+        log_refused(
+            match refused {
+                super::verify::Refused::Secret => "secret",
+                super::verify::Refused::Signature => "signature",
+                super::verify::Refused::Timestamp => "timestamp",
+                super::verify::Refused::Mismatch => "mismatch",
+            },
+            &hook.platform,
+        );
         return answer(StatusCode::UNAUTHORIZED);
     }
 
@@ -103,6 +178,9 @@ pub async fn receive(
     };
     let action = deliveries.action.as_ref().and_then(|p| p.key(&parsed));
 
+    let Some(_slot) = slot(&gate.database, gate.wait).await else {
+        return answer(StatusCode::SERVICE_UNAVAILABLE);
+    };
     if let Err(status) = revoke(
         &state,
         &webhooks,

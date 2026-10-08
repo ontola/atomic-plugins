@@ -1115,3 +1115,283 @@ async fn hook_cleanup_rechecks_access_before_deleting() {
         .any(|d| d.ends_with("wh-2") || d.ends_with("wh-3") || d.ends_with("wh-4")));
     env.drop_schema().await;
 }
+
+// --- review of #394 --------------------------------------------------------------------
+
+/// A request body that never arrives.
+fn never_ending() -> Body {
+    Body::from_stream(futures_util::stream::pending::<
+        Result<axum::body::Bytes, std::io::Error>,
+    >())
+}
+
+/// The webhooks state with another ingress gate.
+fn with_gate(env: &Env, change: impl FnOnce(&mut super::IngressGate)) -> AppState {
+    let mut webhooks = Webhooks::new(
+        env.store.clone(),
+        BTreeMap::from([("tracker".to_owned(), TRACKER_SECRET.to_vec())]),
+    );
+    change(&mut webhooks.gate);
+    let mut state = env.state.clone();
+    state.webhooks = Some(Arc::new(webhooks));
+    state
+}
+
+/// B1: nothing is read before the endpoint is known and the declared
+/// length fits; a body is read only within a timeout and by a bounded
+/// number of requests at once.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn ingress_reads_no_body_before_its_checks_and_bounds_what_it_reads() {
+    let env = env(small()).await;
+    let alice = Agent::new(99);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    let quick = Duration::from_secs(2);
+
+    // Unknown or malformed endpoints answer without reading the body.
+    for path in [
+        format!("/webhooks/{}", "A".repeat(43)),
+        "/webhooks/short".into(),
+        format!("/webhooks/{}", "!".repeat(43)),
+    ] {
+        let request = Request::post(path).body(never_ending()).unwrap();
+        let response = tokio::time::timeout(quick, env.send(request))
+            .await
+            .expect("answered without reading");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    // A declared length over the cap: 413 at once.
+    let request = Request::post(format!("/webhooks/{endpoint}"))
+        .header("content-length", "30000000")
+        .body(never_ending())
+        .unwrap();
+    let response = tokio::time::timeout(quick, env.send(request))
+        .await
+        .expect("answered at once");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // An undeclared length over the cap: refused once the cap is passed.
+    let chunks = futures_util::stream::iter(
+        (0..10).map(|_| Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b'x'; 1000]))),
+    );
+    let request = Request::post(format!("/webhooks/{endpoint}"))
+        .body(Body::from_stream(chunks))
+        .unwrap();
+    assert_eq!(
+        env.send(request).await.status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    // A slow upload is cut off by the read timeout.
+    let state = with_gate(&env, |gate| gate.read_timeout = Duration::from_millis(300));
+    let request = Request::post(format!("/webhooks/{endpoint}"))
+        .body(never_ending())
+        .unwrap();
+    let response = tokio::time::timeout(quick, crate::router(state).oneshot(request))
+        .await
+        .expect("timed out by the gate")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+
+    // With every read slot taken by slow uploads, the next one is refused
+    // after a short wait instead of being buffered.
+    let state = with_gate(&env, |gate| {
+        gate.reads = tokio::sync::Semaphore::new(1);
+        gate.wait = Duration::from_millis(200);
+    });
+    let slow = {
+        let state = state.clone();
+        let request = Request::post(format!("/webhooks/{endpoint}"))
+            .body(never_ending())
+            .unwrap();
+        tokio::spawn(async move { crate::router(state).oneshot(request).await })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let request = env.signed_delivery(&endpoint, "d-1", &task("p-100", "t/1"));
+    let response = crate::router(state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    slow.abort();
+    assert_eq!(env.count("SELECT count(*) FROM webhook_receipts").await, 0);
+    env.drop_schema().await;
+}
+
+/// B1: with every inbox connection busy, requests fail after a bounded
+/// wait instead of queueing without end.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_busy_inbox_pool_answers_503_after_a_bounded_wait() {
+    let env = env(small()).await;
+    let alice = Agent::new(100);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    let sub = id(&env.subscribe_project(&alice, &connection, "p-100").await);
+    let endpoint = env.endpoint("tracker").await;
+    let held = [
+        env.store.hold_connection().await,
+        env.store.hold_connection().await,
+        env.store.hold_connection().await,
+        env.store.hold_connection().await,
+    ];
+    let started = std::time::Instant::now();
+    let response = env.get(&alice, &format!("/subscriptions/{sub}")).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = env
+        .send(env.signed_delivery(&endpoint, "d-1", &task("p-100", "t/1")))
+        .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(started.elapsed() < Duration::from_secs(15));
+    drop(held);
+    assert_eq!(
+        env.deliver(&endpoint, "d-1", "p-100").await,
+        StatusCode::NO_CONTENT
+    );
+    env.drop_schema().await;
+}
+
+/// N1: a long poll is woken by its own subscription's deliveries only, and
+/// waiting polls are capped per consumer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn long_polls_wake_per_subscription_and_are_capped() {
+    let env = env(small()).await;
+    let alice = Agent::new(101);
+    let connection = env
+        .connection("tracker", &alice, "key-a", &["p-1", "p-2"])
+        .await;
+    let mut ids = Vec::new();
+    for project in ["p-1", "p-2"] {
+        let subscription = env.subscribe_project(&alice, &connection, project).await;
+        let reconciliation = &subscription["reconciliationRequired"];
+        let sub = id(&subscription);
+        env.post(
+            &alice,
+            &format!("/subscriptions/{sub}/reconciled"),
+            json!({"generation": reconciliation["generation"], "barrier": reconciliation["barrier"]}),
+        )
+        .await;
+        ids.push(sub);
+    }
+    let endpoint = env.endpoint("tracker").await;
+    let poll = |sub: &str| {
+        let request = signed_request(
+            &env.state,
+            &alice,
+            "GET",
+            &format!("/subscriptions/{sub}/events?wait=20"),
+            vec![],
+        );
+        let state = env.state.clone();
+        tokio::spawn(async move { crate::router(state).oneshot(request).await.unwrap() })
+    };
+    let first = poll(&ids[0]);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // A delivery to the other subscription does not wake it.
+    assert_eq!(
+        env.deliver(&endpoint, "d-2", "p-2").await,
+        StatusCode::NO_CONTENT
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!first.is_finished());
+    assert_eq!(
+        env.deliver(&endpoint, "d-1", "p-1").await,
+        StatusCode::NO_CONTENT
+    );
+    let page = body_json(
+        tokio::time::timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(page["events"][0]["deliveryId"], "d-1");
+
+    // Four waiting polls of one consumer; a fifth answers at once.
+    let waiting: Vec<_> = (0..4).map(|_| poll(&ids[0])).collect();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let started = std::time::Instant::now();
+    let extra = poll(&ids[0]).await.unwrap();
+    assert_eq!(extra.status(), StatusCode::OK);
+    assert!(started.elapsed() < Duration::from_secs(5), "not waiting");
+    for task in waiting {
+        task.abort();
+    }
+    env.drop_schema().await;
+}
+
+/// N3: a subscription created while its connection is being deleted never
+/// outlives the deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_subscription_racing_its_connections_deletion_does_not_outlive_it() {
+    let env = env(Policy::pilot(1 << 30)).await;
+    for round in 0..10u8 {
+        let owner = Agent::new(110 + round);
+        let connection = env
+            .connection("tracker", &owner, &format!("key-{round}"), &["p-1"])
+            .await;
+        let body =
+            json!({"source": "project", "parameters": {"projectId": "p-1"}, "events": ["task"]});
+        let subscribe = signed_request(
+            &env.state,
+            &owner,
+            "POST",
+            &format!("/connections/{connection}/subscriptions"),
+            serde_json::to_vec(&body).unwrap(),
+        );
+        let delete = signed_request(
+            &env.state,
+            &owner,
+            "DELETE",
+            &format!("/connections/{connection}"),
+            vec![],
+        );
+        let (a, b) = (env.state.clone(), env.state.clone());
+        let (_created, deleted) = tokio::join!(
+            async move { crate::router(a).oneshot(subscribe).await.unwrap() },
+            async move { crate::router(b).oneshot(delete).await.unwrap() },
+        );
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        let live = env
+            .count(&format!(
+                "SELECT count(*) FROM webhook_subscriptions WHERE connection_id = '{connection}'
+                 AND state IN ('provisioning', 'needs-reconciliation', 'active')"
+            ))
+            .await;
+        assert_eq!(live, 0, "round {round}");
+    }
+    env.drop_schema().await;
+}
+
+/// A former consumer reads nothing once it lost standing, not even the
+/// closed subscription.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_former_consumer_cannot_read_a_closed_subscription() {
+    let env = env(small()).await;
+    let owner = Agent::new(102);
+    let app = Agent::new(103);
+    let connection = env.connection("tracker", &owner, "key-o", &["p-1"]).await;
+    env.security
+        .put_delegation(&connection, &app.id(), None)
+        .await
+        .unwrap();
+    let sub = id(&env.subscribe_project(&app, &connection, "p-1").await);
+    let deleted = env
+        .send(signed_request(
+            &env.state,
+            &app,
+            "DELETE",
+            &format!("/subscriptions/{sub}"),
+            vec![],
+        ))
+        .await;
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert!(env
+        .security
+        .delete_delegation(&connection, &app.id())
+        .await
+        .unwrap());
+    let response = env.get(&app, &format!("/subscriptions/{sub}")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    env.drop_schema().await;
+}

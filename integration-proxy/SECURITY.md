@@ -457,11 +457,20 @@ generic code.
   `x-webhook-deliveries`; nothing names a provider. What a document cannot
   express in Webhook Deliveries 0.1.0-draft (other algorithms, handshakes,
   non-JSON bodies) is refused.
-- **Verification before parsing.** The body limit is the verification cap
-  (25 MiB), enforced while reading. The endpoint's profile and secret are
+- **Bounded before authentication.** Before any body byte is read, the
+  endpoint id must have its 43-character shape, a declared
+  `Content-Length` over the verification cap (25 MiB) is refused (`413`),
+  and the endpoint's hook is looked up. Then the body is read, at most the
+  cap, within 10 seconds (`408`), by at most 8 requests at once (so at
+  most 8 x 25 MiB is held); at most 2 deliveries use the database at once,
+  so consumer routes and the sweeper always find one of the inbox's four
+  connections. Every wait is bounded: a slot or pooled connection not free
+  within a few seconds is a `503`.
+- **Verification before parsing.** The endpoint's profile and secret are
   looked up, the HMAC-SHA256 over the exact bytes is compared in constant
   time (`Mac::verify_slice`), and only then is anything in the body or the
-  delivery headers read. A missing, repeated or malformed signature, a
+  delivery headers read. Refused deliveries are logged at most once per
+  ten seconds, with a count. A missing, repeated or malformed signature, a
   timestamp outside its tolerance, and a missing secret are all `401`, and
   write nothing. A body nested deeper than 64 levels is not parsed.
 - **Routing.** A delivery reaches a subscription only through a binding
@@ -471,21 +480,32 @@ generic code.
   each, and `.`, `..` and missing parameters are refused. The check is sent
   like a proxied request (catalog allowlist, credential binding, no
   redirects, no caller headers), and a 401 forces one token refresh before
-  it counts. A revocation delivery suspends the bindings it names until
+  it counts, at most once a minute per connection. A refresh the token
+  endpoint refuses (`400`/`401`, such as `invalid_grant`) is a failed
+  check; one that cannot complete is not. A revocation delivery suspends the bindings it names until
   the next check: a failure closes them, a pass resumes with an
   `access-suspended` gap.
 - **Consumers.** Every route is signed by the subscription's consumer, and
-  that consumer's standing on the connection is checked on every request.
-  A removed delegation closes the subscription on its next request.
-  Deleting a connection ends its subscriptions and starts hook cleanup in
-  the same transaction. No events are served on an access check older than
+  that consumer's standing on the connection is checked on every request,
+  also for a closed subscription, so a former consumer reads nothing. A
+  removed delegation closes the subscription on its next request. Deleting
+  a connection locks its row first, then ends its subscriptions and starts
+  hook cleanup in the same transaction; creating a subscription takes the
+  same row (shared) first, so one created during a deletion never outlives
+  it. Long polls are woken only by their own subscription's deliveries,
+  and at most 4 per consumer and 256 in all wait at once; past that a poll
+  answers at once. No events are served on an access check older than
   12 hours: the receiver runs the check itself first.
 - **No provider writes.** Subscriptions use the platform's shared
   application hook only. Dedicated hooks are not created by this release,
   so their deletion (a provider write) can only concern hooks a later
   release creates. That deletion re-runs the managing connection's access
   check with the hook's recorded parameters and requires the bound key
-  before any `list` or `delete`.
+  before any `list` or `delete`. Not handled yet: when the managing
+  connection is deleted and no other subscription's connection takes
+  over, the cleanup fails visibly (no credential is kept for it); a later
+  release creating dedicated hooks has to decide whether to keep narrow
+  cleanup material.
 
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and rate limits on verification work and subscription creation,

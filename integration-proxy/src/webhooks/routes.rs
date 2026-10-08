@@ -110,16 +110,18 @@ async fn consumer(
         Ok(_) => return Err(Box::new(inbox_error(InboxError::UnknownSubscription))),
         Err(error) => return Err(Box::new(inbox_error(error))),
     };
-    if binding.live {
-        let standing = security
-            .standing(&binding.connection_id, &binding.owner, signer.as_str())
-            .await
-            .map_err(|_| Box::new(no_store(ApiError::Unavailable.into_response())))?;
-        if standing == Standing::None {
-            // The delegation or runtime was removed: nothing more is served.
+    // Standing is checked whatever the subscription's state, so a former
+    // consumer reads nothing, not even a closed subscription's tombstone.
+    let standing = security
+        .standing(&binding.connection_id, &binding.owner, signer.as_str())
+        .await
+        .map_err(|_| Box::new(no_store(ApiError::Unavailable.into_response())))?;
+    if standing == Standing::None {
+        // The delegation or runtime was removed: nothing more is served.
+        if binding.live {
             let _ = webhooks.store.close(id, ended::STANDING_LOST, now()).await;
-            return Err(Box::new(no_store(ApiError::NotDelegated.into_response())));
         }
+        return Err(Box::new(no_store(ApiError::NotDelegated.into_response())));
     }
     let owner = crate::agent_id::parse(&binding.owner)
         .ok_or_else(|| Box::new(no_store(ApiError::Internal.into_response())))?;
@@ -374,13 +376,23 @@ pub async fn events(
         Err(response) => return *response,
     };
     let limit = query.limit.unwrap_or(i64::MAX);
-    let wait = Duration::from_secs(query.wait.unwrap_or(0)).min(MAX_WAIT);
+    let requested = Duration::from_secs(query.wait.unwrap_or(0)).min(MAX_WAIT);
+    // A waiting slot, within the caps per consumer and in all; without one
+    // the request answers at once instead of waiting.
+    let waiting = WaitingSlot::take(&webhooks, &binding.consumer, !requested.is_zero());
+    let wait = if waiting.is_some() {
+        requested
+    } else {
+        Duration::ZERO
+    };
     let deadline = tokio::time::Instant::now() + wait;
+    let waker = webhooks.store.waiter(&id);
     let mut checked = false;
-    loop {
+    let response = loop {
         // Registered before the read, so a delivery stored between the read
-        // and the wait still wakes this request.
-        let notified = webhooks.store.notify.notified();
+        // and the wait still wakes this request. Only this subscription's
+        // deliveries wake it.
+        let notified = waker.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
         match webhooks
@@ -396,11 +408,11 @@ pub async fn events(
                 tokio::select! {
                     _ = &mut notified => continue,
                     _ = tokio::time::sleep_until(deadline) => {
-                        return no_store(Json(page).into_response());
+                        break no_store(Json(page).into_response());
                     }
                 }
             }
-            Ok(page) => return no_store(Json(page).into_response()),
+            Ok(page) => break no_store(Json(page).into_response()),
             Err(InboxError::AccessCheckRequired) if !checked => {
                 // The receiver runs the check itself rather than serve
                 // events on a stale one (Webhook Deliveries §4.4.1).
@@ -411,10 +423,54 @@ pub async fn events(
                     .record_access_check(&id, &binding.consumer, access, now())
                     .await
                 {
-                    return inbox_error(error);
+                    break inbox_error(error);
                 }
             }
-            Err(error) => return inbox_error(error),
+            Err(error) => break inbox_error(error),
+        }
+    };
+    webhooks.store.release_waiter(&id, waker);
+    drop(waiting);
+    response
+}
+
+/// One waiting long poll, counted per consumer and in all until dropped.
+struct WaitingSlot {
+    webhooks: Arc<Webhooks>,
+    consumer: String,
+}
+
+impl WaitingSlot {
+    fn take(webhooks: &Arc<Webhooks>, consumer: &str, wants: bool) -> Option<Self> {
+        if !wants {
+            return None;
+        }
+        let mut waiting = webhooks.waiting.lock().unwrap_or_else(|e| e.into_inner());
+        let total: usize = waiting.values().sum();
+        let mine = waiting.get(consumer).copied().unwrap_or(0);
+        if total >= super::MAX_WAITERS || mine >= super::MAX_WAITERS_PER_CONSUMER {
+            return None;
+        }
+        waiting.insert(consumer.to_owned(), mine + 1);
+        Some(Self {
+            webhooks: webhooks.clone(),
+            consumer: consumer.to_owned(),
+        })
+    }
+}
+
+impl Drop for WaitingSlot {
+    fn drop(&mut self) {
+        let mut waiting = self
+            .webhooks
+            .waiting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = waiting.get_mut(&self.consumer) {
+            *count -= 1;
+            if *count == 0 {
+                waiting.remove(&self.consumer);
+            }
         }
     }
 }
@@ -500,13 +556,12 @@ pub async fn reconciled(
 }
 
 /// The webhook routes, added to the router only when the inbox is on.
-pub fn router(body_limit: usize) -> axum::Router<AppState> {
+pub fn router() -> axum::Router<AppState> {
     use axum::routing::{get as get_route, post};
     axum::Router::new()
-        .route(
-            "/webhooks/:endpoint_id",
-            post(super::ingress::receive).layer(axum::extract::DefaultBodyLimit::max(body_limit)),
-        )
+        // The handler reads the raw body itself, after its checks, up to
+        // the verification cap; no extractor buffers it first.
+        .route("/webhooks/:endpoint_id", post(super::ingress::receive))
         .route("/connections/:connection_id/subscriptions", post(subscribe))
         .route("/subscriptions/:id", get_route(get).delete(delete))
         .route("/subscriptions/:id/renew", post(renew))

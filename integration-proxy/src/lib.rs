@@ -366,9 +366,7 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
 fn router(state: AppState) -> Router {
     // The webhook routes exist only while the inbox is on.
     let webhook_routes = match &state.webhooks {
-        Some(webhooks) => {
-            webhooks::routes::router(webhooks.store.policy().max_verified_bytes as usize)
-        }
+        Some(_) => webhooks::routes::router(),
         None => Router::new(),
     };
     Router::new()

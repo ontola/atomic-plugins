@@ -136,7 +136,27 @@ fn needs_refresh(credential: &StoredCredential) -> bool {
     )
 }
 
+/// Why a token refresh failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RefreshFailure {
+    /// The provider refused the refresh (`400`/`401` from the token
+    /// endpoint, e.g. `invalid_grant`), or there is no refresh token: no
+    /// later attempt will do better.
+    Refused,
+    /// The token endpoint could not be reached or answered otherwise.
+    Unavailable,
+}
+
 async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> Result<(), ()> {
+    refresh_token_detailed(state, credential)
+        .await
+        .map_err(|_| ())
+}
+
+async fn refresh_token_detailed(
+    state: &AppState,
+    credential: &mut StoredCredential,
+) -> Result<(), RefreshFailure> {
     let StoredCredential::OAuth {
         provider,
         access_token,
@@ -147,9 +167,9 @@ async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> R
         // A static API key has nothing to refresh.
         return Ok(());
     };
-    let refresh_token_value = refresh_token.as_deref().ok_or(())?;
-    let configured =
-        crate::providers::Provider::configured(&state.catalog, provider).map_err(|_| ())?;
+    let refresh_token_value = refresh_token.as_deref().ok_or(RefreshFailure::Refused)?;
+    let configured = crate::providers::Provider::configured(&state.catalog, provider)
+        .map_err(|_| RefreshFailure::Unavailable)?;
     #[cfg(test)]
     let configured = {
         let mut configured = configured;
@@ -168,10 +188,18 @@ async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> R
         )
         .send()
         .await
-        .map_err(|_| ())?
-        .error_for_status()
-        .map_err(|_| ())?;
-    let token = response.json::<RefreshToken>().await.map_err(|_| ())?;
+        .map_err(|_| RefreshFailure::Unavailable)?;
+    match response.status() {
+        status if status.is_success() => {}
+        reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED => {
+            return Err(RefreshFailure::Refused)
+        }
+        _ => return Err(RefreshFailure::Unavailable),
+    }
+    let token = response
+        .json::<RefreshToken>()
+        .await
+        .map_err(|_| RefreshFailure::Unavailable)?;
     *access_token = token.access_token;
     if token.refresh_token.is_some() {
         *refresh_token = token.refresh_token;
@@ -634,8 +662,31 @@ pub(crate) enum ReceiverReply {
     /// in the catalog. Nothing was sent.
     Refused(&'static str),
     /// The provider could not be reached, answered too much, or a token
-    /// refresh failed: nothing is known.
+    /// refresh failed for a passing reason: nothing is known.
     Unreachable,
+    /// The token endpoint refused to refresh the credential (for example
+    /// `invalid_grant`): the connection no longer grants access.
+    RefreshRefused,
+}
+
+/// A connection's credential is force-refreshed on a 401 at most once a
+/// minute: a token issued that recently and still refused means no access,
+/// and a caller cannot make the proxy spend refresh tokens in a loop.
+const FORCED_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn forced_recently(connection_id: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    static LAST: LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
+        LazyLock::new(Default::default);
+    let now = std::time::Instant::now();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    last.retain(|_, at| now.duration_since(*at) < FORCED_REFRESH_COOLDOWN);
+    if last.contains_key(connection_id) {
+        return true;
+    }
+    last.insert(connection_id.to_owned(), now);
+    false
 }
 
 /// A request the proxy makes on its own behalf through a connection, for
@@ -715,12 +766,15 @@ pub(crate) async fn receiver_call(
             return ReceiverReply::Unreachable;
         };
         let status = upstream.status();
-        if status == StatusCode::UNAUTHORIZED && !refreshed && can_refresh(&credential) {
-            if force_refresh(state, security, connection_id, &mut credential)
-                .await
-                .is_err()
-            {
-                return ReceiverReply::Unreachable;
+        if status == StatusCode::UNAUTHORIZED
+            && !refreshed
+            && can_refresh(&credential)
+            && !forced_recently(connection_id)
+        {
+            match force_refresh(state, security, connection_id, &mut credential).await {
+                Ok(()) => {}
+                Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
+                Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
             }
             refreshed = true;
             continue;
@@ -750,19 +804,19 @@ async fn force_refresh(
     security: &Security,
     connection_id: &str,
     credential: &mut StoredCredential,
-) -> Result<(), ()> {
+) -> Result<(), RefreshFailure> {
     let StoredCredential::OAuth {
         access_token: used, ..
     } = credential.clone()
     else {
-        return Err(());
+        return Err(RefreshFailure::Refused);
     };
     if !security
         .claim_refresh_lease(connection_id)
         .await
-        .map_err(|_| ())?
+        .map_err(|_| RefreshFailure::Unavailable)?
     {
-        return Err(());
+        return Err(RefreshFailure::Unavailable);
     }
     let current = security
         .load_connection(connection_id)
@@ -777,15 +831,15 @@ async fn force_refresh(
         let _ = security.release_refresh_lease(connection_id).await;
         return Ok(());
     }
-    if refresh_token(state, credential).await.is_err() {
+    if let Err(failure) = refresh_token_detailed(state, credential).await {
         let _ = security.release_refresh_lease(connection_id).await;
-        return Err(());
+        return Err(failure);
     }
-    let serialized = serde_json::to_vec(&*credential).map_err(|_| ())?;
+    let serialized = serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
     security
         .store_refreshed_connection(connection_id, &serialized)
         .await
-        .map_err(|_| ())
+        .map_err(|_| RefreshFailure::Unavailable)
 }
 
 // Forward only representation/pagination metadata, never provider cookies or credentials.
@@ -863,6 +917,14 @@ fn upstream_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connection_is_force_refreshed_at_most_once_a_minute() {
+        let connection = format!("cooldown-{}", rand::random::<u64>());
+        assert!(!forced_recently(&connection));
+        assert!(forced_recently(&connection));
+        assert!(!forced_recently(&format!("{connection}-other")));
+    }
     use crate::agent_id::test_signer::Agent;
     use crate::capability::{mint, Claims};
     use crate::test_support::{body_json, security, signed_request, state, PUBLIC_ORIGIN};
