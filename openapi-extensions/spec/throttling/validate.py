@@ -133,6 +133,7 @@ def header_predicate(predicate, label):
         require(isinstance(predicate["equals"], str), f"{label}.equals: expected string")
     if "in" in predicate:
         strings(predicate["in"], f"{label}.in")
+        require(predicate["in"], f"{label}.in: expected nonempty array")
     if "present" in predicate:
         require(predicate["present"] is True, f"{label}.present: expected true")
 
@@ -198,51 +199,89 @@ def body_matches(predicate, body):
         return isinstance(value, str) and predicate["contains"].lower() in value.lower()
     return isinstance(value, list) and any(body_matches(predicate["item"], element) for element in value)
 
+def single_header(headers, name):
+    """The stripped value of one header, None when absent, _REPEATED when it appears more than once."""
+    value = headers.get(name.lower())
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            return _REPEATED if value else None
+        value = value[0]
+    return value.strip()
+
+_REPEATED = object()
+
 def header_matches(predicate, headers):
-    value = headers.get(predicate["name"].lower())
+    value = single_header(headers, predicate["name"])
     if value is None:
         return False
     if "present" in predicate:
         return True
+    if value is _REPEATED:
+        return False
     if "equals" in predicate:
         return value == predicate["equals"]
     return value in predicate["in"]
 
-def parse_time(value, unit, received_at, date_header=None):
-    """Seconds since the epoch at which the header's time falls, or None when it does not parse."""
-    value = value.strip()
-    if unit in ("deltaSeconds", "deltaSecondsOrHttpDate") and DIGITS.fullmatch(value):
-        return received_at + int(value)
-    if unit == "epochSeconds" and DIGITS.fullmatch(value):
-        return _skewed(int(value), received_at, date_header)
-    if unit in ("httpDate", "deltaSecondsOrHttpDate"):
-        try:
-            parsed = email.utils.parsedate_to_datetime(value)
-        except (TypeError, ValueError):
-            return None
-        if parsed is None or parsed.tzinfo is None:
-            return None
-        return _skewed(parsed.timestamp(), received_at, date_header)
-    return None
+def _integer(value):
+    """A non-negative decimal integer, or None (also for one too long for int())."""
+    if not DIGITS.fullmatch(value):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
-def _skewed(absolute, received_at, date_header):
-    """Measure an absolute time against the response's Date header when present."""
-    if date_header:
-        try:
-            server_now = email.utils.parsedate_to_datetime(date_header).timestamp()
-            return received_at + (absolute - server_now)
-        except (TypeError, ValueError, AttributeError):
-            pass
-    return absolute
+def _http_date(value):
+    try:
+        parsed = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:  # an obsolete format without a zone is GMT (RFC 9110 §5.6.7)
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    try:
+        return parsed.timestamp()
+    except (OverflowError, ValueError):
+        return None
+
+def parse_time(value, unit, received_at, date_header=None):
+    """Epoch seconds at which the header's time falls, or None when it does not parse."""
+    if unit in ("deltaSeconds", "deltaSecondsOrHttpDate"):
+        delta = _integer(value)
+        if delta is not None:
+            return received_at + delta
+        if unit == "deltaSeconds":
+            return None
+    if unit == "epochSeconds":
+        absolute = _integer(value)
+    elif unit in ("httpDate", "deltaSecondsOrHttpDate"):
+        absolute = _http_date(value)
+    else:
+        absolute = None
+    if absolute is None:
+        return None
+    return _absolute(absolute, received_at, date_header)
+
+def _absolute(absolute, received_at, date_header):
+    """The later of the time on the consumer's clock and the same offset from the response's Date header."""
+    times = [absolute]
+    server_now = _http_date(date_header) if isinstance(date_header, str) else None
+    if server_now is not None:
+        times.append(received_at + (absolute - server_now))
+    return max(times)
 
 def classify(document, status, headers, body, received_at):
     """Classify one response under the document's x-throttling.
 
-    `headers` maps names (any case) to values; `body` is the parsed JSON body or
-    None; `received_at` is epoch seconds. Returns None when the response is not
-    throttling (or the document declares no signals and the status is not 429),
-    else a dict with `meaning`, `bucket` (or None) and `retryAt` (epoch seconds,
-    or None when the consumer's own backoff applies).
+    `headers` maps names (any case) to a value, or to a list of values when the
+    header appeared more than once. `body` is the parsed JSON body, or None when
+    there is none or it is not JSON. `received_at` is epoch seconds. Returns None
+    when the response is not throttling, else a dict with `meaning`, `bucket`
+    (or None) and `retryAt` (epoch seconds, or None when the consumer's own
+    backoff applies). A 429 is throttling with or without declared signals.
     """
     root = document.get("x-throttling") or {}
     headers = {name.lower(): value for name, value in headers.items()}
@@ -262,25 +301,31 @@ def classify(document, status, headers, body, received_at):
         matched = {"meaning": "throttled"}
     roles = {}
     for name, header in root.get("headers", {}).items():
-        if name.lower() in headers:
-            roles[header["role"]] = (headers[name.lower()], header.get("unit"))
-    date_header = headers.get("date")
+        value = single_header(headers, name)
+        if value is not None and value is not _REPEATED:
+            roles[header["role"]] = (value, header.get("unit"))
+    date_header = single_header(headers, "date")
+    date_header = date_header if isinstance(date_header, str) else None
     times = []
     if "retryAfter" in roles:
         value, unit = roles["retryAfter"]
         times.append(parse_time(value, unit, received_at, date_header))
-    exhausted = matched["meaning"] == "quotaExhausted" or ("remaining" in roles and roles["remaining"][0].strip() == "0")
+    exhausted = matched["meaning"] == "quotaExhausted" or ("remaining" in roles and _integer(roles["remaining"][0]) == 0)
     if "reset" in roles and exhausted:
         value, unit = roles["reset"]
         times.append(parse_time(value, unit, received_at, date_header))
     times = [t for t in times if t is not None]
+    bucket = matched.get("bucket")
     if times:
         retry_at = max(times)
     elif "minDelaySeconds" in matched:
         retry_at = received_at + matched["minDelaySeconds"]
+    elif matched["meaning"] == "quotaExhausted" and bucket in root.get("limits", {}):
+        retry_at = received_at + root["limits"][bucket]["window"]["seconds"]
     else:
         retry_at = None
-    return {"meaning": matched["meaning"], "bucket": matched.get("bucket"), "retryAt": retry_at}
+    return {"meaning": matched["meaning"], "bucket": bucket, "retryAt": retry_at}
+
 
 
 def _load(path):

@@ -81,6 +81,13 @@ class HeadersAndSignalsValidationTests(unittest.TestCase):
         validate(example("windowed.yaml"))
         validate(self.document())
 
+    def test_readme_snippets_validate_on_their_own(self):
+        readme = (EXAMPLES.parent / "README.md").read_text(encoding="utf-8")
+        snippets = [block for block in readme.split("```yaml\n")[1:] if block.startswith("x-throttling:")]
+        self.assertGreaterEqual(len(snippets), 4)
+        for snippet in snippets:
+            validate(yaml.safe_load(snippet.split("```")[0]))
+
     def test_signals_or_headers_without_limits(self):
         d = self.document()
         root = d["x-throttling"]
@@ -120,6 +127,7 @@ class HeadersAndSignalsValidationTests(unittest.TestCase):
         self.invalid(lambda r: r["signals"][0]["header"].pop("equals"))
         self.invalid(lambda r: r["signals"][0]["header"].update(equals=0))
         self.invalid(lambda r: r["signals"][0]["header"].update(name=""))
+        self.invalid(lambda r: r["signals"][0].update(header={"name": "x-ratelimit-remaining", "in": []}))
         self.invalid(lambda r: r["signals"][1]["header"].update(present=False))
         self.invalid(lambda r: r["signals"][0].update(header={"name": "x", "contains": "0"}))
         self.invalid(lambda r: r["signals"][2]["body"].update(pointer="error/errors"))
@@ -189,6 +197,37 @@ class ClassifyTests(unittest.TestCase):
         del document["x-throttling"]["signals"]
         self.assertEqual(classify(document, 429, {"Retry-After": "7"}, None, NOW)["retryAt"], NOW + 7)
         self.assertIsNone(classify(document, 403, {"Retry-After": "7"}, None, NOW))
+
+    def test_a_wrong_date_header_never_makes_the_retry_earlier(self):
+        headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(NOW + 900),
+                   "date": "Fri, 01 Jan 2100 00:00:00 GMT"}
+        self.assertEqual(self.classify(403, headers)["retryAt"], NOW + 900)
+        # A server clock 100 s behind ours moves the reset later, never earlier.
+        headers["date"] = "Fri, 15 Jan 2027 07:58:20 GMT"
+        self.assertEqual(self.classify(403, headers)["retryAt"], NOW + 1000)
+
+    def test_huge_and_malformed_numbers_are_ignored(self):
+        for value in ("9" * 5000, "-5", "5.5", "1e3", ""):
+            with self.subTest(value=value[:10]):
+                result = self.classify(429, {"retry-after": value, "x-ratelimit-remaining": "0", "x-ratelimit-reset": value})
+                # Neither header parses, so the quotaExhausted signal's bucket window is the floor.
+                self.assertEqual(result, {"meaning": "quotaExhausted", "bucket": "core", "retryAt": NOW + 3600})
+
+    def test_obsolete_http_date_without_zone_is_gmt(self):
+        self.assertEqual(self.classify(429, {"retry-after": "Fri Jan 15 08:02:00 2027"})["retryAt"], NOW + 120)
+
+    def test_window_is_the_floor_for_quota_exhausted_without_times(self):
+        document = copy.deepcopy(self.document)
+        document["x-throttling"]["signals"] = [{"status": [429], "meaning": "quotaExhausted", "bucket": "core"}]
+        self.assertEqual(classify(document, 429, {}, None, NOW)["retryAt"], NOW + 3600)
+        self.assertEqual(classify(document, 429, {"retry-after": "5"}, None, NOW)["retryAt"], NOW + 5)
+
+    def test_repeated_headers_have_no_value_and_values_are_stripped(self):
+        self.assertIsNone(self.classify(403, {"x-ratelimit-remaining": ["0", "0"]}))
+        self.assertEqual(self.classify(403, {"x-ratelimit-remaining": " 0 "})["meaning"], "quotaExhausted")
+        self.assertEqual(self.classify(403, {"x-ratelimit-remaining": ["0"]})["meaning"], "quotaExhausted")
+        # present still matches a repeated header; its value is not used as a time.
+        self.assertEqual(self.classify(403, {"retry-after": ["5", "6"]}), {"meaning": "throttled", "bucket": None, "retryAt": None})
 
     def test_first_matching_signal_wins(self):
         # Remaining 0 and Retry-After: the quotaExhausted signal comes first.

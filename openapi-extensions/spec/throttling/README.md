@@ -201,9 +201,10 @@ Declare a header only when the API's documentation establishes its role and
 unit. A header whose unit is not documented stays out of the map, even when its
 name suggests one; the Moneybird example below shows such a case. A consumer
 ignores a declared header whose value does not parse in its declared encoding;
-it does not guess another unit. For `epochSeconds` and `httpDate`, a consumer
-SHOULD measure the delay against the response's `Date` header when one is
-present, rather than its own clock.
+it does not guess another unit. How an absolute time is measured against the
+consumer's clock and the response's `Date` header is defined under "Earliest
+retry time" below. An HTTP-date in an obsolete format without a zone is read
+as GMT (RFC 9110 §5.6.7).
 
 The headers of the IETF `RateLimit` and `RateLimit-Policy` structured fields
 (draft-ietf-httpapi-ratelimit-headers) carry several values in one header. A
@@ -252,30 +253,54 @@ A body that is not JSON, or a `pointer` that does not resolve, does not match.
 | `throttled` | Treats the request as refused because of rate limiting. It retries no earlier than the earliest retry time below. |
 | `quotaExhausted` | Treats the request as refused and the bucket as exhausted until it resets: every request counted against the same bucket will be refused until then, so it pauses them all, not only this one. When `bucket` is given, those are the requests to operations that select it. |
 
-A matching response means the API refused the request without applying it.
-Declare a signal only for responses the API documents that way; a response
-that may follow partial processing (a timeout, a `5xx` in general) is not a
-throttling signal. A consumer may therefore resend a write that matched a
-signal, as it would resend one that was never sent.
+A signal declares a response the API documents as a rate-limit refusal. That
+the refused request was not applied is an inference, as for any refusal before
+processing; none of the APIs in the examples below documents it explicitly. A
+response that may follow partial processing (a timeout, a `5xx` in general) is
+not a throttling signal. A consumer that resends a write after a matching
+response, or after a `429` classified by the default below, relies on that
+inference. Before resending a create that is not idempotent, it SHOULD send an
+idempotency key, or read the collection to check whether the record already
+exists, where the API offers either.
+
+Use `equals`, `in` and `contains` only on headers and body fields the API
+writes itself, never on a field that may echo the request (a submitted title, a
+query string): a caller's own data could otherwise make an ordinary error look
+like throttling, or the reverse.
+
+A header field that appears more than once in a response has no single value:
+a role ignores it, and `equals` and `in` do not match it (`present` does).
+Header values are compared after removing leading and trailing whitespace.
 
 **Earliest retry time.** For a matching response, a consumer computes:
 
 1. T1, from the `retryAfter` header, when it is declared, present and parses;
 2. T2, from the `reset` header, when it is declared, present and parses, and
    the meaning is `quotaExhausted` or the `remaining` header is `0`;
-3. the later of T1 and T2. When neither exists, the response time plus
-   `minDelaySeconds` when given; otherwise the consumer's own backoff.
+3. the later of T1 and T2. When neither exists: the response time plus
+   `minDelaySeconds` when the signal gives it; else, for `quotaExhausted` with
+   a `bucket` whose window is known, the response time plus that window's
+   `seconds`; otherwise the consumer's own backoff.
 
-A consumer MUST NOT retry earlier than this time. It MAY wait longer, cap how
-long it is willing to wait and give up instead, and back off further after
-repeated signals; those are consumer decisions.
+An absolute time (`epochSeconds`, `httpDate`) is measured twice: against the
+consumer's own clock, and, when the response has a `Date` header, as the same
+offset from `Date` applied to the time the response was received. The later of
+the two counts, so neither a wrong local clock nor a wrong `Date` header can
+make the time earlier. A delay (`deltaSeconds`) counts from the time the
+response was received. A decimal integer too large to parse does not parse.
 
-**Classification.** When `signals` is present, a consumer classifies a
-response as throttling only when it matches a Signal Object, or when its status
-is `429` (RFC 6585), which always means `throttled` unless a Signal Object
-matches it first. In particular, a `403` that matches no signal is not
-throttling. When `signals` is absent, this extension says nothing about which
-responses are throttling.
+A consumer MUST NOT send the request again, or another request counted against
+an exhausted bucket, before this time. It MAY wait longer, cap how long it is
+willing to wait and give up instead, and back off further after repeated
+signals; those are consumer decisions.
+
+**Classification.** A response with status `429` (RFC 6585) is throttling,
+with the meaning `throttled`, unless a Signal Object matches it first; this
+holds whether or not `signals` is present. When `signals` is present, a
+consumer classifies any other response as throttling only when it matches a
+Signal Object; in particular, a `403` that matches no signal is not
+throttling. When `signals` is absent, this extension says nothing about
+responses other than `429`.
 
 `headers` and `signals` are root-level only in this version: an operation's
 `x-throttling` array still selects buckets and nothing else. An API whose
@@ -339,14 +364,23 @@ x-throttling:
       minDelaySeconds: 60
 ```
 
-A `403` for a missing permission carries a nonzero `x-ratelimit-remaining`, no
-`retry-after` and another message, so it matches none of these and is not
-throttling.
+A `403` for a missing permission usually carries a nonzero
+`x-ratelimit-remaining`, no `retry-after` and another message, so it matches
+none of these and is not throttling. When the hourly quota happens to be used
+up at the same time, it carries `x-ratelimit-remaining: 0` and matches the
+first signal; the only cost is a wait until the reset before the request fails
+again as a permission error.
 
-**Google Workspace APIs** answer a rate-limit overrun with `403` or `429` and
-the reason `rateLimitExceeded` or `userRateLimitExceeded` in
-`error.errors[].reason`, and recommend exponential backoff
+**Google.** The Calendar API's error guide documents a rate-limit overrun as
+`403` or `429` with the reason `rateLimitExceeded` in `error.errors[].reason`,
+and `userRateLimitExceeded` with `403` only; it recommends exponential backoff
 ([Calendar API errors](https://developers.google.com/workspace/calendar/api/guides/errors)).
+The snippet below generalises that guide to other Google Workspace APIs, which
+is an inference: the Google Tasks API, which K6 targets, documents only a
+courtesy limit of 50,000 queries per day and no error responses
+([Tasks usage limits](https://developers.google.com/workspace/tasks/limits)).
+`quotaExceeded`, which the Calendar guide uses for Calendar's own usage limits
+rather than API quota, is left out, as is any daily-limit reason.
 
 ```yaml
 x-throttling:
@@ -368,13 +402,24 @@ be made" and "the total limit", without units
 
 ```yaml
 x-throttling:
+  limits:
+    apiRequests:
+      requests: 150
+      window: { seconds: 300, kind: unspecified }
+      partitionBy: [sourceIp]
+  applies: [apiRequests]
   headers:
     Retry-After: { role: retryAfter, unit: deltaSecondsOrHttpDate }
   signals:
     - status: [429]
       meaning: quotaExhausted
-      bucket: apiRequests   # the 150-per-300-s source-IP bucket declared under limits
+      bucket: apiRequests
 ```
+
+The `bucket` holds only for a document without the `/reports/` endpoints,
+which have their own limit of 50 requests per five minutes; for a document
+that includes them, a `429` does not say which bucket is exhausted, and the
+signal should leave `bucket` out.
 
 [examples/response-signals.yaml](examples/response-signals.yaml) is a
 complete synthetic document with headers and signals.
@@ -416,12 +461,14 @@ repository root:
 
 ```sh
 cd openapi-extensions/spec/throttling
+pip install -r requirements.txt
 python3 -m unittest test_validate
 python3 validate.py examples/windowed.yaml examples/response-signals.yaml
 ```
 
-`validate.py` reads JSON, or YAML when PyYAML is installed (the
-authenticated-principal `requirements.txt` pins it).
+The tests need PyYAML ([requirements.txt](requirements.txt)); they also check
+that every `x-throttling` snippet in this README validates on its own.
+`validate.py` itself reads JSON, and YAML when PyYAML is installed.
 
 Future revisions can add weighted requests, richer conditional rules, other
 bucket algorithms, per-operation signals and the IETF `RateLimit` structured
@@ -434,8 +481,11 @@ API throttling.
   `remaining`, `used`, `reset`, `retryAfter`, with Time Units) and `signals`
   (Signal Objects with status, header and body predicates, `throttled` or
   `quotaExhausted`, an optional `bucket` and `minDelaySeconds`), the earliest
-  retry time and the classification rule. `limits` and `applies` become
-  optional together. A 0.1.0 document stays valid.
+  retry time (absolute times measured against both clocks, the bucket window
+  as a floor for `quotaExhausted`), the classification rule (`429` throttled
+  with or without signals), and the resend basis (an inference, with an
+  idempotency key or a read before resending a create). `limits` and
+  `applies` become optional together. A 0.1.0 document stays valid.
 - **0.1.0-draft**: announced request-count windows and partitions.
 
 ## References
