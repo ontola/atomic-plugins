@@ -14,6 +14,7 @@ import {
   createDevServer,
   enableAppEntries,
   localCatalog,
+  ontologyFile,
   parseEnableApps,
   root,
 } from './dev-server.mjs';
@@ -268,6 +269,29 @@ test('serves the committed ontology terms like Pages, with subjects on its own o
         assert.equal((await fetch(`${devUrl}${path}`)).status, 404, path);
     });
   });
+});
+
+test('ontologyFile refuses encoded, backslash and NUL paths itself', () => {
+  // fetch() normalises %2e%2e and backslashes on the client before they
+  // reach the server, so the request-level 404s below do not prove that
+  // ontologyFile refuses them; these call it directly.
+  assert.ok(ontologyFile('/ontology/lenses/v1', root));
+  assert.ok(ontologyFile('/ontology/classes/event-v1', root));
+
+  for (const path of [
+    '/ontology/lenses/%2e%2e',
+    '/ontology/lenses/%2e%2e/%2e%2e/ontology-kit/base.json',
+    '/ontology/lenses/..',
+    '/ontology/lenses/../../ontology-kit/base.json',
+    '/ontology/lenses\\v1',
+    '/ontology\\lenses\\v1',
+    '/ontology/lenses/v1\\..\\..\\ontology-kit',
+    '/ontology/lenses/v1\0',
+    '/ontology/lenses/\0v1',
+    '/ontology/classes/event-v1%00',
+    '/ontology/lenses/V1',
+  ])
+    assert.equal(ontologyFile(path, root), undefined, JSON.stringify(path));
 });
 
 test('serves lens catalog files like terms, subjects on its own origin', async () => {
