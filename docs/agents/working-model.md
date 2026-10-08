@@ -23,6 +23,11 @@ authoritative):
   coordinator session can't file in ontola/atomic-server, so it collects the
   drafts on #227 for someone with access (see
   [Issue drafts for Joep](#issue-drafts-for-joep)).
+  One-off exception (Michiel in chat, 2026-10-08, relayed by the VPS
+  coordinator): candidate20, candidate19 plus atomic-server#2069's two
+  commits, may become the pin for user testing ("even if we can't merge this
+  to develop, you can merge it to our pin so we can start user testing for
+  it"). The freeze otherwise stands.
 - **Pin bumps** (`.atomic-server-ref` → a candidate) are pre-approved. See
   [pins.md](pins.md).
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo

@@ -83,8 +83,11 @@ Q-087..Q-092 behind the browser flag
 | Install state                              | A `View` per tab; a `sync-binding` (`synced-table`, `sync-state` JSON) under the integration App, per table                                                                | Real                          |
 
 The coordinator relays that candidate20 will carry #2069 into the pin, behind
-the flag. **Estimated:** candidate20 is "being prepared" (S26), and how it
-relates to the freeze's "no new pin candidates" (S23) was not checked.
+the flag. It is a one-off exception to the freeze's "no new pin candidates"
+(S23), given by Michiel in chat on 2026-10-08 for user testing and recorded in
+[working-model.md](../agents/working-model.md) (**relayed** by coord, like
+D1–D5). **Estimated:** candidate20 is
+"being prepared" (S26).
 
 ## 2. What is new in the statement
 
@@ -322,7 +325,7 @@ data for search (D3), which blocks none of steps 1–5 (**estimated**).
 | S17 | [`integrations/google-tasks/README.md`](../../integrations/google-tasks/README.md)                                                                                                                                                         |
 | S20 | [`syncables/src/client/client.ts`](../../syncables/src/client/client.ts)                                                                                                                                                                   |
 | S21 | Decision Inbox: `inbox show Q-084 --json` … `Q-092`, `Q-100`                                                                                                                                                                               |
-| S23 | [`docs/agents/working-model.md`](../agents/working-model.md):19-25                                                                                                                                                                         |
+| S23 | [`docs/agents/working-model.md`](../agents/working-model.md):19-30                                                                                                                                                                         |
 | S24 | [`overlays/APIs/clockify.me/1.0.0-readonly/time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml`](../../overlays/APIs/clockify.me/1.0.0-readonly/time-entry-write-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) |
 | S25 | #177, comment on [#287](https://github.com/ontola/atomic-plugins/pull/287)                                                                                                                                                                 |
 | S26 | [`usertest/moderator/sessions/README.md`](../../usertest/moderator/sessions/README.md), "The split-pieces prototype"                                                                                                                       |
