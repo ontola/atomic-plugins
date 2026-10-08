@@ -91,6 +91,11 @@ The operator must configure each application and explicitly switch
 by these two profiles. See the [source and scope evidence](tests/ASANA_AIRTABLE_READONLY_PROVENANCE.md)
 and the focused composition and consumer checks under `tests/`.
 
+Airtable OAuth integrations without a support email, privacy-policy URL and
+terms-of-service URL are limited to authorization by their developer account.
+Supply the operator’s actual policies before advertising general availability;
+a working developer connection does not establish public distribution.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
