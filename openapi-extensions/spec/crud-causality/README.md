@@ -233,8 +233,9 @@ own Collection Object extensions `x-list-method`, `x-list-query` and
 `x-list-body`. Published overlays that use them stay valid, and a consumer MAY
 keep reading them. They differ from the standard fields in two ways:
 syncables accepts `x-list-method` in any case (`post`), and accepts
-non-string `x-list-query` values, sending their text (Discord's
-`limit: 200`). A Collection Object SHOULD NOT carry both forms. When it does,
+non-string `x-list-query` values, sending their JSON text, and `null` as an
+empty value (Discord's `limit: 200` is sent as `200`, `true` as `true`).
+Rules 14–18 of §8 do not constrain the `x-list-*` forms. A Collection Object SHOULD NOT carry both forms. When it does,
 they combine field by field: `listMethod`, `listQuery` and `listBody` each
 apply when present, and an absent one falls back to its `x-list-*`
 counterpart.
@@ -637,8 +638,8 @@ A conforming implementation MUST enforce:
 11. Every `references.*.resource` (§4.1.3) MUST reference a key that exists in `components.crudResources`.
 12. Every key in a `references.*.bindings` map MUST correspond to a `{variable}` present in the **target** resource's `identity.urlTemplate`.
 13. Every `{variable}` in the target resource's `identity.urlTemplate` that is not a key in the reference's `bindings` SHOULD also appear, with the same name, in the `urlTemplate` of at least one collection the **referring** resource declares under `collections` — i.e. it is carried from request context rather than read off the referring object.
-14. A Collection Object that defines its read (§4.2.1) MUST have a `urlTemplate`, and the operation at `paths[urlTemplate][method]` MUST exist, where `method` is `listMethod`, else the upper-cased `x-list-method`, else `GET`. `listMethod` MUST be `GET` or `POST`.
-15. When an operation declares `x-crud` with `action: list` and a `collection` that defines its read, that operation MUST be at `paths[urlTemplate][method]`.
+14. Rules 14–18 apply to the standard fields `listMethod`, `listQuery` and `listBody`; the `x-list-*` forms are a consumer fallback that they do not constrain, so a 0.3.0 document that uses them stays valid. A Collection Object with a standard field MUST have a `urlTemplate`, and the operation at `paths[urlTemplate][method]` MUST exist, where `method` is `listMethod`, else the upper-cased `x-list-method`, else `GET`. `listMethod` MUST be `GET` or `POST`.
+15. When an operation declares `x-crud` with `action: list` and a `collection` with a standard field, that operation MUST be at `paths[urlTemplate][method]`.
 16. `listQuery`, when present, MUST be a nonempty object. Every key MUST be a query parameter declared on that operation or its path item and MUST NOT be a path parameter of `urlTemplate`; every value MUST be a string.
 17. `listBody` MUST be a JSON object, MUST NOT be present unless the read's method is `POST`, and requires the operation to declare an `application/json` request body (in Swagger 2.0, a `body` parameter).
 18. No `listQuery` or `listBody` key may name a field to which the pagination scheme the operation applies explicitly (`x-pagination`, after overrides) gives a role other than `pageSize`. `listBody` keys are compared as dot-paths with the pagination scheme's request `bodyFields` keys, a segment holding a `.` written `["a.b"]` as in Pagination Schemes §4.4.
@@ -653,7 +654,7 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 [`validate.py`](validate.py) checks rules 2, 4 and 14–19 for a loaded OpenAPI
 document: the collection reads of §4.2.1 and the resource and collection names
-they depend on; rule 19 is reported as an error. It does not check the other
+they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
 rules. It also holds `read_request`, which builds the first request of a read
 (§4.2.1 steps 1–3, with the `x-list-*` fallback). [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
 is a synthetic document with a fixed-query `GET` collection and a `POST`

@@ -110,12 +110,27 @@ class LegacyAndEdgeCaseTests(unittest.TestCase):
         validate(document)
         self.assertEqual(read_request(document, "page", "searchedPages", {})[0], "POST")
 
-    def test_both_forms_of_one_field_are_reported(self):
+    def test_both_forms_of_one_field_are_a_warning(self):
         document = example()
         collections(document)[0]["x-list-query"] = {"showHidden": "true"}
-        with self.assertRaises(ValueError) as raised:
-            validate(document)
-        self.assertIn("rule 19", str(raised.exception))
+        warnings = []
+        validate(document, warnings)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("rule 19", warnings[0])
+
+    def test_x_list_forms_alone_are_not_checked(self):
+        # A published 0.3.0 overlay may fix a parameter its subset OAD does not declare (GitHub's state=all).
+        document = example()
+        tasks, pages = collections(document)
+        tasks.pop("listQuery")
+        tasks["x-list-query"] = {"state": "all", "limit": 200, "flag": True, "none": None}
+        pages.pop("listMethod")
+        pages["x-list-method"] = "post"
+        pages["x-list-body"] = pages.pop("listBody")
+        pages["x-list-body"]["start_cursor"] = "x"
+        validate(document)
+        path = read_request(document, "task", "allTasks", {"listId": "L"})[1]
+        self.assertEqual(path, "/lists/L/tasks?state=all&limit=200&flag=true&none=")  # syncables' asText
 
     def test_list_body_paging_conflicts_follow_dot_paths_and_escapes(self):
         document = example()

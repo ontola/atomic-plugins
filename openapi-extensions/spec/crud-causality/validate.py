@@ -65,7 +65,20 @@ SEGMENT = re.compile(r'\["((?:[^"\\]|\\.)*)"\]|([^.\[\]]+)')
 
 
 def defines_read(collection):
+    """§4.2.1: a standard field or an x-list-* form; the read a consumer makes."""
     return any(field in collection or LEGACY[field] in collection for field in STANDARD)
+
+
+def declares_standard(collection):
+    """Rules 14-18 apply to collections with a standard field only."""
+    return any(field in collection for field in STANDARD)
+
+
+def as_text(value):
+    """syncables' asText: a string as is, null as '', anything else as JSON."""
+    if isinstance(value, str):
+        return value
+    return "" if value is None else json.dumps(value)
 
 
 def effective(collection):
@@ -82,8 +95,7 @@ def effective(collection):
         query = collection["listQuery"]
     elif "x-list-query" in collection:
         raw = collection["x-list-query"]
-        query = {k: v if isinstance(v, str) else json.dumps(v) if not isinstance(v, (int, float)) else str(v)
-                 for k, v in raw.items()} if isinstance(raw, dict) else raw
+        query = {k: as_text(v) for k, v in raw.items()} if isinstance(raw, dict) else raw
         used.append("x-list-query")
     else:
         query = None
@@ -176,8 +188,15 @@ def _json_request_body(document, item, operation):
     return any(media == "application/json" or media.endswith("+json") for media in content)
 
 
-def validate(document):
+def validate(document, warnings=None):
+    """Raise ValueError for violations of rules 2, 4 and 14-18; append rule 19 to `warnings`.
+
+    Rules 14-18 apply to the standard fields only. The x-list-* forms are a
+    consumer fallback (§4.2.1) and are not checked, so a 0.3.0 document that
+    uses them stays valid.
+    """
     errors = []
+    warnings = warnings if warnings is not None else []
     resources = _resources(document)
     paths = document.get("paths", {})
 
@@ -185,17 +204,20 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         for name, collection in (resource.get("collections") or {}).items():
-            if not isinstance(collection, dict) or not defines_read(collection):
+            if not isinstance(collection, dict) or not declares_standard(collection):
                 continue
             where = f"crudResources.{resource_name}.collections.{name}"
             for field in STANDARD:
                 if field in collection and LEGACY[field] in collection:
-                    errors.append(f"{where}: carries both {field} and {LEGACY[field]} (rule 19)")
+                    warnings.append(f"{where}: carries both {field} and {LEGACY[field]} (rule 19, SHOULD NOT)")
             template = collection.get("urlTemplate")
             if not isinstance(template, str):
                 errors.append(f"{where}: a collection that defines its read needs a urlTemplate")
                 continue
-            method, query, body, _ = effective(collection)
+            method, query, body, used = effective(collection)
+            # A field that falls back to its x-list-* form is a consumer fallback, not checked here.
+            query = None if "x-list-query" in used else query
+            body = None if "x-list-body" in used else body
             if method not in ("GET", "POST"):
                 errors.append(f"{where}.listMethod: expected GET or POST")
                 continue
@@ -253,8 +275,8 @@ def validate(document):
             if not isinstance(collection, dict):
                 errors.append(f"{where}.collection: {crud.get('collection')!r} is not a collection of {crud['resource']}")
                 continue
-            if not defines_read(collection):
-                continue  # rule 15 covers only collections that define their reads
+            if not declares_standard(collection):
+                continue  # rule 15 covers only collections with a standard field
             template = collection.get("urlTemplate")
             expected = str(effective(collection)[0]).lower()
             if isinstance(template, str) and (template != path or expected != method):
