@@ -53,8 +53,8 @@ Mappings are ordinary Atomic Data resources using the definitions in [../vocab](
 
 ## Connector lenses
 
-`AtomicLens` below orchestrates connector I/O and identities. The new,
-unreleased [value lens algebra](value-lenses.md) instead maps supplied values
+`AtomicLens` below orchestrates connector I/O and identities. The
+[value lens algebra](value-lenses.md) (0.9.0) instead maps supplied values
 without I/O. A host can use its `get`/`put` transformations inside an Atomic
 lens's `read`/`write` callbacks; the host still translates full values into
 Atomic patches and explicitly schedules publishing. It adds no automatic
@@ -153,7 +153,7 @@ credentials, subscriptions, identity lookups, or durable synchronization state.
   through. There is no reverse mapping yet.
 
 None of these lenses is part of this package any more (see the README's
-"Unreleased" note). Calendar's projection helpers still require the consuming
+"Passive platform lenses" section). Calendar's projection helpers still require the consuming
 application's compatible `@tomic/lib` calendar helpers. The Calendar lens
 folder keeps its previous adapter, projection, recurrence, types, and sync
 modules next to `lens/`.

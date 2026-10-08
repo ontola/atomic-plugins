@@ -10,6 +10,15 @@
  *   api/GET__api__v1__tasks__page-<n>.json
  *                   { status, headers, body } per page of Todoist API v1,
  *                   body redacted per REDACTIONS below.
+ *   api/GET__api__v1__tasks__completed-<n>.json
+ *                   { status, headers, body } of `GET /tasks/{id}` for each
+ *                   `--completed-task <id>`: a task the account's owner
+ *                   completed by hand before recording. This is #46's open
+ *                   question (does Todoist answer a completed task with
+ *                   `checked: true`, or 404?), recorded as seen; scenario.mjs
+ *                   then models its `completeTask` driver on the answer.
+ *                   Redacted like the lists; a 404 body keeps its status and
+ *                   has every string redacted.
  *   api/meta.json   when and how the recording was made, and every field the
  *                   redactor did not recognise (redacted to "redacted").
  *
@@ -32,11 +41,18 @@
  *                      (default https://localthought.io)
  *   --limit <n>        page size sent as `limit` (default 3)
  *   --max-pages <n>    stop after this many pages per collection (default 3)
+ *   --completed-task <id>
+ *                      record `GET /tasks/<id>` for a task completed by hand
+ *                      in the account (repeatable). Without it the script
+ *                      warns: the recording then leaves #46's completed-task
+ *                      question open and scenario.mjs keeps its assumption.
+ *                      The id is the one Todoist shows in the task's URL.
  *
  * Use an account with at least limit+1 active tasks, so the recording has a
  * second page (next_cursor) to exercise pagination; the script warns if not.
  * For todoist.ts coverage, include a task with `due.date`, one with
- * `due.datetime`, one with no due date, and several priorities.
+ * `due.datetime`, one with no due date, and several priorities. Complete one
+ * more task by hand first and pass its id as --completed-task.
  *
  * The fixture (scenario.mjs) is already registered in
  * integrations/localthought/fixtures/index.mjs. Until api/ exists it serves
@@ -215,6 +231,56 @@ const arg = (name, fallback) => {
   return i === -1 ? fallback : process.argv[i + 1];
 };
 
+/** Every value of a repeatable `--<name> <value>` option, in order. */
+const args = name =>
+  process.argv.flatMap((a, i) =>
+    a === `--${name}` && process.argv[i + 1] !== undefined
+      ? [process.argv[i + 1]]
+      : [],
+  );
+
+/**
+ * Records `GET /tasks/{id}` for one task completed by hand (#46). The file
+ * holds whatever Todoist answered, 404 included: scenario.mjs reads the
+ * status and `checked` of these files to model its completeTask driver, and
+ * todoist-fixture.test.ts fails when the answer is neither 404 nor a row with
+ * `checked: true`, so an unexpected shape is noticed, not assumed away.
+ */
+async function recordCompleted({ dir, token, redact, id, n }) {
+  const url = new URL(`${API}/tasks/${encodeURIComponent(id)}`);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  let body;
+
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    body = {};
+  const file = `GET__api__v1__tasks__completed-${n}.json`;
+  writeFileSync(
+    new URL(`api/${file}`, dir),
+    `${JSON.stringify(
+      { status: res.status, headers: {}, body: redact.row('task', body) },
+      null,
+      2,
+    )}\n`,
+  );
+  if (res.status === 200 && body.checked === true)
+    console.info(`record: completed task ${n}: 200 with checked: true`);
+  else if (res.status === 404) console.info(`record: completed task ${n}: 404`);
+  else
+    console.warn(
+      `record: completed task ${n}: ${res.status} with checked: ${body.checked}; neither 404 nor checked: true. Is the task really completed? todoist-fixture.test.ts will fail on it.`,
+    );
+
+  return res.status;
+}
+
 async function recordDocument(dir, proxy) {
   const res = await fetch(new URL('/catalog/todoist.yaml', proxy));
   if (!res.ok)
@@ -336,6 +402,15 @@ async function main() {
       maxPages,
     });
 
+  const completedIds = args('completed-task');
+  const completed = [];
+  for (const [i, id] of completedIds.entries())
+    completed.push(await recordCompleted({ dir, token, redact, id, n: i + 1 }));
+  if (completed.length === 0)
+    console.warn(
+      'record: no --completed-task given; what GET /tasks/{id} answers for a completed task (#46) stays unrecorded, and scenario.mjs keeps assuming checked: true.',
+    );
+
   writeFileSync(
     new URL('meta.json', api),
     `${JSON.stringify(
@@ -345,6 +420,8 @@ async function main() {
         document_source: `${proxy}/catalog/todoist.yaml`,
         limit,
         pages,
+        completed_tasks: completed.length,
+        completed_task_statuses: completed,
         unrecognised_fields_redacted: redact.unknown(),
       },
       null,
