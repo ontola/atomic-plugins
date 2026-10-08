@@ -262,6 +262,12 @@ directly.
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
+| [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
+| [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
+| [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |
+| [Twilio Messaging](APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Nine GET service/sender/compliance collections with explicit envelopes. | [Provider documentation](https://www.twilio.com/docs/messaging/api/service-resource) |
+| [Clockify read-only v2](APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | One user time-entry list with 1-based page numbers and a root array. | [Provider documentation](https://docs.clockify.me/) |
+| [Twilio Accounts](APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Two GET credential collections: AWS and public keys. | [Provider documentation](https://www.twilio.com/docs/iam/credentialaws-resource) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -454,10 +460,49 @@ omit the pagination inputs present in the pin, so that method also needs a
 separate review. Tokens preserve an ordering position, not a snapshot of
 concurrent changes.
 
+Box 2026.0 selects the beta Automate workflow list and the read-only item-query
+POST. Query markers and page sizes belong in the JSON body for `/query` and
+in query parameters for `/automate_workflows`; both page `entries` using the
+opaque `next_marker`. Preserve the required `box-version` header and every
+query predicate, parameter, sort key and requested field. The workflow list
+is unavailable on free developer accounts. Workflow starts, note conversion
+and aggregated insights are excluded. Endpoint contracts were checked against
+[Box's exact vendor specification](https://raw.githubusercontent.com/box/box-openapi/5b055e333a802b10b8ca90fcc513643836dd92b4/openapi/openapi-v2026.0.json)
+as well as its marker-pagination guide; the public endpoint-reference pages
+were unavailable during review.
+
+GitHub's eight selected collections retain their declared `Link` response
+headers and root arrays. Follow only the next relation with unchanged filters,
+ordering and page size; keep `X-GitHub-Api-Version: 2022-11-28` for this pinned
+version. Issues can include pull requests; pagination does not filter them out.
+Search has a different envelope and remains unselected, along with single
+reads and writes.
+
+The three Twilio service OADs select GET collections only. Conversations,
+Messaging and Accounts follow the full URL in `meta.next_page_url`.
+Each operation declares its own item envelope. Preserve the returned page link
+and filters rather than constructing `PageToken` or incrementing `Page`.
+A null/empty/absent next link ends traversal; `meta.url`, first-page and
+previous-page links do not advance it. Page size is the declared `PageSize`,
+not an SDK's client-side `limit`. Individual reads, resource creation and
+updates stay outside the variants. The classic API's relative `next_page_uri`
+is excluded from this reviewed batch: the extension requires a full URL for
+`nextLink`.
+
+Clockify's new revision selects only the user time-entry list in its read-only
+OAD. It retains the declared page/page-size defaults (1 and 50), root array,
+workspace/user scope and start/end filters. Its older overlay also targets
+projects and users, which this OAD does not declare; that published file remains
+immutable. Select the new `pagination-v2` explicitly. The new variant adds no
+response envelope, totals, completion header or authentication scheme. Empty
+pages end traversal; concurrent edits can shift page contents.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
 and 2026-10-06 (Confluence, Figma, ClickUp, the five additional HubSpot OADs,
-Asana, Zendesk, Square, Zoom, Mastodon and the six Google OADs), not live provider certification.
+Asana, Zendesk, Square, Zoom, Mastodon and the six Google OADs), and 2026-10-08
+(Box, GitHub, three Twilio OADs and Clockify),
+not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
 Run the schema and scope regressions without provider credentials:
@@ -466,7 +511,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the 26 pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 32 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.

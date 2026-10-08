@@ -25,6 +25,12 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    "box": "APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml",
+    "github": "APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml",
+    "twilio_conversations": "APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "twilio_messaging": "APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "clockify": "APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml",
+    "twilio_accounts": "APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
     "google_drive": "APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml",
     "google_gmail": "APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml",
     "google_people": "APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
@@ -171,14 +177,14 @@ class PaginationCollectionTests(unittest.TestCase):
                             self.assertEqual(field_schema(document, body_schema, field)["type"], expected)
                     response = resolve(document, operation["responses"]["200"])
                     schema = json_response_schema(response)
-                    for field, metadata in scheme["response"].get("bodyFields", {}).items():
+                    for field, metadata in scheme.get("response", {}).get("bodyFields", {}).items():
                         expected = metadata.get("schema", {}).get("type", "integer" if metadata["role"] == "totalCount" else "string")
                         self.assertEqual(schema_types(document, field_schema(document, schema, field)), {expected})
-                    for field, metadata in scheme["response"].get("headers", {}).items():
+                    for field, metadata in scheme.get("response", {}).get("headers", {}).items():
                         header = resolve(document, response["headers"][field])
                         self.assertEqual(metadata["role"], "nextLink")
                         self.assertEqual(schema_types(document, header["schema"]), {"string"})
-                    envelope = scheme["response"].get("envelope", {}).get("itemsField")
+                    envelope = scheme.get("response", {}).get("envelope", {}).get("itemsField")
                     items_schema = field_schema(document, schema, envelope) if envelope else schema
                     self.assertEqual(schema_types(document, items_schema), {"array"})
 
@@ -739,6 +745,97 @@ class PaginationCollectionTests(unittest.TestCase):
         for resource in ("folders", "managedFolders", "anywhereCaches"):
             self.assertNotIn("x-pagination", document["paths"]["/b/{bucket}/" + resource]["get"])
         self.assertNotIn("x-pagination", document["paths"]["/b/{bucket}/o/watch"]["post"])
+
+    def test_box_query_body_and_workflow_query_markers_remain_distinct(self):
+        original, document = self.documents["box"]
+        selected = {(p, m): a for p, m, _, _, a in applications(document)}
+        self.assertEqual(selected, {("/automate_workflows", "get"): {"scheme": "queryMarker"},
+                                    ("/query", "post"): {"scheme": "bodyMarker"}})
+        schemes = document["components"]["paginationSchemes"]
+        for name, location in (("queryMarker", "queryParameters"), ("bodyMarker", "bodyFields")):
+            self.assertEqual(schemes[name]["request"], {location: {"marker": {"role": "cursor"}, "limit": {"role": "pageSize"}}})
+            self.assertEqual(schemes[name]["response"], {"envelope": {"itemsField": "entries"},
+                                                       "bodyFields": {"next_marker": {"role": "nextCursor"}}})
+        self.assertEqual(document["components"]["parameters"]["BoxVersionHeader"],
+                         original["components"]["parameters"]["BoxVersionHeader"])
+        self.assertEqual(document["components"]["schemas"]["QueryRequestBody"], original["components"]["schemas"]["QueryRequestBody"])
+        for path in ("/automate_workflows/{workflow_id}/start", "/notes/convert", "/query_insights"):
+            self.assertNotIn("x-pagination", document["paths"][path]["post"])
+
+    def test_github_link_headers_preserve_versioned_root_arrays(self):
+        document = self.documents["github"][1]
+        selected = {(p, m) for p, m, _, _, _ in applications(document)}
+        paths = {"/repos/{owner}/{repo}/issues", "/repos/{owner}/{repo}/pulls", "/repos/{owner}/{repo}/issues/comments",
+                 "/repos/{owner}/{repo}/labels", "/repos/{owner}/{repo}/milestones", "/users/{username}/repos",
+                 "/user/repos", "/orgs/{org}/repos"}
+        self.assertEqual(selected, {(p, "get") for p in paths})
+        scheme = document["components"]["paginationSchemes"]["linkedArrays"]
+        self.assertEqual(scheme["response"], {"headers": {"Link": {"role": "nextLink"}}})
+        self.assertEqual(scheme["request"], {"queryParameters": {"per_page": {"role": "pageSize"}}})
+        self.assertIn("X-GitHub-Api-Version: 2022-11-28", scheme["description"])
+        # Search is a separate object envelope, not an array at the root.
+        self.assertNotIn("x-pagination", document["paths"]["/search/issues"]["get"])
+        self.assertNotIn("x-pagination", document["paths"]["/repos/{owner}/{repo}/issues/{issue_number}"]["get"])
+        self.assertNotIn("x-pagination", document["paths"]["/repos/{owner}/{repo}/issues"]["post"])
+
+    def test_twilio_modern_link_transports_and_get_only_scope(self):
+        expected = {"twilio_conversations": 22, "twilio_messaging": 9, "twilio_accounts": 2}
+        for name, count in expected.items():
+            with self.subTest(service=name):
+                document = self.documents[name][1]
+                selected = list(applications(document))
+                self.assertEqual(len(selected), count)
+                scheme = document["components"]["paginationSchemes"]["linkedCollections"]
+                field = "meta.next_page_url"
+                self.assertEqual(scheme["type"], "nextLink")
+                self.assertEqual(scheme["request"], {"queryParameters": {"PageSize": {"role": "pageSize"}}})
+                self.assertEqual(scheme["response"], {"bodyFields": {field: {"role": "nextLink"}}})
+                for _, method, item, op, _ in selected:
+                    self.assertEqual(method, "get")
+                    params = {resolve(document, p)["name"]: resolve(document, p) for p in
+                              item.get("parameters", []) + op.get("parameters", [])}
+                    self.assertEqual(schema_types(document, params["PageSize"]["schema"]), {"integer"})
+                    response = resolve(document, op["responses"]["200"])
+                    self.assertTrue(field_schema(document, json_response_schema(response), field)["nullable"])
+                for item in document["paths"].values():
+                    for method in ("post", "put", "patch", "delete"):
+                        self.assertNotIn("x-pagination", item.get(method, {}))
+
+    def test_twilio_modern_envelopes_and_credential_list_scope(self):
+        expected = {
+            "twilio_conversations": {"/v1/Conversations": "conversations", "/v1/Conversations/{ConversationSid}/Messages": "messages",
+                                     "/v1/Conversations/{ConversationSid}/Participants": "participants"},
+            "twilio_messaging": {"/v1/Services": "services", "/v1/Services/{ServiceSid}/PhoneNumbers": "phone_numbers"},
+            "twilio_accounts": {"/v1/Credentials/AWS": "credentials", "/v1/Credentials/PublicKeys": "credentials"},
+        }
+        for name, envelopes in expected.items():
+            with self.subTest(service=name):
+                document = self.documents[name][1]
+                selected = {p: a["overrides"]["response"]["envelope"]["itemsField"]
+                            for p, _, _, _, a in applications(document)}
+                for path, envelope in envelopes.items():
+                    self.assertEqual(selected[path], envelope)
+        document = self.documents["twilio_accounts"][1]
+        for resource in ("AWS", "PublicKeys"):
+            self.assertNotIn("x-pagination", document["paths"]["/v1/Credentials/" + resource + "/{Sid}"]["get"])
+
+    def test_clockify_paging_targets_only_the_declared_root_array(self):
+        original, document = self.documents["clockify"]
+        path = "/v1/workspaces/{workspaceId}/user/{userId}/time-entries"
+        self.assertEqual({(p, m) for p, m, _, _, _ in applications(document)}, {(path, "get")})
+        scheme = document["components"]["paginationSchemes"]["timeEntryPages"]
+        self.assertEqual(scheme["type"], "pageNumber")
+        self.assertEqual(scheme["request"], {"queryParameters": {"page": {"role": "page"}, "page-size": {"role": "pageSize"}}})
+        self.assertNotIn("response", scheme)
+        self.assertEqual(json_response_schema(document["paths"][path]["get"]["responses"]["200"])["type"], "array")
+        params = document["components"]["parameters"]
+        for name, default in (("Page", 1), ("PageSize", 50)):
+            self.assertEqual(params[name]["schema"], {"type": "integer", "minimum": 1, "default": default})
+        self.assertEqual(params, original["components"]["parameters"])
+        self.assertEqual(document["security"], original["security"])
+        self.assertNotIn("x-pagination", document["paths"]["/v1/workspaces/{workspaceId}/time-entries/{id}"]["get"])
+        for resource in ("projects", "users"):
+            self.assertNotIn("/v1/workspaces/{workspaceId}/" + resource, document["paths"])
 
 
 if __name__ == "__main__":
