@@ -1,5 +1,9 @@
 # Bundles: organising plugins by what they do
 
+Amended 2026-10-08 (Michiel, relayed by coord): bundles are a grouping for
+discovery and search in the catalog, not the unit of matching; matching is by
+manifest, see [`pieces.md`](pieces.md).
+
 Status: **proposal, not reviewed. Nothing here is implemented.** It builds on
 the decisions recorded in
 [#177](https://github.com/ontola/atomic-plugins/issues/177) (shared row
@@ -12,7 +16,9 @@ against the current `.atomic-server-ref`.
 Decided by Michiel (2026-09-29):
 
 1. **The catalog lists bundles.** A bundle is the unit a person finds,
-   installs and removes.
+   installs and removes. _(Amended 2026-10-08 by pieces.md D3: matching is
+   by manifest, and bundles group pieces for discovery and search. Whether
+   install and removal go by piece or by bundle is still open.)_
 2. **A bundle holds parts of several kinds.** The kinds include reflectors
    (keeping a native table of a row class in sync with a remote dataset) and
    custom views (ways to show tables of a row class).
@@ -69,7 +75,7 @@ class. A view without the lens that makes it reachable is often useless.
 ## 2. The domain bundles
 
 A mapping of what exists today onto domain bundles. "Declared" means catalog
-copy or code without host evidence, as in [READINESS.md](../integrations/READINESS.md).
+copy or code without host evidence, as in [READINESS.md](../../integrations/READINESS.md).
 
 | Bundle       | Row class(es)                      | Views                                                                 | Reflectors                                               | Importers                                | Lenses (planned)                             | Folder today                                      | Catalog entries today                    |
 | ------------ | ---------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- | ------------------------------------------------- | ---------------------------------------- |
