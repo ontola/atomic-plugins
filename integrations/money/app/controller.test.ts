@@ -68,6 +68,15 @@ describe('Money controller: loading', () => {
     });
   });
 
+  it('dates a failed load by the injected clock', async () => {
+    const store = fakeStore({ data: 'none' });
+    const controller = createController(store, () => {}, {
+      now: () => 1_790_000_000_000,
+    });
+    await controller.load();
+    expect(controller.state().failedAt).toBe(1_790_000_000_000);
+  });
+
   it('reports progress while many rows load', async () => {
     const store = fakeStore({
       rows: Array.from({ length: 120 }, (_, i) =>

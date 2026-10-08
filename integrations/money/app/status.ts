@@ -12,15 +12,22 @@
  *   and nothing ever leaves Atomic, so the card is read-only in every state,
  *   with a note saying why, and that the category and note added here are
  *   saved in this table (after "Allow editing" where the host asks for it).
- * - The "sync" the card dates is the last import: the import that finished
- *   in this view (`state.arrived`, with its count as "added"), else the
- *   newest `imported` stamp among the table's stored statements. A table
+ * - The "sync" the card dates is the last import: the latest rows that
+ *   arrived while this view is open (`state.arrived`), else the newest
+ *   `imported` stamp among the table's stored statements. `arrived` counts
+ *   every new row the table subscription brought in, from this view's import
+ *   or from any other writer, so the rows line says how many "arrived at the
+ *   last sync" rather than claiming them as this view's "added"; the card's
+ *   counts line (added, updated, unchanged) is not used, since nothing here
+ *   counts updated or unchanged rows. A table
  *   whose statements are derived from its rows (an older importer table, a
  *   hand-made shared-class table) records no import date: the card then
  *   reads "Not synced yet" over the rows, and the rows line says the dates
  *   are not recorded, rather than inventing one.
  * - Loading and an import's steps show as busy; a load error is the failed
- *   sync, with when it failed and "Try again."; an import that stopped
+ *   sync (the card's "Sync failed", which the header pill repeats), its
+ *   error text led by "Couldn't load the transactions.", with when it
+ *   failed and "Try again."; an import that stopped
  *   midway is a problem that says the rows written so far are kept and how
  *   the rest gets in (check the same file again).
  * - Incomplete rows (#177) are ignored groups by what they miss, with the
@@ -58,6 +65,8 @@ export const EDITING_REFUSED_NOTE =
 export const NO_DATES_SCOPE =
   'in this table; when they were imported is not recorded';
 export const RETRY_STEP = 'Try again.';
+/** Leads the card's error text on a failed load. */
+export const LOAD_FAILED_LEAD = "Couldn't load the transactions.";
 export const IMPORT_STOPPED_LEAD =
   'The import stopped before every row was written.';
 export const IMPORT_STOPPED_TEXT =
@@ -65,6 +74,10 @@ export const IMPORT_STOPPED_TEXT =
 
 const plural = (n: number, [one, many]: [string, string]) =>
   `${n} ${n === 1 ? one : many}`;
+
+/** Ends the rows line once rows arrived: "2 arrived at the last sync". */
+export const arrivedText = (count: number) =>
+  `${count} arrived at the last sync`;
 
 /** The newest `imported` stamp among the stored statements, as epoch ms. */
 export function lastImportAt(state: State): number | undefined {
@@ -161,7 +174,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     status.last = {
       ok: false,
       at: state.failedAt ?? now,
-      error: view.message,
+      error: `${LOAD_FAILED_LEAD} ${view.message.replace(/\.?$/, '.')}`,
       nextStep: RETRY_STEP,
     };
 
@@ -173,23 +186,17 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     state.statements?.length ?? importedStatements(state.rows).length;
   const importedAt = lastImportAt(state);
   status.rows = rows;
-  status.rowsScope =
+  const scope =
     statements && (importedAt !== undefined || state.arrived)
       ? `from ${plural(statements, ['statement', 'statements'])}`
       : rows && importedAt === undefined && !state.arrived
         ? NO_DATES_SCOPE
         : 'in this table';
+  status.rowsScope = state.arrived
+    ? `${scope}; ${arrivedText(state.arrived.count)}`
+    : scope;
 
-  if (state.arrived)
-    status.last = {
-      ok: true,
-      at: state.arrived.at,
-      counts: {
-        added: state.arrived.count,
-        updated: 0,
-        unchanged: Math.max(0, rows - state.arrived.count),
-      },
-    };
+  if (state.arrived) status.last = { ok: true, at: state.arrived.at };
   else if (importedAt !== undefined) status.last = { ok: true, at: importedAt };
 
   const ignored = incompleteGroups(state, input.onOpenRow);

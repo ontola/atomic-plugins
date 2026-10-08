@@ -299,8 +299,10 @@ test.describe('money integration', () => {
     // read-only: there is no provider to send anything to.
     const syncCard = app.getByRole('region', { name: 'Sync status' });
     await expect(syncCard).toContainText('Synced just now');
-    await expect(syncCard).toContainText('Last sync: 2 added');
-    await expect(syncCard).toContainText('2 transactions');
+    await expect(syncCard).toContainText(
+      '2 transactions from 1 statement; 2 arrived at the last sync',
+    );
+    await expect(syncCard).not.toContainText('Last sync:');
     await expect(syncCard).toContainText(
       'Read-only: edits here stay in Atomic. There is no bank connection',
     );

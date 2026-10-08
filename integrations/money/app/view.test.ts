@@ -471,6 +471,14 @@ describe('Money view: the sync-status card (Q-084)', () => {
     expect(card(root)).toBeNull();
   });
 
+  it('a failed load: the pill and the card both say the sync failed', async () => {
+    const root = await open(fakeStore({ data: 'none' }));
+    expect(text(root.querySelector('[role="status"]'))).toBe('Sync failed');
+    const region = card(root)!;
+    expect(text(region)).toContain('Sync failed just now');
+    expect(text(region)).toContain("Couldn't load the transactions.");
+  });
+
   it('on the first run: not synced yet, 0 transactions, above the invitation', async () => {
     const root = await open(fakeStore());
     const region = card(root)!;

@@ -157,8 +157,10 @@ export interface State {
   /** Subject of the row whose detail is open. */
   selected?: string;
   /**
-   * Rows that arrived through the table subscription since the last load,
-   * and when (epoch ms): the import that just finished, for the status card.
+   * Rows that arrived in the latest refresh through the table subscription
+   * since the last load, and when (epoch ms, from `Options.now`). They may
+   * come from this view's import or from any other writer to the table (the
+   * importer's review, another tab), so the card says "arrived", not "added".
    */
   arrived?: { count: number; at: number };
   /** When the last load failed (epoch ms), while `view` is the error. */
@@ -234,6 +236,8 @@ export interface Options {
   importer?: ImportPort;
   /** Yields between check steps so each line can render; tests may pin it. */
   tick?: () => Promise<void>;
+  /** Epoch ms, for `arrived.at` and `failedAt`; `Date.now` by default. */
+  now?: () => number;
 }
 
 export function createController(
@@ -243,6 +247,7 @@ export function createController(
     today = localToday,
     importer,
     tick = () => new Promise(resolve => setTimeout(resolve, 0)),
+    now = Date.now,
   }: Options = {},
 ): Controller {
   let state: State = {
@@ -328,7 +333,7 @@ export function createController(
       rows,
       incomplete,
       view: settled(rows, incomplete),
-      ...(arrived ? { arrived: { count: arrived, at: Date.now() } } : {}),
+      ...(arrived ? { arrived: { count: arrived, at: now() } } : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -445,7 +450,7 @@ export function createController(
     update({ edits: { ...state.edits, [field]: edit } });
 
   const fail = (message: string) =>
-    update({ view: { kind: 'error', message }, failedAt: Date.now() });
+    update({ view: { kind: 'error', message }, failedAt: now() });
 
   return {
     state: () => state,

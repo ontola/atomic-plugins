@@ -205,17 +205,27 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   rows this app may not edit yet, "Saving a category or note asks you to
   allow editing first.", or after a refusal, "Editing the rows was refused,
   so a category or note cannot be saved until you allow it."); the "sync" it
-  dates is the last import: an import that finished in this view ("Synced
-  just now", "Last sync: 2 added, 0 updated, 4 unchanged"), else the newest
-  `imported` stamp among the stored statements ("Synced 3 days ago"); the
-  rows line counts the complete rows and the statements they came from ("6
-  transactions from 2 statements"). A table whose statements are only derived
+  dates is the last import: the latest rows that arrived while the view is
+  open ("Synced just now", and the rows line ends "; 2 arrived at the last
+  sync"), else the newest `imported` stamp among the stored statements
+  ("Synced 3 days ago"); the rows line counts the complete rows and the
+  statements they came from ("6 transactions from 2 statements"). The
+  arrivals are every new row the table subscription brought in, from this
+  view's import or any other writer (the importer's review, another tab),
+  so they are "arrived", not "added", and the card's counts line ("Last
+  sync: N added, N updated, N unchanged") is not used: nothing here counts
+  updated or unchanged rows. A table whose statements are only derived
   from its rows (an older importer table, a hand-made shared-class table)
   records no import date, so the card reads "Not synced yet" over the rows
   and the rows line says "when they were imported is not recorded" rather
   than inventing a date. Loading and an import's steps show as busy ("Reading
   the file…", "Importing 3 of 10…"); a load error is the failed sync with
-  when it failed (`state.failedAt`, 0.4.2) and "Try again."; an import that
+  when it failed (`state.failedAt`, 0.4.2), "Couldn't load the
+  transactions." and the error, and "Try again.", and the header pill says
+  "Sync failed" too, the card's own word for it (the card's headline is
+  fixed by `card.ts`). `arrived.at` and `failedAt` come from the
+  controller's `now` option (`Date.now` by default), which `mount()`'s
+  `now` feeds; an import that
   stopped midway is a problem ("The import stopped before every row was
   written.", the rows written so far are kept, check the same file again).
   Incomplete rows are ignored groups by what they miss, named, with "Open
@@ -360,15 +370,16 @@ minified, one module). Screenshots, axe and the render budget:
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
 0.3.0's bundle with only the manifest's `version` changed; app module
-`apps/money/0.4.2/ui.js`, 120,305 bytes) the five tests of
+`apps/money/0.4.2/ui.js`, 120,392 bytes) the five tests of
 `e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-08 against the
-pin `0fa9c07` (the build VPS's source build of it), in 5.4 minutes. What the
+pin `0fa9c07` (the build VPS's source build of it), in 6.1 minutes. What the
 run adds over 0.4.1: after the MT940 import into the app's own table, the
-sync-status card reads "Synced just now", "Last sync: 2 added", "2
-transactions" and "Read-only: edits here stay in Atomic. There is no bank
-connection". Not verified end to end: the card on the importer's table, on a
-table without import dates, after a load error or a stopped import, and
-with incomplete rows (`app/status.test.ts` and `app/view.test.ts` only).
+sync-status card reads "Synced just now", "2 transactions from 1
+statement; 2 arrived at the last sync", no "Last sync:" counts line, and
+"Read-only: edits here stay in Atomic. There is no bank connection". Not
+verified end to end: the card on the importer's table, on a table without
+import dates, after a load error (the pill and the card's "Sync failed") or
+a stopped import, and with incomplete rows (`app/status.test.ts` and `app/view.test.ts` only).
 
 At 0.4.1 (`plugin.js` sha256
 `b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again

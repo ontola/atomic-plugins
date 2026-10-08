@@ -14,6 +14,7 @@ import {
   ALLOW_EDITING_NOTE,
   EDITING_REFUSED_NOTE,
   IMPORT_STOPPED_LEAD,
+  LOAD_FAILED_LEAD,
   NO_DATES_SCOPE,
   NO_PROVIDER_NOTE,
   RETRY_STEP,
@@ -151,22 +152,32 @@ describe('Money status card: the last import', () => {
     expect(syncStatusFor({ state: s, now: NOW }).last).toBeUndefined();
   });
 
-  it('an import that just finished in this view: synced just now, with its count as added', () => {
+  it('rows that just arrived: synced just now, with how many arrived, and no made-up counts', () => {
     const s = state({
       rows: [txn(), txn({ subject: 'did:ad:row-2' }), txn({ subject: 'r3' })],
       arrived: { count: 2, at: NOW - 10_000 },
       statements: [statement()],
     });
     const status = syncStatusFor({ state: s, now: NOW });
-    expect(status.last).toEqual({
-      ok: true,
-      at: NOW - 10_000,
-      counts: { added: 2, updated: 0, unchanged: 1 },
-    });
+    // `arrived` counts every row the subscription brought in, not only this
+    // view's import, and nothing counts updated or unchanged rows: no counts.
+    expect(status.last).toEqual({ ok: true, at: NOW - 10_000 });
     expect(lines(s)).toMatchObject({
       headline: 'Synced just now',
-      counts: 'Last sync: 2 added, 0 updated, 1 unchanged',
-      rows: '3 transactions from 1 statement',
+      rows: '3 transactions from 1 statement; 2 arrived at the last sync',
+    });
+    expect(lines(s).counts).toBeUndefined();
+  });
+
+  it('rows that arrived into a table with no stored statements still say so', () => {
+    const s = state({
+      rows: [txn()],
+      arrived: { count: 1, at: NOW - 2 * MIN },
+      statements: [],
+    });
+    expect(lines(s)).toMatchObject({
+      headline: 'Synced 2 min ago',
+      rows: '1 transaction in this table; 1 arrived at the last sync',
     });
   });
 
@@ -212,7 +223,7 @@ describe('Money status card: busy, failed and stopped', () => {
     expect(status.last).toEqual({
       ok: false,
       at: NOW - 2 * MIN,
-      error: 'Table not found',
+      error: `${LOAD_FAILED_LEAD} Table not found.`,
       nextStep: RETRY_STEP,
     });
     expect(lines(s)).toMatchObject({

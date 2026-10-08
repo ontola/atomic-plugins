@@ -55,7 +55,9 @@ export function status(ctx: Ctx): { state: PillState; text: string } {
           : 'Loading…',
       };
     case 'error':
-      return { state: 'error', text: "Couldn't load" };
+      // The status card's headline word for the same failure ("Sync
+      // failed …"); the card's error text says what could not be loaded.
+      return { state: 'error', text: 'Sync failed' };
     case 'empty':
       return { state: 'idle', text: 'No transactions yet' };
     case 'populated':

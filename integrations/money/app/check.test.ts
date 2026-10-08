@@ -314,6 +314,7 @@ describe('importing through the host (atomic-server#1774)', () => {
     const store = fakeStore();
     const controller = createController(store, () => {}, {
       tick: async () => {},
+      now: () => 1_790_000_000_000,
     });
     await controller.load();
     await controller.importFile(file(mt940));
@@ -323,7 +324,12 @@ describe('importing through the host (atomic-server#1774)', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(controller.state().rows).toHaveLength(2);
-    expect(controller.state().arrived).toMatchObject({ count: 2 });
+    // Rows the importer wrote arrive through the table subscription, dated
+    // by the injected clock: `arrived` is not only this view's own writes.
+    expect(controller.state().arrived).toEqual({
+      count: 2,
+      at: 1_790_000_000_000,
+    });
     expect(controller.state().statements).toHaveLength(1);
   });
 

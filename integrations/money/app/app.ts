@@ -197,6 +197,7 @@ export async function mount(
     today: options.today,
     importer: options.importer,
     tick: options.tick,
+    now: options.now,
   });
 
   // Layout follows the frame's width: table or list, docked or modal detail.
