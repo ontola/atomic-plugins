@@ -231,6 +231,19 @@ Data flows through four stages, each its own directory under `src/`:
    checked) and releases. A record settled on during the check (up to the
    end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   For a nested collection whose Collection Object declares
+   `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
+   the collection that supplies its path variable in `nestedUnder`, from
+   `model.providers`, skipping variables `constants` fix), every parent
+   record concluded `deleted` or `unavailable` (declaration, GET or feed, at
+   the same three points as `reportMissing`) has `applyParentAbsent` conclude
+   the records last read under it (`nestedScopes`: confirmed records and
+   writes in scopes whose variable is the parent id) as `deleted` (only
+   `parentAbsent: deleted` under a deleted parent) or `unavailable`, with
+   `source: 'parent'`, failing their heads through `failMissing` and
+   skipping a member a write settled on since the sync began; nothing is
+   pruned. Under `'pending'`, a `vanished` parent is GETed when
+   `nestedWritesUnder` finds unsettled writes under it.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
    confirmed copy (`setLastKnown` on every refresh and settled response;
@@ -371,7 +384,16 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `deleted`, an unrecognised value, no declaration), the operation and
   legacy placements, no GET under `absent: deleted`, a later list or GET
   superseding the mark for new updates, the stored value across a restart,
-  `missingRecordChecks: 'all'`, and precedence against a deletion feed.
+  `missingRecordChecks: 'all'`, and precedence against a deletion feed; and
+  §4.4, `parentAbsent`, on the spec's §6.1 task lists
+  (`nestedTaskLists` in `__tests__/fixtures/deletion-declarations.ts`): the
+  tasks of a list that answers 404 concluded unavailable without a request,
+  a queued task update under a vanished list (the list GETed under the
+  default checks, the update failed as unavailable, the list's return), no
+  GET for a vanished list without writes under it, `parentAbsent: deleted`
+  under a declared-deleted parent (no GET at all) and under an unavailable
+  one, and no conclusion for a parent that still exists, without the field,
+  with an unrecognised value, or with it on the list operation.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -389,7 +411,8 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   declarations as the draft specs' own examples
   (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
   §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
-  the §5 overlay), each test naming the spec statement it checks, plus
+  the §5 overlay; its §6.1 `nestedTaskLists` is used by
+  `completeness-outcomes.test.ts`), each test naming the spec statement it checks, plus
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
   a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The

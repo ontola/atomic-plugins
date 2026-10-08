@@ -12,6 +12,7 @@ import {
   type TransportRequest,
   type TransportResponse,
 } from '../../../src/browser.js';
+import { nestedTaskLists } from '../../fixtures/deletion-declarations.js';
 import { petsDocument } from '../../fixtures/pets.js';
 
 // Collection Completeness 0.2.0-draft §4.3 (`notFound`): what a 404 or 410
@@ -238,8 +239,7 @@ async function editedThenMissing(
     listed: (pet) => listRex || pet['id'] !== '1',
     ...(options.item ? { item: options.item } : {}),
     ...(options.deletions ? { deletions: options.deletions } : {}),
-    behave: () =>
-      blocked ? response({ error: 'invented' }, 503) : undefined,
+    behave: () => (blocked ? response({ error: 'invented' }, 503) : undefined),
   });
   const storage = new CrashableStorage();
   const client = createApiClient(options.doc ?? document(), {
@@ -390,11 +390,10 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
   });
 
   it('lets a later complete read that returns the record supersede the mark: a new update is sent at once', async () => {
-    const { client, fake, reports, unblock, relist } =
-      await editedThenMissing({
-        doc: document({ completeness: UNAVAILABLE }),
-        item: gone(404),
-      });
+    const { client, fake, reports, unblock, relist } = await editedThenMissing({
+      doc: document({ completeness: UNAVAILABLE }),
+      item: gone(404),
+    });
     await client.sync();
     expect(client.pendingWrites()).toMatchObject([
       { state: 'failed', missingRecord: 'unavailable' },
@@ -454,10 +453,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     gone404 = false;
     fake.pets.set('1', { ...rex, name: 'Rexy' });
     await client.sync();
-    expect(reports.map((r) => r.evidence)).toEqual([
-      'unavailable',
-      'filtered',
-    ]);
+    expect(reports.map((r) => r.evidence)).toEqual(['unavailable', 'filtered']);
     await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
     expect(JSON.parse(fake.writes[0]?.body ?? '{}')).toEqual({
       id: '1',
@@ -561,4 +557,379 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
       ]);
     });
   });
+});
+
+// --- §4.4, parentAbsent: the members of a nested collection whose parent
+// object is concluded gone, on the spec's §6.1 task lists.
+
+type Row = Record<string, unknown>;
+
+/**
+ * A fake task-list provider for `nestedTaskLists`: lists at
+ * `/users/me/lists`, each list's tasks at `/lists/{listId}/tasks`. `hidden`
+ * lists are left out of the lists read; `listRead` may answer a GET of one
+ * list itself (else 200 while the list exists, 404 once removed);
+ * `blocked` answers every write 503. Records every request as
+ * "METHOD /path".
+ */
+function taskProvider(
+  lists: Row[],
+  tasks: Record<string, Row[]>,
+): {
+  lists: Map<string, Row>;
+  tasks: Map<string, Map<string, Row>>;
+  hidden: Set<string>;
+  blocked: boolean;
+  listRead: ((id: string) => TransportResponse | undefined) | undefined;
+  requests: string[];
+  writes: TransportRequest[];
+  transport: Transport;
+} {
+  const fake = {
+    lists: new Map(lists.map((l) => [String(l['id']), l])),
+    tasks: new Map(
+      Object.entries(tasks).map(([listId, rows]) => [
+        listId,
+        new Map(rows.map((t) => [String(t['id']), t])),
+      ]),
+    ),
+    hidden: new Set<string>(),
+    blocked: false,
+    listRead: undefined as
+      | ((id: string) => TransportResponse | undefined)
+      | undefined,
+    requests: [] as string[],
+    writes: [] as TransportRequest[],
+    transport: (async (r) => {
+      const path = r.url.pathname;
+      fake.requests.push(`${r.method} ${path}`);
+      const parts = path.split('/').map(decodeURIComponent);
+      if (r.method === 'GET' && path === '/users/me/lists')
+        return response(
+          [...fake.lists.values()].filter(
+            (l) => !fake.hidden.has(String(l['id'])),
+          ),
+        );
+      if (r.method === 'GET' && parts[1] === 'users' && parts[4]) {
+        const list = fake.listRead?.(parts[4]) ?? undefined;
+        if (list) return list;
+        const found = fake.lists.get(parts[4]);
+        return found ? response(found) : response({ error: 'gone' }, 404);
+      }
+      const listTasks = fake.tasks.get(parts[2] ?? '');
+      if (r.method === 'GET' && parts[1] === 'lists' && !parts[4])
+        return listTasks
+          ? response([...listTasks.values()])
+          : response({ error: 'gone' }, 404);
+      const task = listTasks?.get(parts[4] ?? '');
+      if (r.method === 'GET')
+        return task ? response(task) : response({ error: 'gone' }, 404);
+      fake.writes.push(r);
+      if (fake.blocked) return response({ error: 'invented' }, 503);
+      if (r.method === 'PUT' && listTasks) {
+        const updated = { ...JSON.parse(r.body ?? '{}'), id: parts[4] };
+        listTasks.set(parts[4] ?? '', updated);
+        return response(updated);
+      }
+      return response({ error: 'gone' }, 404);
+    }) as Transport,
+  };
+  return fake;
+}
+
+const L1 = { id: 'L1', title: 'Home' };
+const L2 = { id: 'L2', title: 'Work' };
+const t1 = { id: 't1', title: 'Water plants' };
+const t2 = { id: 't2', title: 'Write report' };
+const t3 = { id: 't3', title: 'Book room' };
+
+function nestedDocument(
+  edit: (
+    resources: Record<string, Row>,
+    paths: Record<string, Row>,
+  ) => void = (): void => undefined,
+): OpenApiDocument {
+  const doc = structuredClone(nestedTaskLists);
+  edit(
+    doc.components!['crudResources'] as Record<string, Row>,
+    doc.paths as unknown as Record<string, Row>,
+  );
+  return prepareDocument(doc);
+}
+
+const completenessOf = (
+  resources: Record<string, Row>,
+  resource: string,
+  collection: string,
+): Row =>
+  (resources[resource]!['collections'] as Record<string, Row>)[collection]![
+    'x-completeness'
+  ] as Row;
+
+/**
+ * A client that synced two lists and their tasks (`t1` in L1, `t2` and
+ * `t3` in L2), optionally queued an update of `t2` that is between retries
+ * (every write 503), then lost L2 from the lists read. Returns before the
+ * next sync; `fake.requests` and `reports` hold only what follows.
+ */
+async function listsThenGone(
+  options: {
+    doc?: OpenApiDocument;
+    edit?: boolean;
+    client?: ApiClientOptions;
+  } = {},
+): Promise<{
+  client: ApiClient;
+  fake: ReturnType<typeof taskProvider>;
+  reports: MissingRecord[];
+}> {
+  const fake = taskProvider([L1, L2], { L1: [t1], L2: [t2, t3] });
+  const reports: MissingRecord[] = [];
+  const client = createApiClient(options.doc ?? nestedDocument(), {
+    onMissingRecord: (r) => reports.push(r),
+    ...options.client,
+    transport: fake.transport,
+    retry: { baseDelayMs: 60_000 },
+  });
+  await client.sync();
+  if (options.edit) {
+    fake.blocked = true;
+    await client.update(
+      'listTasks',
+      't2',
+      { title: 'Write the report' },
+      { listId: 'L2' },
+    );
+    await vi.waitFor(() => expect(client.pendingWrites()[0]?.attempts).toBe(1));
+    await settle(5);
+  }
+  fake.hidden.add('L2');
+  fake.lists.delete('L2');
+  fake.requests.length = 0;
+  fake.writes.length = 0;
+  return { client, fake, reports };
+}
+
+describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
+  it('§6.1: a list that answers 404 is unavailable, and so is every task last read in it, without reading them', async () => {
+    const { client, fake, reports } = await listsThenGone({
+      client: { missingRecordChecks: 'all' },
+    });
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+      'GET /users/me/lists/L2',
+    ]);
+    expect(reports).toEqual([
+      {
+        resource: 'taskLists',
+        id: 'L2',
+        evidence: 'unavailable',
+        source: 'read',
+        status: 404,
+      },
+      {
+        resource: 'listTasks',
+        id: 't2',
+        context: { listId: 'L2' },
+        evidence: 'unavailable',
+        source: 'parent',
+      },
+      {
+        resource: 'listTasks',
+        id: 't3',
+        context: { listId: 'L2' },
+        evidence: 'unavailable',
+        source: 'parent',
+      },
+    ]);
+    // Nothing is pruned: the tasks keep their last known values.
+    expect(await client.get('listTasks', 't2', { listId: 'L2' })).toEqual(t2);
+    expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
+    expect(await client.get('listTasks', 't1', { listId: 'L1' })).toEqual(t1);
+  });
+
+  it('checks a vanished list without writes when a task under it has a queued update, and fails that update as unavailable', async () => {
+    const { client, fake, reports } = await listsThenGone({ edit: true });
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+      'GET /users/me/lists/L2',
+    ]);
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'unavailable', 'read'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        id: 't2',
+        context: { listId: 'L2' },
+        state: 'failed',
+        missingRecord: 'unavailable',
+        lastError: expect.stringMatching(
+          /^Record t2 is unavailable at the provider \(its parent taskList L2 of taskLists was concluded unavailable: GET \/users\/me\/lists\/L2 answered 404/,
+        ),
+      },
+    ]);
+    expect(client.pendingWrites()[0]).not.toHaveProperty('lastStatus');
+    fake.blocked = false;
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(await client.get('listTasks', 't2', { listId: 'L2' })).toEqual({
+      ...t2,
+      title: 'Write the report',
+    });
+    // The list returns: its tasks are read again, and new edits go out.
+    fake.hidden.delete('L2');
+    fake.lists.set('L2', L2);
+    fake.requests.length = 0;
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+      'GET /lists/L2/tasks',
+    ]);
+    await client.update('listTasks', 't2', { due: 'Friday' }, { listId: 'L2' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    expect(JSON.parse(fake.writes[0]?.body ?? '{}')).toEqual({
+      ...t2,
+      due: 'Friday',
+    });
+    // Settled; the failed edit still waits for the decision.
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'failed', missingRecord: 'unavailable' },
+      ]),
+    );
+  });
+
+  it('does not read a vanished list that has no writes under it by default', async () => {
+    const { client, fake, reports } = await listsThenGone();
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+    ]);
+    expect(reports).toEqual([]);
+  });
+
+  it('parentAbsent: deleted under a parent collection declared absent: deleted concludes the tasks deleted without any GET', async () => {
+    const doc = nestedDocument((resources) => {
+      resources['taskList']!['collections'] = {
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          'x-completeness': { absent: 'deleted' },
+        },
+      };
+      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
+        'deleted';
+    });
+    const { client, fake, reports } = await listsThenGone({ doc, edit: true });
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+    ]);
+    expect(reports).toEqual([
+      {
+        resource: 'taskLists',
+        id: 'L2',
+        evidence: 'deleted',
+        source: 'declaration',
+      },
+      {
+        resource: 'listTasks',
+        id: 't2',
+        context: { listId: 'L2' },
+        evidence: 'deleted',
+        source: 'parent',
+      },
+      {
+        resource: 'listTasks',
+        id: 't3',
+        context: { listId: 'L2' },
+        evidence: 'deleted',
+        source: 'parent',
+      },
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        id: 't2',
+        state: 'failed',
+        missingRecord: 'deleted',
+        lastError: expect.stringMatching(
+          /^Record t2 was deleted at the provider \(its parent taskList L2 of taskLists was concluded deleted: the API document declares/,
+        ),
+      },
+    ]);
+    // Still nothing is pruned; what a deleted task means is the app's call.
+    expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
+  });
+
+  it('parentAbsent: deleted under a parent concluded unavailable makes the tasks unavailable', async () => {
+    const doc = nestedDocument((resources) => {
+      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
+        'deleted';
+    });
+    const { client, reports } = await listsThenGone({
+      doc,
+      client: { missingRecordChecks: 'all' },
+    });
+    await client.sync();
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'unavailable', 'read'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
+    ]);
+  });
+
+  it('draws no conclusion about the tasks when the list still exists (its read answers 200)', async () => {
+    const { client, fake, reports } = await listsThenGone({
+      client: { missingRecordChecks: 'all' },
+    });
+    fake.listRead = (id): TransportResponse | undefined =>
+      id === 'L2' ? response({ ...L2, archived: true }) : undefined;
+    await client.sync();
+    expect(reports).toMatchObject([
+      { id: 'L2', evidence: 'filtered', source: 'read' },
+    ]);
+    expect(fake.requests).not.toContain('GET /lists/L2/tasks');
+  });
+
+  for (const [label, doc] of [
+    [
+      'without parentAbsent',
+      nestedDocument((resources) => {
+        delete completenessOf(resources, 'task', 'listTasks')['parentAbsent'];
+      }),
+    ],
+    [
+      'with an unrecognised parentAbsent value',
+      nestedDocument((resources) => {
+        completenessOf(resources, 'task', 'listTasks')['parentAbsent'] = 'gone';
+      }),
+    ],
+    [
+      'with parentAbsent on the list operation instead of the Collection Object',
+      nestedDocument((resources, paths) => {
+        const completeness = completenessOf(resources, 'task', 'listTasks');
+        delete (resources['task']!['collections'] as Record<string, Row>)[
+          'listTasks'
+        ]!['x-completeness'];
+        (paths['/lists/{listId}/tasks']!['get'] as Row)['x-completeness'] =
+          completeness;
+      }),
+    ],
+  ] as const)
+    it(`draws no conclusion about the tasks ${label}`, async () => {
+      const { client, reports } = await listsThenGone({
+        doc,
+        client: { missingRecordChecks: 'all' },
+      });
+      await client.sync();
+      expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
+    });
 });

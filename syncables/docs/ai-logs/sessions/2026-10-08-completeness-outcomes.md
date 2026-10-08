@@ -49,3 +49,31 @@ failed ones wait for the decision, the stored value across a restart,
 (the evidence table and a `notFound` paragraph, the outbox note, an
 Unreleased changelog entry) and CLAUDE.md updated. Not verified against a
 real provider; no overlay declares `notFound` yet.
+
+**Assistant (second commit, `parentAbsent`):** `declaredCompleteness` also
+parses `parentAbsent`, from a Collection Object only. The client maps each
+nested collection declaring it to the collection that supplies its path
+variable (the read model's providers; a variable `constants` fixes is
+skipped). At the three points where a parent record's evidence becomes
+final (the GET or declaration for a record with held writes, the GET of a
+vanished record, the end-of-sync feed read), a `deleted` or `unavailable`
+conclusion is applied to the records last read under it in each such
+nested collection, following the spec's `members_of_gone_parent`: `deleted`
+only for `parentAbsent: deleted` under a deleted parent, else
+`unavailable`. Each member is reported with `source: 'parent'` and its
+context, and its held updates fail through the existing path; a member a
+write settled on since the sync began is left alone; nothing is pruned; a
+`filtered` or `unknown` parent concludes nothing. One policy addition: the
+default `missingRecordChecks: 'pending'` GETs a vanished parent record
+without writes of its own when a nested collection declaring `parentAbsent`
+has unsettled writes under it, so a queued edit of a task in a vanished list
+is held and failed instead of sent. Nine tests on the spec's §6.1 task lists
+(the `nestedTaskLists` fixture, the spec's `examples/nested-tasks.yaml`
+with a PUT on tasks): the §6.1 bullets, a queued task update under a
+vanished list and the list's return, no GET for a vanished list without
+writes under it, `parentAbsent: deleted` under a declared-deleted parent
+(no request at all) and under an unavailable one, no conclusion for a
+parent that still exists, without the field, with an unrecognised value,
+or with it on the list operation. README, CLAUDE.md and the changelog
+updated. Not recursive (a record concluded through `parentAbsent` is not
+itself a gone parent); not verified against a real provider.

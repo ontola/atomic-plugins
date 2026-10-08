@@ -201,9 +201,13 @@ export interface MissingRecord {
   /**
    * Where the evidence comes from: `declaration` (the API document's
    * `x-completeness`), `feed` (a tombstone in the collection's deletion
-   * feed), `read` (a GET of the record) or `none` (no GET made).
+   * feed), `read` (a GET of the record), `parent` (the record's parent
+   * object, which supplies a path variable of its nested collection, was
+   * concluded deleted or unavailable, and the collection declares
+   * `x-completeness: { parentAbsent }`; the record itself was not read;
+   * Collection Completeness 0.2.0 §4.4) or `none` (no GET made).
    */
-  source: 'declaration' | 'feed' | 'read' | 'none';
+  source: 'declaration' | 'feed' | 'read' | 'parent' | 'none';
   /** The status the GET answered, when one answered. */
   status?: number;
   /** For `filtered`: the record the GET returned. */
@@ -290,7 +294,9 @@ export interface ApiClientOptions {
    * checks with a GET of the record (see `MissingRecordEvidence`), within the
    * sync's read budget (`limits`):
    * - `'pending'` (the default): records with a queued update, when that
-   *   update is the first unsettled write of the record and not in flight;
+   *   update is the first unsettled write of the record and not in flight,
+   *   and records under which a nested collection declaring
+   *   `x-completeness: { parentAbsent }` has records with unsettled writes;
    * - `'all'`: those, and also records without queued writes, once, in the
    *   sync that first misses them;
    * - `'none'`: no GET and no deletion feed read; without a declaration
@@ -607,6 +613,13 @@ interface ClientRoute {
    * read it, not that it was deleted (Collection Completeness 0.2.0 §4.3).
    */
   notFoundMeansUnavailable?: boolean;
+  /**
+   * `x-completeness: { parentAbsent }` on a nested collection: what its
+   * members mean once the parent object that supplies one of its path
+   * variables is concluded deleted or unavailable (Collection Completeness
+   * 0.2.0 §4.4). Applied without reading them.
+   */
+  parentAbsent?: 'deleted' | 'unavailable';
   /** The item URL declares a GET, so a missing record can be read. */
   itemReadable?: boolean;
   /** `x-deletion-feed`: the operation that reports deletions. */
@@ -807,6 +820,8 @@ interface Completeness {
   absent: 'deleted' | 'removed';
   /** §4.3; `deleted` when the field is absent or has another value. */
   notFound: 'deleted' | 'unavailable';
+  /** §4.4; only from a Collection Object, and only a recognised value. */
+  parentAbsent?: 'deleted' | 'unavailable';
 }
 
 /**
@@ -817,7 +832,8 @@ interface Completeness {
  * request (no fixed query or body), since several collections may share that
  * operation. A declaration whose `absent` is not `deleted` or `removed` is
  * ignored; a `notFound` that is not `deleted` or `unavailable` takes the
- * spec's default, `deleted`.
+ * spec's default, `deleted`; a `parentAbsent` that is not one of those, or
+ * that sits on the operation, is ignored.
  */
 function declaredCompleteness(
   document: OpenApiDocument,
@@ -838,19 +854,25 @@ function declaredCompleteness(
   const fixed =
     Object.keys(collection.listQuery).length > 0 ||
     Object.keys(collection.listBody).length > 0;
-  const declared =
-    isRecord(definition) && definition['x-completeness'] !== undefined
-      ? definition['x-completeness']
-      : fixed
-        ? undefined
-        : operation?.['x-completeness'];
+  const onCollection =
+    isRecord(definition) && definition['x-completeness'] !== undefined;
+  const declared = onCollection
+    ? definition['x-completeness']
+    : fixed
+      ? undefined
+      : operation?.['x-completeness'];
   if (!isRecord(declared)) return undefined;
   const absent = declared['absent'];
   if (absent !== 'deleted' && absent !== 'removed') return undefined;
+  const parentAbsent = declared['parentAbsent'];
   return {
     absent,
     notFound:
       declared['notFound'] === 'unavailable' ? 'unavailable' : 'deleted',
+    ...(onCollection &&
+    (parentAbsent === 'deleted' || parentAbsent === 'unavailable')
+      ? { parentAbsent }
+      : {}),
   };
 }
 
@@ -995,6 +1017,8 @@ function clientRoutes(
     if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
     if (completeness?.notFound === 'unavailable')
       route.notFoundMeansUnavailable = true;
+    if (completeness?.parentAbsent)
+      route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
     if (feed) route.deletionFeed = feed;
     const readTombstone = declaredReadTombstone(document, collection);
@@ -1030,7 +1054,8 @@ export function createApiClient(
     options.identityField === undefined
       ? {}
       : { identityField: options.identityField };
-  const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
+  const model = discoverReadModel(doc, legacy);
+  const routes = clientRoutes(doc, model.collections);
   for (const route of routes) {
     // A selection that narrows the read past the collection's own fixed
     // query makes it no longer the read the declaration speaks of: a record
@@ -1050,6 +1075,25 @@ export function createApiClient(
   const byResource = new Map(routes.map((r) => [r.collection.name, r]));
   if (byResource.size !== routes.length)
     throw new Error('Collection names must be unique across resources');
+  // §4.4: the nested collections that declare parentAbsent, by the
+  // collection whose records supply their path variable (`param`). A
+  // variable a constant fixes has no parent object to go missing.
+  const nestedUnder = new Map<
+    string,
+    { route: ClientRoute; param: string }[]
+  >();
+  for (const route of routes) {
+    if (!route.parentAbsent) continue;
+    for (const param of route.collection.contextParams) {
+      if (options.constants && param in options.constants) continue;
+      const provider = model.providers.get(param);
+      if (!provider || provider.collection === route.collection.name) continue;
+      nestedUnder.set(provider.collection, [
+        ...(nestedUnder.get(provider.collection) ?? []),
+        { route, param },
+      ]);
+    }
+  }
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
@@ -2622,6 +2666,124 @@ export function createApiClient(
   }
 
   /**
+   * The scopes (bound contexts) of nested collection `route` whose `param`
+   * is `parentId`, among the confirmed records and the unsettled writes,
+   * each with its context.
+   */
+  function nestedScopes(
+    route: ClientRoute,
+    param: string,
+    parentId: string,
+  ): { scope: string; context: Record<string, string> }[] {
+    const params = route.collection.contextParams;
+    const index = params.indexOf(param);
+    const found = new Map<string, Record<string, string>>();
+    for (const scope of [
+      ...confirmed.keys(),
+      ...allWrites().map((w) => w.scope),
+    ]) {
+      if (found.has(scope)) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(scope);
+      } catch {
+        continue;
+      }
+      if (
+        !Array.isArray(parsed) ||
+        parsed[0] !== route.collection.name ||
+        !Array.isArray(parsed[1]) ||
+        parsed[1][index] !== parentId
+      )
+        continue;
+      const values = parsed[1] as string[];
+      found.set(
+        scope,
+        Object.fromEntries(params.map((p, i) => [p, values[i] as string])),
+      );
+    }
+    return [...found].map(([scope, context]) => ({ scope, context }));
+  }
+
+  /**
+   * Whether a nested collection declaring `parentAbsent` has unsettled
+   * writes under record `id` of `route`: then the record's fate decides
+   * theirs, so it is checked even without writes of its own.
+   */
+  function nestedWritesUnder(route: ClientRoute, id: string): boolean {
+    return (nestedUnder.get(route.collection.name) ?? []).some(
+      ({ route: nested, param }) =>
+        nestedScopes(nested, param, id).some(({ scope }) =>
+          allWrites().some((w) => w.scope === scope),
+        ),
+    );
+  }
+
+  /**
+   * Collection Completeness §4.4: once record `id` of `route` is concluded
+   * deleted or unavailable (`found`), the members last read under it in
+   * each nested collection declaring `parentAbsent` are concluded too,
+   * without being read: `deleted` only for `parentAbsent: deleted` under a
+   * deleted parent, else `unavailable` (the spec's
+   * `members_of_gone_parent`). Each is reported (`source: 'parent'`) and
+   * its held updates fail as for any missing record; a member a write
+   * settled on during this sync is left to a later sync. Nothing is pruned.
+   * Returns the members whose writes failed, for rebuilding.
+   */
+  function applyParentAbsent(
+    route: ClientRoute,
+    id: string,
+    found: Evidence,
+    round: SyncRound,
+    released: Set<QueuedWrite>,
+  ): { scope: string; id: string }[] {
+    const touched: { scope: string; id: string }[] = [];
+    if (found.evidence !== 'deleted' && found.evidence !== 'unavailable')
+      return touched;
+    for (const { route: nested, param } of nestedUnder.get(
+      route.collection.name,
+    ) ?? []) {
+      const evidence: MissingRecordEvidence =
+        nested.parentAbsent === 'deleted' && found.evidence === 'deleted'
+          ? 'deleted'
+          : 'unavailable';
+      for (const { scope, context } of nestedScopes(nested, param, id)) {
+        const members = new Set([
+          ...remote(scope).keys(),
+          ...allWrites()
+            .filter((w) => w.scope === scope)
+            .map((w) => w.id),
+        ]);
+        for (const member of members) {
+          const key = keyFor(scope, member);
+          if (
+            (round.startedRecords.get(key) ?? 0) !==
+            (recordRevisions.get(key) ?? 0)
+          )
+            continue;
+          const conclusion: Evidence = {
+            evidence,
+            source: 'parent',
+            detail: `its parent ${route.collection.resource} ${id} of ${route.collection.name} was concluded ${found.evidence}: ${found.detail}`,
+          };
+          reportMissing(nested, context, member, conclusion);
+          if (
+            failMissing(
+              scope,
+              member,
+              conclusion,
+              remote(scope).get(member),
+              released,
+            )
+          )
+            touched.push({ scope, id: member });
+        }
+      }
+    }
+    return touched;
+  }
+
+  /**
    * After a complete read of `scope`: releases its held updates whose
    * records the read returned fresh (`isFresh`: no write to the record
    * settled during it), and deals with the records it did not return.
@@ -2737,6 +2899,8 @@ export function createApiClient(
     }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
+    // Members of nested collections concluded with this read's records.
+    const nested: { scope: string; id: string }[] = [];
     for (const [id, found] of evidence) {
       const key = keyFor(scope, id);
       // A write to the record settled while it was checked: a later sync
@@ -2754,6 +2918,7 @@ export function createApiClient(
       }
       if (failMissing(scope, id, found, previous.get(id), released))
         touchedIds.add(id);
+      nested.push(...applyParentAbsent(route, id, found, sync, released));
     }
     const taken = new Map<string, Record<string, unknown>>();
     for (const write of allWrites()) {
@@ -2768,23 +2933,32 @@ export function createApiClient(
       delete write.awaitingRefresh;
       delete write.refreshMisses;
     }
-    if (options.missingRecordChecks === 'all')
-      for (const id of vanished) {
-        if (writeQueues.has(keyFor(scope, id))) continue;
-        const found = await findEvidence(route, context, id, budget);
-        if (undecided(found))
-          sync.undecided.push({
-            scope,
-            context,
-            id,
-            ...(found ? { found } : {}),
-            revision: recordRevisions.get(keyFor(scope, id)) ?? 0,
-            previous: undefined,
-            vanished: true,
-          });
-        else if (found) reportMissing(route, context, id, found);
+    // Records without writes: checked under 'all', or when the writes of a
+    // nested collection declaring parentAbsent depend on their fate.
+    for (const id of vanished) {
+      if (writeQueues.has(keyFor(scope, id))) continue;
+      if (
+        options.missingRecordChecks !== 'all' &&
+        !nestedWritesUnder(route, id)
+      )
+        continue;
+      const found = await findEvidence(route, context, id, budget);
+      if (undecided(found))
+        sync.undecided.push({
+          scope,
+          context,
+          id,
+          ...(found ? { found } : {}),
+          revision: recordRevisions.get(keyFor(scope, id)) ?? 0,
+          previous: undefined,
+          vanished: true,
+        });
+      else if (found) {
+        reportMissing(route, context, id, found);
+        nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
-    if (!touchedIds.size) return;
+    }
+    if (!touchedIds.size && !nested.length) return;
     if (taken.size) {
       for (const [id, record] of taken) {
         remote(scope).set(id, record);
@@ -2794,8 +2968,11 @@ export function createApiClient(
     }
     await persistLater();
     for (const id of touchedIds) await rebuild(scope, id);
+    for (const member of nested) await rebuild(member.scope, member.id);
+    const scopes = new Set([scope, ...nested.map((member) => member.scope)]);
     for (const [key, queue] of writeQueues)
-      if (queue[0]?.scope === scope && !draining.has(key)) void drainQueue(key);
+      if (queue[0] && scopes.has(queue[0].scope) && !draining.has(key))
+        void drainQueue(key);
   }
 
   /**
@@ -2839,6 +3016,9 @@ export function createApiClient(
           failMissing(scope, record.id, found, record.previous, released)
         )
           touched.push({ scope, id: record.id });
+        touched.push(
+          ...applyParentAbsent(route, record.id, found, round, released),
+        );
       }
     }
     if (!touched.length && !round.tombstonesChanged) return;

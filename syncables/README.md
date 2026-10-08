@@ -387,6 +387,29 @@ made, so it has no effect. A tombstone in the collection's deletion feed is
 positive evidence of deletion and stands over an `unavailable` answer. No
 overlay declares `notFound` yet; not verified against a real provider.
 
+A nested collection (one whose URL has a path variable that another
+resource's `identity.bindings` binds, `/lists/{listId}/tasks` under task
+lists) can declare `parentAbsent: deleted | unavailable` on its Collection
+Object (0.2.0 §4.4; ignored on the list operation, and for a variable a
+`constants` entry fixes). Once a record of the parent collection is
+concluded gone, by its declaration (`absent: deleted`), by the GET
+(404/410 per `notFound`, or a read tombstone) or by a feed tombstone, the
+records last read under it in that nested collection are concluded too,
+without a request: `deleted` only for `parentAbsent: deleted` under a
+parent concluded deleted, else `unavailable`. Each is reported to
+`onMissingRecord` with `source: 'parent'` and its `context`, and its held
+updates fail with that `missingRecord`, as above; a parent whose GET shows
+it still exists (`filtered`), or whose fate is `unknown`, concludes nothing.
+Nothing is pruned: the records keep their last known values until the
+parent returns in a complete read and the nested collection is read again.
+So that a queued edit under a vanished parent is not sent blindly, the
+default `missingRecordChecks: 'pending'` also checks a vanished parent
+record without writes of its own when a nested collection declaring
+`parentAbsent` has records with unsettled writes under it. A record
+concluded through `parentAbsent` is not itself taken as a gone parent for
+collections nested under it. No overlay declares `parentAbsent` yet; not
+verified against a real provider.
+
 The GET uses the record's item path, the client's transport and
 authentication, the conditional-request cache and `storeResponse`, and counts
 against the same budget as the sync's read (`limits`: requests, time and 429
@@ -427,8 +450,8 @@ held too and checked by the next sync.
 ```ts
 const client = createApiClient(doc, {
   onMissingRecord: ({ resource, id, evidence, source, status, record }) => {
-    // evidence: 'deleted' | 'filtered' | 'unknown'
-    // source: 'declaration' | 'feed' | 'read' | 'none'
+    // evidence: 'deleted' | 'filtered' | 'unavailable' | 'unknown'
+    // source: 'declaration' | 'feed' | 'read' | 'parent' | 'none'
   },
   missingRecordChecks: 'pending', // default; or 'all', or 'none'
 });
@@ -1039,7 +1062,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   provider"), held for `resolveWrite` rather than sent. A tombstone in the
   collection's deletion feed stands over it. `MissingRecordFailure` names
   the three `missingRecord` values. The outbox stores the new value within
-  version `1`.
+  version `1`. §4.4, `parentAbsent`, on a nested collection's Collection
+  Object: once a parent record is concluded deleted or unavailable (by its
+  declaration, the GET or a feed tombstone), the records last read under
+  it are concluded `deleted` (only `parentAbsent: deleted` under a deleted
+  parent) or `unavailable` without a request, reported with
+  `source: 'parent'`, and their held updates fail accordingly; nothing is
+  pruned. The default `missingRecordChecks: 'pending'` now also checks a
+  vanished parent record without writes when such a nested collection has
+  unsettled writes under it.
 - **Unreleased**: The collection read honours the CRUD Causality Collection
   Object's `envelope.itemsField` (a dot-path to the items array, as the feed
   read already did for `x-deletion-feed`), so a list whose items sit at
