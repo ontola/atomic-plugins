@@ -341,6 +341,37 @@ is declared, not verified, and the message match for a header-less 403 is
 brittle by nature: a wording change at GitHub makes such a 403 a plain
 "Sync failed", retried on the 4-minute ladder.
 
+**Writes GitHub refused (0.4.1, #357, `proxy.mjs` `NOT_APPLIED`).** Before
+0.4.1 the transport stored a receipt only for a 2xx answer, so a write
+GitHub refused outright (a 422 for a title over 256 characters, say) left its
+journal entry without one, and the next pass reported "Uncertain GitHub
+write", asking the person to check GitHub for a change that could not be
+there. Now a write answered 400, 404, 409, 410 or 422 is a refusal: GitHub
+documents each as rejecting the whole request, with no partial effect.
+`proxyTransport` drops the journal entry and rejects with `notSent`,
+`refused: true`, the `status` and GitHub's `detail` (the body's `message` and
+its `errors`, at most 300 characters), so the Bridge drops the saved
+operation exactly as for a rate limit (a half-made create is first bound to
+the issue it made, `Bridge.bindCreated`), and the next pass holds the change
+for review again as a plain pending change, never as uncertain, in the same
+view and after a reload. The controller reports it as `refused`: the pill
+says "GitHub refused a change", the card's failed line says "GitHub refused a
+change and applied nothing (HTTP 422: Validation Failed; title is too long
+(maximum is 256 characters))." with "Edit the change here, then Review and
+send it again; nothing is resent on its own.", the review approval is not
+carried over (resending the same content would only be refused again), and
+`retry.ts` arms no timer. Left as before, on purpose: 401 and 403 that are
+not rate limits mean the connection or its permissions are the problem (the
+pass fails or asks to reconnect, and the saved operation resumes flagged
+`unconfirmed`, so a person looks before it is resent); 429 is the rate-limit
+path; and a 5xx or a lost answer stays uncertain, since GitHub may have
+applied the write before the answer was lost. Widening the set to 401/403 is
+a follow-up question, not done here. Tested with the fake store's `refuse`
+knob (`app/controller.test.ts`, "writes GitHub refused"), the transport's
+tests (`devonian/github-issues/proxy.test.mjs`), the card
+(`app/status.test.ts`) and the retry plan (`app/retry.test.ts`); no real
+GitHub refusal has been observed through the drive app.
+
 **The last sync, across reloads (0.4.0).** Each completed pass stamps the
 sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
 date and time, as Todoist's `todoist-last-sync` does), so after a reload the
@@ -518,6 +549,11 @@ replace them.
 - GitHub rate-limiting: the card says "GitHub is rate-limiting; retrying at
   HH:MM", the pill "GitHub rate limit"; the pass is retried then, approved
   changes included (see "GitHub rate limits" above).
+- GitHub refusing a write (400, 404, 409, 410, 422; 0.4.1): the pill says
+  "GitHub refused a change", the card's failed line gives GitHub's words and
+  "Edit the change here, then Review and send it again"; the change is held
+  for review again, nothing is retried on a timer (see "Writes GitHub
+  refused" above).
 - Anything else (network, 5xx) shows on the pill, with "Retry now", and in
   the card's "Sync failed" line with the retry time, and is retried on a
   timer while the view is open. While sync is paused or failed the board
@@ -678,7 +714,8 @@ Drivers for changes on the GitHub side mid-session, as
 `updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
 `commentAs` (`[repo, number, login, body]`, a comment by someone else) and
 `failNext` (`[status, count]`: the next `count` proxied requests answer 503,
-429/403 as a rate limit, or 401). `reset` (`[repo]`) forgets one repository's
+429/403 as a rate limit, 422 as a validation refusal with GitHub's `errors`,
+or 401). `reset` (`[repo]`) forgets one repository's
 edits, so the next request reseeds it, and drops any pending `failNext`
 failures; a spec calls it first, so a Playwright retry starts from the same
 state as the first attempt.

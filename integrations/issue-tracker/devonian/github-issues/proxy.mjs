@@ -2,6 +2,72 @@ import { endpoint, request } from './adapter.js';
 import { trackerAction } from './tracker-actions.js';
 
 /**
+ * Write answers that mean GitHub applied nothing: the request itself was
+ * wrong (400), its target is gone (404, 410), it clashes with the current
+ * state (409) or fails validation (422, for example a title over 256
+ * characters or a label the repository refuses). GitHub documents each as a
+ * refusal of the whole request, with no partial effect. Left out on
+ * purpose: 401 and 403, which mean the connection or its permissions are
+ * the problem (a 403 may also be a rate limit, handled before the receipt
+ * reaches this module), 429, and every 5xx, where the write may have been
+ * applied before the answer was lost.
+ */
+export const NOT_APPLIED = new Set([400, 404, 409, 410, 422]);
+
+/** How much of GitHub's explanation is kept, in characters. */
+const DETAIL_MAX = 300;
+
+/**
+ * GitHub's own words for a refusal: the body's `message`, then each entry
+ * of its `errors` (`message`, or `field` and `code`), joined; empty when
+ * the body has neither.
+ */
+export function refusalDetail(body) {
+  let parsed = body;
+
+  if (typeof body === 'string') {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return body.trim().slice(0, DETAIL_MAX);
+    }
+  }
+
+  const parts = [];
+  if (typeof parsed?.message === 'string') parts.push(parsed.message.trim());
+
+  for (const error of Array.isArray(parsed?.errors) ? parsed.errors : []) {
+    if (typeof error === 'string') parts.push(error.trim());
+    else if (typeof error?.message === 'string')
+      parts.push(error.message.trim());
+    else if (
+      typeof error?.field === 'string' &&
+      typeof error?.code === 'string'
+    )
+      parts.push(`${error.field} ${error.code}`);
+  }
+
+  return parts.filter(Boolean).join('; ').slice(0, DETAIL_MAX);
+}
+
+/**
+ * The error a refused write rejects with. `notSent` is the Bridge's
+ * contract for "nothing was applied, drop the saved operation"; `refused`,
+ * `status` and `detail` let the app tell a refusal from a rate limit or a
+ * host refusal and show GitHub's reason.
+ */
+export function refusedWrite(action, receipt) {
+  const detail = refusalDetail(receipt.body);
+
+  return Object.assign(
+    new Error(
+      `GitHub refused ${action} (HTTP ${receipt.status}${detail ? `: ${detail}` : ''}). Nothing was applied.`,
+    ),
+    { notSent: true, refused: true, status: receipt.status, detail },
+  );
+}
+
+/**
  * GitHub issue actions over the integration proxy, through `dispatch`.
  *
  * `dispatch(path, { method, body })` makes one proxy call for a GitHub API
@@ -17,6 +83,15 @@ import { trackerAction } from './tracker-actions.js';
  * Writes are journalled before they leave (`journal[id]`, persisted by
  * `save`), so a write whose outcome is unknown is never resent. Calls are
  * serialised, one at a time.
+ *
+ * A write GitHub answered with a status in `NOT_APPLIED` was refused whole
+ * (ontola/atomic-plugins#357): its journal entry is dropped and the call
+ * rejects with a `notSent` error carrying `status` and GitHub's `detail`,
+ * so the Bridge drops the saved operation and the next pass plans the
+ * change again instead of reporting "Uncertain GitHub write". Any other
+ * non-2xx answer (401, 403 that is not a rate limit, 5xx) is returned as a
+ * receipt without one, and the entry stays: those say nothing certain about
+ * what GitHub applied, or mean the connection itself is the problem.
  */
 export function proxyTransport({ repository, journal, save, dispatch }) {
   if (typeof dispatch !== 'function')
@@ -92,6 +167,10 @@ export function proxyTransport({ repository, journal, save, dispatch }) {
       if (writes && receipt.status >= 200 && receipt.status < 300) {
         journal[id].receipt = receipt;
         await save();
+      } else if (writes && NOT_APPLIED.has(receipt.status)) {
+        delete journal[id];
+        await save();
+        throw refusedWrite(action, receipt);
       }
 
       return receipt;
