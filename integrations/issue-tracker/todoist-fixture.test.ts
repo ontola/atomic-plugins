@@ -21,7 +21,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Datatype } from '../../browser/lib/src/index';
 import type { JSONValue } from '../../browser/lib/src/value';
 import { fixtures } from '../localthought/fixtures/index.mjs';
-import { args, redactor, scrub } from './fixtures/todoist/record.mjs';
+import {
+  arg,
+  args,
+  redactor,
+  scrub,
+  valueless,
+} from './fixtures/todoist/record.mjs';
 import scenario, {
   completedAnswer,
   loadCompleted,
@@ -189,6 +195,36 @@ describe('todoist fixture: always-on checks', () => {
       ]),
     ).toEqual(['abc']);
     expect(args('completed-task', ['node', 'record.mjs'])).toEqual([]);
+  });
+
+  it('counts a repeatable option given without a value, so the recorder can warn', () => {
+    const argv = ['node', 'record.mjs', '--completed-task', 'abc'];
+    expect(valueless('completed-task', argv)).toBe(0);
+    // Trailing, and followed by another option.
+    expect(valueless('completed-task', [...argv, '--completed-task'])).toBe(1);
+    expect(
+      valueless('completed-task', [
+        'node',
+        'record.mjs',
+        '--completed-task',
+        '--limit',
+        '3',
+        '--completed-task',
+      ]),
+    ).toBe(2);
+  });
+
+  it('reads a single option without taking the next flag as its value', () => {
+    const argv = ['node', 'record.mjs', '--limit', '5', '--proxy', 'x'];
+    expect(arg('limit', '3', argv)).toBe('5');
+    expect(arg('proxy', 'default', argv)).toBe('x');
+    expect(arg('max-pages', '3', argv)).toBe('3');
+    expect(() =>
+      arg('limit', '3', ['node', 'record.mjs', '--limit', '--proxy', 'x']),
+    ).toThrow('--limit needs a value');
+    expect(() => arg('limit', '3', ['node', 'record.mjs', '--limit'])).toThrow(
+      '--limit needs a value',
+    );
   });
 });
 
