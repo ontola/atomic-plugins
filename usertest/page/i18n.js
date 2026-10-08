@@ -78,6 +78,10 @@ export const TEXT = {
       intro:
         "This session uses invented sample data, so you don't need your own. Download a file when the moderator asks for it.",
     },
+    reopen: {
+      intro: 'Closed the Atomic window, or lost the page it started on?',
+      button: 'Open the starting page again',
+    },
     name: 'Your first name (optional)',
     sessionLanguage:
       'The session is in English. You can switch the language at the top of this page at any time.',
@@ -227,6 +231,10 @@ export const TEXT = {
       heading: 'Voorbeeldbestanden voor deze sessie',
       intro:
         'Deze sessie gebruikt verzonnen voorbeeldgegevens, dus je hebt geen eigen gegevens nodig. Download een bestand als de gespreksleider erom vraagt.',
+    },
+    reopen: {
+      intro: 'Het Atomic-venster gesloten, of de beginpagina kwijt?',
+      button: 'Open de beginpagina opnieuw',
     },
     name: 'Je voornaam (optioneel)',
     sessionLanguage:

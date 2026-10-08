@@ -21,3 +21,10 @@ the code on `main` that day. Anything not checked is marked "not verified".
 State that changes daily (which candidate is green, which PR is open) belongs
 on #227, not here. Where a page names a current value (the pin, the droplet's
 candidate, the proxy version) it gives the date it was true.
+
+## Dated handovers
+
+These are archival completion records requested by Michiel. Their PR and issue
+states describe the recorded date; check #227 and the linked issues for updates.
+
+- [2026-10-08: Devonian, ontology lenses and Atomic drive skill](handovers/2026-10-08-devonian.md)

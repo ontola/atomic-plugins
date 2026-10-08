@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.3.0
+**Spec version:** 0.4.0
 
 ---
 
@@ -35,6 +35,9 @@ components:
         bodyFields:
           <field-name>:    # Response Field Object (§4.4.1), key MAY use dot-notation
             role: nextPageToken | nextCursor | nextLink | previousPageToken | previousLink | nextSyncToken | totalCount | totalPages | pageSize | currentPage | offset
+            linkResolution:   # Link Resolution Object (§4.4.3); nextLink and previousLink only
+              base: request | server | declared
+              url: https://api.example.com/v2/   # only with base: declared
         headers:
           <header-name>: { ... }
 ```
@@ -74,7 +77,7 @@ Describes a single pagination strategy.
 |-------|-------------|
 | `pageNumber` | Page-number or offset-based pagination. The client increments a page number or offset with each request. |
 | `pageToken` | Opaque cursor/token-based pagination. The server returns a token in the response; the client sends it back on the next request. |
-| `nextLink` | Hypermedia-style pagination. The server returns the full URL of the next page, either in a response header or body field. The client follows the URL directly. |
+| `nextLink` | Hypermedia-style pagination. The server returns the URL of the next page, either in a response header or body field, as an absolute URL or as a relative reference resolved by §4.4.3. The client follows the resolved URL directly, under the rules of §4.4.4. |
 | `incrementalSync` | Delta/change-feed sync. The server returns a sync token on the **last** page of a full listing (instead of, or alongside, a next-page token); the client persists it and sends it back on a future request to receive only items changed since that point. Unlike `pageToken`, the token is not intended to page through the *current* result set — it seeds the *next* sync. |
 
 ### 4.3 Request Pagination Fields Object
@@ -116,6 +119,7 @@ Describes the fields the client reads from the server response to determine the 
 | `description` | string | Human-readable description. |
 | `schema` | OAS Schema Object | JSON Schema describing the field value. |
 | `role` | `ResponseRole` (§4.5) | Semantic role of this field. |
+| `linkResolution` | `LinkResolutionObject` (§4.4.3) | How a relative reference in this field is resolved. Allowed only when `role` is `nextLink` or `previousLink`. When absent, a relative reference is resolved against the request URL, as with `base: request`. |
 | `x-*` | any | Extension fields. |
 
 #### 4.4.2 Envelope Object
@@ -126,6 +130,48 @@ Some APIs return the paginated array as the response body itself (`[ {...}, {...
 |-------|------|-------------|
 | `itemsField` | string | Dot-path to the field holding the array of items (e.g. `results`, `data.items`). Omit, or set to `null`, when the response body root **is** the array. |
 | `x-*` | any | Extension fields. |
+
+#### 4.4.3 Link Resolution Object
+
+Added in 0.4.0. Some APIs return the next page as a relative reference rather than a full URL. Classic Twilio, for example, returns `"next_page_uri": "/2010-04-01/Accounts/AC.../Applications.json?PageSize=1&Page=1&PageToken=PA..."`, documented as relative to `https://api.twilio.com`. The Link Resolution Object states which absolute URL such a reference is resolved against.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `base` | `"request"` \| `"server"` \| `"declared"` | **Yes** | The base URL a relative reference is resolved against; see the table below. |
+| `url` | string | Conditional | An absolute `https` or `http` URL. REQUIRED when `base` is `declared`, and MUST NOT be present otherwise. It MUST NOT contain userinfo or a fragment. Its origin MUST be the origin of one of the server URLs listed for each operation that applies the scheme (validation rule 11). At runtime, a link resolved against it is still checked against the server the request was actually sent to (§4.4.4), so with any other listed server (a sandbox, say) its relative links are refused. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+| `base` | Base URL |
+|--------|----------|
+| `request` | The absolute URL of the request whose response carried the link, as addressed to the API's server. This is the default when `linkResolution` is absent, and the base [RFC 8288 §3.2](https://www.rfc-editor.org/rfc/rfc8288#section-3.2) gives a `Link` header. |
+| `server` | The server URL the request was sent to (the operation's, else the path item's, else the document's `servers` entry, with its variables substituted; a relative server URL is first resolved against the URL of the OpenAPI document; in Swagger 2.0, `scheme://host` plus `basePath`), with a `/` appended when its path does not already end in `/`. A server URL is treated as a directory because OpenAPI appends operation paths to it. |
+| `declared` | The `url` field, used exactly as written. Write the trailing `/` when it is meant as a directory. |
+
+A consumer resolves the field's value as follows:
+
+1. An absent or `null` value, or an empty string, means there is no next (or previous) page. For a `Link` header, the value is the target URI reference (between `<` and `>`) of the link whose `rel` includes `next` (for `nextLink`) or `prev` or `previous` (for `previousLink`), after parsing the header as [RFC 8288 §3](https://www.rfc-editor.org/rfc/rfc8288#section-3) defines; an `anchor` parameter does not change the base.
+2. A value MUST NOT be followed when it is not a string, or when it contains whitespace, an ASCII control character, a backslash (`\`) or any character outside ASCII; or when it starts with three or more slashes (`///x`); or when it starts with a scheme (`name:`) that is not followed by `//` (`https:x`, `https:/x`); or when its `//` is followed by an empty authority (`//`, `https:///x`). URL parsers disagree on all of these. For example, against the server `https://api.example.com/v1`, `///attacker.example/x` is a same-origin path to one parser, `https://attacker.example/x` to the WHATWG parser and an empty host to strict RFC 3986, so a consumer that checks with one parser and requests with another would leave the origin.
+3. Otherwise the value is a URI reference ([RFC 3986 §4.1](https://www.rfc-editor.org/rfc/rfc3986#section-4.1)). It is resolved against the base URL with the strict algorithm of [RFC 3986 §5.2](https://www.rfc-editor.org/rfc/rfc3986#section-5.2), and the result serialised as §5.3 says; for an absolute URI this only removes dot segments. Other parsers (the WHATWG URL parser, urllib's `urljoin`) differ from RFC 3986 on some inputs, so this specification does not rely on them agreeing.
+4. The resolved URL is then checked under §4.4.4 before it is requested.
+
+The bases differ only for some references. An absolute-path reference (`/2010-04-01/...`) resolves to the same URL against every base on the same origin. A relative-path or query-only reference depends on the base: against the request URL `https://api.example.com/v2/items?page=1`, `?page=2` gives `https://api.example.com/v2/items?page=2`; against `base: server` with the server `https://api.example.com/v2`, it gives `https://api.example.com/v2/?page=2`.
+
+A consumer that reaches the API through a proxy, or another route that rewrites URLs, resolves and checks the link against the provider-side URLs (the request URL as addressed to the API's server, and the server URL from the document). It then maps the resolved URL onto its route the same way it maps any operation URL. Resolving against the proxy's own URL would drop a proxy path prefix from every absolute-path reference. A next link may also climb out of the server URL's base path while staying on its origin (`/other/x` against the server `https://api.example.com/v1`); §4.4.4 allows that, so a proxy that maps links onto its route must not assume they stay under the base path.
+
+This version does not cover two cases: a base read from the response itself (for example a `_links.base` field), and an absolute-path reference meant to be appended to the server URL's path rather than to replace it. An API that needs either needs a later version of this object.
+
+#### 4.4.4 Following a link
+
+Added in 0.4.0. These rules apply to every `nextLink` and `previousLink` value a consumer follows, from a body field or a header, absolute or relative, with or without `linkResolution`:
+
+1. The resolved URL MUST have the same origin ([RFC 6454](https://www.rfc-editor.org/rfc/rfc6454): scheme, host and port, with default ports normalised and scheme and host compared case-insensitively) as the server URL the request was sent to. An `https` server therefore never pages onto `http`. Hosts are compared as ASCII strings: an internationalised host in a different form (Unicode against punycode) does not match, and the link is refused. Within that origin, any path is allowed.
+2. The resolved URL MUST NOT contain userinfo (`user:password@`) or a fragment.
+3. A link that fails rule 2 of §4.4.3, or either rule above, MUST NOT be requested, and no credential for the API may be sent to its URL. The consumer MUST end the read with an error. It MUST NOT treat the page as the last one, because a read that stops there is not complete. This matters to consumers of the [Collection Completeness](../collection-completeness/README.md) extension, which may infer deletions from a complete read.
+4. The URL a consumer requests MUST be exactly the serialised URL that passed rules 1 and 2. It MUST NOT hand the raw value, or the base and the value, to another URL parser or HTTP client to resolve again.
+5. A consumer SHOULD detect a link that resolves to a URL it already requested in the same read, and end the read with an error rather than loop.
+
+An API whose next links legitimately point at another origin cannot be paged under these rules; this version has no field that widens the allowed origins.
 
 ### 4.5 Semantic Roles
 
@@ -147,9 +193,9 @@ Some APIs return the paginated array as the response body itself (`[ {...}, {...
 |------|-------------|-------------|
 | `nextPageToken` | `pageToken` | Token to send with the next request. Absent or empty when there are no more pages. |
 | `nextCursor` | `pageToken` | Synonym for `nextPageToken`. |
-| `nextLink` | `nextLink` | Full URL of the next page. Absent when there are no more pages. |
+| `nextLink` | `nextLink` | URL of the next page: absolute, or a relative reference resolved by §4.4.3. Absent, `null` or empty when there are no more pages. |
 | `previousPageToken` | `pageToken` | Token to send to fetch the previous page. Absent or empty when there is no previous page. |
-| `previousLink` | `nextLink` | Full URL of the previous page. Absent when there is no previous page. |
+| `previousLink` | `nextLink` | URL of the previous page: absolute, or a relative reference resolved by §4.4.3. Absent, `null` or empty when there is no previous page. |
 | `nextSyncToken` | `incrementalSync` | Returned on the last page of a full listing, in place of (or alongside) `nextPageToken`. Persist it and send it back as `syncToken` on a future request to receive an incremental delta. |
 | `totalCount` | all | Total number of items across all pages. |
 | `totalPages` | `pageNumber` | Total number of pages. |
@@ -497,6 +543,55 @@ Matches a response body shaped like:
 }
 ```
 
+### 8.10 Relative next links (classic Twilio-style)
+
+```yaml
+paginationSchemes:
+  linkedCollections:
+    type: nextLink
+    autoDetect: false
+    request:
+      queryParameters:
+        PageSize:
+          role: pageSize
+    response:
+      bodyFields:
+        next_page_uri:
+          role: nextLink
+          linkResolution:
+            base: server
+```
+
+Matches a response body shaped like:
+
+```json
+{
+  "calls": [ { "sid": "CA00000000000000000000000000000000" } ],
+  "next_page_uri": "/2010-04-01/Accounts/AC00000000000000000000000000000000/Calls.json?PageSize=50&Page=1&PageToken=PA00000000000000000000000000000000",
+  "page": 0,
+  "page_size": 50
+}
+```
+
+With the server `https://api.twilio.com`, the next request goes to `https://api.twilio.com/2010-04-01/Accounts/AC00000000000000000000000000000000/Calls.json?PageSize=50&Page=1&PageToken=PA00000000000000000000000000000000`. A body whose `next_page_uri` is `https://attacker.example/steal` or `//attacker.example/steal` is not followed: it resolves outside the server's origin (§4.4.4), and the read ends with an error. [`examples/relative-next-link.yaml`](examples/relative-next-link.yaml) is a complete document of this shape.
+
+### 8.11 Declared base
+
+```yaml
+paginationSchemes:
+  linkedCollections:
+    type: nextLink
+    response:
+      headers:
+        Link:
+          role: nextLink
+          linkResolution:
+            base: declared
+            url: https://api.example.com/v2/
+```
+
+A `Link: <items?cursor=abc>; rel="next"` header then resolves to `https://api.example.com/v2/items?cursor=abc`, whatever the request URL was. [`examples/declared-base.yaml`](examples/declared-base.yaml) is a complete document of this shape.
+
 ---
 
 ## 9. Validation
@@ -510,10 +605,33 @@ A conforming implementation MUST enforce:
 5. The `scheme` field in a Pagination Application Object (§5) MUST reference a key that exists in `components.paginationSchemes`.
 6. `itemsField` in an Envelope Object, when present, MUST resolve to a field whose value is an array.
 7. A dot-path key in `bodyFields` (request or response) MUST resolve, segment by segment, to a field nested inside the (request or response) body; each segment is a literal property name unless bracket-escaped (e.g. `["a.b"]`).
+8. `linkResolution` MAY appear only on a Response Field Object whose `role` is `nextLink` or `previousLink`.
+9. `base` MUST be one of `request`, `server` or `declared`. `url` MUST be present when `base` is `declared`, and MUST NOT be present otherwise.
+10. `url` MUST be an absolute URL with the scheme `https` or `http`, without userinfo or a fragment.
+11. When a scheme with a `declared` base is applied to an operation through `x-pagination` (§5), after its overrides are merged, the origin of `url` MUST equal the origin of one of the server URLs listed for that operation. A validator that cannot know a listed server's origin statically (a relative server URL, or a variable in its scheme, host or port) skips this check for that operation. An operation that a scheme reaches only by auto-detection (§6) is not checked statically at all. In both cases the runtime rules of §4.4.4 still apply.
+
+A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
 ---
+
+## Schema, validator and tests
+
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4 and 8–10. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5 and 11. It also holds `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+
+```sh
+python3 -m venv /tmp/pagination-schemes-venv
+/tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
+cd openapi-extensions/spec/pagination-schemes
+/tmp/pagination-schemes-venv/bin/python -m unittest test_validate
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml
+```
+
+## Changes
+
+- **0.4.0** (2026-10-08): `nextLink` and `previousLink` values may be relative references. Adds the Link Resolution Object (`linkResolution` on a Response Field Object, §4.4.3), the link-following rules (§4.4.4: the server's origin only, no userinfo or fragment, an unfollowable link ends the read with an error, the checked URL is the one requested, and loops are detected), the refusal of values parsers disagree on (§4.4.3 rule 2), validation rules 8–11, and the schema, validator and examples. A document valid under 0.3.0 stays valid. A consumer that followed links to another origin may no longer do so.
+- **0.3.0** and earlier: no change log was kept.
 
 ## Reference Implementation
 

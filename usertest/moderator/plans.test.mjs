@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { loadPlans, PLACEHOLDER, sampleFiles } from './plans.mjs';
+import { loadPlans, PLACEHOLDER, sampleFiles, startPage } from './plans.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -87,4 +87,28 @@ test('the real sessions/ folder loads, and no listed plan holds the placeholder'
     list.length + skipped.length,
     Object.keys(plans).length + skipped.length,
   );
+});
+
+test('a plan can name a same-origin start page; anything else is ignored', () => {
+  assert.equal(
+    startPage('# P\n\nStart page: `/app/pieces-demo?tester`\n'),
+    '/app/pieces-demo?tester',
+  );
+  assert.equal(startPage('# P\n\nNo start line\n'), undefined);
+  for (const bad of [
+    'https://evil.example/app/x',
+    '//evil.example/app/x',
+    '/app/../admin',
+    '/other/x',
+    '/app/x?a=<b>',
+    'javascript:alert(1)',
+  ])
+    assert.equal(startPage(`# P\n\nStart page: \`${bad}\`\n`), undefined, bad);
+
+  const dir = dirWith({
+    'split.md': '# Split\n\nStart page: `/app/pieces-demo?tester`\n',
+  });
+  assert.deepEqual(loadPlans(dir).list, [
+    { id: 'split', title: 'Split', start: '/app/pieces-demo?tester' },
+  ]);
 });

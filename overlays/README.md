@@ -250,6 +250,10 @@ Checks:
 
 ## Reviewed standalone pagination overlays
 
+The [2026-10-08 handoff](HANDOFF-2026-10-08.md) records the completed
+50-additional-OAD milestone, pinned inventory, publication evidence and
+remaining pagination gaps.
+
 These overlays use explicit operation selections and locate the returned
 item arrays through `response.envelope.itemsField`. Replacements use new
 `pagination-v2` filenames for the same pinned OADs; first overlays for a new

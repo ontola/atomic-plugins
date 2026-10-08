@@ -16,20 +16,20 @@ says so. Every `.md` file here except this README is a plan and shows up in
 the menu, titled by its first `# ` heading without the `Session plan: `
 prefix; the moderator refuses to start when a plan has none.
 
-| Plan                   | Tests                                                                                       | Tester needs                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `calendar`             | Google Calendar drive app                                                                   | a Google account (optional)                                                                                          |
-| `calendar-view`        | atomic-server's calendar view on tables                                                     | nothing                                                                                                              |
-| `issue-tracker`        | GitHub issues drive app                                                                     | a GitHub account and a repository where changes are fine                                                             |
-| `issue-tracker-seeded` | GitHub issues drive app, team tasks in a prepared repository                                | a GitHub account with write access to a test repository prepared before the session (below)                          |
-| `timesheets`           | Clockify drive app                                                                          | a Clockify account with recent entries                                                                               |
-| `notion`               | Notion drive app                                                                            | a Notion account with a database                                                                                     |
-| `money`                | Bank statements (Money) drive app, installed from Drive apps                                | nothing: sample statements on the session page (their own export is optional)                                        |
-| `calendar-sample`      | Google Calendar drive app, on sample data                                                   | nothing                                                                                                              |
-| `issue-tracker-sample` | GitHub issues drive app, on sample data                                                     | nothing                                                                                                              |
-| `timesheets-sample`    | Clockify drive app, on sample data                                                          | nothing                                                                                                              |
-| `notion-sample`        | Notion drive app, on sample data                                                            | nothing                                                                                                              |
-| `split-pieces`         | the split of views and integrations on tables (ontola/atomic-server#2069), on seeded tables | nothing: the droplet must run that prototype build, and the plan's entry placeholder must be filled in first (below) |
+| Plan                   | Tests                                                                                       | Tester needs                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `calendar`             | Google Calendar drive app                                                                   | a Google account (optional)                                                                 |
+| `calendar-view`        | atomic-server's calendar view on tables                                                     | nothing                                                                                     |
+| `issue-tracker`        | GitHub issues drive app                                                                     | a GitHub account and a repository where changes are fine                                    |
+| `issue-tracker-seeded` | GitHub issues drive app, team tasks in a prepared repository                                | a GitHub account with write access to a test repository prepared before the session (below) |
+| `timesheets`           | Clockify drive app                                                                          | a Clockify account with recent entries                                                      |
+| `notion`               | Notion drive app                                                                            | a Notion account with a database                                                            |
+| `money`                | Bank statements (Money) drive app, installed from Drive apps                                | nothing: sample statements on the session page (their own export is optional)               |
+| `calendar-sample`      | Google Calendar drive app, on sample data                                                   | nothing                                                                                     |
+| `issue-tracker-sample` | GitHub issues drive app, on sample data                                                     | nothing                                                                                     |
+| `timesheets-sample`    | Clockify drive app, on sample data                                                          | nothing                                                                                     |
+| `notion-sample`        | Notion drive app, on sample data                                                            | nothing                                                                                     |
+| `split-pieces`         | the split of views and integrations on tables (ontola/atomic-server#2069), on seeded tables | nothing: the server must run candidate20 (below)                                            |
 
 ## Sample data (no account needed)
 
@@ -67,19 +67,18 @@ invitation, which does not exist yet (question for Michiel, in the PR).
 `split-pieces` tests the exploration of ontola/atomic-server#2069 (branch
 `claude/split-views-integrations`): a table's **+** menu lists views, and a
 **Connect** button beside the tabs lists integrations, some offered through
-lenses. It is not in any pinned build. Running it on the droplet needs the
-candidate20 image, which is being prepared, and a way for a tester to reach
-the demo's seed page from the empty drive the session opens (in the PR, the
-dev-only route `/app/pieces-demo`, gated like `/app/sandbox`). Until that is
-known, step 2 of the plan holds an `[ENTRY PLACEHOLDER …]` sentence; replace
-it with the spoken entry steps, without a URL, before deploying. Until then
-the moderator neither lists nor starts a plan whose text holds
-`[ENTRY PLACEHOLDER` (`../plans.mjs`; it says so on stderr at start, and
-`node --test usertest/moderator/plans.test.mjs` checks it), so deploying the
-file early is harmless. If the build lets a tester reach the seeded tables
-without the demo page, which explains the split in so many words, the entry
-steps should use that; the plan lists where the build itself names the
-concept. The
+lenses. It needs atomic-server candidate20 (`0fa9c07`), which carries that
+prototype plus a tester entry. The plan's `Start page` line,
+`/app/pieces-demo?tester`, makes the usertest page open the tester's window
+there instead of `/app/dev-drive`: the first visit seeds the demo and lands on
+the Hours table without the demo page's explanation, and the page's "Open the
+starting page again" button gets the tester back to the lens approval. A plan
+may name such a start page only as a same-origin `/app/…` path
+(`../plans.mjs` `startPage`). The moderator still neither lists nor starts a
+plan whose text holds `[ENTRY PLACEHOLDER` (`../plans.mjs`; it says so on
+stderr at start, and `node --test usertest/moderator/plans.test.mjs` checks
+it), for a future plan whose entry is not known yet. The plan lists where the
+build itself names the concept. The
 Clockify and Toggl Track in that build are fixtures inside the browser, so no
 account is needed and nothing reaches either service; the plan's "For the
 moderator only" lists what is real, what is a stand-in and what is still to

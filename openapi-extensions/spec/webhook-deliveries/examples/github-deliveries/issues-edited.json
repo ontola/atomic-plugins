@@ -1,0 +1,16 @@
+{
+  "note": "Synthetic GitHub App delivery: fake ids, fake owner, signed with the fake secret in test_validate.py. Not a recorded delivery.",
+  "headers": [
+    ["X-GitHub-Delivery", "00000000-0000-4000-8000-000000000001"],
+    ["X-GitHub-Event", "issues"],
+    ["X-GitHub-Hook-ID", "6000006"],
+    ["X-GitHub-Hook-Installation-Target-Type", "integration"],
+    ["X-GitHub-Hook-Installation-Target-ID", "7000007"],
+    ["Content-Type", "application/json"],
+    [
+      "X-Hub-Signature-256",
+      "sha256=6fa801d8dd85d8f866ea0ad067f592134a2cbc0f75794521bca37453a5e2fdf5"
+    ]
+  ],
+  "body": "{\"action\":\"edited\",\"changes\":{\"title\":{\"from\":\"Old fixture title\"}},\"issue\":{\"id\":4000004,\"number\":7,\"title\":\"Fixture issue\",\"state\":\"open\",\"body\":\"Synthetic body.\"},\"repository\":{\"id\":2000002,\"node_id\":\"R_fixture2000002\",\"name\":\"fixture-repo\",\"full_name\":\"fixture-owner/fixture-repo\",\"private\":true,\"owner\":{\"login\":\"fixture-owner\",\"id\":3000003,\"type\":\"Organization\"}},\"installation\":{\"id\":1000001,\"node_id\":\"IN_fixture1000001\"},\"sender\":{\"login\":\"fixture-user\",\"id\":5000005,\"type\":\"User\"}}"
+}
