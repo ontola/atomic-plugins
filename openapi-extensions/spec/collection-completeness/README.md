@@ -80,11 +80,12 @@ the Operation Object of an operation that lists the collection. When both are
 present, the Collection Object's applies.
 
 On a Collection Object, the declaration covers reads of that collection as
-the document defines it. CRUD Causality's Collection Object has no field for
-fixed query parameters or request bodies; a consumer that defines a
-collection with such values through its own extension (syncables'
-`x-list-query` and `x-list-body`, for example) applies a Collection Object's
-declaration to reads with exactly those values. On an Operation Object, the
+the document defines it. Since CRUD Causality 0.4.0, a Collection Object can
+fix a read's method, query parameters and request body (`listMethod`,
+`listQuery`, `listBody`; CRUD Causality §4.2.1), and the declaration covers
+reads with exactly those values. The same holds for a collection defined with
+syncables' earlier extensions `x-list-method`, `x-list-query` and
+`x-list-body`. On an Operation Object, the
 declaration covers only a read that sends no query parameter and no request
 body beyond what the operation requires (its path parameters). Several
 collections can share one list URL with different fixed queries, and a
@@ -160,9 +161,9 @@ components:
 
 An (invented) issue tracker whose `GET /projects/{projectId}/issues` returns
 open issues only by default declares no Completeness Object for that
-collection. CRUD Causality cannot define a collection with a fixed query
-parameter such as `state=all`; a consumer extension can (syncables'
-`x-list-query`). For a collection defined that way, the read returns every
+collection. A collection defined with the fixed query parameter `state=all`
+(CRUD Causality 0.4.0 `listQuery: {state: 'all'}`) is a different collection:
+its read returns every
 issue of the project, and its Collection Object can declare
 `absent: removed` when issues can also be moved to another project, and
 `absent: deleted` only when they cannot. The same declaration on the list

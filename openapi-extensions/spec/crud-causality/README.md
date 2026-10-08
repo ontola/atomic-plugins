@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.3.0
+**Spec version:** 0.4.0
 
 ---
 
@@ -42,6 +42,10 @@ components:
           urlTemplate: /widgets
           envelope:              # Envelope Object — shared with the Pagination Schemes Extension, §5
             itemsField: results
+          listQuery:             # fixed query parameters of every read (§4.2.1), since 0.4.0
+            include: archived
+          listMethod: GET        # GET (default) or POST (§4.2.1), since 0.4.0
+          # listBody: { ... }    # fixed JSON body of a POST read (§4.2.1), since 0.4.0
 
 paths:
   /widgets:
@@ -167,7 +171,55 @@ Describes one named, ordered group of objects.
 | `urlTemplate` | string | No | URL template for the collection itself, e.g. `/widgets`, or `/users/{userId}/widgets`. |
 | `description` | string | No | Human-readable description. |
 | `envelope` | `EnvelopeObject` | No | Locates the array of items within a collection response body. Identical in shape to, and interchangeable with, the Envelope Object defined by the [Pagination Schemes Extension §4.4.2](../pagination-schemes/README.md#442-envelope-object) — see §5. Defaults to the response body root. |
+| `listMethod` | `GET` \| `POST` | No | Since 0.4.0. The HTTP method of a read of the collection (§4.2.1). Default: `GET`. |
+| `listQuery` | `Record<string, string>` | No | Since 0.4.0. Query parameters every read of the collection sends, with these exact values (§4.2.1). |
+| `listBody` | object | No | Since 0.4.0. Only with `listMethod: POST`. The JSON request body every read of the collection sends (§4.2.1). |
 | `x-*` | any | No | Extension fields. |
+
+#### 4.2.1 Reading a collection
+
+Added in 0.4.0. Many list operations narrow their result by default: GitHub's
+issue list returns open issues unless `state=all` is sent, Google Tasks hides
+completed and hidden tasks unless `showCompleted=true` and `showHidden=true`
+are sent, and some APIs list through a `POST` search with a fixed filter in
+the body. One list URL can then hold several collections, each defined by the
+values it fixes. The Collection Object states those values, so that a reader of
+the collection sends the same request as every other reader.
+
+A _read_ of a collection is the request, and its follow-up page requests, made
+to the operation at `paths[urlTemplate][listMethod]` with:
+
+1. the path parameters of `urlTemplate`, from the request context (§4.1.2);
+2. every `listQuery` parameter, with exactly its value, as a query parameter;
+3. for `listMethod: POST`, `listBody` as the JSON request body, or no body when
+   `listBody` is absent;
+4. the request fields of the operation's pagination scheme, when it has one
+   ([Pagination Schemes](../pagination-schemes/README.md)), merged over 2 and 3
+   for each page;
+5. nothing else.
+
+| Field | Rules |
+|-------|-------|
+| `listMethod` | The operation at `paths[urlTemplate][listMethod]` MUST exist. When an operation declares `x-crud` with `action: list` and this `collection`, it MUST be that operation. |
+| `listQuery` | Each key MUST be a query parameter the operation declares (on the operation or its path item), and MUST NOT be one of `urlTemplate`'s path parameters. Each value is a string, sent as-is before percent-encoding; write `'true'`, not `true`. A parameter that repeats or takes an array is not covered in this version. |
+| `listBody` | Allowed only with `listMethod: POST`, on an operation that declares a JSON request body. Its keys follow the request body schema. |
+
+`listQuery` and `listBody` MUST NOT name a field to which the operation's
+pagination scheme gives a role other than `pageSize`; paging owns those fields.
+A `pageSize` field they name sets the page size of every read; the pagination
+scheme's own value, if a consumer chooses one, replaces it page by page.
+
+A read that sends any other parameter (a user's filter, a `since` value) is a
+different request: it is not a read of this collection, and extensions that
+reason about complete reads, such as
+[Collection Completeness](../collection-completeness/README.md), do not apply
+to it.
+
+Before 0.4.0, the syncables reader defined the same three things through its
+own Collection Object extensions `x-list-method`, `x-list-query` and
+`x-list-body`, with the same meaning. Published overlays that use them stay
+valid; a consumer MAY keep reading them. A Collection Object SHOULD NOT carry
+both forms; when it does, `listMethod`, `listQuery` and `listBody` apply.
 
 ### 4.3 Operation CRUD Object
 
@@ -501,6 +553,44 @@ To resolve the referenced project for the time entry above, reached via `GET /wo
 
 Note the two bindings for the same target variable. `project.identity.bindings.projectId` reads a project's **own** `id` field; `timeEntry.references.project.bindings.projectId` reads the **time entry's** `projectId` field. They fill the same `{projectId}` variable and differ only in which object supplies the value.
 
+### 7.7 Collections defined by fixed request values
+
+```yaml
+components:
+  crudResources:
+    task:
+      identity:
+        urlTemplate: /lists/{listId}/tasks/{taskId}
+        bindings:
+          taskId: { field: id }
+      collections:
+        allTasks:
+          urlTemplate: /lists/{listId}/tasks
+          envelope: { itemsField: items }
+          listQuery:
+            showCompleted: 'true'
+            showHidden: 'true'
+    page:
+      identity:
+        urlTemplate: /pages/{pageId}
+        bindings:
+          pageId: { field: id }
+      collections:
+        searchedPages:
+          urlTemplate: /search
+          listMethod: POST
+          listBody:
+            filter: { property: object, value: page }
+            page_size: 100
+```
+
+A read of `allTasks` for list `L1` is `GET /lists/L1/tasks?showCompleted=true&showHidden=true`,
+plus the page token on later pages. `GET /lists/L1/tasks` alone, the
+operation's default, is not a read of `allTasks`. A read of `searchedPages` is
+`POST /search` with the body above, with the pagination scheme's cursor field
+merged in from the second page on; `page_size` is allowed because the scheme
+gives it the `pageSize` role.
+
 ---
 
 ## 8. Validation
@@ -520,10 +610,40 @@ A conforming implementation MUST enforce:
 11. Every `references.*.resource` (§4.1.3) MUST reference a key that exists in `components.crudResources`.
 12. Every key in a `references.*.bindings` map MUST correspond to a `{variable}` present in the **target** resource's `identity.urlTemplate`.
 13. Every `{variable}` in the target resource's `identity.urlTemplate` that is not a key in the reference's `bindings` SHOULD also appear, with the same name, in the `urlTemplate` of at least one collection the **referring** resource declares under `collections` — i.e. it is carried from request context rather than read off the referring object.
+14. A Collection Object with `listMethod`, `listQuery` or `listBody` MUST have a `urlTemplate`, and the operation at `paths[urlTemplate][listMethod]` (default `GET`) MUST exist. `listMethod` MUST be `GET` or `POST`.
+15. When an operation declares `x-crud` with `action: list` and a `collection` whose Collection Object has a `urlTemplate` and any of `listMethod`, `listQuery` or `listBody`, that operation MUST be at `paths[urlTemplate][listMethod]`.
+16. Every `listQuery` key MUST be a query parameter declared on that operation or its path item, MUST NOT be a path parameter of `urlTemplate`, and every value MUST be a string.
+17. `listBody` MUST be a JSON object, MUST NOT be present unless `listMethod` is `POST`, and requires the operation to declare a request body.
+18. No `listQuery` or `listBody` key may name a field to which the pagination scheme the operation applies explicitly (`x-pagination`, after overrides) gives a role other than `pageSize`. `listBody` keys MAY be dot-paths, compared with the pagination scheme's request `bodyFields` keys.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
 
 ---
+
+## Validator and tests
+
+[`validate.py`](validate.py) checks rules 2, 4 and 14–18 for a loaded OpenAPI
+document: the collection reads of §4.2.1 and the resource and collection names
+they depend on. It does not check the other rules. It also holds
+`read_request`, which builds the first request of a read (§4.2.1 steps 1–3). [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
+is a synthetic document with a fixed-query `GET` collection and a `POST`
+search collection. From the repository root:
+
+```sh
+cd openapi-extensions/spec/crud-causality
+pip install -r requirements.txt
+python3 -m unittest test_validate
+python3 validate.py examples/fixed-query.yaml
+```
+
+## Changes
+
+- **0.4.0** (2026-10-08): adds `listMethod`, `listQuery` and `listBody` to the
+  Collection Object and defines a read of a collection (§4.2.1), with
+  validation rules 14–18, a validator, an example and tests. They standardise
+  syncables' `x-list-method`, `x-list-query` and `x-list-body`. A 0.3.0
+  document stays valid.
+- **0.3.0** and earlier: no change log was kept.
 
 ## Reference Implementation
 
