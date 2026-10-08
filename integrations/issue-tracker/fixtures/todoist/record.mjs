@@ -231,13 +231,33 @@ const arg = (name, fallback) => {
   return i === -1 ? fallback : process.argv[i + 1];
 };
 
-/** Every value of a repeatable `--<name> <value>` option, in order. */
-const args = name =>
-  process.argv.flatMap((a, i) =>
-    a === `--${name}` && process.argv[i + 1] !== undefined
-      ? [process.argv[i + 1]]
-      : [],
-  );
+/**
+ * Every value of a repeatable `--<name> <value>` option, in order. A flag
+ * right after the option (`--completed-task --limit 3`) is not its value.
+ */
+export const args = (name, argv = process.argv) =>
+  argv.flatMap((a, i) => {
+    const next = argv[i + 1];
+
+    return a === `--${name}` && next !== undefined && !next.startsWith('--')
+      ? [next]
+      : [];
+  });
+
+/**
+ * Every string in `body` replaced with "redacted", numbers, booleans and
+ * null kept: for an error answer (404), whose fields are no task fields.
+ * Nothing in it is reported as unrecognised, so an error body never lands
+ * in meta.json's "add to KEEP" list.
+ */
+export const scrub = body =>
+  Array.isArray(body)
+    ? body.map(scrub)
+    : body !== null && typeof body === 'object'
+      ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, scrub(v)]))
+      : typeof body === 'string'
+        ? 'redacted'
+        : body;
 
 /**
  * Records `GET /tasks/{id}` for one task completed by hand (#46). The file
@@ -265,7 +285,13 @@ async function recordCompleted({ dir, token, redact, id, n }) {
   writeFileSync(
     new URL(`api/${file}`, dir),
     `${JSON.stringify(
-      { status: res.status, headers: {}, body: redact.row('task', body) },
+      {
+        status: res.status,
+        headers: {},
+        // A task row is redacted as one; an error body (404) is scrubbed
+        // whole, its fields being no task fields to learn from.
+        body: res.status === 200 ? redact.row('task', body) : scrub(body),
+      },
       null,
       2,
     )}\n`,
