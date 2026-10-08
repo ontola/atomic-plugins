@@ -72,7 +72,14 @@ candidate20 image, which is being prepared, and a way for a tester to reach
 the demo's seed page from the empty drive the session opens (in the PR, the
 dev-only route `/app/pieces-demo`, gated like `/app/sandbox`). Until that is
 known, step 2 of the plan holds an `[ENTRY PLACEHOLDER …]` sentence; replace
-it with the spoken entry steps, without a URL, before deploying. The
+it with the spoken entry steps, without a URL, before deploying. Until then
+the moderator neither lists nor starts a plan whose text holds
+`[ENTRY PLACEHOLDER` (`../plans.mjs`; it says so on stderr at start, and
+`node --test usertest/moderator/plans.test.mjs` checks it), so deploying the
+file early is harmless. If the build lets a tester reach the seeded tables
+without the demo page, which explains the split in so many words, the entry
+steps should use that; the plan lists where the build itself names the
+concept. The
 Clockify and Toggl Track in that build are fixtures inside the browser, so no
 account is needed and nothing reaches either service; the plan's "For the
 moderator only" lists what is real, what is a stand-in and what is still to
