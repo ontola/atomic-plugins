@@ -64,12 +64,13 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "MAY" are to be interpre
 A _complete read_ of a collection is a read of its `list` operation that
 follows every page (per the [Pagination Schemes Extension](../pagination-schemes/README.md),
 where the operation is paginated), binds the collection's path parameters,
-sends no optional parameter that the API documents as narrowing the result
+sends, beyond the values the collection's read fixes (CRUD Causality 0.4.0
+§4.2.1), no optional parameter that the API documents as narrowing the result
 (a filter, a search term, a date range), and gets a successful response for
 every page.
 
-A _member_ is an object the collection's `list` operation can return under
-those conditions.
+A _member_ is an object the collection's read can return under those
+conditions: its `list` operation with the collection's fixed values, if any.
 
 ## 4. Object Definitions
 
@@ -201,6 +202,12 @@ A conforming consumer:
 * Partial completeness (complete within a time window, or for the
   authenticated principal's own objects only). Describe those with the
   [Filtering proposal](../filtering/README.md) and leave this field out.
+
+## Changes
+
+- 2026-10-08, wording only, no version change: §3 and §4.1 refer to the
+  fixed reads of CRUD Causality 0.4.0 (`listMethod`, `listQuery`,
+  `listBody`); a complete read may send those values.
 
 ## Reference Implementation
 

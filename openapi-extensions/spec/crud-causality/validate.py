@@ -1,4 +1,4 @@
-"""Validate CRUD Causality 0.4.0 collection reads (rules 2, 4 and 14-18).
+"""Validate CRUD Causality 0.4.0 collection reads (rules 2, 4 and 14-19).
 
 `validate(document)` raises ValueError listing every violation it finds and
 returns None for a valid document. It checks the Collection Object's
@@ -59,19 +59,84 @@ def _merge(base, override):
     return result
 
 
-def _flat_keys(value, prefix=""):
-    """Dot-path keys of a nested object's leaves and of every object on the way."""
-    keys = set()
+STANDARD = ("listMethod", "listQuery", "listBody")
+LEGACY = {"listMethod": "x-list-method", "listQuery": "x-list-query", "listBody": "x-list-body"}
+SEGMENT = re.compile(r'\["((?:[^"\\]|\\.)*)"\]|([^.\[\]]+)')
+
+
+def defines_read(collection):
+    return any(field in collection or LEGACY[field] in collection for field in STANDARD)
+
+
+def effective(collection):
+    """(method, query, body, legacy fields used) after the field-by-field x-list-* fallback (§4.2.1)."""
+    used = []
+    if "listMethod" in collection:
+        method = collection["listMethod"]
+    elif "x-list-method" in collection:
+        method = str(collection["x-list-method"]).upper()
+        used.append("x-list-method")
+    else:
+        method = "GET"
+    if "listQuery" in collection:
+        query = collection["listQuery"]
+    elif "x-list-query" in collection:
+        raw = collection["x-list-query"]
+        query = {k: v if isinstance(v, str) else json.dumps(v) if not isinstance(v, (int, float)) else str(v)
+                 for k, v in raw.items()} if isinstance(raw, dict) else raw
+        used.append("x-list-query")
+    else:
+        query = None
+    if "listBody" in collection:
+        body = collection["listBody"]
+    elif "x-list-body" in collection:
+        body = collection["x-list-body"]
+        used.append("x-list-body")
+    else:
+        body = None
+    return method, query, body, used
+
+
+def dot_path(key):
+    """A dot-path as a tuple of segments; a segment holding a '.' is written ["a.b"]."""
+    segments, position = [], 0
+    while position < len(key):
+        match = SEGMENT.match(key, position)
+        if not match:
+            return (key,)
+        segments.append(match.group(1).replace('\\"', '"') if match.group(1) is not None else match.group(2))
+        position = match.end()
+        if position < len(key):
+            if key[position] != ".":
+                return (key,)
+            position += 1
+    return tuple(segments)
+
+
+def _body_paths(value, prefix=()):
+    """Every path in a nested object: objects on the way and leaves."""
+    paths = set()
     for key, child in value.items():
-        path = prefix + key
-        keys.add(path)
+        path = prefix + (key,)
+        paths.add(path)
         if isinstance(child, dict):
-            keys |= _flat_keys(child, path + ".")
-    return keys
+            paths |= _body_paths(child, path)
+    return paths
+
+
+def _leaves(value, prefix=()):
+    leaves = set()
+    for key, child in value.items():
+        path = prefix + (key,)
+        if isinstance(child, dict) and child:
+            leaves |= _leaves(child, path)
+        else:
+            leaves.add(path)
+    return leaves
 
 
 def _paging_fields(document, operation):
-    """Query and body fields to which the operation's explicit pagination gives a role other than pageSize."""
+    """Query names and body paths to which the operation's explicit pagination gives a role other than pageSize."""
     query, body = set(), set()
     schemes = _schemes(document)
     for application in operation.get("x-pagination", []) or []:
@@ -79,11 +144,36 @@ def _paging_fields(document, operation):
             continue
         scheme = _merge(schemes[application["scheme"]], application.get("overrides", {}))
         request = scheme.get("request", {})
-        for target, location in ((query, "queryParameters"), (body, "bodyFields")):
-            for name, field in request.get(location, {}).items():
-                if isinstance(field, dict) and field.get("role") != "pageSize":
-                    target.add(name)
+        for name, field in request.get("queryParameters", {}).items():
+            if isinstance(field, dict) and field.get("role") != "pageSize":
+                query.add(name)
+        for name, field in request.get("bodyFields", {}).items():
+            if isinstance(field, dict) and field.get("role") != "pageSize":
+                body.add(dot_path(name))
     return query, body
+
+
+def _body_conflicts(body, paging):
+    """listBody paths that set, or sit on the way to, a paging body field."""
+    conflicts = set()
+    every = _body_paths(body)
+    leaves = _leaves(body)
+    for field in paging:
+        if field in every:
+            conflicts.add(field)  # the field itself, or an object in its place
+        for leaf in leaves:
+            if field[: len(leaf)] == leaf and len(leaf) < len(field):
+                conflicts.add(leaf)  # a scalar where the field's parent object must be
+    return conflicts
+
+
+def _json_request_body(document, item, operation):
+    if "swagger" in document:
+        return any(_resolve(document, p).get("in") == "body"
+                   for p in item.get("parameters", []) + operation.get("parameters", []))
+    body = _resolve(document, operation.get("requestBody", {}))
+    content = body.get("content", {}) if isinstance(body, dict) else {}
+    return any(media == "application/json" or media.endswith("+json") for media in content)
 
 
 def validate(document):
@@ -95,17 +185,17 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         for name, collection in (resource.get("collections") or {}).items():
-            if not isinstance(collection, dict):
+            if not isinstance(collection, dict) or not defines_read(collection):
                 continue
             where = f"crudResources.{resource_name}.collections.{name}"
-            reads = {"listMethod", "listQuery", "listBody"} & set(collection)
-            if not reads:
-                continue
+            for field in STANDARD:
+                if field in collection and LEGACY[field] in collection:
+                    errors.append(f"{where}: carries both {field} and {LEGACY[field]} (rule 19)")
             template = collection.get("urlTemplate")
             if not isinstance(template, str):
-                errors.append(f"{where}: {', '.join(sorted(reads))} need a urlTemplate")
+                errors.append(f"{where}: a collection that defines its read needs a urlTemplate")
                 continue
-            method = collection.get("listMethod", "GET")
+            method, query, body, _ = effective(collection)
             if method not in ("GET", "POST"):
                 errors.append(f"{where}.listMethod: expected GET or POST")
                 continue
@@ -116,8 +206,7 @@ def validate(document):
                 continue
             paging_query, paging_body = _paging_fields(document, operation)
 
-            if "listQuery" in collection:
-                query = collection["listQuery"]
+            if query is not None:
                 if not isinstance(query, dict) or not query:
                     errors.append(f"{where}.listQuery: expected a nonempty object")
                 else:
@@ -134,22 +223,16 @@ def validate(document):
                         if key in paging_query:
                             errors.append(f"{where}.listQuery.{key}: owned by the operation's pagination scheme")
 
-            if "listBody" in collection:
-                body = collection["listBody"]
+            if body is not None:
                 if not isinstance(body, dict):
                     errors.append(f"{where}.listBody: expected an object")
                 elif method != "POST":
                     errors.append(f"{where}.listBody: only with listMethod POST")
                 else:
-                    if "swagger" in document:
-                        has_body = any(_resolve(document, p).get("in") == "body"
-                                       for p in item.get("parameters", []) + operation.get("parameters", []))
-                    else:
-                        has_body = "requestBody" in operation
-                    if not has_body:
-                        errors.append(f"{where}.listBody: {method} {template} declares no request body")
-                    for key in sorted(_flat_keys(body) & paging_body):
-                        errors.append(f"{where}.listBody.{key}: owned by the operation's pagination scheme")
+                    if not _json_request_body(document, item, operation):
+                        errors.append(f"{where}.listBody: {method} {template} declares no JSON request body")
+                    for path in sorted(_body_conflicts(body, paging_body)):
+                        errors.append(f"{where}.listBody.{'.'.join(path)}: owned by the operation's pagination scheme")
 
     for path, item in paths.items():
         if not isinstance(item, dict):
@@ -170,10 +253,10 @@ def validate(document):
             if not isinstance(collection, dict):
                 errors.append(f"{where}.collection: {crud.get('collection')!r} is not a collection of {crud['resource']}")
                 continue
-            if not {"listMethod", "listQuery", "listBody"} & set(collection):
-                continue  # rule 15 covers only collections that define their reads (0.4.0)
+            if not defines_read(collection):
+                continue  # rule 15 covers only collections that define their reads
             template = collection.get("urlTemplate")
-            expected = str(collection.get("listMethod", "GET")).lower()
+            expected = str(effective(collection)[0]).lower()
             if isinstance(template, str) and (template != path or expected != method):
                 errors.append(f"{where}: collection {crud['collection']} is read at {expected.upper()} {template}")
     if errors:
@@ -184,11 +267,10 @@ def read_request(document, resource, collection, context):
     """(method, path with query, JSON body or None) of a read's first page, before pagination fields."""
     definition = _resources(document)[resource]["collections"][collection]
     path = VARIABLE.sub(lambda m: quote(str(context[m.group(1)]), safe=""), definition["urlTemplate"])
-    query = definition.get("listQuery", {})
+    method, query, body, _ = effective(definition)
     if query:
         path += "?" + "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in query.items())
-    method = definition.get("listMethod", "GET")
-    body = copy.deepcopy(definition.get("listBody")) if method == "POST" else None
+    body = copy.deepcopy(body) if method == "POST" else None
     return method, path, body
 
 
