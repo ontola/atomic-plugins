@@ -177,14 +177,14 @@ class PaginationCollectionTests(unittest.TestCase):
                             self.assertEqual(field_schema(document, body_schema, field)["type"], expected)
                     response = resolve(document, operation["responses"]["200"])
                     schema = json_response_schema(response)
-                    for field, metadata in scheme["response"].get("bodyFields", {}).items():
+                    for field, metadata in scheme.get("response", {}).get("bodyFields", {}).items():
                         expected = metadata.get("schema", {}).get("type", "integer" if metadata["role"] == "totalCount" else "string")
                         self.assertEqual(schema_types(document, field_schema(document, schema, field)), {expected})
-                    for field, metadata in scheme["response"].get("headers", {}).items():
+                    for field, metadata in scheme.get("response", {}).get("headers", {}).items():
                         header = resolve(document, response["headers"][field])
                         self.assertEqual(metadata["role"], "nextLink")
                         self.assertEqual(schema_types(document, header["schema"]), {"string"})
-                    envelope = scheme["response"].get("envelope", {}).get("itemsField")
+                    envelope = scheme.get("response", {}).get("envelope", {}).get("itemsField")
                     items_schema = field_schema(document, schema, envelope) if envelope else schema
                     self.assertEqual(schema_types(document, items_schema), {"array"})
 
