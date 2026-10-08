@@ -1,5 +1,9 @@
 # Bundles: organising plugins by what they do
 
+Amended 2026-10-08 (Michiel, relayed by coord): bundles are a grouping for
+discovery and search in the catalog, not the unit of matching; matching is by
+manifest, see [`pieces.md`](pieces.md).
+
 Status: **proposal, not reviewed. Nothing here is implemented.** It builds on
 the decisions recorded in
 [#177](https://github.com/ontola/atomic-plugins/issues/177) (shared row
@@ -8,10 +12,6 @@ classes, "option 4") and on the placements of
 earlier decision, it says so. Facts about the host were taken from #177 §1.1,
 which checked them at atomic-server `2567fc30b`. They were not re-checked
 against the current `.atomic-server-ref`.
-
-See also [`pieces.md`](pieces.md) (2026-10-08), Michiel's later target of
-views, integrations and lenses from two catalogs. Whether it replaces this
-document is Decision Inbox Q-100, which is open.
 
 Decided by Michiel (2026-09-29):
 
@@ -73,7 +73,7 @@ class. A view without the lens that makes it reachable is often useless.
 ## 2. The domain bundles
 
 A mapping of what exists today onto domain bundles. "Declared" means catalog
-copy or code without host evidence, as in [READINESS.md](../integrations/READINESS.md).
+copy or code without host evidence, as in [READINESS.md](../../integrations/READINESS.md).
 
 | Bundle       | Row class(es)                      | Views                                                                 | Reflectors                                               | Importers                                | Lenses (planned)                             | Folder today                                      | Catalog entries today                    |
 | ------------ | ---------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- | ------------------------------------------------- | ---------------------------------------- |
