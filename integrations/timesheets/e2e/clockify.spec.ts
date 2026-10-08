@@ -40,10 +40,14 @@ import {
 } from '../../../ontology-kit/terms.mjs';
 // @ts-expect-error build.mjs is plain JS with no declaration file.
 import { cssRawPlugin } from '../app/build.mjs';
+import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
-/** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.7.1';
+/**
+ * The catalog's version of this app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('timesheets');
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;

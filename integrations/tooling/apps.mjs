@@ -87,6 +87,29 @@ export function appEntries(catalog) {
 }
 
 /**
+ * The catalog's version of drive app `id` (its shortname), read from
+ * `integrations/catalog.json` at call time. The lane e2e specs import it, so
+ * a version bump in the catalog needs no spec edit: the host must then show
+ * that version, which is what the lane's dev-server serves. Throws for an id
+ * that is not a drive app entry, or whose entry has no version, rather than
+ * letting a spec compare against `undefined`.
+ */
+export function appVersion(id, base = root) {
+  const entry = appEntries(readCatalog(base)).find(
+    candidate => candidate[terms.shortname] === id,
+  );
+  if (!entry)
+    throw new Error(
+      `apps: no drive app entry with shortname "${id}" in ${catalogPath(base)}`,
+    );
+  const version = entry[terms.version];
+  if (typeof version !== 'string' || !version)
+    throw new Error(`apps: the catalog entry "${id}" has no version`);
+
+  return version;
+}
+
+/**
  * Drive apps whose source is not at `integrations/<shortname>/app/`, by
  * catalog shortname: the folder (repository-relative) holding the app's
  * `build.mjs` and a `private` `package.json` with just its version. For an

@@ -30,10 +30,14 @@
  */
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
-/** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.5.0';
+/**
+ * The catalog's version of this app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('notion');
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);

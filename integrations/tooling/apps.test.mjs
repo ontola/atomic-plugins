@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,6 +15,7 @@ import {
   APP_FOLDERS,
   appEntries,
   appFolder,
+  appVersion,
   blobId,
   check,
   integrityOf,
@@ -376,4 +378,59 @@ test('a new version beside a published one passes', () =>
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
+});
+
+test("appVersion reads an app entry's version from the catalog", () =>
+  using({ version: '2.0.1' }, async base => {
+    assert.equal(appVersion('gamma', base), '2.0.1');
+    // Not a drive app (no app-module), and not in the catalog at all.
+    assert.throws(() => appVersion('not-an-app', base), /no drive app entry/);
+    assert.throws(() => appVersion('delta', base), /"delta"/);
+
+    const catalog = readCatalog(base);
+    delete catalog[1][terms.version];
+    writeFileSync(
+      join(base, 'integrations/catalog.json'),
+      JSON.stringify(catalog),
+    );
+    assert.throws(() => appVersion('gamma', base), /has no version/);
+  }));
+
+test('the lane e2e specs read their app version from the catalog, not a literal', () => {
+  const ids = new Set(
+    appEntries(readCatalog()).map(entry => entry[terms.shortname]),
+  );
+  const seen = new Set();
+
+  for (const plugin of readdirSync(join(root, 'integrations'), {
+    withFileTypes: true,
+  })) {
+    if (!plugin.isDirectory()) continue;
+    let files;
+
+    try {
+      files = readdirSync(join(root, 'integrations', plugin.name, 'e2e'));
+    } catch {
+      continue;
+    }
+
+    for (const file of files.filter(f => f.endsWith('.spec.ts'))) {
+      const path = `integrations/${plugin.name}/e2e/${file}`;
+      const text = readFileSync(join(root, path), 'utf8');
+      assert.doesNotMatch(
+        text,
+        /const VERSION = ['"`]/,
+        `${path} hard-codes its app version; use appVersion(id)`,
+      );
+
+      for (const [, id] of text.matchAll(/appVersion\('([^']+)'\)/g)) {
+        assert.ok(ids.has(id), `${path}: "${id}" is not a drive app entry`);
+        assert.equal(typeof appVersion(id), 'string');
+        seen.add(id);
+      }
+    }
+  }
+
+  // Every drive app in the catalog has a spec that checks its version.
+  assert.deepEqual([...seen].sort(), [...ids].sort());
 });

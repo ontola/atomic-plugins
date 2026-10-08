@@ -272,6 +272,12 @@ node integrations/tooling/apps.mjs check --published origin/main
 # 4. commit apps/<id>/<version>/ui.js with the catalog change
 ```
 
+The lane e2e specs need no edit for a version bump: each reads its app's
+catalog version with `appVersion('<id>')` from `integrations/tooling/apps.mjs`
+(the "Version <version>" and "Installed <version>" checks), and
+`apps.test.mjs` fails when a spec hard-codes `const VERSION = '…'` or when a
+drive app entry has no spec that reads its version.
+
 `apps.mjs check` fails when:
 
 - an entry's `app-module` is not the Pages URL of `apps/<id>/<version>/ui.js`,

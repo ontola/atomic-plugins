@@ -41,9 +41,13 @@ import {
   createFromCatalog,
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
-/** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+/**
+ * The catalog's version of the Money app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('money');
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
