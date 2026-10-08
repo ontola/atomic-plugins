@@ -268,6 +268,14 @@ directly.
 | [Twilio Messaging](APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Nine GET service/sender/compliance collections with explicit envelopes. | [Provider documentation](https://www.twilio.com/docs/messaging/api/service-resource) |
 | [Clockify read-only v2](APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | One user time-entry list with 1-based page numbers and a root array. | [Provider documentation](https://docs.clockify.me/) |
 | [Twilio Accounts](APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Two GET credential collections: AWS and public keys. | [Provider documentation](https://www.twilio.com/docs/iam/credentialaws-resource) |
+| [Google Chat v1](APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Four space, membership, message and reaction collections. | [Provider documentation](https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces/list) |
+| [Google Classroom v1 (pagination v2)](APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml) | 12 course, coursework, roster, invitation and guardian collections with exact envelopes. | [Provider documentation](https://developers.google.com/workspace/classroom/reference/rest/v1/courses/list) |
+| [Google Calendar v3 (pagination v2)](APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Five full-list collections; sync checkpoints and watch registration excluded. | [Provider documentation](https://developers.google.com/workspace/calendar/api/v3/reference/events/list) |
+| [Blogger v3](APIs/googleapis.com/blogger/v3/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Five post, page and comment lists. | [Provider documentation](https://developers.google.com/blogger/docs/3.0/reference/posts/list) |
+| [Google Drive Activity v2](APIs/googleapis.com/driveactivity/v2/pagination-2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4-overlay.yaml) | Read-POST activity query with a body token; minimum desired pageSize is unannotated. | [Provider documentation](https://developers.google.com/workspace/drive/activity/v2/reference/rest/v2/activity/query) |
+| [Google Forms v1 (pagination v2)](APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Form responses with stable form and filter scope. | [Provider documentation](https://developers.google.com/workspace/forms/api/reference/rest/v1/forms.responses/list) |
+| [Google Keep v1](APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Notes with opaque tokens; ABORTED is an error, not completion. | [Provider documentation](https://developers.google.com/workspace/keep/api/reference/rest/v1/notes/list) |
+| [Google Books v1 (pagination v2)](APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml) | Two bookshelf-volume lists using 0-based startIndex offsets. | [Provider documentation](https://developers.google.com/books/docs/v1/reference/mylibrary/bookshelves/volumes/list) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -497,11 +505,34 @@ immutable. Select the new `pagination-v2` explicitly. The new variant adds no
 response envelope, totals, completion header or authentication scheme. Empty
 pages end traversal; concurrent edits can shift page contents.
 
+Google Chat, Classroom, Blogger, Forms and Keep copy opaque `nextPageToken`
+values into `pageToken`, preserving resource scope, filters and ordering. Keep
+requires either consistent results through concurrent changes or an `ABORTED`
+error; an error must not count as a completed traversal. Forms preserves the
+same form and filter across pages. Classroom's `courseWorkMaterial` and `topic`
+arrays retain their singular field names. Partial or empty pages with a token
+still have a continuation.
+
+Calendar's new revision selects five full listings, with `syncToken` omitted.
+It pages `items`, leaving ancillary `defaultReminders` and `nextSyncToken`
+checkpoints outside traversal. Event filters, recurrence expansion and deleted
+selection stay caller-controlled; watch POSTs are unselected. Drive Activity's
+read-POST keeps its token in the JSON body and preserves filter and consolidation
+settings. Its `pageSize` requests a minimum desired activity count, so the
+maximum-size role does not apply to that field.
+
+Books selects the two bookshelf-volume lists, using `startIndex` from zero and
+a positive `maxResults`. It leaves volume search and less documented annotation,
+onboarding and upload lists unselected; `totalItems` is not a traversal bound.
+Its ordinary offset traversal does not guarantee a snapshot through concurrent
+changes. Existing Calendar, Classroom, Forms and Books revisions remain
+published; select the new `pagination-v2` files explicitly.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
 and 2026-10-06 (Confluence, Figma, ClickUp, the five additional HubSpot OADs,
 Asana, Zendesk, Square, Zoom, Mastodon and the six Google OADs), and 2026-10-08
-(Box, GitHub, three Twilio OADs and Clockify),
+(Box, GitHub, three Twilio OADs, Clockify and the eight additional Google OADs),
 not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
@@ -511,7 +542,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the 32 pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 40 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.

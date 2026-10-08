@@ -25,6 +25,14 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    "google_chat": "APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "google_classroom": "APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml",
+    "google_calendar": "APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+    "google_blogger": "APIs/googleapis.com/blogger/v3/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+    "google_driveactivity": "APIs/googleapis.com/driveactivity/v2/pagination-2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4-overlay.yaml",
+    "google_forms": "APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+    "google_keep": "APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+    "google_books": "APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml",
     "box": "APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml",
     "github": "APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml",
     "twilio_conversations": "APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
@@ -836,6 +844,97 @@ class PaginationCollectionTests(unittest.TestCase):
         self.assertNotIn("x-pagination", document["paths"]["/v1/workspaces/{workspaceId}/time-entries/{id}"]["get"])
         for resource in ("projects", "users"):
             self.assertNotIn("/v1/workspaces/{workspaceId}/" + resource, document["paths"])
+
+
+    def test_google_workspace_forward_pages_keep_scopes_and_methods(self):
+        expected = {"chat": 4, "classroom": 12, "calendar": 5, "blogger": 5,
+                    "driveactivity": 1, "forms": 1, "keep": 1}
+        for service, count in expected.items():
+            with self.subTest(service=service):
+                document = self.documents["google_" + service][1]
+                selected = list(applications(document))
+                self.assertEqual(len(selected), count)
+                scheme = document["components"]["paginationSchemes"]["forwardPages"]
+                self.assertEqual(scheme["response"], {"bodyFields": {"nextPageToken": {"role": "nextCursor"}}})
+                self.assertIn("not when a page is short or empty", scheme["description"])
+                location = "bodyFields" if service == "driveactivity" else "queryParameters"
+                self.assertEqual(scheme["request"], {location: {"pageToken": {"role": "cursor"}}})
+                for _, method, _, _, _ in selected:
+                    self.assertEqual(method, "post" if service == "driveactivity" else "get")
+                for path, item in document["paths"].items():
+                    for method in ("post", "put", "patch", "delete"):
+                        if service == "driveactivity" and path == "/v2/activity:query" and method == "post":
+                            continue
+                        self.assertNotIn("x-pagination", item.get(method, {}))
+
+    def test_google_chat_root_collections_have_distinct_envelopes(self):
+        document = self.documents["google_chat"][1]
+        selected = {p: a["overrides"]["response"]["envelope"]["itemsField"] for p, _, _, _, a in applications(document)}
+        self.assertEqual(selected, {"/v1/spaces": "spaces", "/v1/{parent}/members": "memberships",
+                                    "/v1/{parent}/messages": "messages", "/v1/{parent}/reactions": "reactions"})
+
+    def test_google_classroom_preserves_singular_collection_field_names(self):
+        document = self.documents["google_classroom"][1]
+        selected = {p: a["overrides"]["response"]["envelope"]["itemsField"] for p, _, _, _, a in applications(document)}
+        self.assertEqual(selected["/v1/courses/{courseId}/courseWorkMaterials"], "courseWorkMaterial")
+        self.assertEqual(selected["/v1/courses/{courseId}/topics"], "topic")
+        self.assertEqual(selected["/v1/courses/{courseId}/courseWork/{courseWorkId}/studentSubmissions"], "studentSubmissions")
+        self.assertNotIn("x-pagination", document["paths"]["/v1/courses/{id}"]["get"])
+
+    def test_google_calendar_pages_items_excluding_sync_checkpoints_and_watches(self):
+        document = self.documents["google_calendar"][1]
+        expected = {"/calendars/{calendarId}/acl", "/calendars/{calendarId}/events",
+                    "/calendars/{calendarId}/events/{eventId}/instances", "/users/me/calendarList", "/users/me/settings"}
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        self.assertEqual(set(selected), expected)
+        for path, app in selected.items():
+            self.assertIn("omit syncToken", app["description"])
+            self.assertEqual(app["overrides"]["response"], {"envelope": {"itemsField": "items"}})
+            self.assertEqual(app["overrides"]["request"], {"queryParameters": {"maxResults": {"role": "pageSize"}}})
+        scheme = document["components"]["paginationSchemes"]["forwardPages"]
+        self.assertNotIn("syncToken", scheme["request"]["queryParameters"])
+        self.assertNotIn("nextSyncToken", scheme["response"]["bodyFields"])
+        for path, item in document["paths"].items():
+            if path.endswith("/watch"):
+                self.assertNotIn("x-pagination", item["post"])
+
+    def test_google_drive_activity_token_is_in_body_without_maximum_size_role(self):
+        original, document = self.documents["google_driveactivity"]
+        path = "/v2/activity:query"
+        op = document["paths"][path]["post"]
+        self.assertEqual(op["requestBody"], original["paths"][path]["post"]["requestBody"])
+        scheme = document["components"]["paginationSchemes"]["forwardPages"]
+        self.assertEqual(scheme["request"], {"bodyFields": {"pageToken": {"role": "cursor"}}})
+        self.assertIn("minimum desired", scheme["description"])
+        app = op["x-pagination"][0]
+        self.assertEqual(app["overrides"], {"response": {"envelope": {"itemsField": "activities"}}})
+        body = resolve(document, op["requestBody"])["content"]["application/json"]["schema"]
+        self.assertIn("minimum number", field_schema(document, body, "pageSize")["description"])
+
+    def test_google_forms_keep_and_blogger_envelopes_preserve_filtering(self):
+        expected = {"forms": {"/v1/forms/{formId}/responses": "responses"},
+                    "keep": {"/v1/notes": "notes"},
+                    "blogger": {"/v3/blogs/{blogId}/comments": "items", "/v3/blogs/{blogId}/pages": "items",
+                                "/v3/blogs/{blogId}/posts": "items", "/v3/blogs/{blogId}/posts/{postId}/comments": "items",
+                                "/v3/users/{userId}/blogs/{blogId}/posts": "items"}}
+        for service, envelopes in expected.items():
+            original, document = self.documents["google_" + service]
+            selected = {p: a["overrides"]["response"]["envelope"]["itemsField"] for p, _, _, _, a in applications(document)}
+            self.assertEqual(selected, envelopes)
+            for path in selected:
+                self.assertEqual(document["paths"][path]["get"]["parameters"], original["paths"][path]["get"]["parameters"])
+
+    def test_google_books_offsets_only_select_bookshelf_volumes(self):
+        document = self.documents["google_books"][1]
+        expected = {"/books/v1/mylibrary/bookshelves/{shelf}/volumes", "/books/v1/users/{userId}/bookshelves/{shelf}/volumes"}
+        self.assertEqual({p for p, _, _, _, _ in applications(document)}, expected)
+        scheme = document["components"]["paginationSchemes"]["shelfOffsets"]
+        self.assertEqual(scheme["type"], "pageNumber")
+        self.assertEqual(scheme["request"], {"queryParameters": {"startIndex": {"role": "offset"}, "maxResults": {"role": "pageSize"}}})
+        self.assertEqual(scheme["response"], {"envelope": {"itemsField": "items"}})
+        # Search estimates and unrelated annotation/onboarding APIs aren't traversal bounds.
+        for path in ("/books/v1/volumes", "/books/v1/mylibrary/annotations", "/books/v1/onboarding/listCategoryVolumes"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
 
 
 if __name__ == "__main__":
