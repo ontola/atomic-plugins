@@ -109,7 +109,17 @@ async function handleRequest(
   }
 
   if (method === 'get') {
-    const effective = resolveEffectiveScheme(document, operation);
+    let effective: ReturnType<typeof resolveEffectiveScheme>;
+    try {
+      effective = resolveEffectiveScheme(document, operation);
+    } catch (error) {
+      // The document's explicit x-pagination cannot be applied: the mock
+      // cannot serve the operation as the document describes it.
+      sendJson(res, 500, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     if (effective) {
       handlePaginatedListRequest(
         match.template,

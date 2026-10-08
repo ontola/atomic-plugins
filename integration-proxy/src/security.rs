@@ -9,10 +9,10 @@ use rand::RngCore;
 use tokio::sync::RwLock;
 use tokio_postgres::Client;
 
-type ConnectionDriver =
+pub(crate) type ConnectionDriver =
     Pin<Box<dyn std::future::Future<Output = Result<(), tokio_postgres::Error>> + Send>>;
 
-async fn connect_once(database_url: &str) -> Result<(Client, ConnectionDriver), String> {
+pub(crate) async fn connect_once(database_url: &str) -> Result<(Client, ConnectionDriver), String> {
     let tls = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
     let tls = postgres_native_tls::MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(database_url, tls)
@@ -255,6 +255,13 @@ impl Security {
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             encryption_key,
         })
+    }
+
+    /// `HMAC-SHA256(ENCRYPTION_KEY, label)`: a key for one purpose, so the
+    /// encryption key itself serves only XChaCha20-Poly1305 (as with the
+    /// key-check buckets' subkey).
+    pub(crate) fn derive_subkey(&self, label: &[u8]) -> [u8; 32] {
+        hmac_sha256(&self.encryption_key, &[label])
     }
 
     /// The client currently backing this connection. Held only for the

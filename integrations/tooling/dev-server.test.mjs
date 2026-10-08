@@ -270,6 +270,74 @@ test('serves the committed ontology terms like Pages, with subjects on its own o
   });
 });
 
+test('serves lens catalog files like terms, subjects on its own origin', async () => {
+  await withFixture(async base => {
+    const published = 'https://vocab.example/ontology';
+    mkdirSync(join(base, 'ontology-kit'), { recursive: true });
+    mkdirSync(join(base, 'ontology/lenses'), { recursive: true });
+    writeFileSync(
+      join(base, 'ontology-kit/base.json'),
+      JSON.stringify({ base: published }),
+    );
+    writeFileSync(
+      join(base, 'ontology/lenses/v1'),
+      JSON.stringify({
+        '@id': `${published}/lenses/v1`,
+        lenses: [`${published}/lenses/shop-thing-v1`],
+      }),
+    );
+    writeFileSync(
+      join(base, 'ontology/lenses/shop-thing-v1'),
+      JSON.stringify({
+        '@id': `${published}/lenses/shop-thing-v1`,
+        target: { class: `${published}/classes/thing-v1` },
+      }),
+    );
+
+    await withServers(base, async ({ devUrl }) => {
+      const release = await fetch(`${devUrl}/ontology/lenses/v1`);
+      assert.equal(release.status, 200);
+      assert.equal(
+        release.headers.get('content-type'),
+        'application/octet-stream',
+      );
+      assert.equal(release.headers.get('access-control-allow-origin'), '*');
+      assert.deepEqual(await release.json(), {
+        '@id': `${devUrl}/ontology/lenses/v1`,
+        lenses: [`${devUrl}/ontology/lenses/shop-thing-v1`],
+      });
+      const lens = await fetch(`${devUrl}/ontology/lenses/shop-thing-v1`);
+      assert.deepEqual(await lens.json(), {
+        '@id': `${devUrl}/ontology/lenses/shop-thing-v1`,
+        target: { class: `${devUrl}/ontology/classes/thing-v1` },
+      });
+
+      for (const path of [
+        '/ontology/lenses/missing-v1',
+        '/ontology/lenses/v1.json',
+        '/ontology/lenses/%2e%2e/%2e%2e/ontology-kit/base.json',
+        '/ontology/lenses/',
+        '/ontology/lenses/a/b',
+      ])
+        assert.equal((await fetch(`${devUrl}${path}`)).status, 404, path);
+    });
+  });
+});
+
+test('serves this repository’s lens catalog release', async () => {
+  await withServers(root, async ({ devUrl }) => {
+    const res = await fetch(`${devUrl}/ontology/lenses/v1`);
+    assert.equal(res.status, 200);
+    const release = await res.json();
+    assert.equal(release['@id'], `${devUrl}/ontology/lenses/v1`);
+    assert.ok(
+      release.lenses.includes(
+        `${devUrl}/ontology/lenses/todoist-task-issue-v1`,
+      ),
+    );
+  });
+});
+
 test('serves this repository’s shared ontology', async () => {
   await withServers(root, async ({ devUrl }) => {
     const res = await fetch(`${devUrl}/ontology/classes/event-v1`);

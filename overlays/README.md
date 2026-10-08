@@ -296,6 +296,7 @@ directly.
 | [Twilio Messaging](APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Nine GET service/sender/compliance collections with explicit envelopes. | [Provider documentation](https://www.twilio.com/docs/messaging/api/service-resource) |
 | [Clockify read-only v2](APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | One user time-entry list with 1-based page numbers and a root array. | [Provider documentation](https://docs.clockify.me/) |
 | [Twilio Accounts](APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Two GET credential collections: AWS and public keys. | [Provider documentation](https://www.twilio.com/docs/iam/credentialaws-resource) |
+| [Twilio API 2010-04-01 v2](APIs/twilio.com/api/1.55.0/pagination-v2-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | All 61 GET collections whose pinned response declares `next_page_uri`, each with its one item array (`calls`, `messages`, `usage_records`, ...). `next_page_uri` is a relative reference, declared with [Pagination Schemes 0.4.0](../openapi-extensions/spec/pagination-schemes/README.md#443-link-resolution-object) `linkResolution: {base: server}`; a consumer without 0.4.0 support that resolves it against the request URL gets the same URL. Replaces the v1 file's three auto-detected schemes. | [List example](https://www.twilio.com/docs/usage/api/applications), [Paging fields](https://www.twilio.com/docs/usage/twilios-response) |
 | [Google Chat v1](APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Four space, membership, message and reaction collections. | [Provider documentation](https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces/list) |
 | [Google Classroom v1 (pagination v2)](APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml) | 12 course, coursework, roster, invitation and guardian collections with exact envelopes. | [Provider documentation](https://developers.google.com/workspace/classroom/reference/rest/v1/courses/list) |
 | [Google Calendar v3 (pagination v2)](APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Five full-list collections; sync checkpoints and watch registration excluded. | [Provider documentation](https://developers.google.com/workspace/calendar/api/v3/reference/events/list) |
@@ -749,3 +750,11 @@ actual two-page Syncables imports for each new platform and both profiles in
 the proxy parser. The Google Tasks importer fixture is
 `tests/google_tasks_syncables.test.ts`; its composition checks are
 `tests/test_google_tasks_readonly.py`. Real-account sync is not certified.
+
+## Google Tasks deployment without GitLab
+
+`catalog/2026-10-08-google-tasks.json` preserves all eleven production entries
+and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
+catalog. This twelve-entry option allows Tasks deployment independently when
+its OAuth client is ready and GitLab registration is still pending. It changes
+no existing pins or API metadata and does not activate itself.

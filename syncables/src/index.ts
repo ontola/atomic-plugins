@@ -112,7 +112,10 @@ export type {
   TimeUnit,
 } from './throttling/throttling.js';
 
-export { resolveEffectiveScheme } from './pagination/autodetect.js';
+export {
+  PaginationSchemeError,
+  resolveEffectiveScheme,
+} from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
 export { validatePaginationScheme } from './pagination/validate.js';
 export type {

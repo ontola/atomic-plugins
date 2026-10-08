@@ -84,6 +84,10 @@ class PolicyRejectionTests(unittest.TestCase):
         self.rejects(lambda p: p["lease"].update(durationSeconds=43201, renewAfterSeconds=3600)
                      or p["access"].update(maxCheckAgeSeconds=43202))
         self.rejects(lambda p: p["receipts"].update(ttlSeconds=1799))
+        self.rejects(lambda p: p["receipts"].update(maxCountPerOwner=p["receipts"]["maxCount"] + 1))
+        self.rejects(lambda p: p["cleanup"].update(maxJobsPerOwner=p["cleanup"]["maxJobs"] + 1))
+        self.rejects(lambda p: p["receipts"].pop("maxCountPerOwner"))
+        self.rejects(lambda p: p["cleanup"].pop("maxJobsPerOwner"))
         self.rejects(lambda p: p.pop("access"))
         self.rejects(lambda p: p["delivery"].pop("maxVerifiedBytes"))
 

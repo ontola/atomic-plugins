@@ -5,6 +5,7 @@
 | Behavior | Coverage |
 | --- | --- |
 | Agent ids: `atomic:agent:` and `did:ad:agent:`, both base64 alphabets, padding, one canonical output; non-agent ids, malformed and weak keys refused | `src/agent_id.rs` |
+| Cross-implementation: atomic-server's golden v2 vectors verify here, each message is rebuilt byte for byte, re-signing with the vector's key gives its signature, other bodies, methods and URLs fail; the vendored copy is atomic-server's file at the recorded commit (its SHA-256 checked, and the copy compared with an `ATOMIC_SERVER_CHECKOUT` when set) | `signature::tests::atomic_server_v2_vectors_verify_here`, `signature::tests::the_vendored_v2_vectors_are_atomic_servers_recorded_file` |
 | v2 message layout and body hash; signed URL from `BASE_URL`, not `Host` | `src/signature.rs`; `proxy::postgres_each_verification_step_fails_closed` (spoofed `Host`, signature over the internal URL) |
 | Each v2 check: missing headers, version 1/other/absent, agent vs public key, invalid agent, ±5 min skew both ways, malformed timestamps, tampered method/URL/origin/scheme/body, a genuine v1 signature | `src/signature.rs`, `proxy::postgres_each_verification_step_fails_closed` |
 | Single use: replayed proxy, frame and management requests | `proxy::postgres_the_owner_signs_requests_that_reach_the_provider_once_each`, `proxy::postgres_a_frame_capability_works_only_with_the_frame_key_and_a_live_delegation`, `connections::postgres_a_management_signature_cannot_be_replayed_with_a_different_body`, `security::nonces_are_single_use` |
@@ -25,6 +26,24 @@
 | CORS for a null-origin frame: preflight of `authorization` and the five `x-atomic-*` headers; exposed headers | `browser_tests::a_null_origin_frame_may_preflight_signed_proxy_requests` |
 | Composed catalog fixtures still yield the OAuth provider and scopes; leftover `tenantIdentity` selections are ignored | `src/identity_catalog_tests.rs` |
 
+## Webhook inbox (#369, step 2)
+
+| Behavior | Coverage |
+| --- | --- |
+| Off by default: no tables when disabled; config parsing | `webhooks::tests::disabled_creates_no_tables`, `config::tests::webhooks_are_off_unless_enabled_explicitly` |
+| Pilot limits equal the spec's schema defaults; inconsistent policies refused | `webhooks::policy::tests::the_pilot_policy_is_the_specs`, `webhooks::policy::tests::inconsistent_policies_are_refused` |
+| One signup, then permanent abandonment, while events arrive hourly for 30 days: retention stops at the lease (request path), then the inbox is empty but for the shared hook | `webhooks::tests::permanent_abandonment_stops_retention_while_events_keep_arriving`, `webhooks::tests::the_sweeper_ends_an_abandoned_subscription_without_deliveries` |
+| Progress deadline: renewals without acknowledgements expire; measured from when pending became non-empty or the last advancing ack | `webhooks::tests::the_progress_deadline_expires_a_renewing_consumer_that_never_acknowledges`, `webhooks::tests::the_progress_deadline_restarts_when_pending_becomes_non_empty` |
+| A gap at each limit (events, bytes, age on ingest and in the sweep, owner, deployment, oversized, receipts), a new generation only when the current one loses an event | `webhooks::tests::every_limit_records_a_gap_before_history_is_lost`, `webhooks::tests::the_owner_budget_evicts_only_the_receiving_subscriptions_history`, `webhooks::tests::a_full_deployment_records_gaps_without_evicting_other_owners`, `webhooks::tests::the_receipt_floor_records_a_gap_for_that_owner_only` |
+| Shared payload stored once, counted per owner, freed after its last reference | `webhooks::tests::a_shared_payload_is_reclaimed_after_its_last_reference` |
+| Routing to new (`needs-reconciliation`) subscriptions; unrouted deliveries leave nothing; receipts per owner; platform-scoped subscriptions | `webhooks::tests::new_subscriptions_receive_events_and_receipts_are_per_owner`, `webhooks::tests::a_connection_subscribes_only_on_its_own_platforms_hooks` |
+| Access freshness, failed and unavailable checks; expiry closes at once and frees quota; connection deletion stops reads | `webhooks::tests::events_are_served_only_after_a_recent_passing_access_check`, `webhooks::tests::expiry_closes_at_once_and_frees_the_owners_quota`, `webhooks::tests::deleting_the_connection_stops_reads_at_once` |
+| Cursors: edited, foreign, ahead, obsolete; monotonic acknowledgement; reconciliation barrier | `webhooks::cursor::tests::*`, `webhooks::tests::cursors_are_refused_when_forged_ahead_obsolete_or_foreign`, `webhooks::tests::reconciliation_completes_only_for_the_current_generation_and_barrier` |
+| Hooks: shared never touched; dedicated hand-over, cleanup retry, deadline, permanent failure, per-owner job cap, failed provisioning | `webhooks::tests::a_shared_hook_outlives_every_subscription`, `webhooks::tests::a_dedicated_hook_is_handed_over_and_cleaned_up`, `webhooks::tests::failing_cleanups_are_bounded_per_owner`, `webhooks::tests::failed_provisioning_closes_the_waiting_subscriptions` |
+| Review of #383: one delivery to three subscriptions of one owner stays within the owner budget (and every test's invariants check each limit); unused dedicated hooks retired; a provisioning answer after the last subscription ended, or after cleanup gave up, still cleaned up; dedicated hooks capped per owner and bound to their source; management stays or moves only to a live connection; a sweeper that never ran refuses new subscriptions | `webhooks::tests::one_delivery_to_several_subscriptions_of_one_owner_stays_within_its_budget`, `webhooks::tests::an_unused_dedicated_hook_is_retired`, `webhooks::tests::a_hook_provisioned_after_its_last_subscription_ended_is_cleaned_up`, `webhooks::tests::dedicated_hooks_are_capped_and_bound_to_their_source`, `webhooks::tests::hook_management_stays_or_moves_only_to_a_live_connection`, `webhooks::tests::a_sweeper_that_never_ran_refuses_new_subscriptions` |
+| Races: 40 concurrent deliveries at the limits, 20 concurrent copies of one delivery, 12 concurrent creations at a quota of 3, acknowledgement and renewal against a sweep; every counter re-checked against what it counts | `webhooks::tests::concurrent_deliveries_stay_within_the_limits`, `webhooks::tests::concurrent_redeliveries_are_retained_once`, `webhooks::tests::concurrent_subscriptions_stop_at_the_quota`, `webhooks::tests::acknowledgements_and_renewals_race_sweeps_consistently` |
+| Outage: a failure before commit and a database connection killed while waiting for a lock leave nothing, the retry is new, the pool reconnects | `webhooks::tests::a_failure_before_commit_leaves_nothing_and_the_retry_is_new`, `webhooks::tests::a_lost_database_connection_fails_the_delivery_and_recovers` |
+
 Run `cargo test` for local tests. Database tests are marked ignored so ordinary
 runs do not require PostgreSQL; CI sets `TEST_DATABASE_URL` and fixture OAuth
 credentials and runs `cargo test -- --include-ignored`. See README for the
@@ -39,6 +58,7 @@ registration or consent behavior, and no real Atomic client (browser
 signed against this proxy yet: signatures in tests come from
 `ed25519-dalek` with the same message layout. The key-check limit's `X-Forwarded-For` handling is tested
 with constructed headers, not behind Heroku's router or a real reverse
-proxy. Cross-implementation test
-vectors (atomic-server `lib/src/authentication_v2_vectors.json`) are not yet
-checked here.
+proxy. Cross-implementation vectors are checked here (atomic-server's
+`lib/src/authentication_v2_vectors.json`, vendored verbatim at the pin), but
+only atomic-server's Rust signer generated them; that its TypeScript signer
+produces the same is atomic-server's own test, not verified here.

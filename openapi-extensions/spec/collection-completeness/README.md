@@ -64,12 +64,13 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "MAY" are to be interpre
 A _complete read_ of a collection is a read of its `list` operation that
 follows every page (per the [Pagination Schemes Extension](../pagination-schemes/README.md),
 where the operation is paginated), binds the collection's path parameters,
-sends no optional parameter that the API documents as narrowing the result
+sends, beyond the values the collection's read fixes (CRUD Causality 0.4.0
+§4.2.1), no optional parameter that the API documents as narrowing the result
 (a filter, a search term, a date range), and gets a successful response for
 every page.
 
-A _member_ is an object the collection's `list` operation can return under
-those conditions.
+A _member_ is an object the collection's read can return under those
+conditions: its `list` operation with the collection's fixed values, if any.
 
 ## 4. Object Definitions
 
@@ -80,11 +81,12 @@ the Operation Object of an operation that lists the collection. When both are
 present, the Collection Object's applies.
 
 On a Collection Object, the declaration covers reads of that collection as
-the document defines it. CRUD Causality's Collection Object has no field for
-fixed query parameters or request bodies; a consumer that defines a
-collection with such values through its own extension (syncables'
-`x-list-query` and `x-list-body`, for example) applies a Collection Object's
-declaration to reads with exactly those values. On an Operation Object, the
+the document defines it. Since CRUD Causality 0.4.0, a Collection Object can
+fix a read's method, query parameters and request body (`listMethod`,
+`listQuery`, `listBody`; CRUD Causality §4.2.1), and the declaration covers
+reads with exactly those values. The same holds for a collection defined with
+syncables' earlier extensions `x-list-method`, `x-list-query` and
+`x-list-body`. On an Operation Object, the
 declaration covers only a read that sends no query parameter and no request
 body beyond what the operation requires (its path parameters). Several
 collections can share one list URL with different fixed queries, and a
@@ -160,9 +162,9 @@ components:
 
 An (invented) issue tracker whose `GET /projects/{projectId}/issues` returns
 open issues only by default declares no Completeness Object for that
-collection. CRUD Causality cannot define a collection with a fixed query
-parameter such as `state=all`; a consumer extension can (syncables'
-`x-list-query`). For a collection defined that way, the read returns every
+collection. A collection defined with the fixed query parameter `state=all`
+(CRUD Causality 0.4.0 `listQuery: {state: 'all'}`) is a different collection:
+its read returns every
 issue of the project, and its Collection Object can declare
 `absent: removed` when issues can also be moved to another project, and
 `absent: deleted` only when they cannot. The same declaration on the list
@@ -200,6 +202,12 @@ A conforming consumer:
 * Partial completeness (complete within a time window, or for the
   authenticated principal's own objects only). Describe those with the
   [Filtering proposal](../filtering/README.md) and leave this field out.
+
+## Changes
+
+- 2026-10-08, wording only, no version change: §3 and §4.1 refer to the
+  fixed reads of CRUD Causality 0.4.0 (`listMethod`, `listQuery`,
+  `listBody`); a complete read may send those values.
 
 ## Reference Implementation
 

@@ -247,11 +247,12 @@ that range, and MAY record a gap for it where its source can be identified
 
 Deduplication: the receiver keys a receipt on the endpoint and the delivery
 id, never on the delivery id alone, so that two hooks (or two providers)
-cannot collide or suppress each other's deliveries. It writes a receipt only
-for a delivery it routes to at least one subscription (§4.4.1), in the
-transaction that retains it or records its gap; an unrouted delivery leaves
-no receipt. A second delivery with a key that has an unexpired receipt is
-acknowledged to the provider and not retained again. Receipts expire
+cannot collide or suppress each other's deliveries. Receipts are kept per
+owner: a delivery routed to subscriptions of several owners (§4.4.1) gets
+one receipt for each of them, written in the transaction that retains it
+or records its gap for that owner; an unrouted delivery leaves no receipt.
+A delivery whose key has an unexpired receipt for an owner is not retained
+again for that owner's subscriptions, and is acknowledged to the provider. Receipts expire
 (Webhook Subscriptions §6); after that the same id is seen as new, so
 consumers MUST be idempotent per delivery id anyway. A provider may redeliver
 for longer than receipts live (GitHub lets a delivery be redelivered for
@@ -260,10 +261,20 @@ reaches consumers again.
 
 The receipt TTL MUST exceed twice the largest `toleranceSeconds` of any
 profile the receiver serves, so that a captured delivery cannot be replayed
-within its timestamp tolerance after its receipt is gone; a receiver MUST
-NOT evict a receipt younger than that, even at its receipt cap (it answers
-5xx instead). Validators cannot check this across documents; with the
-900-second ceiling of §4.2, a TTL of at least 1800 seconds always meets it. With `redelivery: newId` or `unspecified`, deduplication does not
+within its timestamp tolerance after its receipt is gone. Validators cannot
+check this across documents; with the 900-second ceiling of §4.2, a TTL of
+at least 1800 seconds always meets it. A receiver MUST NOT evict a receipt
+younger than that, even at a receipt cap (Webhook Subscriptions §6: one per
+owner, one for the deployment). When a cap leaves no receipt it may evict,
+the receiver stores nothing of the delivery for the owners concerned,
+records a `receipt-limit` gap on each of their routed subscriptions, and
+still answers 2xx: a replay can then only force a reconciliation, bounded by
+the one gap marker per subscription, and never adds state, and other owners
+are not affected. It MUST NOT answer 5xx for a full receipt cap, since a
+provider that does not retry would then drop the delivery for every owner
+without any gap.
+
+With `redelivery: newId` or `unspecified`, deduplication does not
 catch provider redeliveries, and consumers' idempotency is the only
 protection.
 
@@ -422,11 +433,21 @@ A dedicated hook:
   it calls `create`, the receiver commits the hook's record: its endpoint,
   that endpoint's URL and the sealed secret, so a lost response can be
   matched by `list` and no secret is sent that the receiver did not store;
-- is managed (listed, deleted) through the connection that created it. When
-  that connection is deleted while other subscriptions still use the hook,
-  management moves to the connection of one of them whose access check
-  passes; when none is left, the cleanup job (below) fails visibly with the
-  manual steps for the person or the operator;
+- is managed (listed, deleted) through one connection, first the one that
+  created it. When the subscription of the managing connection ends, or that
+  connection is deleted, while other subscriptions still use the hook,
+  management moves to the connection of one of them. Subscribing to a source
+  that already has a dedicated hook consents to that hook's later cleanup
+  being done through the subscriber's connection, and the receiver MUST say
+  so where the subscription is created;
+- is listed or deleted only after the managing connection's access check
+  (§4.4.1) is run again, with the access parameters recorded for the hook,
+  and passes with the hook's bound key; the `list` and `delete` paths are
+  filled from that check's parameters. This holds for the creator too: a
+  source can be renamed and its old name taken by another source. When the
+  check fails or selects another key, the receiver does not call `list` or
+  `delete`, and the cleanup job (below) fails visibly with the manual steps
+  for the person or the operator;
 - is reused by any later subscription of the same endpoint document, source
   kind and key, so one source has at most one dedicated hook per receiver;
 - is deleted (or, where the provider has no delete, disabled) by the receiver

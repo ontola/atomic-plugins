@@ -3,6 +3,22 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+`Config` gains a public field (`webhooks`), a breaking change under Cargo's
+0.x semver rules, so the next release is 0.4.0.
+
+- Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
+  `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless
+  `WEBHOOKS_ENABLED=true` (new `Config::webhooks`, `WebhookConfig`,
+  `WEBHOOK_INBOX_MAX_BYTES`). Enabled, it creates its tables and runs a
+  sweeper every minute; it mounts no route, receives no delivery and
+  registers no hook. Subscriptions, leases and the progress deadline,
+  generations, cursors and gaps, per-owner receipts, subscription, owner and
+  deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
+  jobs, with the limits the plan gives as pilot values. See SECURITY.md,
+  "Webhook inbox".
+
 ## 0.3.0 (2026-10-06)
 
 0.3.0 rather than 0.2.6 because `Config` gains public fields (below), a

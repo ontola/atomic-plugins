@@ -47,6 +47,68 @@ pub struct Config {
     /// `TRUST_FORWARDED_FOR`: where the client address of that limit comes
     /// from. Defaults to [`TrustForwardedFor::None`].
     pub trust_forwarded_for: TrustForwardedFor,
+    /// `WEBHOOKS_ENABLED` and the webhook inbox's limits. Off by default.
+    pub webhooks: WebhookConfig,
+}
+
+/// The webhook inbox (ontola/atomic-plugins#369). Off unless
+/// `WEBHOOKS_ENABLED=true`: then, and only then, the proxy creates the inbox
+/// tables and runs the inbox sweeper. No webhook route is mounted yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WebhookConfig {
+    /// `WEBHOOKS_ENABLED`: `true` turns the inbox on; unset, empty or
+    /// `false` leaves it off. Anything else stops the proxy at startup.
+    pub enabled: bool,
+    /// `WEBHOOK_INBOX_MAX_BYTES`: the deployment's inbox budget in bytes,
+    /// payloads plus the stated per-row overhead. Defaults to
+    /// [`DEFAULT_WEBHOOK_INBOX_MAX_BYTES`] (1 GiB).
+    pub inbox_max_bytes: i64,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            inbox_max_bytes: DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+        }
+    }
+}
+
+/// The deployment inbox budget when `WEBHOOK_INBOX_MAX_BYTES` is unset: the
+/// plan's 1 GiB pilot value.
+pub const DEFAULT_WEBHOOK_INBOX_MAX_BYTES: i64 = 1 << 30;
+
+/// The smallest `WEBHOOK_INBOX_MAX_BYTES` accepted: the owner budget
+/// (256 MiB), so one owner's limit can always be reached before the
+/// deployment's.
+const MIN_WEBHOOK_INBOX_MAX_BYTES: i64 = 256 << 20;
+
+pub(crate) fn webhook_config(
+    enabled: Option<&str>,
+    inbox_max_bytes: Option<&str>,
+) -> Result<WebhookConfig, String> {
+    let enabled = match enabled.map(str::trim) {
+        None | Some("") | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err("WEBHOOKS_ENABLED must be true or false".into()),
+    };
+    // Read only when the inbox is on: off, the variable is ignored.
+    let inbox_max_bytes = match inbox_max_bytes.map(str::trim).filter(|_| enabled) {
+        None | Some("") => DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+        Some(value) => match value.parse::<i64>() {
+            Ok(bytes) if bytes >= MIN_WEBHOOK_INBOX_MAX_BYTES => bytes,
+            _ => {
+                return Err(format!(
+                    "WEBHOOK_INBOX_MAX_BYTES must be a whole number of bytes, at least {MIN_WEBHOOK_INBOX_MAX_BYTES}"
+                ))
+            }
+        },
+    };
+    Ok(WebhookConfig {
+        enabled,
+        inbox_max_bytes,
+    })
 }
 
 /// The key checks one client network may make per platform and hour when
@@ -244,6 +306,10 @@ impl Config {
         let trust_forwarded_for = env::var("TRUST_FORWARDED_FOR")
             .unwrap_or_default()
             .parse()?;
+        let webhooks = webhook_config(
+            env::var("WEBHOOKS_ENABLED").ok().as_deref(),
+            env::var("WEBHOOK_INBOX_MAX_BYTES").ok().as_deref(),
+        )?;
 
         Ok(Self {
             base_url,
@@ -258,6 +324,7 @@ impl Config {
             operator_url,
             key_check_limit_per_hour,
             trust_forwarded_for,
+            webhooks,
         })
     }
 
@@ -352,11 +419,45 @@ mod tests {
             operator_url: None,
             key_check_limit_per_hour: 0,
             trust_forwarded_for: TrustForwardedFor::None,
+            webhooks: WebhookConfig::default(),
         };
         assert_eq!(config.public_origin(), "https://proxy.example:8443");
         assert_eq!(config.public_host(), "proxy.example:8443");
         assert_eq!(public_host("https://proxy.example"), "proxy.example");
         assert_eq!(public_host("http://127.0.0.1:8080"), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn webhooks_are_off_unless_enabled_explicitly() {
+        assert_eq!(
+            webhook_config(None, None).unwrap(),
+            WebhookConfig::default()
+        );
+        assert!(!WebhookConfig::default().enabled);
+        assert_eq!(WebhookConfig::default().inbox_max_bytes, 1 << 30);
+        assert!(!webhook_config(Some(""), None).unwrap().enabled);
+        assert!(!webhook_config(Some("false"), None).unwrap().enabled);
+        assert!(webhook_config(Some("true"), None).unwrap().enabled);
+        for invalid in ["1", "yes", "TRUE", "on"] {
+            assert!(webhook_config(Some(invalid), None).is_err(), "{invalid}");
+        }
+        assert_eq!(
+            webhook_config(Some("true"), Some("536870912"))
+                .unwrap()
+                .inbox_max_bytes,
+            512 << 20
+        );
+        for invalid in ["0", "-1", "1e9", "268435455", "lots"] {
+            assert!(
+                webhook_config(Some("true"), Some(invalid)).is_err(),
+                "{invalid}"
+            );
+            // Off, the budget is not read at all.
+            assert_eq!(
+                webhook_config(None, Some(invalid)).unwrap(),
+                WebhookConfig::default()
+            );
+        }
     }
 
     #[test]
