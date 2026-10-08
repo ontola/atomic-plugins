@@ -355,6 +355,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   documents), malformed declarations, the in-flight head and the budget,
   no storing, restarts, and precedence against `x-completeness` and stored
   and feed tombstones.
+- `unit/client/deletion-declarations.test.ts` runs the deletion
+  declarations as the draft specs' own examples
+  (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
+  §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
+  the §5 overlay), each test naming the spec statement it checks, plus
+  pending-edit recovery on those documents (a PUT in flight across a
+  restart, with and without the record deleted meanwhile; a lost answer on
+  a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
+  §2 test, whose feed is the list itself and whose Collection Object
+  declares `envelope: { itemsField: data.transactions }`, is `it.fails`
+  until #373: the collection read does not yet use the Collection Object's
+  `envelope.itemsField` (only the feed read does), so that list is not read
+  completely and its feed is not read.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination
