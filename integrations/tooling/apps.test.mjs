@@ -329,6 +329,52 @@ test('a published version file may not change or disappear', () =>
     );
   }));
 
+test('a branch behind main is told to merge, not to restore what main published since', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // A topic branch parts here; main then publishes two more versions.
+    git('checkout', '-q', '-b', 'topic');
+    git('checkout', '-q', main);
+
+    for (const version of ['1.3.0', '2.0.0']) {
+      mkdirSync(join(base, `apps/gamma/${version}`), { recursive: true });
+      writeFileSync(join(base, modulePath('gamma', version)), `v${version}`);
+    }
+
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'later',
+    );
+    git('checkout', '-q', 'topic');
+
+    const problems = await check({ base, published: main });
+    assert.deepEqual(problems, [
+      `2 file(s) published at ${main} are not on this branch, which is behind it: merge ${main} (never restore them by hand)`,
+    ]);
+
+    // A file the branch did have, and lost, is still "deleted".
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it.`,
+      ),
+    );
+
+    // Merged, the branch is told nothing.
+    git('checkout', '-q', '--', 'apps');
+    git('merge', '-q', main);
+    assert.deepEqual(await check({ base, published: main }), []);
+  }));
+
 test('write refuses to rebuild a published version with different bytes', () =>
   using({}, async base => {
     const main = commitAsMain(base);

@@ -587,6 +587,29 @@ export const blobId = bytes =>
     .update(bytes)
     .digest('hex');
 
+/**
+ * The commit where this branch and `ref` parted, or undefined when there is
+ * none (no HEAD yet, or unrelated histories).
+ */
+export function mergeBaseWith(ref, base = root) {
+  try {
+    return git(base, ['merge-base', 'HEAD', ref]).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `path` exists in the tree of commit `treeish`. */
+export function inTree(treeish, path, base = root) {
+  try {
+    git(base, ['cat-file', '-e', `${treeish}:${path}`]);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The files under ontology/ at `ref`, as a map from path to git blob id. */
 export function publishedTerms(ref, base = root) {
   const published = new Map();
@@ -631,16 +654,28 @@ export function publishedProblems(ref, base = root) {
   const oldBase = publishedBase(ref, base);
   const newBase = readBase(base);
   const moved = oldBase !== undefined && oldBase !== newBase;
+  const mergeBase = mergeBaseWith(ref, base);
+  // Behind only when the branch point is not `ref` itself.
+  const behindRef =
+    mergeBase !== undefined &&
+    mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
+  // Term files `ref` published after this branch parted from it: missing
+  // here because the branch is behind, not deleted. Reported together, with
+  // the merge as the fix, since "restore it" is the one thing a stale
+  // branch must not do by hand.
+  const behind = [];
 
   for (const [path, blob] of publishedTerms(ref, base)) {
     const file = resolve(base, path);
 
     if (!existsSync(file)) {
-      problems.push(
-        path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
-          ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.`
-          : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
-      );
+      if (behindRef && !inTree(mergeBase, path, base)) behind.push(path);
+      else
+        problems.push(
+          path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
+            ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.`
+            : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
+        );
       continue;
     }
 
@@ -659,6 +694,11 @@ export function publishedProblems(ref, base = root) {
         : `${path} is published at ${ref} and was changed. Published terms are immutable: restore it, and publish the change as a new term (a new property shortname, or <class>-v<N+1>).`,
     );
   }
+
+  if (behind.length)
+    problems.push(
+      `${behind.length} file(s) published at ${ref} are not on this branch, which is behind it: merge ${ref} (never restore them by hand)`,
+    );
 
   return problems;
 }

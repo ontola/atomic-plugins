@@ -256,23 +256,63 @@ export const blobId = bytes =>
     .digest('hex');
 
 /**
+ * The commit where this branch and `ref` parted, or undefined when there is
+ * none (no HEAD yet, or unrelated histories).
+ */
+export function mergeBaseWith(ref, base = root) {
+  try {
+    return git(base, ['merge-base', 'HEAD', ref]).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `path` exists in the tree of commit `treeish`. */
+export function inTree(treeish, path, base = root) {
+  try {
+    git(base, ['cat-file', '-e', `${treeish}:${path}`]);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Published version files that the working tree changed or deleted. A
  * published file's URL is what installed apps recorded; its bytes must stay.
+ * A file `ref` published after this branch parted from it is missing here
+ * because the branch is behind, not because anyone deleted it: those are
+ * reported together as "behind", with the merge as the fix, since restoring
+ * them by hand is what the immutability rule must never provoke.
  */
 export function publishedProblems(ref, base = root) {
   const problems = [];
+  const mergeBase = mergeBaseWith(ref, base);
+  // Behind only when the branch point is not `ref` itself.
+  const behindRef =
+    mergeBase !== undefined &&
+    mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
+  const behind = [];
 
   for (const [path, blob] of publishedModules(ref, base)) {
     const file = resolve(base, path);
-    if (!existsSync(file))
-      problems.push(
-        `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.`,
-      );
-    else if (blobId(readFileSync(file)) !== blob)
+    if (!existsSync(file)) {
+      if (behindRef && !inTree(mergeBase, path, base)) behind.push(path);
+      else
+        problems.push(
+          `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.`,
+        );
+    } else if (blobId(readFileSync(file)) !== blob)
       problems.push(
         `${path} is published at ${ref} and was changed. Published versions are immutable: restore it and release a new version.`,
       );
   }
+
+  if (behind.length)
+    problems.push(
+      `${behind.length} file(s) published at ${ref} are not on this branch, which is behind it: merge ${ref} (never restore them by hand)`,
+    );
 
   return problems;
 }
