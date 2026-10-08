@@ -569,6 +569,13 @@ async fn forward_inner(
             CredentialInjection::None
         }
     };
+    let forward_idempotency_key = headers.contains_key(IDEMPOTENCY_KEY)
+        && state.catalog.declares_header_parameter(
+            platform,
+            method.as_str(),
+            &request_path,
+            IDEMPOTENCY_KEY,
+        );
     let upstream = match upstream_request(
         &state.http_client,
         method.clone(),
@@ -576,6 +583,7 @@ async fn forward_inner(
         injection,
         headers,
         &required_headers,
+        forward_idempotency_key,
         body,
     )
     .send()
@@ -602,17 +610,51 @@ async fn forward_inner(
     Ok(response)
 }
 
-// Forward only representation/pagination metadata, never provider cookies or credentials.
+/// Rate-limit response headers forwarded unchanged, by exact name only:
+/// the names Throttling 0.2.0 (`openapi-extensions/spec/throttling`) gives
+/// roles to, GitHub's `x-ratelimit-resource`, the IETF `RateLimit` and
+/// `RateLimit-Policy` fields and the older drafts' `RateLimit-Limit`,
+/// `-Remaining` and `-Reset`. Each reports the quota of the credential (or,
+/// for a no-credential or IP-partitioned API, the proxy's address) that this
+/// very request used; none carries a secret. Never widen this to a prefix
+/// match: a provider may send any `x-ratelimit-*`-looking name.
+pub(crate) const RATE_LIMIT_HEADERS: [&str; 10] = [
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-used",
+    "x-ratelimit-reset",
+    "x-ratelimit-resource",
+    "ratelimit",
+    "ratelimit-policy",
+    "ratelimit-limit",
+    "ratelimit-remaining",
+    "ratelimit-reset",
+];
+
+/// Request headers a caller may send upstream besides `Content-Type` and
+/// `If-Match`: the conditional-read validators (P2). `Idempotency-Key` (P3)
+/// goes only where the operation declares it; see `upstream_request`.
+const CONDITIONAL_REQUEST_HEADERS: [header::HeaderName; 2] =
+    [header::IF_NONE_MATCH, header::IF_MODIFIED_SINCE];
+
+pub(crate) const IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+// Forward only representation, pagination and rate-limit metadata from an
+// explicit list, never provider cookies or credentials.
 fn upstream_response_headers(headers: &HeaderMap) -> HeaderMap {
     let mut result = HeaderMap::new();
-    for name in [
+    let names = [
         header::CONTENT_TYPE,
         header::LINK,
         header::RETRY_AFTER,
         header::ETAG,
+        header::LAST_MODIFIED,
         axum::http::HeaderName::from_static("x-total-count"),
         axum::http::HeaderName::from_static("x-next-page"),
-    ] {
+    ]
+    .into_iter()
+    .chain(RATE_LIMIT_HEADERS.map(axum::http::HeaderName::from_static));
+    for name in names {
         for value in headers.get_all(&name) {
             result.append(name.clone(), value.clone());
         }
@@ -650,6 +692,7 @@ fn contains_traversal_segment(path: &str) -> bool {
         .any(|segment| segment == "." || segment == "..")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upstream_request(
     client: &reqwest::Client,
     method: axum::http::Method,
@@ -657,6 +700,7 @@ fn upstream_request(
     injection: CredentialInjection,
     headers: &HeaderMap,
     required_headers: &[(String, String)],
+    forward_idempotency_key: bool,
     body: Bytes,
 ) -> reqwest::RequestBuilder {
     // The caller's own `Authorization` (a frame capability) is consumed by
@@ -667,6 +711,22 @@ fn upstream_request(
     }
     if let Some(etag) = headers.get(header::IF_MATCH) {
         request = request.header(header::IF_MATCH, etag);
+    }
+    for name in CONDITIONAL_REQUEST_HEADERS {
+        if let Some(value) = headers.get(&name) {
+            request = request.header(name, value);
+        }
+    }
+    // Only for an operation that declares an `Idempotency-Key` header
+    // parameter, and never next to a fixed value the catalog sets itself.
+    if forward_idempotency_key
+        && !required_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(IDEMPOTENCY_KEY))
+    {
+        if let Some(value) = headers.get(IDEMPOTENCY_KEY) {
+            request = request.header(IDEMPOTENCY_KEY, value);
+        }
     }
     for (name, value) in required_headers {
         request = request.header(name, value);
@@ -728,6 +788,7 @@ mod tests {
                 CredentialInjection::Bearer("test-provider-token".to_string()),
                 &headers,
                 &[],
+                false,
                 Bytes::from_static(b"{}"),
             )
             .send()
@@ -778,6 +839,7 @@ mod tests {
             },
             &HeaderMap::new(),
             &[],
+            false,
             Bytes::new(),
         )
         .send()
@@ -830,6 +892,132 @@ mod tests {
         assert_eq!(forwarded[header::CONTENT_TYPE], "application/json");
         assert!(!forwarded.contains_key(header::SET_COOKIE));
         assert!(!forwarded.contains_key("x-connection-code"));
+    }
+
+    /// P1 and P2: rate-limit headers and `Last-Modified` come back by exact
+    /// name, every value of each, and nothing else that merely looks alike.
+    #[test]
+    fn rate_limit_headers_and_last_modified_are_forwarded_by_exact_name_only() {
+        let mut headers = HeaderMap::new();
+        for name in RATE_LIMIT_HEADERS {
+            headers.insert(name, HeaderValue::from_static("42"));
+        }
+        headers.append(
+            "ratelimit-policy",
+            HeaderValue::from_static("\"hour\";q=5000;w=3600"),
+        );
+        headers.insert(
+            header::LAST_MODIFIED,
+            HeaderValue::from_static("Wed, 07 Oct 2026 10:00:00 GMT"),
+        );
+        for name in [
+            "x-ratelimit-token",
+            "x-ratelimit-client-id",
+            "x-rate-limit-limit",
+            "ratelimit-session",
+            "x-oauth-scopes",
+            "x-github-request-id",
+            "www-authenticate",
+            "authorization",
+            "set-cookie",
+        ] {
+            headers.insert(name, HeaderValue::from_static("must-not-pass"));
+        }
+        let forwarded = upstream_response_headers(&headers);
+        for name in RATE_LIMIT_HEADERS {
+            assert_eq!(forwarded[name], "42", "{name}");
+        }
+        assert_eq!(forwarded.get_all("ratelimit-policy").iter().count(), 2);
+        assert_eq!(
+            forwarded[header::LAST_MODIFIED],
+            "Wed, 07 Oct 2026 10:00:00 GMT"
+        );
+        assert_eq!(forwarded.len(), RATE_LIMIT_HEADERS.len() + 2);
+        assert!(forwarded
+            .values()
+            .all(|value| value.as_bytes() != b"must-not-pass"));
+    }
+
+    /// P2 and P3: the conditional-read validators always go upstream, an
+    /// `Idempotency-Key` only when its operation declares one and the
+    /// catalog sets no fixed value, and other caller headers never.
+    #[tokio::test]
+    async fn conditional_and_declared_idempotency_headers_go_upstream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/items",
+            axum::routing::any(|headers: HeaderMap| async move {
+                let all = |name: &str| {
+                    headers
+                        .get_all(name)
+                        .iter()
+                        .filter_map(|v| v.to_str().ok().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                };
+                Json(json!({
+                    "if_none_match": all("if-none-match"),
+                    "if_modified_since": all("if-modified-since"),
+                    "idempotency_key": all("idempotency-key"),
+                    "cookie": all("cookie"),
+                    "forwarded_for": all("x-forwarded-for"),
+                    "authorization": all("authorization"),
+                }))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = crate::build_http_client();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"v7\""));
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_static("Wed, 07 Oct 2026 10:00:00 GMT"),
+        );
+        headers.insert(IDEMPOTENCY_KEY, HeaderValue::from_static("create-1"));
+        headers.insert(header::COOKIE, HeaderValue::from_static("session=caller"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Capability caller"));
+        let send = |declared: bool, required: Vec<(String, String)>| {
+            let request = upstream_request(
+                &client,
+                axum::http::Method::POST,
+                Url::parse(&format!("http://{address}/items")).unwrap(),
+                CredentialInjection::None,
+                &headers,
+                &required,
+                declared,
+                Bytes::new(),
+            );
+            async move {
+                request
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<serde_json::Value>()
+                    .await
+                    .unwrap()
+            }
+        };
+        let declared = send(true, vec![]).await;
+        assert_eq!(declared["if_none_match"], json!(["\"v7\""]));
+        assert_eq!(
+            declared["if_modified_since"],
+            json!(["Wed, 07 Oct 2026 10:00:00 GMT"])
+        );
+        assert_eq!(declared["idempotency_key"], json!(["create-1"]));
+        for name in ["cookie", "forwarded_for", "authorization"] {
+            assert_eq!(declared[name], json!([]), "{name}");
+        }
+        let undeclared = send(false, vec![]).await;
+        assert_eq!(undeclared["idempotency_key"], json!([]));
+        assert_eq!(undeclared["if_none_match"], json!(["\"v7\""]));
+        let fixed = send(
+            true,
+            vec![("Idempotency-Key".to_owned(), "catalog-fixed".to_owned())],
+        )
+        .await;
+        assert_eq!(fixed["idempotency_key"], json!(["catalog-fixed"]));
+        server.abort();
     }
 
     #[test]
@@ -973,6 +1161,7 @@ mod tests {
                 injection,
                 &incoming,
                 &[],
+                false,
                 Bytes::new(),
             )
             .send()
@@ -1662,6 +1851,101 @@ mod tests {
             }),
             json!({}),
         )
+    }
+
+    /// P1-P3 through the whole route: the provider's rate-limit headers and
+    /// `Last-Modified` reach the caller, a caller's `If-None-Match` reaches
+    /// the provider, and its `Idempotency-Key` only for the operation whose
+    /// catalog entry declares one.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_rate_limit_and_conditional_headers_pass_and_idempotency_keys_only_where_declared(
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let echo = |headers: HeaderMap| async move {
+            let one = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned)
+            };
+            (
+                [
+                    ("x-ratelimit-remaining", "4999"),
+                    ("x-ratelimit-reset", "1791370800"),
+                    ("ratelimit", "\"hour\";r=4999;t=3600"),
+                    ("last-modified", "Wed, 07 Oct 2026 10:00:00 GMT"),
+                    ("x-ratelimit-token", "must-not-pass"),
+                ],
+                Json(json!({
+                    "idempotency_key": one("idempotency-key"),
+                    "if_none_match": one("if-none-match"),
+                })),
+            )
+        };
+        let app = axum::Router::new()
+            .route("/api/items", axum::routing::any(echo))
+            .route("/api/other", axum::routing::any(echo));
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let security = security().await;
+        let mut s = state(Some(security.clone()));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "pets",
+            json!({
+                "servers": [{"url": format!("http://{address}/api")}],
+                "security": [],
+                "paths": {
+                    "/items": {"post": {"parameters": [{"in": "header", "name": "Idempotency-Key"}]}},
+                    "/other": {"post": {}}
+                }
+            }),
+            json!({}),
+        );
+        let owner = Agent::new(39);
+        let id = security
+            .create_connection(
+                "pets",
+                &owner.id(),
+                &serde_json::to_vec(&StoredCredential::NoCredential {
+                    provider: "pets".into(),
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let post = |path: &str| {
+            let mut request = signed_request(
+                &s,
+                &owner,
+                "POST",
+                &format!("/proxy/{id}/pets/api/{path}"),
+                vec![],
+            );
+            let headers = request.headers_mut();
+            headers.insert(IDEMPOTENCY_KEY, HeaderValue::from_static("create-1"));
+            headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"v1\""));
+            crate::router(s.clone()).oneshot(request)
+        };
+
+        let response = post("items").await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers().clone();
+        assert_eq!(headers["x-ratelimit-remaining"], "4999");
+        assert_eq!(headers["x-ratelimit-reset"], "1791370800");
+        assert_eq!(headers["ratelimit"], "\"hour\";r=4999;t=3600");
+        assert_eq!(
+            headers[header::LAST_MODIFIED],
+            "Wed, 07 Oct 2026 10:00:00 GMT"
+        );
+        assert!(!headers.contains_key("x-ratelimit-token"));
+        let body = body_json(response).await;
+        assert_eq!(body["idempotency_key"], "create-1");
+        assert_eq!(body["if_none_match"], "\"v1\"");
+
+        let body = body_json(post("other").await.unwrap()).await;
+        assert_eq!(body["idempotency_key"], serde_json::Value::Null);
+        assert_eq!(body["if_none_match"], "\"v1\"");
     }
 
     #[tokio::test]

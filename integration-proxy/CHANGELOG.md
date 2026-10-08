@@ -18,6 +18,14 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
   jobs, with the limits the plan gives as pilot values. See SECURITY.md,
   "Webhook inbox".
+- Rate-limit and conditional headers (docs/design/pieces.md P1-P3): the
+  provider's `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
+  `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
+  `-Remaining`, `-Reset` and `Last-Modified` now come back to the caller and
+  are CORS-exposed; the caller's `If-None-Match` and `If-Modified-Since` go
+  upstream, and `Idempotency-Key` where the operation declares that header
+  parameter. Every list is exact names only. See SECURITY.md, "Validating
+  proxy".
 
 ## 0.3.0 (2026-10-06)
 

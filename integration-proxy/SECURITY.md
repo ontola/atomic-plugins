@@ -340,6 +340,41 @@ values, and that a request body's presence and content type match the
 operation's declared `requestBody`. It does not validate full JSON Schema
 for bodies or non-enum query parameter values.
 
+Headers cross the proxy only by exact name (`proxy::upstream_request`,
+`proxy::upstream_response_headers`); no prefix or pattern is matched, so a
+provider's `Set-Cookie`, `WWW-Authenticate`, `X-OAuth-Scopes` or an
+`x-ratelimit-*`-looking name outside the list never reaches the caller, and
+the caller's `Cookie`, `Authorization`, `Host` and forwarding headers never
+reach the provider.
+
+- **Rate-limit response headers** (`X-RateLimit-Limit`, `-Remaining`,
+  `-Used`, `-Reset`, `-Resource`, `RateLimit`, `RateLimit-Policy`,
+  `RateLimit-Limit`, `-Remaining`, `-Reset`). They are numbers, times and
+  bucket names describing the quota that the forwarded request itself was
+  counted against. With a user credential that is the caller's own
+  connection's quota, which the person could read by calling the provider
+  with the same credential. They carry no credential, no account id and no
+  other tenant's data. One exception is worth knowing: where the provider
+  counts by source address (a no-credential connection, or a quota
+  partitioned by `sourceIp` in Throttling), the address is the proxy's,
+  shared by every tenant, and `remaining`/`used` then show how much all
+  tenants together used in the window. That is an aggregate count with no
+  identity attached, and a caller could already infer exhaustion from a
+  forwarded `429` with `Retry-After`. Forwarding it lets a client pace
+  itself instead of hammering the shared bucket (pieces.md P4 would pace it
+  at the proxy).
+- **`Last-Modified`** is representation metadata, like `ETag`.
+- **`If-None-Match` and `If-Modified-Since`** only make the provider answer
+  `304` with no body. The proxy keeps no response cache, so a conditional
+  request cannot make one tenant's response serve another's.
+- **`Idempotency-Key`** goes only to an operation whose composed document
+  declares a header parameter of that name, and never next to a fixed value
+  the catalog sets. A provider scopes keys to the credential that sends them,
+  and each connection sends its own credential; on a no-credential
+  connection two tenants could in principle choose the same key for the same
+  operation, which is why the header is limited to declared operations
+  rather than forwarded everywhere.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic

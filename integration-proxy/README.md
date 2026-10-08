@@ -142,8 +142,15 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   `Authorization` and `x-atomic-*` headers are never forwarded: an
   `Authorization` other than `Capability …` is refused with
   `401 unsupported_authorization`, and a capability is consumed by the proxy.
-  `Link`,
-  `Retry-After`, `ETag`, `X-Total-Count` and `X-Next-Page` come back unchanged.
+  Of the caller's headers only `Content-Type`, `If-Match`, `If-None-Match` and
+  `If-Modified-Since` go upstream, plus `Idempotency-Key` where the operation
+  declares an `Idempotency-Key` header parameter (and the catalog sets no
+  fixed value for it). From the provider's response, `Content-Type`, `Link`,
+  `Retry-After`, `ETag`, `Last-Modified`, `X-Total-Count`, `X-Next-Page` and
+  the rate-limit headers `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
+  `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
+  `-Remaining` and `-Reset` come back unchanged, by exact name; every other
+  response header is dropped.
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
   signer's runtimes. Never credentials. Shape:
@@ -610,9 +617,11 @@ describes the controls and what is not yet verified.
 ## Browser clients
 
 CORS allows any origin, including a plugin frame's `null` origin, to send
-`Authorization`, `Content-Type`, `If-Match` and the five `x-atomic-*` headers,
-and exposes `Content-Type`, `Link`, `Retry-After`, `ETag`, `X-Total-Count` and
-`X-Next-Page`. Cookie credentials are not enabled for CORS; consent remains a
+`Authorization`, `Content-Type`, `If-Match`, `If-None-Match`,
+`If-Modified-Since`, `Idempotency-Key` and the five `x-atomic-*` headers, and
+exposes the response headers the proxy forwards (above): `Content-Type`,
+`Link`, `Retry-After`, `ETag`, `Last-Modified`, `X-Total-Count`,
+`X-Next-Page` and the ten rate-limit headers. Cookie credentials are not enabled for CORS; consent remains a
 top-level browser navigation.
 
 ## Todoist

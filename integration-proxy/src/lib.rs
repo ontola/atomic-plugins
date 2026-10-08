@@ -339,20 +339,29 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::IF_MATCH,
+            header::IF_NONE_MATCH,
+            header::IF_MODIFIED_SINCE,
+            HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
             HeaderName::from_static(signature::AGENT_HEADER),
             HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
             HeaderName::from_static(signature::TIMESTAMP_HEADER),
             HeaderName::from_static(signature::SIGNATURE_HEADER),
             HeaderName::from_static(signature::VERSION_HEADER),
         ])
-        .expose_headers([
-            header::CONTENT_TYPE,
-            header::LINK,
-            header::RETRY_AFTER,
-            header::ETAG,
-            HeaderName::from_static("x-total-count"),
-            HeaderName::from_static("x-next-page"),
-        ])
+        .expose_headers(
+            [
+                header::CONTENT_TYPE,
+                header::LINK,
+                header::RETRY_AFTER,
+                header::ETAG,
+                header::LAST_MODIFIED,
+                HeaderName::from_static("x-total-count"),
+                HeaderName::from_static("x-next-page"),
+            ]
+            .into_iter()
+            .chain(proxy::RATE_LIMIT_HEADERS.map(HeaderName::from_static))
+            .collect::<Vec<_>>(),
+        )
 }
 
 fn router(state: AppState) -> Router {
@@ -436,7 +445,7 @@ mod browser_tests {
                     .header("access-control-request-method", "PATCH")
                     .header(
                         "access-control-request-headers",
-                        "authorization,content-type,if-match,x-atomic-agent,x-atomic-public-key,x-atomic-timestamp,x-atomic-signature,x-atomic-signature-version",
+                        "authorization,content-type,if-match,if-none-match,if-modified-since,idempotency-key,x-atomic-agent,x-atomic-public-key,x-atomic-timestamp,x-atomic-signature,x-atomic-signature-version",
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -453,6 +462,9 @@ mod browser_tests {
             "authorization",
             "content-type",
             "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "idempotency-key",
             "x-atomic-agent",
             "x-atomic-public-key",
             "x-atomic-timestamp",
@@ -477,9 +489,22 @@ mod browser_tests {
         let exposed = response.headers()["access-control-expose-headers"]
             .to_str()
             .unwrap();
-        for name in ["link", "retry-after", "etag", "content-type"] {
-            assert!(exposed.contains(name), "{name} not in {exposed}");
+        let exposed: Vec<&str> = exposed.split(',').map(str::trim).collect();
+        for name in [
+            "link",
+            "retry-after",
+            "etag",
+            "content-type",
+            "last-modified",
+            "x-total-count",
+            "x-next-page",
+        ]
+        .into_iter()
+        .chain(proxy::RATE_LIMIT_HEADERS)
+        {
+            assert!(exposed.contains(&name), "{name} not in {exposed:?}");
         }
-        assert!(!exposed.contains("x-connection-code"));
+        assert!(!exposed.contains(&"x-connection-code"));
+        assert!(!exposed.contains(&"set-cookie"));
     }
 }
