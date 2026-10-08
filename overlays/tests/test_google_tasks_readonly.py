@@ -107,7 +107,7 @@ class GoogleTasksReadonlyTests(unittest.TestCase):
                     doc["paths"][path][method]["security"],
                 )
 
-    def test_syncables_discovers_root_then_paginates_each_tasks_collection(self):
+    def test_collection_and_pagination_declarations(self):
         doc = self.document
         resources = doc["components"]["crudResources"]
         self.assertEqual(

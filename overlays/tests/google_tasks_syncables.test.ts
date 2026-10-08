@@ -1,7 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   describePlatform,
   readPlatform,
+  prepareDocument,
   type Transport,
 } from "../../syncables/src/browser.js";
 import type { OpenApiDocument } from "../../syncables/src/openapi/types.js";
@@ -12,107 +16,29 @@ const reply = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-// This is the read subset emitted by the Google Tasks overlays. The Python
-// composition test checks that the overlays declare the same paths, paging
-// envelope, and parent reference against the pinned OAD.
-const googleTasks = {
-  openapi: "3.0.0",
-  info: { title: "Google Tasks API", version: "v1" },
-  servers: [{ url: "https://tasks.googleapis.com/" }],
-  components: {
-    schemas: {
-      TaskList: {
-        type: "object",
-        properties: { id: { type: "string" }, title: { type: "string" } },
-        required: ["id"],
-      },
-      Task: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          title: { type: "string" },
-          parent: { type: "string" },
-        },
-        required: ["id"],
-      },
-    },
-    crudResources: {
-      taskList: {
-        schema: { $ref: "#/components/schemas/TaskList" },
-        identity: {
-          urlTemplate: "/tasks/v1/users/@me/lists/{tasklist}",
-          bindings: { tasklist: { field: "id" } },
-        },
-        collections: {
-          taskLists: { urlTemplate: "/tasks/v1/users/@me/lists" },
+// Read the actual candidate catalog, pinned OAD and local overlay bytes.
+// A handwritten equivalent would miss composition and schema-parser failures.
+const repo = fileURLToPath(new URL("../../", import.meta.url));
+const googleTasks = prepareDocument(
+  JSON.parse(
+    execFileSync(
+      "python3",
+      ["overlays/tests/compose_gitlab_platform.py", "google-tasks"],
+      {
+        cwd: repo,
+        encoding: "utf8",
+        maxBuffer: 32 * 1024 * 1024,
+        env: {
+          ...process.env,
+          ONBOARDING_CATALOG_PATH: resolve(
+            repo,
+            "overlays/catalog/2026-10-08-gitlab-tasks.json",
+          ),
         },
       },
-      task: {
-        schema: { $ref: "#/components/schemas/Task" },
-        identity: {
-          urlTemplate: "/tasks/v1/lists/{tasklist}/tasks/{task}",
-          bindings: { task: { field: "id" } },
-        },
-        collections: {
-          tasks: { urlTemplate: "/tasks/v1/lists/{tasklist}/tasks" },
-        },
-      },
-    },
-    paginationSchemes: {
-      forwardPages: {
-        type: "pageToken",
-        request: { queryParameters: { pageToken: { role: "cursor" } } },
-        response: { bodyFields: { nextPageToken: { role: "nextCursor" } } },
-      },
-    },
-  },
-  paths: {
-    "/tasks/v1/users/@me/lists": {
-      get: {
-        parameters: [
-          { name: "maxResults", in: "query", schema: { type: "integer" } },
-          { name: "pageToken", in: "query", schema: { type: "string" } },
-        ],
-        "x-pagination": [
-          {
-            scheme: "forwardPages",
-            overrides: {
-              request: {
-                queryParameters: { maxResults: { role: "pageSize" } },
-              },
-              response: { envelope: { itemsField: "items" } },
-            },
-          },
-        ],
-      },
-    },
-    "/tasks/v1/lists/{tasklist}/tasks": {
-      get: {
-        parameters: [
-          {
-            name: "tasklist",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-          { name: "maxResults", in: "query", schema: { type: "integer" } },
-          { name: "pageToken", in: "query", schema: { type: "string" } },
-        ],
-        "x-pagination": [
-          {
-            scheme: "forwardPages",
-            overrides: {
-              request: {
-                queryParameters: { maxResults: { role: "pageSize" } },
-              },
-              response: { envelope: { itemsField: "items" } },
-            },
-          },
-        ],
-      },
-    },
-  },
-} as unknown as OpenApiDocument;
+    ),
+  ) as OpenApiDocument,
+);
 
 describe("Google Tasks Syncables read metadata", () => {
   it("discovers task lists as the root input and imports two pages per nested list", async () => {
