@@ -20,11 +20,18 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  DEFAULT_READ_LIMITS,
   PageStatusError,
   RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
 } from '../read/pages.js';
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
 import { readNestedField } from '../pagination/response-parser.js';
 import {
   classifyThrottling,
@@ -60,6 +67,7 @@ import {
   type StoredFeedTombstones,
   type StoredRebuild,
   type StoredRecordWrites,
+  type StoredThrottlingPause,
   type StoredWrite,
 } from './outbox.js';
 
@@ -689,6 +697,8 @@ interface QueuedWrite {
   confirmedId?: string;
   /** The request may be in flight; stored so a restart can tell. */
   sending?: boolean;
+  /** The earliest time to send it again (a throttling answer's), stored; see `StoredWrite.notBefore`. */
+  notBefore?: number;
   /** False until the outbox holding this write is stored; not sent before. */
   durable?: boolean;
   /** A restored update: not sent before a refresh of its collection. */
@@ -781,16 +791,15 @@ class NotSentError extends Error {}
  * follow a committed create. 503 and 429 conventionally mean the request was
  * not processed, other 4xx responses mean it was refused, and an error before
  * sending means nothing went out, so those keep the ordinary retry path. A
- * response the document's `x-throttling` signals declare as a rate-limit
- * refusal (`throttling`) was not applied either, by that declaration.
+ * throttling signal declared for a 5xx does not change this: the Throttling
+ * extension says such a response may follow partial processing and that
+ * "not applied" is only an inference, so a create answered that way is
+ * still uncertain.
  */
-function mayHaveApplied(
-  error: unknown,
-  throttling?: ThrottlingVerdict,
-): boolean {
+function mayHaveApplied(error: unknown): boolean {
   if (error instanceof NotSentError) return false;
   if (error instanceof HttpStatusError)
-    return !throttling && error.status >= 500 && error.status !== 503;
+    return error.status >= 500 && error.status !== 503;
   return true;
 }
 
@@ -1166,6 +1175,7 @@ export function createApiClient(
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
       ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
+      ...(write.notBefore !== undefined ? { notBefore: write.notBefore } : {}),
     };
   }
 
@@ -1236,6 +1246,7 @@ export function createApiClient(
         rebuild,
         ...(feedCursors.size ? { feedCursors: [...feedCursors.values()] } : {}),
         ...storedFeedTombstones(),
+        ...storedThrottlingPauses(),
         unrestorable,
         ...(authBlock ? { authBlock } : {}),
       }),
@@ -1325,6 +1336,9 @@ export function createApiClient(
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
       ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
+      ...(stored.notBefore !== undefined
+        ? { notBefore: stored.notBefore }
+        : {}),
     };
     if (stored.seq !== undefined && stored.seq >= nextSeq)
       nextSeq = stored.seq + 1;
@@ -1373,6 +1387,12 @@ export function createApiClient(
       if (route) feedCursors.set(scopeFor(route, entry.context), entry);
       else unrestorable.push(entry);
     }
+    // Exhausted buckets outlive the process: a pause still in the future is
+    // kept, so no write (nor read) counted against the bucket goes out early.
+    pausedBuckets.clear();
+    for (const entry of outbox.throttlingPauses)
+      if (entry.until > Date.now())
+        pausedBuckets.set(entry.bucket ?? '*', entry.until);
     // Under onAuthFailure 'retry' nothing blocks: a stored block (from a
     // client with 'block') is dropped and its writes resume.
     authBlock =
@@ -1729,6 +1749,9 @@ export function createApiClient(
               receivedAt: error.receivedAt,
             })
           : undefined;
+      // An exhausted bucket holds every write counted against it: until the
+      // answer's time, or, without one, until this write's own backoff (set
+      // below, where the backoff is known).
       if (throttled?.meaning === 'quotaExhausted' && throttled.retryAt)
         pauseBucket(throttled.bucket, throttled.retryAt);
       const classified =
@@ -1751,7 +1774,7 @@ export function createApiClient(
       if (
         failureClass === 'auth' &&
         write.type === 'create' &&
-        mayHaveApplied(error, throttled) &&
+        mayHaveApplied(error) &&
         !usableKey(write)
       )
         failureClass = 'retry';
@@ -1766,7 +1789,13 @@ export function createApiClient(
       if (failureClass === 'auth') {
         // Sent with credentials from before the latest renewal: send it
         // again with the new ones instead of blocking again.
-        if (epoch !== authEpoch) return { status: 'retry', delayMs: 0 };
+        if (epoch !== authEpoch)
+          return {
+            status: 'retry',
+            // Not before a throttling answer's time, though (a custom
+            // classifier may call a throttled response auth).
+            delayMs: Math.max(0, (throttled?.retryAt ?? 0) - Date.now()),
+          };
         write.lastError = message;
         if (status !== undefined) write.lastStatus = status;
         return { status: 'blocked' };
@@ -1780,7 +1809,7 @@ export function createApiClient(
       // create happened, and a replay would return the same unusable body.
       if (
         write.type === 'create' &&
-        mayHaveApplied(error, throttled) &&
+        mayHaveApplied(error) &&
         (!usableKey(write) || error instanceof UnusableResponseError)
       )
         return { status: 'uncertain' };
@@ -1796,20 +1825,28 @@ export function createApiClient(
       if (throttled) {
         // The earliest retry time of the Throttling extension: the write is
         // never sent before it (nor below the backoff, so a time already
-        // past cannot make a tight loop). A wait longer than
-        // retry.maxRetryAfterMs is not cut short: the write gives up
-        // instead, as the extension allows, and resolveWrite can retry it.
-        const wait =
-          throttled.retryAt === undefined ? 0 : throttled.retryAt - Date.now();
+        // past cannot make a tight loop). It is stored with the write
+        // (`notBefore`), so a restart or a resolveWrite retry keeps it. A
+        // wait longer than retry.maxRetryAfterMs is not cut short: the write
+        // gives up instead, as the extension allows, and resolveWrite can
+        // retry it (which waits out the stored time, or fails again).
+        const now = Date.now();
+        const notBefore = Math.max(throttled.retryAt ?? 0, now + backoff);
+        write.notBefore = notBefore;
+        // A quotaExhausted answer without a time still pauses its bucket,
+        // until this write's own backoff (the consumer's floor).
+        if (throttled.meaning === 'quotaExhausted' && !throttled.retryAt)
+          pauseBucket(throttled.bucket, notBefore);
+        const wait = notBefore - now;
         if (wait > retry.maxRetryAfterMs) {
           write.lastError = `${message}; the API asks to wait until ${new Date(
-            throttled.retryAt as number,
+            notBefore,
           ).toISOString()}, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not retried`;
           return { status: 'gaveUp' };
         }
         return {
           status: 'retry',
-          delayMs: Math.min(Math.max(backoff, wait), MAX_TIMER_MS),
+          delayMs: Math.min(wait, MAX_TIMER_MS),
         };
       }
       const asked =
@@ -1839,19 +1876,34 @@ export function createApiClient(
     pausedBuckets.set(key, Math.max(pausedBuckets.get(key) ?? 0, until));
   }
 
-  /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
-  function pauseFor(write: QueuedWrite): number {
+  /** The pauses still in the future, for the outbox. */
+  function storedThrottlingPauses(): {
+    throttlingPauses?: StoredThrottlingPause[];
+  } {
+    const now = Date.now();
+    const pauses = [...pausedBuckets]
+      .filter(([, until]) => until > now)
+      .map(([key, until]) => ({ bucket: key === '*' ? null : key, until }));
+    return pauses.length ? { throttlingPauses: pauses } : {};
+  }
+
+  /** How long a request to `operation` must wait for its exhausted buckets; 0 when none. */
+  function pauseForOperation(operation: OperationObject | undefined): number {
     if (!pausedBuckets.size) return 0;
     const now = Date.now();
     for (const [key, until] of pausedBuckets)
       if (until <= now) pausedBuckets.delete(key);
-    const buckets = throttling
-      ? operationBuckets(throttling, writeOperation(write))
-      : [];
     let until = pausedBuckets.get('*') ?? 0;
-    for (const bucket of buckets)
+    for (const bucket of throttling
+      ? operationBuckets(throttling, operation)
+      : [])
       until = Math.max(until, pausedBuckets.get(bucket) ?? 0);
     return Math.max(0, until - now);
+  }
+
+  /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
+  function pauseFor(write: QueuedWrite): number {
+    return pauseForOperation(writeOperation(write));
   }
 
   /** The OpenAPI operation a write is sent to, for its bucket selection. */
@@ -1942,11 +1994,23 @@ export function createApiClient(
         )
           return;
         // An exhausted bucket (a quotaExhausted signal) holds back every
-        // write counted against it until it resets; checked again after.
-        const paused = pauseFor(write);
-        if (paused > 0) {
+        // write counted against it until it resets, and a write's own stored
+        // `notBefore` (a throttling answer's time, kept across restarts and
+        // resolveWrite retries) holds it back too. A hold longer than
+        // retry.maxRetryAfterMs fails the write with a lastError saying why,
+        // as the write's own answer would, instead of waiting unseen.
+        let outcome: WriteOutcome;
+        const held = Math.max(
+          pauseFor(write),
+          (write.notBefore ?? 0) - Date.now(),
+        );
+        if (held > retry.maxRetryAfterMs) {
+          const until = new Date(Date.now() + held).toISOString();
+          write.lastError = `Held until ${until} by a rate limit the API declared exhausted, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not sent`;
+          outcome = { status: 'gaveUp' };
+        } else if (held > 0) {
           await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, Math.min(paused, MAX_TIMER_MS));
+            const timer = setTimeout(resolve, Math.min(held, MAX_TIMER_MS));
             if (typeof timer.unref === 'function') timer.unref();
             wakers.set(key, () => {
               clearTimeout(timer);
@@ -1955,8 +2019,9 @@ export function createApiClient(
           });
           wakers.delete(key);
           continue;
+        } else {
+          outcome = await attemptWrite(write);
         }
-        const outcome = await attemptWrite(write);
         write.sending = false;
         // Its record went missing while it was in flight. Answered without
         // settling (a retry, a refused credential, not sent), it is not
@@ -2235,6 +2300,20 @@ export function createApiClient(
       headers['if-none-match'] = cached.headers['etag'];
     if (cached?.headers['last-modified'])
       headers['if-modified-since'] = cached.headers['last-modified'];
+    // A read counts against the same buckets as a write: it waits out an
+    // exhausted bucket (a quotaExhausted answer to any request), within the
+    // read's time budget, and its own quotaExhausted answer pauses the
+    // bucket for every request, writes included.
+    const paused = pauseForOperation(operation);
+    if (paused > 0) {
+      const timeout =
+        options.limits?.timeoutMs ?? DEFAULT_READ_LIMITS.timeoutMs;
+      if (paused > timeout)
+        throw new RetryBeyondDeadline(
+          `A rate limit the API declared exhausted holds this request until ${new Date(Date.now() + paused).toISOString()}, longer than the read's time (${timeout} ms)`,
+        );
+      await (options.sleep ?? defaultSleep)(paused);
+    }
     const raw = await readTransport({ ...request, headers });
     const response = {
       ...raw,
@@ -2242,6 +2321,15 @@ export function createApiClient(
         Object.entries(raw.headers).map(([k, v]) => [k.toLowerCase(), v]),
       ),
     };
+    const throttled = classifyThrottling(throttling, {
+      status: response.status,
+      headers: response.headers,
+      body: response.body,
+    });
+    if (throttled?.meaning === 'quotaExhausted' && throttled.retryAt) {
+      pauseBucket(throttled.bucket, throttled.retryAt);
+      await persistLater();
+    }
     if (response.status === 304 && cached) return cached;
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
@@ -3363,9 +3451,14 @@ export function createApiClient(
         }
         pending.push(...retried);
         writeQueues.set(key, pending);
+        // Dropped before the drain starts: a retried write held past
+        // retry.maxRetryAfterMs fails again before the drain's first await,
+        // and must not be dropped along with the writes it replaces.
+        gaveUpWrites.delete(key);
         if (!draining.has(key)) void drainQueue(key);
+      } else {
+        gaveUpWrites.delete(key);
       }
-      gaveUpWrites.delete(key);
       await persistLater();
       await rebuild(scope, id);
     },

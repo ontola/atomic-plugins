@@ -57,3 +57,33 @@ returned, the spec example through `sync()`), and checks the heuristic
 without signals. Not implemented: pacing against the announced `limits`,
 and the bucket pause for reads. README (Failure classes, a Throttling
 subsection, an Unreleased changelog entry) and CLAUDE.md updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review of PR #391. Blocking: a
+create answered by a 5xx that a declared signal matches was treated as not
+applied and resent; the spec says such a response is not a throttling
+signal, since it may follow partial processing, and "not applied" is only an
+inference, so `mayHaveApplied` must ignore the verdict. Should-fix: the
+"never sent before the earliest retry time" claim did not hold across a
+restart or a `resolveWrite` retry; reads ignored a `quotaExhausted` pause
+and a read's `quotaExhausted` did not pause writes; the bucket pause ran
+before the `maxRetryAfterMs` cap, so other writes could wait days with no
+`lastError`; a `quotaExhausted` with no time paused nothing; a custom
+classifier's `auth` after a renewal resent with no delay.
+
+**Assistant:** `mayHaveApplied` is as before (a 5xx other than 503 is
+uncertain for a create, verdict or not) and the test turned around. Each
+throttled write stores `notBefore` (the later of the answer's time and its
+backoff) with the queued write in the outbox, and the exhausted buckets are
+stored at the outbox's top level (`throttlingPauses`, within version 1), so
+both survive a restart and a `resolveWrite` retry. The drain waits out the
+later of the bucket pause and `notBefore`; a hold longer than
+`retry.maxRetryAfterMs` fails the write with "Held until … not sent". A
+`quotaExhausted` with no time and no window pauses the bucket until the
+write's own backoff. The post-renewal resend waits the answer's time. The
+client's read transport waits out a paused bucket for the request's
+operation (through `sleep`, within `limits.timeoutMs`, else stops the read
+with an error) and pauses the bucket on a read's `quotaExhausted` answer.
+Tests for each; README, CLAUDE.md and the changelog reworded. Not done
+(nits): integers above 2^53 and `Date.parse`'s leniency.

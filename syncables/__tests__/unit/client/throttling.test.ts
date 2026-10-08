@@ -9,6 +9,7 @@ import {
   type ApiClientOptions,
   type AuthBlock,
   type OpenApiDocument,
+  type StorageAdapter,
   type TransportRequest,
   type TransportResponse,
   type WriteFailure,
@@ -47,6 +48,45 @@ const doc = (throttling?: unknown): OpenApiDocument =>
 
 const settle = (ms = 30): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/** An in-memory StorageAdapter whose state can be copied, as a crash leaves it. */
+class CrashableStorage implements StorageAdapter {
+  data = new Map<string, Map<string, Record<string, unknown>>>();
+  private ns(resource: string): Map<string, Record<string, unknown>> {
+    let ns = this.data.get(resource);
+    if (!ns) this.data.set(resource, (ns = new Map()));
+    return ns;
+  }
+  async list(resource: string): Promise<Record<string, unknown>[]> {
+    return [...this.ns(resource).values()].map((v) => structuredClone(v));
+  }
+  async get(
+    resource: string,
+    id: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const value = this.ns(resource).get(id);
+    return value && structuredClone(value);
+  }
+  async put(
+    resource: string,
+    id: string,
+    value: Record<string, unknown>,
+  ): Promise<void> {
+    this.ns(resource).set(id, structuredClone(value));
+  }
+  async delete(resource: string, id: string): Promise<void> {
+    this.ns(resource).delete(id);
+  }
+  crash(): CrashableStorage {
+    const copy = new CrashableStorage();
+    for (const [name, records] of this.data)
+      copy.data.set(name, new Map(structuredClone([...records])));
+    return copy;
+  }
+  outbox(): Record<string, unknown> | undefined {
+    return this.data.get('syncables:outbox')?.get('outbox');
+  }
+}
 
 const rex = { id: '1', name: 'Rex' };
 const tom = { id: '2', name: 'Tom' };
@@ -203,17 +243,118 @@ describe('writes under declared signals (GitHub-shaped)', () => {
     );
     await settle();
     expect(fake.writes).toHaveLength(1);
-    // The app can queue it again, but the quotaExhausted answer named no
-    // bucket, so every write is held until the reset: still not sent.
+    // The app can queue it again, but the write keeps its stored notBefore
+    // and the quotaExhausted answer paused every write until the reset: it
+    // fails again at once, with a lastError saying why, not sent early.
     await c.resolveWrite('/pets', '1', { action: 'retry' });
-    await settle(60);
-    expect(c.pendingWrites()).toMatchObject([
-      { id: '1', state: 'pending', attempts: 0 },
-    ]);
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        {
+          id: '1',
+          state: 'failed',
+          lastError: expect.stringMatching(/^Held until .* not sent$/),
+        },
+      ]),
+    );
     expect(fake.writes).toHaveLength(1);
   });
 
-  it('does not make a create uncertain when a declared signal says the 5xx was a refusal', async () => {
+  it('keeps the earliest retry time across a restart: the restored write is not sent before it', async () => {
+    const storage = new CrashableStorage();
+    const fake = provider((_r, n) =>
+      n === 1
+        ? json({ message: 'API rate limit exceeded' }, 403, {
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': epochIn(60),
+          })
+        : undefined,
+    );
+    const first = await client(doc(githubThrottling), fake, { storage });
+    await first.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    await settle(5);
+    const outbox = storage.outbox() as {
+      records: { queue: { notBefore?: number }[] }[];
+      throttlingPauses?: { bucket: string | null; until: number }[];
+    };
+    expect(outbox.records[0]!.queue[0]!.notBefore).toBeGreaterThan(
+      Date.now() + 50_000,
+    );
+    // The GitHub snippet's signal names no bucket: every write is paused.
+    expect(outbox.throttlingPauses).toEqual([
+      { bucket: null, until: expect.any(Number) },
+    ]);
+    // The pause names no bucket, so the restored client's read waits for it
+    // too; the fake sleep lets the sync go ahead here.
+    const restarted = createApiClient(doc(githubThrottling), {
+      transport: fake.transport,
+      storage: storage.crash(),
+      retry: { baseDelayMs: 10 },
+      sleep: async () => {},
+    });
+    await restarted.ready();
+    await restarted.sync();
+    await settle(80);
+    // Not resent at once, as a restored write otherwise is.
+    expect(fake.writes).toHaveLength(1);
+    expect(restarted.pendingWrites()).toMatchObject([
+      { id: '1', state: 'pending', attempts: 1 },
+    ]);
+    // Released by the refresh; held by its stored time, not by a refresh.
+    expect(restarted.pendingWrites()[0]).not.toHaveProperty('awaitingRefresh');
+  });
+
+  it('pauses the bucket until its own backoff when a quotaExhausted answer carries no time and no window', async () => {
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'quota' }, 429) : undefined,
+    );
+    const c = await client(
+      doc({ signals: [{ status: [429], meaning: 'quotaExhausted' }] }),
+      fake,
+      { retry: { baseDelayMs: 300, maxDelayMs: 300 } },
+    );
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    await c.update('/pets', '2', { name: 'Tom II' });
+    await settle(100);
+    // Held with the throttled write, for its backoff.
+    expect(fake.writes).toHaveLength(1);
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 2000,
+    });
+    expect(fake.writes).toHaveLength(3);
+  });
+
+  it('fails other writes held by an exhausted bucket past retry.maxRetryAfterMs, with a lastError', async () => {
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
+    );
+    const c = await client(doc(moneybirdThrottling), fake, {
+      retry: { baseDelayMs: 10, maxRetryAfterMs: 1000 },
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ id: '1', state: 'failed' }]),
+    );
+    // The window (300 s) is the pause; another record's write cannot wait.
+    await c.update('/pets', '2', { name: 'Tom II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed' },
+        {
+          id: '2',
+          state: 'failed',
+          attempts: 0,
+          lastError: expect.stringMatching(
+            /^Held until .* exhausted, longer than retry.maxRetryAfterMs \(1000 ms\); not sent$/,
+          ),
+        },
+      ]),
+    );
+    expect(fake.writes).toHaveLength(1);
+  });
+
+  it('makes a create answered by a 5xx uncertain even when a declared signal matches it: a 5xx may follow partial processing', async () => {
     const fake = provider((r, n) =>
       n === 1
         ? json({ message: 'overloaded' }, 500, { 'retry-after': '0' })
@@ -232,14 +373,65 @@ describe('writes under declared signals (GitHub-shaped)', () => {
       fake,
     );
     await c.create('/pets', { name: 'Milo' });
-    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
-    expect(fake.writes).toHaveLength(2);
-    // Without the signal, the same 500 is uncertain.
-    const plain = provider(() => json({ message: 'overloaded' }, 500));
-    const p = await client(doc(), plain);
-    await p.create('/pets', { name: 'Milo' });
+    // "Not applied" is only an inference (Throttling spec, "Throttling
+    // signals"): the create is uncertain and not resent, as without the signal.
     await vi.waitFor(() =>
-      expect(p.pendingWrites()).toMatchObject([{ state: 'uncertain' }]),
+      expect(c.pendingWrites()).toMatchObject([
+        { type: 'create', state: 'uncertain', attempts: 1, lastStatus: 500 },
+      ]),
+    );
+    await settle();
+    expect(fake.writes).toHaveLength(1);
+  });
+});
+
+describe('reads and the exhausted buckets they share with writes', () => {
+  it("waits for a bucket a write's quotaExhausted answer exhausted, through the injected sleep, and a read's quotaExhausted answer pauses writes", async () => {
+    const slept: number[] = [];
+    let listAnswer: TransportResponse | undefined;
+    const fake = provider(
+      (_r, n) =>
+        n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
+      { list: () => listAnswer },
+    );
+    const c = await client(doc(moneybirdThrottling), fake, {
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    // A write exhausts the one bucket for the window (300 s, no Retry-After).
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    // The next read waits out the pause (here: through the fake sleep).
+    await c.sync();
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThan(290_000);
+    expect(slept[0]).toBeLessThanOrEqual(300_000);
+    expect(fake.reads).toBe(2);
+  });
+
+  it("a read's quotaExhausted answer pauses writes on the bucket, and a pause past the read's time stops the read", async () => {
+    let listAnswer: TransportResponse | undefined = json(
+      { error: 'Too many requests' },
+      429,
+      { 'Retry-After': '120' },
+    );
+    const fake = provider(() => undefined, { list: () => listAnswer });
+    const c = createApiClient(doc(moneybirdThrottling), {
+      transport: fake.transport,
+      retry: { baseDelayMs: 10 },
+      limits: { timeoutMs: 1000, maxRetries: 0 },
+    });
+    // The read's 429 is returned (no retries left) and pauses the bucket.
+    await expect(c.sync()).rejects.toThrow(/responded 429/);
+    listAnswer = undefined;
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await settle(60);
+    expect(fake.writes).toHaveLength(0);
+    expect(c.pendingWrites()).toMatchObject([{ id: '1', state: 'pending' }]);
+    // A read cannot wait 120 s within a 1 s budget: it stops with an error.
+    await expect(c.sync()).rejects.toThrow(
+      /holds this request until .* longer than the read's time \(1000 ms\)/,
     );
   });
 });
@@ -300,11 +492,15 @@ describe('writes under the Google and Moneybird snippets', () => {
     await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
       timeout: 3000,
     });
-    expect(fake.writes.map((w) => w.url.pathname)).toEqual([
-      '/api/pets/1',
-      '/api/pets/1',
-      '/api/pets/2',
-    ]);
+    // Once the pause lifts, the throttled write's retry and the held write
+    // go out in either order.
+    expect(fake.writes[0]!.url.pathname).toBe('/api/pets/1');
+    expect(
+      fake.writes
+        .slice(1)
+        .map((w) => w.url.pathname)
+        .sort(),
+    ).toEqual(['/api/pets/1', '/api/pets/2']);
   });
 });
 

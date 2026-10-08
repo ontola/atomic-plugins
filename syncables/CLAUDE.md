@@ -138,11 +138,16 @@ Data flows through four stages, each its own directory under `src/`:
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
    the later of `retryAfter` and `reset` measured against both clocks, else
-   `minDelaySeconds`, else the bucket window); a `retryAt` further away than
-   `retry.maxRetryAfterMs` makes the write `gaveUp` instead of retrying
-   early; a `quotaExhausted` verdict pauses every write whose operation
-   selects the bucket (`pausedBuckets`, `pauseFor`, `operationBuckets`) and
-   a signalled refusal never makes a create uncertain. For another
+   `minDelaySeconds`, else the bucket window), stored on the write as
+   `notBefore` (outbox) so a restart or `resolveWrite` retry keeps it; a
+   hold (`notBefore` or a bucket pause) further away than
+   `retry.maxRetryAfterMs` makes the write `gaveUp` with a `lastError`
+   instead of retrying early; a `quotaExhausted` verdict, from a write or a
+   read, pauses every request whose operation selects the bucket
+   (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
+   `pauseForOperation`, `operationBuckets`; the read transport waits within
+   `limits.timeoutMs`), until the answer's time or else the write's backoff;
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
    retryable answer the delay is max(backoff, `Retry-After` capped at
    `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
    uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
@@ -411,7 +416,9 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `headerTime`, `declaredThrottling`'s leniency and `operationBuckets`;
   `unit/client/throttling.test.ts` runs those snippets through writes (the
   reset wait, the minimum delay, a non-matching 403 blocks, Retry-After,
-  giving up past `maxRetryAfterMs`, a signalled 500 create, the bucket
+  giving up past `maxRetryAfterMs`, a signalled 500 create staying
+  uncertain, the stored `notBefore` across a restart, the backoff floor, the
+  held-write cap, reads sharing the paused buckets, the bucket
   pause) and reads (the injected sleep, the deadline, the spec example
   through `sync()`), and the 403 heuristic without signals.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used

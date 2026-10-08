@@ -243,20 +243,32 @@ ignored. When no `retryAfter` role is declared, the standard `Retry-After`
 header is read as RFC 9110 defines it, as before the extension.
 
 For a write, a throttling verdict means `retry`, sent again no earlier than
-that time and never below the backoff. A time further away than
-`retry.maxRetryAfterMs` is not cut short: the write becomes `failed` with
-`lastError` naming the time and the cap (`resolveWrite` `retry` sends it),
-since the extension forbids retrying earlier and allows giving up. A
-`quotaExhausted` answer also holds back every other write counted against
-the same bucket (the operation's `x-throttling` selection, else the root
-`applies`; every write when the signal names no bucket) until that time. A
-create answered by a declared signal is a refusal, not an uncertain create.
-For a read, the budget waits the earliest retry time and sends the request
-again, up to `limits.maxRetries` times, or stops with "API retry delay
-exceeds the remaining read time"; a throttled answer without a time is
-returned to the read as before. Pacing requests against the announced
-`limits` is not implemented, and nothing here has been checked against a
-real provider.
+that time and never below the backoff. The time is stored with the queued
+write (`notBefore` in the outbox), so a restart or a `resolveWrite` `retry`
+keeps it: a restored or retried write waits it out too. A time further away
+than `retry.maxRetryAfterMs` is not cut short: the write becomes `failed`
+with `lastError` naming the time and the cap, since the extension forbids
+retrying earlier and allows giving up; `resolveWrite` `retry` queues it
+again, and it fails again at once while the time is still that far away. A
+`quotaExhausted` answer, to a write or to a read, also holds back every
+other request counted against the same bucket (the operation's
+`x-throttling` selection, else the root `applies`; every request when the
+signal names no bucket) until that time, or, when it carries no time and
+its bucket has no declared window, until the throttled write's own
+backoff; the paused buckets are stored in the outbox too. A write held
+that way longer than `retry.maxRetryAfterMs` fails with `lastError` "Held
+until … not sent" rather than waiting unseen. A create answered by a 5xx
+stays `uncertain` even when a declared signal matches the response: the
+extension says such a response may follow partial processing, and that
+"not applied" is only an inference ([Uncertain creates](#uncertain-creates)).
+For a read, the client's transport first waits out a paused bucket of the
+request's operation (through `sleep`; a pause longer than `limits.timeoutMs`
+stops the read with an error), then the budget waits the earliest retry
+time of a throttled answer and sends the request again, up to
+`limits.maxRetries` times, or stops with "API retry delay exceeds the
+remaining read time"; a throttled answer without a time is returned to the
+read as before. Pacing requests against the announced `limits` is not
+implemented, and nothing here has been checked against a real provider.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1083,11 +1095,16 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   matching signal or a 429 `retry`; with signals declared, a 403 that
   matches none is no longer taken as a rate limit by its headers (the
   heuristic stays for documents without signals). A write is never sent
-  before the earliest retry time: one further away than
-  `retry.maxRetryAfterMs` now fails instead of being retried early. A
-  `quotaExhausted` answer pauses every write counted against the bucket; a
-  create answered by a declared signal is not uncertain. The read budget
-  waits the same time for a declared signal, not only for a 429.
+  before the earliest retry time, which is stored with the write
+  (`notBefore`) so that a restart or a `resolveWrite` retry keeps it: one
+  further away than `retry.maxRetryAfterMs` now fails instead of being
+  retried early. A `quotaExhausted` answer, to a write or a read, pauses
+  every request counted against the bucket (writes and reads; the pauses are
+  stored too); a write held past the cap fails with a `lastError` saying
+  why, and a read that cannot wait within its time stops with an error. A
+  create answered by a 5xx stays uncertain even when a signal matches it.
+  The read budget waits the same time for a declared signal, not only for a
+  429.
   `WriteFailure` gains `throttling` and `signalsDeclared`.
   `declaredThrottling`, `classifyThrottling`, `headerTime` and
   `operationBuckets` are exported.
