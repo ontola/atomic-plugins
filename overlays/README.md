@@ -721,3 +721,27 @@ The composition and runtime checks are documented in
 [GitLab read-only provenance](tests/GITLAB_READONLY_PROVENANCE.md) and
 [RUNTIME_VALIDATION.md](tests/RUNTIME_VALIDATION.md). The candidate dated
 catalog selects these overlays; no existing published catalog changes.
+
+## GitLab and Google Tasks onboarding candidates
+
+`catalog/2026-10-08-gitlab.json` preserves the eleven production entries from
+the Asana/Airtable catalog and adds the four-GET GitLab v4 subset.
+`catalog/2026-10-08-gitlab-tasks.json` additionally selects Google Tasks'
+`googleTasksReadOnly` authentication profile. Unlike the earlier Tasks
+catalog, this profile permits only task-list listing, task listing and a
+single-task read; it refuses writes at the proxy as well as requesting
+`https://www.googleapis.com/auth/tasks.readonly` from Google. Its new CRUD
+metadata lets the generic importer walk task lists into their task collections.
+
+These catalogs are prepared deployment choices. Publishing them does not
+register OAuth clients or activate them on localthought.io. Register the
+corresponding clients and exact callbacks, configure their provider-specific
+Heroku credentials, then explicitly select the appropriate dated catalog.
+Google Cloud consent audience, testing and verification remain registration
+requirements; this metadata makes no public-distribution claim.
+
+Validation includes all-catalog composition, immutable revision/target checks,
+actual two-page Syncables imports for each new platform and both profiles in
+the proxy parser. The Google Tasks importer fixture is
+`tests/google_tasks_syncables.test.ts`; its composition checks are
+`tests/test_google_tasks_readonly.py`. Real-account sync is not certified.

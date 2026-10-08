@@ -5,7 +5,7 @@
 overlay: 1.0.0
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
 info:
-  title: Google Tasks v1 read collections and parent links
+  title: Google Tasks v1 task-list and task read collections
   version: 1.0.0
 actions:
   - target: $.components
@@ -45,3 +45,8 @@ actions:
         action: list
         resource: task
         collection: tasks
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].get
+    update:
+      x-crud:
+        action: read
+        resource: task
