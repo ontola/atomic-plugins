@@ -16,6 +16,7 @@ import {
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
+import { mergePatchRecord } from './merge-patch.js';
 import {
   bindPath,
   Budget,
@@ -581,6 +582,24 @@ interface ClientRoute {
   collection: ReadCollection;
   createPath?: string;
   updateMethod?: 'PUT' | 'PATCH';
+  /**
+   * How an update's body is built, from the chosen operation's `x-crud`
+   * (CRUD Causality §4.3 `mode` and §4.6 `patchFormat`): `record` (the
+   * default, and `mode: replace`), the last known record with the changes
+   * on top; `mergePatch` (`mode: patch, patchFormat: jsonMergePatch`), the
+   * changes alone as an RFC 7396 JSON Merge Patch, with its semantics
+   * applied locally too (`null` removes a field, a nested object merges
+   * into the existing one).
+   */
+  updateBody?: 'record' | 'mergePatch';
+  /**
+   * The update request's `Content-Type`: `application/merge-patch+json`
+   * for a merge patch whose operation declares that media type in its
+   * `requestBody.content`, else `application/json`.
+   */
+  updateContentType?: string;
+  /** Why `update()` refuses: a `patchFormat` this client does not send. */
+  updateRefused?: string;
   deletePath?: string;
   idempotencyHeader?: string;
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
@@ -953,6 +972,35 @@ function clientRoutes(
           route.deletePath = path;
       }
     }
+    const updateOperation =
+      route.updateMethod && item
+        ? item[route.updateMethod === 'PUT' ? 'put' : 'patch']
+        : undefined;
+    const updateCrud = updateOperation?.['x-crud'];
+    // A legacy document (no `components.crudResources`) keeps the full
+    // record whatever its operations declare.
+    if (
+      !legacy &&
+      isRecord(updateCrud) &&
+      updateCrud['action'] === 'update' &&
+      updateCrud['resource'] === collection.resource &&
+      updateCrud['mode'] === 'patch'
+    ) {
+      const format = updateCrud['patchFormat'];
+      if (format === 'jsonMergePatch') {
+        route.updateBody = 'mergePatch';
+        const content = updateOperation?.requestBody?.content ?? {};
+        route.updateContentType = Object.keys(content).some(
+          (type) =>
+            type.split(';')[0]?.trim().toLowerCase() ===
+            'application/merge-patch+json',
+        )
+          ? 'application/merge-patch+json'
+          : 'application/json';
+      } else if (format === 'jsonPatch')
+        route.updateRefused = `declares its ${route.updateMethod} update with patchFormat jsonPatch (RFC 6902), which this client does not send`;
+      // `custom`, or no patchFormat: the full record, as before.
+    }
     if (declaredAbsence(document, collection) === 'deleted')
       route.absentMeansDeleted = true;
     const feed = declaredDeletionFeed(document, collection);
@@ -965,6 +1013,21 @@ function clientRoutes(
     if (header) route.idempotencyHeader = header;
     return route;
   });
+}
+
+/**
+ * A record with an update's changes applied, as the route's update body
+ * format defines: a JSON Merge Patch for `mergePatch`, else the changes
+ * over the record.
+ */
+function applyChanges(
+  route: ClientRoute,
+  base: Record<string, unknown> | undefined,
+  changes: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return route.updateBody === 'mergePatch'
+    ? mergePatchRecord(base, changes)
+    : { ...base, ...changes };
 }
 
 /** A browser-safe local replica. Transport/auth/storage are supplied at its boundaries. */
@@ -1498,8 +1561,11 @@ export function createApiClient(
       if (write.type === 'create') value = write.data;
       else if (write.type === 'update')
         value = {
-          ...(value ?? write.lastKnown ?? lastKnownFor(scope, id)),
-          ...write.changes,
+          ...applyChanges(
+            write.route,
+            value ?? write.lastKnown ?? lastKnownFor(scope, id),
+            write.changes,
+          ),
           [write.route.collection.idField]: id,
         };
       else value = undefined;
@@ -1628,12 +1694,21 @@ export function createApiClient(
           write.type === 'create'
             ? write.data
             : {
-                ...(remote(write.scope).get(write.id) ??
-                  write.lastKnown ??
-                  lastKnownFor(write.scope, write.id)),
-                ...write.changes,
+                ...applyChanges(
+                  route,
+                  remote(write.scope).get(write.id) ??
+                    write.lastKnown ??
+                    lastKnownFor(write.scope, write.id),
+                  write.changes,
+                ),
                 [idField]: write.id,
               };
+        // A merge patch carries the changes alone; `data` is still the
+        // record they make, which the response is merged over.
+        const body =
+          write.type === 'update' && route.updateBody === 'mergePatch'
+            ? (write.changes ?? {})
+            : data;
         const result = await requestJson({
           url:
             write.type === 'create'
@@ -1647,12 +1722,15 @@ export function createApiClient(
               ? 'POST'
               : (route.updateMethod as 'PUT' | 'PATCH'),
           headers: {
-            'content-type': 'application/json',
+            'content-type':
+              write.type === 'update'
+                ? (route.updateContentType ?? 'application/json')
+                : 'application/json',
             ...(write.idempotencyKey && route.idempotencyHeader
               ? { [route.idempotencyHeader]: write.idempotencyKey }
               : {}),
           },
-          body: JSON.stringify(data),
+          body: JSON.stringify(body),
         });
         if (write.type === 'create' && !isRecord(result)) {
           throw new UnusableResponseError('Create response has no record');
@@ -3047,6 +3125,8 @@ export function createApiClient(
       const route = resolveRoute(resource);
       if (!route.updateMethod || !route.collection.itemUrl)
         throw new Error(`Resource ${resource} declares no update operation`);
+      if (route.updateRefused)
+        throw new Error(`Resource ${resource} ${route.updateRefused}`);
       const context = contextFor(route, supplied);
       const scope = scopeFor(route, context);
       target(route.collection.itemUrl, {
@@ -3071,7 +3151,10 @@ export function createApiClient(
           ? undefined
           : existing;
       if (!remote(scope).has(id) && seed) remote(scope).set(id, seed);
-      const record = { ...existing, ...data, [route.collection.idField]: id };
+      const record = {
+        ...applyChanges(route, existing, data),
+        [route.collection.idField]: id,
+      };
       const confirmedRecord = remote(scope).get(id);
       await enqueue({
         route,

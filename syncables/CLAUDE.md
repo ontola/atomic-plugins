@@ -108,8 +108,11 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   updates select declared PUT, otherwise PATCH, and currently send JSON
-   records rather than JSON Patch. Read-only operations fail before local edits.
+   updates select declared PUT, otherwise PATCH; the chosen operation's
+   `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
+   `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
+   RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
+   legacy documents) sends the full JSON record. Read-only operations fail before local edits.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone

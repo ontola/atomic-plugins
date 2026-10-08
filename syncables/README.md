@@ -115,7 +115,33 @@ immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. Both currently send JSON records, not JSON Patch documents.
+when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
+`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+body:
+
+- `mode: replace`, no `x-crud`, or a legacy document (no
+  `components.crudResources`): the last known record with the changes on
+  top, as JSON.
+- `mode: patch, patchFormat: jsonMergePatch`: the changes alone, as an
+  [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396) JSON Merge Patch, with
+  `Content-Type: application/merge-patch+json` when the operation's
+  `requestBody.content` declares that media type, else `application/json`.
+  The local copy follows RFC 7396 too: `null` removes the field, and a
+  nested object merges into the existing one (on other routes `null` is a
+  value and a nested object replaces the field). Each queued edit sends only
+  its own changes, in order, also after a restart. `mergePatch(target,
+  patch)` is exported.
+- `mode: patch, patchFormat: jsonPatch` (RFC 6902): `update()` throws
+  ("declares its PATCH update with patchFormat jsonPatch (RFC 6902), which
+  this client does not send") before any local change; create and delete
+  are unaffected.
+- `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
+  record, as for `replace`. Whether the provider accepts that is not checked.
+
+A merge-patch edit records the confirmed values of the top-level fields it
+names, so a remote change anywhere inside a nested object it patches is
+reported as a `WriteConflict` on that field, even when the two changes touch
+different nested members.
 An update's response is merged over the record it sent, so a provider that
 answers with only some fields (or only bookkeeping such as `updatedAt`) does
 not shrink the confirmed record or revert the edit. The trade-off: a field
@@ -341,9 +367,10 @@ or the list may just not return it (a default filter, a view that depends on
 the credentials). The client does not send such an update on the record's
 last known copy: a PUT built on it could recreate a deleted record on some
 providers, or write back fields that changed remotely. That applies to PATCH
-too, since the client's PATCH body also carries the whole last known record
-with the changes on top (JSON, not JSON Patch); a PATCH to a deleted record is
-a 404 at best and recreates it at worst.
+too: unless its operation declares `patchFormat: jsonMergePatch`, the
+client's PATCH body also carries the whole last known record with the
+changes on top, and a PATCH to a deleted record (merge patch included) is a
+404 at best and recreates it at worst.
 
 When a complete read lacks the record (and no write to it settled during the
 read), every queued update of the record up to its first create, apart from
@@ -1022,6 +1049,19 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Update modes from CRUD Causality 0.4.0 (§4.3 `mode`,
+  §4.6 `patchFormat`) on the chosen update operation's `x-crud` (PUT still
+  preferred, else PATCH; an `x-crud` naming another resource is ignored).
+  `mode: patch, patchFormat: jsonMergePatch` sends the changes alone as an
+  RFC 7396 merge patch (`application/merge-patch+json` when the operation
+  declares it, else `application/json`) and applies RFC 7396 locally
+  (`null` removes a field, nested objects merge) in `update()`'s returned
+  record, the visible record and the queue's replay. `patchFormat:
+  jsonPatch` makes `update()` throw. `replace`, `custom`, `mode: patch`
+  without a `patchFormat`, no `x-crud` and legacy documents keep the full
+  record. `mergePatch` is exported from both entries. Behaviour change only
+  for documents that declare `jsonMergePatch` or `jsonPatch` on their
+  update operation.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo
