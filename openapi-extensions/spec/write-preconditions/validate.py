@@ -5,6 +5,7 @@ rules of §7 and returns None for a valid document. `may_send(...)` (§4.2, §4.
 and `resolve_unknown(...)` (§4.5) are reference implementations for clients.
 """
 import json
+import re
 import sys
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -12,13 +13,33 @@ WRITES = {"put", "patch", "post", "delete"}
 KINDS = {"ifMatch", "readVerify", "none"}
 FIELDS = {"kind", "version", "header", "conflictStatus", "refuseWhen", "idempotent", "description"}
 _MISSING = object()
+VARIABLE = re.compile(r"\{([^{}]+)\}")
 
 
 def _scalar(value):
     return value is None or isinstance(value, (str, bool, int, float))
 
 
-def _check(declaration, method, operation, where, errors):
+def _predicate(value, label, errors):
+    """Exactly one of a nonempty values array of JSON scalars and present: true."""
+    if ("values" in value) == ("present" in value):
+        errors.append(f"{label}: exactly one of values and present")
+    elif "present" in value:
+        if value["present"] is not True:
+            errors.append(f"{label}.present: expected true")
+    else:
+        values = value["values"]
+        if not (isinstance(values, list) and values and all(_scalar(v) for v in values)):
+            errors.append(f"{label}.values: expected a nonempty array of JSON scalars")
+
+
+def _resources(document):
+    if "swagger" in document:
+        return document.get("x-crudResources", {})
+    return document.get("components", {}).get("crudResources", {})
+
+
+def _check(declaration, method, operation, where, errors, document=None, path=""):
     if not isinstance(declaration, dict):
         errors.append(f"{where}: expected an object")
         return
@@ -28,7 +49,13 @@ def _check(declaration, method, operation, where, errors):
     if method not in WRITES:
         errors.append(f"{where}: only on PUT, PATCH, POST or DELETE")
     crud = operation.get("x-crud")
-    if isinstance(crud, dict) and crud.get("action") not in ("update", "delete"):
+    action = crud.get("action") if isinstance(crud, dict) else None
+    if action == "create":
+        refusals = declaration.get("refuseWhen") or []
+        if declaration.get("kind") != "none" or not refusals or not all(
+                isinstance(r, dict) and "source" in r for r in refusals):
+            errors.append(f"{where}: on a create only kind none with source refusals")
+    elif isinstance(crud, dict) and action not in ("update", "delete"):
         errors.append(f"{where}: x-crud action must be update or delete")
     kind = declaration.get("kind")
     if kind not in KINDS:
@@ -59,17 +86,28 @@ def _check(declaration, method, operation, where, errors):
         if not isinstance(refusal, dict) or not isinstance(refusal.get("field"), str) or not refusal["field"]:
             errors.append(f"{label}.field: expected a nonempty string")
             continue
-        if ("values" in refusal) == ("present" in refusal):
-            errors.append(f"{label}: exactly one of values and present")
-        elif "present" in refusal:
-            if refusal["present"] is not True:
-                errors.append(f"{label}.present: expected true")
-        else:
-            values = refusal["values"]
-            if not (isinstance(values, list) and values and all(_scalar(v) for v in values)):
-                errors.append(f"{label}.values: expected a nonempty array of JSON scalars")
-        if {k for k in refusal if k not in ("field", "values", "present", "description") and not k.startswith("x-")}:
+        _predicate(refusal, label, errors)
+        if {k for k in refusal if k not in ("field", "values", "present", "source", "when", "description")
+                and not k.startswith("x-")}:
             errors.append(f"{label}: unknown fields")
+        if "source" in refusal:
+            source = refusal["source"]
+            resource = _resources(document or {}).get(source.get("resource")) if isinstance(source, dict) else None
+            if not isinstance(resource, dict):
+                errors.append(f"{label}.source.resource: expected a crudResources key")
+            else:
+                template = (resource.get("identity") or {}).get("urlTemplate", "")
+                missing = sorted(set(VARIABLE.findall(template)) - set(VARIABLE.findall(path)))
+                if missing:
+                    errors.append(f"{label}.source: identity variables {missing} are not path parameters of {path}")
+        if "when" in refusal:
+            when = refusal["when"]
+            if not isinstance(when, dict) or not isinstance(when.get("field"), str) or not when["field"]:
+                errors.append(f"{label}.when.field: expected a nonempty string")
+            else:
+                _predicate(when, f"{label}.when", errors)
+                if {k for k in when if k not in ("field", "values", "present") and not k.startswith("x-")}:
+                    errors.append(f"{label}.when: unknown fields")
     if "idempotent" in declaration and not isinstance(declaration["idempotent"], bool):
         errors.append(f"{where}.idempotent: expected a boolean")
 
@@ -83,7 +121,7 @@ def validate(document):
             operation = item.get(method)
             if isinstance(operation, dict) and "x-write-precondition" in operation:
                 _check(operation["x-write-precondition"], method, operation,
-                       f"paths.{path}.{method}.x-write-precondition", errors)
+                       f"paths.{path}.{method}.x-write-precondition", errors, document, path)
     if errors:
         raise ValueError("\n".join(errors))
 
@@ -120,34 +158,64 @@ def version_of(declaration, body, headers=None):
     return _field(body, version["name"])
 
 
-def refused(declaration, current):
-    """The first Refusal Object that matches the object, or None."""
+def _matches(predicate, value):
+    if predicate.get("present") is True:
+        return value is not None
+    return any(_same(value, v) for v in predicate["values"])
+
+
+def refusal_of(declaration, current, body=None, sources=None, check_sources=True):
+    """The first matching Refusal Object as (refusal, 'refused' | 'source-unknown'), or None.
+
+    `current` is the write's object, `body` the write's request body (for
+    `when`), `sources` maps a source resource to its object as read, or to
+    None when it could not be read (§4.4.1: fail closed). With
+    check_sources=False, Refusal Objects with a source are skipped.
+    """
     for refusal in (declaration or {}).get("refuseWhen", []):
-        value = _field(current, refusal["field"])
-        if refusal.get("present") is True:
-            if value is not None:
-                return refusal
-        elif any(_same(value, v) for v in refusal["values"]):
-            return refusal
+        when = refusal.get("when")
+        if when is not None:
+            if body is None and not check_sources:
+                continue  # the resolution read of §4.5 re-checks the object's own states only
+            if body is not None and not _matches(when, _field(body, when["field"])):
+                continue  # without a body the condition cannot be ruled out: fail closed
+        if "source" in refusal:
+            if not check_sources:
+                continue
+            source = (sources or {}).get(refusal["source"]["resource"])
+            if source is None:
+                return refusal, "source-unknown"
+            if _matches(refusal, _field(source, refusal["field"])):
+                return refusal, "refused"
+        elif _matches(refusal, _field(current, refusal["field"])):
+            return refusal, "refused"
     return None
 
 
-def may_send(declaration, baseline, written, current, headers=None):
+def refused(declaration, current, body=None, sources=None, check_sources=True):
+    """The first matching Refusal Object, or None (a source that cannot be read matches)."""
+    found = refusal_of(declaration, current, body, sources, check_sources)
+    return found[0] if found else None
+
+
+def may_send(declaration, baseline, written, current, headers=None, body=None, sources=None):
     """§4.2/§4.4: ('send', headers) | ('refused', refusal) | ('conflict', fields) | ('read-first', None).
 
     `baseline` maps written fields (dot-paths) to their last read values,
     `written` lists the fields the write sets, `current` is the object as just
     read (readVerify) or as last read, or None when not read, and `headers`
-    the response headers of that read (for a header version).
+    the response headers of that read (for a header version). `body` is the
+    write's request body and `sources` the source objects (§4.4.1); a refusal
+    whose source is missing from `sources` returns ('source-unknown', refusal).
     """
     declaration = declaration or {}
     kind = declaration.get("kind")
-    if current is None and (kind in ("ifMatch", "readVerify") or declaration.get("refuseWhen")):
+    own = [r for r in declaration.get("refuseWhen", []) if "source" not in r]
+    if current is None and (kind in ("ifMatch", "readVerify") or own):
         return "read-first", None
-    if current is not None:
-        refusal = refused(declaration, current)
-        if refusal:
-            return "refused", refusal
+    found = refusal_of(declaration, current, body, sources)
+    if found:
+        return found[1], found[0]
     if kind == "ifMatch":
         value = version_of(declaration, current, headers)
         if value is None:
@@ -190,7 +258,7 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
     status, body = read.get("status"), read.get("body")
     headers = read.get("headers")
     ok = isinstance(status, int) and 200 <= status < 300
-    if ok and isinstance(body, dict) and refused(declaration, body):
+    if ok and isinstance(body, dict) and refused(declaration, body, check_sources=False):
         return "refused"
     if is_delete:
         if status in (404, 410):

@@ -73,7 +73,10 @@ request body sets.
 
 Placed under `x-write-precondition` on the Operation Object of a write: a
 `PUT`, `PATCH`, `POST` or `DELETE` operation, which, when it declares
-`x-crud`, has the action `update` or `delete`.
+`x-crud`, has the action `update` or `delete`. On a `create`, there is no
+object yet to condition the write on: a create MAY carry a Write Precondition
+Object only with `kind: none` and Refusal Objects that all have a `source`
+(§4.4.1), such as a workspace setting that refuses entries without a project.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -130,12 +133,50 @@ entity tags cannot be declared `ifMatch` with `If-Match`; declare
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `field` | string | **Yes** | Dot-path to a field of the object. |
+| `field` | string | **Yes** | Dot-path to a field of the object, or of the source object when `source` is given. |
 | `values` | array of string, number, boolean or `null` | Conditional | The write is refused when the field's current value equals one of these (same JSON type and value; an absent field is `null`). |
 | `present` | `true` | Conditional | The write is refused when the field is present with a value other than `null`, whatever the value (Google Calendar's `recurrence` on a recurring series). |
+| `source` | Source Object (§4.4.1) | No | Read `field` from another object, such as a settings resource, instead of the write's own object. |
+| `when` | Body Condition (§4.4.1) | No | Refuse only a write whose request body also matches this condition. |
 | `description` | string | No | Human-readable notes. |
 
 Exactly one of `values` and `present` is given.
+
+#### 4.4.1 Source Object and Body Condition
+
+Some providers refuse a write because of a setting held elsewhere: a Clockify
+workspace with `settings.forceProjects` set refuses a time entry without a
+project. A Refusal Object with `source` reads `field` from that other object,
+and `when` limits it to the writes the setting concerns.
+
+| Source Object field | Type | Required | Description |
+|---------------------|------|----------|-------------|
+| `resource` | string | **Yes** | A key of [CRUD Causality](../crud-causality/README.md) `crudResources`. |
+| `description` | string | No | Human-readable notes. |
+
+The _source object_ is the object of that resource whose identity variables
+(`identity.urlTemplate`, CRUD Causality §4.1.1) take the values of the
+write's path parameters of the same names; every variable MUST be one of
+them. A client reads it with the resource's `read` operation, or, when the
+resource has none, from a complete read of one of its collections, taking the
+item whose identity binding holds the value. It SHOULD read the source object
+at least once per sync pass; a value older than that may be stale.
+
+| Body Condition field | Type | Required | Description |
+|----------------------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path to a field of the write's request body. |
+| `values` \| `present` | as above | Conditional | Exactly one; matched against the body's value, an absent field being `null`. |
+
+A Refusal Object with `when` refuses a write only when both its own
+condition (on the object or the source object) and `when` (on the request
+body) match. A write whose body does not match `when` is not affected by the
+Refusal Object at all.
+
+**Failing closed.** When the source object cannot be read (a failed request,
+a `403` or `404`, no item with that identity in a complete read), the client
+MUST NOT send a write that the Refusal Object could refuse: one whose body
+matches `when`, or any write when there is no `when`. It reports why. Other
+writes are unaffected.
 
 A client checks every Refusal Object against the object as it last read it,
 and, for `readVerify`, against the read made just before the write. When one
@@ -263,7 +304,8 @@ A conforming document:
 
 * places `x-write-precondition` only on a `PUT`, `PATCH`, `POST` or `DELETE`
   operation, and, when the operation declares `x-crud`, one whose action is
-  `update` or `delete`;
+  `update` or `delete`, or `create` with `kind: none` and only Refusal
+  Objects that have a `source`;
 * gives `kind` one of the values of §4.2;
 * gives `version` exactly when `kind` is `ifMatch`, with `in` one of `header`
   and `body` and a nonempty `name`;
@@ -271,7 +313,7 @@ A conforming document:
   nonempty string, `conflictStatus` a nonempty array of unique integers
   400–499;
 * gives each Refusal Object a nonempty `field` and exactly one of a nonempty
-  `values` array of JSON scalars and `present: true`;
+  `values` array of JSON scalars and `present: true`; a `source`, when given, with a `resource` that is a `crudResources` key whose identity variables are all path parameters of the operation; a `when`, when given, with a nonempty `field` and exactly one of `values` and `present`;
 * gives `idempotent`, when present, a boolean.
 
 A conforming client:
@@ -280,7 +322,7 @@ A conforming client:
   `conflictStatus` as a conflict, never as an error to retry;
 * under `readVerify`, reads the object and compares every written field with
   its baseline before sending, and sends nothing on a difference;
-* never sends a write while a Refusal Object matches;
+* never sends a write while a Refusal Object matches, and, when a Refusal Object's source object cannot be read, never sends a write that Refusal Object could refuse (§4.4.1);
 * follows §4.5 for an unknown outcome.
 
 ## 8. Not covered
@@ -309,7 +351,7 @@ python3 validate.py examples/conditional-writes.yaml
 
 - **0.1.0-draft** (2026-10-08): first version, for ontola/atomic-plugins
   pieces.md K14, K15 and K17; the Refusal Object's `present: true` covers
-  the read-only-by-predicate half of K18.
+  the read-only-by-predicate half of K18, and `source` with `when` the write half of K12.
 
 ## Reference Implementation
 

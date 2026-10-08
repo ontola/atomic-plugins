@@ -172,6 +172,72 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate(document)
 
+    def test_source_and_when_validation(self):
+        def document_with(refusal):
+            document = example()
+            document["components"] = {"crudResources": {"workspace": {
+                "identity": {"urlTemplate": "/workspaces/{workspaceId}", "bindings": {"workspaceId": {"field": "id"}}},
+                "collections": {"workspaces": {"urlTemplate": "/workspaces"}}}}}
+            document["paths"]["/workspaces/{workspaceId}/entries/{entryId}"] = {"put": {
+                "x-write-precondition": {"kind": "none", "refuseWhen": [refusal]},
+                "responses": {"200": {"description": "ok"}}}}
+            return document
+        good = {"source": {"resource": "workspace"}, "field": "settings.forceProjects", "values": [True],
+                "when": {"field": "projectId", "values": [None]}}
+        validate(document_with(good))
+        for bad, fragment in ((dict(good, source={"resource": "nope"}), "expected a crudResources key"),
+                              (dict(good, when={"field": "projectId"}), "exactly one of values and present"),
+                              (dict(good, when={"field": "", "present": True}), "when.field"),
+                              (dict(good, when={"field": "p", "present": True, "x": 1}), "when: unknown fields")):
+            with self.subTest(fragment=fragment), self.assertRaises(ValueError) as raised:
+                validate(document_with(bad))
+            self.assertIn(fragment, str(raised.exception))
+        document = document_with(good)
+        document["components"]["crudResources"]["workspace"]["identity"]["urlTemplate"] = "/orgs/{orgId}/workspaces/{workspaceId}"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("['orgId'] are not path parameters", str(raised.exception))
+
+    def test_creates_take_only_source_refusals(self):
+        def document_with(declaration):
+            document = example()
+            document["components"] = {"crudResources": {"workspace": {
+                "identity": {"urlTemplate": "/workspaces/{workspaceId}", "bindings": {"workspaceId": {"field": "id"}}}}}}
+            document["paths"]["/workspaces/{workspaceId}/entries"] = {"post": {
+                "x-crud": {"action": "create", "resource": "entry", "url": {"source": "template"}},
+                "x-write-precondition": declaration, "responses": {"201": {"description": "ok"}}}}
+            return document
+        source = {"source": {"resource": "workspace"}, "field": "settings.forceProjects", "values": [True],
+                  "when": {"field": "projectId", "values": [None]}}
+        validate(document_with({"kind": "none", "refuseWhen": [source]}))
+        for bad in ({"kind": "none"}, {"kind": "readVerify", "refuseWhen": [source]},
+                    {"kind": "none", "refuseWhen": [source, {"field": "in_trash", "values": [True]}]}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:
+                validate(document_with(bad))
+            self.assertIn("on a create only kind none with source refusals", str(raised.exception))
+
+    def test_source_refusal_fails_closed(self):
+        force = {"kind": "none", "refuseWhen": [
+            {"source": {"resource": "workspace"}, "field": "settings.forceProjects", "values": [True],
+             "when": {"field": "projectId", "values": [None]}}]}
+        forced = {"workspace": {"id": "w1", "settings": {"forceProjects": True}}}
+        relaxed = {"workspace": {"id": "w1", "settings": {"forceProjects": False}}}
+        no_project, with_project = {"description": "x"}, {"description": "x", "projectId": "p1"}
+        # The write's own object need not be read for a source-only refusal.
+        self.assertEqual(may_send(force, {}, ["description"], None, body=no_project, sources=forced)[0], "refused")
+        self.assertEqual(may_send(force, {}, ["description"], None, body=with_project, sources=forced), ("send", {}))
+        self.assertEqual(may_send(force, {}, ["description"], None, body=no_project, sources=relaxed), ("send", {}))
+        # The source could not be read: a write the refusal could refuse is not sent; others are.
+        self.assertEqual(may_send(force, {}, ["description"], None, body=no_project, sources={"workspace": None})[0], "source-unknown")
+        self.assertEqual(may_send(force, {}, ["description"], None, body=no_project)[0], "source-unknown")
+        self.assertEqual(may_send(force, {}, ["description"], None, body=with_project, sources={}), ("send", {}))
+        # Without when, any write is refused while the source is unknown.
+        unconditional = {"kind": "none", "refuseWhen": [{"source": {"resource": "workspace"}, "field": "locked", "values": [True]}]}
+        self.assertEqual(may_send(unconditional, {}, ["x"], None, body={}, sources={})[0], "source-unknown")
+        # The §4.5 resolution read re-checks the object's own states only.
+        self.assertEqual(resolve_unknown(force, "PUT", {"description": "a"}, {"description": "x"},
+                                         {"status": 200, "body": {"description": "x"}}), "applied")
+
     def test_refusals_need_a_read_and_header_versions_are_supported(self):
         refusing = {"kind": "none", "refuseWhen": [{"field": "in_trash", "values": [True]}]}
         self.assertEqual(may_send(refusing, {}, ["x"], None), ("read-first", None))
