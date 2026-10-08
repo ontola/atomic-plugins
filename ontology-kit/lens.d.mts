@@ -19,12 +19,30 @@ export interface LensField {
   readonly args?: { readonly pairs: readonly (readonly [unknown, unknown])[] };
   /** Version 2: the lens never writes this field's source. */
   readonly readOnly?: boolean;
+  /** Version 3: what a put does when the view lacks the field. */
+  readonly absent?: 'keep' | 'unset' | 'default';
+  /** Version 3, with absent "default": the source value written instead. */
+  readonly default?: unknown;
 }
 
-/** Version 1 is ontola/atomic-server#2069's `LensMapping`; 2 extends it. */
+/** Version 3: a condition on the source record. Exactly one test. */
+export interface LensGuard {
+  readonly at: string;
+  readonly is?: 'present' | 'absent';
+  readonly in?: readonly unknown[];
+  readonly notIn?: readonly unknown[];
+  /** With `in`: an absent value also passes. */
+  readonly orAbsent?: boolean;
+}
+
+/**
+ * Version 1 is ontola/atomic-server#2069's `LensMapping`; 2 extends it, and
+ * 3 extends 2 with guards and `absent`.
+ */
 export interface LensMapping {
-  readonly version: 1 | 2;
+  readonly version: 1 | 2 | 3;
   readonly fields: readonly LensField[];
+  readonly guards?: readonly LensGuard[];
 }
 
 export type Row = Readonly<Record<string, unknown>>;
@@ -39,7 +57,8 @@ export type LensErrorCode =
   | 'overlap'
   | 'precision'
   | 'read-only'
-  | 'unmapped-value';
+  | 'unmapped-value'
+  | 'out-of-domain';
 
 export declare class LensError extends Error {
   readonly code: LensErrorCode;
@@ -70,8 +89,11 @@ export interface CatalogLensFile {
   readonly implementation?: string;
   readonly examples: readonly {
     readonly source: unknown;
-    readonly target: unknown;
+    /** What get gives; absent when get refuses with `error`. */
+    readonly target?: unknown;
+    readonly error?: LensErrorCode;
     readonly edits?: readonly {
+      readonly direction?: 'backward';
       readonly target: unknown;
       readonly source?: unknown;
       readonly error?: LensErrorCode;
@@ -86,10 +108,10 @@ export interface CatalogLensInfo {
   readonly source: string;
   readonly target: string;
   readonly mapping: LensMapping;
-  readonly mappingVersion: 1 | 2;
+  readonly mappingVersion: 1 | 2 | 3;
 }
 
-export declare const LENS_MAPPING_VERSIONS: readonly [1, 2];
+export declare const LENS_MAPPING_VERSIONS: readonly [1, 2, 3];
 export declare const CONVERTERS: Readonly<
   Record<
     ConverterName,

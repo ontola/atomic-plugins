@@ -355,6 +355,15 @@ test('this repository: every catalog lens parses, and its published file runs', 
     const mapping = parseMapping(lens.mapping);
 
     for (const example of lens.examples) {
+      if (example.error !== undefined) {
+        assert.throws(
+          () => lensGet(mapping, example.source),
+          e => e.code === example.error,
+          name,
+        );
+        continue;
+      }
+
       assert.deepEqual(lensGet(mapping, example.source), example.target, name);
       assert.deepEqual(
         lensPut(mapping, example.target, example.source),
@@ -481,4 +490,54 @@ test('backward GetPut on example targets passes for a converting lens', () => {
     },
   ];
   assert.equal(problemsOf(c), '');
+});
+
+test('v3 examples: get refusals, backward edits and guard references are checked', () => {
+  const c = lenses();
+  const l = c.lenses['shop-thing-v1'];
+  l.mapping.version = 3;
+  l.mapping.guards = [{ at: '/id', is: 'present' }];
+  l.mapping.fields[1].absent = 'unset';
+  l.examples.push({ source: { title: 'No id' }, error: 'out-of-domain' });
+  l.examples[0].edits.push({
+    direction: 'backward',
+    source: { id: 1, title: 'Cup', look: {} },
+    target: { [NAME]: 'Cup' },
+  });
+  assert.equal(problemsOf(c), '');
+
+  const d = structuredClone(c);
+  d.lenses['shop-thing-v1'].examples[1].error = 'read-only';
+  d.lenses['shop-thing-v1'].examples[0].edits[1].target = {
+    [NAME]: 'Cup',
+    colour: 'red',
+  };
+  const problems = problemsOf(d);
+  assert.match(
+    problems,
+    /example 2: expected get to refuse with read-only, got .*outside this lens's domain/,
+  );
+  assert.match(problems, /edit 2 \(backward\): put gives/);
+
+  const f = structuredClone(c);
+  f.lenses['shop-thing-v1'].mapping.guards.push({
+    at: 'https://x.example/colour',
+    is: 'present',
+  });
+  assert.match(
+    problemsOf(f),
+    /source "https:\/\/x.example\/colour" must be a JSON Pointer/,
+  );
+
+  const e = structuredClone(c);
+  e.lenses['shop-thing-v1'].examples[1].target = {};
+  e.lenses['shop-thing-v1'].examples[0].edits[1].error = 'x';
+  e.lenses['shop-thing-v1'].examples[0].edits.push({
+    direction: 'sideways',
+    target: {},
+  });
+  const shape = problemsOf(e);
+  assert.match(shape, /example 2 has either a target .* or an error/);
+  assert.match(shape, /a backward edit has a source \(the view\) and a target/);
+  assert.match(shape, /direction is "backward" or left out/);
 });

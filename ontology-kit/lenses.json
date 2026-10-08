@@ -9,6 +9,16 @@
         "raindrop-bookmark-v1",
         "solid-bookmark-v1"
       ]
+    },
+    "v2": {
+      "name": "Shared lens catalog, release 2",
+      "description": "Release 2 moves Clockify, Todoist and Raindrop to mapping version 3 (guards and explicit removal), which closes some of their release 1 limits; the Solid lens is unchanged. Declared, not verified: no host loads this catalog yet.",
+      "lenses": [
+        "clockify-time-entry-v2",
+        "todoist-task-issue-v2",
+        "raindrop-bookmark-v2",
+        "solid-bookmark-v1"
+      ]
     }
   },
   "lenses": {
@@ -22,7 +32,9 @@
           "openapi": "APIs/clockify.me/1.0.0-readonly"
         }
       },
-      "target": { "class": "time-entry-v1" },
+      "target": {
+        "class": "time-entry-v1"
+      },
       "mapping": {
         "version": 2,
         "fields": [
@@ -40,7 +52,10 @@
             "target": "work-end",
             "convert": "iso-seconds-to-ms"
           },
-          { "source": "/billable", "target": "work-billable" }
+          {
+            "source": "/billable",
+            "target": "work-billable"
+          }
         ]
       },
       "limits": [
@@ -98,7 +113,9 @@
               }
             },
             {
-              "target": { "work-end": 1791198000500 },
+              "target": {
+                "work-end": 1791198000500
+              },
               "error": "precision"
             }
           ]
@@ -115,7 +132,9 @@
           "openapi": "APIs/todoist.com/1"
         }
       },
-      "target": { "class": "issue-v1" },
+      "target": {
+        "class": "issue-v1"
+      },
       "mapping": {
         "version": 2,
         "fields": [
@@ -240,9 +259,14 @@
       "name": "Raindrop bookmark ↔ Bookmark",
       "description": "A Raindrop.io bookmark record and the host's built-in Bookmark class: title, link and excerpt.",
       "source": {
-        "record": { "provider": "raindrop.io", "resource": "raindrop" }
+        "record": {
+          "provider": "raindrop.io",
+          "resource": "raindrop"
+        }
       },
-      "target": { "class": "https://atomicdata.dev/class/Bookmark" },
+      "target": {
+        "class": "https://atomicdata.dev/class/Bookmark"
+      },
       "mapping": {
         "version": 2,
         "fields": [
@@ -304,8 +328,12 @@
     "solid-bookmark-v1": {
       "name": "Solid bookmark ↔ Bookmark",
       "description": "An RDF bookmark node in expanded JSON-LD (a Solid Pod document) and the host's built-in Bookmark class: its dcterms:title literal and its bookmark:recalls link.",
-      "source": { "rdf": "http://www.w3.org/2002/01/bookmark#Bookmark" },
-      "target": { "class": "https://atomicdata.dev/class/Bookmark" },
+      "source": {
+        "rdf": "http://www.w3.org/2002/01/bookmark#Bookmark"
+      },
+      "target": {
+        "class": "https://atomicdata.dev/class/Bookmark"
+      },
       "mapping": {
         "version": 2,
         "fields": [
@@ -331,13 +359,20 @@
             "@id": "https://pod.example/bookmarks/index.ttl#one",
             "@type": ["http://www.w3.org/2002/01/bookmark#Bookmark"],
             "http://purl.org/dc/terms/title": [
-              { "@value": "Original", "@language": "nl" }
+              {
+                "@value": "Original",
+                "@language": "nl"
+              }
             ],
             "http://www.w3.org/2002/01/bookmark#recalls": [
-              { "@id": "https://example.org/article" }
+              {
+                "@id": "https://example.org/article"
+              }
             ],
             "http://www.w3.org/2002/01/bookmark#hasTopic": [
-              { "@value": "Invented topic" }
+              {
+                "@value": "Invented topic"
+              }
             ]
           },
           "target": {
@@ -354,17 +389,492 @@
                 "@id": "https://pod.example/bookmarks/index.ttl#one",
                 "@type": ["http://www.w3.org/2002/01/bookmark#Bookmark"],
                 "http://purl.org/dc/terms/title": [
-                  { "@value": "Changed", "@language": "nl" }
+                  {
+                    "@value": "Changed",
+                    "@language": "nl"
+                  }
                 ],
                 "http://www.w3.org/2002/01/bookmark#recalls": [
-                  { "@id": "https://example.org/next" }
+                  {
+                    "@id": "https://example.org/next"
+                  }
                 ],
                 "http://www.w3.org/2002/01/bookmark#hasTopic": [
-                  { "@value": "Invented topic" }
+                  {
+                    "@value": "Invented topic"
+                  }
                 ]
               }
             }
           ]
+        }
+      ]
+    },
+    "clockify-time-entry-v2": {
+      "name": "Clockify time entry ↔ Time entry",
+      "description": "A completed Clockify time entry, as syncables reads it through the Clockify overlays, and the shared time-entry-v1 class: description, start, end and billable. Guards keep running timers and non-REGULAR entries out.",
+      "source": {
+        "record": {
+          "provider": "clockify.me",
+          "resource": "timeEntry",
+          "openapi": "APIs/clockify.me/1.0.0-readonly"
+        }
+      },
+      "target": {
+        "class": "time-entry-v1"
+      },
+      "mapping": {
+        "version": 3,
+        "fields": [
+          {
+            "source": "/description",
+            "target": "https://atomicdata.dev/properties/name"
+          },
+          {
+            "source": "/timeInterval/start",
+            "target": "work-start",
+            "convert": "iso-seconds-to-ms"
+          },
+          {
+            "source": "/timeInterval/end",
+            "target": "work-end",
+            "convert": "iso-seconds-to-ms"
+          },
+          {
+            "source": "/billable",
+            "target": "work-billable"
+          }
+        ],
+        "guards": [
+          {
+            "at": "/type",
+            "in": ["REGULAR"],
+            "orAbsent": true
+          },
+          {
+            "at": "/timeInterval/start",
+            "is": "present"
+          },
+          {
+            "at": "/timeInterval/end",
+            "is": "present"
+          }
+        ]
+      },
+      "limits": [
+        "The guards refuse non-REGULAR entries (breaks, time off) and running timers (no start or end), as the code lens does. They do not check that the end is after the start, and they do not apply the code lens's write restrictions (locked entries, custom fields, project rules).",
+        "The description is copied as is: the code lens trims it and shows an empty one as \"Time entry\", and writes \"Time entry\" back as an empty description.",
+        "projectId is not mapped: work-project links to a work-project-v1 row, which needs an identity map from provider ids to rows, not a value converter. The code lens also drops taskId when the project changes.",
+        "Clockify needs every mapped field, so a description, start or end missing from the table leaves the provider value unchanged (absent: keep).",
+        "Moving the start or end leaves timeInterval.duration as it was; the provider recomputes it, and the code lens does not update it either."
+      ],
+      "implementation": "integrations/timesheets/devonian/clockify/lens/algebra.ts",
+      "examples": [
+        {
+          "source": {
+            "id": "entry-1",
+            "description": "Write the report",
+            "billable": true,
+            "projectId": "project-1",
+            "taskId": "task-1",
+            "tagIds": ["tag-1"],
+            "type": "REGULAR",
+            "timeInterval": {
+              "start": "2026-10-05T09:00:00Z",
+              "end": "2026-10-05T10:30:00Z",
+              "duration": "PT1H30M"
+            }
+          },
+          "target": {
+            "https://atomicdata.dev/properties/name": "Write the report",
+            "work-start": 1791190800000,
+            "work-end": 1791196200000,
+            "work-billable": true
+          },
+          "edits": [
+            {
+              "target": {
+                "https://atomicdata.dev/properties/name": "Write the report",
+                "work-start": 1791190800000,
+                "work-end": 1791198000000,
+                "work-billable": false
+              },
+              "source": {
+                "id": "entry-1",
+                "description": "Write the report",
+                "billable": false,
+                "projectId": "project-1",
+                "taskId": "task-1",
+                "tagIds": ["tag-1"],
+                "type": "REGULAR",
+                "timeInterval": {
+                  "start": "2026-10-05T09:00:00Z",
+                  "end": "2026-10-05T11:00:00Z",
+                  "duration": "PT1H30M"
+                }
+              }
+            },
+            {
+              "target": {
+                "work-end": 1791198000500
+              },
+              "error": "precision"
+            }
+          ]
+        },
+        {
+          "source": {
+            "id": "entry-2",
+            "description": "Write the report",
+            "billable": true,
+            "projectId": "project-1",
+            "taskId": "task-1",
+            "tagIds": ["tag-1"],
+            "type": "REGULAR",
+            "timeInterval": {
+              "start": "2026-10-05T11:00:00Z",
+              "end": null,
+              "duration": null
+            }
+          },
+          "error": "out-of-domain"
+        },
+        {
+          "source": {
+            "id": "entry-3",
+            "description": "Write the report",
+            "billable": true,
+            "projectId": "project-1",
+            "taskId": "task-1",
+            "tagIds": ["tag-1"],
+            "type": "BREAK",
+            "timeInterval": {
+              "start": "2026-10-05T09:00:00Z",
+              "end": "2026-10-05T10:30:00Z",
+              "duration": "PT1H30M"
+            }
+          },
+          "error": "out-of-domain"
+        }
+      ]
+    },
+    "todoist-task-issue-v2": {
+      "name": "Todoist task ↔ Issue",
+      "description": "An active Todoist task (API v1), as syncables reads it through the Todoist overlays, and the shared issue-v1 class. Name and body are writable; completion and the due day are read-only, and writing the table from a task without a due date removes a stale due-date.",
+      "source": {
+        "record": {
+          "provider": "todoist.com",
+          "resource": "task",
+          "openapi": "APIs/todoist.com/1"
+        }
+      },
+      "target": {
+        "class": "issue-v1"
+      },
+      "mapping": {
+        "version": 3,
+        "fields": [
+          {
+            "source": "/content",
+            "target": "https://atomicdata.dev/properties/name"
+          },
+          {
+            "source": "/description",
+            "target": "https://atomicdata.dev/task/v1/body"
+          },
+          {
+            "source": "/checked",
+            "target": "https://atomicdata.dev/task/v1/status",
+            "convert": "map",
+            "args": {
+              "pairs": [
+                [false, ["https://atomicdata.dev/task/v1/todo"]],
+                [true, ["https://atomicdata.dev/task/v1/done"]]
+              ]
+            },
+            "readOnly": true
+          },
+          {
+            "source": "/due/date",
+            "target": "https://atomicdata.dev/task/v1/due-date",
+            "convert": "day-of",
+            "readOnly": true,
+            "absent": "unset"
+          }
+        ],
+        "guards": [
+          {
+            "at": "/is_deleted",
+            "notIn": [true]
+          },
+          {
+            "at": "/content",
+            "is": "present"
+          }
+        ]
+      },
+      "limits": [
+        "The guards refuse deleted tasks (is_deleted true) and tasks without content; the code lens also refuses an empty content and a non-boolean checked.",
+        "Doing and Blocked have no Todoist equivalent: a row with either status cannot be read back through this lens (unmapped-value).",
+        "Assignee, labels, priority and parent are not mapped.",
+        "A task whose due date has a fixed time zone (a date-time ending in Z or an offset) cannot be read through this lens: get refuses the whole task with bad-value, because the due date's day depends on the time zone, which day-of does not apply. The code lens takes its UTC day instead."
+      ],
+      "implementation": "integrations/issue-tracker/devonian/todoist/lens/index.ts",
+      "examples": [
+        {
+          "source": {
+            "id": "task-a",
+            "content": "Original",
+            "description": "**Body**",
+            "checked": false,
+            "labels": ["invented"],
+            "due": {
+              "date": "2026-10-08T18:00:00",
+              "timezone": "Europe/Amsterdam",
+              "is_recurring": true,
+              "string": "every Thursday"
+            }
+          },
+          "target": {
+            "https://atomicdata.dev/properties/name": "Original",
+            "https://atomicdata.dev/task/v1/body": "**Body**",
+            "https://atomicdata.dev/task/v1/status": [
+              "https://atomicdata.dev/task/v1/todo"
+            ],
+            "https://atomicdata.dev/task/v1/due-date": "2026-10-08"
+          },
+          "edits": [
+            {
+              "target": {
+                "https://atomicdata.dev/properties/name": "Edited",
+                "https://atomicdata.dev/task/v1/body": "",
+                "https://atomicdata.dev/task/v1/status": [
+                  "https://atomicdata.dev/task/v1/todo"
+                ],
+                "https://atomicdata.dev/task/v1/due-date": "2026-10-08"
+              },
+              "source": {
+                "id": "task-a",
+                "content": "Edited",
+                "description": "",
+                "checked": false,
+                "labels": ["invented"],
+                "due": {
+                  "date": "2026-10-08T18:00:00",
+                  "timezone": "Europe/Amsterdam",
+                  "is_recurring": true,
+                  "string": "every Thursday"
+                }
+              }
+            },
+            {
+              "target": {
+                "https://atomicdata.dev/task/v1/status": [
+                  "https://atomicdata.dev/task/v1/done"
+                ]
+              },
+              "error": "read-only"
+            },
+            {
+              "target": {
+                "https://atomicdata.dev/task/v1/due-date": "2026-10-09"
+              },
+              "error": "read-only"
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "id": "task-a",
+                "content": "Original",
+                "description": "**Body**",
+                "checked": false,
+                "labels": ["invented"],
+                "due": null
+              },
+              "target": {
+                "https://atomicdata.dev/properties/name": "Original",
+                "https://atomicdata.dev/task/v1/body": "**Body**",
+                "https://atomicdata.dev/task/v1/status": [
+                  "https://atomicdata.dev/task/v1/todo"
+                ]
+              }
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "id": "task-a",
+                "content": "Original",
+                "description": "**Body**",
+                "checked": true,
+                "labels": ["invented"],
+                "due": {
+                  "date": "2026-10-09T10:00:00",
+                  "is_recurring": false,
+                  "string": "tomorrow 10:00"
+                }
+              },
+              "target": {
+                "https://atomicdata.dev/properties/name": "Original",
+                "https://atomicdata.dev/task/v1/body": "**Body**",
+                "https://atomicdata.dev/task/v1/status": [
+                  "https://atomicdata.dev/task/v1/done"
+                ],
+                "https://atomicdata.dev/task/v1/due-date": "2026-10-09"
+              }
+            }
+          ]
+        },
+        {
+          "source": {
+            "id": "task-b",
+            "content": "Done already",
+            "description": "",
+            "checked": true,
+            "due": null
+          },
+          "target": {
+            "https://atomicdata.dev/properties/name": "Done already",
+            "https://atomicdata.dev/task/v1/body": "",
+            "https://atomicdata.dev/task/v1/status": [
+              "https://atomicdata.dev/task/v1/done"
+            ]
+          }
+        },
+        {
+          "source": {
+            "id": "task-c",
+            "content": "Gone",
+            "description": "",
+            "checked": false,
+            "is_deleted": true
+          },
+          "error": "out-of-domain"
+        }
+      ]
+    },
+    "raindrop-bookmark-v2": {
+      "name": "Raindrop bookmark ↔ Bookmark",
+      "description": "A Raindrop.io bookmark record and the host's built-in Bookmark class: title, link and excerpt. A description removed in the table clears the excerpt, and an excerpt missing in Raindrop removes the description.",
+      "source": {
+        "record": {
+          "provider": "raindrop.io",
+          "resource": "raindrop"
+        }
+      },
+      "target": {
+        "class": "https://atomicdata.dev/class/Bookmark"
+      },
+      "mapping": {
+        "version": 3,
+        "fields": [
+          {
+            "source": "/title",
+            "target": "https://atomicdata.dev/properties/name"
+          },
+          {
+            "source": "/link",
+            "target": "https://atomicdata.dev/property/url"
+          },
+          {
+            "source": "/excerpt",
+            "target": "https://atomicdata.dev/properties/description",
+            "absent": "default",
+            "default": ""
+          }
+        ],
+        "guards": [
+          {
+            "at": "/_id",
+            "is": "present"
+          }
+        ]
+      },
+      "limits": [
+        "No overlay declares a Raindrop crudResource yet, so no catalog integration produces this source; the record endpoint names the shape the code lens reads.",
+        "The guard refuses a record without an _id; the code lens also refuses a non-positive id, titles over 1000 and excerpts over 10000 UTF-16 code units, and a link that is not an absolute http(s) URL."
+      ],
+      "implementation": "integrations/bookmarks/devonian/raindrop/lens/index.ts",
+      "examples": [
+        {
+          "source": {
+            "_id": 41,
+            "title": "A bookmark",
+            "link": "https://example.org/article",
+            "tags": ["invented"],
+            "note": "Provider-only note",
+            "created": "2026-10-01T12:00:00+02:00"
+          },
+          "target": {
+            "https://atomicdata.dev/properties/name": "A bookmark",
+            "https://atomicdata.dev/property/url": "https://example.org/article"
+          },
+          "edits": [
+            {
+              "target": {
+                "https://atomicdata.dev/properties/name": "Changed",
+                "https://atomicdata.dev/property/url": "https://example.org/article",
+                "https://atomicdata.dev/properties/description": "Edited"
+              },
+              "source": {
+                "_id": 41,
+                "title": "Changed",
+                "link": "https://example.org/article",
+                "tags": ["invented"],
+                "note": "Provider-only note",
+                "created": "2026-10-01T12:00:00+02:00",
+                "excerpt": "Edited"
+              }
+            }
+          ]
+        },
+        {
+          "source": {
+            "_id": 42,
+            "title": "Notes",
+            "link": "https://example.org/notes",
+            "excerpt": "Old",
+            "tags": []
+          },
+          "target": {
+            "https://atomicdata.dev/properties/name": "Notes",
+            "https://atomicdata.dev/property/url": "https://example.org/notes",
+            "https://atomicdata.dev/properties/description": "Old"
+          },
+          "edits": [
+            {
+              "target": {
+                "https://atomicdata.dev/properties/name": "Notes",
+                "https://atomicdata.dev/property/url": "https://example.org/notes"
+              },
+              "source": {
+                "_id": 42,
+                "title": "Notes",
+                "link": "https://example.org/notes",
+                "excerpt": "",
+                "tags": []
+              }
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "_id": 42,
+                "title": "Notes",
+                "link": "https://example.org/notes",
+                "tags": []
+              },
+              "target": {
+                "https://atomicdata.dev/properties/name": "Notes",
+                "https://atomicdata.dev/property/url": "https://example.org/notes"
+              }
+            }
+          ]
+        },
+        {
+          "source": {
+            "title": "No id",
+            "link": "https://example.org/x"
+          },
+          "error": "out-of-domain"
         }
       ]
     }

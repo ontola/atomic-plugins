@@ -475,3 +475,237 @@ test('lawProblems runs backwards too', () => {
     [],
   );
 });
+
+// ---------------------------------------------------------------- version 3
+
+const STATUS = 'https://atomicdata.dev/task/v1/status';
+const DUE = 'https://atomicdata.dev/task/v1/due-date';
+
+test('v3 guards refuse records outside the domain, on get and put', () => {
+  const m = {
+    version: 3,
+    fields: [{ source: '/description', target: NAME }],
+    guards: [
+      { at: '/type', in: ['REGULAR'], orAbsent: true },
+      { at: '/end', is: 'present' },
+      { at: '/locked', notIn: [true] },
+      { at: '/gone', is: 'absent' },
+    ],
+  };
+  const ok = { description: 'a', type: 'REGULAR', end: 1 };
+  assert.deepEqual(lensGet(m, ok), { [NAME]: 'a' });
+  assert.deepEqual(lensGet(m, { description: 'a', end: 1 }), { [NAME]: 'a' });
+  for (const bad of [
+    { ...ok, type: 'BREAK' },
+    { ...ok, end: null },
+    { description: 'a', type: 'REGULAR' },
+    { ...ok, locked: true },
+    { ...ok, gone: 0 },
+  ])
+    code(() => lensGet(m, bad), 'out-of-domain');
+  code(
+    () => lensPut(m, { [NAME]: 'b' }, { ...ok, type: 'BREAK' }),
+    'out-of-domain',
+  );
+  // A put whose result leaves the domain is refused too.
+  const writesEnd = {
+    version: 3,
+    fields: [{ source: '/end', target: START, absent: 'unset' }],
+    guards: [{ at: '/end', is: 'present' }],
+  };
+  code(() => lensPut(writesEnd, {}, { end: 1 }), 'out-of-domain');
+  // Backward, guards are not applied: the row is in the target shape.
+  assert.deepEqual(lensGet(m, { [NAME]: 'x' }, 'backward'), {
+    description: 'x',
+  });
+});
+
+test('v3 guards are validated, and only exist from version 3', () => {
+  const field = [{ source: '/a', target: NAME }];
+  for (const guards of [
+    [],
+    [{ at: '/a' }],
+    [{ at: '/a', is: 'there' }],
+    [{ at: '/a', in: [] }],
+    [{ at: '/a', is: 'present', in: [1] }],
+    [{ at: '/a', notIn: [1], orAbsent: true }],
+    [{ at: 'a', is: 'present' }],
+    [{ at: '/a', is: 'present', also: 1 }],
+  ])
+    assert.throws(
+      () => parseMapping({ version: 3, fields: field, guards }),
+      LensError,
+      JSON.stringify(guards),
+    );
+  code(
+    () =>
+      parseMapping({
+        version: 3,
+        fields: field,
+        guards: [{ at: '/__proto__', is: 'present' }],
+      }),
+    'bad-reference',
+  );
+  code(
+    () =>
+      parseMapping({
+        version: 2,
+        fields: field,
+        guards: [{ at: '/a', is: 'present' }],
+      }),
+    'bad-mapping',
+  );
+  code(
+    () =>
+      parseMapping({
+        version: 2,
+        fields: [{ source: '/a', target: NAME, absent: 'unset' }],
+      }),
+    'bad-mapping',
+  );
+});
+
+test('v3 absent: keep, unset and default, forward and backward', () => {
+  const m = {
+    version: 3,
+    fields: [
+      { source: '/title', target: NAME },
+      { source: '/note', target: 'https://x.example/note', absent: 'unset' },
+      {
+        source: '/excerpt',
+        target: 'https://x.example/excerpt',
+        absent: 'default',
+        default: '',
+      },
+    ],
+  };
+  const source = { id: 1, title: 't', note: 'n', excerpt: 'e' };
+  // keep: a missing name leaves the title; unset removes; default writes ''.
+  assert.deepEqual(lensPut(m, {}, source), { id: 1, title: 't', excerpt: '' });
+  // Nothing to remove when the previous row lacked the place.
+  assert.deepEqual(lensPut(m, {}, { id: 1, title: 't' }), {
+    id: 1,
+    title: 't',
+  });
+  // Backward, both unset and default remove the target place.
+  const target = {
+    [NAME]: 't',
+    'https://x.example/note': 'n',
+    'https://x.example/excerpt': 'e',
+    other: 1,
+  };
+  assert.deepEqual(lensPut(m, { title: 't' }, target, 'backward'), {
+    [NAME]: 't',
+    other: 1,
+  });
+  assert.deepEqual(lawProblems(m, source, { [NAME]: 'u' }), []);
+  code(
+    () =>
+      parseMapping({
+        version: 3,
+        fields: [{ source: '/a', target: NAME, absent: 'default' }],
+      }),
+    'bad-mapping',
+  );
+  code(
+    () =>
+      parseMapping({
+        version: 3,
+        fields: [{ source: '/a', target: NAME, default: 1 }],
+      }),
+    'bad-mapping',
+  );
+  code(
+    () =>
+      parseMapping({
+        version: 3,
+        fields: [{ source: '/a', target: NAME, absent: 'drop' }],
+      }),
+    'bad-mapping',
+  );
+  // Removing an array item would shift indexes: refused.
+  const arrays = {
+    version: 3,
+    fields: [{ source: '/t/0', target: NAME, absent: 'unset' }],
+  };
+  code(() => lensPut(arrays, {}, { t: ['x'] }), 'bad-path');
+});
+
+test('v3 read-only fields: forward never written, backward computed and removed', () => {
+  const m = {
+    version: 3,
+    fields: [
+      { source: '/content', target: NAME },
+      {
+        source: '/checked',
+        target: STATUS,
+        convert: 'map',
+        args: {
+          pairs: [
+            [false, ['todo']],
+            [true, ['done']],
+          ],
+        },
+        readOnly: true,
+      },
+      {
+        source: '/due/date',
+        target: DUE,
+        convert: 'day-of',
+        readOnly: true,
+        absent: 'unset',
+      },
+    ],
+  };
+  const task = {
+    content: 'c',
+    checked: false,
+    due: { date: '2026-10-08T18:00:00' },
+  };
+  const issue = lensGet(m, task);
+  // Forward: a missing read-only field is kept, a changed one refused.
+  assert.deepEqual(lensPut(m, { [NAME]: 'c' }, task), task);
+  code(() => lensPut(m, { ...issue, [DUE]: '2026-10-09' }, task), 'read-only');
+  // Backward: the one-way due day is computed from the view, or removed.
+  assert.deepEqual(
+    lensPut(
+      m,
+      { content: 'c', checked: true, due: { date: '2026-10-09' } },
+      issue,
+      'backward',
+    ),
+    { [NAME]: 'c', [STATUS]: ['done'], [DUE]: '2026-10-09' },
+  );
+  assert.deepEqual(
+    lensPut(m, { content: 'c', checked: false, due: null }, issue, 'backward'),
+    {
+      [NAME]: 'c',
+      [STATUS]: ['todo'],
+    },
+  );
+  assert.deepEqual(lawProblems(m, issue, undefined, 'backward'), []);
+  // Version 2 keeps skipping one-way fields backward.
+  const v2 = {
+    ...m,
+    version: 2,
+    fields: m.fields.map(({ absent: _absent, ...f }) => f),
+  };
+  assert.deepEqual(
+    lensPut(v2, { content: 'c', checked: false, due: null }, issue, 'backward'),
+    issue,
+  );
+});
+
+test('v3 storedMapping keeps guards, absent and default', () => {
+  const m = {
+    version: 3,
+    fields: [
+      { source: '/a', target: NAME, absent: 'default', default: { x: [1] } },
+    ],
+    guards: [
+      { at: '/t', in: ['R'], orAbsent: true },
+      { at: '/b', is: 'present' },
+    ],
+  };
+  assert.deepEqual(storedMapping(m), m);
+});
