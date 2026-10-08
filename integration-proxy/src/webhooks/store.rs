@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS webhook_subscriptions (
   source_kind TEXT NOT NULL,
   source_key TEXT NOT NULL,
   events TEXT[] NOT NULL,
+  access_parameters TEXT NOT NULL DEFAULT '{}',
+  context TEXT NOT NULL DEFAULT '{}',
   state TEXT NOT NULL CHECK (state IN ('provisioning', 'needs-reconciliation', 'active', 'cleanup-pending', 'closed')),
   closed_reason TEXT,
   generation BIGINT NOT NULL,
@@ -89,6 +91,8 @@ CREATE INDEX IF NOT EXISTS webhook_subscriptions_route_idx
   ON webhook_subscriptions (hook_id, source_kind, source_key)
   WHERE state IN ('needs-reconciliation', 'active');
 CREATE INDEX IF NOT EXISTS webhook_subscriptions_owner_idx ON webhook_subscriptions (owner);
+CREATE INDEX IF NOT EXISTS webhook_subscriptions_connection_idx ON webhook_subscriptions (connection_id);
+CREATE INDEX IF NOT EXISTS webhook_subscriptions_source_idx ON webhook_subscriptions (source_kind, source_key);
 CREATE INDEX IF NOT EXISTS webhook_subscriptions_lease_idx ON webhook_subscriptions (lease_expires_at)
   WHERE state IN ('provisioning', 'needs-reconciliation', 'active');
 CREATE INDEX IF NOT EXISTS webhook_subscriptions_progress_idx ON webhook_subscriptions (progress_deadline_at)
@@ -211,6 +215,8 @@ pub mod ended {
     pub const ACCESS_DENIED: &str = "access-denied";
     pub const CONNECTION_DELETED: &str = "connection-deleted";
     pub const DELETED: &str = "deleted";
+    pub const STANDING_LOST: &str = "standing-lost";
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const PROVISIONING_FAILED: &str = "provisioning-failed";
 }
 
@@ -304,6 +310,9 @@ pub struct Delivery {
     pub action: Option<String>,
     pub source_kind: String,
     pub source_key: String,
+    /// Context keys from the delivery (Webhook Deliveries §4.4.2), recorded
+    /// on the bindings it is routed to.
+    pub context: BTreeMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -331,11 +340,37 @@ pub struct NewSubscription {
     pub source_kind: String,
     pub source_key: String,
     pub events: Vec<String>,
+    /// The access operation's parameters, JSON: renewals and fetches
+    /// re-run the check with them.
+    pub access_parameters: String,
+}
+
+/// A subscription's binding, for the consumer routes' checks.
+#[derive(Clone, Debug)]
+pub struct Binding {
+    pub connection_id: String,
+    pub owner: String,
+    pub consumer: String,
+    pub platform: String,
+    pub source_kind: String,
+    pub source_key: String,
+    pub access_parameters: String,
+    pub live: bool,
+}
+
+/// The hook behind an endpoint.
+#[derive(Clone, Debug)]
+pub struct EndpointHook {
+    pub hook_id: String,
+    pub platform: String,
+    pub dedicated: bool,
+    pub secret_envelope: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct HookRecord {
     pub hook_id: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub endpoint_id: String,
 }
 
@@ -626,6 +661,8 @@ pub struct Store {
     /// When this store started; stands in for the last sweep until the
     /// first one ran.
     started_at: SystemTime,
+    /// Woken after a delivery is retained or a gap recorded, for long polls.
+    pub(crate) notify: tokio::sync::Notify,
     #[cfg(test)]
     pub(crate) fail_before_commit: std::sync::atomic::AtomicBool,
 }
@@ -661,6 +698,7 @@ impl Store {
             policy,
             cursors: CursorKey::new(security.derive_subkey(super::cursor::SUBKEY_LABEL)),
             started_at: SystemTime::now(),
+            notify: tokio::sync::Notify::new(),
             #[cfg(test)]
             fail_before_commit: std::sync::atomic::AtomicBool::new(false),
         })
@@ -996,16 +1034,19 @@ impl Store {
         deployment: &mut Deployment,
         now: SystemTime,
     ) -> Result<()> {
+        // Only dedicated hooks: a shared application hook is never retired.
         tx.execute(
             "UPDATE webhook_hooks SET state = 'cleanup-pending'
-             WHERE hook_id = $1 AND state IN ('active', 'provisioning')",
+             WHERE hook_id = $1 AND ownership = 'dedicated' AND state IN ('active', 'provisioning')",
             &[&hook_id],
         )
         .await?;
         let inserted = tx
             .execute(
                 "INSERT INTO webhook_cleanup_jobs (hook_id, next_attempt_at, deadline_at, created_at)
-                 VALUES ($1, $2, $3, $2) ON CONFLICT DO NOTHING",
+                 SELECT hook_id, $2, $3, $2 FROM webhook_hooks
+                 WHERE hook_id = $1 AND ownership = 'dedicated' AND state = 'cleanup-pending'
+                 ON CONFLICT DO NOTHING",
                 &[&hook_id, &now, &(now + policy.cleanup_deadline)],
             )
             .await?;
@@ -1230,6 +1271,10 @@ impl Store {
     /// the deployment or the owner holds as many dedicated hooks that are not
     /// closed as their cleanup-job caps, so cleanup jobs (one per such hook
     /// at most) stay within those caps.
+    // Creating a dedicated hook is a provider write, which this release
+    // never makes: the routes subscribe through shared application hooks
+    // only. These stay for the cleanup paths and their tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub async fn create_dedicated_hook(
         &self,
@@ -1297,6 +1342,7 @@ impl Store {
     /// they all ended meanwhile, the hook is already being cleaned up, and
     /// its provider id is recorded for that; if that cleanup already gave
     /// up, a new one starts. The provider's hook is never left unrecorded.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn hook_provisioned(
         &self,
         hook_id: &str,
@@ -1379,9 +1425,20 @@ impl Store {
     /// Provisioning gave up: the waiting subscriptions close and the hook is
     /// cleaned up (the provider may have created it before the failure was
     /// seen), all in one transaction.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn hook_provisioning_failed(&self, hook_id: &str, now: SystemTime) -> Result<()> {
         let mut client = self.pool.get().await.map_err(InboxError::Database)?;
         let tx = client.transaction().await?;
+        let dedicated = tx
+            .query_opt(
+                "SELECT 1 FROM webhook_hooks WHERE hook_id = $1 AND ownership = 'dedicated'",
+                &[&hook_id],
+            )
+            .await?
+            .is_some();
+        if !dedicated {
+            return Err(InboxError::UnknownHook);
+        }
         let ids: Vec<String> = tx
             .query(
                 &format!(
@@ -1544,15 +1601,15 @@ impl Store {
         }
         let mut row = SubRow {
             id: crate::connect::random(),
-            connection_id: new.connection_id,
-            owner: new.owner,
-            consumer: new.consumer,
-            hook_id: new.hook_id,
+            connection_id: new.connection_id.clone(),
+            owner: new.owner.clone(),
+            consumer: new.consumer.clone(),
+            hook_id: new.hook_id.clone(),
             dedicated: hook.get::<_, String>(2) == "dedicated",
             created_by_receiver: hook.get(3),
-            source_kind: new.source_kind,
-            source_key: new.source_key,
-            events: new.events,
+            source_kind: new.source_kind.clone(),
+            source_key: new.source_key.clone(),
+            events: new.events.clone(),
             state: State::Provisioning,
             closed_reason: None,
             generation: 0,
@@ -1600,6 +1657,11 @@ impl Store {
         )
         .await?;
         Self::save_subscription(&tx, &row).await?;
+        tx.execute(
+            "UPDATE webhook_subscriptions SET access_parameters = $2 WHERE subscription_id = $1",
+            &[&row.id, &new.access_parameters],
+        )
+        .await?;
         owner.live_subscriptions += 1;
         Self::save_owners(&tx, &owners).await?;
         let view = self.view(&tx, &row).await?;
@@ -1654,6 +1716,8 @@ impl Store {
             owner_status.insert(owner.clone(), status);
         }
 
+        let context = (!delivery.context.is_empty())
+            .then(|| serde_json::to_string(&delivery.context).unwrap_or_default());
         let mut retainers: Vec<usize> = Vec::new();
         for (index, row) in subs.iter_mut().enumerate() {
             let owner = owners.get_mut(&row.owner).expect("locked");
@@ -1661,6 +1725,15 @@ impl Store {
                 Self::end(&tx, &self.policy, row, owner, &mut deployment, reason, now).await?;
                 outcome.ended += 1;
                 continue;
+            }
+            if let Some(context) = &context {
+                // The latest verified context replaces the recorded one
+                // (Webhook Deliveries §4.4.2).
+                tx.execute(
+                    "UPDATE webhook_subscriptions SET context = $2 WHERE subscription_id = $1 AND context <> $2",
+                    &[&row.id, context],
+                )
+                .await?;
             }
             match owner_status[&row.owner] {
                 ReceiptStatus::Duplicate => {
@@ -1761,6 +1834,9 @@ impl Store {
         Self::save_owners(&tx, &owners).await?;
         Self::save_deployment(&tx, &deployment).await?;
         self.commit(tx).await?;
+        if outcome.retained > 0 || outcome.gaps > 0 {
+            self.notify.notify_waiters();
+        }
         Ok(outcome)
     }
 
@@ -2027,6 +2103,7 @@ impl Store {
         &self,
         id: &str,
         consumer: &str,
+        expected_generation: Option<&str>,
         cursor: &str,
         now: SystemTime,
     ) -> Result<Acknowledgement> {
@@ -2040,6 +2117,11 @@ impl Store {
             }
         };
         let (generation, seq) = self.position(&row, cursor)?;
+        if expected_generation
+            .is_some_and(|token| super::cursor::parse_generation(token) != Some(generation))
+        {
+            return Err(InboxError::ObsoleteGeneration);
+        }
         if seq > row.ack_seq {
             let mut owners = Self::lock_owners(&tx, std::slice::from_ref(&row.owner)).await?;
             let mut deployment = Self::lock_deployment(&tx).await?;
@@ -2252,6 +2334,197 @@ impl Store {
         Ok(view)
     }
 
+    /// A subscription's binding, read without locking, for the routes'
+    /// standing and access checks.
+    pub async fn binding(&self, id: &str) -> Result<Option<Binding>> {
+        let client = self.pool.get().await.map_err(InboxError::Database)?;
+        Ok(client
+            .query_opt(
+                &format!(
+                    "SELECT s.connection_id, s.owner, s.consumer, h.platform, s.source_kind, s.source_key,
+                            s.access_parameters, s.state IN {LIVE}
+                     FROM webhook_subscriptions s JOIN webhook_hooks h ON h.hook_id = s.hook_id
+                     WHERE s.subscription_id = $1"
+                ),
+                &[&id],
+            )
+            .await?
+            .map(|row| Binding {
+                connection_id: row.get(0),
+                owner: row.get(1),
+                consumer: row.get(2),
+                platform: row.get(3),
+                source_kind: row.get(4),
+                source_key: row.get(5),
+                access_parameters: row.get(6),
+                live: row.get(7),
+            }))
+    }
+
+    /// The hook an endpoint belongs to, if any.
+    pub async fn hook_by_endpoint(&self, endpoint_id: &str) -> Result<Option<EndpointHook>> {
+        let client = self.pool.get().await.map_err(InboxError::Database)?;
+        Ok(client
+            .query_opt(
+                "SELECT hook_id, platform, ownership, secret_envelope FROM webhook_hooks
+                 WHERE endpoint_id = $1 AND state IN ('provisioning', 'active')",
+                &[&endpoint_id],
+            )
+            .await?
+            .map(|row| EndpointHook {
+                hook_id: row.get(0),
+                platform: row.get(1),
+                dedicated: row.get::<_, String>(2) == "dedicated",
+                secret_envelope: row.get(3),
+            }))
+    }
+
+    /// Suspends the bindings a revocation names (Webhook Deliveries §4.4.2):
+    /// of `source_kind` on `platform`'s hooks, by source key or by a
+    /// recorded context key. A suspended binding is not routed to and not
+    /// served until an access check passes.
+    pub async fn suspend_bindings(
+        &self,
+        platform: &str,
+        source_kind: &str,
+        context: Option<&str>,
+        keys: &[String],
+    ) -> Result<u64> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut client = self.pool.get().await.map_err(InboxError::Database)?;
+        let tx = client.transaction().await?;
+        let rows = match context {
+            None => {
+                tx.query(
+                    &format!(
+                        "SELECT s.subscription_id FROM webhook_subscriptions s JOIN webhook_hooks h ON h.hook_id = s.hook_id
+                         WHERE h.platform = $1 AND s.source_kind = $2 AND s.source_key = ANY($3)
+                           AND s.state IN {LIVE} AND NOT s.suspended
+                         ORDER BY s.subscription_id FOR UPDATE OF s"
+                    ),
+                    &[&platform, &source_kind, &keys],
+                )
+                .await?
+            }
+            Some(name) => {
+                tx.query(
+                    &format!(
+                        "SELECT s.subscription_id FROM webhook_subscriptions s JOIN webhook_hooks h ON h.hook_id = s.hook_id
+                         WHERE h.platform = $1 AND s.source_kind = $2 AND (s.context::jsonb ->> $3) = ANY($4)
+                           AND s.state IN {LIVE} AND NOT s.suspended
+                         ORDER BY s.subscription_id FOR UPDATE OF s"
+                    ),
+                    &[&platform, &source_kind, &name, &keys],
+                )
+                .await?
+            }
+        };
+        let ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+        let suspended = tx
+            .execute(
+                "UPDATE webhook_subscriptions SET suspended = TRUE WHERE subscription_id = ANY($1)",
+                &[&ids],
+            )
+            .await?;
+        self.commit(tx).await?;
+        Ok(suspended)
+    }
+
+    /// Ends a subscription for a reason the caller established (its
+    /// consumer lost standing on the connection).
+    pub async fn close(&self, id: &str, reason: &str, now: SystemTime) -> Result<()> {
+        let mut client = self.pool.get().await.map_err(InboxError::Database)?;
+        let tx = client.transaction().await?;
+        let Some(mut row) = Self::lock_subscription(&tx, id).await? else {
+            return Ok(());
+        };
+        if !row.state.is_live() {
+            return Ok(());
+        }
+        let mut owners = Self::lock_owners(&tx, std::slice::from_ref(&row.owner)).await?;
+        let mut deployment = Self::lock_deployment(&tx).await?;
+        let owner = owners.get_mut(&row.owner).expect("locked");
+        Self::end(
+            &tx,
+            &self.policy,
+            &mut row,
+            owner,
+            &mut deployment,
+            reason,
+            now,
+        )
+        .await?;
+        Self::save_owners(&tx, &owners).await?;
+        Self::save_deployment(&tx, &deployment).await?;
+        self.commit(tx).await
+    }
+
+    /// Deletes a connection and, in the same transaction, ends its
+    /// subscriptions and starts cleanup of the dedicated hooks this leaves
+    /// unused (`webhook-subscriptions` §4.1). Returns whether `owner` owned
+    /// it and it was deleted.
+    pub async fn delete_connection(
+        &self,
+        connection_id: &str,
+        owner_id: &str,
+        now: SystemTime,
+    ) -> Result<bool> {
+        let mut client = self.pool.get().await.map_err(InboxError::Database)?;
+        let tx = client.transaction().await?;
+        let ids: Vec<String> = tx
+            .query(
+                &format!(
+                    "SELECT subscription_id FROM webhook_subscriptions
+                     WHERE connection_id = $1 AND owner = $2 AND state IN {LIVE}
+                     ORDER BY subscription_id"
+                ),
+                &[&connection_id, &owner_id],
+            )
+            .await?
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        let mut rows = Vec::new();
+        for id in &ids {
+            if let Some(row) = Self::lock_subscription(&tx, id).await? {
+                rows.push(row);
+            }
+        }
+        if !rows.is_empty() {
+            let mut owners = Self::lock_owners(&tx, &[owner_id.to_owned()]).await?;
+            let mut deployment = Self::lock_deployment(&tx).await?;
+            let owner = owners.get_mut(owner_id).expect("locked");
+            for row in rows.iter_mut().filter(|row| row.state.is_live()) {
+                Self::end(
+                    &tx,
+                    &self.policy,
+                    row,
+                    owner,
+                    &mut deployment,
+                    ended::CONNECTION_DELETED,
+                    now,
+                )
+                .await?;
+            }
+            Self::save_owners(&tx, &owners).await?;
+            Self::save_deployment(&tx, &deployment).await?;
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM agent_connections WHERE connection_id = $1 AND owner = $2",
+                &[&connection_id, &owner_id],
+            )
+            .await?;
+        if deleted == 0 {
+            // Not the owner's: nothing may change.
+            return Ok(false);
+        }
+        self.commit(tx).await?;
+        Ok(true)
+    }
+
     // --- sweeping ----------------------------------------------------------------
 
     pub(crate) async fn transaction_client(
@@ -2380,4 +2653,9 @@ enum ReceiptStatus {
     Duplicate,
     /// A cap left no receipt to evict: store nothing, record a gap, 2xx.
     Floor,
+}
+
+/// `now` as the inbox's clock reads it.
+pub fn now() -> SystemTime {
+    SystemTime::now()
 }

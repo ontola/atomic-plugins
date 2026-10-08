@@ -457,117 +457,10 @@ async fn forward_inner(
     }
     target.set_path(&request_path);
     target.set_query(query.as_deref());
-    let injection = match &credential {
-        StoredCredential::OAuth { access_token, .. } => {
-            // Only while the platform still resolves to OAuth: if its
-            // selection has since moved to an apiKey profile, the token must
-            // not go to that profile's operations, and the person has to
-            // connect again.
-            if !matches!(
-                state.catalog.security_scheme(platform),
-                Ok(crate::providers::SecurityScheme::OAuth(_))
-            ) {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            CredentialInjection::Bearer(access_token.clone())
-        }
-        StoredCredential::ApiKey {
-            key,
-            scheme: bound,
-            placement,
-            ..
-        } => {
-            let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
-                state.catalog.security_scheme(platform)
-            else {
-                return Err(ApiError::Internal);
-            };
-            // A key entered for one apiKey scheme is not sent under another,
-            // nor to another header or query parameter than it was entered
-            // for (rows written before the binding have none, and are sent
-            // as before).
-            if bound
-                .as_ref()
-                .is_some_and(|bound| *bound != scheme.scheme_name)
-                || placement
-                    .as_ref()
-                    .is_some_and(|placement| *placement != scheme.placement())
-            {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            match scheme.location {
-                crate::providers::ApiKeyLocation::Header => CredentialInjection::Header {
-                    name: scheme.name,
-                    value: key.clone(),
-                },
-                crate::providers::ApiKeyLocation::Query => {
-                    target.query_pairs_mut().append_pair(&scheme.name, key);
-                    CredentialInjection::None
-                }
-                crate::providers::ApiKeyLocation::Cookie => {
-                    return Ok((
-                        StatusCode::NOT_IMPLEMENTED,
-                        "cookie-located API keys are not supported",
-                    )
-                        .into_response());
-                }
-            }
-        }
-        StoredCredential::HttpBearer {
-            token,
-            scheme: bound,
-            ..
-        } => {
-            // Only while the platform still resolves to the bearer scheme
-            // the token was entered for: it is not sent under another kind
-            // or another scheme.
-            match state.catalog.security_scheme(platform) {
-                Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
-                    name,
-                    auth: crate::providers::HttpAuth::Bearer,
-                    ..
-                })) if bound.as_ref().is_none_or(|bound| *bound == name) => {
-                    CredentialInjection::Bearer(token.clone())
-                }
-                _ => return Err(ApiError::CredentialRefreshFailed),
-            }
-        }
-        StoredCredential::HttpBasic {
-            username,
-            password,
-            scheme: bound,
-            layout: bound_layout,
-            ..
-        } => match state.catalog.security_scheme(platform) {
-            // The same for Basic, and the declared layout must still be the
-            // one the halves were built from.
-            Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
-                name,
-                auth: crate::providers::HttpAuth::Basic(layout),
-                ..
-            })) if bound.as_ref().is_none_or(|bound| *bound == name)
-                && bound_layout
-                    .as_ref()
-                    .is_none_or(|bound| *bound == layout.layout()) =>
-            {
-                CredentialInjection::Basic {
-                    username: username.clone(),
-                    password: password.clone(),
-                }
-            }
-            _ => return Err(ApiError::CredentialRefreshFailed),
-        },
-        StoredCredential::NoCredential { .. } => {
-            // Only while the catalog still says the platform needs none: if
-            // it has since gained a scheme, this connection holds nothing to
-            // send, and the person has to connect again.
-            if state.catalog.security_scheme(platform)
-                != Ok(crate::providers::SecurityScheme::NoCredential)
-            {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            CredentialInjection::None
-        }
+    let injection = match resolve_injection(state, platform, &credential, &mut target) {
+        Ok(injection) => injection,
+        Err(InjectionError::Api(error)) => return Err(error),
+        Err(InjectionError::Response(response)) => return Ok(*response),
     };
     let upstream = match upstream_request(
         &state.http_client,
@@ -600,6 +493,299 @@ async fn forward_inner(
     *response.status_mut() = status;
     *response.headers_mut() = forwarded_headers;
     Ok(response)
+}
+
+pub(crate) enum InjectionError {
+    Api(ApiError),
+    Response(Box<Response>),
+}
+
+/// How `credential` goes upstream for `platform`, only while the catalog
+/// still resolves the platform to the scheme it was entered for.
+pub(crate) fn resolve_injection(
+    state: &AppState,
+    platform: &str,
+    credential: &StoredCredential,
+    target: &mut Url,
+) -> Result<CredentialInjection, InjectionError> {
+    Ok(match &credential {
+        StoredCredential::OAuth { access_token, .. } => {
+            // Only while the platform still resolves to OAuth: if its
+            // selection has since moved to an apiKey profile, the token must
+            // not go to that profile's operations, and the person has to
+            // connect again.
+            if !matches!(
+                state.catalog.security_scheme(platform),
+                Ok(crate::providers::SecurityScheme::OAuth(_))
+            ) {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            CredentialInjection::Bearer(access_token.clone())
+        }
+        StoredCredential::ApiKey {
+            key,
+            scheme: bound,
+            placement,
+            ..
+        } => {
+            let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
+                state.catalog.security_scheme(platform)
+            else {
+                return Err(InjectionError::Api(ApiError::Internal));
+            };
+            // A key entered for one apiKey scheme is not sent under another,
+            // nor to another header or query parameter than it was entered
+            // for (rows written before the binding have none, and are sent
+            // as before).
+            if bound
+                .as_ref()
+                .is_some_and(|bound| *bound != scheme.scheme_name)
+                || placement
+                    .as_ref()
+                    .is_some_and(|placement| *placement != scheme.placement())
+            {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            match scheme.location {
+                crate::providers::ApiKeyLocation::Header => CredentialInjection::Header {
+                    name: scheme.name,
+                    value: key.clone(),
+                },
+                crate::providers::ApiKeyLocation::Query => {
+                    target.query_pairs_mut().append_pair(&scheme.name, key);
+                    CredentialInjection::None
+                }
+                crate::providers::ApiKeyLocation::Cookie => {
+                    return Err(InjectionError::Response(Box::new(
+                        (
+                            StatusCode::NOT_IMPLEMENTED,
+                            "cookie-located API keys are not supported",
+                        )
+                            .into_response(),
+                    )));
+                }
+            }
+        }
+        StoredCredential::HttpBearer {
+            token,
+            scheme: bound,
+            ..
+        } => {
+            // Only while the platform still resolves to the bearer scheme
+            // the token was entered for: it is not sent under another kind
+            // or another scheme.
+            match state.catalog.security_scheme(platform) {
+                Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                    name,
+                    auth: crate::providers::HttpAuth::Bearer,
+                    ..
+                })) if bound.as_ref().is_none_or(|bound| *bound == name) => {
+                    CredentialInjection::Bearer(token.clone())
+                }
+                _ => return Err(InjectionError::Api(ApiError::CredentialRefreshFailed)),
+            }
+        }
+        StoredCredential::HttpBasic {
+            username,
+            password,
+            scheme: bound,
+            layout: bound_layout,
+            ..
+        } => match state.catalog.security_scheme(platform) {
+            // The same for Basic, and the declared layout must still be the
+            // one the halves were built from.
+            Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                name,
+                auth: crate::providers::HttpAuth::Basic(layout),
+                ..
+            })) if bound.as_ref().is_none_or(|bound| *bound == name)
+                && bound_layout
+                    .as_ref()
+                    .is_none_or(|bound| *bound == layout.layout()) =>
+            {
+                CredentialInjection::Basic {
+                    username: username.clone(),
+                    password: password.clone(),
+                }
+            }
+            _ => return Err(InjectionError::Api(ApiError::CredentialRefreshFailed)),
+        },
+        StoredCredential::NoCredential { .. } => {
+            // Only while the catalog still says the platform needs none: if
+            // it has since gained a scheme, this connection holds nothing to
+            // send, and the person has to connect again.
+            if state.catalog.security_scheme(platform)
+                != Ok(crate::providers::SecurityScheme::NoCredential)
+            {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            CredentialInjection::None
+        }
+    })
+}
+
+/// What a call the receiver makes itself came back with.
+#[derive(Debug)]
+pub(crate) enum ReceiverReply {
+    /// The provider answered (after at most one forced refresh on a 401).
+    Answered(StatusCode, Bytes),
+    /// The call could not be made as asked: the connection is gone, its
+    /// credential does not fit the catalog any more, or the operation is not
+    /// in the catalog. Nothing was sent.
+    Refused(&'static str),
+    /// The provider could not be reached, answered too much, or a token
+    /// refresh failed: nothing is known.
+    Unreachable,
+}
+
+/// A request the proxy makes on its own behalf through a connection, for
+/// webhook access checks and hook cleanup (#369): the same catalog
+/// allowlist, credential binding and refresh as a proxied request, without
+/// any caller header, query or body, and without counting as use of the
+/// connection. A 401 forces one token refresh and one retry, so only a 401
+/// that persists after a refresh comes back as such.
+pub(crate) async fn receiver_call(
+    state: &AppState,
+    security: &Security,
+    connection_id: &str,
+    platform: &str,
+    method: Method,
+    relative_path: &str,
+) -> ReceiverReply {
+    const MAX_CHECK_RESPONSE: usize = 1_048_576;
+    let Ok(Some(record)) = security.load_connection(connection_id).await else {
+        return ReceiverReply::Refused("unknown-connection");
+    };
+    let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&record.credential) else {
+        return ReceiverReply::Refused("unreadable-credential");
+    };
+    if record.platform != platform || credential.provider() != platform {
+        return ReceiverReply::Refused("platform-mismatch");
+    }
+    let Some(base) = state.catalog.server_base_path(platform) else {
+        return ReceiverReply::Refused("not-in-catalog");
+    };
+    let request_path = format!("{base}{relative_path}");
+    if contains_traversal_segment(&request_path) {
+        return ReceiverReply::Refused("traversal");
+    }
+    let (Some(required_headers), Some(mut target)) = (
+        state
+            .catalog
+            .required_headers(platform, method.as_str(), &request_path),
+        state
+            .catalog
+            .allows(platform, method.as_str(), &request_path),
+    ) else {
+        return ReceiverReply::Refused("not-in-catalog");
+    };
+    if state
+        .catalog
+        .validate_request(platform, method.as_str(), &request_path, None, None, false)
+        .is_err()
+    {
+        return ReceiverReply::Refused("not-in-catalog");
+    }
+    target.set_path(&request_path);
+    target.set_query(None);
+    if refresh_connection(state, security, connection_id, &mut credential)
+        .await
+        .is_err()
+    {
+        return ReceiverReply::Unreachable;
+    }
+    let mut refreshed = false;
+    loop {
+        let mut url = target.clone();
+        let Ok(injection) = resolve_injection(state, platform, &credential, &mut url) else {
+            return ReceiverReply::Refused("credential-does-not-fit");
+        };
+        let Ok(upstream) = upstream_request(
+            &state.http_client,
+            method.clone(),
+            url,
+            injection,
+            &HeaderMap::new(),
+            &required_headers,
+            Bytes::new(),
+        )
+        .send()
+        .await
+        else {
+            return ReceiverReply::Unreachable;
+        };
+        let status = upstream.status();
+        if status == StatusCode::UNAUTHORIZED && !refreshed && can_refresh(&credential) {
+            if force_refresh(state, security, connection_id, &mut credential)
+                .await
+                .is_err()
+            {
+                return ReceiverReply::Unreachable;
+            }
+            refreshed = true;
+            continue;
+        }
+        return match read_bounded_body(upstream, MAX_CHECK_RESPONSE).await {
+            Ok(bytes) => ReceiverReply::Answered(status, bytes),
+            Err(()) => ReceiverReply::Unreachable,
+        };
+    }
+}
+
+fn can_refresh(credential: &StoredCredential) -> bool {
+    matches!(
+        credential,
+        StoredCredential::OAuth {
+            refresh_token: Some(_),
+            ..
+        }
+    )
+}
+
+/// Refreshes an OAuth token now, whatever its expiry, under the same
+/// per-connection lease as [`refresh_connection`]. If another caller
+/// refreshed it meanwhile, that token is used instead.
+async fn force_refresh(
+    state: &AppState,
+    security: &Security,
+    connection_id: &str,
+    credential: &mut StoredCredential,
+) -> Result<(), ()> {
+    let StoredCredential::OAuth {
+        access_token: used, ..
+    } = credential.clone()
+    else {
+        return Err(());
+    };
+    if !security
+        .claim_refresh_lease(connection_id)
+        .await
+        .map_err(|_| ())?
+    {
+        return Err(());
+    }
+    let current = security
+        .load_connection(connection_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|record| serde_json::from_slice::<StoredCredential>(&record.credential).ok());
+    if let Some(current) = current {
+        *credential = current;
+    }
+    if matches!(credential, StoredCredential::OAuth { access_token, .. } if *access_token != used) {
+        let _ = security.release_refresh_lease(connection_id).await;
+        return Ok(());
+    }
+    if refresh_token(state, credential).await.is_err() {
+        let _ = security.release_refresh_lease(connection_id).await;
+        return Err(());
+    }
+    let serialized = serde_json::to_vec(&*credential).map_err(|_| ())?;
+    security
+        .store_refreshed_connection(connection_id, &serialized)
+        .await
+        .map_err(|_| ())
 }
 
 // Forward only representation/pagination metadata, never provider cookies or credentials.

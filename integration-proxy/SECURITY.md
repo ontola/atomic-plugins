@@ -354,9 +354,8 @@ format before live credentials are handled.
 ## Webhook inbox (#369, unreleased)
 
 Off by default. With `WEBHOOKS_ENABLED` unset there are no inbox tables, no
-sweeper and no route. Enabled, this release only creates the tables and runs
-the sweeper: no webhook route is mounted, so nothing can reach the inbox
-from outside. Step 3 adds the receiver and the consumer routes. The inbox
+sweeper and no webhook route. Enabled, the tables, the sweeper and the
+routes exist (README, "Routes"); the receiver is described below. The inbox
 follows `openapi-extensions/spec/webhook-subscriptions` and the storage rules
 of `webhook-deliveries`, with the plan's pilot limits
 (`src/webhooks/policy.rs`, checked against the spec's schema by a test).
@@ -415,14 +414,20 @@ What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
   more gets a cleanup job, also while still provisioning (the provider may
   have created it; the job lists, then deletes), and so does one with no
   live subscription an hour after it was created. A provider answer that
-  arrives after cleanup started is recorded for it; one after cleanup
-  gave up starts a new cleanup, so no created hook is left unrecorded.
-  Cleanup: backoff up to a day, a 30-day deadline, then a visible failure.
-  New dedicated hooks are refused while the owner holds 20, or the
-  deployment 10,000, that are not closed; since each has at most one
-  cleanup job, those are also the caps on jobs, and one owner's failing
-  cleanups never block another's. Shared application hooks are never
-  changed. Provider calls (and the access re-check before them) are step 3.
+  arrives after cleanup started is recorded for it, and one that arrives
+  after cleanup gave up (while the closed record still exists) starts a
+  new cleanup. Not covered: an answer that arrives after the closed record
+  was purged by the sweeper (30 days after closing at the earliest) finds
+  no record and is refused; that hook is left at the provider for the
+  person or operator to remove. Cleanup: backoff up to a day, a 30-day
+  deadline, then a visible failure. New dedicated hooks are refused while
+  the owner holds 20, or the deployment 10,000, that are not closed. Each
+  such hook has at most one cleanup job, so these bound the jobs too,
+  except in two cases: when management of a hook moves to another owner,
+  that owner can hold more than 20; and a late provider answer reopens a
+  cleanup job for a hook that no longer counted. Both are rare, and each
+  adds one job per such hook. One owner's failing cleanups never block
+  another's new hooks. Shared application hooks are never changed.
 
 Concurrency: every write takes row locks in one order: subscription rows
 by id, owner rows by owner, the deployment row, then (as needed) receipt
@@ -440,3 +445,48 @@ stands in, so a sweeper that never runs also stops new subscriptions.
 Not yet verified: physical bytes per row, sweep lag under load, and
 behaviour with several proxy instances beyond what row locks guarantee
 (tested with concurrent tasks against one database).
+
+### Receiver and consumer routes (#369 step 3)
+
+`src/webhooks/{ingress,verify,metadata,provider,routes}.rs`; tests in
+`src/webhooks/route_tests.rs` against PostgreSQL and a stand-in provider,
+including the spec's synthetic GitHub fixtures replayed through the same
+generic code.
+
+- **Generic.** A platform takes part only through its composed document's
+  `x-webhook-deliveries`; nothing names a provider. What a document cannot
+  express in Webhook Deliveries 0.1.0-draft (other algorithms, handshakes,
+  non-JSON bodies) is refused.
+- **Verification before parsing.** The body limit is the verification cap
+  (25 MiB), enforced while reading. The endpoint's profile and secret are
+  looked up, the HMAC-SHA256 over the exact bytes is compared in constant
+  time (`Mac::verify_slice`), and only then is anything in the body or the
+  delivery headers read. A missing, repeated or malformed signature, a
+  timestamp outside its tolerance, and a missing secret are all `401`, and
+  write nothing. A body nested deeper than 64 levels is not parsed.
+- **Routing.** A delivery reaches a subscription only through a binding
+  that an access check with that subscriber's own connection established:
+  the key comes from the provider's answer, never from the subscriber or
+  the delivery. Access parameters are percent-encoded as one path segment
+  each, and `.`, `..` and missing parameters are refused. The check is sent
+  like a proxied request (catalog allowlist, credential binding, no
+  redirects, no caller headers), and a 401 forces one token refresh before
+  it counts. A revocation delivery suspends the bindings it names until
+  the next check: a failure closes them, a pass resumes with an
+  `access-suspended` gap.
+- **Consumers.** Every route is signed by the subscription's consumer, and
+  that consumer's standing on the connection is checked on every request.
+  A removed delegation closes the subscription on its next request.
+  Deleting a connection ends its subscriptions and starts hook cleanup in
+  the same transaction. No events are served on an access check older than
+  12 hours: the receiver runs the check itself first.
+- **No provider writes.** Subscriptions use the platform's shared
+  application hook only. Dedicated hooks are not created by this release,
+  so their deletion (a provider write) can only concern hooks a later
+  release creates. That deletion re-runs the managing connection's access
+  check with the hook's recorded parameters and requires the bound key
+  before any `list` or `delete`.
+
+Not yet verified: any real provider's deliveries (only the synthetic
+fixtures), and rate limits on verification work and subscription creation,
+which the plan requires but this release does not set.

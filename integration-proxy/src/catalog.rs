@@ -166,6 +166,34 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// The path of the platform's first server URL, without a trailing
+    /// `/`: the prefix of every allowlisted request path.
+    pub(crate) fn server_base_path(&self, platform: &str) -> Option<String> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        let server = document
+            .get("servers")?
+            .as_array()?
+            .first()?
+            .get("url")?
+            .as_str()?;
+        Some(
+            url::Url::parse(server)
+                .ok()?
+                .path()
+                .trim_end_matches('/')
+                .to_owned(),
+        )
+    }
+
+    /// The platform's composed document, when it declares
+    /// `x-webhook-deliveries` (Webhook Deliveries 0.1.0-draft). Read by the
+    /// generic webhook code for any platform alike.
+    pub(crate) fn webhook_document(&self, platform: &str) -> Option<Value> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        document.get("x-webhook-deliveries")?;
+        Some(document)
+    }
+
     pub fn required_headers(
         &self,
         platform: &str,

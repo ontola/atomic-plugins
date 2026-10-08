@@ -25,6 +25,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         key_check_limit: 0,
         key_check_window: crate::KEY_CHECK_WINDOW,
         trust_forwarded_for: crate::config::TrustForwardedFor::None,
+        webhooks: None,
         test_upstream: None,
     }
 }

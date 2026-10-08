@@ -124,11 +124,28 @@ pub async fn delete(
         async {
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             owned(&signed, &connection_id).await?;
-            signed
-                .security
-                .delete_connection(&connection_id, signed.signer.as_str())
-                .await
-                .map_err(|_| ApiError::Unavailable)?;
+            match &state.webhooks {
+                // Its subscriptions end, and the cleanup of hooks this leaves
+                // unused starts, in the same transaction (#369).
+                Some(webhooks) => {
+                    webhooks
+                        .store
+                        .delete_connection(
+                            &connection_id,
+                            signed.signer.as_str(),
+                            crate::webhooks::store::now(),
+                        )
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+                None => {
+                    signed
+                        .security
+                        .delete_connection(&connection_id, signed.signer.as_str())
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+            }
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         .await,
