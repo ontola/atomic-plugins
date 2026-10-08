@@ -153,6 +153,7 @@ test('check installs a lockfile without node_modules before building, once, unle
     writeFileSync(join(base, 'integrations/gamma/app/pnpm-lock.yaml'), '');
     mkdirSync(join(base, 'integrations/gamma/app/node_modules'));
     const installed = [];
+
     const install = cwd => {
       installed.push(cwd);
       mkdirSync(join(cwd, 'node_modules'));
