@@ -45,7 +45,7 @@ class ReadonlyOverlayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.asana = composed("ontola/openapi-directory", "b58c91d9f59c6a10178916e7948793809edae46d", "asana.com/1.0")
-        cls.airtable = composed("localthought/openapi-directory", "0015c1809b72209188f76d1795a12b0e322acb6e", "airtable.com/1.0-readonly")
+        cls.airtable = composed("localthought/openapi-directory", "1f5368e0251bfbaa233860dc8131507c38a4f8b3", "airtable.com/1.0-readonly")
 
     def test_asana_profile_is_scoped_to_selected_read_operations(self):
         doc = self.asana

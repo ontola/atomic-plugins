@@ -27,7 +27,7 @@ no provider account was connected.
 ## Airtable
 
 - OAD: `ontola/openapi-directory` commit
-  `0015c1809b72209188f76d1795a12b0e322acb6e`,
+  `1f5368e0251bfbaa233860dc8131507c38a4f8b3`,
   `APIs/airtable.com/1.0-readonly/openapi.yaml`.
 - OAuth authorization code endpoints:
   `https://airtable.com/oauth2/v1/authorize` and
@@ -37,13 +37,12 @@ no provider account was connected.
   has no secret. The overlay declares those methods and requires PKCE.
 - Selected GET operation/scope pairs: `/v0/meta/bases` and
   `/v0/meta/bases/{baseId}/tables` → `schema.bases:read`;
-  `/v0/{baseId}/{tableIdOrName}` → `data.records:read`.
-- Record pagination copies the opaque `offset` to the same query parameter,
-  preserves other query arguments and pages the `records` array. Airtable's
-  public guide documents up to 100 records per page and stops when `offset`
-  is absent. The OAD does not declare a single-record GET operation, so a
-  record identity CRUD mapping is intentionally not inferred from the list
-  endpoint.
+  `/v0/{baseId}/{tableIdOrName}` and its single-record path
+  `/v0/{baseId}/{tableIdOrName}/{recordId}` → `data.records:read`.
+- The bases list and records list copy the opaque `offset` to the same query
+  parameter, preserve other query arguments and page their `bases` and `records`
+  arrays. The record CRUD mapping uses the declared single-record GET and binds
+  `recordId` from the record `id`.
 - References: [Airtable OAuth reference](https://airtable.com/developers/web/api/oauth-reference),
   [Official OAuth example](https://github.com/Airtable/oauth-example),
   [Airtable Web API pagination and scopes](https://support.airtable.com/articles/6292134965-getting-started-with-airtable-s-web-api).

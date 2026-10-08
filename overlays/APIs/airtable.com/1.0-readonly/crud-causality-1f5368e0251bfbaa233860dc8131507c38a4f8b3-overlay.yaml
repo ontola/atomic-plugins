@@ -1,0 +1,37 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/1f5368e0251bfbaa233860dc8131507c38a4f8b3/APIs/airtable.com/1.0-readonly/openapi.yaml
+info:
+  title: Airtable read-only record CRUD causality
+  version: 1.0.0
+  description: >-
+    Read-only table-record collection and item operations. Collection envelope,
+    record identity, and API paths follow the pinned Airtable-compatible OAD.
+actions:
+- target: $.components
+  update:
+    crudResources:
+      record:
+        schema:
+          $ref: '#/components/schemas/Record'
+        description: A record in an Airtable table.
+        identity:
+          urlTemplate: /v0/{baseId}/{tableIdOrName}/{recordId}
+          bindings:
+            recordId:
+              field: id
+        collections:
+          tableRecords:
+            urlTemplate: /v0/{baseId}/{tableIdOrName}
+            envelope:
+              itemsField: records
+- target: $.paths['/v0/{baseId}/{tableIdOrName}'].get
+  update:
+    x-crud:
+      action: list
+      resource: record
+      collection: tableRecords
+- target: $.paths['/v0/{baseId}/{tableIdOrName}/{recordId}'].get
+  update:
+    x-crud:
+      action: read
+      resource: record

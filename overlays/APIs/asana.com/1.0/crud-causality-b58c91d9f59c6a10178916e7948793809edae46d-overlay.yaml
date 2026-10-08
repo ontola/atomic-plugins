@@ -33,12 +33,6 @@ actions:
           bindings:
             project_gid:
               field: gid
-        references:
-          workspace:
-            resource: workspace
-            bindings:
-              workspace_gid:
-                field: workspace.gid
         collections:
           workspaceProjects:
             urlTemplate: /workspaces/{workspace_gid}/projects
@@ -53,12 +47,6 @@ actions:
           bindings:
             task_gid:
               field: gid
-        references:
-          projects:
-            resource: project
-            bindings:
-              project_gid:
-                field: memberships[].project.gid
         collections:
           projectTasks:
             urlTemplate: /projects/{project_gid}/tasks

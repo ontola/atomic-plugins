@@ -1,5 +1,5 @@
 overlay: 1.0.0
-extends: https://raw.githubusercontent.com/ontola/openapi-directory/0015c1809b72209188f76d1795a12b0e322acb6e/APIs/airtable.com/1.0-readonly/openapi.yaml
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/1f5368e0251bfbaa233860dc8131507c38a4f8b3/APIs/airtable.com/1.0-readonly/openapi.yaml
 info:
   title: Airtable read-only OAuth authentication profile
   version: 1.0.0
@@ -35,6 +35,10 @@ actions:
     security:
     - airtableReadOnlyOAuth: [schema.bases:read]
 - target: $.paths['/v0/{baseId}/{tableIdOrName}'].get
+  update:
+    security:
+    - airtableReadOnlyOAuth: [data.records:read]
+- target: $.paths['/v0/{baseId}/{tableIdOrName}/{recordId}'].get
   update:
     security:
     - airtableReadOnlyOAuth: [data.records:read]
