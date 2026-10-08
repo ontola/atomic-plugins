@@ -97,12 +97,14 @@ actions:
               select:
                 value: select
                 schema:
+                  type: object
                   nullable: true
                   allOf: [{$ref: '#/components/schemas/NotionSelectOption'}]
                 options: {field: select.options, id: id, name: name, valueId: id}
               status:
                 value: status
                 schema:
+                  type: object
                   nullable: true
                   allOf: [{$ref: '#/components/schemas/NotionSelectOption'}]
                 options: {field: status.options, id: id, name: name, valueId: id}
