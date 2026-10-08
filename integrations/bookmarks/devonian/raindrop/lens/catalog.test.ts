@@ -20,7 +20,7 @@ interface Example {
   error?: string;
   edits?: {
     direction?: 'backward';
-    target: Row;
+    target?: Row;
     source?: RaindropRecord;
     error?: string;
   }[];
@@ -84,7 +84,9 @@ describe.each(LENSES)('catalog lens %s agrees with the code lens', name => {
 
       for (const edit of example.edits ?? []) {
         if (edit.direction === 'backward')
-          expect(written(edit.source!, example.target!)).toEqual(edit.target);
+          if (edit.error === undefined)
+            expect(written(edit.source!, example.target!)).toEqual(edit.target);
+          else refused(edit.error, () => raindropToAtomic(edit.source!));
         else if (edit.error === undefined)
           // A forward edit's target is the whole row; a missing field is a
           // removal, which the code lens reads the same way.

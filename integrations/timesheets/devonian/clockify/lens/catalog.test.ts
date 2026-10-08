@@ -14,7 +14,8 @@ interface Example {
   target?: Record<string, unknown>;
   error?: string;
   edits?: {
-    target: Record<string, unknown>;
+    direction?: 'backward';
+    target?: Record<string, unknown>;
     source?: ClockifyTimeEntry;
     error?: string;
   }[];
@@ -82,6 +83,15 @@ describe.each(LENSES)('catalog lens %s agrees with the code lens', name => {
       expect(row(example.source)).toEqual(example.target);
 
       for (const edit of example.edits ?? []) {
+        // Backward: the table row written from a provider record is the
+        // code lens's view of that record.
+        if (edit.direction === 'backward') {
+          if (edit.error === undefined)
+            expect(row(edit.source!)).toEqual(edit.target);
+          else refused(edit.error, () => code.get(edit.source!));
+          continue;
+        }
+
         const wanted = { ...example.target, ...edit.target };
         const view = {
           ...code.get(example.source),

@@ -20,7 +20,7 @@ interface Example {
   error?: string;
   edits?: {
     direction?: 'backward';
-    target: Row;
+    target?: Row;
     source?: TodoistTask;
     error?: string;
   }[];
@@ -40,7 +40,9 @@ const load = (name: string) =>
  */
 const refusals: Record<string, RegExp> = {
   'read-only': /^This lens is read-only$/,
-  'out-of-domain': /^Deleted tasks require a deletion event, not a projection$/,
+  // Two of the code lens's checks back the catalog's two guards.
+  'out-of-domain':
+    /^(?:Deleted tasks require a deletion event, not a projection|Expected nonempty task content and a string description)$/,
 };
 
 const refused = (code: string, run: () => unknown) => {
@@ -85,7 +87,9 @@ describe.each(LENSES)('catalog lens %s agrees with the code lens', name => {
 
       for (const edit of example.edits ?? []) {
         if (edit.direction === 'backward') {
-          expect(written(edit.source!, example.target!)).toEqual(edit.target);
+          if (edit.error === undefined)
+            expect(written(edit.source!, example.target!)).toEqual(edit.target);
+          else refused(edit.error, () => todoistToAtomic(edit.source!));
           continue;
         }
 

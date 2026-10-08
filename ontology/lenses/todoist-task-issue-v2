@@ -184,6 +184,17 @@
               "string": "tomorrow 10:00"
             }
           }
+        },
+        {
+          "direction": "backward",
+          "source": {
+            "id": "task-a",
+            "content": "Original",
+            "description": "**Body**",
+            "checked": false,
+            "is_deleted": true
+          },
+          "error": "out-of-domain"
         }
       ]
     },
@@ -210,6 +221,14 @@
         "description": "",
         "checked": false,
         "is_deleted": true
+      },
+      "error": "out-of-domain"
+    },
+    {
+      "source": {
+        "id": "task-d",
+        "description": "No content",
+        "checked": false
       },
       "error": "out-of-domain"
     }

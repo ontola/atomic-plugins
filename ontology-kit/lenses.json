@@ -519,6 +519,24 @@
                 "work-end": 1791198000500
               },
               "error": "precision"
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "id": "entry-2",
+                "description": "Write the report",
+                "billable": true,
+                "projectId": "project-1",
+                "taskId": "task-1",
+                "tagIds": ["tag-1"],
+                "type": "REGULAR",
+                "timeInterval": {
+                  "start": "2026-10-05T11:00:00Z",
+                  "end": null,
+                  "duration": null
+                }
+              },
+              "error": "out-of-domain"
             }
           ]
         },
@@ -721,6 +739,17 @@
                 ],
                 "https://atomicdata.dev/task/v1/due-date": "2026-10-09"
               }
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "id": "task-a",
+                "content": "Original",
+                "description": "**Body**",
+                "checked": false,
+                "is_deleted": true
+              },
+              "error": "out-of-domain"
             }
           ]
         },
@@ -747,6 +776,14 @@
             "description": "",
             "checked": false,
             "is_deleted": true
+          },
+          "error": "out-of-domain"
+        },
+        {
+          "source": {
+            "id": "task-d",
+            "description": "No content",
+            "checked": false
           },
           "error": "out-of-domain"
         }
@@ -866,6 +903,14 @@
                 "https://atomicdata.dev/properties/name": "Notes",
                 "https://atomicdata.dev/property/url": "https://example.org/notes"
               }
+            },
+            {
+              "direction": "backward",
+              "source": {
+                "title": "Notes",
+                "link": "https://example.org/notes"
+              },
+              "error": "out-of-domain"
             }
           ]
         },

@@ -187,10 +187,12 @@ roles and skips one-way fields.
 
 **Laws**, checked on every catalog example: GetPut
 (`put(get(s), s) = s`) forward on the example source and backward on the
-example target; and for each edit, forward PutGet (`get(put(v, s)) = v` on
-the mapped fields) and stable put (putting the same view twice changes
-nothing more). PutGet and stable put are not checked backward. They hold on
-the examples, which is evidence, not a proof over all values.
+example target; and for each edit, in the edit's direction, PutGet
+(`get(put(v, s)) = v` on the fields the view holds, and, under `absent:
+"unset"`, a field the view leaves out reads back absent) and stable put
+(putting the same view twice changes nothing more). They hold on the
+examples, which is evidence, not a proof over all values. The backward
+limits are listed under "Mapping version 3".
 
 ### Mapping version 3 (pieces.md L2)
 
@@ -213,12 +215,18 @@ exact meaning, and published version 2 files are unchanged.
     (`orAbsent: true` also lets it be absent);
   - `notIn: [values]`, where the value is absent or equals none of them.
 
-  A forward `get` refuses a record outside the guards with
-  `out-of-domain`. A forward `put` refuses one too, both for the previous
-  record and for the record it would write. Backward, guards are not
-  applied: the row there is in the target shape. Release 2 uses them for a
-  running Clockify timer (`/timeInterval/end` must be present), a
-  non-REGULAR entry and a deleted Todoist task.
+  Guards apply wherever a provider record is the input or the output:
+  - a forward `get` refuses a record outside them with `out-of-domain`;
+  - a forward `put` refuses one too, both for the previous record and for
+    the record it would write;
+  - a backward `put` refuses a view outside them: its view is the provider
+    record, so a deleted Todoist task is refused whichever way it would be
+    written, as the code lens does;
+  - a backward `get` reads a target-shaped row, so guards don't apply to it.
+
+  Release 2 uses them for a running Clockify timer (`/timeInterval/end` must
+  be present), a non-REGULAR entry, a deleted Todoist task, a task without
+  content and a Raindrop record without an `_id`.
 
 - **`absent`** says what a `put` does when the view lacks a field that the
   previous row had:
@@ -228,11 +236,15 @@ exact meaning, and published version 2 files are unchanged.
     source in a forward put, and removes the target in a backward one.
 
   A read-only field is never written forward, so there its `absent` only
-  matters backward. Only an object member can be removed (`bad-path` for an
-  array item, which would shift every later index). With `unset` or
-  `default`, `put` reads the view as the whole row, as Devonian's
-  `recordLens` does; a host that has only a patch merges it onto the
-  previous view first.
+  matters backward. Only an object member can be removed: `parseMapping`
+  refuses `unset` or `default` on a field whose source or target ends in an
+  array index, which would shift every later index. An object that a
+  removal leaves empty is removed too (`/due/date` leaves no `due: {}`),
+  but never the row itself or an array item. A `default` must be a source
+  value the field's converter accepts, checked when the mapping is parsed.
+  With `unset` or `default`, `put` reads the view as the whole row, as
+  Devonian's `recordLens` does; a host that has only a patch merges it onto
+  the previous view first.
 
 - **A one-way field is written backward.** A backward `put` (writing the
   table from a provider-shaped view) computes a one-way field's target from
@@ -240,9 +252,17 @@ exact meaning, and published version 2 files are unchanged.
   it. Version 2 skips such fields. Todoist's due day is the case: a task
   without a due date now removes a stale `due-date`, as the code lens does.
 
-Backward GetPut leaves one-way fields' target places out of the
-comparison: a target-shaped row cannot be turned into a source view that
-holds them, because they have no inverse.
+Backward limits, stated plainly:
+
+- **One-way fields break backward GetPut under `unset` or `default`.** A
+  target-shaped row cannot be turned into a source view that holds a
+  one-way field, since it has no inverse, so `put_b(get_b(row), row)`
+  removes that field's target (Todoist's `due-date`). The law check leaves
+  one-way fields' target places out of the comparison; for them backward
+  GetPut is not claimed.
+- **A backward view built from a row can fall outside the guards**, because
+  it lacks provider places no field maps (Raindrop's `_id`). `put` refuses
+  such a view, and the law check gives no GetPut verdict for it.
 
 ### Examples
 
@@ -252,8 +272,10 @@ or an `error` code that `get` must refuse with (`out-of-domain`). Optional
 
 - a changed `target` with the `source` that `put` must give, or with an
   `error` code (`read-only`, `precision`, …) that `put` must throw;
-- with `direction: "backward"`, a provider-shaped `source` view and the
-  `target` row that a backward `put` onto the example's target must give.
+- with `direction: "backward"`, a provider-shaped `source` view and either
+  the `target` row that a backward `put` onto the example's target must
+  give, or the `error` code it must refuse with (`out-of-domain` for a
+  view outside the guards).
 
 They are the lens's conformance fixtures: a host's interpreter can run them
 too.

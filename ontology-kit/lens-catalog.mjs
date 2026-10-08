@@ -376,11 +376,10 @@ export function lensSourceProblems(
           else if (
             backward &&
             (edit.source === undefined ||
-              edit.target === undefined ||
-              edit.error !== undefined)
+              (edit.target === undefined) === (edit.error === undefined))
           )
             problems.push(
-              `${what}: a backward edit has a source (the view) and a target (the row it gives)`,
+              `${what}: a backward edit has a source (the view) and either a target (the row it gives) or an error`,
             );
           else if (
             !backward &&
@@ -510,6 +509,22 @@ export function lensSourceProblems(
           const what = `${where}, edit ${j + 1}`;
 
           if (edit.direction === 'backward') {
+            if (edit.error !== undefined) {
+              try {
+                lensPut(parsed, edit.source, example.target, 'backward');
+                problems.push(
+                  `${what} (backward): expected a ${edit.error} refusal`,
+                );
+              } catch (error) {
+                if (!(error instanceof LensError) || error.code !== edit.error)
+                  problems.push(
+                    `${what} (backward): expected a ${edit.error} refusal, got ${error.message}`,
+                  );
+              }
+
+              continue;
+            }
+
             const put = lensPut(
               parsed,
               edit.source,
@@ -520,6 +535,13 @@ export function lensSourceProblems(
               problems.push(
                 `${what} (backward): put gives ${JSON.stringify(put)}, the example says ${JSON.stringify(edit.target)}`,
               );
+            for (const p of lawProblems(
+              parsed,
+              example.target,
+              edit.source,
+              'backward',
+            ))
+              problems.push(`${what}: ${p}`);
             continue;
           }
 

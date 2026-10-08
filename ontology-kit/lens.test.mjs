@@ -623,12 +623,123 @@ test('v3 absent: keep, unset and default, forward and backward', () => {
       }),
     'bad-mapping',
   );
-  // Removing an array item would shift indexes: refused.
-  const arrays = {
+  // Removing an array item would shift indexes: refused when parsed.
+  for (const field of [
+    { source: '/t/0', target: NAME, absent: 'unset' },
+    { source: '/t', target: '/n/1', absent: 'default', default: 'x' },
+  ])
+    code(() => parseMapping({ version: 3, fields: [field] }), 'bad-mapping');
+  // Through an object member it is fine.
+  const members = {
     version: 3,
-    fields: [{ source: '/t/0', target: NAME, absent: 'unset' }],
+    fields: [{ source: '/t/0/v', target: NAME, absent: 'unset' }],
   };
-  code(() => lensPut(arrays, {}, { t: ['x'] }), 'bad-path');
+  assert.deepEqual(lensPut(members, {}, { t: [{ v: 'x', w: 1 }] }), {
+    t: [{ w: 1 }],
+  });
+});
+
+test('v3 removal prunes the objects it empties, not the row or arrays', () => {
+  const m = {
+    version: 3,
+    fields: [{ source: '/due/date', target: DUE, absent: 'unset' }],
+  };
+  assert.deepEqual(lensPut(m, {}, { id: 1, due: { date: '2026-10-08' } }), {
+    id: 1,
+  });
+  assert.deepEqual(
+    lensPut(m, {}, { id: 1, due: { date: '2026-10-08', string: 'today' } }),
+    { id: 1, due: { string: 'today' } },
+  );
+  const deep = {
+    version: 3,
+    fields: [{ source: '/a/b/c', target: NAME, absent: 'unset' }],
+  };
+  assert.deepEqual(lensPut(deep, {}, { a: { b: { c: 1 } }, k: 2 }), { k: 2 });
+  assert.deepEqual(lensPut(deep, {}, { a: { b: { c: 1 }, x: [] } }), {
+    a: { x: [] },
+  });
+});
+
+test('v3 default must be a source value its converter accepts', () => {
+  code(
+    () =>
+      parseMapping({
+        version: 3,
+        fields: [
+          {
+            source: '/at',
+            target: START,
+            convert: 'iso-to-ms',
+            absent: 'default',
+            default: 'not an instant',
+          },
+        ],
+      }),
+    'bad-mapping',
+  );
+  assert.equal(
+    parseMapping({
+      version: 3,
+      fields: [
+        {
+          source: '/at',
+          target: START,
+          convert: 'iso-to-ms',
+          absent: 'default',
+          default: '2026-01-01T00:00:00Z',
+        },
+      ],
+    }).version,
+    3,
+  );
+});
+
+test('v3 backward put applies the guards to its view', () => {
+  const m = {
+    version: 3,
+    fields: [{ source: '/content', target: NAME }],
+    guards: [
+      { at: '/is_deleted', notIn: [true] },
+      { at: '/content', is: 'present' },
+    ],
+  };
+  const issueRow = { [NAME]: 'X' };
+  code(
+    () => lensPut(m, { content: 'X', is_deleted: true }, issueRow, 'backward'),
+    'out-of-domain',
+  );
+  code(() => lensPut(m, { id: 'a' }, issueRow, 'backward'), 'out-of-domain');
+  assert.deepEqual(lensPut(m, { content: 'Y' }, issueRow, 'backward'), {
+    [NAME]: 'Y',
+  });
+  // A backward view outside the guards (it lacks an unmapped id) gives no
+  // GetPut verdict rather than an exception.
+  const ids = { ...m, guards: [{ at: '/id', is: 'present' }] };
+  assert.deepEqual(lawProblems(ids, issueRow, undefined, 'backward'), []);
+});
+
+test('v3 PutGet: a field left out under unset reads back absent', () => {
+  const ok = {
+    version: 3,
+    fields: [
+      { source: '/title', target: NAME },
+      { source: '/note', target: START, absent: 'unset' },
+    ],
+  };
+  assert.deepEqual(
+    lawProblems(ok, { title: 't', note: 'n' }, { [NAME]: 'u' }),
+    [],
+  );
+  // With keep, leaving it out keeps it, which is not a PutGet problem.
+  const keep = {
+    ...ok,
+    fields: [ok.fields[0], { source: '/note', target: START }],
+  };
+  assert.deepEqual(
+    lawProblems(keep, { title: 't', note: 'n' }, { [NAME]: 'u' }),
+    [],
+  );
 });
 
 test('v3 read-only fields: forward never written, backward computed and removed', () => {

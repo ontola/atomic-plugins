@@ -119,6 +119,14 @@
             "link": "https://example.org/notes",
             "tags": []
           }
+        },
+        {
+          "direction": "backward",
+          "source": {
+            "title": "Notes",
+            "link": "https://example.org/notes"
+          },
+          "error": "out-of-domain"
         }
       ]
     },

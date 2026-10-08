@@ -94,7 +94,8 @@ export interface CatalogLensFile {
     readonly error?: LensErrorCode;
     readonly edits?: readonly {
       readonly direction?: 'backward';
-      readonly target: unknown;
+      /** Absent when the edit expects `error` instead. */
+      readonly target?: unknown;
       readonly source?: unknown;
       readonly error?: LensErrorCode;
     }[];

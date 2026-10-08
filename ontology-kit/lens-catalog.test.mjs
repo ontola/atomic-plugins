@@ -538,6 +538,36 @@ test('v3 examples: get refusals, backward edits and guard references are checked
   });
   const shape = problemsOf(e);
   assert.match(shape, /example 2 has either a target .* or an error/);
-  assert.match(shape, /a backward edit has a source \(the view\) and a target/);
+  assert.match(
+    shape,
+    /a backward edit has a source \(the view\) and either a target/,
+  );
   assert.match(shape, /direction is "backward" or left out/);
+});
+
+test('v3 backward edits may expect a refusal, and their laws are checked', () => {
+  const c = lenses();
+  const l = c.lenses['shop-thing-v1'];
+  l.mapping.version = 3;
+  l.mapping.guards = [{ at: '/deleted', notIn: [true] }];
+  l.examples[0].edits.push(
+    {
+      direction: 'backward',
+      source: { id: 1, title: 'Gone', deleted: true },
+      error: 'out-of-domain',
+    },
+    {
+      direction: 'backward',
+      source: { id: 1, title: 'Bowl', look: { colour: 'blue' } },
+      target: { [NAME]: 'Bowl', colour: 'blue' },
+    },
+  );
+  assert.equal(problemsOf(c), '');
+
+  const d = structuredClone(c);
+  d.lenses['shop-thing-v1'].examples[0].edits[1].error = 'read-only';
+  assert.match(
+    problemsOf(d),
+    /edit 2 \(backward\): expected a read-only refusal, got .*outside this lens's domain/,
+  );
 });

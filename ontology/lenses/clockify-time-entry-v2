@@ -116,6 +116,26 @@
             "https://ontola.github.io/atomic-plugins/ontology/properties/work-end": 1791198000500
           },
           "error": "precision"
+        },
+        {
+          "direction": "backward",
+          "source": {
+            "id": "entry-2",
+            "description": "Write the report",
+            "billable": true,
+            "projectId": "project-1",
+            "taskId": "task-1",
+            "tagIds": [
+              "tag-1"
+            ],
+            "type": "REGULAR",
+            "timeInterval": {
+              "start": "2026-10-05T11:00:00Z",
+              "end": null,
+              "duration": null
+            }
+          },
+          "error": "out-of-domain"
         }
       ]
     },

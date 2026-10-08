@@ -265,7 +265,18 @@ function removeAt(row, tokens) {
   const last = tokens[tokens.length - 1];
   if (Array.isArray(parent))
     throw new LensError('bad-path', `cannot remove array item "${last}"`);
-  if (isPlainObject(parent) && Object.hasOwn(parent, last)) delete parent[last];
+  if (!isPlainObject(parent) || !Object.hasOwn(parent, last)) return;
+  delete parent[last];
+
+  // An object the removal emptied goes too, so `/due/date` leaves no
+  // `due: {}` behind. The row itself and array items are never removed.
+  for (let depth = tokens.length - 1; depth > 0; depth--) {
+    const emptied = readAt(row, tokens.slice(0, depth));
+    if (!isPlainObject(emptied) || Object.keys(emptied).length) return;
+    const holder = readAt(row, tokens.slice(0, depth - 1));
+    if (!isPlainObject(holder)) return;
+    delete holder[tokens[depth - 1]];
+  }
 }
 
 // ---------------------------------------------------------------- converters
@@ -613,6 +624,28 @@ export function parseMapping(input) {
     const sourcePath = safeTokens(field.source, version, at);
     const targetPath = safeTokens(field.target, version, at);
 
+    if (
+      (field.absent === 'unset' || field.absent === 'default') &&
+      [sourcePath, targetPath].some(path =>
+        ARRAY_INDEX.test(path[path.length - 1]),
+      )
+    )
+      throw new LensError(
+        'bad-mapping',
+        `${at}: absent "${field.absent}" removes a place, and an array item cannot be removed`,
+      );
+
+    if (fallback !== undefined) {
+      try {
+        converter.get(fallback, field.args);
+      } catch (error) {
+        throw new LensError(
+          'bad-mapping',
+          `${at}: default is not a source value its converter accepts: ${error.message}`,
+        );
+      }
+    }
+
     return Object.freeze({
       ...field,
       ...(fallback !== undefined ? { default: fallback } : {}),
@@ -724,6 +757,8 @@ export function lensGet(mapping, row, direction = 'forward') {
 export function lensPut(mapping, view, previous, direction = 'forward') {
   const parsed = parsedOf(mapping);
   const forward = direction === 'forward';
+  // Backward, the view is the provider record, so it must be in the domain.
+  if (!forward) checkGuards(parsed, view, 'the record');
   const current = lensGet(parsed, previous, direction);
   const next = clone(previous) ?? {};
 
@@ -795,8 +830,24 @@ export function lawProblems(mapping, row, desired, direction = 'forward') {
   const at = forward ? '' : ' (backward)';
   const problems = [];
   const view = lensGet(parsed, row, direction);
+
+  // Backwards, the view is built from a target-shaped row and lacks every
+  // provider place no field maps (an id, a type); when that leaves it
+  // outside the guards, put refuses it, and GetPut says nothing about it.
+  if (!forward) {
+    try {
+      checkGuards(parsed, view, 'the view');
+    } catch (error) {
+      if (error instanceof LensError && error.code === 'out-of-domain')
+        return problems;
+      throw error;
+    }
+  }
+
   // Backwards, a one-way field cannot appear in the view (it has no
-  // inverse), so its target place is left out of the comparison.
+  // inverse), so its target place is left out of the comparison: under
+  // absent "unset" or "default" a backward put removes it, so GetPut does
+  // not hold there (LENSES.md, "Mapping version 3").
 
   const comparable = value => {
     if (forward) return value;
@@ -824,10 +875,19 @@ export function lawProblems(mapping, row, desired, direction = 'forward') {
       if (!forward && !field.converter.put) continue;
       const path = forward ? field.targetPath : field.sourcePath;
       const want = readAt(desired, path);
-      if (want !== undefined && !deepEqual(readAt(got, path), want))
-        problems.push(
-          `PutGet${at}: ${forward ? field.target : field.source} did not read back as written`,
-        );
+      const back = readAt(got, path);
+      const name = forward ? field.target : field.source;
+      if (want !== undefined && !deepEqual(back, want))
+        problems.push(`PutGet${at}: ${name} did not read back as written`);
+      // A field the view leaves out under absent "unset" must read back
+      // absent; under "default" it reads back as the default's value.
+      else if (
+        want === undefined &&
+        field.absent === 'unset' &&
+        !(forward && field.readOnly) &&
+        back !== undefined
+      )
+        problems.push(`PutGet${at}: ${name} was left out but reads back`);
     }
 
     if (!deepEqual(lensPut(parsed, desired, updated, direction), updated))
