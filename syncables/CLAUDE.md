@@ -288,7 +288,22 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
 - `response-parser.ts` parses that state back out of a response
   (`bodyFields` keys may be dotted paths into nested objects, e.g.
   `pagination.total_count`; `headers` supports RFC 8288 `Link` parsing for
-  `nextLink`-role headers) and derives `hasNextPage`.
+  `nextLink`-role headers) and derives `hasNextPage`. The `nextLink` value
+  is kept raw (`nextLinkValue`, never coerced) with the field's
+  `linkResolution` (`nextLinkResolution`).
+- `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
+  0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
+  `null`/`""` means no next page; a non-string, whitespace, a control
+  character, a backslash, a non-ASCII character, three or more leading
+  slashes, a scheme without `//host`, an empty authority, or a `#` in the
+  raw value is refused (rule 2); the rest is resolved with WHATWG `new URL`
+  against the request URL, the server URL as a directory (`base: server`)
+  or the declared `url`, and refused unless it has the server's origin and
+  no userinfo or fragment. `walkPages` requests exactly the returned `URL`
+  object (§4.4.4 rule 4) and keeps its repeated-page check (rule 5); a
+  `LinkRefused` ends the read with an error, never as the last page. The validator checks
+  `linkResolution` (§9 rules 8–10) and accepts the roles added up to 0.4.0;
+  `incrementalSync` schemes are still not implemented.
 
 **Pagination is orthogonal to the collection/item resource model.** In
 real APIs, the paths that pair into a "resource" (batch-get-by-IDs style,

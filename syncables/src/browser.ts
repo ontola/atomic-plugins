@@ -96,6 +96,9 @@ export { validatePaginationScheme } from './pagination/validate.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';
+export { LinkRefused, resolveLink } from './pagination/links.js';
+export type { ResolveLinkOptions } from './pagination/links.js';
+export type { LinkResolutionObject } from './pagination/types.js';
 export type {
   AutoDetectObject,
   PaginationApplicationObject,
