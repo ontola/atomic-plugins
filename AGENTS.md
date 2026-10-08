@@ -278,9 +278,9 @@ The shared row classes of [#177](https://github.com/ontola/atomic-plugins/issues
 (event, issue, time entry, bank transaction), which several plugins sync into
 so that a plugin's view works on any table of that class. `ontology/` holds
 only generated files: the term files, and the shared lens catalog under
-`ontology/lenses/` (Q-089; this second kind is proposed in the pull request
-that adds it and waits for Michiel's OK, see
-[`ontology-kit/LENSES.md`](ontology-kit/LENSES.md)). The same Pages publish
+`ontology/lenses/` (Q-089; decided by Michiel in Decision Inbox Q-106,
+2026-10-08, see [`ontology-kit/LENSES.md`](ontology-kit/LENSES.md)). The same
+Pages publish
 serves them at `https://ontola.github.io/atomic-plugins/ontology/<path>`, each
 file at its own subject. `ontology-kit/` holds everything else: `base.json`
 (the one place the base URL is written), `source.json`, `lenses.json`,
@@ -377,8 +377,10 @@ below and #227 disagree, #227 is newer.
   `integrations/README.md`). Moving shared code out of plugin folders needs
   the user's decision. `ontology/` and `ontology-kit/` are such shared code,
   approved by Michiel on #177: shared-class terms, subject constants, the
-  field resolver and class-to-class lenses belong there, while a plugin's
-  provider-specific terms and code stay in its own folder.
+  field resolver and the shared lens catalog belong there. The catalog may
+  hold declarative provider-record-to-class lenses as well as class-to-class
+  ones (Decision Inbox Q-106, 2026-10-08); a plugin's provider-specific
+  terms and code, code lenses included, stay in its own folder.
   `integrations/sync-status/` is the other approved shared code (Decision
   Inbox Q-084, status-only): the sync-status card a drive app renders above
   its data (`card.ts`, `card.css`, with their tests and the `sync-status`

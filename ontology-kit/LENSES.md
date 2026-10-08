@@ -7,10 +7,11 @@ catalog yet: ontola/atomic-server#2069's `loadLensCatalog()` still returns
 provider.
 
 This closes gap L1 of [`docs/design/pieces.md`](../docs/design/pieces.md)
-(open point O2) as a proposal, and feeds L2, L4 and L5. The decisions it
-follows are Q-089 (a shared catalog next to the ontology, plus drive-local
-lenses that need review) and Q-091 (chains of at most 2 lenses, two-way
-only).
+(open point O2), and feeds L2, L4 and L5. The decisions it follows are
+Q-089 (a shared catalog next to the ontology, plus drive-local lenses that
+need review), Q-091 (chains of at most 2 lenses, two-way only), Q-106
+(published under `ontology/lenses/`, provider-record-to-class lenses
+allowed) and Q-107 (the host's templates make shared-class rows, below).
 
 ## Where it lives
 
@@ -39,9 +40,15 @@ amends that sentence. Why there, and not in a new top-level folder:
   `ontology/` with its committed bytes, so lens files get that check too.
 
 The alternative, a top-level `lenses/` folder with its own base, needs a
-second immutability check and a workflow change. **Michiel decides** (open
-point L-A below, Decision Inbox Q-106); until then the amended sentence is a proposal in the
-pull request that adds it.
+second immutability check and a workflow change.
+
+**Decided (Decision Inbox Q-106, `ontology-lenses`, Michiel, 2026-10-08):**
+lens files are published under `ontology/lenses/`, and the catalog may hold
+provider-record-to-class lenses (record and rdf endpoints) as well as
+class-to-class ones. AGENTS.md's two rules are amended accordingly: what
+`ontology/` holds, and that shared code may hold such declarative lenses
+while provider-specific code, code lenses included, stays in plugin
+folders.
 
 ## Versioning: published lens files are immutable
 
@@ -261,6 +268,19 @@ put refuses edits to some read-only fields counts as two-way. Q-091 excluded
 one-way lenses that make a whole piece read-only, not refusals of single
 fields.
 
+## The host's templates (Q-107)
+
+**Decided (Decision Inbox Q-107, `shared-classes`, Michiel, 2026-10-08):**
+the host's Time tracker and Issue Tracker templates create `time-entry-v1`
+and `issue-v1` rows directly, instead of minting a class per table (the
+pinned host mints one per table, and the Time tracker's `work-*`
+properties per drive). A table made from either template then matches
+views and integrations of the shared class exactly, so the catalog needs no
+lens for it, and none is planned: per-drive template classes cannot be
+named in a published catalog anyway. The host change is an atomic-server
+issue, under the freeze a draft for Joep. Tables made from the old
+templates keep their per-table classes until migrated.
+
 ## Release 1
 
 All four come from merged prototypes and keep their code lens as the
@@ -364,7 +384,6 @@ them to the list in `.github/workflows/ci.yml` needs a push with the
 
 | #   | Open point                                                                                                                                         | Recommendation                                                                                                                     |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| L-A | (Q-106) Where lens files are published: under `ontology/lenses/` (needs AGENTS.md's `ontology/` rule amended) or a new top-level folder            | `ontology/lenses/`, for the reasons in "Where it lives"                                                                            |
 | L-C | The github.io gate (pieces.md O11): lens files carry the temporary base, as terms do                                                               | No host loads the catalog outside #2069's flag until the stable domain is in `base.json`; the release URL then moves with the base |
 | L-D | Endpoint keys for record and rdf endpoints vs. the I1 declaration (O8)                                                                             | Settle with the I1 spec; until then the keys are provisional and no host should persist them                                       |
 | L-E | Whether lens files should also be Atomic resources (JSON-AD with a shared `lens` class), so a drive can copy a catalog lens into a drive-local one | Later, with the host loader; plain JSON is enough to fetch and run                                                                 |
