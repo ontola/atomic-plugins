@@ -276,6 +276,23 @@ directly.
 | [Google Forms v1 (pagination v2)](APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Form responses with stable form and filter scope. | [Provider documentation](https://developers.google.com/workspace/forms/api/reference/rest/v1/forms.responses/list) |
 | [Google Keep v1](APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Notes with opaque tokens; ABORTED is an error, not completion. | [Provider documentation](https://developers.google.com/workspace/keep/api/reference/rest/v1/notes/list) |
 | [Google Books v1 (pagination v2)](APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml) | Two bookshelf-volume lists using 0-based startIndex offsets. | [Provider documentation](https://developers.google.com/books/docs/v1/reference/mylibrary/bookshelves/volumes/list) |
+| [HubSpot Pages](APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Six landing/site-page, folder and revision lists. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75337/version/2026-03) |
+| [HubSpot URL Redirects](APIs/hubspot.com/url-redirects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | URL redirects with forward cursors and archived/date filters. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75326/version/2026-03) |
+| [HubSpot User Provisioning](APIs/hubspot.com/user-provisioning/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Account user list. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75360/version/2026-03) |
+| [HubSpot Event Occurrences](APIs/hubspot.com/events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Filtered event occurrences. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75357/version/2026-03) |
+| [HubSpot Audit Logs](APIs/hubspot.com/audit-logs/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Audit, login and security history, with distinct schemas. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75272/version/2026-03) |
+| [HubSpot Sequences](APIs/hubspot.com/sequences/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Sequence definitions, excluding enrollments. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75344/version/2026-03) |
+| [HubSpot Marketing Emails](APIs/hubspot.com/marketing-emails/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Email and email-revision lists, excluding unpaged histograms. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75322/version/2026-03) |
+| [HubSpot Multicurrency](APIs/hubspot.com/multicurrency/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Configured exchange-rate list. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75365/version/2026-03) |
+| [HubSpot Marketing Events](APIs/hubspot.com/marketing-events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Four event and participation lists; missing-input operations excluded. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75335/version/2026-03) |
+| [HubSpot Campaigns](APIs/hubspot.com/campaigns-public-api/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Campaigns and contact reports; string-limit assets excluded. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75325/version/2026-03) |
+| [HubSpot Custom Objects](APIs/hubspot.com/custom-objects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Generic CRM object list, preserving properties/history and associations; search POST excluded. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75278/version/2026-03) |
+| [HubSpot Imports](APIs/hubspot.com/imports/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml) | Import history and import errors. | [Provider release specification](https://api.hubspot.com/public/api/spec/v2/specs/release/75332/version/2026-03) |
+| [Google Admin Directory](APIs/googleapis.com/admin/directory_v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 13 directory, device, resource, role, group, user and printer lists. | [Provider documentation](https://developers.google.com/workspace/admin/directory/reference/rest/v1/users/list) |
+| [Google Admin Reports](APIs/googleapis.com/admin/reports_v1/pagination-5e5d2369ea3e91b9b09193dd9928f628612369d3-overlay.yaml) | Four audit/usage reports with warnings separate from items. | [Provider documentation](https://developers.google.com/workspace/admin/reports/reference/rest/v1/customerUsageReports/get) |
+| [Google Vault](APIs/googleapis.com/vault/v1/pagination-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml) | Four matter, export, hold and saved-query metadata lists. | [Provider documentation](https://developers.google.com/workspace/vault/reference/rest/v1/matters/list) |
+| [Google Drive Labels v2 (pagination v2)](APIs/googleapis.com/drivelabels/v2/pagination-v2-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml) | Labels, revision locks and permissions. | [Provider documentation](https://developers.google.com/workspace/drive/labels/reference/rest/v2/labels/list) |
+| [Google Business Profile Information v1 (pagination v2)](APIs/googleapis.com/mybusinessbusinessinformation/v1/pagination-v2-a68633bd9b84af444f424d6a03f24450b84129ef-overlay.yaml) | Locations with required readMask, plus category and attribute metadata. | [Provider documentation](https://developers.google.com/my-business/reference/businessinformation/rest/v1/accounts.locations/list) |
 
 Slack's overlay declares `response_metadata.next_cursor` as the continuation
 field and documents that a short page can still have another cursor. It does
@@ -528,11 +545,35 @@ Its ordinary offset traversal does not guarantee a snapshot through concurrent
 changes. Existing Calendar, Classroom, Forms and Books revisions remain
 published; select the new `pagination-v2` files explicitly.
 
+The twelve additional HubSpot 2026-03 service OADs copy `paging.next.after`
+into the query's `after`, page `results`, and preserve `limit` and all other
+filters. They cover content/revisions, redirects, user provisioning, event
+occurrences, audit/login/security history, sequence definitions, marketing
+email/event/campaign lists, configured exchange rates, CRM objects and imports.
+They do not use backward `before` cursors or derive tokens from `paging.next.link`.
+The exact release specifications from HubSpot's public API catalog were checked
+alongside the pinned OADs. Object search POST, unpaged email histograms,
+marketing-event association/identifier operations without paging inputs and the
+campaign-assets endpoint's string-valued limit remain unselected.
+
+Google Directory preserves customer/domain, masks, sorting, deleted selection
+and derived membership scope. Its users application omits subscription `event`
+and documents that tokens expire after three days. Reports pages `usageReports`
+for usage operations and `items` for activity, keeping `warnings` outside the
+item envelope; callers must still inspect warnings. The customer usage request
+has no page-size field, so the overlay adds none. Vault selects only four
+resource-metadata lists, leaving operation polling and export downloads outside
+the scope. Drive Labels preserves language, revision, published/draft and access
+selection. Business Profile's location application retains required `readMask`;
+category and attribute metadata use separate envelopes. Existing Drive Labels
+and Business Profile revisions remain published.
+
 These are documentation and composition checks as of 2026-10-02 (Slack,
 DigitalOcean, Notion and Spotify), 2026-10-05 (Intercom, Mailchimp and HubSpot),
 and 2026-10-06 (Confluence, Figma, ClickUp, the five additional HubSpot OADs,
 Asana, Zendesk, Square, Zoom, Mastodon and the six Google OADs), and 2026-10-08
-(Box, GitHub, three Twilio OADs, Clockify and the eight additional Google OADs),
+(Box, GitHub, three Twilio OADs, Clockify, eight additional Google OADs, twelve
+additional HubSpot OADs and five Google administration/business OADs),
 not live provider certification.
 The metadata follows the
 [pagination extension](../openapi-extensions/spec/pagination-schemes/README.md).
@@ -542,7 +583,7 @@ Run the schema and scope regressions without provider credentials:
 python3 overlays/tests/test_pagination_collection.py --directory /path/to/openapi-directory
 ```
 
-Omit `--directory` to download the 40 pinned OADs. CI uses the same full-history
+Omit `--directory` to download the 57 pinned OADs. CI uses the same full-history
 checkout as the pin validator. Every declared query or body field must exist, every
 continuation field must be declared, and each envelope must locate an array;
 the tests also preserve unrelated request parameters, operations and security.

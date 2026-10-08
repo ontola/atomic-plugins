@@ -25,6 +25,23 @@ from validate_oad_pins import overlay_pin
 
 DIRECTORY = None
 VARIANTS = {
+    "hubspot_pages": "APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_url-redirects": "APIs/hubspot.com/url-redirects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_user-provisioning": "APIs/hubspot.com/user-provisioning/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_events": "APIs/hubspot.com/events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_audit-logs": "APIs/hubspot.com/audit-logs/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_sequences": "APIs/hubspot.com/sequences/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_marketing-emails": "APIs/hubspot.com/marketing-emails/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_multicurrency": "APIs/hubspot.com/multicurrency/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_marketing-events": "APIs/hubspot.com/marketing-events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_campaigns-public-api": "APIs/hubspot.com/campaigns-public-api/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_custom-objects": "APIs/hubspot.com/custom-objects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "hubspot_imports": "APIs/hubspot.com/imports/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+    "google_directory": "APIs/googleapis.com/admin/directory_v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "google_reports": "APIs/googleapis.com/admin/reports_v1/pagination-5e5d2369ea3e91b9b09193dd9928f628612369d3-overlay.yaml",
+    "google_vault": "APIs/googleapis.com/vault/v1/pagination-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+    "google_drivelabels": "APIs/googleapis.com/drivelabels/v2/pagination-v2-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+    "google_businessinfo": "APIs/googleapis.com/mybusinessbusinessinformation/v1/pagination-v2-a68633bd9b84af444f424d6a03f24450b84129ef-overlay.yaml",
     "google_chat": "APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
     "google_classroom": "APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml",
     "google_calendar": "APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
@@ -935,6 +952,112 @@ class PaginationCollectionTests(unittest.TestCase):
         # Search estimates and unrelated annotation/onboarding APIs aren't traversal bounds.
         for path in ("/books/v1/volumes", "/books/v1/mylibrary/annotations", "/books/v1/onboarding/listCategoryVolumes"):
             self.assertNotIn("x-pagination", document["paths"][path]["get"])
+
+
+    def test_hubspot_additional_forward_lists_preserve_cursor_and_query_contracts(self):
+        counts = {"pages": 6, "url-redirects": 1, "user-provisioning": 1, "events": 1,
+                  "audit-logs": 3, "sequences": 1, "marketing-emails": 2, "multicurrency": 1,
+                  "marketing-events": 4, "campaigns-public-api": 2, "custom-objects": 1, "imports": 2}
+        for service, count in counts.items():
+            with self.subTest(service=service):
+                original, document = self.documents["hubspot_" + service]
+                selected = list(applications(document))
+                self.assertEqual(len(selected), count)
+                scheme = document["components"]["paginationSchemes"]["forwardResults"]
+                self.assertEqual(scheme["request"], {"queryParameters": {"after": {"role": "cursor"}, "limit": {"role": "pageSize"}}})
+                self.assertEqual(scheme["response"], {"envelope": {"itemsField": "results"}, "bodyFields": {"paging.next.after": {"role": "nextCursor"}}})
+                for path, method, _, operation, _ in selected:
+                    self.assertEqual(method, "get")
+                    self.assertEqual(operation["parameters"], original["paths"][path][method]["parameters"])
+                for item in document["paths"].values():
+                    for method in ("post", "put", "patch", "delete"):
+                        self.assertNotIn("x-pagination", item.get(method, {}))
+
+    def test_hubspot_additional_scope_excludes_search_aggregates_and_undeclared_inputs(self):
+        document = self.documents["hubspot_custom-objects"][1]
+        base = "/crm/objects/2026-03/{objectType}"
+        self.assertIn("x-pagination", document["paths"][base]["get"])
+        self.assertNotIn("x-pagination", document["paths"][base + "/search"]["post"])
+        document = self.documents["hubspot_marketing-emails"][1]
+        self.assertNotIn("x-pagination", document["paths"]["/marketing/emails/2026-03/statistics/histogram"]["get"])
+        document = self.documents["hubspot_marketing-events"][1]
+        for path in ("/marketing/marketing-events/2026-03/associations/{marketingEventId}/lists",
+                     "/marketing/marketing-events/2026-03/{externalEventId}/identifiers"):
+            self.assertNotIn("x-pagination", document["paths"][path]["get"])
+        document = self.documents["hubspot_campaigns-public-api"][1]
+        op = document["paths"]["/marketing/campaigns/2026-03/{campaignGuid}/assets/{assetType}"]["get"]
+        params = {p["name"]: p for p in op["parameters"]}
+        self.assertEqual(params["limit"]["schema"]["type"], "string")
+        self.assertNotIn("x-pagination", op)
+
+    def test_google_admin_collections_use_only_get_forward_tokens(self):
+        counts = {"directory": 13, "reports": 4, "vault": 4, "drivelabels": 3, "businessinfo": 3}
+        for service, count in counts.items():
+            with self.subTest(service=service):
+                document = self.documents["google_" + service][1]
+                selected = list(applications(document))
+                self.assertEqual(len(selected), count)
+                scheme = document["components"]["paginationSchemes"]["forwardPages"]
+                self.assertEqual(scheme["request"], {"queryParameters": {"pageToken": {"role": "cursor"}}})
+                self.assertEqual(scheme["response"], {"bodyFields": {"nextPageToken": {"role": "nextCursor"}}})
+                for _, method, _, _, _ in selected:
+                    self.assertEqual(method, "get")
+                for path, item in document["paths"].items():
+                    for method in ("post", "put", "patch", "delete"):
+                        self.assertNotIn("x-pagination", item.get(method, {}))
+
+    def test_google_directory_ordinary_users_preserve_deleted_and_projection_scope(self):
+        original, document = self.documents["google_directory"]
+        path = "/admin/directory/v1/users"
+        op = document["paths"][path]["get"]
+        self.assertEqual(op["parameters"], original["paths"][path]["get"]["parameters"])
+        app = op["x-pagination"][0]
+        self.assertIn("omit event", app["description"])
+        self.assertIn("three days", app["description"])
+        self.assertEqual(app["overrides"]["response"]["envelope"], {"itemsField": "users"})
+        params = {p["name"]: p for p in op["parameters"]}
+        self.assertTrue({"customer", "domain", "projection", "customFieldMask", "query", "showDeleted"} <= set(params))
+        for p, item in document["paths"].items():
+            if p.endswith("/watch"):
+                self.assertNotIn("x-pagination", item["post"])
+
+    def test_google_reports_warnings_are_not_items_or_pagination_inputs(self):
+        original, document = self.documents["google_reports"]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        usage = "/admin/reports/v1/usage/dates/{date}"
+        self.assertNotIn("request", selected[usage]["overrides"])
+        for path, app in selected.items():
+            expected = "items" if "/activity/" in path else "usageReports"
+            self.assertEqual(app["overrides"]["response"]["envelope"], {"itemsField": expected})
+            if expected == "usageReports":
+                response = document["paths"][path]["get"]["responses"]["200"]
+                fields = properties(document, json_response_schema(response))
+                self.assertEqual(fields["warnings"], properties(original, json_response_schema(original["paths"][path]["get"]["responses"]["200"]))["warnings"])
+
+    def test_google_vault_only_selects_resource_metadata_lists(self):
+        document = self.documents["google_vault"][1]
+        selected = {p: a["overrides"]["response"]["envelope"]["itemsField"] for p, _, _, _, a in applications(document)}
+        self.assertEqual(selected, {"/v1/matters": "matters", "/v1/matters/{matterId}/exports": "exports",
+                                    "/v1/matters/{matterId}/holds": "holds", "/v1/matters/{matterId}/savedQueries": "savedQueries"})
+        self.assertNotIn("x-pagination", document["paths"]["/v1/{name}"]["get"])
+
+    def test_google_drive_labels_keep_revision_and_permission_envelopes(self):
+        document = self.documents["google_drivelabels"][1]
+        selected = {p: a["overrides"]["response"]["envelope"]["itemsField"] for p, _, _, _, a in applications(document)}
+        self.assertEqual(selected, {"/v2/labels": "labels", "/v2/{parent}/locks": "labelLocks", "/v2/{parent}/permissions": "labelPermissions"})
+        params = {p["name"] for p in document["paths"]["/v2/labels"]["get"]["parameters"]}
+        self.assertTrue({"publishedOnly", "customer", "languageCode", "view", "minimumRole", "useAdminAccess"} <= params)
+
+    def test_google_business_locations_preserve_required_read_mask_and_distinct_metadata(self):
+        original, document = self.documents["google_businessinfo"]
+        selected = {p: a for p, _, _, _, a in applications(document)}
+        expected = {"/v1/attributes": "attributeMetadata", "/v1/categories": "categories", "/v1/{parent}/locations": "locations"}
+        self.assertEqual({p: a["overrides"]["response"]["envelope"]["itemsField"] for p, a in selected.items()}, expected)
+        path = "/v1/{parent}/locations"
+        params = {p["name"]: p for p in document["paths"][path]["get"]["parameters"]}
+        self.assertTrue(params["readMask"]["description"].startswith("Required."))
+        self.assertIn("readMask query is required", selected[path]["description"])
+        self.assertEqual(document["paths"][path]["get"]["parameters"], original["paths"][path]["get"]["parameters"])
 
 
 if __name__ == "__main__":

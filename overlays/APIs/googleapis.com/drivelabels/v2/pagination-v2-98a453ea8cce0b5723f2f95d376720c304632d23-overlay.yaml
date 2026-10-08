@@ -1,0 +1,63 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/drive/labels/reference/rest/v2/labels/list
+overlay: 1.0.0
+info:
+  title: Google drivelabels collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/98a453ea8cce0b5723f2f95d376720c304632d23/APIs/googleapis.com/drivelabels/v2/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send opaque nextPageToken as pageToken. Stop only when nextPageToken is absent or
+          empty, not when a page is short or empty. If using fields, include nextPageToken and the item
+          array. Preserve customer, label revision parent, languageCode, publishedOnly, view, minimumRole
+          and useAdminAccess when present. Pagination does not widen permissions or change published/draft
+          selection.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v2/labels'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: labels
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v2/{parent}/locks'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: labelLocks
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v2/{parent}/permissions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: labelPermissions
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
