@@ -247,15 +247,48 @@ would skip all of them.
   lenses of the release it pins, on every drive, as #2069 does.
 - **Drive-local lenses** keep #2069's resource (`lens-source`, `lens-target`,
   `lens-mapping`, `lens-review`) and use the same mapping format; until
-  approved they offer nothing. Recommendation for L3/O3: bind an approval to
-  the mapping's content (store a digest of the canonical mapping JSON with
-  the approval), so editing an approved lens makes it unreviewed again. At
-  #2069's head nothing resets `lens-review` when the mapping changes
-  (checked, a search of its diff at `bab52555`).
-- A drive-local lens and a catalog lens between the same endpoints: the
-  catalog one is trusted, so a shortest-path search prefers it only when the
-  drive-local one is unreviewed. Whether a reviewed drive-local lens may
-  override a catalog lens is not decided.
+  approved they offer nothing. At #2069's head nothing resets `lens-review`
+  when the mapping changes (checked, a search of its diff at `bab52555`), so
+  an approved lens stays approved after any edit. "Approvals bound to a
+  mapping digest" below proposes a fix.
+- A drive-local lens and a catalog lens between the same endpoints: while
+  the drive-local one is unreviewed only the catalog one is trusted. When
+  both are trusted, #2069's search takes the lens listed first, and its
+  `loadPieces` lists catalog lenses first (checked, at `bab52555`). Whether a
+  reviewed drive-local lens should override a catalog lens is not decided.
+
+### Approvals bound to a mapping digest (proposal, L3/O3)
+
+**A proposal, not implemented and not decided.** It changes #2069's
+drive-local `lens` resource, so under the freeze it goes to Joep as part of
+the host-loading issue, and what the review screen shows stays open (O3).
+
+1. **Digest.** The approval covers the lens's _effective_ content:
+   `source`, `target` and the mapping. Its canonical form is the JSON text
+   of an object with three keys, `mapping` (`storedMapping(mapping)`),
+   `source` (the `lens-source` subject) and `target` (the `lens-target`
+   subject), with object keys sorted at every level, no whitespace, and
+   array order kept (array order is meaningful in a mapping). The digest is
+   `sha256:` plus the lowercase hex SHA-256 of its UTF-8 bytes; a browser
+   computes it with `crypto.subtle.digest`.
+2. **Approving** writes `lens-review: "approved"` and a new property
+   `lens-review-digest` holding the digest of the content just reviewed, in
+   one commit. The review screen shows the content it digests, so what was
+   reviewed is what is bound.
+3. **Trust.** A drive-local lens is trusted only when `lens-review` is
+   `"approved"` **and** `lens-review-digest` equals the digest of its current
+   content. Any edit to the mapping, source or target makes it unreviewed
+   again without anyone resetting a flag, and the offer shows it as
+   "waiting for review", as #2069 does today for an unapproved lens.
+4. **Migration.** An approved lens with no `lens-review-digest` (every lens
+   approved under #2069 today) counts as unreviewed once the rule ships, and
+   needs one more approval.
+5. **Catalog lenses** need no digest: a published lens file never changes,
+   and the host trusts it by its subject in the pinned release.
+
+What it does not do: it does not record who approved (the commit's signer
+already does), nor stop a person with write access from approving their own
+edit. Whether approval needs a second person is part of O3.
 
 ## Chains (Q-091)
 
@@ -371,9 +404,10 @@ them to the list in `.github/workflows/ci.yml` needs a push with the
 
 - Any host loading the catalog; Pages serving `ontology/lenses/` (it will
   be checked by `ontology-published.yml` after the first merge).
-- The lane dev-server: `ontologyFile` in `integrations/tooling/dev-server.mjs`
-  serves only `v<N>`, `classes/` and `properties/`, so a lane that wants the
-  catalog from its own origin needs `lenses/` added there first.
+- A lane reading the catalog from the dev-server: `ontologyFile` in
+  `integrations/tooling/dev-server.mjs` serves `ontology/lenses/` with its
+  subjects moved to the dev-server's origin (unit-tested), but no lane e2e
+  fetches it yet.
 - That syncables' records for Clockify and Todoist have exactly the field
   names the examples use: the examples follow the code lenses' fixtures,
   not a recorded syncables read.
