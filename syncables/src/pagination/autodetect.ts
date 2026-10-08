@@ -11,6 +11,15 @@ export interface EffectiveScheme {
 }
 
 /**
+ * An operation's explicit `x-pagination` cannot be applied: it is not an
+ * array of Pagination Application Objects, names a scheme the document does
+ * not declare, or names one that fails validation (spec §9), before or
+ * after its overrides are merged. A read of such an operation fails rather
+ * than making one request and returning that page as complete (#384).
+ */
+export class PaginationSchemeError extends Error {}
+
+/**
  * Schemes that fail validation (spec §9) are excluded here rather than
  * thrown on eagerly — one malformed scheme in a document (see e.g. Giphy's
  * `type: offset`, which isn't a valid scheme type) shouldn't prevent using
@@ -112,21 +121,50 @@ export function resolveEffectiveScheme(
 ): EffectiveScheme | undefined {
   const schemes = validSchemes(document);
 
-  const explicit = operation['x-pagination'] as
-    | PaginationApplicationObject[]
-    | undefined;
+  // An explicit application is never dropped silently: a reader that
+  // ignored it would make one request and take that page for the whole
+  // collection. (An empty array applies nothing and falls through to
+  // auto-detection, as before.)
+  const explicit = operation['x-pagination'];
+  if (explicit !== undefined && !Array.isArray(explicit)) {
+    throw new PaginationSchemeError(
+      'x-pagination must be an array of Pagination Application Objects',
+    );
+  }
   if (Array.isArray(explicit) && explicit.length > 0) {
-    const application = explicit[0];
-    const base = application ? schemes.get(application.scheme) : undefined;
-    if (!application || !base) {
-      return undefined;
+    const application = explicit[0] as PaginationApplicationObject | undefined;
+    if (!isPlainObject(application) || typeof application.scheme !== 'string') {
+      throw new PaginationSchemeError(
+        'x-pagination[0] must be a Pagination Application Object with a "scheme" name',
+      );
     }
-    return {
-      schemeName: application.scheme,
-      scheme: application.overrides
-        ? deepMerge(base, application.overrides)
-        : base,
-    };
+    const name = application.scheme;
+    const declared = document.components?.paginationSchemes?.[name];
+    if (!declared) {
+      throw new PaginationSchemeError(
+        `x-pagination names the pagination scheme "${name}", which the document does not declare`,
+      );
+    }
+    const invalid = validatePaginationScheme(name, declared);
+    if (invalid.length) {
+      throw new PaginationSchemeError(
+        `x-pagination names the pagination scheme "${name}", which is invalid: ${invalid.join('; ')}`,
+      );
+    }
+    const scheme = application.overrides
+      ? deepMerge(declared, application.overrides)
+      : declared;
+    // The overrides are checked after the merge too (the spec's validator
+    // does the same): a typo in an override is as silent a truncation.
+    const afterMerge = application.overrides
+      ? validatePaginationScheme(name, scheme)
+      : [];
+    if (afterMerge.length) {
+      throw new PaginationSchemeError(
+        `x-pagination's overrides make the pagination scheme "${name}" invalid: ${afterMerge.join('; ')}`,
+      );
+    }
+    return { schemeName: name, scheme };
   }
 
   for (const [schemeName, scheme] of schemes) {

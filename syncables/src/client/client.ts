@@ -783,7 +783,7 @@ function declaredIdempotencyHeader(
 /**
  * The Collection Completeness extension's `absent` value for a collection:
  * from its CRUD Causality Collection Object, which covers the collection's
- * own fixed `x-list-query`/`x-list-body`, else from its list operation,
+ * own fixed `listQuery`/`listBody` (or `x-list-query`/`x-list-body`), else from its list operation,
  * which covers only a read that adds nothing to the operation's request (no
  * fixed query or body), since several collections may share that operation.
  */
@@ -2094,15 +2094,28 @@ export function createApiClient(
     }
   }
 
+  /** Whether a GET operation pages, or declares an x-pagination that cannot be applied. */
+  function paginated(operation: OperationObject | undefined): boolean {
+    try {
+      return (
+        resolveEffectiveScheme(doc, operation ?? { responses: {} }) !==
+        undefined
+      );
+    } catch {
+      return true;
+    }
+  }
+
   const conditionalTransport: Transport = async (request) => {
     const path = request.url.pathname.slice(
       upstream.pathname.replace(/\/$/, '').length,
     );
     const matched = findRoute(Object.keys(doc.paths), path);
     const operation = matched ? doc.paths[matched.template]?.get : undefined;
-    const cacheable =
-      request.method === 'GET' &&
-      !resolveEffectiveScheme(doc, operation ?? { responses: {} });
+    // A paginated operation is not cached conditionally. An explicit
+    // x-pagination that cannot be applied counts as paginated here; the read
+    // itself fails on it (walkPages).
+    const cacheable = request.method === 'GET' && !paginated(operation);
     const key = request.url.href;
     const cached = cacheable ? conditionalCache.get(key) : undefined;
     const headers = { ...request.headers };
