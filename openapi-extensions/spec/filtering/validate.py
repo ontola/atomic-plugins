@@ -1,13 +1,14 @@
 """Validate the Filtering proposal's parameter annotations, and convert wall-clock bounds.
 
 `validate(document)` checks every `x-time-zone` (0.2.0-draft) and the shape of
-every `x-filter` on a Parameter Object: an operation's or path item's
-parameters, and `components.parameters`. It reports an `x-time-zone`
-anywhere else. `x-collection-scope` and `x-for-each` are not checked.
-Ordinary OpenAPI validation is separate.
+every `x-filter` on a Parameter Object: the parameters of every operation
+under `paths`, `webhooks`, `components.pathItems` and callbacks (an
+operation's own and `components.callbacks`), and `components.parameters`.
+It reports an `x-time-zone` anywhere else. `x-collection-scope` and
+`x-for-each` are not checked. Ordinary OpenAPI validation is separate.
 
-`wall_clock_param(...)` and `covered_span(...)` are a reference
-implementation of the client steps under "Parameter time zones".
+`wall_clock_param(...)`, `instants_of(...)` and `covered_span(...)` are a
+reference implementation of the client steps under "Parameter time zones".
 """
 import datetime
 import json
@@ -21,7 +22,8 @@ OPERATORS = ("eq", "gte", "gt", "lte", "lt")
 AMBIGUOUS = ("unspecified", "earlier", "later")
 POINTER = re.compile(r"^(/([^~/]|~[01])*)*$")
 ZONE_FIELDS = {"interpretation", "zone", "suffix", "ambiguous", "description"}
-# No zone is further from UTC than this (UTC+14; the other end is UTC-12).
+# Current offsets run from UTC-12 to UTC+14. A lower bound needs only 12 hours,
+# an upper bound 14; the fallback uses 14 for both (see the README).
 MAX_OFFSET = datetime.timedelta(hours=14)
 UTC = datetime.timezone.utc
 
@@ -42,14 +44,44 @@ def _deref(document, value):
     return value
 
 
-def operations(document):
-    for path, item in (document.get("paths") or {}).items():
-        if not isinstance(item, dict):
+def _path_item_operations(document, item, location, seen):
+    """(location, method, item, operation) of a path item, and of its operations' callbacks."""
+    item = _deref(document, item)
+    if not isinstance(item, dict) or id(item) in seen:
+        return
+    seen.add(id(item))
+    for method in METHODS:
+        operation = item.get(method)
+        if not isinstance(operation, dict):
             continue
-        for method in METHODS:
-            operation = item.get(method)
-            if isinstance(operation, dict):
-                yield path, method, item, operation
+        yield location, method, item, operation
+        for name, callback in (operation.get("callbacks") or {}).items():
+            callback = _deref(document, callback)
+            for expression, nested in (callback or {}).items() if isinstance(callback, dict) else []:
+                yield from _path_item_operations(
+                    document, nested, f"{location}.{method}.callbacks.{name}.{expression}", seen)
+
+
+def operations(document, callable_only=False):
+    """Every operation in the document; with callable_only, only those under `paths`."""
+    seen = set()
+    for path, item in (document.get("paths") or {}).items():
+        yield from (
+            entry for entry in _path_item_operations(document, item, f"paths.{path}", seen)
+            if not callable_only or ".callbacks." not in entry[0]
+        )
+    if callable_only:
+        return
+    for name, item in (document.get("webhooks") or {}).items():
+        yield from _path_item_operations(document, item, f"webhooks.{name}", seen)
+    components = document.get("components") or {}
+    for name, item in (components.get("pathItems") or {}).items():
+        yield from _path_item_operations(document, item, f"components.pathItems.{name}", seen)
+    for name, callback in (components.get("callbacks") or {}).items():
+        callback = _deref(document, callback)
+        for expression, item in (callback or {}).items() if isinstance(callback, dict) else []:
+            yield from _path_item_operations(
+                document, item, f"components.callbacks.{name}.{expression}", seen)
 
 
 def parameters_of(document, item, operation):
@@ -61,6 +93,20 @@ def parameters_of(document, item, operation):
             if isinstance(parameter, dict) and "name" in parameter and "in" in parameter:
                 found[(parameter["in"], parameter["name"])] = parameter
     return found
+
+
+def _parameter_formats(document, parameter):
+    """The `format` of every schema the parameter declares: `schema`, or each `content` entry's."""
+    schemas = [parameter.get("schema")]
+    for media in (parameter.get("content") or {}).values():
+        if isinstance(media, dict):
+            schemas.append(media.get("schema"))
+    formats = []
+    for schema in schemas:
+        schema = _deref(document, schema)
+        if isinstance(schema, dict) and "format" in schema:
+            formats.append(schema["format"])
+    return formats
 
 
 def _filter_errors(value, where):
@@ -76,7 +122,7 @@ def _filter_errors(value, where):
     return errors
 
 
-def _zone_errors(value, where, parameter):
+def _zone_errors(document, value, where, parameter):
     if not isinstance(value, dict):
         return [f"{where}: expected an object"]
     errors = [f"{where}.{key}: unknown member" for key in value if key not in ZONE_FIELDS and not key.startswith("x-")]
@@ -106,21 +152,27 @@ def _zone_errors(value, where, parameter):
                 errors.append(f"{where}.zone.pointer: expected a non-empty JSON Pointer with operationId")
         elif "pointer" in zone:
             errors.append(f"{where}.zone.pointer: allowed only with operationId")
-    schema = parameter.get("schema")
-    if isinstance(schema, dict) and "format" in schema and schema["format"] != "date-time":
-        errors.append(f"{where}: the parameter's schema format is {schema['format']!r}, not 'date-time'")
+    for found in _parameter_formats(document, parameter):
+        if found != "date-time":
+            errors.append(f"{where}: the parameter's schema format is {found!r}, not 'date-time'")
     return errors
 
 
-def _zone_operation_errors(document, zone, where, own_path_parameters):
-    """The named operation exists, is a get, and needs only path parameters the request already has."""
+def _zone_operation_errors(document, zone, where, own_path_parameters=None):
+    """The named operation exists under `paths`, is a get, and needs only path parameters the request has.
+
+    `own_path_parameters` None: the parameter is not used by any operation, so
+    only existence and method are checked.
+    """
     if not isinstance(zone, dict) or not isinstance(zone.get("operationId"), str):
         return []
-    for _, method, item, operation in operations(document):
+    for _, method, item, operation in operations(document, callable_only=True):
         if operation.get("operationId") != zone["operationId"]:
             continue
         if method != "get":
             return [f"{where}.zone.operationId: {zone['operationId']!r} is a {method}, not a get"]
+        if own_path_parameters is None:
+            return []
         missing = sorted(
             name for (kind, name), parameter in parameters_of(document, item, operation).items()
             if parameter.get("required") and not (kind == "path" and name in own_path_parameters)
@@ -128,38 +180,44 @@ def _zone_operation_errors(document, zone, where, own_path_parameters):
         if missing:
             return [f"{where}.zone.operationId: {zone['operationId']!r} requires parameters {missing} the request does not have"]
         return []
-    return [f"{where}.zone.operationId: no operation {zone['operationId']!r} in the document"]
+    return [f"{where}.zone.operationId: no operation {zone['operationId']!r} under paths"]
 
 
 def validate(document):
     """Raise ValueError listing every violation; return None when valid."""
-    errors, annotated = [], set()
-    components = (document.get("components") or {}).get("parameters") or {}
-    for name, raw in components.items():
-        parameter = _deref(document, raw)
-        if not isinstance(parameter, dict):
-            continue
-        annotated.add(id(parameter))
-        where = f"components.parameters.{name}"
+    errors, annotated, used = [], set(), set()
+    checked = set()
+
+    def check_shape(parameter, where):
+        if id(parameter) in checked:
+            return
+        checked.add(id(parameter))
         if "x-filter" in parameter:
-            errors += _filter_errors(parameter["x-filter"], where + ".x-filter")
+            errors.extend(_filter_errors(parameter["x-filter"], where + ".x-filter"))
         if "x-time-zone" in parameter:
-            errors += _zone_errors(parameter["x-time-zone"], where + ".x-time-zone", parameter)
-    for path, method, item, operation in operations(document):
+            errors.extend(_zone_errors(document, parameter["x-time-zone"], where + ".x-time-zone", parameter))
+
+    for location, method, item, operation in operations(document):
         found = parameters_of(document, item, operation)
         own_path = {name for (kind, name) in found if kind == "path"}
         for (kind, name), parameter in found.items():
-            where = f"paths.{path}.{method}.parameters[{kind}:{name}]"
-            first = id(parameter) not in annotated
+            where = f"{location}.{method}.parameters[{kind}:{name}]"
             annotated.add(id(parameter))
-            if first and "x-filter" in parameter:
-                errors += _filter_errors(parameter["x-filter"], where + ".x-filter")
-            if "x-time-zone" in parameter:
-                if first:
-                    errors += _zone_errors(parameter["x-time-zone"], where + ".x-time-zone", parameter)
-                errors += _zone_operation_errors(document, parameter["x-time-zone"].get("zone")
-                                                 if isinstance(parameter["x-time-zone"], dict) else None,
-                                                 where + ".x-time-zone", own_path)
+            used.add(id(parameter))
+            check_shape(parameter, where)
+            zone = parameter.get("x-time-zone")
+            if isinstance(zone, dict):
+                errors += _zone_operation_errors(document, zone.get("zone"), where + ".x-time-zone", own_path)
+    for name, raw in ((document.get("components") or {}).get("parameters") or {}).items():
+        parameter = _deref(document, raw)
+        if not isinstance(parameter, dict):
+            continue
+        where = f"components.parameters.{name}"
+        annotated.add(id(parameter))
+        check_shape(parameter, where)
+        zone = parameter.get("x-time-zone")
+        if id(parameter) not in used and isinstance(zone, dict):
+            errors += _zone_operation_errors(document, zone.get("zone"), where + ".x-time-zone")
     errors += _misplaced(document, "", annotated)
     if errors:
         raise ValueError("\n".join(dict.fromkeys(errors)))
@@ -185,31 +243,42 @@ def wall_clock_param(instant, zone, suffix="Z"):
 
 
 def instants_of(wall, zone):
-    """Every UTC instant a naive wall-clock datetime can mean in `zone`, ascending.
+    """The UTC instants a naive wall-clock datetime can mean in `zone`, by offset.
 
-    One normally, two in a repeated hour. In a skipped hour none is valid, so
-    the two instants given by the offsets on either side of the gap.
+    Returns {"earlier": instant, "later": instant}: the instant under the
+    offset in effect before a change (Python's fold=0) and under the offset
+    after it (fold=1). Outside a repeated or skipped hour both are the same.
+    In a repeated hour `earlier` is the earlier instant; in a skipped hour,
+    where neither offset gives this wall-clock time back, `earlier` is the
+    later instant (Amsterdam 2026-03-29 02:30 at +01:00 is 01:30Z).
     """
     tz = ZoneInfo(zone)
-    candidates = sorted({wall.replace(tzinfo=tz, fold=fold).astimezone(UTC) for fold in (0, 1)})
-    valid = [at for at in candidates if at.astimezone(tz).replace(tzinfo=None) == wall]
-    return valid or candidates
+    return {
+        "earlier": wall.replace(tzinfo=tz, fold=0).astimezone(UTC),
+        "later": wall.replace(tzinfo=tz, fold=1).astimezone(UTC),
+    }
 
 
 def covered_span(start_wall, end_wall, zone, ambiguous="unspecified"):
-    """Step 3: the UTC (from, to) a read with these wall-clock bounds is known to cover.
+    """Step 3: the UTC (from, to) a read with these wall-clock bounds is known to cover, or None.
 
-    `zone` None means the zone could not be read and the bounds were sent as
-    UTC digits: each bound then covers 14 hours less.
+    `ambiguous` `earlier` or `later` takes that offset's instant for both
+    bounds; `unspecified` takes, of the two, the latest for the lower bound
+    and the earliest for the upper bound. `zone` None means the zone could
+    not be read and the bounds were sent as UTC digits: each bound then
+    covers 14 hours less. A span that is empty or inverted covers nothing:
+    None.
     """
     if zone is None:
-        return (start_wall.replace(tzinfo=UTC) + MAX_OFFSET, end_wall.replace(tzinfo=UTC) - MAX_OFFSET)
-    starts, ends = instants_of(start_wall, zone), instants_of(end_wall, zone)
-    if ambiguous == "earlier":
-        return starts[0], ends[0]
-    if ambiguous == "later":
-        return starts[-1], ends[-1]
-    return starts[-1], ends[0]
+        start = start_wall.replace(tzinfo=UTC) + MAX_OFFSET
+        end = end_wall.replace(tzinfo=UTC) - MAX_OFFSET
+    else:
+        starts, ends = instants_of(start_wall, zone), instants_of(end_wall, zone)
+        if ambiguous in ("earlier", "later"):
+            start, end = starts[ambiguous], ends[ambiguous]
+        else:
+            start, end = max(starts.values()), min(ends.values())
+    return (start, end) if start < end else None
 
 
 def _load(path):
