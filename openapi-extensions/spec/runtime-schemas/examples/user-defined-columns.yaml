@@ -1,0 +1,148 @@
+openapi: 3.0.3
+info:
+  title: Illustrative user-defined columns
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Notion's data sources and pages. A table's owner
+    defines its columns; GET /tables/{tableId} answers them under properties,
+    keyed by column name, each with a stable id, a name and a type. A row's
+    properties holds one member per column, keyed by name, carrying the
+    column's id, its type and the value under a key named after the type.
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /tables/{tableId}:
+    get:
+      operationId: getTable
+      parameters:
+        - name: tableId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The table and its column definitions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Table' }
+  /tables/{tableId}/rows:
+    get:
+      operationId: listRows
+      parameters:
+        - name: tableId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Every row of the table; the body is the array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Row' }
+  /rows/{rowId}:
+    get:
+      operationId: getRow
+      parameters:
+        - name: rowId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: One row.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Row' }
+components:
+  schemas:
+    Table:
+      type: object
+      required: [id, properties]
+      properties:
+        id: { type: string }
+        properties:
+          type: object
+          description: Column definitions keyed by column name.
+          additionalProperties: true
+    Row:
+      type: object
+      required: [id, parent, properties]
+      properties:
+        id: { type: string }
+        parent:
+          type: object
+          properties:
+            table_id: { type: string }
+        properties:
+          type: object
+          description: One member per column, keyed by column name.
+          additionalProperties: true
+    Option:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        color: { type: string }
+  crudResources:
+    table:
+      schema: { $ref: '#/components/schemas/Table' }
+      identity:
+        urlTemplate: /tables/{tableId}
+        bindings: { tableId: { field: id } }
+    row:
+      schema: { $ref: '#/components/schemas/Row' }
+      identity:
+        urlTemplate: /rows/{rowId}
+        bindings: { rowId: { field: id } }
+      collections:
+        rows:
+          urlTemplate: /tables/{tableId}/rows
+      references:
+        table:
+          resource: table
+          bindings: { tableId: { field: parent.table_id } }
+      x-runtime-schema:
+        field: properties
+        keyedBy: name
+        match: id
+        memberId: id
+        memberType: type
+        describedBy:
+          reference: table
+          definitions: properties
+          shape: map
+        definition:
+          id: id
+          name: name
+          type: type
+        types:
+          number:
+            value: number
+            schema: { type: number, nullable: true }
+          checkbox:
+            value: checkbox
+            schema: { type: boolean }
+          select:
+            value: select
+            schema:
+              nullable: true
+              allOf: [{ $ref: '#/components/schemas/Option' }]
+            options:
+              field: select.options
+              id: id
+              name: name
+              valueId: id
+          multi_select:
+            value: multi_select
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/Option' }
+            options:
+              field: multi_select.options
+              id: id
+              name: name
+              valueId: id
+            multiple: true
