@@ -64,6 +64,17 @@ pub struct WebhookConfig {
     /// payloads plus the stated per-row overhead. Defaults to
     /// [`DEFAULT_WEBHOOK_INBOX_MAX_BYTES`] (1 GiB).
     pub inbox_max_bytes: i64,
+    /// `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`: deliveries one endpoint accepts
+    /// for verification per minute, per instance. Default 600.
+    pub ingress_per_endpoint_per_minute: u32,
+    /// `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`: deliveries one client network
+    /// (as `TRUST_FORWARDED_FOR` finds it) may send per minute, per
+    /// instance. Default 120.
+    pub ingress_per_network_per_minute: u32,
+    /// `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`: subscription requests per
+    /// connection owner per hour, per instance, counted before the access
+    /// check reaches the provider. Default 20.
+    pub subscribe_per_owner_per_hour: u32,
 }
 
 impl Default for WebhookConfig {
@@ -71,7 +82,25 @@ impl Default for WebhookConfig {
         Self {
             enabled: false,
             inbox_max_bytes: DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+            ingress_per_endpoint_per_minute: 600,
+            ingress_per_network_per_minute: 120,
+            subscribe_per_owner_per_hour: 20,
         }
+    }
+}
+
+/// The largest value of a webhook rate limit.
+const MAX_WEBHOOK_LIMIT: u32 = 100_000;
+
+fn webhook_limit(name: &str, value: Option<&str>, default: u32) -> Result<u32, String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(default),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if (1..=MAX_WEBHOOK_LIMIT).contains(&limit) => Ok(limit),
+            _ => Err(format!(
+                "{name} must be a whole number from 1 to {MAX_WEBHOOK_LIMIT}"
+            )),
+        },
     }
 }
 
@@ -84,9 +113,22 @@ pub const DEFAULT_WEBHOOK_INBOX_MAX_BYTES: i64 = 1 << 30;
 /// deployment's.
 const MIN_WEBHOOK_INBOX_MAX_BYTES: i64 = 256 << 20;
 
+/// The webhook variables as read from the environment, by name.
+pub(crate) type WebhookVariables<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+#[cfg(test)]
 pub(crate) fn webhook_config(
     enabled: Option<&str>,
     inbox_max_bytes: Option<&str>,
+) -> Result<WebhookConfig, String> {
+    webhook_config_with(enabled, inbox_max_bytes, &|_| None)
+}
+
+/// [`webhook_config`] plus the rate limits, read only when the inbox is on.
+pub(crate) fn webhook_config_with(
+    enabled: Option<&str>,
+    inbox_max_bytes: Option<&str>,
+    variable: WebhookVariables<'_>,
 ) -> Result<WebhookConfig, String> {
     let enabled = match enabled.map(str::trim) {
         None | Some("") | Some("false") => false,
@@ -105,9 +147,29 @@ pub(crate) fn webhook_config(
             }
         },
     };
+    let defaults = WebhookConfig::default();
+    let limit = |name: &str, default: u32| {
+        if enabled {
+            webhook_limit(name, variable(name).as_deref(), default)
+        } else {
+            Ok(default)
+        }
+    };
     Ok(WebhookConfig {
         enabled,
         inbox_max_bytes,
+        ingress_per_endpoint_per_minute: limit(
+            "WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT",
+            defaults.ingress_per_endpoint_per_minute,
+        )?,
+        ingress_per_network_per_minute: limit(
+            "WEBHOOK_INGRESS_LIMIT_PER_NETWORK",
+            defaults.ingress_per_network_per_minute,
+        )?,
+        subscribe_per_owner_per_hour: limit(
+            "WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER",
+            defaults.subscribe_per_owner_per_hour,
+        )?,
     })
 }
 
@@ -306,9 +368,10 @@ impl Config {
         let trust_forwarded_for = env::var("TRUST_FORWARDED_FOR")
             .unwrap_or_default()
             .parse()?;
-        let webhooks = webhook_config(
+        let webhooks = webhook_config_with(
             env::var("WEBHOOKS_ENABLED").ok().as_deref(),
             env::var("WEBHOOK_INBOX_MAX_BYTES").ok().as_deref(),
+            &|name| env::var(name).ok(),
         )?;
 
         Ok(Self {
@@ -455,6 +518,50 @@ mod tests {
             // Off, the budget is not read at all.
             assert_eq!(
                 webhook_config(None, Some(invalid)).unwrap(),
+                WebhookConfig::default()
+            );
+        }
+    }
+
+    #[test]
+    fn webhook_rate_limits_are_bounded_and_read_only_when_enabled() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        let config = webhook_config_with(Some("true"), None, &|_| None).unwrap();
+        assert_eq!(
+            (
+                config.ingress_per_endpoint_per_minute,
+                config.ingress_per_network_per_minute,
+                config.subscribe_per_owner_per_hour
+            ),
+            (600, 120, 20)
+        );
+        let set = vars(&[
+            ("WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT", "1000"),
+            ("WEBHOOK_INGRESS_LIMIT_PER_NETWORK", "30"),
+            ("WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER", "5"),
+        ]);
+        let config = webhook_config_with(Some("true"), None, &set).unwrap();
+        assert_eq!(config.ingress_per_endpoint_per_minute, 1000);
+        assert_eq!(config.ingress_per_network_per_minute, 30);
+        assert_eq!(config.subscribe_per_owner_per_hour, 5);
+        for invalid in ["0", "-1", "100001", "lots", "1.5"] {
+            let bad = move |name: &str| {
+                (name == "WEBHOOK_INGRESS_LIMIT_PER_NETWORK").then(|| invalid.to_string())
+            };
+            assert!(
+                webhook_config_with(Some("true"), None, &bad).is_err(),
+                "{invalid}"
+            );
+            // Off, nothing is read.
+            assert_eq!(
+                webhook_config_with(None, None, &bad).unwrap(),
                 WebhookConfig::default()
             );
         }
