@@ -347,14 +347,17 @@ export function publishedProblems(ref, base = root) {
   const problems = [];
   const mergeBase = mergeBaseWith(ref, base);
   // Behind only when the branch point is not `ref` itself.
+  // A shallow clone counts as having none: its merge-base may stop short of
+  // the real one, so it cannot tell "behind" from "deleted" either.
+  const shallow = isShallow(base);
   const behindRef =
+    !shallow &&
     mergeBase !== undefined &&
     mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
   const behind = [];
   // Without a merge-base (unrelated histories, or a shallow clone such as
   // CI's, where `git merge-base` fails or may stop short), a file main
   // published since cannot be told from one this branch lost: say both.
-  const shallow = isShallow(base);
   const unsure =
     mergeBase === undefined || shallow
       ? ` (This ${shallow ? 'shallow clone' : 'checkout'} cannot tell whether the branch is behind ${ref}: if it is, merge ${ref} first instead.)`
