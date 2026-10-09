@@ -20,7 +20,11 @@
  *   GET /proxy/todoist/api/v1/projects/<id>, /tasks/<id>
  *       — the row as it now stands: `checked: true` after completeTask,
  *         `is_deleted: true` after deleteTask, 404 after removeTask or for
- *         an unknown id.
+ *         an unknown id. When api/ holds a recorded completed-task answer
+ *         (record.mjs --completed-task) that was a 404, a completed task
+ *         answers 404 by id instead, as Todoist did: `source().completed`
+ *         says which, and the synthetic source keeps the `checked: true`
+ *         assumption until a recording settles it (#46).
  * Any other method is 403 (the real catalog allows GET only); any other path
  * 404. `limit` is ignored: pages hold PAGE_SIZE rows (the recorded page
  * size, or 3 for the synthetic rows, so five tasks span two pages).
@@ -49,46 +53,124 @@
 import { existsSync, readFileSync } from 'node:fs';
 import * as synthetic from './synthetic.mjs';
 
-const api = new URL('./api/', import.meta.url);
+/** record.mjs writes here; a test may point `apiDir` at an invented api/. */
+export const API_DIR = new URL('./api/', import.meta.url);
 const COLLECTIONS = ['projects', 'tasks'];
 const SYNTHETIC_PAGE_SIZE = 3;
 
-export const recorded = () => existsSync(new URL('meta.json', api));
+/**
+ * The completed-task answer when nothing was recorded: the synthetic
+ * assumption, `GET /tasks/{id}` returns the row with `checked: true`.
+ * Declared, not verified against Todoist.
+ */
+const ASSUMED_COMPLETED = { recorded: false, status: 200, checked: true };
 
-function loadPages(collection) {
+export const recorded = (apiDir = API_DIR) =>
+  existsSync(new URL('meta.json', apiDir));
+
+function loadJson(file) {
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+function loadPages(collection, apiDir) {
   const pages = [];
 
   for (let n = 1; ; n++) {
-    const file = new URL(`GET__api__v1__${collection}__page-${n}.json`, api);
+    const file = new URL(`GET__api__v1__${collection}__page-${n}.json`, apiDir);
     if (!existsSync(file)) break;
-    pages.push(JSON.parse(readFileSync(file, 'utf8')));
+    pages.push(loadJson(file));
   }
 
   return pages;
 }
 
-/** The rows to start from and the page size, from api/ or synthetic.mjs. */
-export function source() {
-  if (!recorded())
+/**
+ * What the recording says `GET /tasks/{id}` answers for a completed task
+ * (record.mjs --completed-task): every `tasks__completed-<n>.json` file, as
+ * `{ status, checked }`. Empty when none was recorded.
+ */
+export function loadCompleted(apiDir = API_DIR) {
+  const answers = [];
+
+  for (let n = 1; ; n++) {
+    const file = new URL(`GET__api__v1__tasks__completed-${n}.json`, apiDir);
+    if (!existsSync(file)) break;
+    const { status, body } = loadJson(file);
+    answers.push({ status, checked: body?.checked });
+  }
+
+  return answers;
+}
+
+/**
+ * The one answer a recording gives, or undefined when it recorded none.
+ * Every recorded completed task must have answered the same way (the same
+ * status, and for 200 the same `checked`): Todoist has one behaviour, so
+ * answers that disagree mean a task that was not completed after all, or a
+ * recording made across a change; the fixture refuses to pick one.
+ */
+export function completedAnswer(answers, apiDir = API_DIR) {
+  const [first] = answers;
+  if (!first) return undefined;
+  const differs = answers.find(
+    a =>
+      a.status !== first.status ||
+      (a.status === 200 && a.checked !== first.checked),
+  );
+  if (differs)
+    throw new Error(
+      `${apiDir.pathname}: the recorded completed-task answers disagree (${answers
+        .map(
+          a => `${a.status}${a.status === 200 ? ` checked: ${a.checked}` : ''}`,
+        )
+        .join(', ')}); re-record with tasks that are all completed`,
+    );
+
+  return first;
+}
+
+/**
+ * The rows to start from, the page size and the completed-task answer, from
+ * api/ or synthetic.mjs. `completed` is `{ recorded, status, checked }`:
+ * the recorded answer (`recorded: true`, every recorded task agreeing), or
+ * ASSUMED_COMPLETED.
+ */
+export function source({ apiDir = API_DIR } = {}) {
+  if (!recorded(apiDir))
     return {
       synthetic: true,
       pageSize: SYNTHETIC_PAGE_SIZE,
       projects: structuredClone(synthetic.projects),
       tasks: structuredClone(synthetic.tasks),
+      completed: { ...ASSUMED_COMPLETED },
     };
-  const pages = Object.fromEntries(COLLECTIONS.map(c => [c, loadPages(c)]));
+  const pages = Object.fromEntries(
+    COLLECTIONS.map(c => [c, loadPages(c, apiDir)]),
+  );
   const rows = c => pages[c].flatMap(page => page.body.results);
+  const answer = completedAnswer(loadCompleted(apiDir), apiDir);
 
   return {
     synthetic: false,
     pageSize: pages.tasks[0]?.body.results.length || SYNTHETIC_PAGE_SIZE,
     projects: rows('projects'),
     tasks: rows('tasks'),
+    completed: answer
+      ? { recorded: true, status: answer.status, checked: answer.checked }
+      : { ...ASSUMED_COMPLETED },
   };
 }
 
-export function todoistFixture({ blank = false } = {}) {
-  const { synthetic: isSynthetic, pageSize, projects, tasks } = source();
+export function todoistFixture({ blank = false, apiDir = API_DIR } = {}) {
+  const {
+    synthetic: isSynthetic,
+    pageSize,
+    projects,
+    tasks,
+    completed,
+  } = source({ apiDir });
+  /** A completed task answers 404 by id when the recording saw that. */
+  const completedIs404 = completed.status === 404;
   if (blank) tasks.length = 0;
   let made = 0;
   const byId = new Map(tasks.map(t => [t.id, t]));
@@ -147,6 +229,8 @@ export function todoistFixture({ blank = false } = {}) {
   return {
     synthetic: isSynthetic,
     pageSize,
+    /** What a completed task answers by id: `{ recorded, status, checked }`. */
+    completed,
     /** The collections as the pages they are served in now (tests). */
     get pages() {
       return pages();
@@ -173,11 +257,12 @@ export function todoistFixture({ blank = false } = {}) {
       }
 
       if (id) {
+        const task = byId.get(id);
         const row =
           collection === 'tasks'
-            ? gone.has(id)
+            ? gone.has(id) || (completedIs404 && task?.checked === true)
               ? undefined
-              : byId.get(id)
+              : task
             : projects.find(p => p.id === id);
 
         return row

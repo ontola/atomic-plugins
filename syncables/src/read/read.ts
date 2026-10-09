@@ -25,10 +25,13 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WindowRange,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
-import { readCollections } from './collections.js';
+import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import { declaredThrottling } from '../throttling/throttling.js';
+import type { RuntimeDescriber, RuntimeMembers } from './runtime-schemas.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -80,6 +83,8 @@ export interface ReadOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Make one request to the first root collection, read nothing, return an empty result. */
   probe?: boolean;
+  /** The range for collections read by range windows; see `CollectionReadOptions.ranges`. */
+  ranges?: NonNullable<CollectionReadOptions['ranges']>;
 }
 
 export interface ReadRecord {
@@ -97,6 +102,12 @@ export interface ReadRecord {
    * are left out; everything else is the provider's JSON value as-is.
    */
   values: Record<string, unknown>;
+  /**
+   * For a resource that declares `x-runtime-schema`: its user-defined
+   * members, interpreted against the class of its describer (one of the
+   * result's `describers`). `values` keeps the raw field as before.
+   */
+  runtime?: RuntimeMembers;
 }
 
 export interface ReadResult {
@@ -105,6 +116,19 @@ export interface ReadResult {
   records: ReadRecord[];
   /** Non-fatal per-collection failures, as `<collection>: <message>`. */
   errors: string[];
+  /**
+   * The describers read and the classes derived from them, when a resource
+   * declares `x-runtime-schema` (Runtime Schemas 0.1.0-draft); absent
+   * otherwise. These classes are per describer (one per Notion data
+   * source), so they are not part of `ontology`, which the document alone
+   * defines.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read (the
+   * last ones); present with `describers`.
+   */
+  describerErrors?: string[];
 }
 
 const TIMESTAMP =
@@ -146,6 +170,7 @@ export async function readPlatform(
       .map((t) => [t.shortname, t.datatype]),
   );
   const records: ReadRecord[] = [];
+  const byItem = new Map<Record<string, unknown>, ReadRecord>();
   const result = await readCollections(doc, {
     ...options,
     onRecord(value, collection, path): void {
@@ -161,23 +186,35 @@ export async function readPlatform(
         (v): v is string => typeof v === 'string' && v !== '',
       );
       const id = asText(value[collection.idField]);
-      records.push({
+      const record: ReadRecord = {
         resource: ontologyShortname(collection.resource),
         namespace: collection.contextParams.map((p) => path[p] ?? '').join('/'),
         id,
         name: name ?? id,
         values,
-      });
+      };
+      records.push(record);
+      byItem.set(value, record);
     },
   });
   if (!records.length && result.errors.length) {
     throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
   }
+  for (const snapshot of result.collections)
+    snapshot.items.forEach((item, i) => {
+      const record = byItem.get(item);
+      const runtime = snapshot.runtimeMembers?.[i];
+      if (record && runtime) record.runtime = runtime;
+    });
   return {
     platform: options.platform,
     ontology,
     records,
     errors: result.errors,
+    ...(result.describers ? { describers: result.describers } : {}),
+    ...(result.describerErrors
+      ? { describerErrors: result.describerErrors }
+      : {}),
   };
 }
 
@@ -185,6 +222,12 @@ export interface PaginateOptions {
   transport: Transport;
   /** Optional storage hook for original data-read responses. */
   storeResponse?: StoreReadResponse;
+  /**
+   * Dot-path to the items array in each page body, `''` for the body root
+   * (an Envelope Object's `itemsField`). Without it, the scheme's own
+   * `response.envelope` applies, else the array is located.
+   */
+  itemsField?: string;
   /** A path template from `document.paths`, e.g. `/v1/search`. */
   path: string;
   /** Default `GET`. */
@@ -196,6 +239,11 @@ export interface PaginateOptions {
   body?: Record<string, unknown>;
   /** Sent through the scheme's `pageSize`-role field, when it declares one. */
   pageSize?: number;
+  /**
+   * The range to read when the operation applies a `rangeWindow` scheme
+   * (Pagination Schemes 0.5.0 §4.6), both bounds in its window format.
+   */
+  range?: WindowRange;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -220,6 +268,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
+    declaredThrottling(doc),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({
@@ -232,6 +281,10 @@ export async function paginate(
     query: options.query ?? {},
     body: options.body ?? {},
     ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+    ...(options.itemsField === undefined
+      ? {}
+      : { itemsField: options.itemsField }),
+    ...(options.range ? { range: options.range } : {}),
   })) {
     items.push(...page.items);
     if (items.length > budget.limits.maxRecords) {

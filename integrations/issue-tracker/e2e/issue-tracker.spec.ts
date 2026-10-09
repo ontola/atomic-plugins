@@ -54,7 +54,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const REPOSITORY = 'atomic-fixture/tracker';
 /** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
 const TEAM_REPOSITORY = 'atomic-fixture/team-board';

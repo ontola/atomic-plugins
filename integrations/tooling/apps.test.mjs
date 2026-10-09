@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_FOLDERS,
+  appDependencyDirs,
   appEntries,
   appFolder,
   blobId,
@@ -25,6 +26,12 @@ import {
   terms,
   write,
 } from './apps.mjs';
+import {
+  buildCatalog,
+  readBuilds,
+  recordedFor,
+  versionProblems,
+} from '../../usertest/catalog.mjs';
 
 const TEXT = 'export async function view() {}';
 
@@ -129,6 +136,59 @@ test('a matching app entry passes check', () =>
   using({}, async base => {
     assert.equal(appEntries(readCatalog(base)).length, 1);
     assert.deepEqual(await check({ base }), []);
+  }));
+
+test('an app depends on the lockfiles of its plugin folder and its own folder', () => {
+  assert.deepEqual(appDependencyDirs('gamma'), [
+    'integrations/gamma',
+    'integrations/gamma/app',
+  ]);
+  assert.deepEqual(appDependencyDirs('moneybird'), [
+    'integrations/money',
+    'integrations/money/moneybird',
+  ]);
+  assert.deepEqual(appDependencyDirs('todoist'), [
+    'integrations/issue-tracker',
+    'integrations/issue-tracker/todoist-app',
+  ]);
+});
+
+test('check installs a lockfile without node_modules before building, once, unless told not to', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    writeFileSync(join(base, 'integrations/gamma/app/pnpm-lock.yaml'), '');
+    mkdirSync(join(base, 'integrations/gamma/app/node_modules'));
+    const installed = [];
+
+    const install = cwd => {
+      installed.push(cwd);
+      mkdirSync(join(cwd, 'node_modules'));
+
+      return { status: 0 };
+    };
+
+    assert.deepEqual(await check({ base, install: false }), []);
+    assert.deepEqual(installed, []);
+
+    assert.deepEqual(await check({ base, install }), []);
+    // Only the folder that had no node_modules; app/ already had one.
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+
+    // Installed now, so a second check leaves it alone.
+    assert.deepEqual(await check({ base, install }), []);
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+  }));
+
+test('a failed install fails check with pnpm output, before any build', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    await assert.rejects(
+      check({
+        base,
+        install: () => ({ status: 1, stderr: 'ERR_PNPM_OUTDATED_LOCKFILE' }),
+      }),
+      /pnpm install --frozen-lockfile failed in integrations\/gamma:\nERR_PNPM_OUTDATED_LOCKFILE/,
+    );
   }));
 
 test('a fresh build that differs from the committed module fails check', () =>
@@ -329,6 +389,80 @@ test('a published version file may not change or disappear', () =>
     );
   }));
 
+test('a branch behind main is told to merge, not to restore what main published since', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // A topic branch parts here; main then publishes four more versions.
+    git('checkout', '-q', '-b', 'topic');
+    git('checkout', '-q', main);
+
+    for (const version of ['1.3.0', '1.4.0', '2.0.0', '2.1.0']) {
+      mkdirSync(join(base, `apps/gamma/${version}`), { recursive: true });
+      writeFileSync(join(base, modulePath('gamma', version)), `v${version}`);
+    }
+
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'later',
+    );
+    git('checkout', '-q', 'topic');
+
+    const problems = await check({ base, published: main });
+    assert.deepEqual(problems, [
+      `4 file(s) published at ${main} are not on this branch, which is behind it (apps/gamma/1.3.0/ui.js, apps/gamma/1.4.0/ui.js, apps/gamma/2.0.0/ui.js, and 1 more): merge ${main} (never restore them by hand)`,
+    ]);
+
+    // A file the branch did have, and lost, is still "deleted".
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it.`,
+      ),
+    );
+
+    // Merged, the branch is told nothing.
+    git('checkout', '-q', '--', 'apps');
+    git('merge', '-q', main);
+    assert.deepEqual(await check({ base, published: main }), []);
+  }));
+
+test('without a merge-base, a missing published file is "deleted" and may mean the branch is behind', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // An unrelated history: no merge-base with main, as in CI's shallow
+    // clone where `git merge-base` fails.
+    git('checkout', '-q', '--orphan', 'lone');
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'lone',
+    );
+
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it. (This checkout cannot tell whether the branch is behind ${main}: if it is, merge ${main} first instead.)`,
+      ),
+    );
+  }));
+
 test('write refuses to rebuild a published version with different bytes', () =>
   using({}, async base => {
     const main = commitAsMain(base);
@@ -376,4 +510,81 @@ test('a new version beside a published one passes', () =>
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
+});
+
+// The user-testing catalog's builds (usertest/catalog.mjs) live here, in
+// CI's tooling unit tests, so that a changed app without a usertest version
+// bump fails CI: the droplet would otherwise serve new bytes under an old
+// version, which the host's integrity check refuses for new installs.
+test('usertest versions: a build that changed under a recorded version is a forgotten bump', () => {
+  const recorded = recordedFor([
+    { key: 'notion/usertest-9', sha256: 'sha256-old' },
+    { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-sample' },
+    { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+  ]);
+  assert.deepEqual(Object.keys(recorded), [
+    'calendar/usertest-12',
+    'notion-sample/usertest-9-sample-2',
+    'notion/usertest-9',
+  ]);
+
+  // Unchanged: nothing to report.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-old' },
+        { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+      ],
+      recorded,
+    ),
+    { changed: [], unrecorded: [] },
+  );
+
+  // Notion's source changed, its version did not (#417): both its module
+  // and its sample's differ from what usertest-9 was recorded with.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-new' },
+        { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-new2' },
+      ],
+      recorded,
+    ),
+    {
+      changed: [
+        "notion: the build differs from what usertest-9 was recorded with (usertest/builds.json): bump VERSIONS['notion'] in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+        "notion-sample: the build differs from what usertest-9-sample-2 was recorded with (usertest/builds.json): bump VERSIONS['notion'] if that app changed, else SAMPLE_VERSION, in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+      ],
+      unrecorded: [],
+    },
+  );
+
+  // Bumped but not recorded yet.
+  assert.deepEqual(
+    versionProblems(
+      [{ key: 'notion/usertest-10', sha256: 'sha256-new' }],
+      recorded,
+    ),
+    {
+      changed: [],
+      unrecorded: [
+        'notion/usertest-10 is not in usertest/builds.json: run node usertest/catalog.mjs --record',
+      ],
+    },
+  );
+});
+
+test("this repository's usertest builds match what their versions were recorded with", async () => {
+  const out = mkdtempSync(join(tmpdir(), 'usertest-catalog-'));
+
+  try {
+    const { modules } = await buildCatalog(out);
+    assert.ok(modules.length > 0);
+    assert.deepEqual(versionProblems(modules, readBuilds()), {
+      changed: [],
+      unrecorded: [],
+    });
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
 });

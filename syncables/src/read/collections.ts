@@ -1,5 +1,6 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 import {
   applySelection,
   asText,
@@ -17,8 +18,17 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
+  type WindowRange,
 } from './pages.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import {
+  interpretRuntimeItems,
+  runtimeSchemasOf,
+  type RuntimeDescriber,
+  type RuntimeItem,
+  type RuntimeMembers,
+} from './runtime-schemas.js';
 import type { Transport } from './transport.js';
 
 export interface CollectionReadOptions {
@@ -37,6 +47,17 @@ export interface CollectionReadOptions {
    * `storeResponse` are not used: the budget's own transport and limits are.
    */
   budget?: Budget;
+  /**
+   * The range to read a collection over when its list operation applies a
+   * `rangeWindow` pagination scheme (Pagination Schemes 0.5.0 §4.6), both
+   * bounds in the scheme's window format; `undefined` leaves such a
+   * collection unread, with an error. Which range to read is the caller's
+   * choice. Not called for other collections.
+   */
+  ranges?: (
+    collection: ReadCollection,
+    path: Record<string, string>,
+  ) => WindowRange | undefined;
   /** Called per accepted record, before it is added to its collection. */
   onRecord?: (
     value: Record<string, unknown>,
@@ -49,14 +70,41 @@ export interface CollectionSnapshot {
   collection: ReadCollection;
   pathParams: Record<string, string>;
   items: Record<string, unknown>[];
-  /** False when a page, identity check, storage hook or budget failed. */
+  /**
+   * False when a page, identity check, storage hook or budget failed, or
+   * when the read returned every page but is never complete in the
+   * Collection Completeness sense (`notComplete` says why). Only a complete
+   * snapshot may be used to infer that an absent record is gone.
+   */
   complete: boolean;
   error?: string;
+  /** Why a read that ended without an error is still not complete. */
+  notComplete?: string;
+  /**
+   * For a resource that declares `x-runtime-schema` (Runtime Schemas
+   * 0.1.0-draft): each item's user-defined members, interpreted against its
+   * describer's class, in the order of `items`.
+   */
+  runtimeMembers?: RuntimeMembers[];
 }
 
 export interface CollectionReadResult {
   collections: CollectionSnapshot[];
   errors: string[];
+  /**
+   * Present when a read resource declares `x-runtime-schema`: every
+   * describer the items named, read once (twice after an unmatched member),
+   * with the class derived from it or the error that left its items without
+   * one.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read: they
+   * leave items without a class, not a collection incomplete. They are the
+   * last entries of `errors`, after every collection's. Present with
+   * `describers`.
+   */
+  describerErrors?: string[];
 }
 
 interface Origin {
@@ -136,8 +184,13 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
+      declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
+  // A resource whose x-runtime-schema cannot be used fails its collections
+  // before any request: its items' members could not be interpreted.
+  const runtimeFailures = new Map<string, string>();
+  const schemas = runtimeSchemasOf(doc, runtimeFailures);
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];
   const origins = new Map<string, Origin[]>();
@@ -172,6 +225,8 @@ export async function readCollections(
         };
         collections.push(snapshot);
         try {
+          const failure = runtimeFailures.get(collection.resource);
+          if (failure !== undefined) throw new Error(failure);
           const operation = listOperation(
             doc,
             collection.url,
@@ -186,6 +241,8 @@ export async function readCollections(
               `${collection.url} declares no ${collection.method} operation`,
             );
           }
+          const outcome: WalkOutcome = { complete: true };
+          const range = options.ranges?.(collection, path);
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -199,6 +256,9 @@ export async function readCollections(
             ...(collection.itemsField !== undefined
               ? { itemsField: collection.itemsField }
               : {}),
+            ...(range ? { range } : {}),
+            identity: (value) => asText(value[collection.idField]),
+            outcome,
           })) {
             if (options.probe) throw new ProbeDone();
             for (const value of page.items) {
@@ -224,7 +284,10 @@ export async function readCollections(
               snapshot.items.push(value);
             }
           }
-          snapshot.complete = true;
+          snapshot.complete = outcome.complete;
+          if (!outcome.complete && outcome.reason) {
+            snapshot.notComplete = outcome.reason;
+          }
           read.push(...snapshot.items.map((value) => ({ value, path })));
         } catch (error) {
           if (error instanceof ProbeDone)
@@ -250,5 +313,34 @@ export async function readCollections(
     pending = waiting;
   }
   if (options.probe) throw new Error('No collection available to check');
-  return { collections, errors };
+  if (!schemas.size) return { collections, errors };
+  // Runtime Schemas §5.2: the describers are read in the same read as the
+  // items, after them, through the same budget.
+  const items: RuntimeItem[] = [];
+  for (const snapshot of collections) {
+    if (!schemas.has(snapshot.collection.resource)) continue;
+    const members: RuntimeMembers[] = [];
+    snapshot.runtimeMembers = members;
+    snapshot.items.forEach((item, index) =>
+      items.push({
+        resource: snapshot.collection.resource,
+        item,
+        context: snapshot.pathParams,
+        set: (interpreted) => {
+          members[index] = interpreted;
+        },
+      }),
+    );
+  }
+  const describerErrors: string[] = [];
+  const describers = await interpretRuntimeItems(
+    schemas,
+    items,
+    budget,
+    upstream,
+    describerErrors,
+  );
+  // Last, after every collection error: callers split `errors` by count.
+  errors.push(...describerErrors);
+  return { collections, errors, describers, describerErrors };
 }

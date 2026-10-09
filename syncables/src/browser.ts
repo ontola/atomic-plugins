@@ -76,6 +76,12 @@ export type {
   CollectionSnapshot,
 } from './read/collections.js';
 export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
+export type {
+  RuntimeClass,
+  RuntimeDescriber,
+  RuntimeMembers,
+  RuntimeProperty,
+} from './read/runtime-schemas.js';
 
 export { applyOverlay } from './openapi/apply-overlay.js';
 export type {
@@ -102,6 +108,32 @@ export { parseLinkHeader } from './pagination/response-parser.js';
 export { LinkRefused, resolveLink } from './pagination/links.js';
 export type { ResolveLinkOptions } from './pagination/links.js';
 export type { LinkResolutionObject } from './pagination/types.js';
+export {
+  classifyThrottling,
+  declaredThrottling,
+  headerTime,
+  operationBuckets,
+} from './throttling/throttling.js';
+export type {
+  BodyPredicate,
+  HeaderPredicate,
+  HeaderRole,
+  HeaderRoleObject,
+  SignalObject,
+  ThrottlingDeclaration,
+  ThrottlingMeaning,
+  ThrottlingResponse,
+  ThrottlingVerdict,
+  TimeUnit,
+} from './throttling/throttling.js';
+export { halves, WindowReadError } from './pagination/window.js';
+export type {
+  RangeWindowObject,
+  WindowBounds,
+  WindowFormat,
+  WindowUnit,
+} from './pagination/types.js';
+export type { WalkOutcome, WindowRange } from './read/pages.js';
 export type {
   AutoDetectObject,
   PaginationApplicationObject,

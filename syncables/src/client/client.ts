@@ -8,6 +8,10 @@ import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { readCollections } from '../read/collections.js';
+import type {
+  RuntimeDescriber,
+  RuntimeMembers,
+} from '../read/runtime-schemas.js';
 import {
   asText,
   discoverReadModel,
@@ -20,15 +24,29 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  DEFAULT_READ_LIMITS,
   PageStatusError,
   RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
 } from '../read/pages.js';
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
 import { readNestedField } from '../pagination/response-parser.js';
+import {
+  classifyThrottling,
+  declaredThrottling,
+  operationBuckets,
+  type ThrottlingVerdict,
+} from '../throttling/throttling.js';
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
+  lowerCaseHeaders,
   type ListMethod,
   type Transport,
   type TransportRequest,
@@ -54,6 +72,7 @@ import {
   type StoredFeedTombstones,
   type StoredRebuild,
   type StoredRecordWrites,
+  type StoredThrottlingPause,
   type StoredWrite,
 } from './outbox.js';
 
@@ -110,17 +129,34 @@ export interface WriteFailure {
    * call `auth`.
    */
   afterRenewal: boolean;
+  /**
+   * Set when the response is throttling under the document's `x-throttling`
+   * (draft Throttling extension: a matching Signal Object, or a 429), with
+   * the earliest retry time when one is known. See `classifyThrottling`.
+   */
+  throttling?: ThrottlingVerdict;
+  /**
+   * True when the document declares `x-throttling.signals`. With signals,
+   * only a matching signal or a 429 is throttling (a 403 that matches none
+   * is a refused credential or a missing permission); without them (absent
+   * or false) the default classification keeps its header heuristic for a
+   * 403. The client sets it on every failure it classifies.
+   */
+  signalsDeclared?: boolean;
 }
 
 /**
  * The default classification:
  * - a delete answered 404 or 410: `satisfied` (the record is already gone);
+ * - a response that is throttling under the document's `x-throttling`
+ *   (`failure.throttling`: a matching signal, or any 429): `retry`;
  * - 401: `auth`;
- * - 403: `retry` when the response carries `Retry-After` or
- *   `x-ratelimit-remaining: 0` (a rate limit, as GitHub sends); otherwise
- *   `permanent` when `afterRenewal` (a refusal that renewed credentials did
- *   not fix is a missing permission), and `auth` before that;
- * - 408, 425 and 429: `retry`;
+ * - 403, when the document declares no signals: `retry` when the response
+ *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
+ *   GitHub sends); otherwise, and with signals declared, `permanent` when
+ *   `afterRenewal` (a refusal that renewed credentials did not fix is a
+ *   missing permission), and `auth` before that;
+ * - 408 and 425: `retry`;
  * - every other 4xx (400, 404 and 410 on a create or update, 405, 409, 413,
  *   415, 422, ...): `permanent`;
  * - anything else (5xx, and 1xx/3xx a transport did not handle): `retry`.
@@ -131,11 +167,13 @@ export function defaultWriteFailureClass(
   const { status, type, headers } = failure;
   if (type === 'delete' && (status === 404 || status === 410))
     return 'satisfied';
+  if (failure.throttling) return 'retry';
   if (status === 401) return 'auth';
   if (status === 403) {
     if (
-      headers['retry-after'] !== undefined ||
-      headers['x-ratelimit-remaining'] === '0'
+      !failure.signalsDeclared &&
+      (headers['retry-after'] !== undefined ||
+        headers['x-ratelimit-remaining'] === '0')
     )
       return 'retry';
     return failure.afterRenewal ? 'permanent' : 'auth';
@@ -308,6 +346,19 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * The describers this sync read and the classes derived from them, when
+   * a resource declares `x-runtime-schema` (Runtime Schemas 0.1.0-draft);
+   * absent otherwise. `runtimeMembers()` gives a record's values.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * Non-fatal problems of a sync whose collections were read: a describer
+   * that could not be read (`<resource>: describer <path>: <message>`), so
+   * its records' `runtimeMembers()` have `noClass`. Absent when there are
+   * none. A collection that could not be read still makes `sync()` throw.
+   */
+  warnings?: string[];
 }
 
 export interface PollOptions {
@@ -450,6 +501,19 @@ export interface ApiClient {
     id: string,
     context?: Record<string, string>,
   ): Promise<Record<string, unknown> | undefined>;
+  /**
+   * A record's user-defined members (`x-runtime-schema`), as the latest
+   * complete read of its collection interpreted them against its
+   * describer's class: of the record as that read returned it, so local
+   * edits still pending are not in them. Undefined when no complete read of this client returned
+   * the record, or its resource declares no runtime schema. Kept in memory
+   * only: after a restart, until the next sync.
+   */
+  runtimeMembers(
+    resource: string,
+    id: string,
+    context?: Record<string, string>,
+  ): RuntimeMembers | undefined;
   /**
    * Writes `data` to local storage immediately, under a client-generated id
    * (or `data.id`, if already set) and returns without waiting on the
@@ -664,6 +728,8 @@ interface QueuedWrite {
   confirmedId?: string;
   /** The request may be in flight; stored so a restart can tell. */
   sending?: boolean;
+  /** The earliest time to send it again (a throttling answer's), stored; see `StoredWrite.notBefore`. */
+  notBefore?: number;
   /** False until the outbox holding this write is stored; not sent before. */
   durable?: boolean;
   /** A restored update: not sent before a refresh of its collection. */
@@ -694,6 +760,8 @@ type WriteOutcome =
 
 /** The server answered with a non-2xx status. */
 class HttpStatusError extends Error {
+  /** When the response arrived, in milliseconds since the epoch. */
+  readonly receivedAt = Date.now();
   constructor(
     message: string,
     readonly status: number,
@@ -753,13 +821,35 @@ class NotSentError extends Error {}
  * responses other than 503 count as uncertain: a gateway error or timeout can
  * follow a committed create. 503 and 429 conventionally mean the request was
  * not processed, other 4xx responses mean it was refused, and an error before
- * sending means nothing went out, so those keep the ordinary retry path.
+ * sending means nothing went out, so those keep the ordinary retry path. A
+ * throttling signal declared for a 5xx does not change this: the Throttling
+ * extension says such a response may follow partial processing and that
+ * "not applied" is only an inference, so a create answered that way is
+ * still uncertain.
  */
 function mayHaveApplied(error: unknown): boolean {
   if (error instanceof NotSentError) return false;
   if (error instanceof HttpStatusError)
     return error.status >= 500 && error.status !== 503;
   return true;
+}
+
+/** JSON values equal in structure, whatever the order of object keys. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b))
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, i) => deepEqual(value, b[i]))
+    );
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]))
+  );
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -783,7 +873,7 @@ function declaredIdempotencyHeader(
 /**
  * The Collection Completeness extension's `absent` value for a collection:
  * from its CRUD Causality Collection Object, which covers the collection's
- * own fixed `x-list-query`/`x-list-body`, else from its list operation,
+ * own fixed `listQuery`/`listBody` (or `x-list-query`/`x-list-body`), else from its list operation,
  * which covers only a read that adds nothing to the operation's request (no
  * fixed query or body), since several collections may share that operation.
  */
@@ -861,7 +951,10 @@ function declaredDeletionFeed(
   if (envelope !== undefined) {
     if (!isRecord(envelope)) return undefined;
     const field = envelope['itemsField'];
-    if (field !== undefined && typeof field !== 'string') return undefined;
+    // Omitted, null or "" mean the body root (Pagination Schemes §4.4.2);
+    // another non-string does not parse.
+    if (field !== undefined && field !== null && typeof field !== 'string')
+      return undefined;
     feed.itemsField = field ?? '';
   }
   if (idField !== undefined) {
@@ -977,6 +1070,13 @@ export function createApiClient(
   const doc = resolveRefs(document);
   if (options.baseUrl) doc['servers'] = [{ url: options.baseUrl }];
   const upstream = upstreamOf(doc);
+  // The root x-throttling (draft Throttling extension): header roles and
+  // the signals that make a response a rate-limit refusal.
+  const throttling = declaredThrottling(doc);
+  /** Buckets a quotaExhausted answer declared exhausted, by identifier ('*' when unnamed), until (ms). */
+  const pausedBuckets = new Map<string, number>();
+  /** The running sync's read budget, for what is left of its time while a read waits out a pause. */
+  let activeBudget: Budget | undefined;
   const storage = options.storage ?? new InMemoryStorageAdapter();
   const baseTransport =
     options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch);
@@ -1013,6 +1113,8 @@ export function createApiClient(
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
+  /** Per scope, the user-defined members of the latest complete read's records, by id. */
+  const runtimeMembersByScope = new Map<string, Map<string, RuntimeMembers>>();
   const writeQueues = new Map<string, QueuedWrite[]>();
   /** Failed updates and deletes per record, oldest first. Failed creates stay parked in their queue. */
   const gaveUpWrites = new Map<string, QueuedWrite[]>();
@@ -1129,6 +1231,7 @@ export function createApiClient(
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
       ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
+      ...(write.notBefore !== undefined ? { notBefore: write.notBefore } : {}),
     };
   }
 
@@ -1199,6 +1302,7 @@ export function createApiClient(
         rebuild,
         ...(feedCursors.size ? { feedCursors: [...feedCursors.values()] } : {}),
         ...storedFeedTombstones(),
+        ...storedThrottlingPauses(),
         unrestorable,
         ...(authBlock ? { authBlock } : {}),
       }),
@@ -1288,6 +1392,9 @@ export function createApiClient(
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
       ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
+      ...(stored.notBefore !== undefined
+        ? { notBefore: stored.notBefore }
+        : {}),
     };
     if (stored.seq !== undefined && stored.seq >= nextSeq)
       nextSeq = stored.seq + 1;
@@ -1336,6 +1443,12 @@ export function createApiClient(
       if (route) feedCursors.set(scopeFor(route, entry.context), entry);
       else unrestorable.push(entry);
     }
+    // Exhausted buckets outlive the process: a pause still in the future is
+    // kept, so no write (nor read) counted against the bucket goes out early.
+    pausedBuckets.clear();
+    for (const entry of outbox.throttlingPauses)
+      if (entry.until > Date.now())
+        pausedBuckets.set(entry.bucket ?? '*', entry.until);
     // Under onAuthFailure 'retry' nothing blocks: a stored block (from a
     // client with 'block') is dropped and its writes resume.
     authBlock =
@@ -1681,9 +1794,34 @@ export function createApiClient(
       accepted();
       return settled(write, resolvedId);
     } catch (error) {
+      // Throttling under the document's x-throttling (a matching signal, or
+      // a 429), with the earliest retry time; decided once per response.
+      const throttled =
+        error instanceof HttpStatusError
+          ? classifyThrottling(throttling, {
+              status: error.status,
+              headers: error.headers,
+              body: error.body,
+              receivedAt: error.receivedAt,
+            })
+          : undefined;
+      // The earliest retry time holds the write whatever path its class
+      // takes below (uncertain, blocked, failed, retried): set it here, so
+      // that a resolveWrite retry or authRenewed() never sends it earlier.
+      if (throttled?.retryAt !== undefined)
+        write.notBefore = Math.max(write.notBefore ?? 0, throttled.retryAt);
+      // An exhausted bucket holds every write counted against it: until the
+      // answer's time, or, without one, at least the client's base backoff,
+      // whatever path the write's class takes below (the retry path extends
+      // it to this write's own backoff).
+      if (throttled?.meaning === 'quotaExhausted')
+        pauseBucket(
+          throttled.bucket,
+          throttled.retryAt ?? Date.now() + retry.baseDelayMs,
+        );
       const classified =
         error instanceof HttpStatusError
-          ? classify(write, error, sentAfterRenewal)
+          ? classify(write, error, sentAfterRenewal, throttled)
           : undefined;
       let failureClass: WriteFailureClass = classified?.result ?? 'retry';
       // Any answer but a refusal shows the credentials were accepted; a 403
@@ -1716,7 +1854,13 @@ export function createApiClient(
       if (failureClass === 'auth') {
         // Sent with credentials from before the latest renewal: send it
         // again with the new ones instead of blocking again.
-        if (epoch !== authEpoch) return { status: 'retry', delayMs: 0 };
+        if (epoch !== authEpoch)
+          return {
+            status: 'retry',
+            // Not before a throttling answer's time, though (a custom
+            // classifier may call a throttled response auth).
+            delayMs: Math.max(0, (throttled?.retryAt ?? 0) - Date.now()),
+          };
         write.lastError = message;
         if (status !== undefined) write.lastStatus = status;
         return { status: 'blocked' };
@@ -1743,13 +1887,41 @@ export function createApiClient(
         retry.baseDelayMs * 2 ** (write.attempts - 1),
         retry.maxDelayMs,
       );
+      if (throttled) {
+        // The earliest retry time of the Throttling extension: the write is
+        // never sent before it (nor below the backoff, so a time already
+        // past cannot make a tight loop). It is stored with the write
+        // (`notBefore`), so a restart or a resolveWrite retry keeps it. A
+        // wait longer than retry.maxRetryAfterMs is not cut short: the write
+        // gives up instead, as the extension allows, and resolveWrite can
+        // retry it (which waits out the stored time, or fails again).
+        const now = Date.now();
+        const notBefore = Math.max(throttled.retryAt ?? 0, now + backoff);
+        write.notBefore = notBefore;
+        // A quotaExhausted answer without a time pauses its bucket until
+        // this write's own backoff (the consumer's floor), not only the base
+        // backoff set above.
+        if (throttled.meaning === 'quotaExhausted' && !throttled.retryAt)
+          pauseBucket(throttled.bucket, notBefore);
+        const wait = notBefore - now;
+        if (wait > retry.maxRetryAfterMs) {
+          write.lastError = `${message}; the API asks to wait until ${new Date(
+            notBefore,
+          ).toISOString()}, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not retried`;
+          return { status: 'gaveUp' };
+        }
+        return {
+          status: 'retry',
+          delayMs: Math.min(wait, MAX_TIMER_MS),
+        };
+      }
       const asked =
         error instanceof HttpStatusError
           ? retryAfterMs(error.headers)
           : undefined;
-      // Retry-After only lengthens the wait (never below the backoff, so
-      // "0", a past date or a fast clock cannot make a tight loop), up to
-      // retry.maxRetryAfterMs.
+      // A Retry-After on another retryable answer (a 503, say) only
+      // lengthens the wait (never below the backoff, so "0", a past date or
+      // a fast clock cannot make a tight loop), up to retry.maxRetryAfterMs.
       return {
         status: 'retry',
         delayMs: Math.min(
@@ -1758,6 +1930,59 @@ export function createApiClient(
         ),
       };
     }
+  }
+
+  /**
+   * Holds back every write counted against `bucket` (all writes when the
+   * signal names none) until `until`: a `quotaExhausted` answer says the
+   * bucket refuses every request until it resets, not only the one sent.
+   */
+  function pauseBucket(bucket: string | undefined, until: number): void {
+    const key = bucket ?? '*';
+    pausedBuckets.set(key, Math.max(pausedBuckets.get(key) ?? 0, until));
+  }
+
+  /** The pauses still in the future, for the outbox. */
+  function storedThrottlingPauses(): {
+    throttlingPauses?: StoredThrottlingPause[];
+  } {
+    const now = Date.now();
+    const pauses = [...pausedBuckets]
+      .filter(([, until]) => until > now)
+      .map(([key, until]) => ({ bucket: key === '*' ? null : key, until }));
+    return pauses.length ? { throttlingPauses: pauses } : {};
+  }
+
+  /** How long a request to `operation` must wait for its exhausted buckets; 0 when none. */
+  function pauseForOperation(operation: OperationObject | undefined): number {
+    if (!pausedBuckets.size) return 0;
+    const now = Date.now();
+    for (const [key, until] of pausedBuckets)
+      if (until <= now) pausedBuckets.delete(key);
+    let until = pausedBuckets.get('*') ?? 0;
+    for (const bucket of throttling
+      ? operationBuckets(throttling, operation)
+      : [])
+      until = Math.max(until, pausedBuckets.get(bucket) ?? 0);
+    return Math.max(0, until - now);
+  }
+
+  /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
+  function pauseFor(write: QueuedWrite): number {
+    return pauseForOperation(writeOperation(write));
+  }
+
+  /** The OpenAPI operation a write is sent to, for its bucket selection. */
+  function writeOperation(write: QueuedWrite): OperationObject | undefined {
+    const { route } = write;
+    if (write.type === 'create')
+      return route.createPath ? doc.paths[route.createPath]?.post : undefined;
+    if (write.type === 'delete')
+      return route.deletePath ? doc.paths[route.deletePath]?.delete : undefined;
+    const item = route.collection.itemUrl
+      ? doc.paths[route.collection.itemUrl]
+      : undefined;
+    return route.updateMethod === 'PATCH' ? item?.patch : item?.put;
   }
 
   /**
@@ -1771,6 +1996,7 @@ export function createApiClient(
     write: QueuedWrite,
     error: HttpStatusError,
     sentAfterRenewal: boolean,
+    throttled: ThrottlingVerdict | undefined,
   ): { result: WriteFailureClass; refused: boolean } {
     const failure: WriteFailure = {
       type: write.type,
@@ -1786,6 +2012,8 @@ export function createApiClient(
       resource: write.route.collection.name,
       id: write.id,
       afterRenewal: sentAfterRenewal,
+      ...(throttled ? { throttling: throttled } : {}),
+      signalsDeclared: throttling?.signals !== undefined,
     };
     let result = classOf(failure);
     if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
@@ -1831,7 +2059,35 @@ export function createApiClient(
           authBlock
         )
           return;
-        const outcome = await attemptWrite(write);
+        // An exhausted bucket (a quotaExhausted signal) holds back every
+        // write counted against it until it resets, and a write's own stored
+        // `notBefore` (a throttling answer's time, kept across restarts and
+        // resolveWrite retries) holds it back too. A hold longer than
+        // retry.maxRetryAfterMs fails the write with a lastError saying why,
+        // as the write's own answer would, instead of waiting unseen.
+        let outcome: WriteOutcome;
+        const held = Math.max(
+          pauseFor(write),
+          (write.notBefore ?? 0) - Date.now(),
+        );
+        if (held > retry.maxRetryAfterMs) {
+          const until = new Date(Date.now() + held).toISOString();
+          write.lastError = `Held until ${until} by a rate limit the API declared exhausted, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not sent`;
+          outcome = { status: 'gaveUp' };
+        } else if (held > 0) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, Math.min(held, MAX_TIMER_MS));
+            if (typeof timer.unref === 'function') timer.unref();
+            wakers.set(key, () => {
+              clearTimeout(timer);
+              resolve();
+            });
+          });
+          wakers.delete(key);
+          continue;
+        } else {
+          outcome = await attemptWrite(write);
+        }
         write.sending = false;
         // Its record went missing while it was in flight. Answered without
         // settling (a retry, a refused credential, not sent), it is not
@@ -2106,12 +2362,75 @@ export function createApiClient(
     }
   }
 
-  const conditionalTransport: Transport = async (request) => {
+  /** The operation a read request goes to; a POST list read (listMethod POST) is its path's post. */
+  function readOperation(
+    request: TransportRequest,
+  ): OperationObject | undefined {
     const path = request.url.pathname.slice(
       upstream.pathname.replace(/\/$/, '').length,
     );
     const matched = findRoute(Object.keys(doc.paths), path);
-    const operation = matched ? doc.paths[matched.template]?.get : undefined;
+    return matched
+      ? doc.paths[matched.template]?.[
+          request.method === 'POST' ? 'post' : 'get'
+        ]
+      : undefined;
+  }
+
+  /**
+   * A read counts against the same buckets as a write: it waits out an
+   * exhausted bucket (a quotaExhausted answer to any request) within what
+   * `remainingMs` says is left of the read's own time, else stops with
+   * RetryBeyondDeadline. Checked again after each sleep, in case another
+   * answer extended the pause meanwhile; a pause that did not move is taken
+   * as waited out (the `sleep` option may return early, in tests).
+   */
+  async function waitOutPauses(
+    operation: OperationObject | undefined,
+    remainingMs: () => number,
+  ): Promise<void> {
+    let sleptUntil = 0;
+    for (;;) {
+      const paused = pauseForOperation(operation);
+      if (paused <= 0) return;
+      const until = Date.now() + paused;
+      if (until <= sleptUntil) return;
+      const remaining = remainingMs();
+      if (paused > remaining)
+        throw new RetryBeyondDeadline(
+          `A rate limit the API declared exhausted holds this request until ${new Date(until).toISOString()}, longer than the read's remaining time (${remaining} ms)`,
+        );
+      await (options.sleep ?? defaultSleep)(paused);
+      sleptUntil = until;
+    }
+  }
+
+  /** A read's own quotaExhausted answer pauses the bucket for every request, writes included. */
+  async function noteReadThrottling(
+    response: TransportResponse,
+    receivedAt: number,
+  ): Promise<void> {
+    const throttled = classifyThrottling(throttling, {
+      status: response.status,
+      headers: lowerCaseHeaders(response.headers),
+      body: response.body,
+      receivedAt,
+    });
+    if (throttled?.meaning !== 'quotaExhausted') return;
+    // Without a time and a bucket window, the client's base backoff is the
+    // floor, as for a write.
+    pauseBucket(
+      throttled.bucket,
+      throttled.retryAt ?? receivedAt + retry.baseDelayMs,
+    );
+    await persistLater();
+  }
+
+  const readLimitMs =
+    options.limits?.timeoutMs ?? DEFAULT_READ_LIMITS.timeoutMs;
+
+  const conditionalTransport: Transport = async (request) => {
+    const operation = readOperation(request);
     // A paginated operation is not cached conditionally. An explicit
     // x-pagination that cannot be applied counts as paginated here; the read
     // itself fails on it (walkPages).
@@ -2123,13 +2442,15 @@ export function createApiClient(
       headers['if-none-match'] = cached.headers['etag'];
     if (cached?.headers['last-modified'])
       headers['if-modified-since'] = cached.headers['last-modified'];
+    // What is left of the read's time: the running sync's budget (this
+    // transport serves only sync()), else the whole limit.
+    await waitOutPauses(
+      operation,
+      () => activeBudget?.remainingMs() ?? readLimitMs,
+    );
     const raw = await readTransport({ ...request, headers });
-    const response = {
-      ...raw,
-      headers: Object.fromEntries(
-        Object.entries(raw.headers).map(([k, v]) => [k.toLowerCase(), v]),
-      ),
-    };
+    const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
+    await noteReadThrottling(response, Date.now());
     if (response.status === 304 && cached) return cached;
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
@@ -2359,6 +2680,8 @@ export function createApiClient(
             : {},
         body: {},
         itemsField: feed.itemsField,
+        // Items that are not objects are skipped, as the README says.
+        skipNonObjects: true,
       })) {
         body = page.body;
         count += page.items.length;
@@ -2845,14 +3168,21 @@ export function createApiClient(
       conditionalTransport,
       options.limits,
       options.sleep,
+      throttling,
     );
-    const result = await readCollections(doc, {
-      transport: conditionalTransport,
-      constants: options.constants ?? {},
-      legacy,
-      budget,
-      ...(options.selection ? { selection: options.selection } : {}),
-    });
+    activeBudget = budget;
+    let result: Awaited<ReturnType<typeof readCollections>>;
+    try {
+      result = await readCollections(doc, {
+        transport: conditionalTransport,
+        constants: options.constants ?? {},
+        legacy,
+        budget,
+        ...(options.selection ? { selection: options.selection } : {}),
+      });
+    } finally {
+      activeBudget = undefined;
+    }
     const round: SyncRound = {
       feeds: [],
       undecided: [],
@@ -2866,6 +3196,15 @@ export function createApiClient(
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const context = contextFor(route, snapshot.pathParams);
       const scope = scopeFor(route, context);
+      if (snapshot.runtimeMembers) {
+        const members = new Map<string, RuntimeMembers>();
+        snapshot.items.forEach((item, i) => {
+          const interpreted = snapshot.runtimeMembers?.[i];
+          if (interpreted)
+            members.set(String(item[route.collection.idField]), interpreted);
+        });
+        runtimeMembersByScope.set(scope, members);
+      }
       const previous = lastSyncedItems.get(scope);
       const differs = hasChanges(
         previous,
@@ -2958,9 +3297,23 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
-    if (result.errors.length)
-      throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
-    return { changed: [...changed] };
+    // A describer that could not be read (whatever the status: a 401 or
+    // 403 here is not an auth block) or that the budget left unread leaves
+    // its items without a class, not their collection incomplete: a
+    // warning, not a failed sync. readCollections appends those entries
+    // last, so the collection failures are the ones before them.
+    const warnings = result.describerErrors ?? [];
+    const failures = result.errors.slice(
+      0,
+      result.errors.length - warnings.length,
+    );
+    if (failures.length)
+      throw new Error(`Read incomplete: ${failures.join('; ')}`);
+    return {
+      changed: [...changed],
+      ...(result.describers ? { describers: result.describers } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   function sync(): Promise<SyncResult> {
@@ -3010,6 +3363,12 @@ export function createApiClient(
       await whenRestored();
       const route = resolveRoute(resource);
       return storage.get(scopeFor(route, contextFor(route, context)), id);
+    },
+    runtimeMembers(resource, id, context): RuntimeMembers | undefined {
+      const route = resolveRoute(resource);
+      return runtimeMembersByScope
+        .get(scopeFor(route, contextFor(route, context)))
+        ?.get(id);
     },
     async create(resource, data, supplied): Promise<Record<string, unknown>> {
       await whenRestored();
@@ -3250,9 +3609,14 @@ export function createApiClient(
         }
         pending.push(...retried);
         writeQueues.set(key, pending);
+        // Dropped before the drain starts: a retried write held past
+        // retry.maxRetryAfterMs fails again before the drain's first await,
+        // and must not be dropped along with the writes it replaces.
+        gaveUpWrites.delete(key);
         if (!draining.has(key)) void drainQueue(key);
+      } else {
+        gaveUpWrites.delete(key);
       }
-      gaveUpWrites.delete(key);
       await persistLater();
       await rebuild(scope, id);
     },
@@ -3282,10 +3646,52 @@ export function createApiClient(
       ) {
         throw new Error(`No ${method} operation found for path "${path}"`);
       }
+      // The Collection Object's envelope applies to its own list operation,
+      // as in sync() (#384). Several collections may share one list URL with
+      // different fixed reads (CRUD Causality 0.4.0 §4.2.1): of those whose
+      // fixed query and body this call sends, the ones fixing the most values
+      // apply; when that leaves none, or several with different envelopes, no
+      // Collection envelope is applied (the scheme's own, or the heuristic,
+      // is).
+      const sends = (
+        fixed: Record<string, unknown>,
+        given: Record<string, unknown>,
+      ): boolean =>
+        Object.entries(fixed).every(([key, value]) =>
+          deepEqual(given[key], value),
+        );
+      const candidates = routes.filter(
+        (r) =>
+          r.collection.url === template &&
+          r.collection.method === method &&
+          sends(r.collection.listQuery, pagination.query ?? {}) &&
+          sends(r.collection.listBody, pagination.body ?? {}),
+      );
+      const fixedCount = (r: (typeof routes)[number]): number =>
+        Object.keys(r.collection.listQuery).length +
+        Object.keys(r.collection.listBody).length;
+      const most = Math.max(-1, ...candidates.map(fixedCount));
+      const envelopes = new Set(
+        candidates
+          .filter((r) => fixedCount(r) === most)
+          .map((r) => r.collection.itemsField),
+      );
+      const envelope = envelopes.size === 1 ? [...envelopes][0] : undefined;
+      const deadline = Date.now() + readLimitMs;
       return paginateOperation(doc, {
         ...pagination,
+        ...(envelope === undefined ? {} : { itemsField: envelope }),
         path: template,
-        transport: readTransport,
+        // The exhausted buckets hold paginate()'s requests too, within its
+        // own read limit (not a sync's budget, even while one runs).
+        transport: async (request) => {
+          await waitOutPauses(readOperation(request), () =>
+            Math.max(0, deadline - Date.now()),
+          );
+          const response = await readTransport(request);
+          await noteReadThrottling(response, Date.now());
+          return response;
+        },
         pathParams: {
           ...options.constants,
           ...(doc.paths[path] ? {} : matched?.params),
