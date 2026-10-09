@@ -654,6 +654,37 @@ the provider actually deduplicates on that key is the provider's contract; it is
 not verified here. A 2xx response with an unusable body stays `uncertain`
 even with a key.
 
+#### Declared create results (CRUD Causality §4.3.2, §4.4–4.5)
+
+When the create operation declares an `x-crud` `create` for the resource
+(not in legacy documents), the client follows it:
+
+- Fields its `addedFields` mark `source: generated` are left out of the
+  create body, the client-made id included when the id is generated. The
+  local record keeps the client-made id until the response gives the
+  server's. `default` and `computed` fields are sent when the caller sets
+  them. Only top-level field names are matched.
+- The created record's identity comes from `url`, read in reverse through
+  the resource's `identity.urlTemplate` and `bindings` (the reference
+  `created_identity()` of CRUD Causality 0.5.0): `source: header` reads the
+  named header (`Location` when unnamed), `bodyField` the URL at a body
+  dot-path. The URL may be absolute or relative and may carry a query or
+  fragment; the template must match up to its end; values are
+  percent-decoded strings. A body value equal to one as text (a numeric
+  `id`) is kept. With `source: template`, or no `url`, the bound fields come
+  from the response body. With a header source, a 2xx body that is not JSON
+  is not an error; the record is then the sent body plus the identity, until
+  the next refresh.
+- When the identity cannot be determined (no or another `Location`, an
+  empty body where the body must name it), the record exists at the
+  provider but is **unbound**: the create becomes `uncertain` with
+  `unbound: true` in `pendingWrites()` (stored in the outbox), is never sent
+  again, also with an idempotency key or after a restart, and `resolveWrite`
+  `retry` throws. Settle it with `confirm` (the server's id, found by a
+  refresh) or `discard`. Finding it automatically is not implemented.
+
+Without a declaration, creates behave as described above.
+
 ### Durable outbox and restarts
 
 When a `storage` adapter is passed, the client keeps every unsettled write in
@@ -1039,6 +1070,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Declared create results (CRUD Causality §4.3.2,
+  §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
+  created identity is read from the declared `url` source (a header such as
+  `Location`, a body field, or the body for `template`) through the
+  identity template in reverse; a 2xx whose identity cannot be determined
+  leaves the create `uncertain` and `unbound` (stored, `pendingWrites()`),
+  never sent again; `retry` refuses it. Behaviour change only for
+  documents whose create operation declares `x-crud`.
 - **Unreleased**: `rangeWindow` pagination (Pagination Schemes 0.5.0 §4.6):
   a read by windows over a caller-chosen range (`range` for `paginate`,
   `ranges` for `readCollections`/`readPlatform`), halving full windows,

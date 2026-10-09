@@ -43,6 +43,11 @@ export interface StoredWrite {
   seq?: number;
   /** A failed update whose record a complete refresh no longer returned. */
   missingRecord?: 'deleted' | 'unknown';
+  /**
+   * Added within version 1: a create answered 2xx whose identity could not
+   * be determined (CRUD Causality §4.3.2); never sent again.
+   */
+  unbound?: true;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -148,6 +153,7 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unknown') &&
+    (value['unbound'] === undefined || value['unbound'] === true) &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.
     value['lastKnown'] === undefined

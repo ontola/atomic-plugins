@@ -1,3 +1,9 @@
+import {
+  createBody,
+  createDeclaration,
+  createdIdentity,
+  type CreateDeclaration,
+} from './created-identity.js';
 import { discoverResources } from '../resources/discover.js';
 import type {
   OpenApiDocument,
@@ -423,6 +429,14 @@ export interface PendingWriteInfo {
    * `MissingRecordEvidence`.
    */
   missingRecord?: 'deleted' | 'unknown';
+  /**
+   * Set on an `uncertain` create whose 2xx response did not identify the
+   * created record as its operation's `x-crud` declares (CRUD Causality
+   * §4.3.2): the record exists at the provider but is unbound. It is never
+   * sent again; `resolveWrite` `confirm` (with the server's id) or
+   * `discard` settles it, and `retry` throws.
+   */
+  unbound?: true;
 }
 
 export interface ApiClient {
@@ -582,6 +596,12 @@ interface ClientRoute {
   createPath?: string;
   updateMethod?: 'PUT' | 'PATCH';
   deletePath?: string;
+  /**
+   * The resource's declared `create` (`x-crud`, not in legacy documents):
+   * generated fields left out of the body, and where the created
+   * record's identity comes from.
+   */
+  create?: CreateDeclaration;
   idempotencyHeader?: string;
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
   absentMeansDeleted?: boolean;
@@ -676,6 +696,8 @@ interface QueuedWrite {
   seq?: number;
   /** Failed because a complete refresh no longer returned the record. */
   missingRecord?: 'deleted' | 'unknown';
+  /** A create answered 2xx whose identity could not be determined; stored. */
+  unbound?: boolean;
   /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
@@ -947,8 +969,13 @@ function clientRoutes(
         const crud = entry[method]?.['x-crud'];
         if (!isRecord(crud) || crud['resource'] !== collection.resource)
           continue;
-        if (method === 'post' && crud['action'] === 'create')
+        if (method === 'post' && crud['action'] === 'create') {
           route.createPath = path;
+          const declared = legacy
+            ? undefined
+            : createDeclaration(document, crud);
+          if (declared) route.create = declared;
+        }
         if (method === 'delete' && crud['action'] === 'delete')
           route.deletePath = path;
       }
@@ -965,6 +992,21 @@ function clientRoutes(
     if (header) route.idempotencyHeader = header;
     return route;
   });
+}
+
+/**
+ * The created record with its identity fields set from what identified it.
+ * A body value equal as text (a number the URL gave as a string) is kept.
+ */
+function withIdentity(
+  record: Record<string, unknown>,
+  identity: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...record };
+  for (const [field, value] of Object.entries(identity))
+    if (merged[field] === undefined || String(merged[field]) !== String(value))
+      merged[field] = value;
+  return merged;
 }
 
 /** A browser-safe local replica. Transport/auth/storage are supplied at its boundaries. */
@@ -1129,6 +1171,7 @@ export function createApiClient(
       ...(write.refreshMisses ? { refreshMisses: write.refreshMisses } : {}),
       ...(write.seq !== undefined ? { seq: write.seq } : {}),
       ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
+      ...(write.unbound ? { unbound: true as const } : {}),
     };
   }
 
@@ -1288,6 +1331,7 @@ export function createApiClient(
       ...(stored.refreshMisses ? { refreshMisses: stored.refreshMisses } : {}),
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
       ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
+      ...(stored.unbound ? { unbound: true } : {}),
     };
     if (stored.seq !== undefined && stored.seq >= nextSeq)
       nextSeq = stored.seq + 1;
@@ -1515,7 +1559,14 @@ export function createApiClient(
     return url;
   }
 
-  async function requestJson(request: TransportRequest): Promise<unknown> {
+  /**
+   * `received`, when given, gets the response's headers (lower-cased); with
+   * `lenient`, a 2xx body that is not JSON reads as no body.
+   */
+  async function requestJson(
+    request: TransportRequest,
+    received?: { headers?: Record<string, string>; lenient?: boolean },
+  ): Promise<unknown> {
     // Tells an error raised before the request left (an authenticate adapter
     // failing, say) apart from one raised while it was being sent.
     let sent = false;
@@ -1550,9 +1601,17 @@ export function createApiClient(
         response.body ?? '',
       );
     }
+    if (received)
+      received.headers = Object.fromEntries(
+        Object.entries(response.headers ?? {}).map(([k, v]) => [
+          k.toLowerCase(),
+          v,
+        ]),
+      );
     try {
       return response.body ? JSON.parse(response.body) : undefined;
     } catch {
+      if (received?.lenient) return undefined;
       throw new UnusableResponseError(
         `Response from ${request.url.pathname} is not JSON`,
       );
@@ -1634,37 +1693,73 @@ export function createApiClient(
                 ...write.changes,
                 [idField]: write.id,
               };
-        const result = await requestJson({
-          url:
-            write.type === 'create'
-              ? target(route.createPath as string, write.context)
-              : target(route.collection.itemUrl as string, {
-                  ...write.context,
-                  [route.collection.itemParam ?? 'id']: write.id,
-                }),
-          method:
-            write.type === 'create'
-              ? 'POST'
-              : (route.updateMethod as 'PUT' | 'PATCH'),
-          headers: {
-            'content-type': 'application/json',
-            ...(write.idempotencyKey && route.idempotencyHeader
-              ? { [route.idempotencyHeader]: write.idempotencyKey }
-              : {}),
+        // A declared create: generated fields are the server's to set.
+        const declared = write.type === 'create' ? route.create : undefined;
+        const received: {
+          headers?: Record<string, string>;
+          lenient?: boolean;
+        } = declared ? { lenient: true } : {};
+        const result = await requestJson(
+          {
+            url:
+              write.type === 'create'
+                ? target(route.createPath as string, write.context)
+                : target(route.collection.itemUrl as string, {
+                    ...write.context,
+                    [route.collection.itemParam ?? 'id']: write.id,
+                  }),
+            method:
+              write.type === 'create'
+                ? 'POST'
+                : (route.updateMethod as 'PUT' | 'PATCH'),
+            headers: {
+              'content-type': 'application/json',
+              ...(write.idempotencyKey && route.idempotencyHeader
+                ? { [route.idempotencyHeader]: write.idempotencyKey }
+                : {}),
+            },
+            body: JSON.stringify(
+              declared
+                ? createBody(declared, data as Record<string, unknown>)
+                : data,
+            ),
           },
-          body: JSON.stringify(data),
-        });
-        if (write.type === 'create' && !isRecord(result)) {
+          received,
+        );
+        // CRUD Causality §4.3.2: the identity from the declared url source
+        // (read back through the identity template) or the body's bound
+        // fields. Without one the record exists but is unbound: never sent
+        // again (uncertain, and resolveWrite retry refuses it).
+        let identity: Record<string, unknown> | undefined;
+        if (declared) {
+          identity = createdIdentity(declared, result, received.headers ?? {});
+          const id =
+            identity?.[idField] ??
+            (isRecord(result) ? result[idField] : undefined);
+          if (!identity || id === undefined || id === null || id === '') {
+            write.unbound = true;
+            throw new UnusableResponseError(
+              'Create response does not identify the created record as its x-crud declares (CRUD Causality §4.3.2); the record is unbound and is not sent again',
+            );
+          }
+        } else if (write.type === 'create' && !isRecord(result)) {
           throw new UnusableResponseError('Create response has no record');
         }
         // An update's response may hold only some fields: merge it over the
         // record that was sent (the edit included), not over the copy from
         // before the edit, which would revert it.
-        const record = isRecord(result)
-          ? write.type === 'update'
-            ? { ...data, ...result }
-            : result
-          : data;
+        const record = identity
+          ? withIdentity(
+              isRecord(result)
+                ? result
+                : createBody(declared, data as Record<string, unknown>),
+              identity,
+            )
+          : isRecord(result)
+            ? write.type === 'update'
+              ? { ...data, ...result }
+              : result
+            : data;
         if (!record) throw new Error('Write returned no record');
         if (write.type === 'create') {
           const id = record[idField];
@@ -3130,6 +3225,9 @@ export function createApiClient(
           ...(write.missingRecord && write.state === 'failed'
             ? { missingRecord: write.missingRecord }
             : {}),
+          ...(write.unbound && write.state === 'uncertain'
+            ? { unbound: true as const }
+            : {}),
           ...(write.conflicts?.size
             ? {
                 conflicts: [...write.conflicts.values()].map((c) => ({
@@ -3157,7 +3255,14 @@ export function createApiClient(
           await rebuild(scope, id);
           return;
         }
-        if (resolution.action === 'confirm') head.confirmedId = resolution.id;
+        if (resolution.action === 'retry' && head.unbound)
+          throw new Error(
+            `The create of record ${id} of ${resource} succeeded but did not identify the record (unbound); confirm it with the server's id, or discard it`,
+          );
+        if (resolution.action === 'confirm') {
+          head.confirmedId = resolution.id;
+          delete head.unbound;
+        }
         if (head.state === 'failed') head.attempts = 0;
         head.state = 'pending';
         await persistLater();
