@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.4.0: schema, document validator, examples and link resolution."""
+"""Pagination Schemes 0.5.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, resolve_link, rfc3986_resolve, validate
+from validate import LinkRefused, WindowReadError, halves, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml")
 
 
 def example(name):
@@ -234,6 +234,263 @@ class ResolveLinkTests(unittest.TestCase):
         # An absolute-path reference replaces the server path; the origin rule still allows it (§4.4.3, last paragraph).
         self.assertEqual(self.resolve("/items?cursor=b", {"base": "server"}, server, server + "/items"),
                          "https://api.example.com/items?cursor=b")
+
+
+TRANSACTIONS = "/ledgers/{ledgerId}/transactions"
+
+
+class RangeWindowSchemaTests(unittest.TestCase):
+    def document(self):
+        return example("range-window.yaml")
+
+    def scheme(self, document, name="periodWindows"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_window_is_required_for_range_window_and_refused_elsewhere(self):
+        document = self.document()
+        del self.scheme(document)["window"]
+        self.assertInvalid(document, "periodWindows")
+        document = example("relative-next-link.yaml")
+        document["components"]["paginationSchemes"]["linkedCollections"]["window"] = {
+            "unit": "day", "format": "date", "bounds": "closed", "cap": 100}
+        self.assertInvalid(document, "linkedCollections")
+
+    def test_window_fields_and_values(self):
+        for mutate in (lambda w: w.pop("bounds"), lambda w: w.pop("cap"), lambda w: w.pop("unit"),
+                       lambda w: w.pop("format"), lambda w: w.update(cap=0), lambda w: w.update(cap="100"),
+                       lambda w: w.update(minimumWidth=0), lambda w: w.update(bounds="open"),
+                       lambda w: w.update(unit="month"), lambda w: w.update(field="date"),
+                       lambda w: w.update(format="dateTime"), lambda w: w.update(split="halve")):
+            document = self.document()
+            mutate(self.scheme(document)["window"])
+            self.assertInvalid(document, "periodWindows")
+
+    def test_format_fits_unit(self):
+        fits = {"day": ("date", "basicDate"), "second": ("dateTime", "unixSeconds"), "integer": ("integer",)}
+        for unit in fits:
+            for form in ("date", "basicDate", "dateTime", "unixSeconds", "integer"):
+                document = self.document()
+                window = self.scheme(document, "changedWindows")["window"]
+                window.update(unit=unit, format=form)
+                with self.subTest(unit=unit, format=form):
+                    if form in fits[unit]:
+                        validate(document)
+                    else:
+                        self.assertInvalid(document, "changedWindows")
+
+    def test_time_zone_only_for_days(self):
+        document = self.document()
+        self.scheme(document, "changedWindows")["window"]["timeZone"] = "UTC"
+        self.assertInvalid(document, "changedWindows")
+
+    def test_window_roles_only_in_range_window_schemes(self):
+        for role in ("windowStart", "windowEnd", "windowRange"):
+            document = example("relative-next-link.yaml")
+            document["components"]["paginationSchemes"]["linkedCollections"]["request"]["queryParameters"]["PageSize"]["role"] = role
+            with self.subTest(role=role):
+                self.assertInvalid(document, "linkedCollections")
+
+    def test_one_way_of_carrying_the_window(self):
+        document = self.document()
+        fields = self.scheme(document)["request"]["queryParameters"]
+        fields["from"] = {"role": "windowStart"}
+        self.assertInvalid(document, "needs one windowRange field")
+        document = self.document()
+        fields = self.scheme(document, "changedWindows")["request"]["queryParameters"]
+        del fields["updatedBefore"]
+        self.assertInvalid(document, "needs one windowRange field")
+        fields["updatedBefore"] = {"role": "windowStart"}
+        self.assertInvalid(document, "needs one windowRange field")
+        fields["updatedBefore"] = {"role": "pageSize"}
+        self.assertInvalid(document, "needs one windowRange field")
+
+    def test_template_rules(self):
+        for template in ("period:{start}", "period:{end}..{end}", "period:{start}..{end}..{start}",
+                         "period:{start}..{end},x:{other}", "period:{start}..{end}}", ""):
+            document = self.document()
+            self.scheme(document)["request"]["queryParameters"]["filter"]["template"] = template
+            with self.subTest(template=template):
+                self.assertInvalid(document, "periodWindows")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["filter"]["template"] = "{end}/{start}"
+        validate(document)
+        del self.scheme(document)["request"]["queryParameters"]["filter"]["template"]
+        self.assertInvalid(document, "periodWindows")
+        document = self.document()
+        self.scheme(document, "changedWindows")["request"]["queryParameters"]["updatedFrom"]["template"] = "{start}{end}"
+        self.assertInvalid(document, "changedWindows")
+
+    def test_never_auto_detected(self):
+        document = self.document()
+        self.scheme(document)["autoDetect"] = True
+        self.assertInvalid(document, "periodWindows")
+        self.scheme(document)["autoDetect"] = {"matchQueryParams": True}
+        self.assertInvalid(document, "periodWindows")
+        del self.scheme(document)["autoDetect"]
+        validate(document)
+
+    def test_applied_alone(self):
+        document = self.document()
+        document["components"]["paginationSchemes"]["pages"] = {
+            "type": "pageNumber", "request": {"queryParameters": {"page": {"role": "page"}}}}
+        document["paths"][TRANSACTIONS]["get"]["x-pagination"].append({"scheme": "pages"})
+        self.assertInvalid(document, "applies no other scheme")
+
+    def test_applied_alone_after_overrides(self):
+        # A pageNumber scheme overridden into a rangeWindow counts as one (review of #397).
+        document = self.document()
+        document["components"]["paginationSchemes"]["pages"] = {
+            "type": "pageNumber", "request": {"queryParameters": {"page": {"role": "page"}}}}
+        document["paths"][TRANSACTIONS]["get"]["x-pagination"] = [
+            {"scheme": "pages"},
+            {"scheme": "pages", "overrides": {"type": "rangeWindow", "autoDetect": False,
+                                              "window": copy.deepcopy(self.scheme(document)["window"]),
+                                              "request": {"queryParameters": {
+                                                  "page": {"role": "x-unused"},
+                                                  "filter": {"role": "windowRange", "template": "{start}..{end}"}}}}}]
+        self.assertInvalid(document, "applies no other scheme")
+
+    def test_window_parameters_exist_on_the_operation(self):
+        document = self.document()
+        parameters = document["paths"][TRANSACTIONS]["get"]["parameters"]
+        parameters[0]["name"] = "filters"
+        self.assertInvalid(document, "no query parameter 'filter'")
+        # A path-item parameter reached through $ref counts.
+        del parameters[0]
+        document["components"]["parameters"]["filter"] = {"name": "filter", "in": "query", "schema": {"type": "string"}}
+        document["paths"][TRANSACTIONS]["parameters"].append({"$ref": "#/components/parameters/filter"})
+        validate(document)
+        # Overrides are merged before the check.
+        document["paths"]["/entries"]["get"]["x-pagination"][0]["overrides"] = {"request": {"queryParameters": {
+            "updatedBefore": {"role": "x-unused"}, "before": {"role": "windowEnd"}}}}
+        self.assertInvalid(document, "no query parameter 'before'")
+
+    def test_header_parameters_match_case_insensitively(self):
+        document = self.document()
+        scheme = self.scheme(document, "changedWindows")
+        scheme["request"] = {"headerFields": {"X-From": {"role": "windowStart"}, "X-Before": {"role": "windowEnd"}}}
+        document["paths"]["/entries"]["get"]["parameters"] = [
+            {"name": "x-from", "in": "header", "schema": {"type": "string"}},
+            {"name": "X-BEFORE", "in": "header", "schema": {"type": "string"}}]
+        validate(document)
+        document["paths"]["/entries"]["get"]["parameters"][1]["in"] = "query"
+        self.assertInvalid(document, "no header parameter 'X-Before'")
+
+    def test_0_4_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml"):
+            validate(example(name))
+
+
+class ReadRangeTests(unittest.TestCase):
+    def setUp(self):
+        self.document = example("range-window.yaml")
+        self.period = self.document["components"]["paginationSchemes"]["periodWindows"]
+        self.changed = self.document["components"]["paginationSchemes"]["changedWindows"]
+
+    def provider(self, dates, cap):
+        """A fake financial_mutations list: items {id, date YYYYMMDD}, answers truncated at cap."""
+        calls = []
+
+        def request(values):
+            filter_value = values[("queryParameters", "filter")]
+            calls.append(filter_value)
+            self.assertTrue(filter_value.startswith("period:") and filter_value.endswith(",state:all"))
+            low, high = filter_value[len("period:"):-len(",state:all")].split("..")
+            selected = [{"id": str(i), "date": d} for i, d in enumerate(dates) if low <= d <= high]
+            return selected[:cap]
+
+        return request, calls
+
+    def test_one_request_when_below_the_cap(self):
+        request, calls = self.provider(["20260105"] * 99, 100)
+        result = read_range(self.period, "20260101", "20261231", request)
+        self.assertEqual((result["requests"], len(result["items"])), (1, 99))
+        self.assertEqual(calls, ["period:20260101..20261231,state:all"])
+
+    def test_full_answers_are_halved_like_the_money_app(self):
+        dates = ["20260310"] * 60 + ["20261120"] * 60
+        request, calls = self.provider(dates, 100)
+        result = read_range(self.period, "20260101", "20261231", request)
+        self.assertEqual(len(result["items"]), 120)
+        self.assertEqual(calls[:3], ["period:20260101..20261231,state:all",
+                                     "period:20260101..20260702,state:all",
+                                     "period:20260703..20261231,state:all"])
+        self.assertEqual(result["windows"], [("20260101", "20260702"), ("20260703", "20261231")])
+
+    def test_windows_partition_the_range_down_to_days(self):
+        dates = [f"202602{d:02d}" for d in range(1, 29) for _ in range(4)]  # 112 items, 4 a day
+        request, _ = self.provider(dates, 100)
+        result = read_range(self.period, "20260201", "20260228", request)
+        self.assertEqual(len(result["items"]), 112)
+        windows = result["windows"]
+        self.assertEqual(windows[0][0], "20260201")
+        self.assertEqual(windows[-1][1], "20260228")
+        for (_, end), (start, _) in zip(windows, windows[1:]):
+            self.assertEqual(int(start) - int(end), 1)  # adjacent days within February
+
+    def test_a_full_single_day_is_an_error_not_a_complete_read(self):
+        request, _ = self.provider(["20260415"] * 100, 100)
+        with self.assertRaises(WindowReadError) as raised:
+            read_range(self.period, "20260101", "20261231", request)
+        self.assertIn("20260415..20260415", str(raised.exception))
+
+    def test_exactly_cap_items_counts_as_full(self):
+        request, calls = self.provider(["20260101", "20260102"] * 50, 100)
+        result = read_range(self.period, "20260101", "20260102", request)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result["items"]), 100)
+
+    def test_request_budget_ends_the_read_incomplete(self):
+        request, _ = self.provider(["20260310"] * 60 + ["20261120"] * 60, 100)
+        with self.assertRaises(WindowReadError):
+            read_range(self.period, "20260101", "20261231", request, max_requests=2)
+
+    def test_minimum_width(self):
+        window = dict(self.period["window"], minimumWidth=7)
+        self.assertIsNone(halves("20260101", "20260113", window))  # 13 days < 14
+        self.assertEqual(halves("20260101", "20260114", window),
+                         (("20260101", "20260107"), ("20260108", "20260114")))
+
+    def test_half_open_seconds(self):
+        window = self.changed["window"]
+        self.assertEqual(halves("2026-01-01T00:00:00Z", "2026-01-01T00:00:10Z", window),
+                         (("2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z"),
+                          ("2026-01-01T00:00:05Z", "2026-01-01T00:00:10Z")))
+        self.assertIsNone(halves("2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z", window))
+        self.assertEqual(window_request(self.changed, "a", "b"),
+                         {("queryParameters", "updatedFrom"): "a", ("queryParameters", "updatedBefore"): "b"})
+
+    def test_odd_widths_put_the_extra_unit_first(self):
+        window = {"unit": "integer", "format": "integer", "bounds": "closed", "cap": 1}
+        self.assertEqual(halves("1", "5", window), (("1", "3"), ("4", "5")))
+        self.assertEqual(halves("-2", "-1", window), (("-2", "-2"), ("-1", "-1")))
+        window["bounds"] = "halfOpen"
+        self.assertEqual(halves("0", "5", window), (("0", "3"), ("3", "5")))
+
+    def test_dates_cross_month_and_leap_days(self):
+        window = {"unit": "day", "format": "date", "bounds": "closed", "cap": 1}
+        self.assertEqual(halves("2028-02-28", "2028-03-01", window),
+                         (("2028-02-28", "2028-02-29"), ("2028-03-01", "2028-03-01")))
+
+    def test_bounds_must_be_in_the_format(self):
+        for start in ("2026-01-01", "2026011", 20260101, "20261301"):
+            with self.subTest(start=start), self.assertRaises(ValueError):
+                read_range(self.period, start, "20261231", lambda values: [])
+        with self.assertRaises(ValueError):
+            read_range(self.period, "20260102", "20260101", lambda values: [])
+
+    def test_duplicates_across_windows_are_kept_once(self):
+        answers = iter([[{"id": "1"}] * 2, [{"id": "1", "v": 1}], [{"id": "1", "v": 2}]])
+        window = {"unit": "integer", "format": "integer", "bounds": "closed", "cap": 2}
+        scheme = {"type": "rangeWindow", "window": window,
+                  "request": {"queryParameters": {"n": {"role": "windowRange", "template": "{start}:{end}"}}}}
+        result = read_range(scheme, "1", "2", lambda values: next(answers))
+        self.assertEqual(result["items"], [{"id": "1", "v": 2}])
 
 
 if __name__ == "__main__":

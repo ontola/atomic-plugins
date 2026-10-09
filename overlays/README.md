@@ -169,22 +169,15 @@ because a historical catalog's order is not recorded here (Clockify's
 `dc7b2bdb` auth and pagination overlays target paths its `crud-causality`
 sibling adds). A revision that a higher `-vN-` file of the same kind and pin
 supersedes is not checked on its own, since it usually exists because the
-old one does not compose; a catalog that still selects it is told. Three
-pinned OADs do not parse with libyaml ([#307](https://github.com/ontola/atomic-plugins/issues/307)):
-bunq.com 1.0 at `dec74da7` has two U+2028 (line separator) characters inside
-a block scalar on line 1141, which libyaml
-treats as YAML 1.1 line breaks, so the text after them is dedented out of the scalar
-("did not find expected key", libyaml line 1143); codat.io accounting 2.1.0
-at `41b90944` has a line holding only a tab inside two `|-` block scalars
-(lines 43982 and 44484); sendgrid.com 1.0.0 at `bdea260b` has raw C1
-control characters (U+0090, U+0091, U+009C, U+009F) in three example `city`
-strings (lines 13002, 13169 and 27059). The proxy's serde_yaml 0.9.34
-(unsafe-libyaml) refuses all three with the same errors, so the proxy cannot
-load them either. No later revision parses: each pin is the last upstream
-change to its file (checked against `ontola/openapi-directory` `main` at
-`845f81fffbea9a2c4b49fb7364cce967eea3203a`), so these overlays cannot be
-re-pinned until the documents are fixed upstream. The script warns and
-cannot check their overlays.
+old one does not compose; a catalog that still selects it is told. The
+bunq.com 1.0, codat.io accounting 2.1.0 and sendgrid.com 1.0.0 documents did
+not parse with libyaml (or the proxy's serde_yaml) until
+ontola/openapi-directory#179 fixed them
+([#307](https://github.com/ontola/atomic-plugins/issues/307)); their overlays
+now have `pagination-dc4bd462cdef2a11865274027de251b5b1f3d854-overlay.yaml`
+revisions at the fixed commit, which the script checks. No catalog selects
+them. The old revisions stay published; the script warns that it cannot read
+their pinned documents.
 
 Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
