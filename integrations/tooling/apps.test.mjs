@@ -28,6 +28,7 @@ import {
 } from './apps.mjs';
 import {
   buildCatalog,
+  explained,
   readBuilds,
   recordedFor,
   versionProblems,
@@ -513,4 +514,26 @@ test("this repository's usertest builds match what their versions were recorded 
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
+});
+
+test('usertest: a build that misses a package says to install the plugin dependencies', async () => {
+  await assert.rejects(
+    explained('notion', async () => {
+      throw new Error('Build failed: Could not resolve "syncables/browser"');
+    }),
+    error =>
+      /^usertest: building notion failed on a missing package/.test(
+        error.message,
+      ) &&
+      error.message.includes('pnpm install --frozen-lockfile') &&
+      error.message.includes('Could not resolve "syncables/browser"'),
+  );
+  // Any other failure is passed on as it is.
+  await assert.rejects(
+    explained('notion', async () => {
+      throw new Error('boom');
+    }),
+    /^Error: boom$/,
+  );
+  assert.equal(await explained('notion', async () => 7), 7);
 });
