@@ -13,8 +13,10 @@ It lives in the issue-tracker plugin folder (it was
 `devonian/platform-lenses/github-issues/` in the `devonian` package up to
 0.6.1). It imports Devonian as the `devonian` package, and the host modules
 (`@integration-host/*`) and `@tomic/lib` from the host; in this repo
-`../../vitest.config.ts` aliases all of them, `devonian` to its source in
-`devonian/src/` and the rest to the linked atomic-server checkout. All its
+`../../vitest.config.ts` aliases all of them: `devonian` to the npm package
+that `../../app/package.json` pins (its compiled entry points in
+`app/node_modules/devonian/build/`), the rest to the linked atomic-server
+checkout. All its
 tests run in the issue-tracker lane:
 
 ```sh

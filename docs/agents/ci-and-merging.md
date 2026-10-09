@@ -50,10 +50,18 @@ reason to wait, not a reason to merge.
 
 ## Merge conflicts and stale branches
 
-- **`apps.mjs check --published origin/main` fails with "published … was
-  deleted".** The branch is behind `main`: another app version was published
-  there since. Merge `origin/main`. Don't restore files by hand, and never
-  change a published file.
+- **`apps.mjs check --published origin/main` or `ontology.mjs check
+  --published origin/main` says "<n> file(s) published at origin/main are
+  not on this branch, which is behind it (<the first three paths>…)".**
+  `main` published another app version or term after the branch parted from
+  it. Merge `origin/main`. Don't restore files by hand, and never change a
+  published file. A missing file is "was deleted … restore it" when the
+  branch point (`git merge-base HEAD origin/main`) has it: the branch had
+  the file and lost it. Where the checks cannot find a branch point (no
+  merge-base, or a shallow clone such as CI's checkout), every missing file
+  is "was deleted", with "if the branch is behind origin/main, merge it
+  first instead" added: merge first, then restore only what is still
+  reported.
 - **`integrations/READINESS.md`** (one wide table) **and the `VERSIONS` map in
   `usertest/catalog.mjs`** are edited by almost every plugin PR, so parallel
   PRs conflict on every merge. Recipe: take `main`'s version of the file,
