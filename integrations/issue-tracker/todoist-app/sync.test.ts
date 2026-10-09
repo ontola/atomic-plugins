@@ -113,6 +113,41 @@ describe('provisioning', () => {
   });
 });
 
+describe('import through the catalog lens', () => {
+  it('reports a task the lens refuses, keeps an existing row, and leaves a new one without shared values', async () => {
+    const { store, sync, rowOf, p } = await setUp();
+    await sync(T1);
+    const before = rowOf('synthetic-task-1');
+    const project = store.todoist.snapshot().tasks[0].project_id;
+    // A due date with a fixed time zone: its day depends on the time zone.
+    store.todoist.updateTask('synthetic-task-1', {
+      content: 'Changed in Todoist',
+      due: { date: '2026-03-02T16:00:00Z', string: 'tomorrow 17:00' },
+    });
+    const fresh = store.todoist.createTask({
+      content: 'New with a fixed zone',
+      project_id: project,
+      due_date: '2026-03-03T09:00:00Z',
+    });
+
+    const summary = await sync(T2);
+    expect(summary.unmapped.map(u => u.id).sort()).toEqual(
+      ['synthetic-task-1', fresh.id].sort(),
+    );
+    expect(summary.unmapped[0].reason).toMatch(/without a time zone/);
+    expect(describeSummary(summary)).toContain(
+      '2 tasks could not be read through the catalog lens',
+    );
+
+    const kept = rowOf('synthetic-task-1');
+    expect(kept[NAME]).toBe(before[NAME]);
+    expect(kept[TASK_DUE_DATE]).toBe(before[TASK_DUE_DATE]);
+    const added = rowOf(fresh.id);
+    expect(added).not.toHaveProperty(NAME);
+    expect(added[p.presence]).toBe('active');
+  });
+});
+
 describe('import', () => {
   it('writes every active task as an issue-v1 row with shared fields and extras', async () => {
     const { store, sync, rowOf, p } = await setUp();

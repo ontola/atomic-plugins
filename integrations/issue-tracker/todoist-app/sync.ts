@@ -156,8 +156,12 @@ async function previousTasks(
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
         values = parsed as Record<string, AtomicJSON>;
     } catch {
-      // Unreadable source: the row is treated as an active task with no
-      // provider values, and the next read replaces them.
+      // Unreadable source: the row is treated as an active task whose only
+      // provider value is its stored Name as `content`, so the catalog lens
+      // can still read it (instead of refusing it on every pass while
+      // Todoist no longer lists it); the next read replaces it.
+      const name = text(row.get(NAME));
+      if (name) values = { content: name };
     }
 
     const presence = values[todoistFields.presence];

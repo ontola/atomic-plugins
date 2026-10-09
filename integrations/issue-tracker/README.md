@@ -131,25 +131,35 @@ from its task with the lens's backward put onto the row's current values:
 `name` is the task's `content`, `body` its `description` (an empty
 description is an empty body), task/v1 `status` is `done` when Todoist
 returned `checked: true` and `todo` when `false`, and `due-date` is the
-day of `due.date`, removed when the task no longer has a due date. A task
-the lens refuses keeps its row's shared values, and the card and the
-summary name it: a deleted task, a task without content, and a due date
-with a fixed time zone (`…Z` or an offset, whose day depends on the time
-zone). Changes from 0.2.0, which mapped tasks itself:
+day of `due.date`, removed when the task no longer has a due date.
+
+A task the lens refuses is named on the card and in the summary: a deleted
+task, a task without content, and a due date with a fixed time zone (`…Z`
+or an offset, whose day depends on the time zone). An existing row keeps
+its shared values. A **new** refused task still gets a row, with the app's
+bookkeeping (`todoist-task-id`, presence, priority, project, source) but no
+shared values, so the view and the host table show it as "Incomplete:
+missing Name" until a later pass can read it. A row whose `todoist-source`
+is unreadable (not JSON) falls back to its stored Name as the task's
+`content` when Todoist no longer lists the task, so it is not refused on
+every pass; the next pass that reads the task rewrites the source.
+
+Changes from 0.2.0, which mapped tasks itself:
 
 - `name` is `content` as Todoist sends it, no longer trimmed, and no longer
   the task id when `content` is empty;
 - an empty description writes an empty `body` instead of none;
 - a due date with a fixed time zone is refused instead of cut at its UTC
   day.
-  The provider extras, created once under the app's own ontology:
-  `todoist-task-id` (the row's identity), `todoist-presence`,
-  `todoist-last-seen`, `todoist-priority`, `todoist-project` and
-  `todoist-source` (the task as Todoist last sent it, JSON text). A pass that
-  finds nothing changed writes no row: `last-seen` is kept off active rows
-  (an active task's last sighting is the App's `todoist-last-sync`, one write
-  per complete read), and only a task no longer in the active list carries
-  its own `todoist-last-seen`.
+
+The provider extras, created once under the app's own ontology:
+`todoist-task-id` (the row's identity), `todoist-presence`,
+`todoist-last-seen`, `todoist-priority`, `todoist-project` and
+`todoist-source` (the task as Todoist last sent it, JSON text). A pass that
+finds nothing changed writes no row: `last-seen` is kept off active rows
+(an active task's last sighting is the App's `todoist-last-sync`, one write
+per complete read), and only a task no longer in the active list carries
+its own `todoist-last-seen`.
 
 **Local edits.** Todoist owns the imported columns: a local change to one
 of them is overwritten at the next pass (#97's policy question; this plugin's
