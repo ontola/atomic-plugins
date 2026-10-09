@@ -34,6 +34,8 @@ export interface TimeZoneParameter {
    * `upper` for `lte`/`lt`, else undefined (no range predicate declared).
    */
   bound?: 'lower' | 'upper';
+  /** The parameter's `x-filter` field (a JSON Pointer), when it declares one. */
+  field?: string;
 }
 
 /** A UTC span a read is known to cover; an absent end is open. */
@@ -65,7 +67,10 @@ export interface ReadCoverage {
    * after the read differs from the one a value was written in, or could
    * not be read again; read again for a known span. `noRangePredicate`: a
    * parameter declares no `x-filter` with `gte`, `gt`, `lte` or `lt`, so
-   * its value bounds nothing known. `incomplete`: the read did not finish.
+   * its value bounds nothing known. `incomplete`: the read did not finish
+   * (`span` null), or finished but is never complete, as a read by range
+   * windows (`span` is then what the windows asked for over the whole
+   * range, `x-filter` field by field).
    */
   reason?: 'empty' | 'zoneChanged' | 'noRangePredicate' | 'incomplete';
 }
@@ -277,13 +282,22 @@ export function timeZoneParameters(
     if (!declaration) continue;
     const filter = parameter['x-filter'];
     const operator = isRecord(filter) ? filter['operator'] : undefined;
+    const field =
+      isRecord(filter) && typeof filter['field'] === 'string'
+        ? filter['field']
+        : undefined;
     const bound =
       operator === 'gte' || operator === 'gt'
         ? 'lower'
         : operator === 'lte' || operator === 'lt'
           ? 'upper'
           : undefined;
-    found.push({ name, declaration, ...(bound ? { bound } : {}) });
+    found.push({
+      name,
+      declaration,
+      ...(bound ? { bound } : {}),
+      ...(field !== undefined ? { field } : {}),
+    });
   }
   return found;
 }
@@ -506,4 +520,110 @@ export async function wallClockQuery(
           },
         };
   return { query: sent, coverage, keys };
+}
+
+/**
+ * Pagination Schemes 0.5.0 range windows over `x-time-zone` parameters: the
+ * window bounds are instants, split as such, and each one sent to such a
+ * parameter is written as wall-clock digits in its zone
+ * (`PageWalk.windowValue`). `windowParameters` are the query parameters the
+ * scheme's window fields name. Throws when a window field targets an
+ * `x-time-zone` parameter and the window `format` is not `dateTime`: only
+ * instants convert to wall-clock time (the Filtering validator requires
+ * `format: date-time` on such a parameter, so this is a document error).
+ *
+ * The coverage is what the read asked for over the whole range: per
+ * `x-filter` field, the outer bounds written as wall-clock digits and read
+ * back with `coveredSpan`; the fields' spans are intersected. Adjacent
+ * windows share their bounds, so with an unknown zone (UTC digits sent)
+ * every window shifts by the same offset and only the outer ends narrow by
+ * 14 hours.
+ */
+export async function wallClockWindows(
+  parameters: TimeZoneParameter[],
+  windowParameters: string[],
+  window: { format: string },
+  range: { start: string; end: string },
+  path: Record<string, string>,
+  read: ReturnType<typeof zoneReader>['read'],
+): Promise<
+  | {
+      windowValue: (parameter: string, bound: string) => string | undefined;
+      coverage: ReadCoverage;
+      keys: Set<string>;
+    }
+  | undefined
+> {
+  const zoned = parameters.filter((p) => windowParameters.includes(p.name));
+  if (!zoned.length) return undefined;
+  if (window.format !== 'dateTime')
+    throw new Error(
+      `The window format ${window.format} cannot be sent as wall-clock time to the x-time-zone parameter ${zoned.map((p) => p.name).join(', ')}; such a window needs format dateTime`,
+    );
+  const keys = new Set<string>();
+  const zones: Record<string, string | null> = {};
+  const written: Record<string, string> = {};
+  const byName = new Map<string, { zone: string | null; suffix: string }>();
+  // Per x-filter field: the parameters that bound one field share a span.
+  const spans = new Map<string, CoveredSpan | null>();
+  for (const parameter of zoned) {
+    const { zone, key } = await read(parameter.declaration.zone, path);
+    if (zone !== null) keys.add(key);
+    zones[parameter.name] = zone;
+    const { suffix, ambiguous } = parameter.declaration;
+    byName.set(parameter.name, { zone, suffix });
+    const lower = wallClockParam(range.start, zone, suffix);
+    const upper = wallClockParam(range.end, zone, suffix);
+    written[parameter.name] = `${lower}..${upper}`;
+    const field = parameter.field ?? parameter.name;
+    const span = coveredSpan(
+      lower.slice(0, 19),
+      upper.slice(0, 19),
+      zone,
+      ambiguous,
+    );
+    const before = spans.get(field);
+    spans.set(
+      field,
+      before === undefined
+        ? span
+        : before && span
+          ? intersectSpans(before, span)
+          : null,
+    );
+  }
+  let span: CoveredSpan | null = {};
+  for (const one of spans.values())
+    span = span && one ? intersectSpans(span, one) : null;
+  const base = { parameters: written, zones };
+  const coverage: ReadCoverage = span
+    ? { ...base, span }
+    : { ...base, span: null, reason: 'empty' };
+  return {
+    windowValue: (name, bound) => {
+      const found = byName.get(name);
+      return found
+        ? wallClockParam(bound, found.zone, found.suffix)
+        : undefined;
+    },
+    coverage,
+    keys,
+  };
+}
+
+/** The overlap of two spans, or null when it is empty; an absent end is open. */
+function intersectSpans(a: CoveredSpan, b: CoveredSpan): CoveredSpan | null {
+  const froms = [a.from, b.from].filter((v): v is string => v !== undefined);
+  const tos = [a.to, b.to].filter((v): v is string => v !== undefined);
+  const from = froms.length
+    ? Math.max(...froms.map((v) => Date.parse(v)))
+    : undefined;
+  const to = tos.length
+    ? Math.min(...tos.map((v) => Date.parse(v)))
+    : undefined;
+  if (from !== undefined && to !== undefined && from >= to) return null;
+  return {
+    ...(from === undefined ? {} : { from: new Date(from).toISOString() }),
+    ...(to === undefined ? {} : { to: new Date(to).toISOString() }),
+  };
 }

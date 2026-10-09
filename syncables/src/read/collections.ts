@@ -1,5 +1,7 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import { windowFields } from '../pagination/window.js';
 import {
   applySelection,
   asText,
@@ -24,6 +26,7 @@ import {
 import {
   timeZoneParameters,
   wallClockQuery,
+  wallClockWindows,
   zoneReader,
   type ReadCoverage,
 } from './time-zone.js';
@@ -250,6 +253,39 @@ export async function readCollections(
           }
           const outcome: WalkOutcome = { complete: true };
           const range = options.ranges?.(collection, path);
+          // A range read by windows sends wall-clock bounds to x-time-zone
+          // parameters (Pagination Schemes 0.5.0 x Filtering 0.2.0-draft).
+          let windowValue:
+            | ((parameter: string, bound: string) => string | undefined)
+            | undefined;
+          const scheme =
+            operation && range
+              ? resolveEffectiveScheme(doc, operation)?.scheme
+              : undefined;
+          if (
+            range &&
+            scheme?.type === 'rangeWindow' &&
+            scheme.window &&
+            timeZoned.length
+          ) {
+            const windows = await wallClockWindows(
+              timeZoned,
+              windowFields(scheme)
+                .filter((field) => field.location === 'queryParameters')
+                .map((field) => field.name),
+              scheme.window,
+              range,
+              path,
+              zones.read,
+            );
+            if (windows) {
+              windowValue = windows.windowValue;
+              snapshot.coverage = windows.coverage;
+              const entry = zoned.find((z) => z.snapshot === snapshot);
+              if (entry) for (const key of windows.keys) entry.keys.add(key);
+              else zoned.push({ snapshot, keys: windows.keys });
+            }
+          }
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -264,6 +300,7 @@ export async function readCollections(
               ? { itemsField: collection.itemsField }
               : {}),
             ...(range ? { range } : {}),
+            ...(windowValue ? { windowValue } : {}),
             identity: (value) => asText(value[collection.idField]),
             outcome,
           })) {
@@ -332,10 +369,17 @@ export async function readCollections(
     if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
     for (const { snapshot, keys } of zoned) {
       const coverage = snapshot.coverage as ReadCoverage;
-      if (!snapshot.complete)
+      if (
+        snapshot.error !== undefined ||
+        (!snapshot.complete && !snapshot.notComplete)
+      )
         snapshot.coverage = { ...coverage, span: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
         snapshot.coverage = { ...coverage, span: null, reason: 'zoneChanged' };
+      else if (!snapshot.complete)
+        // Finished but never complete (range windows): the span asked for
+        // stays, marked incomplete.
+        snapshot.coverage = { ...coverage, reason: 'incomplete' };
     }
   }
   return { collections, errors };

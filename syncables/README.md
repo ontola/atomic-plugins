@@ -1093,6 +1093,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: `readCollections` (and so `sync()`) sends a
+  `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
+  time in their zone, read once before and once after the read; a window
+  format other than `dateTime` on such a parameter fails the read; the
+  coverage is the outer range asked for (14 hours off the outer ends for an
+  unknown zone), with `reason: 'incomplete'`.
 - **Unreleased**: `walkPages` takes `windowValue(parameter, bound)`, which
   converts each query window bound of a `rangeWindow` read before it is
   sent (a parameter the API reads as wall-clock time in a zone); bounds

@@ -46,3 +46,25 @@ when it does not convert that parameter; bounds are compared when both or
 neither are converted. The `convertWindowQuery` JSDoc sits above its own
 function again, and `walkWindows` keeps its own. Test: the London window is
 refused.
+
+## Turn 3
+
+**Human (via the coordinator session):** Wire `windowValue` in
+`readCollections`, stacked on the window-zone branch over #428: call the
+zone reader, the `date`-format check, narrowing the span to the outer range
+for an unknown zone, and the zone re-check. Build against coverage grouped
+by `x-filter` field.
+
+**Assistant:** `wallClockWindows` (in `time-zone.ts`) reads the zone of each
+`x-time-zone` parameter a window field names, refuses a window `format`
+other than `dateTime` for them, and returns the hook (wall-clock digits for
+those parameters, `undefined` for others) and the coverage: per `x-filter`
+field, the outer range written as wall-clock digits and read back with
+`coveredSpan` (with an unknown zone, UTC digits and 14 hours off the outer
+ends only), intersected across fields. `readCollections` calls it for a
+`rangeWindow` read with a range, passes the hook to `walkPages`, sets the
+snapshot's coverage and joins its zone keys to the re-check. At the end, a
+failed read gets `span: null, reason: 'incomplete'`, a changed zone
+`zoneChanged`, and a finished windowed read keeps its span with `reason:
+'incomplete'` (no `windowed` marker). `TimeZoneParameter` carries the
+`x-filter` field. Tests in `window-zone-read.test.ts`.
