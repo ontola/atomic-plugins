@@ -101,7 +101,7 @@ A lens, `ontology/lenses/<name>-v<N>`:
 | `description`    | One or two sentences                                                                                                                                                                                                    |
 | `source`         | An endpoint (below)                                                                                                                                                                                                     |
 | `target`         | An endpoint                                                                                                                                                                                                             |
-| `mapping`        | A `LensMapping`, version 2 (below)                                                                                                                                                                                      |
+| `mapping`        | A `LensMapping`, version 2 or 3 (below)                                                                                                                                                                                 |
 | `limits`         | Optional: what the mapping does not do that a reader could expect, one sentence each                                                                                                                                    |
 | `implementation` | Optional: the repository path of the code lens it was derived from when published; informative, never executed. `check` requires the file only while the lens is unpublished, so moving the code later does not fail CI |
 | `examples`       | At least one `{ source, target, edits? }`; `check` runs every one (below)                                                                                                                                               |
@@ -187,16 +187,96 @@ roles and skips one-way fields.
 
 **Laws**, checked on every catalog example: GetPut
 (`put(get(s), s) = s`) forward on the example source and backward on the
-example target; and for each edit, forward PutGet (`get(put(v, s)) = v` on
-the mapped fields) and stable put (putting the same view twice changes
-nothing more). PutGet and stable put are not checked backward. They hold on
-the examples, which is evidence, not a proof over all values.
+example target; and for each edit, in the edit's direction, PutGet
+(`get(put(v, s)) = v` on the fields the view holds, and, under `absent:
+"unset"`, a field the view leaves out reads back absent) and stable put
+(putting the same view twice changes nothing more). They hold on the
+examples, which is evidence, not a proof over all values. The backward
+limits are listed under "Mapping version 3".
+
+### Mapping version 3 (pieces.md L2)
+
+Version 3 is version 2 plus three additions. A version 2 mapping keeps its
+exact meaning, and published version 2 files are unchanged.
+
+```json
+{
+  "version": 3,
+  "fields": [{ "source", "target", "convert"?, "args"?, "readOnly"?, "absent"?, "default"? }],
+  "guards"?: [{ "at", "is" | "in" | "notIn", "orAbsent"? }]
+}
+```
+
+- **Guards** say which source records the lens is for. Each guard tests the
+  place `at` (a reference on the source side) and has exactly one test:
+  - `is: "present"` or `is: "absent"`, where present means neither
+    undefined nor null;
+  - `in: [values]`, where the value must be present and equal one of them
+    (`orAbsent: true` also lets it be absent);
+  - `notIn: [values]`, where the value is absent or equals none of them.
+
+  Guards apply wherever a provider record is the input or the output:
+  - a forward `get` refuses a record outside them with `out-of-domain`;
+  - a forward `put` refuses one too, both for the previous record and for
+    the record it would write;
+  - a backward `put` refuses a view outside them: its view is the provider
+    record, so a deleted Todoist task is refused whichever way it would be
+    written, as the code lens does;
+  - a backward `get` reads a target-shaped row, so guards don't apply to it.
+
+  Release 2 uses them for a running Clockify timer (`/timeInterval/end` must
+  be present), a non-REGULAR entry, a deleted Todoist task, a task without
+  content and a Raindrop record without an `_id`.
+
+- **`absent`** says what a `put` does when the view lacks a field that the
+  previous row had:
+  - `keep`, the default and version 2's only behaviour, leaves it;
+  - `unset` removes it;
+  - `default` writes the field's `default` value, a source value, into the
+    source in a forward put, and removes the target in a backward one.
+
+  A read-only field is never written forward, so there its `absent` only
+  matters backward. Only an object member can be removed: `parseMapping`
+  refuses `unset` or `default` on a field whose source or target ends in an
+  array index, which would shift every later index. An object that a
+  removal leaves empty is removed too (`/due/date` leaves no `due: {}`),
+  but never the row itself or an array item. A `default` must be a source
+  value the field's converter accepts, checked when the mapping is parsed.
+  With `unset` or `default`, `put` reads the view as the whole row, as
+  Devonian's `recordLens` does; a host that has only a patch merges it onto
+  the previous view first.
+
+- **A one-way field is written backward.** A backward `put` (writing the
+  table from a provider-shaped view) computes a one-way field's target from
+  the view, and removes it under `unset` or `default` when the view lacks
+  it. Version 2 skips such fields. Todoist's due day is the case: a task
+  without a due date now removes a stale `due-date`, as the code lens does.
+
+Backward limits, stated plainly:
+
+- **One-way fields break backward GetPut under `unset` or `default`.** A
+  target-shaped row cannot be turned into a source view that holds a
+  one-way field, since it has no inverse, so `put_b(get_b(row), row)`
+  removes that field's target (Todoist's `due-date`). The law check leaves
+  one-way fields' target places out of the comparison; for them backward
+  GetPut is not claimed.
+- **A backward view built from a row can fall outside the guards**, because
+  it lacks provider places no field maps (Raindrop's `_id`). `put` refuses
+  such a view, and the law check gives no GetPut verdict for it.
 
 ### Examples
 
-Each example has a `source` row, the `target` row `get` must give, and
-optional `edits`: a changed `target` with the `source` that `put` must give,
-or with an `error` code (`read-only`, `precision`, …) that `put` must throw.
+Each example has a `source` row and either the `target` row `get` must give,
+or an `error` code that `get` must refuse with (`out-of-domain`). Optional
+`edits` hold:
+
+- a changed `target` with the `source` that `put` must give, or with an
+  `error` code (`read-only`, `precision`, …) that `put` must throw;
+- with `direction: "backward"`, a provider-shaped `source` view and either
+  the `target` row that a backward `put` onto the example's target must
+  give, or the `error` code it must refuse with (`out-of-domain` for a
+  view outside the guards).
+
 They are the lens's conformance fixtures: a host's interpreter can run them
 too.
 
@@ -239,7 +319,7 @@ difference from #2069's `lens.ts` at `bab52555`:
 `catalogLensInfo(file)` returns #2069's `CatalogLens` shape (`subject`,
 `name`, `source`, `target`, `mapping`) plus `mappingVersion`. All four
 release 1 lenses are version 2 (they need pointers), so a v1-only host
-would skip all of them.
+would skip all of them. Release 2's Clockify, Todoist and Raindrop lenses are version 3: a host that runs only version 2 would skip them, so it stays pinned to `lenses/v1` until it runs version 3.
 
 ## Trust and review (Q-089)
 
@@ -333,6 +413,24 @@ refuses the same edits; it runs in that plugin's lane unit tier
 | `raindrop-bookmark-v1`   | Raindrop `raindrop` record → host `Bookmark`   | name, url, description                    | –                               | domain guard (id, lengths, URL), clearing an excerpt; no overlay declares the resource yet    |
 | `solid-bookmark-v1`      | RDF `bookmark#Bookmark` node → host `Bookmark` | name, url                                 | –                               | alias predicates and types, literal-encoded links, the Pod write (ETag, CRDT)                 |
 
+## Release 2
+
+`lenses/v2` moves Clockify, Todoist and Raindrop to mapping version 3. It
+lists `clockify-time-entry-v2`, `todoist-task-issue-v2`,
+`raindrop-bookmark-v2` and the unchanged `solid-bookmark-v1`. Release 1 and
+its files stay published as they were; a host pinned to `lenses/v1` keeps
+getting them.
+
+| Lens                     | What version 3 adds                                                                                                                  | Still left to code (see `limits`)                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `clockify-time-entry-v2` | Guards: `type` REGULAR or absent, start and end present (no running timers)                                                          | end after start, write restrictions (locked, custom fields, project rules), naming, project link, task |
+| `todoist-task-issue-v2`  | Guards: not deleted, content present; a backward put writes the due day from the task and removes a stale one (`absent: "unset"`)    | an empty content, Doing and Blocked, a time-zoned due date, unmapped fields                            |
+| `raindrop-bookmark-v2`   | Guard: `_id` present; a removed description writes an empty excerpt, a missing excerpt removes the description (`absent: "default"`) | id range, lengths, URL checks; no overlay declares the resource yet                                    |
+
+The conformance tests next to each code lens run every example of both
+versions; a refusal code (`out-of-domain`, `read-only`, `precision`) must
+match the code lens's own message, listed in each test's `refusals` table.
+
 ### What it takes over from #271 and #365, and what it supersedes
 
 Both PRs were merged with no review threads (checked, GitHub API, 2026-10-08);
@@ -353,15 +451,17 @@ their open ends are in their bodies, #259's comments and the #367 handover.
   labels as a coupled field, and the Notion and Google Calendar lenses, which
   need runtime schemas and recurrence. They are L2 material, below.
 
-## What v2 cannot express (input for L2)
+## What the format cannot express yet (input for L2)
 
-Found by fitting the four prototypes; each is a candidate feature, none is
-built:
+Found by fitting the four prototypes. Items 1 and 2 are built in mapping
+version 3; the rest are candidate features:
 
-1. **Domain guards**: refuse a record outside the lens's domain (a running
-   Clockify timer, a deleted Todoist task). Today each entry maps anything.
-2. **Removal**: a field absent from the view cannot clear the source
-   (Raindrop's excerpt, Todoist's stale due-date).
+1. **Domain guards** (version 3, `guards`): refuse a record outside the
+   lens's domain (a running Clockify timer, a deleted Todoist task). Guards
+   test single places; a relation between two places (an end after a start)
+   is still not expressible.
+2. **Removal** (version 3, `absent`): a field absent from the view clears
+   the source (Raindrop's excerpt, Todoist's stale due-date).
 3. **Identity links**: a provider id to a link to another row (Clockify
    `projectId` → `work-project`) needs an identity map, not a converter.
 4. **Coupled writes**: one view field owning several source fields (Clockify's
@@ -383,7 +483,9 @@ name; an endpoint that is not exactly one of the three; an unknown shared
 class or property; a reference of the wrong kind for its endpoint; a mapping
 `parseMapping` refuses; a target (or source) field that is not a field of the
 shared class it names, or a required field of that class left unmapped; a
-missing example or one whose `get`, `put`, laws or expected refusal fail; an
+missing example or one whose `get`, `put`, laws or expected refusal fail
+(including an example `get` must refuse, and a backward edit); a guard whose
+`at` is of the wrong kind for the source endpoint; an
 example row on a class endpoint whose value for one of `source.json`'s
 properties does not fit that property's datatype (a string on a boolean, a
 non-integer timestamp); a lens whose source and target are the same; an

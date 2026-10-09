@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_FOLDERS,
+  appDependencyDirs,
   appEntries,
   appFolder,
   blobId,
@@ -129,6 +130,59 @@ test('a matching app entry passes check', () =>
   using({}, async base => {
     assert.equal(appEntries(readCatalog(base)).length, 1);
     assert.deepEqual(await check({ base }), []);
+  }));
+
+test('an app depends on the lockfiles of its plugin folder and its own folder', () => {
+  assert.deepEqual(appDependencyDirs('gamma'), [
+    'integrations/gamma',
+    'integrations/gamma/app',
+  ]);
+  assert.deepEqual(appDependencyDirs('moneybird'), [
+    'integrations/money',
+    'integrations/money/moneybird',
+  ]);
+  assert.deepEqual(appDependencyDirs('todoist'), [
+    'integrations/issue-tracker',
+    'integrations/issue-tracker/todoist-app',
+  ]);
+});
+
+test('check installs a lockfile without node_modules before building, once, unless told not to', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    writeFileSync(join(base, 'integrations/gamma/app/pnpm-lock.yaml'), '');
+    mkdirSync(join(base, 'integrations/gamma/app/node_modules'));
+    const installed = [];
+
+    const install = cwd => {
+      installed.push(cwd);
+      mkdirSync(join(cwd, 'node_modules'));
+
+      return { status: 0 };
+    };
+
+    assert.deepEqual(await check({ base, install: false }), []);
+    assert.deepEqual(installed, []);
+
+    assert.deepEqual(await check({ base, install }), []);
+    // Only the folder that had no node_modules; app/ already had one.
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+
+    // Installed now, so a second check leaves it alone.
+    assert.deepEqual(await check({ base, install }), []);
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+  }));
+
+test('a failed install fails check with pnpm output, before any build', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    await assert.rejects(
+      check({
+        base,
+        install: () => ({ status: 1, stderr: 'ERR_PNPM_OUTDATED_LOCKFILE' }),
+      }),
+      /pnpm install --frozen-lockfile failed in integrations\/gamma:\nERR_PNPM_OUTDATED_LOCKFILE/,
+    );
   }));
 
 test('a fresh build that differs from the committed module fails check', () =>
