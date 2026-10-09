@@ -1248,23 +1248,34 @@ describe('deletion feeds: a feed read that is not complete (review of #431)', ()
   }
 
   it('leaves the cursor where it was and gives no tombstones', async () => {
-    for (const [assurance, stored] of [
-      ['observed', false],
-      ['documented', true],
-    ] as const) {
-      const storage = new CrashableStorage();
+    const outcomes: Record<string, unknown> = {};
+    for (const assurance of ['observed', 'documented'] as const) {
+      // Rex is deleted; the feed says so in one item, a short page: the end
+      // of the list only if that end is documented.
       const fake = provider([rex, tom], {
-        // One change, a short page: the end of the list only if documented.
-        feed: () => response({ changes: [{ id: '9', state: 'active' }], next: 'c1' }),
+        write: unavailable,
+        item: unavailable,
+        feed: () =>
+          response({ changes: [{ id: '1', state: 'deleted' }], next: 'c1' }),
       });
-      const client = createApiClient(pagedFeed(assurance), {
-        storage,
-        transport: fake.transport,
+      const { client, storage } = await edited({
+        doc: pagedFeed(assurance),
+        fake,
       });
+      fake.pets.delete('1');
       await client.sync();
-      const cursors = (storage.outbox() as { feedCursors?: unknown[] } | undefined)
-        ?.feedCursors;
-      expect(Boolean(cursors?.length), assurance).toBe(stored);
+      const cursors = (
+        storage.outbox() as { feedCursors?: unknown[] } | undefined
+      )?.feedCursors;
+      outcomes[assurance] = {
+        cursor: Boolean(cursors?.length),
+        missingRecord: client.pendingWrites()[0]?.missingRecord,
+      };
     }
+    expect(outcomes).toEqual({
+      // Not complete: no tombstone, so the GET's unknown answer decides.
+      observed: { cursor: false, missingRecord: 'unknown' },
+      documented: { cursor: true, missingRecord: 'deleted' },
+    });
   });
 });

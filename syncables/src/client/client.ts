@@ -2388,7 +2388,10 @@ export function createApiClient(
             : {},
         body: {},
         itemsField: feed.itemsField,
-        // No identity: a change list may name one record in several items.
+        // The whole item is its identity (Pagination Schemes §4.4.5, "else
+        // the whole item"): a change list may name one record in several
+        // items, so the record id would refuse a valid feed.
+        identity: (item) => JSON.stringify(item),
         outcome: feedOutcome,
       })) {
         body = page.body;

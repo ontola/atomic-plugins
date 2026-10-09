@@ -1,9 +1,11 @@
 // @wc-ignore-file
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
+  InMemoryStorageAdapter,
   type OpenApiDocument,
   type Transport,
+  type TransportResponse,
 } from '../../../src/browser.js';
 
 // sync() and reads that end without an error but are not complete: a read by
@@ -230,5 +232,146 @@ describe('sync() with a read that is not complete', () => {
     expect(filters).toEqual(['period:20260101..20261231']);
     expect(result.incomplete[0]?.reason).toMatch(/range windows/);
     expect(ids(await client.list('transactions'))).toEqual(['m1']);
+  });
+});
+
+describe('an incomplete read and the marks a complete read leaves (review of #431)', () => {
+  /** shortPages() plus a PUT on a task and, optionally, a deletion feed. */
+  function writable(feed: boolean): OpenApiDocument {
+    const doc = shortPages();
+    doc.paths['/task/{taskId}']!.put = {
+      requestBody: {
+        content: { 'application/json': { schema: { type: 'object' } } },
+      },
+      responses: { '200': { description: 'The task' } },
+    };
+    if (feed) {
+      doc.paths['/team/{teamId}/task-changes'] = {
+        get: {
+          operationId: 'listTaskChanges',
+          responses: { '200': { description: 'Changes' } },
+        },
+      };
+      (
+        doc.components!['crudResources'] as Record<
+          string,
+          { collections: Record<string, Record<string, unknown>> }
+        >
+      )['task']!.collections['tasks']!['x-deletion-feed'] = {
+        operationId: 'listTaskChanges',
+        envelope: { itemsField: 'changes' },
+        tombstone: { field: 'state', values: ['deleted'] },
+      };
+    }
+    return doc;
+  }
+
+  /** Pages for the list, a changes answer for the feed, 503 for task GETs. */
+  function provider(): {
+    transport: Transport;
+    set: (pages: Record<string, unknown>[][], total?: number) => void;
+    changes: Record<string, unknown>[];
+    puts: () => number;
+    gate: { open: () => void };
+  } {
+    let pages: Record<string, unknown>[][] = [];
+    let total: number | undefined;
+    let puts = 0;
+    const changes: Record<string, unknown>[] = [];
+    let open!: () => void;
+    const gated = new Promise<void>((resolve) => (open = resolve));
+    const transport: Transport = async (request) => {
+      const path = request.url.pathname;
+      const json = (body: unknown, status = 200): TransportResponse => ({
+        status,
+        headers: {},
+        body: JSON.stringify(body),
+      });
+      if (path === '/v2/team/w1/task') {
+        const page = Number(request.url.searchParams.get('page') ?? '0');
+        const items = pages[page] ?? [];
+        return json(total === undefined ? { items } : { items, total });
+      }
+      if (path === '/v2/team/w1/task-changes') return json({ changes });
+      if (request.method === 'PUT') {
+        puts += 1;
+        if (puts === 1) await gated;
+        return json({ error: 'invented' }, 503);
+      }
+      return json({ error: 'invented' }, 503);
+    };
+    return {
+      transport,
+      set: (p, t): void => {
+        pages = p;
+        total = t;
+      },
+      changes,
+      puts: () => puts,
+      gate: { open: () => open() },
+    };
+  }
+
+  const four = [
+    [{ id: 'a' }, { id: 'b' }],
+    [{ id: 'c' }, { id: 'd' }],
+  ];
+  const withoutA = [
+    [{ id: 'b' }, { id: 'c' }],
+    [{ id: 'd' }, { id: 'e' }],
+  ];
+
+  it('clears holdIfQueued on an in-flight update whose record it returns', async () => {
+    const fake = provider();
+    const client = createApiClient(writable(false), {
+      transport: fake.transport,
+      constants: { teamId: 'w1' },
+      retry: { baseDelayMs: 20, maxAttempts: 2 },
+    });
+    fake.set(four, 4);
+    await client.sync();
+    await client.update('tasks', 'a', { title: 'A2' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // A complete read lacks a while its update is in flight: marked for holding.
+    fake.set(withoutA, 4);
+    await client.sync();
+    // An incomplete read returns a: the mark goes, as a complete read does.
+    fake.set([[{ id: 'a' }]]);
+    expect((await client.sync()).incomplete).toHaveLength(1);
+    fake.gate.open();
+    // The 503 is retried after the backoff instead of being held for a refresh.
+    await vi.waitFor(() => expect(fake.puts()).toBe(2), { timeout: 2000 });
+  });
+
+  it('drops a stored feed tombstone for a record it returns', async () => {
+    const storage = new InMemoryStorageAdapter();
+    const fake = provider();
+    fake.gate.open();
+    const client = createApiClient(writable(true), {
+      storage,
+      transport: fake.transport,
+      constants: { teamId: 'w1' },
+      retry: { baseDelayMs: 60_000 },
+    });
+    fake.set(four, 4);
+    await client.sync();
+    await client.update('tasks', 'a', { title: 'A2' });
+    await vi.waitFor(() => expect(fake.puts()).toBe(1));
+    // A complete read lacks a; its GET is undecided; the feed's tombstone
+    // fails the update and is kept for the next sync.
+    fake.changes.push({ id: 'a', state: 'deleted' });
+    fake.set(withoutA, 4);
+    await client.sync();
+    const tombstones = async (): Promise<unknown> =>
+      (
+        (await storage.get('syncables:outbox', 'outbox')) as
+          | { feedTombstones?: { tombstones: string[] }[] }
+          | undefined
+      )?.feedTombstones?.flatMap((entry) => entry.tombstones) ?? [];
+    expect(await tombstones()).toEqual(['a']);
+    // An incomplete read returns a: the stored tombstone is stale.
+    fake.set([[{ id: 'a' }]]);
+    await client.sync();
+    expect(await tombstones()).toEqual([]);
   });
 });

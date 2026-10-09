@@ -73,3 +73,21 @@ drops a stored feed tombstone for it (`superseded`), as the complete path
 does. Test: a feed paged by a short-page scheme keeps no cursor under
 `observed` and stores one under `documented` (checked to fail without the
 fix).
+
+## Turn 4
+
+**Human (via the coordinator session):** Lint fails on a two-argument
+`expect`; pass `identity: (item) => JSON.stringify(item)` to the feed walk
+(the spec's "else the whole item"); test clearing `holdIfQueued` and
+dropping tombstones; give the feed test a deletion so "no tombstones" is
+tested.
+
+**Assistant:** The feed test now has a deleted record whose GET is
+undecided and a feed tombstone for it on a short page: under `observed` the
+feed read is not complete, no cursor is kept and the update fails as
+`unknown`; under `documented` the cursor is kept and it fails as `deleted`.
+The feed walk passes the whole item as its identity. Two new tests: an
+in-flight update marked for holding by a complete read is retried after an
+incomplete read returns its record, and a stored feed tombstone is dropped
+when an incomplete read returns the record (both checked to fail without the
+change). Lint is clean.
