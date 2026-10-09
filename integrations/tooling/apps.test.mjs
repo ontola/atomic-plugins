@@ -390,6 +390,80 @@ test('a published version file may not change or disappear', () =>
     );
   }));
 
+test('a branch behind main is told to merge, not to restore what main published since', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // A topic branch parts here; main then publishes four more versions.
+    git('checkout', '-q', '-b', 'topic');
+    git('checkout', '-q', main);
+
+    for (const version of ['1.3.0', '1.4.0', '2.0.0', '2.1.0']) {
+      mkdirSync(join(base, `apps/gamma/${version}`), { recursive: true });
+      writeFileSync(join(base, modulePath('gamma', version)), `v${version}`);
+    }
+
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'later',
+    );
+    git('checkout', '-q', 'topic');
+
+    const problems = await check({ base, published: main });
+    assert.deepEqual(problems, [
+      `4 file(s) published at ${main} are not on this branch, which is behind it (apps/gamma/1.3.0/ui.js, apps/gamma/1.4.0/ui.js, apps/gamma/2.0.0/ui.js, and 1 more): merge ${main} (never restore them by hand)`,
+    ]);
+
+    // A file the branch did have, and lost, is still "deleted".
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it.`,
+      ),
+    );
+
+    // Merged, the branch is told nothing.
+    git('checkout', '-q', '--', 'apps');
+    git('merge', '-q', main);
+    assert.deepEqual(await check({ base, published: main }), []);
+  }));
+
+test('without a merge-base, a missing published file is "deleted" and may mean the branch is behind', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // An unrelated history: no merge-base with main, as in CI's shallow
+    // clone where `git merge-base` fails.
+    git('checkout', '-q', '--orphan', 'lone');
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'lone',
+    );
+
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it. (This checkout cannot tell whether the branch is behind ${main}: if it is, merge ${main} first instead.)`,
+      ),
+    );
+  }));
+
 test('write refuses to rebuild a published version with different bytes', () =>
   using({}, async base => {
     const main = commitAsMain(base);
