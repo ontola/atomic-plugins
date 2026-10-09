@@ -1,0 +1,80 @@
+# Reviewed 2026-10-08 against the pinned OAD.
+# Source: the pinned OAD's own parameter descriptions for tasks.list: showCompleted
+# ("The default is True. Note that showHidden must also be True to show tasks completed
+# in first party clients") and showHidden ("The default is False").
+# Source: https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list
+# Needs CRUD Causality 0.4.0 (openapi-extensions/spec/crud-causality, listQuery).
+# Read-only: list and read operations only, as the google-tasks drive app uses them.
+# v2 of crud-causality-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml (#378), which
+# stays published: the same resources, collections and operations, plus the tasks
+# collection's fixed read, both collections' envelopes, the task-list read operation
+# and descriptions.
+overlay: 1.0.0
+info:
+  title: Google Tasks v1 CRUD Causality (read)
+  version: 2.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        taskList:
+          schema:
+            $ref: '#/components/schemas/TaskList'
+          description: One of the authenticated user's task lists. Its id is the tasklist context of the task collection.
+          identity:
+            urlTemplate: /tasks/v1/users/@me/lists/{tasklist}
+            bindings:
+              tasklist:
+                field: id
+          collections:
+            taskLists:
+              urlTemplate: /tasks/v1/users/@me/lists
+              envelope:
+                itemsField: items
+        task:
+          schema:
+            $ref: '#/components/schemas/Task'
+          description: A task in one task list.
+          identity:
+            urlTemplate: /tasks/v1/lists/{tasklist}/tasks/{task}
+            bindings:
+              task:
+                field: id
+          collections:
+            tasks:
+              urlTemplate: /tasks/v1/lists/{tasklist}/tasks
+              envelope:
+                itemsField: items
+              description: >-
+                Every task of the list that is not deleted, including completed
+                and hidden ones. tasks.list hides hidden tasks by default
+                (showHidden defaults to false), and completed tasks made in
+                Google's own clients are hidden too unless showHidden is true,
+                so both flags are fixed to true. Deleted tasks (showDeleted)
+                stay excluded.
+              listQuery:
+                showCompleted: 'true'
+                showHidden: 'true'
+  - target: $.paths['/tasks/v1/users/@me/lists'].get
+    update:
+      x-crud:
+        action: list
+        resource: taskList
+        collection: taskLists
+  - target: $.paths['/tasks/v1/users/@me/lists/{tasklist}'].get
+    update:
+      x-crud:
+        action: read
+        resource: taskList
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].get
+    update:
+      x-crud:
+        action: list
+        resource: task
+        collection: tasks
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].get
+    update:
+      x-crud:
+        action: read
+        resource: task
