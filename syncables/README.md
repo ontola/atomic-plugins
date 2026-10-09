@@ -442,36 +442,42 @@ collection's deletion feed decides first). A wrong `deleted` declaration makes f
 records count as deleted; no overlay declares one yet, and the behaviour has
 not been verified against a real provider.
 
-What that GET's 404 or 410 means is the declaration's `notFound` (0.2.0
-§4.3): `deleted` when the field is absent (the default, as 0.1.0 consumers
-read it), `unavailable` for a value the client does not recognise; `unavailable` means the
+What that GET's 404 or 410 means is the `notFound` the record's
+**resource** states (0.2.0 §4.3), through any of its collections: the one
+this record was read in, another one, or the operation that lists one (its
+list path's, or one whose `x-crud` is a `list` of that collection). So a
+record that vanished from a collection with no declaration still follows a
+`notFound` another collection of its resource states. When collections state
+different values, or one the client does not recognise, it is
+`unavailable`; when none states it, `deleted` (the default, as 0.1.0
+consumers read it). A `notFound` stated beside an `absent` the client does
+not recognise still counts, though the rest of that declaration is ignored.
+`unavailable` means the
 record is kept with its last known values and its queued updates fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
-reported as deleted, until the app decides (`resolveWrite`). The field is
-read from the same placement as `absent`, and still applies when a
-`selection` narrows the read, since it says what the record's own read
-means. With `absent: deleted`, where the spec does not allow it, no GET is
+reported as deleted, until the app decides (`resolveWrite`). It still
+applies when a `selection` narrows the read, since it says what the record's
+own read means. With `absent: deleted`, where the spec does not allow it, no GET is
 made, so it has no effect. A tombstone in the collection's deletion feed is
 positive evidence of deletion and stands over an `unavailable` answer. No
 overlay declares `notFound` yet; not verified against a real provider.
 
 A nested collection (one whose URL has a path variable that another
 resource's `identity.bindings` binds, `/lists/{listId}/tasks` under task
-lists) can declare `parentAbsent: deleted | unavailable` on its Collection
-Object (0.2.0 §4.4; ignored on the list operation, for a variable a
+lists) can declare `parentAbsent` on its Collection Object (0.2.0 §4.4;
+`unavailable` is its one value, and any value is read as `unavailable`;
+ignored on the list operation, on a collection whose `absent` the client does
+not recognise, for a variable a
 `constants` entry fixes, and on a collection whose path variables two or
 more other resources bind, which the spec does not describe). Once a record
 of the parent collection is concluded gone, by its declaration
 (`absent: deleted`), by the GET (404/410 per `notFound`, or a read
 tombstone) or by a feed tombstone, the records last read under it in that
-nested collection are concluded too, without a request: `deleted` only for
-`parentAbsent: deleted` under a parent concluded deleted by a conclusion
-the document stands behind (`absent: deleted`, a tombstone, or a 404/410
-under a stated `notFound: deleted`), else `unavailable`. A 404 that is
-`deleted` only by the `notFound` default (the parent's collection declares
-no `notFound`, or no Completeness Object at all) never cascades as a
-deletion: a missing permission answered as 404 must not delete the members.
-Each member is reported to `onMissingRecord` with `source: 'parent'`, its
+nested collection are concluded `unavailable`, never `deleted`, without a
+request: deleting a member needs evidence about the member itself (0.2.0
+has no deleted cascade). A member that this sync's read of the same nested
+collection returned under another parent (it moved; ids are global, as in
+Google Tasks) is not marked. Each member is reported to `onMissingRecord` with `source: 'parent'`, its
 `context` and its last known values, and its held updates fail with that
 `missingRecord`, as above (under `unavailable`, every write queued for it,
 as above); a parent whose GET shows it still exists (`filtered`), or whose
@@ -480,9 +486,7 @@ their last known values until the parent returns in a complete read and the
 nested collection is read again. Until then the nested scope is marked: a
 new `update()` of a member is concluded at once like the earlier writes
 were (failed, not sent as a PUT on a record the caller cannot read), and a
-new `create()` into the scope of an unavailable parent is parked the same
-way; under a deleted parent a create is sent, and the provider answers for
-the parent. The mark is in memory only: after a restart, a member's failed
+new `create()` into the scope is parked the same way. The mark is in memory only: after a restart, a member's failed
 writes still carry `missingRecord` and hold a new edit, but a member without
 writes is not marked until the parent is concluded again.
 So that a queued edit under a vanished parent is not sent blindly, the
@@ -1183,8 +1187,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 - **Unreleased**: Collection Completeness 0.2.0 §4.3, `notFound`: a 404
   or 410 from the GET of a record a complete refresh no longer returned
-  means `deleted` by default, as before, or, when the collection declares
-  `x-completeness: { absent: removed, notFound: unavailable }`, the new
+  means `deleted` by default, as before, or, when the record's resource
+  states `notFound: unavailable` through any of its collections (or states
+  conflicting or unrecognised values), the new
   evidence `unavailable`: the caller can no longer read the record and the
   API does not say why. It is never reported as deleted; the record keeps
   its last known values, and its queued updates fail with
@@ -1195,15 +1200,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   version `1`. §4.4, `parentAbsent`, on a nested collection's Collection
   Object: once a parent record is concluded deleted or unavailable (by its
   declaration, the GET or a feed tombstone), the records last read under
-  it are concluded `deleted` (only `parentAbsent: deleted` under a deleted
-  parent) or `unavailable` without a request, reported with
+  it are concluded `unavailable` (never `deleted`, whatever the value)
+  without a request, unless this sync read them under another parent,
+  reported with
   `source: 'parent'`, and their held updates fail accordingly; nothing is
   pruned. The default `missingRecordChecks: 'pending'` now also checks a
   vanished parent record without writes when such a nested collection has
   unsettled writes under it. The declaration is ignored with two or more
-  parent resources; a deletion cascades only from a conclusion the document
-  stands behind (`absent: deleted`, a tombstone, a 404/410 under a stated
-  `notFound: deleted`), never from the `notFound` default. Under
+  parent resources or an unrecognised `absent`. Under
   `unavailable`, every write queued for the record fails, deletes included,
   and a create is parked; a nested scope whose parent is gone is marked
   until it is read again, and a new `update()` or `create()` into it is

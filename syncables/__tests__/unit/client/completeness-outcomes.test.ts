@@ -12,6 +12,8 @@ import {
   type TransportRequest,
   type TransportResponse,
 } from '../../../src/browser.js';
+import { resourceNotFound } from '../../../src/client/client.js';
+import { discoverReadModel } from '../../../src/read/model.js';
 import { nestedTaskLists } from '../../fixtures/deletion-declarations.js';
 import { petsDocument } from '../../fixtures/pets.js';
 
@@ -874,7 +876,9 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     expect(reports).toEqual([]);
   });
 
-  it('parentAbsent: deleted under a parent collection declared absent: deleted concludes the tasks deleted without any GET', async () => {
+  it('makes the tasks unavailable, never deleted, under a parent collection declared absent: deleted, without any GET', async () => {
+    // §4.4 (0.2.0 round 6): no deleted cascade; deleting a member needs
+    // evidence about the member itself.
     const doc = nestedDocument((resources) => {
       resources['taskList']!['collections'] = {
         taskLists: {
@@ -882,8 +886,6 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
           'x-completeness': { absent: 'deleted' },
         },
       };
-      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
-        'deleted';
     });
     const { client, fake, reports } = await listsThenGone({ doc, edit: true });
     await client.sync();
@@ -891,60 +893,75 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
       'GET /users/me/lists',
       'GET /lists/L1/tasks',
     ]);
-    expect(reports).toEqual([
-      {
-        resource: 'taskLists',
-        id: 'L2',
-        evidence: 'deleted',
-        source: 'declaration',
-      },
-      {
-        resource: 'listTasks',
-        id: 't2',
-        context: { listId: 'L2' },
-        evidence: 'deleted',
-        source: 'parent',
-      },
-      {
-        resource: 'listTasks',
-        id: 't3',
-        context: { listId: 'L2' },
-        evidence: 'deleted',
-        source: 'parent',
-      },
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'deleted', 'declaration'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
     ]);
     expect(client.pendingWrites()).toMatchObject([
       {
         id: 't2',
         state: 'failed',
-        missingRecord: 'deleted',
+        missingRecord: 'unavailable',
         lastError: expect.stringMatching(
-          /^Record t2 was deleted at the provider \(its parent taskList L2 of taskLists was concluded deleted: the API document declares/,
+          /its parent taskList L2 of taskLists was concluded deleted: the API document declares/,
         ),
       },
     ]);
-    // Still nothing is pruned; what a deleted task means is the app's call.
+    // Nothing is pruned.
     expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
   });
 
-  it('reads parentAbsent: deleted as unavailable when a parent collection declared absent: removed omits notFound', async () => {
-    // §4.4: the declaration needs an explicit notFound on the parent's
-    // absent: removed collections; a 404 for a missing permission must not
-    // cascade as a deletion through the default.
-    const doc = nestedDocument((resources) => {
-      delete completenessOf(resources, 'taskList', 'taskLists')['notFound'];
-      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
-        'deleted';
+  for (const value of ['unavailable', 'deleted', 'gone'])
+    for (const [label, parent, conclusion] of [
+      [
+        'a 404 under a stated notFound: deleted',
+        { absent: 'removed', notFound: 'deleted' },
+        ['L2', 'deleted', 'read'],
+      ],
+      [
+        'a 404 under the notFound default',
+        { absent: 'removed' },
+        ['L2', 'deleted', 'read'],
+      ],
+      [
+        'a 404 under notFound: unavailable',
+        { absent: 'removed', notFound: 'unavailable' },
+        ['L2', 'unavailable', 'read'],
+      ],
+    ] as const)
+      it(`reads parentAbsent: ${value} as unavailable under a parent concluded by ${label}`, async () => {
+        const doc = nestedDocument((resources) => {
+          resources['taskList']!['collections'] = {
+            taskLists: {
+              urlTemplate: '/users/me/lists',
+              'x-completeness': parent,
+            },
+          };
+          completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
+            value;
+        });
+        const { client, reports } = await listsThenGone({ doc, edit: true });
+        await client.sync();
+        expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+          conclusion,
+          ['t2', 'unavailable', 'parent'],
+          ['t3', 'unavailable', 'parent'],
+        ]);
+        expect(client.pendingWrites()).toMatchObject([
+          { id: 't2', state: 'failed', missingRecord: 'unavailable' },
+        ]);
+      });
+
+  it('does not mark a member that this sync read under another parent (it moved)', async () => {
+    const { client, fake, reports } = await listsThenGone({
+      client: { missingRecordChecks: 'all' },
     });
-    const { client, reports } = await listsThenGone({ doc, edit: true });
+    fake.tasks.get('L1')!.set('t2', t2);
     await client.sync();
     expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
-      ['L2', 'deleted', 'read'],
-      ['t2', 'unavailable', 'parent'],
+      ['L2', 'unavailable', 'read'],
       ['t3', 'unavailable', 'parent'],
-    ]);
-    expect(client.pendingWrites()).toMatchObject([
-      { id: 't2', state: 'failed', missingRecord: 'unavailable' },
     ]);
   });
 
@@ -1008,36 +1025,125 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
   });
 
-  it('cascades a deletion only from a stated conclusion: a 404 under the notFound default makes the tasks unavailable', async () => {
-    // The parent resource's first collection, which supplies listId, has
-    // no declaration; another of its collections states notFound. The 404
-    // is deleted by the default for the list itself (a 0.1.0 reading), but
-    // a permission 404 must not cascade as a deletion of the tasks.
-    const doc = nestedDocument((resources, paths) => {
-      resources['taskList']!['collections'] = {
+  // §4.3 (0.2.0 round 6): notFound is resource-wide. The lists read that
+  // supplies listId, taskLists, is set up per case; the 404 of L2's own
+  // read follows what the taskList resource states through any collection.
+  for (const [label, collections, operation, evidence] of [
+    [
+      'another collection that states notFound: unavailable',
+      {
         taskLists: { urlTemplate: '/users/me/lists' },
         starredLists: {
           urlTemplate: '/users/me/starred',
           'x-completeness': { absent: 'removed', notFound: 'unavailable' },
         },
-      };
-      paths['/users/me/starred'] = {
-        get: { responses: { '200': { description: 'Starred lists' } } },
-      };
-      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
-        'deleted';
+      },
+      undefined,
+      'unavailable',
+    ],
+    [
+      'its own absent: removed without notFound, beside one stating unavailable',
+      {
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          'x-completeness': { absent: 'removed' },
+        },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed', notFound: 'unavailable' },
+        },
+      },
+      undefined,
+      'unavailable',
+    ],
+    [
+      'collections that state different values (the safe direction)',
+      {
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          'x-completeness': { absent: 'removed', notFound: 'deleted' },
+        },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed', notFound: 'unavailable' },
+        },
+      },
+      undefined,
+      'unavailable',
+    ],
+    [
+      'a notFound stated beside an absent this client does not recognise',
+      {
+        taskLists: { urlTemplate: '/users/me/lists' },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'archived', notFound: 'unavailable' },
+        },
+      },
+      undefined,
+      'unavailable',
+    ],
+    [
+      'the x-crud list operation of another collection',
+      {
+        taskLists: { urlTemplate: '/users/me/lists' },
+        starredLists: { urlTemplate: '/users/me/starred' },
+      },
+      {
+        'x-crud': {
+          action: 'list',
+          resource: 'taskList',
+          collection: 'starredLists',
+        },
+        'x-completeness': { absent: 'removed', notFound: 'unavailable' },
+        responses: { '200': { description: 'Starred lists, v2' } },
+      },
+      'unavailable',
+    ],
+    [
+      'no collection that states it (the default)',
+      {
+        taskLists: { urlTemplate: '/users/me/lists' },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed' },
+        },
+      },
+      undefined,
+      'deleted',
+    ],
+  ] as const)
+    it(`classifies a 404 through an undeclared collection by ${label}`, async () => {
+      const doc = nestedDocument((resources, paths) => {
+        resources['taskList']!['collections'] = structuredClone(collections);
+        paths['/users/me/starred'] = {
+          get: { responses: { '200': { description: 'Starred lists' } } },
+        };
+        if (operation) paths['/v2/starred'] = { get: structuredClone(operation) };
+      });
+      const { client, fake, reports } = await listsThenGone({
+        doc,
+        edit: true,
+      });
+      await client.sync();
+      expect(fake.requests).toContain('GET /users/me/lists/L2');
+      expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+        ['L2', evidence, 'read'],
+        ['t2', 'unavailable', 'parent'],
+        ['t3', 'unavailable', 'parent'],
+      ]);
     });
-    const { client, fake, reports } = await listsThenGone({ doc, edit: true });
+
+  it('draws no parent marks from a collection whose absent is not recognised', async () => {
+    const doc = nestedDocument((resources) => {
+      completenessOf(resources, 'task', 'listTasks')['absent'] = 'archived';
+    });
+    const { client, reports } = await listsThenGone({
+      doc,
+      client: { missingRecordChecks: 'all' },
+    });
     await client.sync();
-    expect(fake.requests).toContain('GET /users/me/lists/L2');
-    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
-      ['L2', 'deleted', 'read'],
-      ['t2', 'unavailable', 'parent'],
-      ['t3', 'unavailable', 'parent'],
-    ]);
-    expect(client.pendingWrites()).toMatchObject([
-      { id: 't2', state: 'failed', missingRecord: 'unavailable' },
-    ]);
+    expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
   });
 
   it('parks a create into the nested scope of an unavailable parent instead of sending it', async () => {
@@ -1124,23 +1230,6 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     });
   });
 
-  it('parentAbsent: deleted under a parent concluded unavailable makes the tasks unavailable', async () => {
-    const doc = nestedDocument((resources) => {
-      completenessOf(resources, 'task', 'listTasks')['parentAbsent'] =
-        'deleted';
-    });
-    const { client, reports } = await listsThenGone({
-      doc,
-      client: { missingRecordChecks: 'all' },
-    });
-    await client.sync();
-    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
-      ['L2', 'unavailable', 'read'],
-      ['t2', 'unavailable', 'parent'],
-      ['t3', 'unavailable', 'parent'],
-    ]);
-  });
-
   it('draws no conclusion about the tasks when the list still exists (its read answers 200)', async () => {
     const { client, fake, reports } = await listsThenGone({
       client: { missingRecordChecks: 'all' },
@@ -1159,12 +1248,6 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
       'without parentAbsent',
       nestedDocument((resources) => {
         delete completenessOf(resources, 'task', 'listTasks')['parentAbsent'];
-      }),
-    ],
-    [
-      'with an unrecognised parentAbsent value',
-      nestedDocument((resources) => {
-        completenessOf(resources, 'task', 'listTasks')['parentAbsent'] = 'gone';
       }),
     ],
     [
@@ -1187,4 +1270,65 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
       await client.sync();
       expect(reports).toMatchObject([{ id: 'L2', evidence: 'unavailable' }]);
     });
+});
+
+// --- wp-consumer R2: the resource's stated notFound, as the Write
+// Preconditions consumer's deletionConfirmed reads it (route.notFound).
+
+describe('resourceNotFound (route.notFound, resource-wide)', () => {
+  const collections = (
+    doc: OpenApiDocument,
+  ): ReturnType<typeof discoverReadModel>['collections'] =>
+    discoverReadModel(doc).collections;
+  const lists = (declared: Record<string, Row>): OpenApiDocument =>
+    nestedDocument((resources, paths) => {
+      resources['taskList']!['collections'] = declared;
+      paths['/users/me/starred'] = {
+        get: { responses: { '200': { description: 'Starred lists' } } },
+      };
+    });
+
+  it('is undefined when no collection of the resource states it: the default is no confirmation', () => {
+    const doc = lists({
+      taskLists: {
+        urlTemplate: '/users/me/lists',
+        'x-completeness': { absent: 'removed' },
+      },
+    });
+    expect(resourceNotFound(doc, collections(doc), 'taskList')).toBeUndefined();
+  });
+
+  it('is deleted only when stated so, and applies to an undeclared collection of the resource', () => {
+    const doc = lists({
+      taskLists: { urlTemplate: '/users/me/lists' },
+      starredLists: {
+        urlTemplate: '/users/me/starred',
+        'x-completeness': { absent: 'removed', notFound: 'deleted' },
+      },
+    });
+    expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe(
+      'deleted',
+    );
+  });
+
+  it('is unavailable for different or unrecognised stated values', () => {
+    for (const [first, second] of [
+      ['deleted', 'unavailable'],
+      ['deleted', 'gone'],
+    ]) {
+      const doc = lists({
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          'x-completeness': { absent: 'removed', notFound: first },
+        },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed', notFound: second },
+        },
+      });
+      expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe(
+        'unavailable',
+      );
+    }
+  });
 });

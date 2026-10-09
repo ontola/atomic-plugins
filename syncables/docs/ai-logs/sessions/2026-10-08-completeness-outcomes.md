@@ -142,3 +142,29 @@ behind the update, the parked create, the new edit of a member and its
 sending after the parent returns, the unrecognised value, `record` in the
 reports). The mark is not stored: after a restart a member without writes is
 not marked until the parent is concluded again (documented).
+
+## Turn (2026-10-09): follow #387 round 6
+
+**Human (via the coordinator session):** Merge `origin/main` into #399 and
+port the delta plan for #387 round 6, without waiting for #387's approval:
+`parentAbsent` gives only `unavailable`; `notFound` is resource-wide,
+including undeclared collections; an unrecognised `absent` is ignored, but
+a stated `notFound` still counts (round 7); a test for the Write
+Preconditions consumer's `deletionConfirmed` reading (plan R2); keep
+`openapi-extensions/` equal to main; the cross-scope id check if small.
+
+**Assistant (syncables worker 2):** Merged main (throttling and envelope
+conflicts, kept both) and reset `openapi-extensions/` to main's (the
+#387 spec files leave this PR). `rawCompleteness` finds a collection's
+declaration (Collection Object, its list path's operation, or an `x-crud`
+list operation of it); `declaredCompleteness` ignores one with an
+unrecognised `absent` and reads any `parentAbsent` as `unavailable`;
+`resourceNotFound` (after `resource_not_found`, but also counting a
+`notFound` beside an unrecognised `absent`) gives every route of a resource
+`route.notFound`, replacing `notFoundMeansUnavailable`/`notFoundExplicit`.
+The deleted cascade and `Evidence.defaulted` are gone; a create into a gone
+parent's scope is always parked. `SyncRound.returned` keeps the ids this
+sync read per collection, and a member returned under another parent is not
+marked. Tests rewritten and added (resource-wide cases, any `parentAbsent`
+under three parent conclusions, the moved member, an unrecognised `absent`,
+`resourceNotFound` for R2). README, CLAUDE.md and the changelog follow.

@@ -203,9 +203,15 @@ Data flows through four stages, each its own directory under `src/`:
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
-   the collection's Completeness Object says `notFound: unavailable`
-   (`notFoundMeansUnavailable`, 0.2.0 §4.3; `declaredCompleteness` parses
-   `absent` and `notFound`), 2xx with the record
+   the record's resource states `notFound: unavailable` through any
+   collection (`route.notFound`, resource-wide, from `resourceNotFound`
+   over every collection's `rawCompleteness`, after the reference
+   `resource_not_found`; conflicting or unrecognised values are
+   `unavailable`, a value beside an unrecognised `absent` counts; undefined
+   when not stated, which the Write Preconditions consumer must not take as
+   a confirmed deletion; 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   and `parentAbsent`, and ignores a declaration with an unrecognised
+   `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
    on the CRUD Resource Object, else, or when that one does not parse, the
    item GET operation, a Tombstone Object of the deletion-feeds draft; not
@@ -257,20 +263,18 @@ Data flows through four stages, each its own directory under `src/`:
    record concluded `deleted` or `unavailable` (declaration, GET or feed, at
    the same three points as `reportMissing`) has `applyParentAbsent` conclude
    the records last read under it (`nestedScopes`: confirmed records and
-   writes in scopes whose variable is the parent id) as `deleted` (only
-   `parentAbsent: deleted` under a parent concluded deleted by a
-   declaration, a tombstone or a 404/410 under a stated `notFound: deleted`;
-   a 404/410 under the default is `Evidence.defaulted`, from
-   `route.notFoundExplicit`, and cascades `unavailable`) or `unavailable`,
-   with `source: 'parent'` and the last known values as `record`, failing
-   their heads through `failMissing` and skipping a member a write settled
-   on since the sync began; nothing is pruned. `failMissing` on
+   writes in scopes whose variable is the parent id) as `unavailable`,
+   never `deleted` (any `parentAbsent` value), with `source: 'parent'` and
+   the last known values as `record`, failing their heads through
+   `failMissing` and skipping a member a write settled on since the sync
+   began, or one this sync's read of the nested collection returned under
+   another context (`SyncRound.returned`); nothing is pruned. `failMissing` on
    `unavailable` also fails the rest of the record's queue in order,
    deletes included, and parks a create in place (state `failed`,
    `missingRecord`), stopping at a head in flight, not stored or already
    parked. Each concluded nested scope is marked in `goneParents` (in
    memory, cleared by a complete read of the scope); `update()` into a
-   marked scope, and `create()` into one whose parent is unavailable, are
+   marked scope, and `create()` into one, are
    enqueued held and concluded at once (`concludeNew`). An unrecognised
    `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
    parent is GETed when `nestedWritesUnder` finds unsettled writes under
@@ -440,11 +444,15 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   tasks of a list that answers 404 concluded unavailable without a request,
   a queued task update under a vanished list (the list GETed under the
   default checks, the update failed as unavailable, the list's return), no
-  GET for a vanished list without writes under it, `parentAbsent: deleted`
-  under a declared-deleted parent (no GET at all) and under an unavailable
-  one, and no conclusion for a parent that still exists, without the field,
-  with an unrecognised value, or with it on the list operation; the #399
-  review: no cascade of a deletion from a 404 under the `notFound` default,
+  GET for a vanished list without writes under it, tasks unavailable (never
+  deleted) under a declared-deleted parent (no GET at all), any
+  `parentAbsent` value under parents concluded three ways, a moved member
+  not marked, a resource-wide `notFound` through an undeclared collection
+  (another collection, conflicting values, an unrecognised `absent`, an
+  `x-crud` list operation, none stated), no parent marks under an
+  unrecognised `absent`, `resourceNotFound` itself (wp-consumer R2), and no
+  conclusion for a parent that still exists, without the field, or with it
+  on the list operation; the #399 review:
   a DELETE behind an unavailable record's update failed rather than sent, a
   create into an unavailable parent's scope parked, a new edit of a member
   under an unavailable parent concluded at once and sent again after the

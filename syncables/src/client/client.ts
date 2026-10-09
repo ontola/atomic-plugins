@@ -646,24 +646,21 @@ interface ClientRoute {
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
   absentMeansDeleted?: boolean;
   /**
-   * `x-completeness: { notFound: unavailable }`: a 404 or 410 from the item
-   * GET of a record a complete read lacked means the caller can no longer
-   * read it, not that it was deleted (Collection Completeness 0.2.0 §4.3).
+   * The `notFound` the route's **resource** states (Collection
+   * Completeness 0.2.0 §4.3): any of its collections, this one or not, set
+   * on every route of the resource; `unavailable` when they differ or a
+   * stated value is not recognised. Undefined: not stated anywhere, so a
+   * 404 or 410 means `deleted` by the spec's default only, which is not a
+   * stated confirmation of a deletion.
    */
-  notFoundMeansUnavailable?: boolean;
+  notFound?: 'deleted' | 'unavailable';
   /**
-   * The collection states `notFound` itself. Without it a 404 or 410 is
-   * `deleted` by the spec's default only, which never cascades to the
-   * members of a nested collection as a deletion (§4.4).
+   * `x-completeness: { parentAbsent }` on a nested collection, any value:
+   * its members are unavailable once the parent object that supplies one
+   * of its path variables is concluded deleted or unavailable (Collection
+   * Completeness 0.2.0 §4.4). Applied without reading them.
    */
-  notFoundExplicit?: boolean;
-  /**
-   * `x-completeness: { parentAbsent }` on a nested collection: what its
-   * members mean once the parent object that supplies one of its path
-   * variables is concluded deleted or unavailable (Collection Completeness
-   * 0.2.0 §4.4). Applied without reading them.
-   */
-  parentAbsent?: 'deleted' | 'unavailable';
+  parentAbsent?: 'unavailable';
   /** The item URL declares a GET, so a missing record can be read. */
   itemReadable?: boolean;
   /** `x-deletion-feed`: the operation that reports deletions. */
@@ -888,34 +885,25 @@ function declaredIdempotencyHeader(
 /** A parsed Completeness Object (draft Collection Completeness extension, §4.1). */
 interface Completeness {
   absent: 'deleted' | 'removed';
-  /**
-   * §4.3; `deleted` when the field is absent (the spec's default), and
-   * `unavailable` for a value that is not `deleted` or `unavailable`, the
-   * safe direction for a declaration the client cannot read.
-   */
-  notFound: 'deleted' | 'unavailable';
-  /** Whether the document states `notFound` itself, as one of its values. */
-  notFoundExplicit: boolean;
-  /** §4.4; only from a Collection Object, and only a recognised value. */
-  parentAbsent?: 'deleted' | 'unavailable';
+  /** §4.4; only from a Collection Object; any value means `unavailable`. */
+  parentAbsent?: 'unavailable';
 }
 
 /**
- * The Collection Completeness extension's Completeness Object for a
- * collection: from its CRUD Causality Collection Object, which covers the
- * collection's own fixed `listQuery`/`listBody` (or
- * `x-list-query`/`x-list-body`), else from its list operation, which covers
- * only a read that adds nothing to the operation's request (no fixed query
- * or body), since several collections may share that operation. A
- * declaration whose `absent` is not `deleted` or `removed` is ignored; a
- * `notFound` that is not `deleted` or `unavailable` is read as
- * `unavailable`; a `parentAbsent` that is not one of those, or that sits on
- * the operation, is ignored.
+ * A collection's raw Completeness Object (draft Collection Completeness
+ * extension, §4.1): from its CRUD Causality Collection Object, which covers
+ * the collection's own fixed `listQuery`/`listBody` (or
+ * `x-list-query`/`x-list-body`), else from the operation that lists it
+ * (its list path's operation, or one whose `x-crud` is a `list` of this
+ * collection), which covers only a read that adds nothing to the
+ * operation's request (no fixed query or body), since several collections
+ * may share that operation. `onCollection`: it came from the Collection
+ * Object.
  */
-function declaredCompleteness(
+function rawCompleteness(
   document: OpenApiDocument,
   collection: ReadCollection,
-): Completeness | undefined {
+): { declared: Record<string, unknown>; onCollection: boolean } | undefined {
   const resources = document.components?.['crudResources'];
   const resource = isRecord(resources)
     ? resources[collection.resource]
@@ -924,37 +912,82 @@ function declaredCompleteness(
   const definition = isRecord(collections)
     ? collections[collection.name]
     : undefined;
+  if (isRecord(definition) && definition['x-completeness'] !== undefined) {
+    const declared = definition['x-completeness'];
+    return isRecord(declared) ? { declared, onCollection: true } : undefined;
+  }
+  const fixed =
+    Object.keys(collection.listQuery).length > 0 ||
+    Object.keys(collection.listBody).length > 0;
+  if (fixed) return undefined;
   const operation =
     document.paths[collection.url]?.[
       collection.method === 'POST' ? 'post' : 'get'
     ];
-  const fixed =
-    Object.keys(collection.listQuery).length > 0 ||
-    Object.keys(collection.listBody).length > 0;
-  const onCollection =
-    isRecord(definition) && definition['x-completeness'] !== undefined;
-  const declared = onCollection
-    ? definition['x-completeness']
-    : fixed
-      ? undefined
-      : operation?.['x-completeness'];
-  if (!isRecord(declared)) return undefined;
-  const absent = declared['absent'];
+  let declared = operation?.['x-completeness'];
+  if (declared === undefined)
+    for (const item of Object.values(document.paths))
+      for (const method of ['get', 'post'] as const) {
+        const listing = item?.[method];
+        const crud = listing?.['x-crud'];
+        if (
+          declared === undefined &&
+          isRecord(crud) &&
+          crud['action'] === 'list' &&
+          crud['resource'] === collection.resource &&
+          crud['collection'] === collection.name
+        )
+          declared = listing?.['x-completeness'];
+      }
+  return isRecord(declared) ? { declared, onCollection: false } : undefined;
+}
+
+/**
+ * The Completeness Object of a collection (`rawCompleteness`), parsed. A
+ * declaration whose `absent` is not `deleted` or `removed` is ignored as a
+ * whole (§7), apart from its `notFound`, which `resourceNotFound` still
+ * counts. `parentAbsent` counts only on the Collection Object, and any
+ * value means `unavailable` (§7, 0.2.0 has no `deleted` cascade).
+ */
+function declaredCompleteness(
+  document: OpenApiDocument,
+  collection: ReadCollection,
+): Completeness | undefined {
+  const raw = rawCompleteness(document, collection);
+  if (!raw) return undefined;
+  const absent = raw.declared['absent'];
   if (absent !== 'deleted' && absent !== 'removed') return undefined;
-  const parentAbsent = declared['parentAbsent'];
-  const notFound = declared['notFound'];
   return {
     absent,
-    notFound:
-      notFound === undefined || notFound === 'deleted'
-        ? 'deleted'
-        : 'unavailable',
-    notFoundExplicit: notFound === 'deleted' || notFound === 'unavailable',
-    ...(onCollection &&
-    (parentAbsent === 'deleted' || parentAbsent === 'unavailable')
-      ? { parentAbsent }
+    ...(raw.onCollection && raw.declared['parentAbsent'] !== undefined
+      ? { parentAbsent: 'unavailable' as const }
       : {}),
   };
+}
+
+/**
+ * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * (after the reference `resource_not_found`): the one value they state,
+ * `unavailable` when they state different ones or one this client does not
+ * recognise, undefined when none states it. A `notFound` stated beside an
+ * `absent` the client does not recognise still counts.
+ */
+export function resourceNotFound(
+  document: OpenApiDocument,
+  collections: ReadCollection[],
+  resource: string,
+): 'deleted' | 'unavailable' | undefined {
+  const stated = new Set<string>();
+  for (const collection of collections) {
+    if (collection.resource !== resource) continue;
+    const raw = rawCompleteness(document, collection);
+    if (raw && raw.declared['notFound'] !== undefined)
+      stated.add(
+        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
+      );
+  }
+  if (!stated.size) return undefined;
+  return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
 }
 
 /**
@@ -1099,9 +1132,12 @@ function clientRoutes(
     }
     const completeness = declaredCompleteness(document, collection);
     if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
-    if (completeness?.notFound === 'unavailable')
-      route.notFoundMeansUnavailable = true;
-    if (completeness?.notFoundExplicit) route.notFoundExplicit = true;
+    const notFound = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+    );
+    if (notFound) route.notFound = notFound;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -1170,9 +1206,7 @@ export function createApiClient(
   // §4.4: the nested collections that declare parentAbsent, by the
   // collection whose records supply their path variable (`param`). The
   // declaration needs exactly one parent resource; with more it is ignored.
-  // A variable a constant fixes has no parent object to go missing. Whether
-  // `parentAbsent: deleted` may cascade a deletion is decided per parent
-  // record, from how it was concluded (`Evidence.defaulted`).
+  // A variable a constant fixes has no parent object to go missing.
   // Nested scopes whose parent is concluded gone, until a complete read of
   // the scope (the parent returned): new writes into them are concluded at
   // once. In memory only: after a restart, a member's failed writes still
@@ -2595,12 +2629,6 @@ export function createApiClient(
     source: MissingRecord['source'];
     status?: number;
     record?: Record<string, unknown>;
-    /**
-     * A `deleted` from a 404 or 410 that the collection's `notFound` did
-     * not state (the spec's default): fails the record's own writes as
-     * before, but never cascades to a nested collection as a deletion.
-     */
-    defaulted?: true;
     /** Why, for `lastError`. */
     detail: string;
   }
@@ -2644,6 +2672,11 @@ export function createApiClient(
     superseded: Set<string>;
     /** `recordRevisions` when the sync began. */
     startedRecords: Map<string, number>;
+    /**
+     * Ids this sync's read returned, per collection name, across every
+     * bound context: a member returned under another parent is present.
+     */
+    returned: Map<string, Set<string>>;
   }
 
   function feedEvidence(route: ClientRoute): Evidence {
@@ -2988,9 +3021,10 @@ export function createApiClient(
     // Rate-limited after the budget's own 429 retries: not checked.
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
-    // the collection's `notFound`, `deleted` by default.
+    // the resource's stated `notFound`, through any collection, `deleted`
+    // by default.
     if (status === 404 || status === 410)
-      return route.notFoundMeansUnavailable
+      return route.notFound === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
@@ -3002,7 +3036,6 @@ export function createApiClient(
             source: 'read',
             status,
             detail: `GET ${path} answered ${status}`,
-            ...(route.notFoundExplicit ? {} : { defaulted: true }),
           };
     if (status >= 200 && status < 300) {
       let body: unknown;
@@ -3134,12 +3167,14 @@ export function createApiClient(
   /**
    * Collection Completeness §4.4: once record `id` of `route` is concluded
    * deleted or unavailable (`found`), the members last read under it in
-   * each nested collection declaring `parentAbsent` are concluded too,
-   * without being read: `deleted` only for `parentAbsent: deleted` under a
-   * deleted parent, else `unavailable` (the spec's
-   * `members_of_gone_parent`). Each is reported (`source: 'parent'`) and
-   * its held updates fail as for any missing record; a member a write
-   * settled on during this sync is left to a later sync. Nothing is pruned.
+   * each nested collection declaring `parentAbsent` are concluded
+   * `unavailable`, never `deleted`, without being read (the spec's
+   * `members_of_gone_parent`; 0.2.0 has no deleted cascade). Each is
+   * reported (`source: 'parent'`) and its held updates fail as for any
+   * missing record. A member a write settled on during this sync is left
+   * to a later sync, and so is one this sync's read of the same nested
+   * collection returned under another parent (it moved, and is present).
+   * Nothing is pruned.
    * Returns the members whose writes failed, for rebuilding.
    */
   function applyParentAbsent(
@@ -3155,15 +3190,8 @@ export function createApiClient(
     for (const { route: nested, param } of nestedUnder.get(
       route.collection.name,
     ) ?? []) {
-      // A deletion cascades only from a conclusion the document stands
-      // behind: `absent: deleted`, a tombstone, or a 404/410 under a stated
-      // `notFound: deleted`; never from the `notFound` default.
-      const evidence: MissingRecordEvidence =
-        nested.parentAbsent === 'deleted' &&
-        found.evidence === 'deleted' &&
-        !found.defaulted
-          ? 'deleted'
-          : 'unavailable';
+      const evidence: MissingRecordEvidence = 'unavailable';
+      const returned = round.returned.get(nested.collection.name);
       for (const { scope, context } of nestedScopes(nested, param, id)) {
         const conclusion: Evidence = {
           evidence,
@@ -3181,7 +3209,8 @@ export function createApiClient(
           const key = keyFor(scope, member);
           if (
             (round.startedRecords.get(key) ?? 0) !==
-            (recordRevisions.get(key) ?? 0)
+              (recordRevisions.get(key) ?? 0) ||
+            returned?.has(member)
           )
             continue;
           const lastKnown =
@@ -3518,7 +3547,14 @@ export function createApiClient(
       tombstonesChanged: false,
       superseded: new Set(),
       startedRecords,
+      returned: new Map(),
     };
+    for (const snapshot of result.collections) {
+      const idField = snapshot.collection.idField;
+      const ids = round.returned.get(snapshot.collection.name) ?? new Set();
+      for (const item of snapshot.items) ids.add(String(item[idField]));
+      round.returned.set(snapshot.collection.name, ids);
+    }
     const changed = new Set<string>();
     for (const snapshot of result.collections) {
       if (!snapshot.complete) continue;
@@ -3685,11 +3721,11 @@ export function createApiClient(
           ? crypto.randomUUID()
           : String(data[route.collection.idField]);
       const record = { ...data, [route.collection.idField]: id };
-      // Into a nested scope whose parent is unavailable: not sent without a
-      // decision (parked, like a refused create). Under a deleted parent it
-      // is sent; the provider answers for the parent.
+      // Into a nested scope whose parent is concluded gone (its members
+      // are unavailable): not sent without a decision (parked, like a
+      // refused create).
       const gone = goneParents.get(scope);
-      const held = gone?.evidence === 'unavailable';
+      const held = gone !== undefined;
       await enqueue({
         route,
         scope,
