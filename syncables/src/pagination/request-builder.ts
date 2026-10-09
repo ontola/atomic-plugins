@@ -29,10 +29,7 @@ function fieldsWithRole(
   );
 }
 
-/**
- * The number of the first page: the `start` of the scheme's `page` field
- * (spec 0.6.0 §4.3.1), else 1.
- */
+// pageStart lives in response-parser.ts; re-exported for the builder's callers.
 export { pageStart };
 
 /**
