@@ -26,6 +26,7 @@ import {
   halves,
   parseBound,
   WindowReadError,
+  windowFields,
   windowRequest,
   windowWidth,
 } from '../pagination/window.js';
@@ -275,6 +276,17 @@ export interface PageWalk {
    * Completeness sense (a windowed read, §4.6.4 rule 5), with `reason`.
    */
   outcome?: WalkOutcome;
+  /**
+   * Converts one window bound before it is sent in a query parameter that
+   * carries the window (`parameter` is its name): the bounds are split as
+   * instants, and a parameter the API reads as wall-clock time in a zone
+   * (Filtering 0.2.0-draft `x-time-zone`) needs other digits. Applied to
+   * each bound separately, before a `windowRange` template is filled; header
+   * and body window fields are sent as they are. Returns the bound to send,
+   * or `undefined` when it does not convert that parameter (the bound is
+   * then sent as it is).
+   */
+  windowValue?: (parameter: string, bound: string) => string | undefined;
 }
 
 export interface WindowRange {
@@ -459,6 +471,79 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
 }
 
 /**
+ * Applies `PageWalk.windowValue` to the query fields that carry a window.
+ * The hook says, per parameter, whether it converts it: `undefined` sends
+ * the bound as it is. Bounds on one clock must still be in order
+ * (fixed-width digits compare as strings): two instants an hour apart in a
+ * repeated hour convert to the same wall-clock digits, and a window inside
+ * that hour would be sent inverted or empty. It cannot be sent, so the read
+ * ends with `WindowReadError` and is not complete. Only two converted
+ * bounds are compared, and the comparison assumes offset-free digits: the
+ * hook returns wall-clock digits followed by one fixed suffix on every
+ * bound (`2026-10-25T02:30:00Z`, where `Z` is the declared suffix, not the
+ * instant's offset), which order as strings as their times do. Bounds that
+ * each carry their own offset (`+02:00`, then `+01:00`) do not, and are
+ * compared wrongly.
+ *
+ * Known limit: a start that is converted and an end that is not (or the
+ * reverse) are on different clocks and are not compared, so a window whose
+ * converted bound falls in a repeated hour can still be sent inverted when
+ * the other bound targets a parameter without a zone. No provider in the
+ * catalogs mixes the two on one window.
+ */
+function convertWindowQuery(
+  scheme: PaginationSchemeObject,
+  window: NonNullable<PaginationSchemeObject['window']>,
+  low: string,
+  high: string,
+  convert: (parameter: string, bound: string) => string | undefined,
+  values: { queryParameters: Record<string, string> },
+): void {
+  const fields = windowFields(scheme).filter(
+    (field) => field.location === 'queryParameters',
+  );
+  const startField =
+    fields.find((f) => f.role === 'windowStart') ??
+    fields.find((f) => f.role === 'windowRange');
+  const endField =
+    fields.find((f) => f.role === 'windowEnd') ??
+    fields.find((f) => f.role === 'windowRange');
+  if (!startField && !endField) return;
+  // Each bound is converted when its own field is in the query, so a start
+  // in the query is converted even when the end is sent elsewhere.
+  const convertedStart = startField ? convert(startField.name, low) : undefined;
+  const convertedEnd = endField ? convert(endField.name, high) : undefined;
+  const start = convertedStart ?? low;
+  const end = convertedEnd ?? high;
+  // Compared only when both bounds were converted, and only for the
+  // fixed-width date formats, whose digits order as strings; bounds sent as
+  // they are need no check (halves keeps them in order), and integer or
+  // unixSeconds bounds do not order as strings.
+  const comparable =
+    convertedStart !== undefined &&
+    convertedEnd !== undefined &&
+    (window.format === 'dateTime' ||
+      window.format === 'date' ||
+      window.format === 'basicDate');
+  const inOrder = window.bounds === 'closed' ? start <= end : start < end;
+  if (comparable && !inOrder) {
+    throw new WindowReadError(
+      `The window ${low}..${high} converts to ${start}..${end} (inside a repeated hour of the parameter's time zone, say) and cannot be sent; the read is not complete`,
+    );
+  }
+  for (const field of fields) {
+    values.queryParameters[field.name] =
+      field.role === 'windowStart'
+        ? start
+        : field.role === 'windowEnd'
+          ? end
+          : (field.template ?? '{start}..{end}')
+              .replace('{start}', start)
+              .replace('{end}', end);
+  }
+}
+
+/**
  * A `rangeWindow` read (Pagination Schemes 0.5.0 §4.6.3): the whole range
  * first, then, for an answer with `cap` items or more (full, §4.6.4 rule 2),
  * its two halves, depth first and the first half first, down to windows
@@ -497,6 +582,9 @@ async function* walkWindows(
   while (pending.length) {
     const [low, high] = pending.shift() as [string, string];
     const values = windowRequest(scheme, low, high);
+    if (walk.windowValue) {
+      convertWindowQuery(scheme, window, low, high, walk.windowValue, values);
+    }
     const url = new URL(upstream.href);
     url.pathname = basePath + walk.path;
     for (const [key, value] of Object.entries({
