@@ -188,7 +188,7 @@ function deriveHasNextPage(
 }
 
 /** The `start` of the scheme's `page` field (spec 0.6.0 §4.3.1), else 1. */
-function firstPageOf(scheme: PaginationSchemeObject): number {
+export function pageStart(scheme: PaginationSchemeObject): number {
   for (const location of ['queryParameters', 'bodyFields'] as const) {
     for (const field of Object.values(scheme.request?.[location] ?? {})) {
       if (field.role === 'page' && typeof field.start === 'number')
@@ -236,7 +236,7 @@ export function parsePaginationState(
     scheme.type,
     state,
     itemsFetchedSoFar,
-    firstPageOf(scheme),
+    pageStart(scheme),
   );
   return state;
 }

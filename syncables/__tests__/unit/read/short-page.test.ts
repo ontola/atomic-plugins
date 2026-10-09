@@ -462,3 +462,93 @@ describe('end signals and numbering (review of #415)', () => {
     expect(result.errors[0]).toMatch(/an earlier page returned/);
   });
 });
+
+describe('second review of #424', () => {
+  it('takes a smaller page size sent as the full size', async () => {
+    const scheme = zeroBased('documented');
+    scheme.request!.queryParameters!['per_page'] = { role: 'pageSize' };
+    const pages: string[] = [];
+    const transport: Transport = (request) => {
+      const page = Number(request.url.searchParams.get('page'));
+      pages.push(String(page));
+      const items = Array.from(
+        { length: Math.max(0, Math.min(50, 250 - page * 50)) },
+        (_, i) => ({ id: `t${page * 50 + i}` }),
+      );
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items }),
+      });
+    };
+    const items = await paginate(document(scheme), {
+      transport,
+      path: '/team/{teamId}/task',
+      pathParams: { teamId: 'w1' },
+      pageSize: 50,
+    });
+    expect(items).toHaveLength(250);
+    expect(pages).toEqual(['0', '1', '2', '3', '4', '5']);
+  });
+
+  it('caps the default page size at the maximum, through a $ref', async () => {
+    const scheme: PaginationSchemeObject = {
+      type: 'pageNumber',
+      autoDetect: false,
+      request: {
+        queryParameters: {
+          page: { role: 'page' },
+          per_page: { role: 'pageSize' },
+        },
+      },
+      response: { shortPage: { size: 'request', assurance: 'documented' } },
+    };
+    const doc = document(scheme);
+    doc.components!['parameters'] = {
+      PerPage: {
+        name: 'per_page',
+        in: 'query',
+        schema: { type: 'integer', default: 200, maximum: 100 },
+      },
+    };
+    doc.paths['/team/{teamId}/task']!.get!.parameters = [
+      { name: 'page', in: 'query' },
+      { $ref: '#/components/parameters/PerPage' } as unknown as {
+        name: string;
+        in: 'query';
+      },
+    ];
+    const sizes: string[] = [];
+    const transport: Transport = (request) => {
+      sizes.push(request.url.searchParams.get('per_page') ?? '');
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items: [{ id: 'a' }] }),
+      });
+    };
+    const { walkPages, Budget } = await import('../../../src/read/pages.js');
+    for await (const page of walkPages({
+      document: doc,
+      operation: doc.paths['/team/{teamId}/task']!.get!,
+      budget: new Budget(transport),
+      upstream: new URL('https://api.example.com/v2'),
+      path: '/team/w1/task',
+      method: 'GET',
+      query: {},
+      body: {},
+      itemsField: 'items',
+    }))
+      expect(page.items).toHaveLength(1);
+    expect(sizes).toEqual(['100']);
+  });
+
+  it('needs exactly one page field (rule 22)', () => {
+    const scheme = zeroBased();
+    scheme.request!.queryParameters!['p2'] = { role: 'page' };
+    const doc = document(scheme);
+    expect(() =>
+      resolveEffectiveScheme(doc, doc.paths['/team/{teamId}/task']!.get!),
+    ).toThrow(/exactly one request field with role page/);
+  });
+});
