@@ -180,7 +180,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/todoist/0.3.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-0akKbWhgYdZB+b6Ac5AsA/NgWyw2dtmD1NFkrng2mcnc4dJ8CKW0OulFPhow/CRE"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-G96/aA8lvVIHLAH+Q6VVUDKpQeE0t0jUVwBSwZUvmUQzyKksT2AhNrKeZQQ9nRp3"
   },
   {
     "https://atomicdata.dev/properties/localId": "google-tasks",

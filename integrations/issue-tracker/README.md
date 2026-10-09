@@ -96,7 +96,7 @@ tests prove the mechanism against an invented `api/` only.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 51,993
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 52,055
 bytes for 0.3.0, 38,912 for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
