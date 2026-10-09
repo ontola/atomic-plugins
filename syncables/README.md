@@ -23,6 +23,20 @@ Syncables builds on three complementary projects:
 | [openapi-extensions](../openapi-extensions/README.md) | Shared vocabulary for the missing behavior: [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) describe how to reach the next page; [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) describes collections, record identities and operation effects. Syncables implements a subset of these specifications. |
 | [overlays](../overlays/README.md) | Reusable additions to API descriptions, so collection and pagination metadata can be maintained separately from the provider's document. Dated catalogs pair documents with their overlay revisions. |
 
+The extension versions this source reads, against the specifications in
+[`openapi-extensions/spec/`](../openapi-extensions/README.md):
+
+| Extension | Version | What Syncables reads |
+| --- | --- | --- |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
+| [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
+
+The other specifications there (Filtering, Runtime Schemas, the
+authentication and webhook extensions) are not read by Syncables.
+
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
 it does not look up a directory or catalog on each request. An API whose document
@@ -413,7 +427,7 @@ update that is not in flight, the client looks for evidence:
 | `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id, and that is not a read tombstone | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
-`x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
+`x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md) (0.1.0-draft),
 read from the collection's CRUD Causality definition, which covers its fixed
 `listQuery`/`listBody` (or the older `x-list-query`/`x-list-body`), else from
 its list operation, which counts only
@@ -485,7 +499,7 @@ client was sent on the last known copy.)
 ### Deletion feeds
 
 A collection can declare the operation that reports its deletions, with the
-draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md):
+draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md) (0.2.0-draft):
 `x-deletion-feed` on its CRUD Causality definition, else on its list
 operation.
 
@@ -1076,8 +1090,9 @@ const { records, ontology, errors } = await readPlatform(document, {
   `values` are keyed by property shortname, and `date-time` strings are
   converted to epoch milliseconds.
 - **Limits** (`DEFAULT_READ_LIMITS`): 10,000 requests, 5,000 records and 30
-  minutes per read, plus at most 3 retries of a 429 per request, each after
-  its `Retry-After`. When a limit is reached, the read stops. It keeps the
+  minutes per read, plus at most 3 retries per request of a 429 or a
+  response a declared throttling signal matches, each after the earliest
+  retry time it gives (`Retry-After`, or the declared headers). When a limit is reached, the read stops. It keeps the
   records read so far and reports the stop in `errors`.
 
 `paginate(document, { transport, path, method, pathParams, query, body,
