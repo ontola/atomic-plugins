@@ -229,12 +229,14 @@ export async function readCollections(
             );
           }
           let query = collection.listQuery;
-          const timeZoned = operation
-            ? timeZoneParameters(
-                doc.paths[collection.url]?.['parameters'],
-                operation,
-              )
-            : [];
+          // A probe makes one request and reads nothing: no zone reads.
+          const timeZoned =
+            operation && !options.probe
+              ? timeZoneParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation,
+                )
+              : [];
           if (timeZoned.length) {
             const written = await wallClockQuery(
               timeZoned,
@@ -333,9 +335,9 @@ export async function readCollections(
     for (const { snapshot, keys } of zoned) {
       const coverage = snapshot.coverage as ReadCoverage;
       if (!snapshot.complete)
-        snapshot.coverage = { ...coverage, span: null, reason: 'incomplete' };
+        snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
-        snapshot.coverage = { ...coverage, span: null, reason: 'zoneChanged' };
+        snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
     }
   }
   return { collections, errors };

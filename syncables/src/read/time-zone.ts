@@ -34,6 +34,10 @@ export interface TimeZoneParameter {
    * `upper` for `lte`/`lt`, else undefined (no range predicate declared).
    */
   bound?: 'lower' | 'upper';
+  /** `gte`/`lte`: the bound itself is included. */
+  inclusive?: boolean;
+  /** The `x-filter` field (a JSON Pointer into an item) the bound compares. */
+  field?: string;
 }
 
 /** A UTC span a read is known to cover; an absent end is open. */
@@ -45,20 +49,41 @@ export interface CoveredSpan {
 }
 
 /**
- * What a read whose query has `x-time-zone` parameters with values is known
- * to have covered. `span` is null when it covers nothing known; `reason`
- * then says why.
+ * The UTC span one item field is bounded to by a read's `x-time-zone`
+ * parameters: their `x-filter` field, the ends, and whether each end is
+ * included (`gte`/`lte`) or not (`gt`/`lt`). An absent end is open.
+ */
+export interface FieldSpan {
+  field: string;
+  from?: string;
+  fromInclusive?: boolean;
+  to?: string;
+  toInclusive?: boolean;
+}
+
+/**
+ * What one request with `x-time-zone` query parameters asked for: the
+ * provider was asked for the items whose fields are in every span of
+ * `spans` at once (one per `x-filter` field). This describes the query, not
+ * the local copy: an item in a span is local only if the read returned it
+ * and the caller kept it. `spans` is null when the request covers nothing
+ * known; `reason` then says why.
  */
 export interface ReadCoverage {
-  /** The `x-time-zone` query parameters and the values sent for them. */
+  /**
+   * The `x-time-zone` query parameters and the values sent for them: the
+   * wall-clock digits plus `suffix`, not instants.
+   */
   parameters: Record<string, string>;
+  /** The instants those values were written from, as given (ISO 8601 UTC). */
+  instants: Record<string, string>;
   /**
    * Per parameter, the zone its value was written in; null when the zone
    * could not be read, so the UTC digits were sent and the bound narrowed
    * by 14 hours.
    */
   zones: Record<string, string | null>;
-  span: CoveredSpan | null;
+  spans: FieldSpan[] | null;
   /**
    * `empty`: the lower end is not before the upper end (with an unknown
    * zone, any window of 28 hours or less). `zoneChanged`: a zone read again
@@ -283,7 +308,14 @@ export function timeZoneParameters(
         : operator === 'lte' || operator === 'lt'
           ? 'upper'
           : undefined;
-    found.push({ name, declaration, ...(bound ? { bound } : {}) });
+    const field = isRecord(filter) ? filter['field'] : undefined;
+    found.push({
+      name,
+      declaration,
+      ...(bound && typeof field === 'string'
+        ? { bound, inclusive: operator === 'gte' || operator === 'lte', field }
+        : {}),
+    });
   }
   return found;
 }
@@ -413,7 +445,10 @@ export function zoneReader(
   }
 
   return {
-    async read(zone, path) {
+    async read(
+      zone: TimeZoneDeclaration['zone'],
+      path: Record<string, string>,
+    ): Promise<{ zone: string | null; key: string }> {
       if ('name' in zone)
         return {
           zone: isTimeZoneName(zone.name) ? zone.name : null,
@@ -429,7 +464,7 @@ export function zoneReader(
       }
       return { zone: await found, key };
     },
-    async recheck() {
+    async recheck(): Promise<Set<string>> {
       const changed = new Set<string>();
       for (const [key, source] of sources) {
         const before = await cache.get(key);
@@ -461,9 +496,18 @@ export async function wallClockQuery(
   const sent = { ...query };
   const keys = new Set<string>();
   const values: Record<string, string> = {};
+  const instants: Record<string, string> = {};
   const zones: Record<string, string | null> = {};
-  let from: number | undefined;
-  let to: number | undefined;
+  // Per x-filter field: the tightest lower and upper end, in milliseconds.
+  const ends = new Map<
+    string,
+    {
+      from?: number;
+      fromInclusive?: boolean;
+      to?: number;
+      toInclusive?: boolean;
+    }
+  >();
   let noRange = false;
   for (const parameter of parameters) {
     const value = query[parameter.name];
@@ -473,8 +517,9 @@ export async function wallClockQuery(
     const written = wallClockParam(value, zone, parameter.declaration.suffix);
     sent[parameter.name] = written;
     values[parameter.name] = written;
+    instants[parameter.name] = new Date(Date.parse(value)).toISOString();
     zones[parameter.name] = zone;
-    if (!parameter.bound) {
+    if (!parameter.bound || parameter.field === undefined) {
       noRange = true;
       continue;
     }
@@ -485,25 +530,60 @@ export async function wallClockQuery(
       zone,
       parameter.declaration.ambiguous,
     );
-    if (one?.from !== undefined)
-      from = Math.max(from ?? -Infinity, Date.parse(one.from));
-    if (one?.to !== undefined)
-      to = Math.min(to ?? Infinity, Date.parse(one.to));
+    const inclusive = parameter.inclusive === true;
+    const end = ends.get(parameter.field) ?? {};
+    ends.set(parameter.field, end);
+    if (one?.from !== undefined) {
+      const at = Date.parse(one.from);
+      // The tighter end wins; at the same instant, an excluded one.
+      if (
+        end.from === undefined ||
+        at > end.from ||
+        (at === end.from && !inclusive)
+      ) {
+        end.from = at;
+        end.fromInclusive = inclusive;
+      }
+    }
+    if (one?.to !== undefined) {
+      const at = Date.parse(one.to);
+      if (
+        end.to === undefined ||
+        at < end.to ||
+        (at === end.to && !inclusive)
+      ) {
+        end.to = at;
+        end.toInclusive = inclusive;
+      }
+    }
   }
   if (!Object.keys(values).length) return { query: sent, keys };
-  const base = { parameters: values, zones };
+  const base = { parameters: values, instants, zones };
+  const empty = [...ends.values()].some(
+    (end) =>
+      end.from !== undefined && end.to !== undefined && end.from >= end.to,
+  );
   const coverage: ReadCoverage = noRange
-    ? { ...base, span: null, reason: 'noRangePredicate' }
-    : from !== undefined && to !== undefined && from >= to
-      ? { ...base, span: null, reason: 'empty' }
+    ? { ...base, spans: null, reason: 'noRangePredicate' }
+    : empty
+      ? { ...base, spans: null, reason: 'empty' }
       : {
           ...base,
-          span: {
-            ...(from === undefined
+          spans: [...ends].map(([field, end]) => ({
+            field,
+            ...(end.from === undefined
               ? {}
-              : { from: new Date(from).toISOString() }),
-            ...(to === undefined ? {} : { to: new Date(to).toISOString() }),
-          },
+              : {
+                  from: new Date(end.from).toISOString(),
+                  fromInclusive: end.fromInclusive === true,
+                }),
+            ...(end.to === undefined
+              ? {}
+              : {
+                  to: new Date(end.to).toISOString(),
+                  toInclusive: end.toInclusive === true,
+                }),
+          })),
         };
   return { query: sent, coverage, keys };
 }

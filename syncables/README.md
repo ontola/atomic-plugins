@@ -126,17 +126,19 @@ client steps say, when a `selection` gives it a value:
   it is as accurate as the runtime's time zone data.
 - The value sent is the wall-clock digits in that zone,
   `yyyy-MM-ddTHH:mm:ss` (whole seconds, truncated), plus `suffix`.
-- The UTC span covered is computed from the digits sent: `gte`/`gt`
-  parameters' `x-filter` give the lower end, `lte`/`lt` the upper one, and
-  `ambiguous` picks the offset in a repeated or skipped hour (`unspecified`:
-  the reading that covers least).
+- The UTC span covered is computed from the digits sent, one span per
+  `x-filter` field (bounds of different fields are never merged): `gte`/`gt`
+  parameters give the lower end, `lte`/`lt` the upper one (the tighter one
+  when several bound the same end), with `fromInclusive`/`toInclusive` from
+  the operator, and `ambiguous` picks the offset in a repeated or skipped
+  hour (`unspecified`: the reading that covers least).
 - A zone that cannot be read (an error status, nothing at the pointer, not
   an IANA name this runtime knows, a zone operation that needs a parameter
   the request does not have) is not taken as UTC: the UTC digits are sent
   and each bound covers 14 hours less, so a window of 28 hours or less
   covers nothing.
 - After the read, each operation zone source is read again; if the zone
-  differs or cannot be read, the span is discarded (`zoneChanged`). The
+  differs or cannot be read, the spans are discarded (`zoneChanged`). The
   items are kept. syncables does not read again by itself: the caller
   decides.
 
@@ -147,14 +149,23 @@ on `SyncResult.coverage` (per collection and bound context):
 const { coverage } = await client.sync();
 // [{ collection: 'entries', context: {...},
 //    parameters: { start: '2026-01-01T01:00:00Z', end: '2026-02-01T01:00:00Z' },
+//    instants: { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' },
 //    zones: { start: 'Europe/Amsterdam', end: 'Europe/Amsterdam' },
-//    span: { from: '2026-01-01T00:00:00.000Z', to: '2026-02-01T00:00:00.000Z' } }]
+//    spans: [{ field: '/timeInterval/start',
+//              from: '2026-01-01T00:00:00.000Z', fromInclusive: true,
+//              to: '2026-02-01T00:00:00.000Z', toInclusive: false }] }]
 ```
 
-`span` is null when the read covers nothing known; `reason` is then
-`empty`, `zoneChanged`, `noRangePredicate` (a parameter with a value but no
-range `x-filter`) or `incomplete`. An open end is left out. Whether `from`
-and `to` are inclusive follows the parameters' `x-filter` operators.
+`parameters` holds the values sent (wall-clock digits plus `suffix`), and
+`instants` the instants they were written from. Coverage describes the
+query, per request: the provider was asked for the items whose fields lie in
+every span at once. It does not say that every such item is in the local
+copy (an incomplete or failed read, a record the caller dropped). `spans` is
+null when the request covers nothing known; `reason` is then `empty` (some
+field's lower end is not before its upper end), `zoneChanged`,
+`noRangePredicate` (a parameter with a value but no range `x-filter`) or
+`incomplete`. An open end is left out. A `probe` read reads no zone and
+converts nothing.
 `readPlatform` does not report coverage. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
@@ -1096,7 +1107,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 - **Unreleased**: Filtering 0.2.0-draft `x-time-zone` on list query
   parameters: the zone is read (a fixed name, or another operation's
   response at a pointer) once per read and again after it, values are sent
-  as wall-clock digits plus `suffix`, and the covered UTC span is reported
+  as wall-clock digits plus `suffix`, and the covered UTC spans (per
+  `x-filter` field, with inclusive ends) are reported
   on `CollectionSnapshot.coverage` and `SyncResult.coverage` (new), with
   the 14-hour narrowing when the zone cannot be read and the span discarded
   when the zone changed. `wallClockParam`, `instantsOf` and `coveredSpan`
