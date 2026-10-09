@@ -51,7 +51,8 @@
  *                      --option) it is ignored, with a warning.
  *
  * --proxy, --limit and --max-pages without a value (last, or before another
- * --option) stop the script before anything is fetched.
+ * --option), a --limit or --max-pages that is not an integer of at least 1,
+ * and the --name=value form stop the script before anything is fetched.
  *
  * Use an account with at least limit+1 active tasks, so the recording has a
  * second page (next_cursor) to exercise pagination; the script warns if not.
@@ -233,6 +234,27 @@ export function redactor() {
 /** Whether `argv[i + 1]` is no value for the option at `argv[i]`. */
 const noValue = (argv, i) =>
   argv[i + 1] === undefined || argv[i + 1].startsWith('--');
+
+/**
+ * Refuses the `--<name>=<value>` form, which `arg` and `args` would not see
+ * (the option would silently keep its default).
+ */
+export function checkArgv(argv = process.argv) {
+  const joined = argv.find(a => /^--[^=]+=/.test(a));
+  if (joined)
+    throw new Error(
+      `write ${joined.replace('=', ' ')} instead of ${joined}: options take their value as the next argument`,
+    );
+}
+
+/** `value` of option `--<name>` as an integer of at least 1, or a throw. */
+export function positiveInteger(name, value) {
+  const n = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(n) || n < 1)
+    throw new Error(`--${name} must be an integer of at least 1, not ${value}`);
+
+  return n;
+}
 
 /**
  * The value of a single `--<name> <value>` option, or `fallback` when it is
@@ -418,9 +440,10 @@ async function main() {
   const dir = new URL('./', import.meta.url);
   // Every option is read before anything is fetched, so one without a
   // value stops the script first.
+  checkArgv();
   const proxy = arg('proxy', 'https://localthought.io');
-  const limit = Number(arg('limit', '3'));
-  const maxPages = Number(arg('max-pages', '3'));
+  const limit = positiveInteger('limit', arg('limit', '3'));
+  const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
   await recordDocument(dir, proxy);
   console.info(`record: wrote document.yaml from ${proxy}`);
   if (process.argv.includes('--document-only')) return format(dir);

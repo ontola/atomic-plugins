@@ -24,6 +24,8 @@ import { fixtures } from '../localthought/fixtures/index.mjs';
 import {
   arg,
   args,
+  checkArgv,
+  positiveInteger,
   redactor,
   scrub,
   valueless,
@@ -195,6 +197,31 @@ describe('todoist fixture: always-on checks', () => {
       ]),
     ).toEqual(['abc']);
     expect(args('completed-task', ['node', 'record.mjs'])).toEqual([]);
+  });
+
+  it('takes --limit and --max-pages only as integers of at least 1', () => {
+    expect(positiveInteger('limit', '3')).toBe(3);
+    expect(positiveInteger('max-pages', '200')).toBe(200);
+    for (const bad of ['0', '-1', '1.5', '2e1', 'abc', '', ' 3', '0x10'])
+      expect(() => positiveInteger('limit', bad), bad).toThrow(
+        `--limit must be an integer of at least 1, not ${bad}`,
+      );
+  });
+
+  it('refuses the --name=value form', () => {
+    expect(() =>
+      checkArgv([
+        'node',
+        'record.mjs',
+        '--limit',
+        '5',
+        '--completed-task',
+        'a',
+      ]),
+    ).not.toThrow();
+    expect(() => checkArgv(['node', 'record.mjs', '--limit=5'])).toThrow(
+      'write --limit 5 instead of --limit=5',
+    );
   });
 
   it('counts a repeatable option given without a value, so the recorder can warn', () => {
