@@ -112,8 +112,15 @@ Data flows through four stages, each its own directory under `src/`:
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
    the same `walkPages` as the reader, including POST-body cursors, next-link
-   checks and budgets. Failed/incomplete collections do not replace or prune
-   stored records. GET validators reuse raw cached response bodies.
+   checks and budgets. Failed collections do not replace or prune stored
+   records. A snapshot that ended without an error but is not complete
+   (`notComplete`: range windows, an undocumented short-page end) goes to
+   `upsertIncomplete`: its records are merged into the confirmed copy and
+   rebuilt (per record, skipped when a write settled on it during the read;
+   whole scope skipped when one settled on the scope), `lastSyncedItems` is
+   dropped for the scope so a later complete read still prunes, and nothing
+   is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
+   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
