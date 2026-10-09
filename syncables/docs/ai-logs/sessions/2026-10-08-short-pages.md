@@ -32,3 +32,26 @@ complete); a full last page followed by an empty one; `size: request` with
 and without `pageSize`; an oversized page; a server that ignores `page`; a
 `totalCount` that ends the list on a full page; rules 19–22. README (usage
 and Unreleased changelog) and CLAUDE.md updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** Match the reviewed spec (#415):
+the client caps `pageSize` at the schema `maximum`; `totalPages` with
+`start` (a count: the last page is `start + totalPages − 1`, `currentPage`
+numbered like the page field); a short page contradicted by `totalPages`
+or `totalCount` (an error under `documented`, not complete otherwise); a
+`totalPages`/`totalCount` end on a full page complete whatever the
+assurance; repeats as an item identity any earlier page returned. Also the
+review nits of the consumer (#423, #424).
+
+**Assistant:** The consumer nits (page size cap and default, `paginate`
+`idField`, the walk outcome, `WindowReadError` from `parseBound`, the mock's
+`shortPage.size`) were carried over from the incomplete-upsert branch. The
+short-page walk now parses the page's state before handing it on: a
+reported `pageSize` is the full size; more items than that, or an item
+identity an earlier page returned (a page fingerprint when no identity is
+known), throw `PageReadError`. After it: `totalPages` counts from `start`,
+`totalCount` from the items read; a short page they contradict throws under
+`documented` and ends not complete otherwise; a full page they end is
+complete. `deriveHasNextPage` numbers `currentPage` from the page field's
+`start`. Tests for each in `short-page.test.ts`.

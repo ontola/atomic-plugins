@@ -18,7 +18,10 @@ import {
   readNestedField,
   setNestedField,
 } from '../pagination/response-parser.js';
-import type { PaginationSchemeObject } from '../pagination/types.js';
+import type {
+  PaginationResponseState,
+  PaginationSchemeObject,
+} from '../pagination/types.js';
 import {
   halves,
   parseBound,
@@ -380,6 +383,7 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     );
   }
   let previousPage: string | undefined;
+  const seenIds = new Set<string>();
   const first = scheme ? pageStart(scheme) : 1;
 
   for (;;) {
@@ -435,23 +439,44 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       walk.itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
         : itemsAt(body, walk.itemsField);
-    // Checked before the page is handed on: its items are not taken.
-    if (short && shortSize !== undefined) {
-      if (items.length > shortSize) {
+    // Pagination Schemes 0.6.0 §4.4.5: checked before the page is handed
+    // on, so that its items are not taken.
+    const number = cursor.page ?? first;
+    let shortState: PaginationResponseState | undefined;
+    let full = shortSize ?? 0;
+    if (scheme && short && shortSize !== undefined) {
+      shortState = parsePaginationState(
+        scheme,
+        isRecord(body) ? body : {},
+        response.headers,
+        itemsSoFar + items.length,
+      );
+      // A pageSize-role field reports the size the server applied.
+      if (shortState.pageSize !== null && shortState.pageSize >= 1)
+        full = shortState.pageSize;
+      if (items.length > full) {
         throw new PageReadError(
-          `Page ${String(cursor.page ?? first)} holds ${items.length} items, more than the declared ${shortSize}; the read is not complete`,
+          `Page ${number} holds ${items.length} items, more than the declared ${full}; the read is not complete`,
         );
       }
       const identity = walk.identity;
-      const fingerprint = JSON.stringify(
-        identity ? items.map((item) => identity(item)) : items,
-      );
-      if (items.length > 0 && fingerprint === previousPage) {
-        throw new PageReadError(
-          `Page ${String(cursor.page ?? first)} repeats the page before it; the read is not complete`,
-        );
+      if (identity) {
+        const ids = items.map((item) => identity(item)).filter((id) => id);
+        if (ids.some((id) => seenIds.has(id))) {
+          throw new PageReadError(
+            `Page ${number} holds an item an earlier page returned; the read is not complete`,
+          );
+        }
+        for (const id of ids) seenIds.add(id);
+      } else {
+        const fingerprint = JSON.stringify(items);
+        if (items.length > 0 && fingerprint === previousPage) {
+          throw new PageReadError(
+            `Page ${number} repeats the page before it; the read is not complete`,
+          );
+        }
+        previousPage = fingerprint;
       }
-      previousPage = fingerprint;
     }
     itemsSoFar += items.length;
     yield { url, items, body };
@@ -459,12 +484,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     if (!scheme) {
       return;
     }
-    const state = parsePaginationState(
-      scheme,
-      isRecord(body) ? body : {},
-      response.headers,
-      itemsSoFar,
-    );
+    const state =
+      shortState ??
+      parsePaginationState(
+        scheme,
+        isRecord(body) ? body : {},
+        response.headers,
+        itemsSoFar,
+      );
     // A link the response carried, whatever its type: `resolveLink` decides
     // whether it is followed, so a value that is not a string is refused
     // rather than taken as the last page.
@@ -473,27 +500,39 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       state.nextLinkValue !== null &&
       state.nextLinkValue !== '';
     if (short && shortSize !== undefined) {
-      if (items.length < shortSize) {
-        if (walk.outcome && short.assurance !== 'documented') {
+      // totalPages is a count: with start s the last page is s + totalPages - 1.
+      const last =
+        state.totalPages !== null ? first + state.totalPages - 1 : null;
+      const ended =
+        (last !== null && number >= last) ||
+        (state.totalCount !== null && itemsSoFar >= state.totalCount);
+      const more =
+        (last !== null && number < last) ||
+        (state.totalCount !== null && itemsSoFar < state.totalCount);
+      if (items.length < full) {
+        if (more && short.assurance === 'documented') {
+          throw new PageReadError(
+            `Page ${number} is short, but the response says more pages follow; the read is not complete`,
+          );
+        }
+        if (
+          walk.outcome &&
+          (more || (!ended && short.assurance !== 'documented'))
+        ) {
           walk.outcome.complete = false;
-          walk.outcome.reason = `ended by a short page whose end is ${short.assurance}, not documented: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`;
+          walk.outcome.reason = more
+            ? `ended by a short page while the response says more pages follow: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`
+            : `ended by a short page whose end is ${short.assurance}, not documented: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`;
         }
         return;
       }
-      // A full page: another declared signal may still end the list.
-      const signalled =
-        linkPresent ||
-        state.nextPageToken !== null ||
-        state.totalCount !== null ||
-        state.totalPages !== null;
-      if (!signalled || state.hasNextPage) {
-        if (!linkPresent) {
-          cursor = { page: (cursor.page ?? first) + 1 };
-          next = undefined;
-          continue;
-        }
-      } else if (!linkPresent) {
-        return;
+      // A full page: a totalPages or totalCount end is complete, whatever
+      // the assurance; else the next page number, unless a link leads on.
+      if (ended) return;
+      if (!linkPresent) {
+        cursor = { page: number + 1 };
+        next = undefined;
+        continue;
       }
     }
     if (!state.hasNextPage && !linkPresent) {
