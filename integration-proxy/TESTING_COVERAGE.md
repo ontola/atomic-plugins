@@ -44,6 +44,28 @@
 | Races: 40 concurrent deliveries at the limits, 20 concurrent copies of one delivery, 12 concurrent creations at a quota of 3, acknowledgement and renewal against a sweep; every counter re-checked against what it counts | `webhooks::tests::concurrent_deliveries_stay_within_the_limits`, `webhooks::tests::concurrent_redeliveries_are_retained_once`, `webhooks::tests::concurrent_subscriptions_stop_at_the_quota`, `webhooks::tests::acknowledgements_and_renewals_race_sweeps_consistently` |
 | Outage: a failure before commit and a database connection killed while waiting for a lock leave nothing, the retry is new, the pool reconnects | `webhooks::tests::a_failure_before_commit_leaves_nothing_and_the_retry_is_new`, `webhooks::tests::a_lost_database_connection_fails_the_delivery_and_recovers` |
 
+## Webhook receiver and consumer routes (#369, step 3)
+
+| Behavior | Coverage |
+| --- | --- |
+| Declarations parsed generically; unsupported ones refused; keys, wildcards, escapes; one-segment path values; JSON depth | `webhooks::metadata::tests::*` |
+| HMAC over the raw bytes, constant time; re-serialized bodies, missing, repeated or malformed signatures, prefixes, timestamps | `webhooks::verify::tests::*` (the spec's signed fixtures) |
+| Subscribe, deliver, fetch, acknowledge, reconcile, renew, delete, resubscribe result | `webhooks::route_tests::subscribe_receive_fetch_acknowledge_reconcile` |
+| The synthetic GitHub fixtures through the generic path: key from the provider's answer, `X-Hub-Signature-256`, `X-GitHub-Delivery`, revocation of a removed repository | `webhooks::route_tests::the_synthetic_github_fixtures_pass_through_the_generic_path` |
+| Isolation between connections; access parameters as single segments; declared events only | `webhooks::route_tests::deliveries_reach_only_subscriptions_with_access_to_their_source` |
+| Revocation suspends; failing re-check closes, passing one resumes with a gap | `webhooks::route_tests::a_revocation_suspends_until_the_access_check_decides` |
+| Removed delegation closes on next request; connection deletion ends subscriptions in the same transaction | `webhooks::route_tests::standing_and_connection_deletion_end_subscriptions` |
+| Tampered, re-serialized, repeated-header deliveries, unknown endpoint, missing secret: refused, nothing written | `webhooks::route_tests::tampered_reserialized_or_ambiguous_deliveries_are_refused` |
+| Over the verification cap 413; over the retention cap an `oversized-delivery` gap | `webhooks::route_tests::oversized_deliveries` |
+| Database failure before commit and a killed connection: never 2xx, nothing kept, retry accepted | `webhooks::route_tests::a_database_failure_before_commit_is_never_acknowledged` |
+| A long poll wakes on a stored delivery | `webhooks::route_tests::a_long_poll_wakes_when_a_delivery_is_stored` |
+| Forged, future and obsolete cursors and generations refused on the routes | `webhooks::route_tests::forged_future_and_obsolete_cursors_are_refused_on_the_routes` |
+| Concurrent signed subscriptions stop at the quota | `webhooks::route_tests::concurrent_subscriptions_through_the_routes_stop_at_the_quota` |
+| Hook cleanup re-checks access with the bound key; list-then-delete by endpoint URL; no call when the key moved or access is gone | `webhooks::route_tests::hook_cleanup_rechecks_access_before_deleting` |
+| Review of #394: no body read for unknown or malformed endpoints or a declared length over the cap; undeclared lengths cut at the cap; slow uploads timed out; read slots bounded; a busy inbox pool answers 503 after a bounded wait; long polls woken per subscription and capped per consumer; a subscription racing its connection's deletion never outlives it; a former consumer reads nothing; forced refreshes at most once a minute | `webhooks::route_tests::ingress_reads_no_body_before_its_checks_and_bounds_what_it_reads`, `webhooks::route_tests::a_busy_inbox_pool_answers_503_after_a_bounded_wait`, `webhooks::route_tests::long_polls_wake_per_subscription_and_are_capped`, `webhooks::route_tests::a_subscription_racing_its_connections_deletion_does_not_outlive_it`, `webhooks::route_tests::a_former_consumer_cannot_read_a_closed_subscription`, `proxy::tests::only_a_successful_refresh_arms_the_cooldown` |
+| Re-review of #394: only a successful forced refresh arms the cooldown; within it a 401 retries with a token a concurrent call stored, otherwise is unknown; a refused refresh (`invalid_grant`) is a refusal on expiry and on 401; a broken upload is 400; one endpoint is capped at its own read slots; waiters over the cap get 429; cancelled polls leave no wakeup | `proxy::tests::postgres_a_failed_forced_refresh_does_not_arm_the_cooldown`, `proxy::tests::postgres_within_the_cooldown_a_401_is_retried_with_a_newer_token_or_unknown`, `proxy::tests::postgres_a_refused_refresh_is_a_refusal_on_expiry_and_on_401`, `proxy::tests::only_a_successful_refresh_arms_the_cooldown`, `webhooks::route_tests::broken_uploads_and_the_per_endpoint_read_cap`, `webhooks::route_tests::long_polls_wake_per_subscription_and_are_capped` |
+| No webhook route when disabled | `webhooks::route_tests::no_webhook_route_exists_when_disabled` |
+
 Run `cargo test` for local tests. Database tests are marked ignored so ordinary
 runs do not require PostgreSQL; CI sets `TEST_DATABASE_URL` and fixture OAuth
 credentials and runs `cargo test -- --include-ignored`. See README for the

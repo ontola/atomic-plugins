@@ -129,6 +129,7 @@ impl Env {
                     source_kind: "project".into(),
                     source_key: key.into(),
                     events: vec!["task".into()],
+                    access_parameters: "{}".into(),
                 },
                 now,
             )
@@ -293,6 +294,7 @@ fn delivery(endpoint: &str, id: &str, key: &str, bytes: usize) -> Delivery {
         action: Some("updated".into()),
         source_kind: "project".into(),
         source_key: key.into(),
+        context: Default::default(),
         body: body.into_bytes(),
     }
 }
@@ -456,7 +458,7 @@ async fn the_progress_deadline_expires_a_renewing_consumer_that_never_acknowledg
             .unwrap();
         if let Some(next) = &page.next {
             env.store
-                .acknowledge(&healthy.id, &helper, next, now)
+                .acknowledge(&healthy.id, &helper, None, next, now)
                 .await
                 .unwrap();
         }
@@ -531,7 +533,13 @@ async fn the_progress_deadline_restarts_when_pending_becomes_non_empty() {
         .await
         .unwrap();
     env.store
-        .acknowledge(&sub.id, &owner, page.next.as_ref().unwrap(), at(3 * DAY))
+        .acknowledge(
+            &sub.id,
+            &owner,
+            None,
+            page.next.as_ref().unwrap(),
+            at(3 * DAY),
+        )
         .await
         .unwrap();
     let view = env.store.get(&sub.id, &owner, at(3 * DAY)).await.unwrap();
@@ -550,7 +558,13 @@ async fn the_progress_deadline_restarts_when_pending_becomes_non_empty() {
         .await
         .unwrap();
     env.store
-        .acknowledge(&sub.id, &owner, page.next.as_ref().unwrap(), at(4 * DAY))
+        .acknowledge(
+            &sub.id,
+            &owner,
+            None,
+            page.next.as_ref().unwrap(),
+            at(4 * DAY),
+        )
         .await
         .unwrap();
     let view = env.store.get(&sub.id, &owner, at(4 * DAY)).await.unwrap();
@@ -1120,7 +1134,7 @@ async fn a_shared_payload_is_reclaimed_after_its_last_reference() {
         .await
         .unwrap();
     env.store
-        .acknowledge(&a.id, &alice, page.next.as_ref().unwrap(), at(3))
+        .acknowledge(&a.id, &alice, None, page.next.as_ref().unwrap(), at(3))
         .await
         .unwrap();
     assert_eq!(env.count("SELECT count(*) FROM webhook_payloads").await, 1);
@@ -1176,21 +1190,29 @@ async fn cursors_are_refused_when_forged_ahead_obsolete_or_foreign() {
     // Correctly signed, but never returned: ahead.
     let ahead = cursors.encode(&sub.id, 1, 3);
     assert!(matches!(
-        env.store.acknowledge(&sub.id, &owner, &ahead, at(11)).await,
+        env.store
+            .acknowledge(&sub.id, &owner, None, &ahead, at(11))
+            .await,
         Err(InboxError::CursorAhead)
     ));
     // Signed with another key: not issued.
     let forged = super::cursor::CursorKey::new([9; 32]).encode(&sub.id, 1, 1);
     assert!(matches!(
         env.store
-            .acknowledge(&sub.id, &owner, &forged, at(11))
+            .acknowledge(&sub.id, &owner, None, &forged, at(11))
             .await,
         Err(InboxError::CursorNotIssued)
     ));
     // Another subscription's cursor: not issued for this one.
     assert!(matches!(
         env.store
-            .acknowledge(&sub.id, &owner, other_page.next.as_ref().unwrap(), at(11))
+            .acknowledge(
+                &sub.id,
+                &owner,
+                None,
+                other_page.next.as_ref().unwrap(),
+                at(11)
+            )
             .await,
         Err(InboxError::CursorNotIssued)
     ));
@@ -1198,7 +1220,7 @@ async fn cursors_are_refused_when_forged_ahead_obsolete_or_foreign() {
     let obsolete = cursors.encode(&sub.id, 7, 1);
     assert!(matches!(
         env.store
-            .acknowledge(&sub.id, &owner, &obsolete, at(11))
+            .acknowledge(&sub.id, &owner, None, &obsolete, at(11))
             .await,
         Err(InboxError::ObsoleteGeneration)
     ));
@@ -1211,12 +1233,12 @@ async fn cursors_are_refused_when_forged_ahead_obsolete_or_foreign() {
     ));
     // Acknowledgement is monotonic.
     env.store
-        .acknowledge(&sub.id, &owner, &first, at(12))
+        .acknowledge(&sub.id, &owner, None, &first, at(12))
         .await
         .unwrap();
     let again = env
         .store
-        .acknowledge(&sub.id, &owner, &first, at(13))
+        .acknowledge(&sub.id, &owner, None, &first, at(13))
         .await
         .unwrap();
     assert_eq!(again.cursor, first);
@@ -1892,6 +1914,7 @@ async fn a_sweeper_that_never_ran_refuses_new_subscriptions() {
         source_kind: "project".into(),
         source_key: key.into(),
         events: vec!["task".into()],
+        access_parameters: "{}".into(),
     };
     store.create_subscription(new("a"), at(180)).await.unwrap();
     assert!(matches!(
@@ -2014,6 +2037,7 @@ async fn concurrent_subscriptions_stop_at_the_quota() {
                         source_kind: "project".into(),
                         source_key: format!("p-{n}"),
                         events: vec!["task".into()],
+                        access_parameters: "{}".into(),
                     },
                     at(0),
                 )
@@ -2067,7 +2091,7 @@ async fn acknowledgements_and_renewals_race_sweeps_consistently() {
         let deadline = 7 * DAY;
         let (ack, renew, sweep) = tokio::join!(
             env.store
-                .acknowledge(&sub.id, &owner, &next, at(deadline - 1)),
+                .acknowledge(&sub.id, &owner, None, &next, at(deadline - 1)),
             env.store
                 .renew(&sub.id, &owner, AccessCheck::Passed, at(deadline - 1)),
             env.store.sweep(at(deadline + 1)),
@@ -2213,6 +2237,7 @@ async fn disabled_creates_no_tables() {
         &crate::config::WebhookConfig::default(),
         url.as_str(),
         &security,
+        &crate::catalog::Catalog::for_test("tracker"),
     )
     .await
     .unwrap();

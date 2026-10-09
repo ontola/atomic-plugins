@@ -11,6 +11,8 @@ use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
 use tokio_postgres::Client;
 
 const LOCK_TIMEOUT_MS: u64 = 10_000;
+/// How long a caller waits for a pooled connection (and for a new one).
+pub const ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const STATEMENT_TIMEOUT_MS: u64 = 30_000;
 
 pub struct Pool {
@@ -27,6 +29,12 @@ pub struct PooledClient<'a> {
 }
 
 impl Pool {
+    /// Takes a connection and keeps it, as a busy request would.
+    #[cfg(test)]
+    pub(crate) async fn hold(&self) -> PooledClient<'_> {
+        self.get().await.expect("pool connection")
+    }
+
     pub fn new(database_url: &str, size: usize) -> Self {
         Self {
             database_url: database_url.to_owned(),
@@ -36,10 +44,12 @@ impl Pool {
     }
 
     pub async fn get(&self) -> Result<PooledClient<'_>, String> {
-        let permit = self
-            .permits
-            .acquire()
+        // A caller waits a bounded time for a connection, then fails (503):
+        // a flood of requests cannot queue without end behind four
+        // connections.
+        let permit = tokio::time::timeout(ACQUIRE_TIMEOUT, self.permits.acquire())
             .await
+            .map_err(|_| "webhook pool busy".to_string())?
             .map_err(|_| "webhook pool closed".to_string())?;
         let reused = {
             let mut idle = self.idle.lock().await;
@@ -55,7 +65,12 @@ impl Pool {
         let client = match reused {
             Some(client) => client,
             None => {
-                let (client, driver) = crate::security::connect_once(&self.database_url).await?;
+                let (client, driver) = tokio::time::timeout(
+                    ACQUIRE_TIMEOUT,
+                    crate::security::connect_once(&self.database_url),
+                )
+                .await
+                .map_err(|_| "webhook pool connect timed out".to_string())??;
                 tokio::spawn(async move {
                     if let Err(error) = driver.await {
                         tracing::warn!(%error, "webhook inbox connection closed");

@@ -18,6 +18,15 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
   jobs, with the limits the plan gives as pilot values. See SECURITY.md,
   "Webhook inbox".
+- Webhook receiver and consumer routes, step 3 of #369, mounted only with
+  `WEBHOOKS_ENABLED=true`: `POST /webhooks/{endpointId}` verifies a
+  delivery's HMAC over its raw bytes before reading it, routes it through
+  access-checked bindings and stores it in one transaction; signed
+  subscribe, get, delete, renew, events (long poll), ack and reconciled
+  routes. Shared-hook secrets come from `WEBHOOK_SECRET_<PLATFORM>`.
+  Deleting a connection ends its subscriptions in the same transaction.
+  Subscriptions use shared application hooks only; no provider hook is
+  created.
 
 ## 0.3.0 (2026-10-06)
 

@@ -66,6 +66,7 @@ dependencies = [
  "base64",
  "chacha20poly1305",
  "ed25519-dalek",
+ "futures-util",
  "hmac 0.12.1",
  "native-tls",
  "postgres-native-tls",

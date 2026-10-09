@@ -63,3 +63,4 @@ lto = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+futures-util = { version = "0.3", default-features = false }
