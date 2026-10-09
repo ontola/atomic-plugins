@@ -4,7 +4,7 @@ import type {
   RequestFieldObject,
 } from './types.js';
 import type { PaginationResponseState } from './types.js';
-import { setNestedField } from './response-parser.js';
+import { pageStart, setNestedField } from './response-parser.js';
 
 /** Where the client is in a paginated traversal, independent of scheme type. */
 export interface PageCursor {
@@ -33,18 +33,7 @@ function fieldsWithRole(
  * The number of the first page: the `start` of the scheme's `page` field
  * (spec 0.6.0 §4.3.1), else 1.
  */
-export function pageStart(scheme: PaginationSchemeObject): number {
-  for (const location of ['queryParameters', 'bodyFields'] as const) {
-    for (const field of Object.values(
-      (scheme.request?.[location] ?? {}) as Record<string, RequestFieldObject>,
-    )) {
-      if (field.role === 'page' && typeof field.start === 'number') {
-        return field.start;
-      }
-    }
-  }
-  return 1;
-}
+export { pageStart };
 
 /**
  * The values a page request carries, by field name, for one location

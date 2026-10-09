@@ -190,25 +190,45 @@ function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
  * property) that a scheme's `pageSize` field names, when they are integers.
  */
 function pageSizeLimits(
+  document: OpenApiDocument,
   scheme: PaginationSchemeObject,
   operation: OperationObject,
 ): { default?: number; maximum?: number } {
+  const deref = <T>(value: T): T => {
+    let current: unknown = value;
+    for (let hops = 0; hops < 8 && isRecord(current); hops += 1) {
+      const ref = current['$ref'];
+      if (typeof ref !== 'string' || !ref.startsWith('#/')) break;
+      let node: unknown = document;
+      for (const raw of ref.slice(2).split('/'))
+        node = isRecord(node)
+          ? node[raw.replace(/~1/g, '/').replace(/~0/g, '~')]
+          : undefined;
+      current = node;
+    }
+    return current as T;
+  };
   const schemas: (SchemaObject | undefined)[] = [];
   for (const [name, field] of Object.entries(
     scheme.request?.queryParameters ?? {},
   )) {
     if (field.role !== 'pageSize') continue;
     schemas.push(
-      (operation.parameters ?? []).find(
-        (p) => p.in === 'query' && p.name === name,
-      )?.schema,
+      deref(
+        (operation.parameters ?? [])
+          .map((p) => deref(p))
+          .find((p) => p?.in === 'query' && p.name === name)?.schema,
+      ),
     );
   }
-  const body = operation.requestBody?.content?.['application/json']?.schema;
+  const body = deref(
+    operation.requestBody?.content?.['application/json']?.schema,
+  );
   for (const [name, field] of Object.entries(
     scheme.request?.bodyFields ?? {},
   )) {
-    if (field.role === 'pageSize') schemas.push(body?.properties?.[name]);
+    if (field.role === 'pageSize')
+      schemas.push(deref(body?.properties?.[name]));
   }
   const integer = (value: unknown): number | undefined =>
     typeof value === 'number' && Number.isInteger(value) && value >= 1
@@ -370,13 +390,23 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
   // documented maximum (a server caps a larger one, and a short page would
   // then end the list early); else, for a shortPage that takes the size
   // sent, the parameter's documented default, sent explicitly.
-  const limits = scheme ? pageSizeLimits(scheme, operation) : {};
+  const limits = scheme ? pageSizeLimits(document, scheme, operation) : {};
   let pageSize = walk.pageSize;
   if (pageSize !== undefined && limits.maximum !== undefined)
     pageSize = Math.min(pageSize, limits.maximum);
   if (pageSize === undefined && short?.size === 'request')
-    pageSize = limits.default;
-  const shortSize = short?.size === 'request' ? pageSize : short?.size;
+    pageSize =
+      limits.default !== undefined && limits.maximum !== undefined
+        ? Math.min(limits.default, limits.maximum)
+        : limits.default;
+  // The full size (spec 0.6.0 §4.4.5): `size`, or the page size sent when
+  // it is smaller, so that a smaller page does not look short.
+  const shortSize =
+    short?.size === 'request'
+      ? pageSize
+      : short && pageSize !== undefined
+        ? Math.min(short.size, pageSize)
+        : short?.size;
   if (short && shortSize === undefined) {
     throw new PageReadError(
       'The shortPage size of the scheme is the page size the client sends, and its pageSize parameter documents no default; pass pageSize',

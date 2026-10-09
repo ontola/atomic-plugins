@@ -55,3 +55,17 @@ known), throw `PageReadError`. After it: `totalPages` counts from `start`,
 `documented` and ends not complete otherwise; a full page they end is
 complete. `deriveHasNextPage` numbers `currentPage` from the page field's
 `start`. Tests for each in `short-page.test.ts`.
+
+## Turn 3
+
+**Human (via the coordinator session):** Review blocker: with a
+whole-number `size` and a smaller page size sent, every full page looks
+short. Nits: cap the default at `maximum`; rule 22 means exactly one page
+field; `pageSizeLimits` follows `$ref`; remove the `firstPageOf` duplicate.
+
+**Assistant:** The full size is now `size`, or the page size sent when it
+is smaller. The documented default page size is capped at the `maximum`;
+`pageSizeLimits` follows local `$ref`s for the parameter, its schema and a
+body property; `resolveEffectiveScheme` requires exactly one `page` field
+for a `shortPage` scheme; `pageStart` lives once, in `response-parser.ts`,
+and `request-builder.ts` re-exports it. Tests for each.
