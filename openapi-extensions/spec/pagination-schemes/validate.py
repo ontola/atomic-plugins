@@ -216,8 +216,6 @@ def validate(document):
         location = f"{root}.{name}"
         found = _errors(SCHEME_VALIDATOR, scheme, location)
         errors += found
-        if not found:
-            errors += [f"{location}.{problem}" for problem in _short_page_problems(scheme, applied=False)]
         if not found and scheme.get("type") == "rangeWindow":
             problem = _window_carrier_problem(scheme)
             if problem:
@@ -483,7 +481,8 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         raise ValueError("size 'request' needs the page size the client sends")
     if page_size is not None and maximum is not None and page_size > maximum:
         raise ValueError(f"page size {page_size} is above the documented maximum {maximum}")
-    size = page_size if short["size"] == "request" else short["size"]
+    # The full size: size, or the page size sent when it is smaller (or size is "request").
+    size = page_size if short["size"] == "request" else min(short["size"], page_size or short["size"])
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
     items, seen, pages = [], set(), 0
     number = first

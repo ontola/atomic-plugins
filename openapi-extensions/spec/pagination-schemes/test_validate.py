@@ -688,5 +688,38 @@ class ReadPagesReviewTests(unittest.TestCase):
         self.assertIn("exactly one request field with role page", str(raised.exception))
 
 
+class ReadPagesSmallerPageSizeTests(unittest.TestCase):
+    """Second review of #415: a whole-number size with a smaller page size sent."""
+
+    def test_the_smaller_page_size_sent_is_the_full_size(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["request"]["queryParameters"]["limit"] = {"role": "pageSize"}
+        scheme["response"]["shortPage"]["assurance"] = "documented"
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append((number, values[("queryParameters", "limit")]))
+            return {"tasks": [{"id": str(i)} for i in range(number * 50, min(250, (number + 1) * 50))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(len(result["items"]), 250)
+        self.assertEqual([n for n, _ in calls], [0, 1, 2, 3, 4, 5])
+        self.assertTrue(result["complete"])
+
+    def test_rule_21_is_checked_after_overrides_only(self):
+        document = example("short-page.yaml")
+        sized = document["components"]["paginationSchemes"]["sizedPages"]
+        del sized["request"]["queryParameters"]["per_page"]
+        # The bare scheme is not checked; its application is.
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("(merged)", str(raised.exception))
+        document["paths"]["/projects"]["get"]["x-pagination"][0]["overrides"] = {
+            "request": {"queryParameters": {"per_page": {"role": "pageSize"}}}}
+        validate(document)
+
+
 if __name__ == "__main__":
     unittest.main()

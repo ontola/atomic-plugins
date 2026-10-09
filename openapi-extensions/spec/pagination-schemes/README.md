@@ -202,7 +202,7 @@ far the document vouches for a short page being the last one.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `size` | integer, at least 1, \| `"request"` | **Yes** | How many items a full page holds: a number, or `"request"` for the value the client sends in the scheme's `pageSize` field. With `"request"`, the scheme has a `pageSize` request field and the client always sends it, with a value no larger than the documented maximum (the `maximum` of that parameter's or body property's schema): a server that caps a larger value answers full pages shorter than the value sent, and the first of them would end the list. A response field with the `pageSize` role (§4.5) reports the size the server applied; when it is present and differs from the value sent, the client takes the reported value as `size` for that page. |
+| `size` | integer, at least 1, \| `"request"` | **Yes** | How many items a full page holds: a number, or `"request"` for the value the client sends in the scheme's `pageSize` field. With a number, a client that also sends a page size takes the smaller of the two as the full size: `size: 100` with `per_page=50` makes 50 a full page, not a short one. With `"request"`, the scheme has a `pageSize` request field and the client always sends it, with a value no larger than the documented maximum (the `maximum` of that parameter's or body property's schema): a server that caps a larger value answers full pages shorter than the value sent, and the first of them would end the list. Where the schema documents no `maximum`, a document declares `"request"` only when the provider documents that it answers the size sent for every full page; otherwise it declares the cap as a number. A response field with the `pageSize` role (§4.5) reports the size the server applied; when it is present and differs from the full size the client works out, the client takes the reported value as the full size for that page. |
 | `assurance` | `"documented"` \| `"observed"` \| `"assumed"` | **Yes** | What the claim that a short page is the last one rests on. `documented`: the provider's documentation says so (a page with fewer than `size` items, or an empty page, is the last one). `observed`: recorded responses show every page but the last full, but the provider does not promise it. `assumed`: neither; the documentation gives only a maximum page size. |
 | `description` | string | No | Human-readable description, such as the source of the claim. |
 | `x-*` | any | No | Extension fields. |
@@ -284,7 +284,7 @@ an item re-reads.
 | `nextSyncToken` | `incrementalSync` | Returned on the last page of a full listing, in place of (or alongside) `nextPageToken`. Persist it and send it back as `syncToken` on a future request to receive an incremental delta. |
 | `totalCount` | all | Total number of items across all pages. |
 | `totalPages` | `pageNumber` | Total number of pages: a count, so the last page is `start + totalPages − 1`. |
-| `pageSize` | all | Number of items in the current page (as confirmed by the server). |
+| `pageSize` | all | The page size the server applied to the current page (as confirmed by the server): the number of items a full page holds. A page can hold fewer (the last one, or a short page, §4.4.5). |
 | `currentPage` | `pageNumber` | The current page number (as confirmed by the server), numbered as the request's `page` field is (from its `start`, §4.3.1). |
 | `offset` | `pageNumber` | The current offset into the result set (as confirmed by the server). |
 
@@ -835,7 +835,7 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 
 19. `start` MAY appear only on a Request Field Object whose `role` is `page`, and is an integer of at least 0.
 20. `shortPage` MAY appear only in the `response` of a `pageNumber` scheme. Its `size` is an integer of at least 1 or `"request"`, and its `assurance` one of `documented`, `observed` or `assumed`.
-21. When `size` is `"request"`, the scheme, after overrides are merged, has a request field whose `role` is `pageSize`.
+21. When `size` is `"request"`, the scheme, after overrides are merged, has a request field whose `role` is `pageSize`. A component scheme on its own is not checked: an application's overrides may add the field.
 22. When a scheme with `shortPage` is applied to an operation, after its overrides are merged, it has exactly one request field whose `role` is `page`.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
