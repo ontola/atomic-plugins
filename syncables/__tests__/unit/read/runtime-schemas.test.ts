@@ -122,7 +122,11 @@ describe('Runtime Schemas: the §7.1 example', () => {
             },
           },
           undescribed: [],
+          names: { 'a%3Ab': 'Estimate', 'c%3Ad': 'Stage' },
           duplicates: [],
+          duplicateNames: [],
+          duplicateIdNames: {},
+          duplicateOptions: {},
         },
       },
     ]);
@@ -133,6 +137,7 @@ describe('Runtime Schemas: the §7.1 example', () => {
         unmatched: [],
         undescribed: [],
         invalid: [],
+        conflicting: [],
       },
     ]);
   });
@@ -360,6 +365,7 @@ describe('Runtime Schemas: invalid, unmatched and undescribed stay apart', () =>
         unmatched: ['Ghost'],
         undescribed: [],
         invalid: [],
+        conflicting: [],
       },
       {
         describer: '/tables/t1',
@@ -367,6 +373,7 @@ describe('Runtime Schemas: invalid, unmatched and undescribed stay apart', () =>
         unmatched: ['Ghost'],
         undescribed: [],
         invalid: [],
+        conflicting: [],
       },
     ]);
   });
@@ -397,6 +404,10 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
         error: 'GET /v1/tables/t1 responded 404',
       },
     ]);
+    // Reported in the read's errors too.
+    expect(result.errors).toEqual([
+      'row: describer /tables/t1: GET /v1/tables/t1 responded 404',
+    ]);
     expect(requests).toHaveLength(2);
     expect(result.collections[0]!.runtimeMembers![0]!).toEqual({
       describer: '/tables/t1',
@@ -404,6 +415,7 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
       unmatched: ['Estimate', 'Stage'],
       undescribed: [],
       invalid: [],
+      conflicting: [],
     });
     // The rows themselves were read.
     expect(result.collections[0]!.complete).toBe(true);
@@ -422,17 +434,19 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
         unmatched: ['Estimate', 'Stage'],
         undescribed: [],
         invalid: [],
+        conflicting: [],
       },
       {
         values: {},
         unmatched: ['Estimate', 'Stage'],
         undescribed: [],
         invalid: [],
+        conflicting: [],
       },
     ]);
   });
 
-  it('reports a declaration it cannot use, and reads the rows without it', async () => {
+  it('fails the collection of a declaration it cannot use, before any request', async () => {
     const broken = structuredClone(userDefinedColumns);
     const crud = broken.components!['crudResources'] as Record<
       string,
@@ -445,11 +459,15 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
     };
     const { result, requests } = await read([row()], [json(table())], broken);
     expect(result.errors).toEqual([
-      'row.x-runtime-schema.describedBy.reference names no reference nowhere',
+      'rows: row.x-runtime-schema.describedBy.reference names no reference nowhere',
     ]);
-    expect(requests).toEqual(['GET /v1/tables/t1/rows']);
-    expect(result.collections[0]!.runtimeMembers).toBeUndefined();
-    expect(result.collections[0]!.items).toHaveLength(1);
+    expect(requests).toEqual([]);
+    expect(result.collections[0]).toMatchObject({
+      complete: false,
+      items: [],
+      error:
+        'row.x-runtime-schema.describedBy.reference names no reference nowhere',
+    });
   });
 
   it('adds nothing to the result of a document without the extension', async () => {
@@ -463,5 +481,106 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
     expect(requests).toEqual(['GET /v1/tables/t1/rows']);
     expect(result).not.toHaveProperty('describers');
     expect(result.collections[0]).not.toHaveProperty('runtimeMembers');
+  });
+});
+
+describe('Runtime Schemas: re-reads and reports in the read', () => {
+  const keyed = (): OpenApiDocument => {
+    const document = structuredClone(userDefinedColumns);
+    const crud = document.components!['crudResources'] as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    const declaration = crud['row']!['x-runtime-schema']!;
+    declaration['match'] = 'key';
+    delete declaration['memberId'];
+    delete declaration['memberType'];
+    return document;
+  };
+
+  it('under match: key, re-reads for an unmatched member but keeps the first interpretation (§5.2)', async () => {
+    const added = table({
+      Owner: { id: 'i%3Aj', name: 'Owner', type: 'checkbox', checkbox: {} },
+    });
+    const { result, requests } = await read(
+      [
+        row('r1', {
+          Estimate: { number: 3 },
+          Owner: { checkbox: true },
+        }),
+      ],
+      [json(table()), json(added)],
+      keyed(),
+    );
+    expect(requests.filter((r) => r === 'GET /v1/tables/t1')).toHaveLength(2);
+    // The class is the re-read one; the row is not interpreted again.
+    expect(result.describers![0]!.class!.properties).toHaveProperty('i%3Aj');
+    expect(result.collections[0]!.runtimeMembers![0]!).toMatchObject({
+      values: { 'a%3Ab': 3 },
+      unmatched: ['Owner'],
+    });
+  });
+
+  it('under match: key, an undescribed member is no reason to re-read', async () => {
+    const { result, requests } = await read(
+      [
+        row('r1', {
+          Estimate: { number: 3 },
+          Related: { relation: [] },
+        }),
+      ],
+      [
+        json(
+          table({
+            Related: { id: 'g%3Ah', name: 'Related', type: 'relation' },
+          }),
+        ),
+      ],
+      keyed(),
+    );
+    expect(requests.filter((r) => r === 'GET /v1/tables/t1')).toHaveLength(1);
+    expect(result.collections[0]!.runtimeMembers![0]!).toMatchObject({
+      values: { 'a%3Ab': 3 },
+      undescribed: ['Related'],
+      unmatched: [],
+    });
+  });
+
+  it('reports two members matching one definition as conflicting, with no value', async () => {
+    const { result } = await read(
+      [
+        row('r1', {
+          Estimate: { id: 'a%3Ab', type: 'number', number: 3 },
+          'Old estimate': { id: 'a%3Ab', type: 'number', number: 5 },
+        }),
+      ],
+      [json(table())],
+    );
+    expect(result.collections[0]!.runtimeMembers![0]!).toMatchObject({
+      values: {},
+      conflicting: ['Estimate', 'Old estimate'],
+      unmatched: [],
+    });
+  });
+
+  it('names a describer the budget leaves unread in the errors', async () => {
+    const fake = provider([row()], [json(table())]);
+    const result = await readCollections(userDefinedColumns, {
+      transport: fake.transport,
+      constants: { tableId: 't1' },
+      limits: { maxRequests: 1 },
+    });
+    expect(fake.requests).toEqual(['GET /v1/tables/t1/rows']);
+    expect(result.describers![0]).toMatchObject({
+      path: '/tables/t1',
+      error: expect.stringMatching(/requests/),
+    });
+    expect(result.errors).toEqual([
+      expect.stringMatching(/^row: describer \/tables\/t1: .*requests/),
+    ]);
+    expect(result.collections[0]!.runtimeMembers![0]!.unmatched).toEqual([
+      'Estimate',
+      'Stage',
+    ]);
   });
 });

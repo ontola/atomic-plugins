@@ -180,6 +180,10 @@ export async function readCollections(
       declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
+  // A resource whose x-runtime-schema cannot be used fails its collections
+  // before any request: its items' members could not be interpreted.
+  const runtimeFailures = new Map<string, string>();
+  const schemas = runtimeSchemasOf(doc, runtimeFailures);
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];
   const origins = new Map<string, Origin[]>();
@@ -214,6 +218,8 @@ export async function readCollections(
         };
         collections.push(snapshot);
         try {
+          const failure = runtimeFailures.get(collection.resource);
+          if (failure !== undefined) throw new Error(failure);
           const operation = listOperation(
             doc,
             collection.url,
@@ -300,7 +306,6 @@ export async function readCollections(
     pending = waiting;
   }
   if (options.probe) throw new Error('No collection available to check');
-  const schemas = runtimeSchemasOf(doc, errors);
   if (!schemas.size) return { collections, errors };
   // Runtime Schemas §5.2: the describers are read in the same read as the
   // items, after them, through the same budget.
@@ -325,6 +330,7 @@ export async function readCollections(
     items,
     budget,
     upstream,
+    errors,
   );
   return { collections, errors, describers };
 }

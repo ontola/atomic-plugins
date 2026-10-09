@@ -17,8 +17,8 @@ import { bindPath, type Budget } from './pages.js';
 
 /** One property of a derived class, keyed in `RuntimeClass.properties` by the definition's id. */
 export interface RuntimeProperty {
-  /** The definition's `name`; else its map key (with `keyedBy: name`); else its id. */
-  name: unknown;
+  /** The definition's `name` when it is a string; else its map key (with `keyedBy: name`); else its id. */
+  name: string;
   /** The definition's type, a key of the declaration's `types`. */
   type: string;
   /** The Type Object's `schema` for the value. */
@@ -27,8 +27,12 @@ export interface RuntimeProperty {
   key?: string;
   /** Present when the declaration names a `description` field; `null` when the definition has none. */
   description?: unknown;
-  /** For an option type: option id to its name, as the definition lists them. */
-  options?: Record<string, unknown>;
+  /**
+   * For an option type: option id to its name (`null` when the option has
+   * no string name), as the definition lists them; of a repeated option id,
+   * the first.
+   */
+  options?: Record<string, string | null>;
   /** For an option type: whether a value is an array of option references. */
   multiple?: boolean;
 }
@@ -38,8 +42,16 @@ export interface RuntimeClass {
   properties: Record<string, RuntimeProperty>;
   /** Definition ids whose type has no Type Object (§5.4); no property. */
   undescribed: string[];
+  /** Every definition's name, by id (the first, for a repeated id), described or not. */
+  names: Record<string, string>;
   /** Definition ids that occur more than once (§5.1); no property. */
   duplicates: string[];
+  /** Names two or more definitions share: under `match: key` with `keyedBy: name`, a member keyed by one matches nothing. */
+  duplicateNames: string[];
+  /** The other names a repeated id goes by, to that id, so a member keyed by one is undescribed. */
+  duplicateIdNames: Record<string, string>;
+  /** Option ids an option definition lists more than once, by definition id; the first is kept. */
+  duplicateOptions: Record<string, string[]>;
 }
 
 /** One describer as the read found it. */
@@ -67,6 +79,8 @@ export interface RuntimeMembers {
   undescribed: string[];
   /** Member keys whose option value has the wrong shape. */
   invalid: string[];
+  /** Member keys of two or more members that match one definition; none gives a value. */
+  conflicting: string[];
 }
 
 interface TypeObject {
@@ -92,26 +106,27 @@ export interface RuntimeSchema {
 
 const MISSING = Symbol('missing');
 
-/** Dot-path segments (§3): `.`-separated, `["a.b"]` for a segment holding a dot; `''` is no segment. */
+const SEGMENT = /\["([^"]+)"\]|([^.[\]]+)/y;
+
+/**
+ * Dot-path segments (§3): `.`-separated, `["a.b"]` for a segment holding a
+ * dot; `''` is no segment. Throws on a malformed path (an empty segment, an
+ * unclosed bracket), as the spec's `segments()` does.
+ */
 function segments(path: string): string[] {
   if (path === '') return [];
   const out: string[] = [];
-  let i = 0;
+  let position = 0;
   for (;;) {
-    if (path.startsWith('["', i)) {
-      const end = path.indexOf('"]', i + 2);
-      if (end < 0) throw new Error(`Unclosed bracket in dot-path ${path}`);
-      out.push(path.slice(i + 2, end));
-      i = end + 2;
-    } else {
-      const dot = path.indexOf('.', i);
-      const end = dot < 0 ? path.length : dot;
-      out.push(path.slice(i, end));
-      i = end;
-    }
-    if (i >= path.length) return out;
-    if (path[i] !== '.') throw new Error(`Malformed dot-path ${path}`);
-    i += 1;
+    SEGMENT.lastIndex = position;
+    const match = SEGMENT.exec(path);
+    if (!match) throw new Error(`malformed dot-path ${JSON.stringify(path)}`);
+    out.push((match[1] ?? match[2]) as string);
+    position = SEGMENT.lastIndex;
+    if (position === path.length) return out;
+    if (path[position] !== '.')
+      throw new Error(`malformed dot-path ${JSON.stringify(path)}`);
+    position += 1;
   }
 }
 
@@ -131,14 +146,28 @@ function text(value: unknown, where: string): string {
   return value;
 }
 
+/** A dot-path field of the declaration: a string that parses (`''` only where `empty` allows it). */
+function dotPath(value: unknown, where: string, empty = false): string {
+  const path = text(value, where);
+  if (path === '' && !empty) throw new Error(`${where} must not be empty`);
+  try {
+    segments(path);
+  } catch (error) {
+    throw new Error(`${where}: ${(error as Error).message}`);
+  }
+  return path;
+}
+
 /**
  * The resources of `document` that declare `x-runtime-schema`, with their
  * declarations. A declaration the reader cannot use (a missing required
- * field, an unknown reference) is left out, and named in `errors`.
+ * field, a malformed dot-path, no `types`, a type without `schema`, an
+ * unknown reference) is left out, and its message put in `failures` by
+ * resource.
  */
 export function runtimeSchemasOf(
   document: OpenApiDocument,
-  errors: string[] = [],
+  failures: Map<string, string> = new Map(),
 ): Map<string, RuntimeSchema> {
   const out = new Map<string, RuntimeSchema>();
   const resources = document.components?.['crudResources'];
@@ -149,7 +178,10 @@ export function runtimeSchemasOf(
     try {
       out.set(resource, runtimeSchema(resource, declaration, resources));
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+      failures.set(
+        resource,
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
   return out;
@@ -200,65 +232,68 @@ function runtimeSchema(
   const bindings: Record<string, string> = {};
   if (isRecord(reference['bindings']))
     for (const [variable, binding] of Object.entries(reference['bindings'])) {
-      if (isRecord(binding) && typeof binding['field'] === 'string')
-        bindings[variable] = binding['field'];
+      if (isRecord(binding))
+        bindings[variable] = dotPath(
+          binding['field'],
+          `${where}: reference ${referenceName} binding ${variable}.field`,
+        );
     }
+  if (!Object.keys(types).length)
+    throw new Error(`${where}.types must have at least one entry`);
   const typeObjects: Record<string, TypeObject> = {};
   for (const [kind, type] of Object.entries(types)) {
-    if (!isRecord(type) || typeof type['value'] !== 'string')
-      throw new Error(`${where}.types.${kind} needs a value`);
+    const here = `${where}.types.${kind}`;
+    if (!isRecord(type)) throw new Error(`${here} must be an object`);
+    if (!isRecord(type['schema']))
+      throw new Error(`${here}.schema is required`);
     const options = type['options'];
+    if (options !== undefined && !isRecord(options))
+      throw new Error(`${here}.options must be an object`);
+    if (type['multiple'] !== undefined && !options)
+      throw new Error(`${here}.multiple needs options`);
     typeObjects[kind] = {
-      value: type['value'],
-      schema: (isRecord(type['schema']) ? type['schema'] : {}) as SchemaObject,
-      ...(isRecord(options)
+      value: dotPath(type['value'], `${here}.value`, true),
+      schema: type['schema'] as SchemaObject,
+      ...(options
         ? {
             options: {
-              field: text(
-                options['field'],
-                `${where}.types.${kind}.options.field`,
-              ),
-              id: text(options['id'], `${where}.types.${kind}.options.id`),
-              name: text(
-                options['name'],
-                `${where}.types.${kind}.options.name`,
-              ),
-              valueId: text(
-                options['valueId'],
-                `${where}.types.${kind}.options.valueId`,
-              ),
+              field: dotPath(options['field'], `${here}.options.field`),
+              id: dotPath(options['id'], `${here}.options.id`),
+              name: dotPath(options['name'], `${here}.options.name`),
+              valueId: dotPath(options['valueId'], `${here}.options.valueId`),
             },
             multiple: type['multiple'] === true,
           }
         : {}),
     };
   }
+  const optional = (value: unknown, name: string): string | undefined =>
+    value === undefined ? undefined : dotPath(value, `${where}.${name}`);
+  const memberId = optional(raw['memberId'], 'memberId');
+  const memberType = optional(raw['memberType'], 'memberType');
+  const definitionName = optional(definition['name'], 'definition.name');
+  const description = optional(
+    definition['description'],
+    'definition.description',
+  );
   return {
-    field: text(raw['field'], `${where}.field`),
+    field: dotPath(raw['field'], `${where}.field`),
     keyedBy,
     match,
-    ...(typeof raw['memberId'] === 'string'
-      ? { memberId: raw['memberId'] }
-      : {}),
-    ...(typeof raw['memberType'] === 'string'
-      ? { memberType: raw['memberType'] }
-      : {}),
+    ...(memberId !== undefined ? { memberId } : {}),
+    ...(memberType !== undefined ? { memberType } : {}),
     describedBy: {
-      definitions: text(
+      definitions: dotPath(
         describedBy['definitions'],
         `${where}.describedBy.definitions`,
       ),
       shape,
     },
     definition: {
-      id: text(definition['id'], `${where}.definition.id`),
-      type: text(definition['type'], `${where}.definition.type`),
-      ...(typeof definition['name'] === 'string'
-        ? { name: definition['name'] }
-        : {}),
-      ...(typeof definition['description'] === 'string'
-        ? { description: definition['description'] }
-        : {}),
+      id: dotPath(definition['id'], `${where}.definition.id`),
+      type: dotPath(definition['type'], `${where}.definition.type`),
+      ...(definitionName !== undefined ? { name: definitionName } : {}),
+      ...(description !== undefined ? { description } : {}),
     },
     types: typeObjects,
     describer: { urlTemplate: identity['urlTemplate'], bindings },
@@ -298,37 +333,54 @@ function definitionsOf(
   return Array.isArray(found) ? found.map((d) => [undefined, d]) : [];
 }
 
-/** §5.1: the class one describer defines. */
+/**
+ * §5.1: the class one describer defines, after the spec's `derive_class`.
+ * A definition without a string id and type is skipped; a name that is not
+ * a string is replaced by the map key (with `keyedBy: name`), else the id.
+ */
 export function deriveRuntimeClass(
   runtime: RuntimeSchema,
   describer: unknown,
 ): RuntimeClass {
   const fields = runtime.definition;
-  const properties: Record<string, RuntimeProperty> = {};
-  const undescribed: string[] = [];
-  const duplicates: string[] = [];
+  const derived: RuntimeClass = {
+    properties: {},
+    undescribed: [],
+    names: {},
+    duplicates: [],
+    duplicateNames: [],
+    duplicateIdNames: {},
+    duplicateOptions: {},
+  };
   const seen = new Set<string>();
+  const nameCount = new Map<string, number>();
   for (const [key, definition] of definitionsOf(runtime, describer)) {
     if (!isRecord(definition)) continue;
     const id = at(definition, fields.id);
     const kind = at(definition, fields.type);
     if (typeof id !== 'string' || typeof kind !== 'string') continue;
+    let name =
+      fields.name === undefined ? MISSING : at(definition, fields.name);
+    if (typeof name !== 'string')
+      name = key !== undefined && runtime.keyedBy === 'name' ? key : id;
+    const named = name as string;
     if (seen.has(id)) {
-      if (!duplicates.includes(id)) duplicates.push(id);
+      if (!derived.duplicates.includes(id)) derived.duplicates.push(id);
+      // Every name a repeated id goes by points at it, so a member keyed by
+      // any of them is undescribed rather than unmatched.
+      derived.duplicateIdNames[named] = id;
       continue;
     }
     seen.add(id);
-    let name =
-      fields.name === undefined ? MISSING : at(definition, fields.name);
-    if (name === MISSING)
-      name = key !== undefined && runtime.keyedBy === 'name' ? key : id;
+    derived.names[id] = named;
+    nameCount.set(named, (nameCount.get(named) ?? 0) + 1);
     const type = runtime.types[kind];
     if (!type) {
-      undescribed.push(id);
+      derived.undescribed.push(id);
       continue;
     }
     const property: RuntimeProperty = {
-      name,
+      name: named,
       type: kind,
       schema: type.schema,
       ...(key !== undefined ? { key } : {}),
@@ -339,24 +391,31 @@ export function deriveRuntimeClass(
     }
     if (type.options) {
       const listed = at(definition, type.options.field);
-      const options: Record<string, unknown> = {};
+      const options: Record<string, string | null> = {};
       for (const option of Array.isArray(listed) ? listed : []) {
         const optionId = at(option, type.options.id);
         if (typeof optionId !== 'string') continue;
+        if (Object.prototype.hasOwnProperty.call(options, optionId)) {
+          (derived.duplicateOptions[id] ??= []).push(optionId);
+          continue;
+        }
         const optionName = at(option, type.options.name);
-        options[optionId] = optionName === MISSING ? undefined : optionName;
+        options[optionId] = typeof optionName === 'string' ? optionName : null;
       }
       property.options = options;
       property.multiple = type.multiple === true;
     }
-    properties[id] = property;
+    derived.properties[id] = property;
   }
-  for (const id of duplicates) {
-    delete properties[id];
-    const i = undescribed.indexOf(id);
-    if (i >= 0) undescribed.splice(i, 1);
+  for (const id of derived.duplicates) {
+    delete derived.properties[id];
+    const i = derived.undescribed.indexOf(id);
+    if (i >= 0) derived.undescribed.splice(i, 1);
   }
-  return { properties, undescribed, duplicates };
+  derived.duplicateNames = [...nameCount]
+    .filter(([, count]) => count > 1)
+    .map(([name]) => name);
+  return derived;
 }
 
 /** An option value's id or ids, or MISSING when its shape is wrong (§4.5, §5.1). */
@@ -378,9 +437,9 @@ function optionIds(
 }
 
 /**
- * §5.2 to §5.4: one item's members against a class. Without a class (the
- * describer could not be read, or the item identifies none), every member is
- * unmatched (§5.5).
+ * §5.1 to §5.4: one item's members against a class, after the spec's
+ * `read_members`. Without a class (the describer could not be read, or the
+ * item identifies none), every member is unmatched (§5.5).
  */
 export function readRuntimeMembers(
   runtime: RuntimeSchema,
@@ -392,6 +451,7 @@ export function readRuntimeMembers(
     unmatched: [],
     undescribed: [],
     invalid: [],
+    conflicting: [],
   };
   const members = at(item, runtime.field);
   if (!isRecord(members)) return result;
@@ -400,19 +460,26 @@ export function readRuntimeMembers(
     return result;
   }
   const { properties } = derived;
-  const byKey = new Map<unknown, string>();
-  for (const [id, property] of Object.entries(properties))
-    byKey.set(runtime.keyedBy === 'id' ? id : property.name, id);
   const skipped = new Set([...derived.undescribed, ...derived.duplicates]);
+  // Under match: key, a member's key names its definition: every
+  // definition's id or name (described or not), never a name two share.
+  const byKey = new Map<string, string>();
+  if (runtime.keyedBy === 'id') {
+    for (const id of Object.keys(derived.names)) byKey.set(id, id);
+    for (const id of skipped) byKey.set(id, id);
+  } else {
+    const ambiguous = new Set(derived.duplicateNames);
+    for (const [id, name] of Object.entries(derived.names))
+      if (!ambiguous.has(name)) byKey.set(name, id);
+    for (const [name, id] of Object.entries(derived.duplicateIdNames))
+      byKey.set(name, id);
+  }
+  const matched = new Map<string, string[]>();
   for (const [key, member] of Object.entries(members)) {
-    let id: unknown;
-    if (runtime.match === 'id') {
-      id = at(member, runtime.memberId as string);
-    } else {
-      id = byKey.get(key) ?? MISSING;
-      if (id === MISSING && runtime.keyedBy === 'id' && skipped.has(key))
-        id = key;
-    }
+    const id =
+      runtime.match === 'id'
+        ? at(member, runtime.memberId as string)
+        : (byKey.get(key) ?? MISSING);
     if (typeof id === 'string' && skipped.has(id)) {
       result.undescribed.push(key);
       continue;
@@ -429,8 +496,17 @@ export function readRuntimeMembers(
       result.unmatched.push(key);
       continue;
     }
+    matched.set(id as string, [...(matched.get(id as string) ?? []), key]);
+  }
+  for (const [id, keys] of matched) {
+    if (keys.length > 1) {
+      result.conflicting.push(...keys);
+      continue;
+    }
+    const key = keys[0] as string;
+    const property = properties[id] as RuntimeProperty;
     const type = runtime.types[property.type] as TypeObject;
-    let value = at(member, type.value);
+    let value = at(members[key], type.value);
     // No value at the type's path: the item holds no value (§4.4), not null.
     if (value === MISSING) continue;
     if (type.options) {
@@ -440,7 +516,7 @@ export function readRuntimeMembers(
         continue;
       }
     }
-    result.values[id as string] = value;
+    result.values[id] = value;
   }
   return result;
 }
@@ -455,16 +531,20 @@ export interface RuntimeItem {
 
 /**
  * Reads each describer the items name once, through `budget`, derives its
- * class and interprets the items; a describer for which a member matched no
- * definition is read once more and the items with an unmatched member are
- * interpreted again (§5.2). A describer that cannot be read leaves its
- * items without a class (§5.5).
+ * class and interprets the items. Describers are keyed per resource and
+ * path: two resources naming one path read it twice, each with its own
+ * declaration. A describer for which a member matched no definition is read
+ * once more; under `match: id` the items with an unmatched member are then
+ * interpreted again (§5.2). A describer that cannot be read, budget errors
+ * included, leaves its items without a class (§5.5), and is named in
+ * `errors`.
  */
 export async function interpretRuntimeItems(
   schemas: Map<string, RuntimeSchema>,
   items: RuntimeItem[],
   budget: Budget,
   upstream: URL,
+  errors: string[] = [],
 ): Promise<RuntimeDescriber[]> {
   const describers = new Map<string, RuntimeDescriber>();
   const groups = new Map<string, RuntimeItem[]>();
@@ -487,9 +567,10 @@ export async function interpretRuntimeItems(
       );
       delete entry.error;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`${entry.resource}: describer ${entry.path}: ${message}`);
       // A failed re-read keeps the class the first read derived.
-      if (!entry.class)
-        entry.error = error instanceof Error ? error.message : String(error);
+      if (!entry.class) entry.error = message;
     }
   };
   const interpret = (
@@ -525,7 +606,11 @@ export async function interpretRuntimeItems(
     const unmatched = group.filter((entry) => interpret(entry, describer));
     if (!unmatched.length || !describer.class) continue;
     await read(describer);
-    for (const entry of unmatched) interpret(entry, describer);
+    // Interpreting again is safe only when members match by id (§5.2);
+    // under match: key the items keep what the first class gave them.
+    const runtime = schemas.get(describer.resource) as RuntimeSchema;
+    if (runtime.match === 'id')
+      for (const entry of unmatched) interpret(entry, describer);
   }
   return [...describers.values()];
 }

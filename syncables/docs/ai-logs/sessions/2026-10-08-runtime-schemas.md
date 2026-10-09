@@ -36,3 +36,36 @@ error on the describer. Tests: 17 cases on the spec's §7.1 example
 transcribed as a fixture. README (read section and Unreleased changelog) and
 CLAUDE.md updated. Not done: writes, value conversion, and use of the
 classes in `readPlatform` or the client's `sync()`.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review of #435, five blockers: the
+port lags the reference; re-port from main's `validate.py` and #432. Two
+members matching one definition are `conflicting` with no value; a shared
+name under `match: key`/`keyedBy: name` matches nothing (`duplicateNames`);
+duplicate option ids keep the first (`duplicateOptions`); an option without
+a name is kept with `null`; build the key lookup from `names` for every
+definition so undescribed and duplicate-id members are undescribed, not
+unmatched. Nits: describer errors (budget ones too) in `errors`;
+re-interpret after a re-read only under `match: id`; validate dot-paths,
+empty `types` and a missing `schema`, failing that collection cleanly; a
+docs line on describers keyed per resource and path; option names
+`string | null`, and `names` and the duplicate reports on `RuntimeClass`.
+Tests mirroring each reference case.
+
+**Assistant:** Rebased onto main. `deriveRuntimeClass` and
+`readRuntimeMembers` re-ported from main's `derive_class`/`read_members`:
+`names`, `duplicateNames`, `duplicateIdNames` and `duplicateOptions` on
+the class; `conflicting` on the members; the key lookup from `names`; a
+non-string name replaced by the map key or id; option names
+`string | null`, the first of a repeated id kept. The dot-path reader uses
+the spec's `SEGMENT` grammar. `runtimeSchemasOf` checks every dot-path,
+non-empty `types`, a `schema` per type and `multiple` only with `options`;
+a failure fails that resource's collections before any request. Describer
+errors, budget ones included, go to `errors`; after a re-read, items are
+interpreted again only under `match: id`. A new test file mirrors the
+spec's `ReadingTests` case by case on the same TABLE and ROW (the option
+shapes as a table), plus the refused declarations; the read tests add
+re-reads under `match: key`, conflicting members and a budget error. The
+README table lists Runtime Schemas 0.1.0-draft, the read section and
+changelog bullet describe the new reports, CLAUDE.md is updated.
