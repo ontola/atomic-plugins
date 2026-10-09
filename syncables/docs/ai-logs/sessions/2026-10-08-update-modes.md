@@ -84,3 +84,14 @@ of this client's writes' values. Failed updates restored under a mismatched
 format get the format `lastError`. README "Refresh during a pending update"
 says merge-patch conflicts are per top-level field. Tests: the repro, and
 the restored failed update's `lastError`.
+
+## Turn 4
+
+**Human (via the coordinator session):** CI fails on `unified.test.ts >
+uses the reader rate-limit policy and captures each attempt` (1999 instead
+of 2000); find the root cause.
+
+**Assistant:** The read `Budget` measures the wait from the clock when it
+sleeps, so one millisecond between receiving the 429 and sleeping gives
+1999 (reproduced with a clock that ticks per call). The code is right; the
+test now freezes `Date.now`. Main merged in.
