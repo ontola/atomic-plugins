@@ -404,6 +404,24 @@ that no longer returns the record at all is handled below.
 
 ### Records a refresh no longer returns
 
+**Tell before prune.** A complete `sync()` removes from the local copy a
+record it no longer returns, when the record has no unsettled writes (and,
+under `notFound: unavailable`, is not kept as unavailable; see below). The
+app is told first: `onPresence(changes)` is called, and awaited, before
+anything is removed, with one `PresenceChange` per record (`collection`,
+`context`, `id`, `presence`, `source`, `record`: its last values, and
+`pruned: true`). `presence` is `deleted` when the collection declares
+`x-completeness: { absent: deleted }` (`source: 'declaration'`), else
+`removed`: no longer returned by a complete read, whether or not it still
+exists (`source: 'read'`). If the handler throws or rejects, nothing of
+that collection's read is applied, `sync()` rejects with the error, and the
+next sync tells again. The same changes are on `SyncResult.presence` (absent
+when there are none). This applies under every `missingRecordChecks`; a
+lookup of the record, when one is made, comes after it and is reported to
+`onMissingRecord` as before (so a record later found `unavailable` is
+removed, told, and then kept again; keeping it before the lookup is a later
+step). A read that fails or is incomplete removes nothing and tells nothing.
+
 A complete `sync()` of a collection (every page read, within the read budget)
 can lack a record that has queued updates. The provider may have deleted it,
 or the list may just not return it (a default filter, a view that depends on
@@ -1280,6 +1298,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Tell before prune: a record a complete `sync()` removes
+  from the local copy (no longer returned, no unsettled writes) is told to
+  the new `onPresence` handler, awaited, before it is removed, and listed on
+  the new `SyncResult.presence` (`PresenceChange`: `deleted` under
+  `absent: deleted`, else `removed`, with the last values). A failing
+  handler applies nothing of that read and the next sync tells again.
+  Before, under the default `missingRecordChecks: 'pending'`, the app was
+  never told.
 - **Unreleased**: Collection Completeness 0.2.0 §4.3, `notFound`: a 404
   or 410 from the GET of a record a complete refresh no longer returned
   means `deleted` by default, as before, or, when the record's resource

@@ -370,6 +370,33 @@ export interface ApiClientOptions {
    * (`filtered`).
    */
   onMissingRecord?: (record: MissingRecord) => void;
+  /**
+   * Told before the client removes records from its local copy because a
+   * complete read no longer returns them (tell before prune). Awaited: the
+   * records are removed only after it returns. If it throws or rejects,
+   * nothing of that collection read is applied, `sync()` rejects with the
+   * error, and the next sync tells again. The same changes are on
+   * `SyncResult.presence`.
+   */
+  onPresence?: (changes: PresenceChange[]) => void | Promise<void>;
+}
+
+/**
+ * A record the client is about to remove from its local copy, and why.
+ * `presence`: `deleted` when the collection declares
+ * `x-completeness: { absent: deleted }` (absence is deletion), else
+ * `removed` (no longer returned by a complete read; whether it still exists
+ * is not known). `record`: its last values in the local copy.
+ */
+export interface PresenceChange {
+  collection: string;
+  context?: Record<string, string>;
+  id: string;
+  presence: 'deleted' | 'removed';
+  source: 'declaration' | 'read';
+  record?: Record<string, unknown>;
+  /** The record is removed from the local copy right after this is told. */
+  pruned: true;
 }
 
 export interface PaginateOptions {
@@ -384,6 +411,11 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * Records this sync removed from the local copy, each told to
+   * `onPresence` before it was removed. Absent when there were none.
+   */
+  presence?: PresenceChange[];
   /**
    * Collections this sync read without error but not completely: a read by
    * range windows (Pagination Schemes 0.5.0 §4.6.4) or one ended by a short
@@ -3787,6 +3819,9 @@ export function createApiClient(
       returned: new Map(),
     };
     let keptSettled = false;
+    // Records removed from the local copy, told before removal.
+    const presence: PresenceChange[] = [];
+    let presenceError: unknown;
     for (const snapshot of result.collections) {
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const scope = scopeFor(route, contextFor(route, snapshot.pathParams));
@@ -3875,17 +3910,54 @@ export function createApiClient(
       let confirmedBefore = remote(scope);
       if (differs) {
         // A reused adapter can contain records from before this client instance.
+        const persistedById = new Map(
+          persisted.map((item) => [
+            String(item[route.collection.idField]),
+            item,
+          ]),
+        );
         const before = new Set([
           ...remote(scope).keys(),
-          ...persisted.map((item) => String(item[route.collection.idField])),
+          ...persistedById.keys(),
         ]);
-        confirmedBefore = new Map(remote(scope));
-        confirmed.set(scope, records);
         const written = new Set(
           allWrites()
             .filter((w) => w.scope === scope)
             .map((w) => w.id),
         );
+        // Tell before prune: the records this read removes from the local
+        // copy (not returned, no writes, not kept as unavailable) are told
+        // first. If the app's handler fails, nothing of this read is applied.
+        const pruning: PresenceChange[] = [];
+        for (const id of before) {
+          if (
+            records.has(id) ||
+            written.has(id) ||
+            unavailableKept.has(keyFor(scope, id))
+          )
+            continue;
+          const last = remote(scope).get(id) ?? persistedById.get(id);
+          pruning.push({
+            collection: route.collection.name,
+            ...(Object.keys(context).length ? { context: { ...context } } : {}),
+            id,
+            presence: route.absentMeansDeleted ? 'deleted' : 'removed',
+            source: route.absentMeansDeleted ? 'declaration' : 'read',
+            ...(last ? { record: structuredClone(last) } : {}),
+            pruned: true,
+          });
+        }
+        if (pruning.length) {
+          try {
+            await options.onPresence?.(pruning.map((c) => structuredClone(c)));
+          } catch (error) {
+            presenceError ??= error;
+            continue;
+          }
+          presence.push(...pruning);
+        }
+        confirmedBefore = new Map(remote(scope));
+        confirmed.set(scope, records);
         for (const id of confirmedBefore.keys())
           if (!records.has(id) && !written.has(id)) vanished.push(id);
         // The newest confirmed copy of each written record: from this read,
@@ -3923,6 +3995,7 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
+    if (presenceError !== undefined) throw presenceError;
     // A describer that could not be read (whatever the status: a 401 or
     // 403 here is not an auth block) or that the budget left unread leaves
     // its items without a class, not their collection incomplete: a
@@ -3940,6 +4013,7 @@ export function createApiClient(
       incomplete,
       ...(result.describers ? { describers: result.describers } : {}),
       ...(warnings.length ? { warnings } : {}),
+      ...(presence.length ? { presence } : {}),
     };
   }
 

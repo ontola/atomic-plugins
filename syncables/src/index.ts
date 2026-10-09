@@ -39,6 +39,7 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  PresenceChange,
   MissingRecordFailure,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
