@@ -626,9 +626,12 @@ export function parseMapping(input) {
 
     if (
       (field.absent === 'unset' || field.absent === 'default') &&
-      [sourcePath, targetPath].some(path =>
-        ARRAY_INDEX.test(path[path.length - 1]),
-      )
+      [sourcePath, targetPath].some(path => {
+        const last = path[path.length - 1];
+
+        // `-` is JSON Pointer's "after the last item": an array place too.
+        return ARRAY_INDEX.test(last) || last === '-';
+      })
     )
       throw new LensError(
         'bad-mapping',
@@ -834,13 +837,16 @@ export function lawProblems(mapping, row, desired, direction = 'forward') {
   // Backwards, the view is built from a target-shaped row and lacks every
   // provider place no field maps (an id, a type); when that leaves it
   // outside the guards, put refuses it, and GetPut says nothing about it.
+  // PutGet and stable put for `desired` are still checked below.
+  let getPutApplies = true;
+
   if (!forward) {
     try {
       checkGuards(parsed, view, 'the view');
     } catch (error) {
-      if (error instanceof LensError && error.code === 'out-of-domain')
-        return problems;
-      throw error;
+      if (!(error instanceof LensError) || error.code !== 'out-of-domain')
+        throw error;
+      getPutApplies = false;
     }
   }
 
@@ -860,6 +866,7 @@ export function lawProblems(mapping, row, desired, direction = 'forward') {
   };
 
   if (
+    getPutApplies &&
     !deepEqual(
       comparable(lensPut(parsed, view, row, direction)),
       comparable(row),
@@ -872,7 +879,25 @@ export function lawProblems(mapping, row, desired, direction = 'forward') {
     const got = lensGet(parsed, updated, direction);
 
     for (const field of parsed.fields) {
-      if (!forward && !field.converter.put) continue;
+      // Backwards a one-way field has no inverse to read back through, so
+      // check what the put wrote instead: the target `get` gives for the
+      // view's source value (or nothing, when the view lacks it and the
+      // field removes).
+      if (!forward && !field.converter.put) {
+        const source = readAt(desired, field.sourcePath);
+        const written = readAt(updated, field.targetPath);
+        const removes = field.absent === 'unset' || field.absent === 'default';
+        if (
+          source !== undefined
+            ? !deepEqual(written, field.converter.get(source, field.args))
+            : removes && written !== undefined
+        )
+          problems.push(
+            `PutGet${at}: ${field.target} is not what ${field.source} gives`,
+          );
+        continue;
+      }
+
       const path = forward ? field.targetPath : field.sourcePath;
       const want = readAt(desired, path);
       const back = readAt(got, path);

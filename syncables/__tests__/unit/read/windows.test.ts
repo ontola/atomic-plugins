@@ -299,3 +299,35 @@ describe('review follow-ups (#423)', () => {
     expect(outcome.complete).toBe(false);
   });
 });
+
+describe("a windowed read and the scheme's own envelope (#384 item 10a)", () => {
+  it('reads the items at the scheme-level response.envelope, strictly', async () => {
+    const doc = document();
+    const scheme = (
+      doc.components!['paginationSchemes'] as unknown as Record<
+        string,
+        Record<string, unknown>
+      >
+    )['periodWindows']!;
+    scheme['response'] = { envelope: { itemsField: 'data.rows' } };
+    const answer = (body: unknown): ReturnType<Transport> =>
+      Promise.resolve({ status: 200, headers: {}, body: JSON.stringify(body) });
+    expect(
+      await paginate(doc, {
+        transport: () =>
+          answer({ data: { rows: [{ id: 'm1' }] }, items: [{ id: 'x' }] }),
+        path: '/ledgers/{ledgerId}/transactions',
+        pathParams: { ledgerId: 'l1' },
+        range: YEAR,
+      }),
+    ).toEqual([{ id: 'm1' }]);
+    await expect(
+      paginate(doc, {
+        transport: () => answer({ items: [{ id: 'x' }] }),
+        path: '/ledgers/{ledgerId}/transactions',
+        pathParams: { ledgerId: 'l1' },
+        range: YEAR,
+      }),
+    ).rejects.toThrow(/No items array at data\.rows/);
+  });
+});

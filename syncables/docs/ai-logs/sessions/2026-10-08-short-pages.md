@@ -81,3 +81,12 @@ declares a `pageSize` request field; a page size passed without one leaves
 `size` as the full size. The stale JSDoc is replaced by a one-line comment.
 Test: `size: 100` with no field and `pageSize: 50` reads 250 items in three
 pages.
+
+**User:** Merge `origin/main` into the branch. `sendsPageSize` must ignore
+`bodyFields` on a GET walk.
+
+**Assistant:** Merged main (0.21.0, envelopes, throttling); the conflicts in
+`types.ts`, `pages.ts`, `windows.test.ts` and the README keep both sides. A
+`pageSize` body field now counts only on a POST walk. Test: a GET scheme
+whose `pageSize` field is a body field, `pageSize: 50` passed, reads 250
+items in three full pages of 100.

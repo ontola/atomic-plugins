@@ -579,4 +579,25 @@ describe('third review of #424', () => {
     expect(items).toHaveLength(250);
     expect(pages).toEqual(['0', '1', '2']);
   });
+
+  it('ignores a body pageSize field on a GET walk', async () => {
+    // The page size field is a body field, and a GET sends no body: full
+    // pages stay 100 although pageSize 50 is passed.
+    const scheme: PaginationSchemeObject = {
+      ...zeroBased('documented'),
+      request: {
+        queryParameters: { page: { role: 'page', start: 0 } },
+        bodyFields: { limit: { role: 'pageSize' } },
+      },
+    };
+    const { transport, pages } = provider(250, 100);
+    const items = await paginate(document(scheme), {
+      transport,
+      path: '/team/{teamId}/task',
+      pathParams: { teamId: 'w1' },
+      pageSize: 50,
+    });
+    expect(items).toHaveLength(250);
+    expect(pages).toEqual(['0', '1', '2']);
+  });
 });
