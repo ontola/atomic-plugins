@@ -222,3 +222,42 @@ describe('PageWalk.windowValue', () => {
     ).rejects.toThrow(WindowReadError);
   });
 });
+
+describe('PageWalk.windowValue and number formats (second review of #433)', () => {
+  const numbers = (format: 'integer' | 'unixSeconds'): PaginationSchemeObject => ({
+    type: 'rangeWindow',
+    autoDetect: false,
+    window: {
+      unit: format === 'integer' ? 'integer' : 'second',
+      format,
+      bounds: 'halfOpen',
+      cap: 10,
+    },
+    request: {
+      queryParameters: {
+        start: { role: 'windowStart' },
+        end: { role: 'windowEnd' },
+      },
+    },
+  });
+
+  it('does not compare integer bounds as strings when neither is converted', async () => {
+    const { queries } = await walk(
+      numbers('integer'),
+      { start: '9', end: '12' },
+      () => [],
+      () => undefined,
+    );
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['9', '12']);
+  });
+
+  it('does not compare unixSeconds bounds as strings even when converted', async () => {
+    const { queries } = await walk(
+      numbers('unixSeconds'),
+      { start: '999', end: '1001' },
+      () => [],
+      (_, bound) => bound,
+    );
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['999', '1001']);
+  });
+});

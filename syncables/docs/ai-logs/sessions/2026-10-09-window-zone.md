@@ -46,3 +46,19 @@ when it does not convert that parameter; bounds are compared when both or
 neither are converted. The `convertWindowQuery` JSDoc sits above its own
 function again, and `walkWindows` keeps its own. Test: the London window is
 refused.
+
+## Turn 4
+
+**Human (via the coordinator session):** When neither bound is converted,
+don't compare the raw bounds as strings: integer and unixSeconds windows fail
+falsely. Compare only when both bounds are converted, and only for date and
+dateTime formats. Document the mixed-clock repeated-hour case as a known
+limit. The two lint warnings in `time-zone.ts` come from #428's base.
+
+**Assistant:** Bounds are compared only when both were converted and the
+window format is `dateTime`, `date` or `basicDate` (fixed-width digits that
+order as strings). The `convertWindowQuery` JSDoc states the mixed-clock
+case as a known limit. Tests: an integer window with no conversion and a
+unixSeconds window with both bounds passed through are sent without an
+error. The latest #428 head is merged in, which fixes the two lint
+warnings.

@@ -477,9 +477,14 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
  * (fixed-width digits compare as strings): two instants an hour apart in a
  * repeated hour convert to the same wall-clock digits, and a window inside
  * that hour would be sent inverted or empty. It cannot be sent, so the read
- * ends with `WindowReadError` and is not complete. A start that is
- * converted and an end that is not (or the reverse) are on different
- * clocks and are not compared.
+ * ends with `WindowReadError` and is not complete. Only two converted
+ * bounds are compared.
+ *
+ * Known limit: a start that is converted and an end that is not (or the
+ * reverse) are on different clocks and are not compared, so a window whose
+ * converted bound falls in a repeated hour can still be sent inverted when
+ * the other bound targets a parameter without a zone. No provider in the
+ * catalogs mixes the two on one window.
  */
 function convertWindowQuery(
   scheme: PaginationSchemeObject,
@@ -503,10 +508,18 @@ function convertWindowQuery(
   const convertedEnd = convert(endField.name, high);
   const start = convertedStart ?? low;
   const end = convertedEnd ?? high;
-  const sameClock =
-    (convertedStart === undefined) === (convertedEnd === undefined);
+  // Compared only when both bounds were converted, and only for the
+  // fixed-width date formats, whose digits order as strings; bounds sent as
+  // they are need no check (halves keeps them in order), and integer or
+  // unixSeconds bounds do not order as strings.
+  const comparable =
+    convertedStart !== undefined &&
+    convertedEnd !== undefined &&
+    (window.format === 'dateTime' ||
+      window.format === 'date' ||
+      window.format === 'basicDate');
   const inOrder = window.bounds === 'closed' ? start <= end : start < end;
-  if (sameClock && !inOrder) {
+  if (comparable && !inOrder) {
     throw new WindowReadError(
       `The window ${low}..${high} converts to ${start}..${end} (inside a repeated hour of the parameter's time zone, say) and cannot be sent; the read is not complete`,
     );
