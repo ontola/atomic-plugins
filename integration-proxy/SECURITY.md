@@ -515,6 +515,25 @@ generic code.
   release creating dedicated hooks has to decide whether to keep narrow
   cleanup material.
 
+- **Rate limits.** On `POST /webhooks/…`, a client network (120 a minute)
+  is limited only by its refused requests (unknown endpoints, failed
+  verification, oversized bodies): verified deliveries never count, since
+  for a shared application hook they all come from the provider's few
+  delivery addresses, and a network over its limit is refused before any
+  work. An endpoint (600 a minute) is limited once it is known to exist,
+  before its body is read or verified, so random ids never take a real
+  endpoint's window. Subscription requests are limited per owner (20 an
+  hour) before their access check reaches the provider. Over a limit:
+  `429` with `Retry-After`, nothing written. The windows are fixed, in
+  memory and per instance, which is what they bound (this instance's CPU
+  and outbound calls); at most 10,000 keys are held, after which new keys
+  share one overflow window with the same limit. Values come from
+  `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`, `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`
+  and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
+  A provider whose deliveries hit the endpoint limit loses them without a
+  gap if it does not retry (GitHub does not); the periodic full reads are
+  the fallback, and the limit is set well above the pilot's volume.
+
 Not yet verified: any real provider's deliveries (only the synthetic
-fixtures), and rate limits on verification work and subscription creation,
-which the plan requires but this release does not set.
+fixtures), and how the limits behave across several instances (each counts
+its own).

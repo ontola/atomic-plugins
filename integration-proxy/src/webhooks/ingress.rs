@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -125,15 +125,48 @@ impl Drop for EndpointRead<'_> {
     }
 }
 
+/// The per-network limit counts only requests that are refused before
+/// verification succeeds (unknown endpoints, bad signatures, oversized
+/// bodies): verified deliveries, which for a shared application hook all
+/// come from the provider's few delivery addresses, never use it up. A
+/// network over its limit is refused before any work.
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
     let Some(webhooks) = state.webhooks.clone() else {
         return answer(StatusCode::NOT_FOUND);
     };
+    let now = std::time::Instant::now();
+    let network = crate::client_addr::client_network(
+        state.trust_forwarded_for,
+        &headers,
+        peer.map(|ConnectInfo(peer)| peer),
+    );
+    if let Some(retry) = webhooks.limits.ingress_per_network.blocked(&network, now) {
+        return super::limits::too_many(retry);
+    }
+    let mut verified = false;
+    let response =
+        receive_checked(&state, &webhooks, endpoint_id, headers, body, &mut verified).await;
+    let status = response.status();
+    if !verified && status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS {
+        let _ = webhooks.limits.ingress_per_network.take(&network, now);
+    }
+    response
+}
+
+async fn receive_checked(
+    state: &AppState,
+    webhooks: &std::sync::Arc<super::Webhooks>,
+    endpoint_id: String,
+    headers: HeaderMap,
+    body: Body,
+    verified: &mut bool,
+) -> Response {
     if !endpoint_shaped(&endpoint_id) {
         return answer(StatusCode::NOT_FOUND);
     }
@@ -156,7 +189,16 @@ pub async fn receive(
             Err(_) => return answer(StatusCode::SERVICE_UNAVAILABLE),
         }
     };
-    let Some(deliveries) = super::provider::deliveries(&state, &hook.platform) else {
+    // Per endpoint, only for endpoints that exist: random ids never take a
+    // key from real endpoints. Counted before the body is read or verified.
+    if let Err(retry) = webhooks
+        .limits
+        .ingress_per_endpoint
+        .take(&endpoint_id, std::time::Instant::now())
+    {
+        return super::limits::too_many(retry);
+    }
+    let Some(deliveries) = super::provider::deliveries(state, &hook.platform) else {
         return answer(StatusCode::NOT_FOUND);
     };
     let profile_name = if hook.dedicated {
@@ -213,6 +255,7 @@ pub async fn receive(
     }
 
     // Verified. Only now is anything in the request read.
+    *verified = true;
     let Some(delivery_id) = single_header(&headers, &deliveries.delivery_id_header)
         .filter(|id| {
             !id.is_empty() && id.len() <= 255 && id.bytes().all(|b| (0x21..=0x7e).contains(&b))
@@ -242,8 +285,8 @@ pub async fn receive(
         return answer(StatusCode::SERVICE_UNAVAILABLE);
     };
     if let Err(status) = revoke(
-        &state,
-        &webhooks,
+        state,
+        webhooks,
         &hook.platform,
         &deliveries,
         &event_type,

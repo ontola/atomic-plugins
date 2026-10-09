@@ -15,6 +15,7 @@ use std::sync::Arc;
 pub mod cleanup;
 pub mod cursor;
 pub mod ingress;
+pub mod limits;
 pub mod metadata;
 pub mod policy;
 pub mod pool;
@@ -90,15 +91,31 @@ pub struct Webhooks {
     pub gate: IngressGate,
     /// Long polls waiting, per consumer.
     pub waiting: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    pub limits: limits::Limits,
 }
 
 impl Webhooks {
+    /// With the default rate limits.
+    #[cfg(test)]
     pub fn new(store: Arc<Store>, shared_secrets: BTreeMap<String, Vec<u8>>) -> Self {
+        Self::with_limits(
+            store,
+            shared_secrets,
+            limits::Limits::from_config(&crate::config::WebhookConfig::default()),
+        )
+    }
+
+    pub fn with_limits(
+        store: Arc<Store>,
+        shared_secrets: BTreeMap<String, Vec<u8>>,
+        limits: limits::Limits,
+    ) -> Self {
         Self {
             store,
             shared_secrets,
             gate: IngressGate::default(),
             waiting: Default::default(),
+            limits,
         }
     }
 
@@ -157,5 +174,9 @@ pub async fn start(
         }
     }
     tracing::info!("webhook inbox enabled");
-    Ok(Some(Arc::new(Webhooks::new(store, secrets))))
+    Ok(Some(Arc::new(Webhooks::with_limits(
+        store,
+        secrets,
+        limits::Limits::from_config(config),
+    ))))
 }
