@@ -1119,6 +1119,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Follow-ups to #391 and #406. A write answered
+  `quotaExhausted` without a time pauses its bucket for at least the base
+  backoff on every path, also when it is failed, uncertain or blocked (before,
+  only the retry path paused it). `ApiClient.paginate` waits out exhausted
+  buckets too, within its own read limit (`limits.timeoutMs`), not a running
+  sync's budget, and its own `quotaExhausted` answers pause the bucket. Its
+  choice of the Collection envelope compares a fixed `listBody` with the
+  call's body by structure, whatever the order of nested keys.
 - **Unreleased**: Pagination Schemes 0.4.0 and envelope conformance (#384
   items 3–10): `resolveLink` refuses userinfo in the raw authority (an empty
   `//@host/x` included) and any server URL or result that is not http(s);
