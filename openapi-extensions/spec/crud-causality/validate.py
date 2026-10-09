@@ -205,6 +205,16 @@ def validate(document, warnings=None):
     for resource_name, resource in resources.items():
         if not isinstance(resource, dict):
             continue
+        identity = resource.get("identity")
+        if isinstance(identity, dict) and isinstance(identity.get("bindings"), dict):
+            template = identity.get("urlTemplate")
+            variables = set(VARIABLE.findall(template)) if isinstance(template, str) else set()
+            for variable in identity["bindings"]:
+                # Rule 9: a reader filling or reading the template would otherwise fail.
+                if variable not in variables:
+                    errors.append(
+                        f"crudResources.{resource_name}.identity.bindings.{variable}: not a variable of urlTemplate {template!r} (rule 9)"
+                    )
         for name, collection in (resource.get("collections") or {}).items():
             if not isinstance(collection, dict) or not declares_standard(collection):
                 continue
@@ -351,6 +361,9 @@ def _follow_up_errors(document, crud, where, create_item, create_operation):
         return [f"{where}.followUps: expected a nonempty array (rule 20)"]
     errors = []
     create_path = {name for (kind, name) in _parameters(document, create_item, create_operation) if kind == "path"}
+    fields = [f.get("field") for f in follow_ups if isinstance(f, dict)]
+    for field in sorted({f for f in fields if isinstance(f, str) and fields.count(f) > 1}):
+        errors.append(f"{where}.followUps: field {field!r} has more than one follow-up (rule 21)")
     for index, follow_up in enumerate(follow_ups):
         at = f"{where}.followUps[{index}]"
         if not isinstance(follow_up, dict):
@@ -444,43 +457,58 @@ def _drop_path(target, path):
     target.pop(segments[-1], None)
 
 
-def created_identity(document, crud, created, location=None):
+def created_identity(document, crud, created, headers=None, sent=None):
     """§4.3.2: the identity fields of a created object, or None when they cannot be determined.
 
-    `created` is the response body (or None), `location` the `Location`
-    header (or None). Returns {field: value} for every bound identity
-    variable; a value read back from the URL is a string.
+    `created` is the response body (or None). `headers` are the response
+    headers (names compared case-insensitively), or, for compatibility, the
+    `Location` header itself as a string; `source: header` reads the header
+    `url.name` names, `Location` by default. `sent` is the create's request
+    body: with `source: template`, a bound field comes from the response
+    body, else from what was sent (§4.3.2 "request body plus addedFields").
+    Returns {field: value} for every bound identity variable (a value read
+    back from a URL is a string), or None: the object is then unbound.
     """
     resource = _resources(document).get(crud.get("resource"), {})
     identity = resource.get("identity") or {}
     template, bindings = identity.get("urlTemplate"), identity.get("bindings") or {}
-    if not isinstance(template, str) or not bindings:
+    if not isinstance(template, str) or not isinstance(bindings, dict) or not bindings:
         return None
-    source = (crud.get("url") or {}).get("source")
+    variables = VARIABLE.findall(template)
+    if any(variable not in variables for variable in bindings):
+        return None  # a binding for a variable the template lacks (rule 9)
+    url_source = crud.get("url") or {}
+    source = url_source.get("source")
     url = None
     if source == "header":
-        url = location
+        if isinstance(headers, str):
+            headers = {"location": headers}
+        wanted = str(url_source.get("name") or "Location").lower()
+        url = next((v for k, v in (headers or {}).items() if str(k).lower() == wanted), None)
     elif source == "bodyField":
-        found = get_path(created or {}, (crud.get("url") or {}).get("name", ""))
+        found = get_path(created or {}, url_source.get("name", ""))
         url = found if isinstance(found, str) else None
     if source in ("header", "bodyField"):
         if not isinstance(url, str):
             return None
-        pattern = "".join(
-            f"(?P<{re.sub(r'[^0-9A-Za-z_]', '_', part[1:-1])}>[^/?#]+)" if part.startswith("{") else re.escape(part)
-            for part in re.split(r"(\{[^{}]+\})", template)
-        )
-        match = re.search(pattern + r"(?:[?#]|$)", url)
+        # Groups by position, so variables whose names clash once sanitised stay apart.
+        groups, parts = {}, []
+        for part in re.split(r"(\{[^{}]+\})", template):
+            if part.startswith("{") and part.endswith("}"):
+                name = f"g{len(groups)}"
+                groups.setdefault(part[1:-1], name)
+                parts.append(f"(?P<{name}>[^/?#]+)" if groups[part[1:-1]] == name else f"(?P={groups[part[1:-1]]})")
+            else:
+                parts.append(re.escape(part))
+        match = re.search("".join(parts) + r"(?:[?#]|$)", url)
         if not match:
             return None
-        values = {}
-        for variable, binding in bindings.items():
-            group = re.sub(r"[^0-9A-Za-z_]", "_", variable)
-            values[binding.get("field")] = unquote(match.group(group))
-        return values
+        return {binding.get("field"): unquote(match.group(groups[variable])) for variable, binding in bindings.items()}
     values = {}
     for variable, binding in bindings.items():
         value = get_path(created or {}, binding.get("field", ""))
+        if (value is MISSING or value is None) and sent is not None:
+            value = get_path(sent, binding.get("field", ""))
         if value is MISSING or value is None:
             return None
         values[binding.get("field")] = value
@@ -488,11 +516,16 @@ def created_identity(document, crud, created, location=None):
 
 
 def missing_value(follow_up, planned, created):
-    """§4.7.2 step 4: the part of the planned value the create did not apply, or MISSING for none."""
+    """§4.7.2 step 4: the part of the planned value `created` does not show, or MISSING for none.
+
+    `created` is the create's answer, or the object read back when a create
+    is resumed; `omit` and `include` fields are compared the same way, so a
+    resumed create does not send again a follow-up that already applied.
+    """
     wanted = get_path(planned, follow_up["field"])
     if wanted is MISSING:
         return MISSING
-    if follow_up["create"] == "omit" or created is None:
+    if created is None:
         return wanted
     shown = get_path(created, follow_up["field"])
     if isinstance(wanted, list):
@@ -560,9 +593,9 @@ def continue_compound_create(crud, planned, created, send_follow_up, context=Non
 def compound_create(document, crud, planned, send_create, send_follow_up, context=None, on_created=None):
     """A reference implementation of §4.7.2.
 
-    `send_create(body)` returns ("ok", body, location), ("refused", None,
-    None) or ("unknown", None, None); `location` is the `Location` header or
-    None. `on_created(created)` runs once the object is bound, before any
+    `send_create(body)` returns ("ok", body, headers), ("refused", None,
+    None) or ("unknown", None, None); `headers` are the response headers (or
+    the `Location` header as a string, or None). `on_created(created)` runs once the object is bound, before any
     follow-up, so a caller records the binding first (a follow-up that
     raises then leaves the binding recorded). `send_follow_up(operation_id,
     request)` returns "ok", "refused" or "unknown". `context` holds the
@@ -577,13 +610,13 @@ def compound_create(document, crud, planned, send_create, send_follow_up, contex
     for follow_up in follow_ups:
         if follow_up["create"] == "omit":
             _drop_path(body, follow_up["field"])
-    outcome, created, location = send_create(body)
+    outcome, created, headers = send_create(body)
     if outcome == "refused":
         return {"state": "refused", "created": None, "pending": []}
     if outcome != "ok":
         planned_fields = [f["field"] for f in follow_ups if get_path(planned, f["field"]) is not MISSING]
         return {"state": "uncertain", "created": None, "pending": [], "planned": planned_fields}
-    identity = created_identity(document, crud, created, location)
+    identity = created_identity(document, crud, created, headers, sent=body)
     if identity is None:
         return {"state": "unbound", "created": created, "pending": []}
     created = dict(created) if isinstance(created, dict) else {}
