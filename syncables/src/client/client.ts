@@ -902,7 +902,10 @@ function declaredDeletionFeed(
   if (envelope !== undefined) {
     if (!isRecord(envelope)) return undefined;
     const field = envelope['itemsField'];
-    if (field !== undefined && typeof field !== 'string') return undefined;
+    // Omitted, null or "" mean the body root (Pagination Schemes §4.4.2);
+    // another non-string does not parse.
+    if (field !== undefined && field !== null && typeof field !== 'string')
+      return undefined;
     feed.itemsField = field ?? '';
   }
   if (idField !== undefined) {
@@ -2603,6 +2606,8 @@ export function createApiClient(
             : {},
         body: {},
         itemsField: feed.itemsField,
+        // Items that are not objects are skipped, as the README says.
+        skipNonObjects: true,
       })) {
         body = page.body;
         count += page.items.length;
@@ -3538,8 +3543,40 @@ export function createApiClient(
       ) {
         throw new Error(`No ${method} operation found for path "${path}"`);
       }
+      // The Collection Object's envelope applies to its own list operation,
+      // as in sync() (#384). Several collections may share one list URL with
+      // different fixed reads (CRUD Causality 0.4.0 §4.2.1): of those whose
+      // fixed query and body this call sends, the ones fixing the most values
+      // apply; when that leaves none, or several with different envelopes, no
+      // Collection envelope is applied (the scheme's own, or the heuristic,
+      // is).
+      const sends = (
+        fixed: Record<string, unknown>,
+        given: Record<string, unknown>,
+      ): boolean =>
+        Object.entries(fixed).every(([key, value]) =>
+          sameValue(given[key], value),
+        );
+      const candidates = routes.filter(
+        (r) =>
+          r.collection.url === template &&
+          r.collection.method === method &&
+          sends(r.collection.listQuery, pagination.query ?? {}) &&
+          sends(r.collection.listBody, pagination.body ?? {}),
+      );
+      const fixedCount = (r: (typeof routes)[number]): number =>
+        Object.keys(r.collection.listQuery).length +
+        Object.keys(r.collection.listBody).length;
+      const most = Math.max(-1, ...candidates.map(fixedCount));
+      const envelopes = new Set(
+        candidates
+          .filter((r) => fixedCount(r) === most)
+          .map((r) => r.collection.itemsField),
+      );
+      const envelope = envelopes.size === 1 ? [...envelopes][0] : undefined;
       return paginateOperation(doc, {
         ...pagination,
+        ...(envelope === undefined ? {} : { itemsField: envelope }),
         path: template,
         transport: readTransport,
         pathParams: {

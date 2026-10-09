@@ -428,7 +428,15 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   nested dot-path, a missing or non-array path (an incomplete read with
   "No items array at <path>", never an empty one), no heuristic once an
   envelope is declared, and the unchanged heuristic without a declaration,
-  with `itemsField: null`, or with one that is not a string.
+  or with one that is not a string (`null` and `""` mean the body root since
+  #384). `unit/read/envelope.test.ts` covers #384 items 6, 7, 9 and 10a (a
+  non-object item fails the read; `null`/`""` as the root; the body-root
+  error text; the scheme's own `response.envelope`),
+  `unit/client/envelope.test.ts` items 7 and 10b (a feed with
+  `itemsField: null`; `ApiClient.paginate` through the Collection envelope),
+  and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
+  userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
+  dot-paths).
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus
