@@ -123,6 +123,7 @@ impl Catalog {
                         })?;
                 apply_overlay(&mut document, overlay, &platform.openapi, &overlay_url)?;
             }
+            refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
@@ -255,12 +256,8 @@ impl Catalog {
             let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
-            // A path item may itself be a local `$ref` (OpenAPI 3.1).
-            let mut path_item = paths.get(template)?;
-            if let Some(reference) = path_item.get("$ref") {
-                path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;
-            }
-            let path_item = path_item.as_object()?;
+            // `$ref` path items are refused at load (`refuse_ref_path_items`).
+            let path_item = paths.get(template)?.as_object()?;
             let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
             Some(
                 operation
@@ -504,6 +501,26 @@ fn parse_catalog_config(source: &str, path: &str) -> Result<CatalogConfig, Strin
     serde_yaml::from_str(source).map_err(|err| format!("cannot parse {path}: {err}"))
 }
 
+/// Refuses a composed document whose `paths` holds a path item that is a
+/// `$ref` (OpenAPI 3.1) or not an object. No catalog uses one (checked
+/// against every dated catalog on 2026-10-09), and the allowlist, the fixed
+/// headers, request validation, pacing and the scope and profile walk in
+/// `providers.rs` all read path items in place. Refusing such a document at
+/// load keeps all of them consistent and cannot widen what is allowed.
+fn refuse_ref_path_items(platform: &str, document: &Value) -> Result<(), String> {
+    let Some(paths) = document.get("paths").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (path, item) in paths {
+        if !item.is_object() || item.get("$ref").is_some() {
+            return Err(format!(
+                "platform {platform:?}: path item {path:?} is a $ref or not an object; this proxy does not resolve $ref path items"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn insert_document(
     documents: &mut BTreeMap<String, String>,
     name: &str,
@@ -710,15 +727,13 @@ mod tests {
         let catalog = super::Catalog::from_test_document(
             "test",
             json!({"servers":[{"url":"https://example.com/v1"}],
-            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}},
-                "pathItems":{"shared":{"put":{"parameters":[{"$ref":"#/components/parameters/key"}]}}}},
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}}},
             "paths":{
                 "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
                     "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
                 "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
                     "patch":{}},
-                "/other":{"post":{}},
-                "/shared":{"$ref":"#/components/pathItems/shared"}
+                "/other":{"post":{}}
             }}),
             json!({}),
         );
@@ -726,7 +741,6 @@ mod tests {
             catalog.declares_header_parameter("test", method, path, "idempotency-key")
         };
         assert!(declared("POST", "/v1/items"));
-        assert!(declared("PUT", "/v1/shared"));
         assert!(declared("PATCH", "/v1/items/7"));
         // A query parameter of that name, another operation, another path,
         // a path outside the server URL or an unknown platform: not declared.
@@ -2135,6 +2149,68 @@ mod tests {
         .unwrap();
         assert_eq!(config.platforms[0].name, "example");
         assert!(valid_platform_name("bad_name").is_err());
+    }
+
+    /// No catalog uses a `$ref` path item, and no lookup resolves one: a
+    /// composed document with one (from the OAD or an overlay) is refused
+    /// at load, naming the platform and path, so the allowlist cannot
+    /// change silently.
+    #[tokio::test]
+    async fn a_ref_path_item_is_refused_at_load() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        let load = |paths: Value| {
+            let (mirror, source) = (mirror.clone(), source.clone());
+            async move {
+                fs::write(
+                    source.join("openapi.yaml"),
+                    serde_yaml::to_string(&serde_json::json!({
+                        "openapi": "3.1.0",
+                        "info": {"title": "Example", "version": "1"},
+                        "servers": [{"url": "https://api.example"}],
+                        "paths": paths,
+                        "components": {"pathItems": {"shared": {"get": {}}}}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let catalog_file = mirror.join("catalog.json");
+                fs::write(
+                    &catalog_file,
+                    serde_json::json!({"platforms": [{
+                        "name": "example",
+                        "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                    }]})
+                    .to_string(),
+                )
+                .unwrap();
+                Catalog::load_with_mirror(
+                    &catalog_file.to_string_lossy(),
+                    &crate::build_http_client(),
+                    Some(&mirror),
+                )
+                .await
+            }
+        };
+        let catalog = load(serde_json::json!({"/items": {"get": {}}}))
+            .await
+            .unwrap();
+        assert!(catalog.allows("example", "GET", "/items").is_some());
+        for paths in [
+            serde_json::json!({"/items": {"get": {}}, "/shared": {"$ref": "#/components/pathItems/shared"}}),
+            serde_json::json!({"/shared": "not an object"}),
+        ] {
+            let error = load(paths).await.err().expect("refused");
+            assert!(
+                error.contains(
+                    "platform \"example\": path item \"/shared\" is a $ref or not an object"
+                ),
+                "{error}"
+            );
+        }
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }
 
     #[test]

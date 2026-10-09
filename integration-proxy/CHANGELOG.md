@@ -29,6 +29,9 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `Cache-Control: no-store`. A catalog-fixed value for a caller header now
   replaces the caller's instead of being sent next to it. See SECURITY.md,
   "Validating proxy".
+- A composed catalog document with a `$ref` path item, or a path item that is
+  not an object, is refused at load (naming the platform and path) instead of
+  being read inconsistently; no catalog uses one.
 
 ## 0.3.0 (2026-10-06)
 

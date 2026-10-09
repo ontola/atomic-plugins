@@ -326,6 +326,12 @@ credential. Do not forward the upstream's cookies or authorization headers.
 Rate-limit per owner, audit token use without logging secrets, and return
 generic authentication errors.
 
+A composed document with a `$ref` path item (or a path item that is not an
+object) is refused when the catalog loads, so every check that reads a path
+item in place (the allowlist, fixed headers, request validation, pacing, and
+the scope and profile walk) sees the same operations, and a `$ref` cannot
+add operations to the allowlist unnoticed.
+
 Implemented today: the requested path is rejected if it contains a `.` or
 `..` segment before catalog validation, so it cannot normalize to a
 different path than the one authorized (see `proxy::contains_traversal_segment`).
