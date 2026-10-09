@@ -253,8 +253,15 @@ export async function readCollections(
                 doc,
                 operation as OperationObject,
               )?.scheme;
+              // Only the fields walkPages overwrites (or that only size
+              // the pages): a token or cursor the selection sets narrows
+              // where the read starts, so it is another filter.
               paging = new Set(
-                Object.keys(scheme?.request?.queryParameters ?? {}),
+                Object.entries(scheme?.request?.queryParameters ?? {})
+                  .filter(([, field]) =>
+                    ['pageSize', 'offset', 'page'].includes(String(field.role)),
+                  )
+                  .map(([name]) => name),
               );
             } catch {
               // An unusable scheme fails the read in walkPages below.

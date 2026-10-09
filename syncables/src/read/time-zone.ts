@@ -63,10 +63,10 @@ export interface FieldSpan {
 
 /**
  * What one request with `x-time-zone` query parameters asked for: the
- * provider was asked for the items whose fields are in every span of
- * `spans` at once (one per `x-filter` field). This describes the query, not
- * the local copy: an item in a span is local only if the read returned it
- * and the caller kept it. `spans` is null when the request covers nothing
+ * provider was asked for the collection's items whose fields are in every
+ * span of `spans` at once (one per `x-filter` field). This describes the
+ * query, not the local copy: an item in a span is local only if the read
+ * returned it and the caller kept it. `spans` is null when the request covers nothing
  * known; `reason` then says why.
  */
 export interface ReadCoverage {
@@ -531,9 +531,11 @@ export function zoneReader(
 
 /**
  * The rest of a request's query, for its coverage: the range parameters
- * without `x-time-zone` (`ranges`), the paging parameters (`paging`) and
- * the collection's own fixed `listQuery` values (`fixed`), which define the
- * collection rather than narrow it.
+ * without `x-time-zone` (`ranges`), the paging parameters `walkPages`
+ * overwrites or that only size the pages (`paging`: roles `pageSize`,
+ * `offset`, `page`) and the collection's own fixed `listQuery` values
+ * (`fixed`), which define the collection rather than narrow it, though a
+ * fixed range bound still bounds its field's span.
  */
 export interface OtherQuery {
   ranges: Map<string, RangeParameter>;
@@ -640,11 +642,14 @@ export async function wallClockQuery(
   let otherFilters = false;
   for (const [name, value] of Object.entries(query)) {
     if (zonedNames.has(name) || value === undefined || value === '') continue;
-    if (others.paging.has(name) || others.fixed[name] === value) continue;
+    if (others.paging.has(name)) continue;
     const range = others.ranges.get(name);
     const at = /(Z|[+-]\d{2}:\d{2})$/i.test(value) ? Date.parse(value) : NaN;
+    // A fixed value defines the collection; a fixed range bound still
+    // bounds its field's span.
+    const fixed = others.fixed[name] === value;
     if (!range || Number.isNaN(at)) {
-      otherFilters = true;
+      if (!fixed) otherFilters = true;
       continue;
     }
     instants[name] = new Date(at).toISOString();

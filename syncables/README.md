@@ -152,9 +152,12 @@ client steps say, when a `selection` gives it a value:
   tighter-bound rule (its instant is in `instants`). Any other value that
   narrows the read (an `eq` `x-filter`, a parameter without `x-filter`, a
   range bound that is not an instant) makes the coverage unknown
-  (`otherFilters`): the read asked for less than the spans say. Paging
-  parameters of the operation's pagination scheme, and the collection's own
-  fixed `listQuery` values, do not count.
+  (`otherFilters`): the read asked for less than the spans say. Not
+  counted: the pagination scheme's fields that `walkPages` overwrites or
+  that only size the pages (roles `pageSize`, `offset`, `page`; a
+  `pageToken` or `cursor` a selection sets is `otherFilters`), and the
+  collection's own fixed `listQuery` values, which define the collection
+  (a fixed range bound that is an instant still adds to its field's span).
 - A zone that cannot be read (an error status, nothing at the pointer, not
   an IANA name this runtime knows, a zone operation that needs a parameter
   the request does not have) is not taken as UTC: the UTC digits are sent
@@ -181,7 +184,7 @@ const { coverage } = await client.sync();
 
 `parameters` holds the values sent (wall-clock digits plus `suffix`), and
 `instants` the instants they were written from. Coverage describes the
-query, per request: the provider was asked for the items whose fields lie in
+query, per request: the provider was asked for the collection's items whose fields lie in
 every span at once. It does not say that every such item is in the local
 copy (an incomplete or failed read, a record the caller dropped). `spans` is
 null when the request covers nothing known; `reason` is then `empty` (some

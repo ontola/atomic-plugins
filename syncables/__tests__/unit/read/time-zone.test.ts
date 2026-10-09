@@ -811,4 +811,72 @@ describe('x-time-zone in a collection read', () => {
       },
     ]);
   });
+
+  // #428 re-review: which paging fields do not count, and fixed bounds.
+  /** withParameters() plus a pagination scheme applied to the list. */
+  function paged(
+    queryParameters: Record<string, { role: string }>,
+  ): OpenApiDocument {
+    const doc = withParameters(
+      Object.keys(queryParameters).map((name) => query(name)),
+    );
+    (doc.components as Record<string, unknown>)['paginationSchemes'] = {
+      paged: { type: 'pageNumber', request: { queryParameters } },
+    };
+    doc.paths[ENTRIES]!.get!['x-pagination'] = [{ scheme: 'paged' }];
+    return doc;
+  }
+
+  it('does not count the page size the selection sets', async () => {
+    const { snapshot } = await read(
+      [AMS],
+      values({ size: '50' }),
+      paged({ page: { role: 'page' }, size: { role: 'pageSize' } }),
+    );
+    expect(snapshot.coverage?.spans).toHaveLength(1);
+    expect(snapshot.coverage).not.toHaveProperty('reason');
+  });
+
+  it('counts a page token the selection sets as another filter', async () => {
+    const doc = withParameters([query('token')]);
+    (doc.components as Record<string, unknown>)['paginationSchemes'] = {
+      tokens: {
+        type: 'pageToken',
+        request: { queryParameters: { token: { role: 'pageToken' } } },
+        response: { bodyFields: { next: { role: 'nextPageToken' } } },
+      },
+    };
+    doc.paths[ENTRIES]!.get!['x-pagination'] = [{ scheme: 'tokens' }];
+    const { snapshot } = await read([AMS], values({ token: 'abc' }), doc);
+    expect(snapshot.coverage).toMatchObject({
+      spans: null,
+      reason: 'otherFilters',
+    });
+  });
+
+  it('adds a fixed range bound without a zone to its field’s span', async () => {
+    const { snapshot } = await read(
+      [AMS],
+      values({}),
+      withParameters(
+        [query('updatedAfter', { field: '/updatedAt', operator: 'gt' })],
+        { updatedAfter: '2025-12-01T00:00:00Z' },
+      ),
+    );
+    expect(snapshot.coverage).not.toHaveProperty('reason');
+    expect(snapshot.coverage?.spans).toEqual([
+      {
+        field: '/timeInterval/start',
+        from: iso('2026-01-01T00:00:00'),
+        fromInclusive: true,
+        to: iso('2026-02-01T00:00:00'),
+        toInclusive: false,
+      },
+      {
+        field: '/updatedAt',
+        from: iso('2025-12-01T00:00:00'),
+        fromInclusive: false,
+      },
+    ]);
+  });
 });
