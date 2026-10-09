@@ -137,6 +137,43 @@ class ValidatorGapTests(unittest.TestCase):
             validate(document)
         self.assertIn("components.parameters.Unused.x-time-zone.zone.operationId", str(raised.exception))
 
+    def parameter(self, fmt="date-time"):
+        return {"name": "since", "in": "query", "schema": {"type": "string", "format": fmt},
+                "x-time-zone": self.zone()}
+
+    def test_shadowed_path_item_parameter_is_not_misplaced(self):
+        # Review of #402: a path-item parameter that an operation overrides is still a Parameter Object.
+        document = example()
+        item = document["paths"][ENTRIES]
+        item["parameters"] = [self.parameter()]
+        item["get"]["parameters"].append(self.parameter())
+        validate(document)
+        item["parameters"][0]["schema"]["format"] = "date"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(f"paths.{ENTRIES}.parameters[query:since]", str(raised.exception))
+
+    def test_operation_less_path_item_parameter_is_checked_not_misplaced(self):
+        document = example()
+        document["paths"]["/later"] = {"parameters": [self.parameter()]}
+        validate(document)
+        document["paths"]["/later"]["parameters"][0]["x-time-zone"]["zone"]["operationId"] = "missing"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("no operation 'missing'", str(raised.exception))
+
+    def test_formats_inside_all_of_and_one_of_are_checked(self):
+        for key in ("allOf", "oneOf", "anyOf"):
+            document = example()
+            start = document["components"]["parameters"]["Start"]
+            start["schema"] = {key: [{"type": "string"}, {"format": "date"}]}
+            with self.subTest(key=key), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn("not 'date-time'", str(raised.exception))
+        document = example()
+        document["components"]["parameters"]["Start"]["schema"] = {"allOf": [{"type": "string"}, {"format": "date-time"}]}
+        validate(document)
+
     def test_webhook_and_callback_parameters_are_not_misplaced(self):
         document = example()
         parameter = {"name": "since", "in": "query", "schema": {"type": "string", "format": "date-time"},

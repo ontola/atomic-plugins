@@ -28,9 +28,15 @@
  *
  * Builds need the layout AGENTS.md describes (browser/ from the pinned
  * atomic-server, for esbuild) and `pnpm install` in each app's plugin folder.
+ * Locally, a plugin folder or app folder whose pnpm-lock.yaml has no
+ * node_modules yet is installed first (`pnpm install --frozen-lockfile`, one
+ * line per install, as run-lane.mjs does through deps.mjs); CI installs every
+ * lockfile before this script runs, so there it does nothing. `--no-install`
+ * skips that and lets the build fail on a missing module instead.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { installMissing } from './deps.mjs';
 import {
   existsSync,
   mkdirSync,
@@ -185,8 +191,37 @@ export function staticProblems(entry, base = root) {
   return problems;
 }
 
+/**
+ * The folders whose lockfile an app's build may need: its plugin folder
+ * (notion, pets: `integrations/<id>/pnpm-lock.yaml`) and its own folder
+ * (issue-tracker: `integrations/issue-tracker/app/pnpm-lock.yaml`). The
+ * same folders CI's "Install plugin npm dependencies" step covers for apps.
+ */
+export const appDependencyDirs = id => {
+  const folder = appFolder(id);
+  const plugin = folder.split('/').slice(0, 2).join('/');
+
+  return [...new Set([plugin, folder])];
+};
+
+/**
+ * Installs the app's missing dependencies first (see deps.mjs). `install`
+ * is `true` (run pnpm), `false` (skip), or a function standing in for pnpm
+ * (tests). Returns the folders installed.
+ */
+export function installAppDeps(id, base = root, install = true) {
+  if (install === false) return [];
+
+  return installMissing(appDependencyDirs(id), {
+    base,
+    ...(typeof install === 'function' ? { install } : {}),
+    log: message => console.info(`apps: ${message}`),
+  });
+}
+
 /** The app's module, built in memory by its own build.mjs. */
-export async function buildApp(id, base = root) {
+export async function buildApp(id, base = root, { install = true } = {}) {
+  installAppDeps(id, base, install);
   const file = resolve(base, appFolder(id), 'build.mjs');
   // Keyed by content, so a changed build.mjs is not served from the module
   // cache within one process.
@@ -282,7 +317,7 @@ export function publishedProblems(ref, base = root) {
  * that must equal the committed module; the shape of everything under apps/;
  * and, when `published` names a ref, that none of its version files changed.
  */
-export async function check({ base = root, published } = {}) {
+export async function check({ base = root, published, install = true } = {}) {
   const problems = [];
 
   for (const entry of appEntries(readCatalog(base))) {
@@ -291,7 +326,7 @@ export async function check({ base = root, published } = {}) {
     if (found.length) continue;
     const id = entry[terms.shortname];
     const path = modulePath(id, entry[terms.version]);
-    const { integrity } = await buildApp(id, base);
+    const { integrity } = await buildApp(id, base, { install });
     if (integrity !== entry[terms.integrity])
       problems.push(
         `${id}: a fresh build is ${integrity}, ${path} and the catalog pin ${entry[terms.integrity]}. ` +
@@ -316,7 +351,12 @@ export async function check({ base = root, published } = {}) {
  * sets its URL and integrity. Refuses to change a version file that is
  * already published at `published`, before writing anything.
  */
-export async function write({ only, base = root, published } = {}) {
+export async function write({
+  only,
+  base = root,
+  published,
+  install = true,
+} = {}) {
   const catalog = readCatalog(base);
   const onMain = published ? publishedModules(published, base) : new Map();
   const builds = [];
@@ -328,7 +368,7 @@ export async function write({ only, base = root, published } = {}) {
     const path = modulePath(id, version);
     if (!MODULE_PATH.test(path))
       throw new Error(`${id}: version ${version} cannot be a URL path segment`);
-    const built = await buildApp(id, base);
+    const built = await buildApp(id, base, { install });
     const blob = onMain.get(path);
     if (blob && blob !== blobId(built.bytes))
       throw new Error(
@@ -383,10 +423,13 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const [command, ...args] = process.argv.slice(2);
+  const noInstall = args.indexOf('--no-install');
+  const install = noInstall === -1;
+  if (!install) args.splice(noInstall, 1);
 
   if (command === 'check') {
     const published = publishedRef(args);
-    const problems = await check({ published });
+    const problems = await check({ published, install });
     for (const p of problems) console.error(p);
     if (problems.length) process.exit(1);
     console.info(
@@ -395,11 +438,11 @@ if (
     );
   } else if (command === 'write') {
     const published = publishedRef(args);
-    for (const written of await write({ only: args[0], published }))
+    for (const written of await write({ only: args[0], published, install }))
       console.info(JSON.stringify(written));
   } else {
     console.error(
-      'usage: apps.mjs check [--published <ref>] | write [<id>] [--published <ref>]',
+      'usage: apps.mjs check [--published <ref>] [--no-install] | write [<id>] [--published <ref>] [--no-install]',
     );
     process.exit(2);
   }

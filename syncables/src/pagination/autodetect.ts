@@ -61,7 +61,9 @@ function autoDetectMatches(
   scheme: PaginationSchemeObject,
   operation: OperationObject,
 ): boolean {
-  if (scheme.autoDetect === false) {
+  // A rangeWindow scheme is never auto-detected (spec 0.5.0 §4.6): its
+  // window field is often a filter parameter other operations share.
+  if (scheme.autoDetect === false || scheme.type === 'rangeWindow') {
     return false;
   }
   const options =
@@ -162,6 +164,23 @@ export function resolveEffectiveScheme(
     if (afterMerge.length) {
       throw new PaginationSchemeError(
         `x-pagination's overrides make the pagination scheme "${name}" invalid: ${afterMerge.join('; ')}`,
+      );
+    }
+    // Rule 17: an operation that applies a rangeWindow scheme, after
+    // overrides, applies no other scheme.
+    const windowed = explicit.some((entry) => {
+      if (!isPlainObject(entry)) return false;
+      const overrides = entry['overrides'];
+      const type =
+        isPlainObject(overrides) && 'type' in overrides
+          ? overrides['type']
+          : document.components?.paginationSchemes?.[String(entry['scheme'])]
+              ?.type;
+      return type === 'rangeWindow';
+    });
+    if (windowed && explicit.length > 1) {
+      throw new PaginationSchemeError(
+        'x-pagination applies a rangeWindow scheme together with another scheme',
       );
     }
     return { schemeName: name, scheme };

@@ -306,6 +306,19 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `nextLink`-role headers) and derives `hasNextPage`. The `nextLink` value
   is kept raw (`nextLinkValue`, never coerced) with the field's
   `linkResolution` (`nextLinkResolution`).
+- `window.ts` is the `rangeWindow` arithmetic of Pagination Schemes
+  0.5.0 §4.6 (after the spec's `validate.py`): `parseBound`/`formatBound`
+  for the five bound formats as exact strings, `windowWidth`, `halves`
+  (the default split, `undefined` below `2 × minimumWidth`) and
+  `windowRequest` (a template, or a start and an end field, per location).
+  `walkPages` hands a `rangeWindow` scheme to `walkWindows` (in
+  `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
+  first, throws `WindowReadError` for a full window it cannot split, keeps an
+  item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
+  complete: `readCollections` turns that into `complete: false` with
+  `notComplete`, and the client never applies such a snapshot. The
+  validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
+  never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
