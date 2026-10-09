@@ -87,6 +87,12 @@ export type {
   CollectionSnapshot,
 } from './read/collections.js';
 export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
+export type {
+  RuntimeClass,
+  RuntimeDescriber,
+  RuntimeMembers,
+  RuntimeProperty,
+} from './read/runtime-schemas.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';

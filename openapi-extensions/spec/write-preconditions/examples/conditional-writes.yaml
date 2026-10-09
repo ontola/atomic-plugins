@@ -1,0 +1,75 @@
+openapi: 3.0.3
+info:
+  title: Illustrative write preconditions
+  version: 1.0.0
+  description: >-
+    Synthetic. Events carry an etag body field and accept If-Match; pages have
+    no conditional update and a trash flag; notes are last-writer-wins.
+servers:
+  - url: https://api.example.com
+paths:
+  /events/{eventId}:
+    parameters:
+      - { name: eventId, in: path, required: true, schema: { type: string } }
+    get:
+      responses:
+        '200':
+          description: The event.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  etag: { type: string }
+                  summary: { type: string }
+    patch:
+      x-write-precondition:
+        kind: ifMatch
+        version: { in: body, name: etag }
+        conflictStatus: [412]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: The updated event. }
+        '412': { description: The event changed since the version sent. }
+    delete:
+      x-write-precondition:
+        kind: ifMatch
+        version: { in: body, name: etag }
+      responses:
+        '204': { description: Deleted. }
+        '412': { description: The event changed since the version sent. }
+  /pages/{pageId}:
+    parameters:
+      - { name: pageId, in: path, required: true, schema: { type: string } }
+    get:
+      responses:
+        '200': { description: The page. }
+    patch:
+      x-write-precondition:
+        kind: readVerify
+        refuseWhen:
+          - field: in_trash
+            values: [true]
+            description: The owner trashed the page.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: The updated page. }
+  /notes/{noteId}:
+    parameters:
+      - { name: noteId, in: path, required: true, schema: { type: string } }
+    put:
+      x-write-precondition:
+        kind: none
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: The replaced note. }

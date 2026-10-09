@@ -144,7 +144,7 @@ What a member of one definition type holds.
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path, in the definition, to the array of options. |
 | `id` | string | **Yes** | Dot-path, in an option, to its stable id. A client keys an option by it, so a renamed or recoloured option stays the same option. |
-| `name` | string | **Yes** | Dot-path, in an option, to its display name. |
+| `name` | string | **Yes** | Dot-path, in an option, to its display name. A value there that is absent or not a string is no name (`null`, §5.1). |
 | `valueId` | string | **Yes** | Dot-path, in one option reference of a member's value, to the option's id. |
 | `x-*` | any | No | Extension fields. |
 
@@ -171,7 +171,8 @@ A describer can be ambiguous, and the client SHOULD report each case:
   the display name.
 - An option id that occurs more than once in one definition's options: the
   client keeps the first option with that id. An option without a name at
-  the Options Object's `name` has no name (`null`); the client keeps it.
+  the Options Object's `name`, or whose name there is not a string, has no
+  name (`null`); the client keeps it.
 
 An item can be ambiguous too: two members that match the same definition (a
 member keyed by a stale name and one keyed by the current name, say). The
@@ -181,7 +182,9 @@ report it.
 An option value whose shape does not fit its Type Object (an option
 reference without an id at `valueId`, or a value that is not an array when
 `multiple` is `true`) is invalid: the client MUST NOT store any value for
-that member, and SHOULD report it.
+that member, and SHOULD report it. So is a member whose value at `memberId`
+is present but not a string (an object, an array, a number): it names no
+definition id.
 
 ### 5.2 When to read the describer
 
