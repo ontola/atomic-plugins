@@ -330,6 +330,21 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(derived["properties"]["a%3Ab"]["name"], "Estimate")  # the map key
         self.assertEqual(read_members(self.runtime, derived, ROW)["values"]["a%3Ab"], 3)
 
+    def test_member_id_that_is_not_a_string_is_invalid(self):
+        derived = derive_class(self.runtime, TABLE)
+        for value in ({"nested": "a%3Ab"}, ["a%3Ab"], 7):
+            row = copy.deepcopy(ROW)
+            row["properties"]["Estimate"]["id"] = value
+            with self.subTest(value=value):
+                result = read_members(self.runtime, derived, row)
+                self.assertEqual(result["invalid"], ["Estimate"])
+                self.assertNotIn("a%3Ab", result["values"])
+
+    def test_option_name_that_is_not_a_string_is_no_name(self):
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Stage"]["select"]["options"].append({"id": "opt-3", "name": {"text": "Later"}})
+        self.assertIsNone(derive_class(self.runtime, table)["properties"]["c%3Ad"]["options"]["opt-3"])
+
     def test_array_definitions_and_key_matching(self):
         runtime = {
             "field": "fields", "keyedBy": "id", "match": "key",

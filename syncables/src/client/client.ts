@@ -8,6 +8,10 @@ import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { readCollections } from '../read/collections.js';
+import type {
+  RuntimeDescriber,
+  RuntimeMembers,
+} from '../read/runtime-schemas.js';
 import {
   asText,
   discoverReadModel,
@@ -368,6 +372,19 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * The describers this sync read and the classes derived from them, when
+   * a resource declares `x-runtime-schema` (Runtime Schemas 0.1.0-draft);
+   * absent otherwise. `runtimeMembers()` gives a record's values.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * Non-fatal problems of a sync whose collections were read: a describer
+   * that could not be read (`<resource>: describer <path>: <message>`), so
+   * its records' `runtimeMembers()` have `noClass`. Absent when there are
+   * none. A collection that could not be read still makes `sync()` throw.
+   */
+  warnings?: string[];
 }
 
 export interface PollOptions {
@@ -511,6 +528,19 @@ export interface ApiClient {
     id: string,
     context?: Record<string, string>,
   ): Promise<Record<string, unknown> | undefined>;
+  /**
+   * A record's user-defined members (`x-runtime-schema`), as the latest
+   * complete read of its collection interpreted them against its
+   * describer's class: of the record as that read returned it, so local
+   * edits still pending are not in them. Undefined when no complete read of this client returned
+   * the record, or its resource declares no runtime schema. Kept in memory
+   * only: after a restart, until the next sync.
+   */
+  runtimeMembers(
+    resource: string,
+    id: string,
+    context?: Record<string, string>,
+  ): RuntimeMembers | undefined;
   /**
    * Writes `data` to local storage immediately, under a client-generated id
    * (or `data.id`, if already set) and returns without waiting on the
@@ -1252,6 +1282,8 @@ export function createApiClient(
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
+  /** Per scope, the user-defined members of the latest complete read's records, by id. */
+  const runtimeMembersByScope = new Map<string, Map<string, RuntimeMembers>>();
   const writeQueues = new Map<string, QueuedWrite[]>();
   /** Failed updates and deletes per record, oldest first. Failed creates stay parked in their queue. */
   const gaveUpWrites = new Map<string, QueuedWrite[]>();
@@ -3679,6 +3711,15 @@ export function createApiClient(
       const scope = scopeFor(route, context);
       // Read completely: its parent is back, and so are its members.
       goneParents.delete(scope);
+      if (snapshot.runtimeMembers) {
+        const members = new Map<string, RuntimeMembers>();
+        snapshot.items.forEach((item, i) => {
+          const interpreted = snapshot.runtimeMembers?.[i];
+          if (interpreted)
+            members.set(String(item[route.collection.idField]), interpreted);
+        });
+        runtimeMembersByScope.set(scope, members);
+      }
       const previous = lastSyncedItems.get(scope);
       const differs = hasChanges(
         previous,
@@ -3771,9 +3812,23 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
-    if (result.errors.length)
-      throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
-    return { changed: [...changed] };
+    // A describer that could not be read (whatever the status: a 401 or
+    // 403 here is not an auth block) or that the budget left unread leaves
+    // its items without a class, not their collection incomplete: a
+    // warning, not a failed sync. readCollections appends those entries
+    // last, so the collection failures are the ones before them.
+    const warnings = result.describerErrors ?? [];
+    const failures = result.errors.slice(
+      0,
+      result.errors.length - warnings.length,
+    );
+    if (failures.length)
+      throw new Error(`Read incomplete: ${failures.join('; ')}`);
+    return {
+      changed: [...changed],
+      ...(result.describers ? { describers: result.describers } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   function sync(): Promise<SyncResult> {
@@ -3823,6 +3878,12 @@ export function createApiClient(
       await whenRestored();
       const route = resolveRoute(resource);
       return storage.get(scopeFor(route, contextFor(route, context)), id);
+    },
+    runtimeMembers(resource, id, context): RuntimeMembers | undefined {
+      const route = resolveRoute(resource);
+      return runtimeMembersByScope
+        .get(scopeFor(route, contextFor(route, context)))
+        ?.get(id);
     },
     async create(resource, data, supplied): Promise<Record<string, unknown>> {
       await whenRestored();

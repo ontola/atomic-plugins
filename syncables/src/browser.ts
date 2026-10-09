@@ -77,6 +77,12 @@ export type {
   CollectionSnapshot,
 } from './read/collections.js';
 export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
+export type {
+  RuntimeClass,
+  RuntimeDescriber,
+  RuntimeMembers,
+  RuntimeProperty,
+} from './read/runtime-schemas.js';
 
 export { applyOverlay } from './openapi/apply-overlay.js';
 export type {

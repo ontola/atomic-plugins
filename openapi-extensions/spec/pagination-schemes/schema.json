@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.5.0",
-  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1). Covers validation rules 1-4, 8-10 and 12-16; validate.py adds 5, 11, 17 and 18.",
+  "title": "Pagination Schemes 0.6.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5). Covers validation rules 1-4, 8-10, 12-16, 19 and 20; validate.py adds 5, 11, 17, 18, 21 and 22.",
   "$ref": "#/$defs/scheme",
   "$defs": {
     "scheme": {
@@ -21,6 +21,13 @@
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "Rule 20: shortPage only on a pageNumber scheme.",
+          "if": { "required": ["type"], "properties": { "type": { "const": "pageNumber" } } },
+          "else": { "properties": { "response": { "not": { "required": ["shortPage"] } } } }
+        }
+      ],
       "if": { "required": ["type"], "properties": { "type": { "const": "rangeWindow" } } },
       "then": {
         "description": "Rules 12, 14 (window fields counted by validate.py) and 16.",
@@ -151,6 +158,7 @@
           ]
         },
         "required": { "type": "boolean" },
+        "start": { "description": "Rule 19.", "type": "integer", "minimum": 0 },
         "template": {
           "description": "Rule 15: {start} and {end} once each, no other braces.",
           "type": "string",
@@ -161,14 +169,30 @@
       "additionalProperties": false,
       "if": { "required": ["role"], "properties": { "role": { "const": "windowRange" } } },
       "then": { "required": ["template"] },
-      "else": { "not": { "required": ["template"] } }
+      "else": { "not": { "required": ["template"] } },
+      "dependentSchemas": {
+        "start": { "required": ["role"], "properties": { "role": { "const": "page" } } }
+      }
     },
     "response": {
       "type": "object",
       "properties": {
         "envelope": { "$ref": "#/$defs/envelope" },
         "bodyFields": { "$ref": "#/$defs/responseFields" },
-        "headers": { "$ref": "#/$defs/responseFields" }
+        "headers": { "$ref": "#/$defs/responseFields" },
+        "shortPage": { "$ref": "#/$defs/shortPage" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "shortPage": {
+      "description": "Rule 20.",
+      "type": "object",
+      "required": ["size", "assurance"],
+      "properties": {
+        "size": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "const": "request" }] },
+        "assurance": { "enum": ["documented", "observed", "assumed"] },
+        "description": { "type": "string" }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false
