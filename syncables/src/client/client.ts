@@ -13,7 +13,15 @@ import type {
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
-import { readCollections } from '../read/collections.js';
+import {
+  readCollections,
+  type CollectionReadOptions,
+  type CollectionSnapshot,
+} from '../read/collections.js';
+import type {
+  RuntimeDescriber,
+  RuntimeMembers,
+} from '../read/runtime-schemas.js';
 import {
   asText,
   discoverReadModel,
@@ -31,6 +39,7 @@ import {
   RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
 } from '../read/pages.js';
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -245,6 +254,13 @@ export interface ApiClientOptions {
   /** Root path bindings; per-call context overrides these. */
   constants?: Record<string, string>;
   selection?: QuerySelection;
+  /**
+   * The range `sync()` reads a collection over when its list operation
+   * applies a `rangeWindow` pagination scheme (Pagination Schemes 0.5.0
+   * §4.6), as for `readCollections`. Such a read is never complete: its
+   * records are added or updated, nothing is removed (`SyncResult.incomplete`).
+   */
+  ranges?: NonNullable<CollectionReadOptions['ranges']>;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
   /** Optional, awaited storage of original collection-read responses. */
@@ -348,6 +364,35 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * Collections this sync read without error but not completely: a read by
+   * range windows (Pagination Schemes 0.5.0 §4.6.4) or one ended by a short
+   * page whose end is not documented (0.6.0 §4.4.5). Their records were
+   * added or updated; nothing was removed or concluded about the records
+   * they did not return. One entry per collection and parent context.
+   */
+  incomplete: IncompleteRead[];
+  /**
+   * The describers this sync read and the classes derived from them, when
+   * a resource declares `x-runtime-schema` (Runtime Schemas 0.1.0-draft);
+   * absent otherwise. `runtimeMembers()` gives a record's values.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * Non-fatal problems of a sync whose collections were read: a describer
+   * that could not be read (`<resource>: describer <path>: <message>`), so
+   * its records' `runtimeMembers()` have `noClass`. Absent when there are
+   * none. A collection that could not be read still makes `sync()` throw.
+   */
+  warnings?: string[];
+}
+
+export interface IncompleteRead {
+  collection: string;
+  /** The parent path parameters the collection was read under. */
+  context: Record<string, string>;
+  /** Why the read is not complete. */
+  reason: string;
 }
 
 export interface PollOptions {
@@ -498,6 +543,19 @@ export interface ApiClient {
     id: string,
     context?: Record<string, string>,
   ): Promise<Record<string, unknown> | undefined>;
+  /**
+   * A record's user-defined members (`x-runtime-schema`), as the latest
+   * complete read of its collection interpreted them against its
+   * describer's class: of the record as that read returned it, so local
+   * edits still pending are not in them. Undefined when no complete read of this client returned
+   * the record, or its resource declares no runtime schema. Kept in memory
+   * only: after a restart, until the next sync.
+   */
+  runtimeMembers(
+    resource: string,
+    id: string,
+    context?: Record<string, string>,
+  ): RuntimeMembers | undefined;
   /**
    * Writes `data` to local storage immediately, under a client-generated id
    * (or `data.id`, if already set) and returns without waiting on the
@@ -1125,6 +1183,8 @@ export function createApiClient(
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
+  /** Per scope, the user-defined members of the latest complete read's records, by id. */
+  const runtimeMembersByScope = new Map<string, Map<string, RuntimeMembers>>();
   const writeQueues = new Map<string, QueuedWrite[]>();
   /** Failed updates and deletes per record, oldest first. Failed creates stay parked in their queue. */
   const gaveUpWrites = new Map<string, QueuedWrite[]>();
@@ -2729,6 +2789,7 @@ export function createApiClient(
     const last = new Map<string, boolean>();
     let body: unknown;
     let count = 0;
+    const feedOutcome: WalkOutcome = { complete: false };
     try {
       for await (const page of walkPages({
         document: doc,
@@ -2745,6 +2806,11 @@ export function createApiClient(
         itemsField: feed.itemsField,
         // Items that are not objects are skipped, as the README says.
         skipNonObjects: true,
+        // The whole item is its identity (Pagination Schemes §4.4.5, "else
+        // the whole item"): a change list may name one record in several
+        // items, so the record id would refuse a valid feed.
+        identity: (item) => JSON.stringify(item),
+        outcome: feedOutcome,
       })) {
         body = page.body;
         count += page.items.length;
@@ -2780,6 +2846,10 @@ export function createApiClient(
       }
       return incomplete;
     }
+    // A feed read that ended without an error but not completely (a short
+    // page whose end is not documented, say) gives no tombstones and leaves
+    // the cursor where it was.
+    if (!feedOutcome.complete) return incomplete;
     if (feed.cursor) {
       const next = isRecord(body)
         ? readNestedField(body, feed.cursor.responseField)
@@ -3221,6 +3291,65 @@ export function createApiClient(
       if (queue.length && !draining.has(key)) void drainQueue(key);
   }
 
+  /**
+   * A snapshot read without error but not completely (`notComplete`):
+   * its records are added to, or updated in, the confirmed copy; nothing
+   * is removed, no absent record is held, checked or reported missing, and
+   * no deletion feed is read or moved. Skipped for a scope a write settled
+   * on during the read, and per record for a record one settled on.
+   */
+  async function upsertIncomplete(
+    snapshot: CollectionSnapshot,
+    started: Map<string, number>,
+    startedRecords: Map<string, number>,
+    changed: Set<string>,
+    round: SyncRound,
+  ): Promise<IncompleteRead> {
+    const route = byResource.get(snapshot.collection.name) as ClientRoute;
+    const context = contextFor(route, snapshot.pathParams);
+    const scope = scopeFor(route, context);
+    const report: IncompleteRead = {
+      collection: route.collection.name,
+      context: { ...context },
+      reason: snapshot.notComplete ?? 'not complete',
+    };
+    if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0))
+      return report;
+    const before = remote(scope);
+    const updated = new Map<string, Record<string, unknown>>();
+    const stored = feedTombstones.get(scope)?.ids;
+    for (const item of snapshot.items) {
+      const id = String(item[route.collection.idField]);
+      const key = keyFor(scope, id);
+      if ((startedRecords.get(key) ?? 0) !== (recordRevisions.get(key) ?? 0))
+        continue;
+      // As in a complete read: a record this read returns exists, so an
+      // update held for it in flight is not held any more, and a stored
+      // feed tombstone for it is stale.
+      for (const write of writeQueues.get(key) ?? []) delete write.holdIfQueued;
+      if (stored?.delete(id)) {
+        round.tombstonesChanged = true;
+        round.superseded.add(key);
+      }
+      if (sameValue(before.get(id), item)) continue;
+      updated.set(id, item);
+    }
+    if (!updated.size) return report;
+    confirmed.set(scope, new Map([...before, ...updated]));
+    // A later complete read must compare against the confirmed copy, not
+    // the last complete snapshot, so that it can still prune.
+    lastSyncedItems.delete(scope);
+    for (const write of allWrites()) {
+      const record = write.scope === scope ? updated.get(write.id) : undefined;
+      if (record) setLastKnown(keyFor(scope, write.id), record);
+    }
+    detectConflicts(scope, updated);
+    for (const id of updated.keys()) await rebuild(scope, id);
+    changed.add(route.collection.name);
+    if (writeQueues.size || gaveUpWrites.size) await persistLater();
+    return report;
+  }
+
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
     const started = new Map(revisions);
@@ -3242,6 +3371,7 @@ export function createApiClient(
         legacy,
         budget,
         ...(options.selection ? { selection: options.selection } : {}),
+        ...(options.ranges ? { ranges: options.ranges } : {}),
       });
     } finally {
       activeBudget = undefined;
@@ -3254,11 +3384,33 @@ export function createApiClient(
       startedRecords,
     };
     const changed = new Set<string>();
+    const incomplete: IncompleteRead[] = [];
     for (const snapshot of result.collections) {
-      if (!snapshot.complete) continue;
+      if (!snapshot.complete) {
+        if (snapshot.notComplete !== undefined && snapshot.error === undefined)
+          incomplete.push(
+            await upsertIncomplete(
+              snapshot,
+              started,
+              startedRecords,
+              changed,
+              round,
+            ),
+          );
+        continue;
+      }
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const context = contextFor(route, snapshot.pathParams);
       const scope = scopeFor(route, context);
+      if (snapshot.runtimeMembers) {
+        const members = new Map<string, RuntimeMembers>();
+        snapshot.items.forEach((item, i) => {
+          const interpreted = snapshot.runtimeMembers?.[i];
+          if (interpreted)
+            members.set(String(item[route.collection.idField]), interpreted);
+        });
+        runtimeMembersByScope.set(scope, members);
+      }
       const previous = lastSyncedItems.get(scope);
       const differs = hasChanges(
         previous,
@@ -3351,9 +3503,24 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
-    if (result.errors.length)
-      throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
-    return { changed: [...changed] };
+    // A describer that could not be read (whatever the status: a 401 or
+    // 403 here is not an auth block) or that the budget left unread leaves
+    // its items without a class, not their collection incomplete: a
+    // warning, not a failed sync. readCollections appends those entries
+    // last, so the collection failures are the ones before them.
+    const warnings = result.describerErrors ?? [];
+    const failures = result.errors.slice(
+      0,
+      result.errors.length - warnings.length,
+    );
+    if (failures.length)
+      throw new Error(`Read incomplete: ${failures.join('; ')}`);
+    return {
+      changed: [...changed],
+      incomplete,
+      ...(result.describers ? { describers: result.describers } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   function sync(): Promise<SyncResult> {
@@ -3403,6 +3570,12 @@ export function createApiClient(
       await whenRestored();
       const route = resolveRoute(resource);
       return storage.get(scopeFor(route, contextFor(route, context)), id);
+    },
+    runtimeMembers(resource, id, context): RuntimeMembers | undefined {
+      const route = resolveRoute(resource);
+      return runtimeMembersByScope
+        .get(scopeFor(route, contextFor(route, context)))
+        ?.get(id);
     },
     async create(resource, data, supplied): Promise<Record<string, unknown>> {
       await whenRestored();

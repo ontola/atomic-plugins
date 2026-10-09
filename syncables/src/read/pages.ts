@@ -14,6 +14,7 @@ import {
   buildBody,
   buildQuery,
   nextCursor,
+  pageStart,
   type PageCursor,
 } from '../pagination/request-builder.js';
 import {
@@ -21,7 +22,10 @@ import {
   readNestedField,
   setNestedField,
 } from '../pagination/response-parser.js';
-import type { PaginationSchemeObject } from '../pagination/types.js';
+import type {
+  PaginationResponseState,
+  PaginationSchemeObject,
+} from '../pagination/types.js';
 import {
   halves,
   parseBound,
@@ -61,6 +65,13 @@ export class BudgetExhausted extends Error {}
 
 /** A 429's `Retry-After` reaches past the read's deadline. */
 export class RetryBeyondDeadline extends Error {}
+
+/**
+ * A page-number read that ended with an error (Pagination Schemes 0.6.0
+ * §4.4.5 step 3): a page with more items than the declared full size, or a
+ * page that repeats the one before it. The read is not complete.
+ */
+export class PageReadError extends Error {}
 
 /** A page answered a non-2xx status; carries the status and the body text. */
 export class PageStatusError extends Error {
@@ -221,6 +232,67 @@ function itemsAt(
   return array as Record<string, unknown>[];
 }
 
+/**
+ * The documented `default` and `maximum` of the parameter (or JSON body
+ * property) that a scheme's `pageSize` field names, when they are integers.
+ */
+function pageSizeLimits(
+  document: OpenApiDocument,
+  scheme: PaginationSchemeObject,
+  operation: OperationObject,
+): { default?: number; maximum?: number } {
+  const deref = <T>(value: T): T => {
+    let current: unknown = value;
+    for (let hops = 0; hops < 8 && isRecord(current); hops += 1) {
+      const ref = current['$ref'];
+      if (typeof ref !== 'string' || !ref.startsWith('#/')) break;
+      let node: unknown = document;
+      for (const raw of ref.slice(2).split('/'))
+        node = isRecord(node)
+          ? node[raw.replace(/~1/g, '/').replace(/~0/g, '~')]
+          : undefined;
+      current = node;
+    }
+    return current as T;
+  };
+  const schemas: (SchemaObject | undefined)[] = [];
+  for (const [name, field] of Object.entries(
+    scheme.request?.queryParameters ?? {},
+  )) {
+    if (field.role !== 'pageSize') continue;
+    schemas.push(
+      deref(
+        (operation.parameters ?? [])
+          .map((p) => deref(p))
+          .find((p) => p?.in === 'query' && p.name === name)?.schema,
+      ),
+    );
+  }
+  const body = deref(
+    operation.requestBody?.content?.['application/json']?.schema,
+  );
+  for (const [name, field] of Object.entries(
+    scheme.request?.bodyFields ?? {},
+  )) {
+    if (field.role === 'pageSize')
+      schemas.push(deref(body?.properties?.[name]));
+  }
+  const integer = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 1
+      ? value
+      : undefined;
+  for (const schema of schemas) {
+    if (!schema) continue;
+    const limits: { default?: number; maximum?: number } = {};
+    const fallback = integer(schema.default);
+    const maximum = integer(schema.maximum);
+    if (fallback !== undefined) limits.default = fallback;
+    if (maximum !== undefined) limits.maximum = maximum;
+    return limits;
+  }
+  return {};
+}
+
 /** Fills `{name}` path variables, percent-encoding each value. */
 export function bindPath(
   template: string,
@@ -330,16 +402,28 @@ function withBody(
  * a non-2xx status, or on a non-JSON body.
  */
 export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
+  // Not complete until the walk ends normally: a throw, or a caller that
+  // stops early, leaves `complete: false`.
+  const outcome = walk.outcome;
+  if (outcome) {
+    outcome.complete = false;
+    delete outcome.reason;
+  }
+  const result: WalkOutcome = { complete: true };
+  yield* walkAllPages({ ...walk, outcome: result });
+  if (outcome) {
+    outcome.complete = result.complete;
+    if (result.reason !== undefined) outcome.reason = result.reason;
+  }
+}
+
+async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
   const { document, operation, budget, upstream } = walk;
   const effective = resolveEffectiveScheme(document, operation);
   const scheme = effective?.scheme;
   const responseSchema =
     operation.responses?.['200']?.content?.['application/json']?.schema;
   const basePath = upstream.pathname.replace(/\/$/, '');
-  if (walk.outcome) {
-    walk.outcome.complete = true;
-    delete walk.outcome.reason;
-  }
   if (scheme?.type === 'rangeWindow') {
     yield* walkWindows(walk, scheme, responseSchema);
     return;
@@ -348,6 +432,53 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   let cursor: PageCursor = {};
   let next: URL | undefined;
   let itemsSoFar = 0;
+  // Pagination Schemes 0.6.0 §4.4.5: a page with fewer than `size` items
+  // ends a pageNumber list.
+  const short =
+    scheme?.type === 'pageNumber' ? scheme.response?.shortPage : undefined;
+  // The page size sent: the caller's, capped at the pageSize parameter's
+  // documented maximum (a server caps a larger one, and a short page would
+  // then end the list early); else, for a shortPage that takes the size
+  // sent, the parameter's documented default, sent explicitly.
+  const limits = scheme ? pageSizeLimits(document, scheme, operation) : {};
+  let pageSize = walk.pageSize;
+  if (pageSize !== undefined && limits.maximum !== undefined)
+    pageSize = Math.min(pageSize, limits.maximum);
+  if (pageSize === undefined && short?.size === 'request')
+    pageSize =
+      limits.default !== undefined && limits.maximum !== undefined
+        ? Math.min(limits.default, limits.maximum)
+        : limits.default;
+  // The full size (spec 0.6.0 §4.4.5): `size`, or the page size sent when
+  // it is smaller, so that a smaller page does not look short. A page size
+  // is only sent through a pageSize field; without one it changes nothing.
+  // A GET walk sends no body, so a body field only counts on a POST walk.
+  const pageSizeLocations =
+    walk.method === 'POST'
+      ? (['queryParameters', 'bodyFields'] as const)
+      : (['queryParameters'] as const);
+  const sendsPageSize = Boolean(
+    scheme &&
+      pageSizeLocations.some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.role === 'pageSize',
+        ),
+      ),
+  );
+  const shortSize =
+    short?.size === 'request'
+      ? pageSize
+      : short && pageSize !== undefined && sendsPageSize
+        ? Math.min(short.size, pageSize)
+        : short?.size;
+  if (short && shortSize === undefined) {
+    throw new PageReadError(
+      'The shortPage size of the scheme is the page size the client sends, and its pageSize parameter documents no default; pass pageSize',
+    );
+  }
+  let previousPage: string | undefined;
+  const seenIds = new Set<string>();
+  const first = scheme ? pageStart(scheme) : 1;
 
   for (;;) {
     let url = next;
@@ -356,7 +487,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       url.pathname = basePath + walk.path;
       const query = {
         ...walk.query,
-        ...(scheme ? buildQuery(scheme, cursor, walk.pageSize) : {}),
+        ...(scheme ? buildQuery(scheme, cursor, pageSize) : {}),
       };
       for (const [key, value] of Object.entries(query)) {
         url.searchParams.set(key, value);
@@ -373,7 +504,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       request.body = JSON.stringify(
         next || !scheme
           ? walk.body
-          : withBody(walk.body, buildBody(scheme, cursor, walk.pageSize)),
+          : withBody(walk.body, buildBody(scheme, cursor, pageSize)),
       );
     }
 
@@ -403,18 +534,59 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
         : itemsAt(body, itemsField, walk.skipNonObjects);
+    // Pagination Schemes 0.6.0 §4.4.5: checked before the page is handed
+    // on, so that its items are not taken.
+    const number = cursor.page ?? first;
+    let shortState: PaginationResponseState | undefined;
+    let full = shortSize ?? 0;
+    if (scheme && short && shortSize !== undefined) {
+      shortState = parsePaginationState(
+        scheme,
+        isRecord(body) ? body : {},
+        response.headers,
+        itemsSoFar + items.length,
+      );
+      // A pageSize-role field reports the size the server applied.
+      if (shortState.pageSize !== null && shortState.pageSize >= 1)
+        full = shortState.pageSize;
+      if (items.length > full) {
+        throw new PageReadError(
+          `Page ${number} holds ${items.length} items, more than the declared ${full}; the read is not complete`,
+        );
+      }
+      const identity = walk.identity;
+      if (identity) {
+        const ids = items.map((item) => identity(item)).filter((id) => id);
+        if (ids.some((id) => seenIds.has(id))) {
+          throw new PageReadError(
+            `Page ${number} holds an item an earlier page returned; the read is not complete`,
+          );
+        }
+        for (const id of ids) seenIds.add(id);
+      } else {
+        const fingerprint = JSON.stringify(items);
+        if (items.length > 0 && fingerprint === previousPage) {
+          throw new PageReadError(
+            `Page ${number} repeats the page before it; the read is not complete`,
+          );
+        }
+        previousPage = fingerprint;
+      }
+    }
     itemsSoFar += items.length;
     yield { url, items, body };
 
     if (!scheme) {
       return;
     }
-    const state = parsePaginationState(
-      scheme,
-      isRecord(body) ? body : {},
-      response.headers,
-      itemsSoFar,
-    );
+    const state =
+      shortState ??
+      parsePaginationState(
+        scheme,
+        isRecord(body) ? body : {},
+        response.headers,
+        itemsSoFar,
+      );
     // A link the response carried, whatever its type: `resolveLink` decides
     // whether it is followed, so a value that is not a string is refused
     // rather than taken as the last page.
@@ -422,6 +594,42 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       state.nextLinkValue !== undefined &&
       state.nextLinkValue !== null &&
       state.nextLinkValue !== '';
+    if (short && shortSize !== undefined) {
+      // totalPages is a count: with start s the last page is s + totalPages - 1.
+      const last =
+        state.totalPages !== null ? first + state.totalPages - 1 : null;
+      const ended =
+        (last !== null && number >= last) ||
+        (state.totalCount !== null && itemsSoFar >= state.totalCount);
+      const more =
+        (last !== null && number < last) ||
+        (state.totalCount !== null && itemsSoFar < state.totalCount);
+      if (items.length < full) {
+        if (more && short.assurance === 'documented') {
+          throw new PageReadError(
+            `Page ${number} is short, but the response says more pages follow; the read is not complete`,
+          );
+        }
+        if (
+          walk.outcome &&
+          (more || (!ended && short.assurance !== 'documented'))
+        ) {
+          walk.outcome.complete = false;
+          walk.outcome.reason = more
+            ? `ended by a short page while the response says more pages follow: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`
+            : `ended by a short page whose end is ${short.assurance}, not documented: not a complete read (Pagination Schemes 0.6.0 §4.4.5)`;
+        }
+        return;
+      }
+      // A full page: a totalPages or totalCount end is complete, whatever
+      // the assurance; else the next page number, unless a link leads on.
+      if (ended) return;
+      if (!linkPresent) {
+        cursor = { page: number + 1 };
+        next = undefined;
+        continue;
+      }
+    }
     if (!state.hasNextPage && !linkPresent) {
       return;
     }
@@ -548,6 +756,8 @@ async function* walkWindows(
           const id = (walk.identity as (i: Record<string, unknown>) => string)(
             item,
           );
+          // An item without an identity cannot be told apart: kept as is.
+          if (id === '') return true;
           if (yielded.has(id)) return false;
           yielded.add(id);
           return true;

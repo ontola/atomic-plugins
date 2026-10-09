@@ -9,7 +9,9 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "devonian/lenses": ["../../devonian/src/lenses/index.ts"],
+      "devonian/lenses": [
+        "app/node_modules/devonian/build/src/lenses/index.d.ts"
+      ],
       "@tomic/lib": ["../../browser/lib/src/index.ts"]
     }
   },
