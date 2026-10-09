@@ -43,8 +43,8 @@ def validate(document):
     limits = {}
     if root is not None:
         require(isinstance(root, dict), "root: expected object")
-        require(set(root) <= {"limits", "applies", "headers", "signals"}, "root: unknown field")
-        require(set(root) & {"limits", "headers", "signals"}, "root: expected limits, headers or signals")
+        require(set(root) <= {"limits", "applies", "headers", "bodyFields", "signals"}, "root: unknown field")
+        require(set(root) & {"limits", "headers", "bodyFields", "signals"}, "root: expected limits, headers, bodyFields or signals")
         require(("limits" in root) == ("applies" in root), "root: limits and applies go together")
         if "limits" in root:
             limits = root["limits"]
@@ -54,6 +54,8 @@ def validate(document):
             selection(root["applies"], limits, "root.applies")
         if "headers" in root:
             validate_headers(root["headers"])
+        if "bodyFields" in root:
+            validate_roles(root["bodyFields"], "bodyFields", case_insensitive=False)
         if "signals" in root:
             signals = root["signals"]
             require(isinstance(signals, list) and signals, "signals: expected nonempty array")
@@ -89,13 +91,18 @@ def validate_limit(name, limit):
             require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
 
 def validate_headers(headers):
-    require(isinstance(headers, dict) and headers, "headers: expected nonempty object")
-    lowered = [name.lower() for name in headers if isinstance(name, str)]
-    require(len(lowered) == len(headers) and all(lowered), "headers: expected nonempty header names")
-    require(len(set(lowered)) == len(lowered), "headers: names must be unique case-insensitively")
+    validate_roles(headers, "headers", case_insensitive=True)
+
+
+def validate_roles(headers, where, case_insensitive):
+    """A map of header name (or body dot-path) to Header Role Object."""
+    require(isinstance(headers, dict) and headers, f"{where}: expected nonempty object")
+    names = [name.lower() if case_insensitive else name for name in headers if isinstance(name, str)]
+    require(len(names) == len(headers) and all(names), f"{where}: expected nonempty names")
+    require(len(set(names)) == len(names), f"{where}: names must be unique" + (" case-insensitively" if case_insensitive else ""))
     roles = []
     for name, header in headers.items():
-        label = f"headers.{name}"
+        label = f"{where}.{name}"
         require(isinstance(header, dict) and set(header) <= {"role", "unit", "description"}, f"{label}: unknown field")
         require(header.get("role") in ROLES, f"{label}: unknown role")
         roles.append(header["role"])
@@ -105,7 +112,7 @@ def validate_headers(headers):
             require("unit" not in header, f"{label}: unit only for reset and retryAfter")
         if "description" in header:
             require(isinstance(header["description"], str), f"{label}.description: expected string")
-    require(len(set(roles)) == len(roles), "headers: each role at most once")
+    require(len(set(roles)) == len(roles), f"{where}: each role at most once")
 
 def validate_signal(signal, limits, label):
     require(isinstance(signal, dict), f"{label}: expected object")
@@ -273,6 +280,20 @@ def _absolute(absolute, received_at, date_header):
         times.append(received_at + (absolute - server_now))
     return max(times)
 
+def _body_text(body, path):
+    """A body field's value as text (§ Response body fields): a string, or an integer's decimal form."""
+    value = body
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return value if isinstance(value, str) else None
+
+
 def classify(document, status, headers, body, received_at):
     """Classify one response under the document's x-throttling.
 
@@ -299,21 +320,26 @@ def classify(document, status, headers, body, received_at):
         if status != 429:
             return None
         matched = {"meaning": "throttled"}
+    # role -> [(value, unit), ...]: headers first, then body fields (0.3.0).
     roles = {}
     for name, header in root.get("headers", {}).items():
         value = single_header(headers, name)
         if value is not None and value is not _REPEATED:
-            roles[header["role"]] = (value, header.get("unit"))
+            roles.setdefault(header["role"], []).append((value, header.get("unit")))
+    for path, field in root.get("bodyFields", {}).items():
+        value = _body_text(body, path)
+        if value is not None:
+            roles.setdefault(field["role"], []).append((value, field.get("unit")))
     date_header = single_header(headers, "date")
     date_header = date_header if isinstance(date_header, str) else None
     times = []
-    if "retryAfter" in roles:
-        value, unit = roles["retryAfter"]
+    for value, unit in roles.get("retryAfter", []):
         times.append(parse_time(value, unit, received_at, date_header))
-    exhausted = matched["meaning"] == "quotaExhausted" or ("remaining" in roles and _integer(roles["remaining"][0]) == 0)
-    if "reset" in roles and exhausted:
-        value, unit = roles["reset"]
-        times.append(parse_time(value, unit, received_at, date_header))
+    remaining = next((n for n in (_integer(v) for v, _ in roles.get("remaining", [])) if n is not None), None)
+    exhausted = matched["meaning"] == "quotaExhausted" or remaining == 0
+    if exhausted:
+        for value, unit in roles.get("reset", []):
+            times.append(parse_time(value, unit, received_at, date_header))
     times = [t for t in times if t is not None]
     bucket = matched.get("bucket")
     if times:

@@ -235,4 +235,51 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(result["meaning"], "quotaExhausted")
 
 
+class BodyFieldTests(unittest.TestCase):
+    """0.3.0: roles read from the JSON body (Todoist's error_extra.retry_after)."""
+
+    def document(self):
+        return {"x-throttling": {"bodyFields": {"error_extra.retry_after": {"role": "retryAfter", "unit": "deltaSeconds"}}}}
+
+    def test_validation(self):
+        validate(self.document())
+        for mutate in (lambda r: r.update(bodyFields={}),
+                       lambda r: r["bodyFields"]["error_extra.retry_after"].pop("unit"),
+                       lambda r: r["bodyFields"].update({"other": {"role": "retryAfter", "unit": "deltaSeconds"}}),
+                       lambda r: r["bodyFields"]["error_extra.retry_after"].update(role="wait")):
+            d = self.document()
+            mutate(d["x-throttling"])
+            with self.assertRaises(ValueError):
+                validate(d)
+        # Body paths are case-sensitive: these are two names (but each role only once).
+        d = self.document()
+        d["x-throttling"]["bodyFields"]["Error_extra.limit"] = {"role": "limit"}
+        validate(d)
+
+    def test_retry_after_from_the_body(self):
+        body = {"error": "Too many requests", "http_code": 429, "error_extra": {"retry_after": 3, "event_id": "x"}}
+        self.assertEqual(classify(self.document(), 429, {}, body, NOW), {"meaning": "throttled", "bucket": None, "retryAt": NOW + 3})
+        # A string digit sequence parses too; booleans, floats and objects do not.
+        body["error_extra"]["retry_after"] = "7"
+        self.assertEqual(classify(self.document(), 429, {}, body, NOW)["retryAt"], NOW + 7)
+        for value in (True, 3.5, {"s": 3}, None):
+            body["error_extra"]["retry_after"] = value
+            self.assertIsNone(classify(self.document(), 429, {}, body, NOW)["retryAt"])
+        # A non-throttling response's body field says nothing.
+        body["error_extra"]["retry_after"] = 3
+        self.assertIsNone(classify(self.document(), 404, {}, body, NOW))
+
+    def test_header_and_body_for_one_role(self):
+        d = self.document()
+        d["x-throttling"]["headers"] = {"Retry-After": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}}
+        body = {"error_extra": {"retry_after": 3}}
+        self.assertEqual(classify(d, 429, {"Retry-After": "10"}, body, NOW)["retryAt"], NOW + 10)  # the later time
+        self.assertEqual(classify(d, 429, {"Retry-After": "1"}, body, NOW)["retryAt"], NOW + 3)
+        # Counts: the header's value when it parses, else the body's.
+        d = {"x-throttling": {"headers": {"X-Remaining": {"role": "remaining"}, "X-Reset": {"role": "reset", "unit": "deltaSeconds"}},
+                              "bodyFields": {"remaining": {"role": "remaining"}}}}
+        self.assertEqual(classify(d, 429, {"X-Remaining": "5", "X-Reset": "60"}, {"remaining": 0}, NOW)["retryAt"], None)
+        self.assertEqual(classify(d, 429, {"X-Remaining": "x", "X-Reset": "60"}, {"remaining": 0}, NOW)["retryAt"], NOW + 60)
+
+
 if __name__ == "__main__": unittest.main()
