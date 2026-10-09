@@ -56,6 +56,20 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+Discord's guild list needs no pagination for these user tokens. Discord's
+reference for `GET /users/@me/guilds`
+(https://docs.discord.com/developers/resources/user, "Get Current User
+Guilds", checked 2026-10-09) says it "returns 200 guilds by default, which
+is the maximum number of guilds a non-bot user can join", and that
+pagination is not needed to list a user's guilds; `limit` is 1–200. The
+CRUD overlay's fixed `limit: 200` read of `myGuilds` therefore returns every
+guild of a `discordUser` connection, and a guild missing from it is one the
+user left. The comment in
+`APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+that Syncables "cannot derive a cursor" for `before`/`after` is moot for
+this read: no cursor is needed. It would matter only for a bot token (the
+`discordBot` profile), which no catalog selects.
+
 `catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
 platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
 the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
@@ -169,22 +183,15 @@ because a historical catalog's order is not recorded here (Clockify's
 `dc7b2bdb` auth and pagination overlays target paths its `crud-causality`
 sibling adds). A revision that a higher `-vN-` file of the same kind and pin
 supersedes is not checked on its own, since it usually exists because the
-old one does not compose; a catalog that still selects it is told. Three
-pinned OADs do not parse with libyaml ([#307](https://github.com/ontola/atomic-plugins/issues/307)):
-bunq.com 1.0 at `dec74da7` has two U+2028 (line separator) characters inside
-a block scalar on line 1141, which libyaml
-treats as YAML 1.1 line breaks, so the text after them is dedented out of the scalar
-("did not find expected key", libyaml line 1143); codat.io accounting 2.1.0
-at `41b90944` has a line holding only a tab inside two `|-` block scalars
-(lines 43982 and 44484); sendgrid.com 1.0.0 at `bdea260b` has raw C1
-control characters (U+0090, U+0091, U+009C, U+009F) in three example `city`
-strings (lines 13002, 13169 and 27059). The proxy's serde_yaml 0.9.34
-(unsafe-libyaml) refuses all three with the same errors, so the proxy cannot
-load them either. No later revision parses: each pin is the last upstream
-change to its file (checked against `ontola/openapi-directory` `main` at
-`845f81fffbea9a2c4b49fb7364cce967eea3203a`), so these overlays cannot be
-re-pinned until the documents are fixed upstream. The script warns and
-cannot check their overlays.
+old one does not compose; a catalog that still selects it is told. The
+bunq.com 1.0, codat.io accounting 2.1.0 and sendgrid.com 1.0.0 documents did
+not parse with libyaml (or the proxy's serde_yaml) until
+ontola/openapi-directory#179 fixed them
+([#307](https://github.com/ontola/atomic-plugins/issues/307)); their overlays
+now have `pagination-dc4bd462cdef2a11865274027de251b5b1f3d854-overlay.yaml`
+revisions at the fixed commit, which the script checks. No catalog selects
+them. The old revisions stay published; the script warns that it cannot read
+their pinned documents.
 
 Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's

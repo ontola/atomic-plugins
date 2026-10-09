@@ -30,6 +30,7 @@ import {
 import type { ListMethod, Transport } from './transport.js';
 import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -188,6 +189,12 @@ export interface PaginateOptions {
   transport: Transport;
   /** Optional storage hook for original data-read responses. */
   storeResponse?: StoreReadResponse;
+  /**
+   * Dot-path to the items array in each page body, `''` for the body root
+   * (an Envelope Object's `itemsField`). Without it, the scheme's own
+   * `response.envelope` applies, else the array is located.
+   */
+  itemsField?: string;
   /** A path template from `document.paths`, e.g. `/v1/search`. */
   path: string;
   /** Default `GET`. */
@@ -228,6 +235,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
+    declaredThrottling(doc),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({
@@ -240,6 +248,9 @@ export async function paginate(
     query: options.query ?? {},
     body: options.body ?? {},
     ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+    ...(options.itemsField === undefined
+      ? {}
+      : { itemsField: options.itemsField }),
     ...(options.range ? { range: options.range } : {}),
   })) {
     items.push(...page.items);

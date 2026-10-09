@@ -208,6 +208,7 @@ pub struct Security {
 }
 
 const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
+const IDEMPOTENCY_SUBKEY_LABEL: &[u8] = b"integration-proxy-idempotency-key-v1";
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
@@ -262,6 +263,19 @@ impl Security {
     /// key-check buckets' subkey).
     pub(crate) fn derive_subkey(&self, label: &[u8]) -> [u8; 32] {
         hmac_sha256(&self.encryption_key, &[label])
+    }
+
+    /// An `Idempotency-Key` as a no-credential connection sends it upstream:
+    /// base64url (unpadded) of `HMAC-SHA256(subkey, connection_id ‖ 0 ‖
+    /// key)` under `derive_subkey(IDEMPOTENCY_SUBKEY_LABEL)`. Stable for one
+    /// connection and key, so a retry matches; different across connections,
+    /// so tenants sharing the provider's key space never collide; and the
+    /// caller's key cannot be read back from it.
+    pub fn connection_idempotency_key(&self, connection_id: &str, key: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(hmac_sha256(
+            &self.derive_subkey(IDEMPOTENCY_SUBKEY_LABEL),
+            &[connection_id.as_bytes(), b"\0", key],
+        ))
     }
 
     /// The client currently backing this connection. Held only for the
@@ -988,6 +1002,38 @@ pub(crate) mod tests {
         assert_eq!(
             hex,
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// A no-credential connection's `Idempotency-Key` is an HMAC under its
+    /// own derived subkey: per connection, stable, never the caller's key.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn idempotency_keys_are_namespaced_per_connection_under_a_derived_subkey() {
+        let security = crate::test_support::security().await;
+        let subkey = hmac_sha256(&security.encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]);
+        assert_ne!(subkey, security.key_check_key);
+        let key = security.connection_idempotency_key("conn-a", b"create-1");
+        assert_eq!(
+            key,
+            URL_SAFE_NO_PAD.encode(hmac_sha256(&subkey, &[b"conn-a", b"\0", b"create-1"]))
+        );
+        assert_eq!(
+            key,
+            security.connection_idempotency_key("conn-a", b"create-1")
+        );
+        assert_ne!(
+            key,
+            security.connection_idempotency_key("conn-b", b"create-1")
+        );
+        assert_ne!(
+            key,
+            security.connection_idempotency_key("conn-a", b"create-2")
+        );
+        // The separator keeps (id, key) pairs from running together.
+        assert_ne!(
+            security.connection_idempotency_key("ab", b"c"),
+            security.connection_idempotency_key("a", b"bc")
         );
     }
 

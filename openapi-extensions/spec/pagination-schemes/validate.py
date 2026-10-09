@@ -481,7 +481,6 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         raise ValueError("size 'request' needs the page size the client sends")
     if page_size is not None and maximum is not None and page_size > maximum:
         raise ValueError(f"page size {page_size} is above the documented maximum {maximum}")
-    # The full size: size, or the page size sent when it is smaller (or size is "request").
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
     # The full size: size, or the page size sent when it is smaller. A page
     # size is only sent through a pageSize field; without one it changes nothing.
