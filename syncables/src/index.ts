@@ -28,6 +28,7 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  IncompleteRead,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
@@ -125,7 +126,9 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
+export { PageReadError } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
+export type { ShortPageObject } from './pagination/types.js';
 
 export {
   PaginationSchemeError,

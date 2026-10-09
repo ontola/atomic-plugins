@@ -61,6 +61,7 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  IncompleteRead,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
@@ -134,7 +135,9 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
+export { PageReadError } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
+export type { ShortPageObject } from './pagination/types.js';
 export type {
   AutoDetectObject,
   PaginationApplicationObject,

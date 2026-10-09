@@ -205,6 +205,9 @@ pub struct Security {
     /// key-check buckets, so the encryption key itself is used only by
     /// XChaCha20-Poly1305.
     key_check_key: [u8; 32],
+    /// `HMAC-SHA256(ENCRYPTION_KEY, IDEMPOTENCY_SUBKEY_LABEL)`, the key of
+    /// [`Security::connection_idempotency_key`], derived once.
+    idempotency_key: [u8; 32],
 }
 
 const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
@@ -254,6 +257,7 @@ impl Security {
         Ok(Self {
             database,
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
+            idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
             encryption_key,
         })
     }
@@ -273,7 +277,7 @@ impl Security {
     /// caller's key cannot be read back from it.
     pub fn connection_idempotency_key(&self, connection_id: &str, key: &[u8]) -> String {
         URL_SAFE_NO_PAD.encode(hmac_sha256(
-            &self.derive_subkey(IDEMPOTENCY_SUBKEY_LABEL),
+            &self.idempotency_key,
             &[connection_id.as_bytes(), b"\0", key],
         ))
     }
@@ -1012,6 +1016,7 @@ pub(crate) mod tests {
     async fn idempotency_keys_are_namespaced_per_connection_under_a_derived_subkey() {
         let security = crate::test_support::security().await;
         let subkey = hmac_sha256(&security.encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]);
+        assert_eq!(security.idempotency_key, subkey);
         assert_ne!(subkey, security.key_check_key);
         let key = security.connection_idempotency_key("conn-a", b"create-1");
         assert_eq!(
