@@ -90,3 +90,22 @@ is kept, and a read with such a row completes; each fails on the previous
 code. The option-shape cases assert every value is a scalar, a list or
 null. `deriveRuntimeClass` documents JavaScript's integer-like key order,
 and `interpretRuntimeItems` why describers are read one at a time.
+
+## Turn 4
+
+**Human (via the coordinator session):** Align with #448 (the spec
+reference fix): a `memberId` that is present but not a string (an object,
+array, number, null or boolean) is invalid, not unmatched; a test for each.
+Optional: own-property lookups for the declaration's reference and
+resource, and prototype-less bindings, so a `__proto__` name gives a clear
+error or a missing value.
+
+**Assistant:** Such a member goes to `invalid` with no value (a member
+without the `memberId` path, or one that is not an object, stays
+unmatched). Five table cases, after the reference's
+`test_member_id_that_is_not_a_string_is_invalid` plus null and a boolean.
+The reference and resource are looked up as own properties, and the
+bindings and the path values are prototype-less: an undeclared
+`__proto__` reference is named in the error, and a template variable
+`__proto__` that nothing binds leaves the item without a describer. Each
+new test fails on the previous commit. README wording updated.

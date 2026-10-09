@@ -1106,7 +1106,8 @@ const { records, ontology, errors } = await readPlatform(document, {
   member keys that are `unmatched` (no definition, a name two definitions
   share under `match: key`, or a type other than the definition's under
   `memberType`), `undescribed` (a type the document does not describe, or a
-  duplicated id), `invalid` (an option value of the wrong shape) or
+  duplicated id), `invalid` (an option value of the wrong shape, or a
+  `memberId` that is present but not a string) or
   `conflicting` (two or more members matching one definition: none gives a
   value). A member whose value path is absent has no value, never `null`.
   When a member matches no definition, the describer is read once more,

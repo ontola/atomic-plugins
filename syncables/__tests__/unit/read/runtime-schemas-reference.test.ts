@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { OpenApiDocument } from '../../../src/browser.js';
 import {
   deriveRuntimeClass,
+  describerPath,
   readRuntimeMembers,
   runtimeSchemasOf,
   type RuntimeSchema,
@@ -216,6 +217,21 @@ describe('Runtime Schemas reference cases (ReadingTests)', () => {
       if (badTags) expect(result.values).not.toHaveProperty('e%3Af');
     },
   );
+
+  it.each([
+    ['an object', { nested: 'a%3Ab' }],
+    ['an array', ['a%3Ab']],
+    ['a number', 7],
+    ['null', null],
+    ['a boolean', true],
+  ])('test_member_id_that_is_not_a_string_is_invalid (%s)', (_kind, value) => {
+    const row = copy(ROW) as Json;
+    (properties(row)['Estimate'] as Json)['id'] = value;
+    const result = read(runtime(), TABLE, row);
+    expect(result.invalid).toEqual(['Estimate']);
+    expect(result.unmatched).toEqual([]);
+    expect(result.values).not.toHaveProperty('a%3Ab');
+  });
 
   it('test_member_without_value_path_has_no_value', () => {
     const row = copy(ROW) as Json;
@@ -473,6 +489,43 @@ describe('Runtime Schemas: keys that are Object.prototype names (#435 re-review)
     expect(Object.keys(result.values)).toEqual(['__proto__', 'c%3Ad']);
     expect(result.values['__proto__']).toBe(4);
     expect(result.values['c%3Ad']).toBe('__proto__');
+  });
+});
+
+describe('Runtime Schemas: author-chosen keys that are Object.prototype names', () => {
+  it('names an undeclared reference or resource __proto__ clearly', () => {
+    const failures = new Map<string, string>();
+    const document = copy(userDefinedColumns);
+    const crud = document.components!['crudResources'] as Record<string, Json>;
+    ((crud['row']!['x-runtime-schema'] as Json)['describedBy'] as Json)[
+      'reference'
+    ] = '__proto__';
+    runtimeSchemasOf(document as OpenApiDocument, failures);
+    expect(failures.get('row')).toBe(
+      'row.x-runtime-schema.describedBy.reference names no reference __proto__',
+    );
+    const other = copy(userDefinedColumns);
+    const references = (
+      other.components!['crudResources'] as Record<string, Json>
+    )['row']!['references'] as Record<string, Json>;
+    references['table']!['resource'] = 'constructor';
+    failures.clear();
+    runtimeSchemasOf(other as OpenApiDocument, failures);
+    expect(failures.get('row')).toMatch(
+      /reference table names no resource with an identity\.urlTemplate/,
+    );
+  });
+
+  it('leaves a template variable __proto__ that nothing binds missing: no describer', () => {
+    const document = copy(userDefinedColumns);
+    const crud = document.components!['crudResources'] as Record<string, Json>;
+    (crud['table']!['identity'] as Json)['urlTemplate'] =
+      '/tables/{tableId}/{__proto__}';
+    const schema = runtimeSchemasOf(document as OpenApiDocument).get('row')!;
+    expect(describerPath(schema, ROW, {})).toBeUndefined();
+    // A context that does give it, as an own key, binds it.
+    const context = JSON.parse('{"__proto__": "x"}') as Record<string, string>;
+    expect(describerPath(schema, ROW, context)).toBe('/tables/t1/x');
   });
 });
 

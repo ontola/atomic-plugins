@@ -77,7 +77,7 @@ export interface RuntimeMembers {
   unmatched: string[];
   /** Member keys whose definition's type is undescribed, or whose id is duplicated. */
   undescribed: string[];
-  /** Member keys whose option value has the wrong shape. */
+  /** Member keys whose option value has the wrong shape, or whose `memberId` is present but not a string. */
   invalid: string[];
   /** Member keys of two or more members that match one definition; none gives a value. */
   conflicting: string[];
@@ -232,19 +232,19 @@ function runtimeSchema(
   );
   const references = declaration['references'];
   const reference = isRecord(references)
-    ? references[referenceName]
+    ? own(references, referenceName)
     : undefined;
   if (!isRecord(reference))
     throw new Error(
       `${where}.describedBy.reference names no reference ${referenceName}`,
     );
-  const target = resources[asText(reference['resource'])];
+  const target = own(resources, asText(reference['resource']));
   const identity = isRecord(target) ? target['identity'] : undefined;
   if (!isRecord(identity) || typeof identity['urlTemplate'] !== 'string')
     throw new Error(
       `${where}: reference ${referenceName} names no resource with an identity.urlTemplate`,
     );
-  const bindings: Record<string, string> = {};
+  const bindings = dict<string>();
   if (isRecord(reference['bindings']))
     for (const [variable, binding] of Object.entries(reference['bindings'])) {
       if (isRecord(binding))
@@ -325,7 +325,9 @@ export function describerPath(
   item: Record<string, unknown>,
   context: Record<string, string>,
 ): string | undefined {
-  const values = { ...context };
+  // Without a prototype, so a template variable named `__proto__` that
+  // nothing binds is missing, not Object.prototype.
+  const values = Object.assign(dict<string>(), context);
   for (const [variable, field] of Object.entries(runtime.describer.bindings)) {
     const value = at(item, field);
     if (value === MISSING || value === null || value === '') return undefined;
@@ -505,6 +507,12 @@ export function readRuntimeMembers(
       runtime.match === 'id'
         ? at(member, runtime.memberId as string)
         : (byKey.get(key) ?? MISSING);
+    if (id !== MISSING && typeof id !== 'string') {
+      // A memberId that is present but not a string (an object, an array, a
+      // number, null, a boolean) names no definition: invalid, no value.
+      result.invalid.push(key);
+      continue;
+    }
     if (typeof id === 'string' && skipped.has(id)) {
       result.undescribed.push(key);
       continue;
