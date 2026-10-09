@@ -1,11 +1,12 @@
 """CRUD Causality 0.5.0: collection reads (listMethod, listQuery, listBody) and compound creates."""
+import copy
 import pathlib
 import unittest
 
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import compound_create, continue_compound_create, read_request, validate
+from validate import compound_create, continue_compound_create, created_identity, read_request, validate
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -385,6 +386,74 @@ class CompoundCreateTests(unittest.TestCase):
         result = self.run_create({"number": 7, "labels": []}, planned={"title": "Fix", "labels": ["doing"]})
         self.assertEqual(result["state"], "applied")
         self.assertEqual([s[0] for s in self.sent], ["create", "addTicketLabels"])
+
+
+class CompoundCreateSecondReviewTests(unittest.TestCase):
+    """Second review of #413: duplicate-write paths and identity edge cases."""
+
+    PLANNED = {"title": "Fix", "labels": ["doing"], "watchers": ["ada"]}
+
+    def setUp(self):
+        self.document = compound()
+        self.crud = self.document["paths"][TICKETS]["post"]["x-crud"]
+
+    def test_resuming_does_not_resend_an_applied_omit_follow_up(self):
+        sent = []
+        # Read back after a partly applied create: watchers (omit) already set, labels not.
+        found = {"number": 7, "title": "Fix", "labels": [], "watchers": ["ada"]}
+        result = continue_compound_create(self.crud, self.PLANNED, found,
+                                          lambda op, req: sent.append(op) or "ok", {"project": "p1"})
+        self.assertEqual(result["state"], "applied")
+        self.assertEqual(sent, ["addTicketLabels"])
+
+    def test_a_binding_without_its_template_variable_is_unbound_not_an_error(self):
+        resource = self.document["components"]["crudResources"]["ticket"]
+        resource["identity"]["bindings"]["ticketId"] = {"field": "id"}
+        bound, sent = [], []
+        result = compound_create(self.document, self.crud, self.PLANNED,
+                                 lambda body: ("ok", {"number": 7}, None),
+                                 lambda op, req: sent.append(op) or "ok", {"project": "p1"},
+                                 on_created=bound.append)
+        self.assertEqual(result["state"], "unbound")
+        self.assertEqual((bound, sent), ([], []))
+        with self.assertRaises(ValueError) as raised:
+            validate(self.document)
+        self.assertIn("not a variable of urlTemplate", str(raised.exception))
+
+    def test_template_identity_falls_back_to_the_request_body(self):
+        resource = self.document["components"]["crudResources"]["ticket"]
+        resource["identity"]["bindings"] = {"number": {"field": "number"}}
+        planned = dict(self.PLANNED, number=12)  # a client-supplied identity
+        result = compound_create(self.document, self.crud, planned,
+                                 lambda body: ("ok", {}, None), lambda op, req: "ok", {"project": "p1"})
+        self.assertEqual(result["created"]["number"], 12)
+
+    def test_header_named_by_url_name_case_insensitively(self):
+        self.crud["url"] = {"source": "header", "name": "Content-Location"}
+        result = compound_create(
+            self.document, self.crud, self.PLANNED,
+            lambda body: ("ok", {}, {"content-location": "/v1/projects/p1/tickets/9"}),
+            lambda op, req: "ok", {"project": "p1"})
+        self.assertEqual(result["created"]["number"], "9")
+        result = compound_create(
+            self.document, self.crud, self.PLANNED,
+            lambda body: ("ok", {}, {"Location": "/v1/projects/p1/tickets/9"}),
+            lambda op, req: "ok", {"project": "p1"})
+        self.assertEqual(result["state"], "unbound")
+
+    def test_variables_whose_names_clash_once_sanitised(self):
+        resource = self.document["components"]["crudResources"]["ticket"]
+        resource["identity"] = {"urlTemplate": "/projects/{a-b}/tickets/{a_b}",
+                                "bindings": {"a-b": {"field": "project"}, "a_b": {"field": "number"}}}
+        self.crud["url"] = {"source": "header"}
+        identity = created_identity(self.document, self.crud, {}, "/projects/p1/tickets/3")
+        self.assertEqual(identity, {"project": "p1", "number": "3"})
+
+    def test_duplicate_follow_up_fields(self):
+        self.crud["followUps"].append(copy.deepcopy(self.crud["followUps"][0]))
+        with self.assertRaises(ValueError) as raised:
+            validate(self.document)
+        self.assertIn("field 'labels' has more than one follow-up", str(raised.exception))
 
 
 if __name__ == "__main__":

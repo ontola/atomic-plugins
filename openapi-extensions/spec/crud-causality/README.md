@@ -378,7 +378,7 @@ A BindSource is an object with `from` and `field`:
    object.
 3. When the create succeeds, the object exists. The client determines its
    identity as §4.3.2 says (the `Location` header, a body field, or the
-   template over the response body and `addedFields`). It records the
+   template over the request body and `addedFields`, read from the response). It records the
    logical create as bound to that identity before it sends anything else,
    and from then on MUST NOT send the create again for this logical create.
    When the identity cannot be determined (an empty body where the template
@@ -386,11 +386,14 @@ A BindSource is an object with `from` and `field`:
    the client MUST NOT send the create again, sends no follow-up, and reports
    the logical create as unbound until it finds the object by other means
    (a read of the collection), when it continues from step 4.
-4. For each follow-up in order, the client works out what is missing: for
-   `omit`, the planned value; for `include`, the planned value minus what
-   the create response shows at `field` (for an array, the planned items
-   whose value, through `itemKey`, is not among the response's items; for
-   anything else, the planned value unless the response's value equals it).
+4. For each follow-up in order, the client works out what is missing: the
+   planned value minus what the created object shows at `field`, for
+   `omit` and `include` alike (for an array, the planned items whose value,
+   through `itemKey`, is not among the object's items; for anything else,
+   the planned value unless the object's value equals it). The created
+   object is the create's answer, or, when the client resumes a create
+   (step 2, or a partly applied one), the object it read back; so a
+   follow-up that already applied is not sent again.
    When nothing is missing (the planned object has no value at `field`, or
    the create applied all of it), it skips the follow-up. Otherwise it fills
    the follow-up request by `bind`. A BindSource that resolves to nothing
@@ -744,7 +747,7 @@ A conforming implementation MUST enforce:
 18. No `listQuery` or `listBody` key may name a field to which the pagination scheme the operation applies explicitly (`x-pagination`, after overrides) gives a role other than `pageSize`. `listBody` keys are compared as dot-paths with the pagination scheme's request `bodyFields` keys, a segment holding a `.` written `["a.b"]` as in Pagination Schemes §4.4.
 19. A Collection Object SHOULD NOT carry both a standard field and its `x-list-*` counterpart.
 20. `followUps` MUST NOT be present unless `action` is `create`, and MUST be a nonempty array.
-21. Every Follow-up Object has `field`, `create` (`include` or `omit`), `operation` and `bind`; `field` and `itemKey` are dot-paths.
+21. Every Follow-up Object has `field`, `create` (`include` or `omit`), `operation` and `bind`; `field` and `itemKey` are dot-paths; no two Follow-up Objects of one create have the same `field`.
 22. `operation` MUST be the `operationId` of exactly one operation in the document, whose `x-crud` has `action: update` and the same `resource` as the create.
 23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
 24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name. Every required query or header parameter of the follow-up operation is bound by a `query.<name>` or `header.<name>` key. Header names compare case-insensitively, here and in rule 23.
@@ -756,7 +759,7 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Validator and tests
 
-[`validate.py`](validate.py) checks rules 2, 4, 14–19 and 20–24 for a loaded OpenAPI
+[`validate.py`](validate.py) checks rules 2, 4, 9, 14–19 and 20–24 for a loaded OpenAPI
 document: the collection reads of §4.2.1 and the resource and collection names
 they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
 rules. It also holds `read_request`, which builds the first request of a read
