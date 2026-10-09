@@ -106,6 +106,21 @@ export interface RuntimeSchema {
 
 const MISSING = Symbol('missing');
 
+/**
+ * Every record this module builds from provider or document keys is
+ * created without a prototype, and read through `own`: a definition,
+ * option or type named `constructor`, `toString` or `__proto__` is an
+ * ordinary key, never an inherited member.
+ */
+function dict<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** `record[key]` when `record` has it as its own property, else undefined. */
+function own<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 const SEGMENT = /\["([^"]+)"\]|([^.[\]]+)/y;
 
 /**
@@ -240,7 +255,7 @@ function runtimeSchema(
     }
   if (!Object.keys(types).length)
     throw new Error(`${where}.types must have at least one entry`);
-  const typeObjects: Record<string, TypeObject> = {};
+  const typeObjects = dict<TypeObject>();
   for (const [kind, type] of Object.entries(types)) {
     const here = `${where}.types.${kind}`;
     if (!isRecord(type)) throw new Error(`${here} must be an object`);
@@ -337,6 +352,14 @@ function definitionsOf(
  * §5.1: the class one describer defines, after the spec's `derive_class`.
  * A definition without a string id and type is skipped; a name that is not
  * a string is replaced by the map key (with `keyedBy: name`), else the id.
+ *
+ * Order: a `map`-shaped describer is walked in JavaScript's own key order,
+ * which puts integer-like keys (`"2"`, `"10"`) first, in ascending order,
+ * before the others in the order the JSON gives them. So "the first" of a
+ * repeated definition id, and the order of `names`, `undescribed` and the
+ * other lists, can differ from the JSON text, and from the Python
+ * reference's dict order, when a map has integer-like keys. The same holds
+ * for an item's members.
  */
 export function deriveRuntimeClass(
   runtime: RuntimeSchema,
@@ -344,13 +367,13 @@ export function deriveRuntimeClass(
 ): RuntimeClass {
   const fields = runtime.definition;
   const derived: RuntimeClass = {
-    properties: {},
+    properties: dict(),
     undescribed: [],
-    names: {},
+    names: dict(),
     duplicates: [],
     duplicateNames: [],
-    duplicateIdNames: {},
-    duplicateOptions: {},
+    duplicateIdNames: dict(),
+    duplicateOptions: dict(),
   };
   const seen = new Set<string>();
   const nameCount = new Map<string, number>();
@@ -374,7 +397,7 @@ export function deriveRuntimeClass(
     seen.add(id);
     derived.names[id] = named;
     nameCount.set(named, (nameCount.get(named) ?? 0) + 1);
-    const type = runtime.types[kind];
+    const type = own(runtime.types, kind);
     if (!type) {
       derived.undescribed.push(id);
       continue;
@@ -391,12 +414,14 @@ export function deriveRuntimeClass(
     }
     if (type.options) {
       const listed = at(definition, type.options.field);
-      const options: Record<string, string | null> = {};
+      const options = dict<string | null>();
       for (const option of Array.isArray(listed) ? listed : []) {
         const optionId = at(option, type.options.id);
         if (typeof optionId !== 'string') continue;
-        if (Object.prototype.hasOwnProperty.call(options, optionId)) {
-          (derived.duplicateOptions[id] ??= []).push(optionId);
+        if (Object.hasOwn(options, optionId)) {
+          const repeated = own(derived.duplicateOptions, id) ?? [];
+          repeated.push(optionId);
+          derived.duplicateOptions[id] = repeated;
           continue;
         }
         const optionName = at(option, type.options.name);
@@ -447,7 +472,7 @@ export function readRuntimeMembers(
   item: Record<string, unknown>,
 ): Omit<RuntimeMembers, 'describer'> {
   const result: Omit<RuntimeMembers, 'describer'> = {
-    values: {},
+    values: dict(),
     unmatched: [],
     undescribed: [],
     invalid: [],
@@ -484,7 +509,7 @@ export function readRuntimeMembers(
       result.undescribed.push(key);
       continue;
     }
-    const property = typeof id === 'string' ? properties[id] : undefined;
+    const property = typeof id === 'string' ? own(properties, id) : undefined;
     if (!property) {
       result.unmatched.push(key);
       continue;
@@ -504,8 +529,8 @@ export function readRuntimeMembers(
       continue;
     }
     const key = keys[0] as string;
-    const property = properties[id] as RuntimeProperty;
-    const type = runtime.types[property.type] as TypeObject;
+    const property = own(properties, id) as RuntimeProperty;
+    const type = own(runtime.types, property.type) as TypeObject;
     let value = at(members[key], type.value);
     // No value at the type's path: the item holds no value (§4.4), not null.
     if (value === MISSING) continue;
@@ -582,6 +607,10 @@ export async function interpretRuntimeItems(
     entry.set(describer ? { describer: describer.path, ...members } : members);
     return members.unmatched.length > 0;
   };
+  // Describers are read one at a time, on purpose: each read goes through
+  // the read's shared Budget (request count, deadline, throttling waits),
+  // in the same order every time, and a read of many items naming one
+  // describer must not send it several times at once.
   for (const entry of items) {
     const runtime = schemas.get(entry.resource) as RuntimeSchema;
     const path = describerPath(runtime, entry.item, entry.context);

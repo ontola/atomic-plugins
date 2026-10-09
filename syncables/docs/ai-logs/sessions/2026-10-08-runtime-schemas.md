@@ -69,3 +69,24 @@ shapes as a table), plus the refused declarations; the read tests add
 re-reads under `match: key`, conflicting members and a budget error. The
 README table lists Runtime Schemas 0.1.0-draft, the read section and
 changelog bullet describe the new reports, CLAUDE.md is updated.
+
+## Turn 3
+
+**Human (via the coordinator session):** Re-review of #435: one blocker,
+`Object.prototype` keys. A member id `constructor` under `match: id`
+without `memberType`, or a type named `toString`, throws and rejects the
+whole read; a definition or option id `__proto__` is dropped. Use
+prototype-less records with own-property lookups, with tests. Nits: port
+the "every value is a scalar, list or null" assertion, note the order of
+integer-like keys, and say why describers are read one at a time.
+
+**Assistant:** Every record built from provider or document keys
+(`properties`, `names`, `duplicateIdNames`, `duplicateOptions`, an
+option map, `values`, the parsed `types`) is created without a prototype,
+and read through an own-property helper. Tests: `constructor` and
+`toString` member ids are unmatched, a `toString` definition type is
+undescribed unless declared, `__proto__` as a definition id and option id
+is kept, and a read with such a row completes; each fails on the previous
+code. The option-shape cases assert every value is a scalar, a list or
+null. `deriveRuntimeClass` documents JavaScript's integer-like key order,
+and `interpretRuntimeItems` why describers are read one at a time.

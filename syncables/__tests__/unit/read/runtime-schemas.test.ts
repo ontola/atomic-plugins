@@ -484,6 +484,33 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
   });
 });
 
+describe('Runtime Schemas: one odd row does not reject the read', () => {
+  it('reads a row with members whose ids are Object.prototype names', async () => {
+    const document = structuredClone(userDefinedColumns);
+    const crud = document.components!['crudResources'] as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    delete crud['row']!['x-runtime-schema']!['memberType'];
+    const { result } = await read(
+      [
+        row('r1', {
+          Estimate: { id: 'a%3Ab', type: 'number', number: 3 },
+          Odd: { id: 'constructor', type: 'number', number: 1 },
+          Odder: { id: 'toString', type: 'toString', toString: 'x' },
+        }),
+      ],
+      [json(table())],
+      document,
+    );
+    expect(result.collections[0]!.complete).toBe(true);
+    expect(result.collections[0]!.runtimeMembers![0]!).toMatchObject({
+      values: { 'a%3Ab': 3 },
+      unmatched: ['Odd', 'Odder'],
+    });
+  });
+});
+
 describe('Runtime Schemas: re-reads and reports in the read', () => {
   const keyed = (): OpenApiDocument => {
     const document = structuredClone(userDefinedColumns);

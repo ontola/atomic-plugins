@@ -205,6 +205,13 @@ describe('Runtime Schemas reference cases (ReadingTests)', () => {
         ...(badTags ? ['Tags'] : []),
       ];
       expect(result.invalid).toEqual(expected);
+      // Never a sentinel as a value: a scalar, a list or null.
+      for (const value of Object.values(result.values))
+        expect(
+          value === null ||
+            Array.isArray(value) ||
+            ['number', 'string', 'boolean'].includes(typeof value),
+        ).toBe(true);
       if (badStage) expect(result.values).not.toHaveProperty('c%3Ad');
       if (badTags) expect(result.values).not.toHaveProperty('e%3Af');
     },
@@ -402,6 +409,70 @@ describe('Runtime Schemas reference cases (ReadingTests)', () => {
       invalid: [],
       conflicting: [],
     });
+  });
+});
+
+describe('Runtime Schemas: keys that are Object.prototype names (#435 re-review)', () => {
+  it('leaves a member whose id is constructor unmatched, under match: id without memberType', () => {
+    const schema = runtime((d) => delete d['memberType']);
+    const row = copy(ROW) as Json;
+    properties(row)['Odd'] = { id: 'constructor', type: 'number', number: 1 };
+    properties(row)['Odder'] = { id: 'toString', type: 'number', number: 2 };
+    const result = read(schema, TABLE, row);
+    expect(result.unmatched).toEqual(['Odd', 'Odder']);
+    expect(result.values).toEqual({
+      'a%3Ab': 3,
+      'c%3Ad': 'opt-1',
+      'e%3Af': ['tag-1'],
+    });
+  });
+
+  it('takes a definition type named toString as undescribed, unless the document describes it', () => {
+    const table = copy(TABLE) as Json;
+    tableProperties(table)['Odd'] = { id: 'o1', name: 'Odd', type: 'toString' };
+    const row = copy(ROW) as Json;
+    properties(row)['Odd'] = { id: 'o1', type: 'toString', toString: 'x' };
+    let schema = runtime();
+    expect(deriveRuntimeClass(schema, table).undescribed).toEqual([
+      'g%3Ah',
+      'o1',
+    ]);
+    expect(read(schema, table, row).undescribed).toEqual(['Due', 'Odd']);
+    schema = runtime((d) => {
+      (d['types'] as Json)['toString'] = {
+        value: 'toString',
+        schema: { type: 'string' },
+      };
+    });
+    expect(read(schema, table, row).values['o1']).toBe('x');
+  });
+
+  it('keeps a definition id and an option id __proto__ as ordinary keys', () => {
+    // JSON.parse makes "__proto__" an own key, as a provider's body would.
+    const table = JSON.parse(`{
+      "properties": {
+        "Proto": { "id": "__proto__", "name": "Proto", "type": "number" },
+        "Stage": { "id": "c%3Ad", "name": "Stage", "type": "select",
+                   "select": { "options": [ { "id": "__proto__", "name": "Odd" } ] } }
+      }
+    }`) as Json;
+    const row = JSON.parse(`{
+      "properties": {
+        "Proto": { "id": "__proto__", "type": "number", "number": 4 },
+        "Stage": { "id": "c%3Ad", "type": "select", "select": { "id": "__proto__" } }
+      }
+    }`) as Json;
+    const schema = runtime();
+    const derived = deriveRuntimeClass(schema, table);
+    expect(Object.keys(derived.properties)).toEqual(['__proto__', 'c%3Ad']);
+    expect(derived.names['__proto__']).toBe('Proto');
+    expect(Object.keys(derived.properties['c%3Ad']!.options!)).toEqual([
+      '__proto__',
+    ]);
+    const result = readRuntimeMembers(schema, derived, row);
+    expect(Object.keys(result.values)).toEqual(['__proto__', 'c%3Ad']);
+    expect(result.values['__proto__']).toBe(4);
+    expect(result.values['c%3Ad']).toBe('__proto__');
   });
 });
 
