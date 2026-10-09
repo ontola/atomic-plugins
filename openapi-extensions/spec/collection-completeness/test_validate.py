@@ -6,7 +6,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import classify_read, members_of_gone_parent, resource_not_found, validate
+from validate import classify_read, members_of_gone_parent, resource_not_found, resource_read_value, validate
 
 ROOT = pathlib.Path(__file__).parent
 TOMBSTONE = {"field": "deleted", "values": [True]}
@@ -168,6 +168,77 @@ class ClassifyTests(unittest.TestCase):
             completeness(document)[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                 validate(document)
+
+class GoneTests(unittest.TestCase):
+    """0.3.0: gone classifies a 410 separately from a 404."""
+
+    def deletion_only_410(self):
+        document = example()
+        for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
+            completeness(document, resource, collection)["gone"] = "deleted"
+        return document
+
+    def test_gone_deleted_with_not_found_unavailable(self):
+        document = self.deletion_only_410()
+        validate(document)
+        declaration = completeness(document)
+        not_found = resource_not_found(document, "task")
+        gone = resource_read_value(document, "task", "gone")
+        self.assertEqual((not_found, gone), ("unavailable", "deleted"))
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 404, None, not_found, gone), "unavailable")
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 410, None, not_found, gone), "deleted")
+        # Through a collection with no declaration, the resource-wide value still applies.
+        self.assertEqual(classify_read(None, None, "id", "t1", 410, None, not_found, gone), "deleted")
+
+    def test_without_gone_a_410_is_classified_like_a_404(self):
+        declaration = {"absent": "removed", "notFound": "unavailable"}
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 410, None), "unavailable")
+        self.assertEqual(classify_read({"absent": "removed"}, None, "id", "t1", 410, None), "deleted")
+        self.assertEqual(classify_read(dict(declaration, gone="purged"), None, "id", "t1", 410, None), "unavailable")
+
+    def test_not_found_deleted_with_gone_unavailable_is_forbidden(self):
+        document = example()
+        for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
+            completeness(document, resource, collection)["notFound"] = "deleted"
+        completeness(document)["gone"] = "unavailable"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("notFound: deleted with gone: unavailable", str(raised.exception))
+
+    def test_unrecognised_absent_still_honours_gone(self):
+        declaration = {"absent": "archived", "notFound": "unavailable", "gone": "deleted"}
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 410, None), "deleted")
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 404, None), "unavailable")
+
+    def test_gone_rules(self):
+        document = self.deletion_only_410()
+        document["components"]["crudResources"]["task"]["collections"]["starred"] = {
+            "urlTemplate": "/starred", "x-completeness": {"absent": "removed", "notFound": "unavailable", "gone": "deleted"}}
+        validate(document)
+        completeness(document)["gone"] = "unavailable"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("different gone values", str(raised.exception))
+        document = self.deletion_only_410()
+        document["components"]["crudResources"]["task"]["collections"]["starred"] = {
+            "urlTemplate": "/starred", "x-completeness": {"absent": "removed", "notFound": "unavailable"}}
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("['starred'] default gone", str(raised.exception))
+        for value, fragment in (("later", "gone: expected deleted or unavailable"), (["deleted"], "gone: expected")):
+            document = self.deletion_only_410()
+            completeness(document)["gone"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn(fragment, str(raised.exception))
+        document = example()
+        completeness(document).pop("notFound")
+        completeness(document)["absent"] = "deleted"
+        completeness(document)["gone"] = "deleted"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("gone: not allowed with absent: deleted", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
