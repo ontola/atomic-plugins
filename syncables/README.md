@@ -361,6 +361,11 @@ value this client has queued, or holds as failed, for that field), the client
 records a conflict.
 A refresh that shows an earlier queued edit applied, before or after its
 response arrives, is not a conflict.
+For a JSON Merge Patch update, conflicts are per top-level field: a remote
+change to any nested member of an object the patch touches is reported on
+the whole field, even when the patch sets other members. Its expected value
+is the patch applied to its own base, or to what the queued patches before
+it leave; failed patches are not counted as applied.
 The local value stays visible, the queued write still sends it (local wins on
 acknowledgement), and the conflict is observable in two ways:
 

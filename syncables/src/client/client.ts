@@ -1522,6 +1522,15 @@ export function createApiClient(
         }
         changed = true;
       }
+      // An update that had already failed says why it cannot be retried.
+      for (const write of failed) {
+        const message = `This update was made for a ${writeBody(write)} body and the document now declares ${routeBody(write.route)}; discard it`;
+        if (bodyMismatch(write) && write.lastError !== message) {
+          write.lastError = message;
+          delete write.lastStatus;
+          changed = true;
+        }
+      }
       // Updates send the whole record, so they wait for a refresh of their
       // collection instead of replaying on a confirmed record from before
       // the stop. Behind a create, the create's response is fresh enough.
@@ -2204,38 +2213,45 @@ export function createApiClient(
       // Values this client already sent or queued, per field, so a refresh
       // showing an earlier write applied (before its response arrived) is
       // not mistaken for a remote change.
-      // A merge patch's value is the field after the patch, applied in
-      // order from the first write's base (`null`: the field is absent).
+      // A merge patch's value is the field after the patch (`null`: the
+      // field is absent): applied to the write's own base, and to the value
+      // the queued writes before it leave. Failed writes are not chained:
+      // the provider did not apply them.
       const ours = new Map<string, unknown[]>();
       const latest = new Map<string, unknown>();
+      const failed = new Set(gaveUpWrites.get(key) ?? []);
+      const expected = new Map<QueuedWrite, Map<string, unknown[]>>();
       for (const write of writes) {
         if (write.scope !== scope || write.type !== 'update') continue;
-        const after = new Map<string, unknown>();
-        for (const [field, local] of Object.entries(write.changes ?? {}))
-          after.set(
-            field,
-            writeBody(write) === 'mergePatch'
-              ? patchedField(
-                  latest.has(field) ? latest.get(field) : write.base?.[field],
-                  local,
-                )
-              : local,
-          );
-        checkConflicts(write, records.get(write.id), ours, after);
-        for (const [field, value] of after) {
-          ours.set(field, [...(ours.get(field) ?? []), value]);
-          latest.set(field, value);
+        const after = new Map<string, unknown[]>();
+        for (const [field, local] of Object.entries(write.changes ?? {})) {
+          if (writeBody(write) !== 'mergePatch') {
+            after.set(field, [local]);
+          } else {
+            const values = [patchedField(write.base?.[field], local)];
+            if (latest.has(field))
+              values.push(patchedField(latest.get(field), local));
+            after.set(field, values);
+          }
+          const values = after.get(field) as unknown[];
+          ours.set(field, [...(ours.get(field) ?? []), ...values]);
+          if (!failed.has(write)) latest.set(field, values[values.length - 1]);
         }
+        expected.set(write, after);
       }
+      // Any value one of this client's writes gives the field, earlier or
+      // later, is not a remote change.
+      for (const [write, after] of expected)
+        checkConflicts(write, records.get(write.id), ours, after);
     }
   }
 
-  /** `after`: each changed field's value once this write applies. */
+  /** `after`: each changed field's possible values once this write applies. */
   function checkConflicts(
     write: QueuedWrite,
     next: Record<string, unknown> | undefined,
     ours: Map<string, unknown[]>,
-    after: Map<string, unknown>,
+    after: Map<string, unknown[]>,
   ): void {
     // A remote deletion under a pending update is not reported here.
     if (!write.base || !next) return;
@@ -2246,7 +2262,7 @@ export function createApiClient(
       write.base[field] = value;
       write.conflicts ??= new Map();
       if (
-        sameValue(value, after.get(field)) ||
+        after.get(field)?.some((own) => sameValue(own, value)) ||
         ours.get(field)?.some((own) => sameValue(own, value))
       ) {
         write.conflicts.delete(field);

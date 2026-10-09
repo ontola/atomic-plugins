@@ -66,3 +66,21 @@ behind a create; `retry` refuses such a write. `mergePatch` defines members
 instead of assigning them. Tests for each. An earlier, unpushed commit that
 merged update responses by RFC 7396 was dropped, as the review asked to
 keep storing a response's `null` as a value.
+
+## Turn 3
+
+**Human (via the coordinator session):** Re-review blocker: a false
+conflict still fires when an earlier merge patch failed, because the
+expected value was chained through failed writes the provider never
+applied (repro: `{meta:{a:'X'}}` refused 422, `{meta:{c:'3'}}` applied with
+its response held, `sync()`). Nits: a mismatched failed head restored under
+another format should get the format `lastError`; a README line that a
+nested remote change is reported on the whole field.
+
+**Assistant:** `detectConflicts` now computes, for every write first, the
+values its patch gives the field (on its own base, and chained only through
+queued writes, never failed ones), and accepts a remote value equal to any
+of this client's writes' values. Failed updates restored under a mismatched
+format get the format `lastError`. README "Refresh during a pending update"
+says merge-patch conflicts are per top-level field. Tests: the repro, and
+the restored failed update's `lastError`.

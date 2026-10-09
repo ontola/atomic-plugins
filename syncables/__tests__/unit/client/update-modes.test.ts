@@ -813,3 +813,64 @@ describe('mergePatch: __proto__', () => {
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 });
+
+describe('update modes: conflicts after a failed merge patch', () => {
+  it('reports no conflict when a later patch is read back after an earlier one failed', async () => {
+    const conflicts: string[] = [];
+    const fake = provider([structuredClone(rex)]);
+    const client = createApiClient(document({ put: false, patch: MERGE }), {
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+      onConflict: (c) => conflicts.push(c.field),
+    });
+    await client.sync();
+    fake.script = [422];
+    await client.update('/pets', '1', { meta: { a: 'X' } });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    let release = (): void => undefined;
+    fake.hold = new Promise<void>((resolve) => (release = resolve));
+    await client.update('/pets', '1', { meta: { c: '3' } });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(2));
+    // The provider applied only the second patch.
+    expect(fake.pets.get('1')).toEqual({
+      ...rex,
+      meta: { a: '1', b: '2', c: '3' },
+    });
+    await client.sync();
+    expect(conflicts).toEqual([]);
+    expect(
+      client.pendingWrites().flatMap((w) => w.conflicts ?? []),
+    ).toEqual([]);
+    release();
+    await vi.waitFor(() => expect(client.pendingWrites()).toHaveLength(1));
+    expect(conflicts).toEqual([]);
+  });
+});
+
+describe('update modes: an already failed update restored under another format', () => {
+  it('gets the format lastError', async () => {
+    const { client, fake, storage } = await synced(
+      document({ put: false, patch: MERGE }),
+    );
+    fake.script = [422];
+    await client.update('/pets', '1', { tag: null });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()[0]?.state).toBe('failed'),
+    );
+    const again = createApiClient(document({ put: REPLACE }), {
+      storage: storage.crash(),
+      transport: fake.transport,
+    });
+    await again.ready();
+    expect(again.pendingWrites()).toEqual([
+      expect.objectContaining({
+        state: 'failed',
+        lastError:
+          'This update was made for a mergePatch body and the document now declares record; discard it',
+      }),
+    ]);
+    expect(again.pendingWrites()[0]).not.toHaveProperty('lastStatus');
+  });
+});
