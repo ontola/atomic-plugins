@@ -15,6 +15,10 @@ import sys
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 ABSENT = {"deleted", "removed"}
 OUTCOMES = {"deleted", "unavailable"}
+
+
+def _known_absent(value):
+    return isinstance(value, str) and value in ABSENT
 FIELDS = {"absent", "notFound", "parentAbsent", "description"}
 VARIABLE = re.compile(r"\{([^{}]+)\}")
 
@@ -32,10 +36,10 @@ def _object(value, where, errors, on_collection):
     unknown = {k for k in value if k not in FIELDS and not k.startswith("x-")}
     if unknown:
         errors.append(f"{where}: unknown fields {sorted(unknown)}")
-    if value.get("absent") not in ABSENT:
+    if not _known_absent(value.get("absent")):
         errors.append(f"{where}.absent: expected deleted or removed")
     if "notFound" in value:
-        if value["notFound"] not in OUTCOMES:
+        if not isinstance(value["notFound"], str) or value["notFound"] not in OUTCOMES:
             errors.append(f"{where}.notFound: expected deleted or unavailable")
         elif value.get("absent") == "deleted":
             errors.append(f"{where}.notFound: not allowed with absent: deleted")
@@ -90,7 +94,8 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         declared = declarations_of(document, resource_name)
-        explicit = {d["notFound"] for d in declared.values() if d and "notFound" in d}
+        explicit = {d["notFound"] for d in declared.values()
+                    if d and "notFound" in d and isinstance(d["notFound"], (str, int, float, bool, type(None)))}
         if len(explicit) > 1:
             errors.append(f"crudResources.{resource_name}: collections declare different notFound values {sorted(map(str, explicit))}")
         if explicit:
@@ -153,9 +158,15 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
     of the resource's objects, through any collection (§4.3).
     """
     if status in (404, 410):
-        if declaration is not None and declaration.get("absent") not in ABSENT:
-            declaration = None  # §7: an unrecognised absent value means no Completeness Object
-        value = resource_not_found or (declaration or {}).get("notFound", "deleted")
+        stated = (declaration or {}).get("notFound")
+        if resource_not_found is not None:
+            value = resource_not_found
+        elif stated is not None:
+            value = stated  # §4.3: notFound describes the resource's read, whatever absent says
+        elif declaration is not None and not _known_absent(declaration.get("absent")):
+            value = "unavailable"  # §7: an unrecognised absent never yields the deleted default
+        else:
+            value = "deleted"
         return value if value in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
     if not isinstance(status, int) or not 200 <= status < 300:
         return "unknown"
@@ -171,8 +182,13 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
 
 def resource_not_found(document, resource_name):
     """The notFound any collection of the resource states, or None; it covers every read of its objects (§4.3)."""
-    values = {d["notFound"] for d in declarations_of(document, resource_name).values()
-              if d and d.get("absent") in ABSENT and "notFound" in d}
+    values = {d["notFound"] if d["notFound"] in OUTCOMES else "unavailable"
+              for d in declarations_of(document, resource_name).values()
+              if d and "notFound" in d and isinstance(d["notFound"], (str, type(None)))}
+    unreadable = any(d and "notFound" in d and not isinstance(d["notFound"], (str, type(None)))
+                     for d in declarations_of(document, resource_name).values())
+    if unreadable:
+        values.add("unavailable")
     return values.pop() if len(values) == 1 else ("unavailable" if values else None)
 
 
@@ -185,6 +201,8 @@ def members_of_gone_parent(declaration, parent_outcome):
     """
     if parent_outcome not in OUTCOMES or not declaration or "parentAbsent" not in declaration:
         return None
+    if not _known_absent(declaration.get("absent")):
+        return None  # §7: an unrecognised absent means no Completeness Object
     return "unavailable"
 
 

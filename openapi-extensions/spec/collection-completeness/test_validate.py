@@ -151,8 +151,23 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(classify_read({"absent": "removed"}, TOMBSTONE, "id", "t1", 404, None, value), "unavailable")
         self.assertIsNone(resource_not_found({"components": {"crudResources": {"x": {"collections": {}}}}}, "x"))
 
-    def test_unrecognised_absent_means_no_declaration(self):
-        self.assertEqual(classify_read({"absent": "gone", "notFound": "unavailable"}, None, "id", "t1", 404, None), "deleted")
+    def test_unrecognised_absent_never_yields_the_deleted_default(self):
+        # The round-7 probe: a stated notFound is honoured whatever absent says.
+        self.assertEqual(classify_read({"absent": "archived", "notFound": "unavailable"}, None, "id", "t1", 404, None), "unavailable")
+        self.assertEqual(classify_read({"absent": "archived", "notFound": "deleted"}, None, "id", "t1", 410, None), "deleted")
+        self.assertEqual(classify_read({"absent": "archived"}, None, "id", "t1", 404, None), "unavailable")
+        self.assertEqual(classify_read({"absent": ["removed"]}, None, "id", "t1", 404, None), "unavailable")
+        self.assertIsNone(members_of_gone_parent({"absent": "archived", "parentAbsent": "unavailable"}, "deleted"))
+        document = example()
+        document["components"]["crudResources"]["task"]["collections"]["listTasks"]["x-completeness"]["absent"] = "archived"
+        self.assertEqual(resource_not_found(document, "task"), "unavailable")
+
+    def test_malformed_values_are_errors_not_crashes(self):
+        for field, value in (("notFound", ["unavailable"]), ("absent", ["removed"]), ("notFound", {"a": 1})):
+            document = example()
+            completeness(document)[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                validate(document)
 
 if __name__ == "__main__":
     unittest.main()

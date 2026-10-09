@@ -375,9 +375,12 @@ A conforming consumer:
   mark the members `unavailable`, never `deleted`; MUST NOT mark a member a
   read of the pass returned, nor cascade further;
 * since 0.2.0: SHOULD treat a value it does not recognise as follows: a
-  Completeness Object whose `absent` it does not recognise as absent (it
-  checks `absent` before using any other field of the declaration); a
-  `notFound` as `unavailable`; a `parentAbsent` as `unavailable`.
+  Completeness Object whose `absent` it does not recognise as absent, except
+  for its `notFound`, which describes the resource's read (§4.3) and is
+  honoured whatever `absent` says; under an unrecognised `absent`, a `404` or
+  `410` is classified by a recognised `notFound`, else as `unavailable`, never
+  by the `deleted` default; a `notFound` as `unavailable`; a `parentAbsent`
+  as `unavailable`.
 
 ## 8. Not covered
 
