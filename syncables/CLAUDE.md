@@ -84,7 +84,13 @@ Data flows through four stages, each its own directory under `src/`:
    its `error`, no class, and an entry in `errors`. `runtimeSchemasOf`
    checks the declaration (dot-paths through the spec's `SEGMENT` grammar,
    non-empty `types`, a `schema` per type) and a failure fails the
-   resource's collections before any request.
+   resource's collections before any request. Describer errors are also
+   in `describerErrors`; `sync()` subtracts them from `errors` before its
+   "Read incomplete" check and returns them as `SyncResult.warnings`, with
+   `describers`, and keeps each complete snapshot's members per scope
+   (`runtimeMembersByScope`, in memory) for `runtimeMembers()`. An item
+   without a class gets `noClass: true`. `readPlatform` maps snapshot items
+   to records by object identity to set `ReadRecord.runtime`.
 
    For compatibility, the client opts into `resources/discover.ts` path-pair
    discovery when CRUD metadata is absent. The mock server still uses that
@@ -441,6 +447,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/runtime-classes.test.ts` covers the classes in
+  `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
+  `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
+  a failed collection still throwing).
 - `unit/read/runtime-schemas-reference.test.ts` mirrors the spec's
   `ReadingTests` (same TABLE and ROW) against `deriveRuntimeClass` and
   `readRuntimeMembers`, plus the declarations `runtimeSchemasOf` refuses.
