@@ -28,6 +28,7 @@ import {
   RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
 } from '../read/pages.js';
 import { readNestedField } from '../pagination/response-parser.js';
 import { paginate as paginateOperation } from '../read/read.js';
@@ -2372,6 +2373,7 @@ export function createApiClient(
     const last = new Map<string, boolean>();
     let body: unknown;
     let count = 0;
+    const feedOutcome: WalkOutcome = { complete: false };
     try {
       for await (const page of walkPages({
         document: doc,
@@ -2386,6 +2388,8 @@ export function createApiClient(
             : {},
         body: {},
         itemsField: feed.itemsField,
+        // No identity: a change list may name one record in several items.
+        outcome: feedOutcome,
       })) {
         body = page.body;
         count += page.items.length;
@@ -2421,6 +2425,10 @@ export function createApiClient(
       }
       return incomplete;
     }
+    // A feed read that ended without an error but not completely (a short
+    // page whose end is not documented, say) gives no tombstones and leaves
+    // the cursor where it was.
+    if (!feedOutcome.complete) return incomplete;
     if (feed.cursor) {
       const next = isRecord(body)
         ? readNestedField(body, feed.cursor.responseField)
@@ -2874,6 +2882,7 @@ export function createApiClient(
     started: Map<string, number>,
     startedRecords: Map<string, number>,
     changed: Set<string>,
+    round: SyncRound,
   ): Promise<IncompleteRead> {
     const route = byResource.get(snapshot.collection.name) as ClientRoute;
     const context = contextFor(route, snapshot.pathParams);
@@ -2887,11 +2896,20 @@ export function createApiClient(
       return report;
     const before = remote(scope);
     const updated = new Map<string, Record<string, unknown>>();
+    const stored = feedTombstones.get(scope)?.ids;
     for (const item of snapshot.items) {
       const id = String(item[route.collection.idField]);
       const key = keyFor(scope, id);
       if ((startedRecords.get(key) ?? 0) !== (recordRevisions.get(key) ?? 0))
         continue;
+      // As in a complete read: a record this read returns exists, so an
+      // update held for it in flight is not held any more, and a stored
+      // feed tombstone for it is stale.
+      for (const write of writeQueues.get(key) ?? []) delete write.holdIfQueued;
+      if (stored?.delete(id)) {
+        round.tombstonesChanged = true;
+        round.superseded.add(key);
+      }
       if (sameValue(before.get(id), item)) continue;
       updated.set(id, item);
     }
@@ -2943,7 +2961,13 @@ export function createApiClient(
       if (!snapshot.complete) {
         if (snapshot.notComplete !== undefined && snapshot.error === undefined)
           incomplete.push(
-            await upsertIncomplete(snapshot, started, startedRecords, changed),
+            await upsertIncomplete(
+              snapshot,
+              started,
+              startedRecords,
+              changed,
+              round,
+            ),
           );
         continue;
       }

@@ -54,3 +54,22 @@ parameter's `maximum`, and a `size: request` short page without a passed
 size uses the parameter's `default`, sent explicitly; `readPlatform`'s doc
 says its records include incompletely read collections; the mock server
 answers full pages of a numeric `shortPage.size`. Tests for each.
+
+## Turn 3
+
+**Human (via the coordinator session):** Review blocker: the deletion-feed
+read can be incomplete and still move the feed position; pass `outcome`
+(and `identity`) and treat the read as incomplete without moving the
+cursor. Nit: clear `holdIfQueued` and the feed tombstone for records an
+incomplete read returns, as the complete path does.
+
+**Assistant:** `readFeed` passes an outcome to `walkPages` and, when the
+walk ended without an error but not completely, returns the incomplete
+result: no tombstones, the cursor where it was. It passes no identity: a
+change list can name one record in several items (the last decides), which
+the short-page repeat check would refuse. `upsertIncomplete` clears
+`holdIfQueued` on the queued writes of each record the read returns and
+drops a stored feed tombstone for it (`superseded`), as the complete path
+does. Test: a feed paged by a short-page scheme keeps no cursor under
+`observed` and stores one under `documented` (checked to fail without the
+fix).

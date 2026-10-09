@@ -1225,3 +1225,46 @@ describe('deletion feeds: precedence', () => {
     ]);
   });
 });
+
+describe('deletion feeds: a feed read that is not complete (review of #431)', () => {
+  /** The feed paged by a short-page scheme, with the given assurance. */
+  function pagedFeed(assurance: 'documented' | 'observed'): OpenApiDocument {
+    const doc = feedDocument();
+    doc.components!['paginationSchemes'] = {
+      changePages: {
+        type: 'pageNumber',
+        autoDetect: false,
+        request: { queryParameters: { page: { role: 'page' } } },
+        response: { shortPage: { size: 2, assurance } },
+      },
+    };
+    const get = doc.paths['/pet-changes']!.get!;
+    get.parameters = [
+      ...(get.parameters ?? []),
+      { name: 'page', in: 'query', schema: { type: 'integer' } },
+    ];
+    get['x-pagination'] = [{ scheme: 'changePages' }];
+    return doc;
+  }
+
+  it('leaves the cursor where it was and gives no tombstones', async () => {
+    for (const [assurance, stored] of [
+      ['observed', false],
+      ['documented', true],
+    ] as const) {
+      const storage = new CrashableStorage();
+      const fake = provider([rex, tom], {
+        // One change, a short page: the end of the list only if documented.
+        feed: () => response({ changes: [{ id: '9', state: 'active' }], next: 'c1' }),
+      });
+      const client = createApiClient(pagedFeed(assurance), {
+        storage,
+        transport: fake.transport,
+      });
+      await client.sync();
+      const cursors = (storage.outbox() as { feedCursors?: unknown[] } | undefined)
+        ?.feedCursors;
+      expect(Boolean(cursors?.length), assurance).toBe(stored);
+    }
+  });
+});
