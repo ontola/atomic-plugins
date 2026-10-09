@@ -555,10 +555,128 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
         record: tom,
       },
     ]);
-    // As for every record without writes, the complete read pruned the
-    // visible copy; keeping the last known values is the app's call here.
-    expect(await client.get('/pets', '2')).toBeUndefined();
+    // §4.3: kept with its last known values, not pruned, until a later
+    // read settles it.
+    expect(await client.get('/pets', '2')).toEqual(tom);
+    await client.sync();
+    expect(await client.get('/pets', '2')).toEqual(tom);
+    // A new update of it is held for the next refresh, not sent.
+    await client.update('/pets', '2', { tag: 'lion' });
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { id: '2', state: 'pending', awaitingRefresh: true },
+    ]);
+    // The next sync checks it again: still unavailable, so it is held for a
+    // decision, with the edit visible on the kept values.
+    await client.sync();
+    expect(client.pendingWrites()).toMatchObject([
+      { id: '2', state: 'failed', missingRecord: 'unavailable' },
+    ]);
+    expect(await client.get('/pets', '2')).toEqual({ ...tom, tag: 'lion' });
+    // A read that returns it settles the mark.
+    listTom = true;
+    await client.resolveWrite('/pets', '2', { action: 'discard' });
+    await client.sync();
+    listTom = false;
+    fake.pets.delete('2');
+    await client.sync();
+    expect(reports.map((r) => [r.id, r.evidence])).toEqual([
+      ['2', 'unavailable'],
+      ['2', 'unavailable'],
+      ['2', 'unavailable'],
+    ]);
   });
+
+  it('keeps an unavailable record after its held writes are discarded, across a restart, until a read returns it', async () => {
+    const { client, storage, fake, relist } = await editedThenMissing({
+      doc: document({ completeness: UNAVAILABLE }),
+      item: gone(404),
+    });
+    await client.sync();
+    await client.resolveWrite('/pets', '1', { action: 'discard' });
+    expect(client.pendingWrites()).toEqual([]);
+    // §4.3: the last known values stay, marked, after the discard.
+    expect(await client.get('/pets', '1')).toEqual(rex);
+    await client.sync();
+    expect(await client.get('/pets', '1')).toEqual(rex);
+    // Kept across a restart (the outbox stores the mark).
+    const again = createApiClient(document({ completeness: UNAVAILABLE }), {
+      storage: storage.crash(),
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await again.ready();
+    await again.sync();
+    expect(await again.get('/pets', '1')).toEqual(rex);
+    // A delete of it is held, not sent, and checked again.
+    await again.remove('/pets', '1');
+    await settle();
+    expect(fake.writes).toEqual([]);
+    await again.sync();
+    expect(again.pendingWrites()).toMatchObject([
+      { type: 'delete', state: 'failed', missingRecord: 'unavailable' },
+    ]);
+    // Once a read returns it, the mark is settled.
+    await again.resolveWrite('/pets', '1', { action: 'discard' });
+    relist();
+    await again.sync();
+    expect(await again.get('/pets', '1')).toEqual(rex);
+  });
+
+  for (const [label, doc, expected] of [
+    [
+      'holds it for a decision when the read says unavailable',
+      document({ completeness: UNAVAILABLE }),
+      'held',
+    ],
+    [
+      'sends it when the read says deleted (the default notFound)',
+      document(),
+      'sent',
+    ],
+  ] as const)
+    it(`checks a lone DELETE of a record a complete read no longer returns: ${label}`, async () => {
+      let listRex = true;
+      let blocked = true;
+      const fake = provider([rex, tom], {
+        listed: (pet) => listRex || pet['id'] !== '1',
+        item: (id) => (id === '1' ? gone(404)() : undefined),
+        behave: (r) =>
+          blocked
+            ? response({ error: 'invented' }, 503)
+            : r.method === 'DELETE'
+              ? response({ error: 'gone' }, 404)
+              : undefined,
+      });
+      const client = createApiClient(doc, {
+        transport: fake.transport,
+        retry: { baseDelayMs: 60_000 },
+      });
+      await client.sync();
+      await client.remove('/pets', '1');
+      await vi.waitFor(() =>
+        expect(client.pendingWrites()[0]?.attempts).toBe(1),
+      );
+      await settle(5);
+      fake.writes.length = 0;
+      blocked = false;
+      listRex = false;
+      await client.sync();
+      await settle();
+      if (expected === 'held') {
+        expect(fake.writes).toEqual([]);
+        expect(client.pendingWrites()).toMatchObject([
+          { type: 'delete', state: 'failed', missingRecord: 'unavailable' },
+        ]);
+      } else {
+        // Released at once, and settled by the provider's 404.
+        await vi.waitFor(() =>
+          expect(fake.writes.map((w) => w.method)).toEqual(['DELETE']),
+        );
+        await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+      }
+    });
 
   describe('with a deletion feed', () => {
     it('lets a tombstone in the feed stand over the unavailable answer', async () => {
@@ -953,15 +1071,42 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
         ]);
       });
 
-  it('does not mark a member that this sync read under another parent (it moved)', async () => {
+  it('marks a member whose bare id this sync read under another parent (identity includes the parent)', async () => {
+    // The review's probe: the same id under L1 and L2 is not the same
+    // record unless the ids are known to be global; when in doubt, mark.
     const { client, fake, reports } = await listsThenGone({
       client: { missingRecordChecks: 'all' },
     });
     fake.tasks.get('L1')!.set('t2', t2);
     await client.sync();
-    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
-      ['L2', 'unavailable', 'read'],
-      ['t3', 'unavailable', 'parent'],
+    expect(reports.map((r) => [r.id, r.context, r.evidence])).toEqual([
+      ['L2', undefined, 'unavailable'],
+      ['t2', { listId: 'L2' }, 'unavailable'],
+      ['t3', { listId: 'L2' }, 'unavailable'],
+    ]);
+  });
+
+  it('holds a remove() into the scope of a gone parent and concludes it at once', async () => {
+    const doc = nestedDocument((_, paths) => {
+      (paths['/lists/{listId}/tasks/{taskId}'] as Record<string, Row>)[
+        'delete'
+      ] = { responses: { '204': { description: 'Deleted' } } };
+    });
+    const { client, fake } = await listsThenGone({
+      doc,
+      client: { missingRecordChecks: 'all' },
+    });
+    await client.sync();
+    await client.remove('listTasks', 't3', { listId: 'L2' });
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        id: 't3',
+        type: 'delete',
+        state: 'failed',
+        missingRecord: 'unavailable',
+      },
     ]);
   });
 
@@ -1308,6 +1453,24 @@ describe('resourceNotFound (route.notFound, resource-wide)', () => {
     });
     expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe(
       'deleted',
+    );
+  });
+
+  it('counts a notFound on the list operation even for a collection with fixed reads', () => {
+    const doc = nestedDocument((resources, paths) => {
+      resources['taskList']!['collections'] = {
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          listQuery: { showHidden: 'true' },
+        },
+      };
+      (paths['/users/me/lists']!['get'] as Row)['x-completeness'] = {
+        absent: 'removed',
+        notFound: 'unavailable',
+      };
+    });
+    expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe(
+      'unavailable',
     );
   });
 

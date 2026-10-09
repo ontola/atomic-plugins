@@ -267,14 +267,23 @@ Data flows through four stages, each its own directory under `src/`:
    never `deleted` (any `parentAbsent` value), with `source: 'parent'` and
    the last known values as `record`, failing their heads through
    `failMissing` and skipping a member a write settled on since the sync
-   began, or one this sync's read of the nested collection returned under
-   another context (`SyncRound.returned`); nothing is pruned. `failMissing` on
+   began, or one this sync's read returned in the same scope
+   (`SyncRound.returned`, by scope: a bare id under another parent is
+   still marked); nothing is pruned. Records concluded `unavailable`
+   (`reportMissing`) are kept in `unavailableKept` (stored as the outbox's
+   `unavailable`) and `rebuild` falls back to them, so neither a vanished
+   write-less record nor one whose writes were discarded is pruned; a read
+   returning the record, a `filtered` or a `deleted` conclusion clears it.
+   `update()`/`remove()` of a kept record are held (`awaitingRefresh`) for
+   the next refresh. `holdMissing` and `evidenceHead` include deletes: a
+   held delete is released (and woken) unless the evidence is
+   `unavailable`, which fails it. `failMissing` on
    `unavailable` also fails the rest of the record's queue in order,
    deletes included, and parks a create in place (state `failed`,
    `missingRecord`), stopping at a head in flight, not stored or already
    parked. Each concluded nested scope is marked in `goneParents` (in
    memory, cleared by a complete read of the scope); `update()` into a
-   marked scope, and `create()` into one, are
+   marked scope, `remove()` into one, and `create()` into one, are
    enqueued held and concluded at once (`concludeNew`). An unrecognised
    `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
    parent is GETed when `nestedWritesUnder` finds unsettled writes under

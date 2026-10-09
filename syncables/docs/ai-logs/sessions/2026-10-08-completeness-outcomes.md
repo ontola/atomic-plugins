@@ -168,3 +168,31 @@ sync read per collection, and a member returned under another parent is not
 marked. Tests rewritten and added (resource-wide cases, any `parentAbsent`
 under three parent conclusions, the moved member, an unrecognised `absent`,
 `resourceNotFound` for R2). README, CLAUDE.md and the changelog follow.
+
+## Turn (2026-10-09): review blockers and nits
+
+**Human (via the coordinator session):** Blockers: `remove()` into a gone
+parent's scope was sent at once; the moved-member exemption matched bare
+ids across parents (exempt only on the full identity; the probe: the same
+id under L1 and L2). Nits: a list operation's `notFound` counts for
+fixed-query collections; a lone DELETE of a directly unavailable record
+must be checked before sending; under the K4/K5 decisions, a vanished,
+write-less record concluded unavailable is kept, marked, not pruned, and a
+later `update()` of it is held. Also spec §4.3: after a discard, an
+unavailable record keeps its last known values until a later read settles
+it.
+
+**Assistant:** `unavailableKept` (stored in the outbox as `unavailable`)
+holds every record concluded unavailable, set in `reportMissing` and
+cleared by a read that returns it or a `filtered`/`deleted` conclusion;
+`rebuild` falls back to it, so neither a vanished record nor a discarded
+one is pruned. `update()`/`remove()` of a kept record are held for the next
+refresh; `remove()` into a gone parent's scope is concluded at once.
+`holdMissing`/`evidenceHead` include deletes, and a held delete is released
+(and woken) unless the evidence is unavailable. `SyncRound.returned` is
+keyed by scope. `rawCompleteness` takes the operation's declaration for
+`notFound` even with fixed reads. Tests for each, the existing
+vanished-record test now expects the record kept, and the moved-member test
+became the review's probe. Not done: telling the app before pruning in
+general (records pruned by a complete read without any check) is the
+K4/K5 work; kept records are not looked up again by themselves.
