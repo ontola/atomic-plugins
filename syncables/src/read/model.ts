@@ -41,11 +41,12 @@ export interface ReadCollection {
   /**
    * Dot-path to the items array in each list response body, from the
    * Collection Object's `envelope.itemsField` (CRUD Causality §4.2, the
-   * Envelope Object of Pagination Schemes §4.4.2). Absent when the
-   * declaration is omitted or `null` (the body root is the array), or is not
-   * a non-empty string: the array is then located as before (a top-level
-   * array body, else the schema's array property, else a common envelope
-   * name).
+   * Envelope Object of Pagination Schemes §4.4.2): a string, or `''` when
+   * the declaration is `null` or `""` (the body root is the array). Absent
+   * when the declaration is omitted or not a string: the array is then
+   * located as before (the scheme's own `response.envelope`, else a
+   * top-level array body, else the schema's array property, else a common
+   * envelope name).
    */
   itemsField?: string;
   /** Item URL from the declared identity; absent for a list-only resource. */
@@ -225,8 +226,11 @@ export function discoverReadModel(
         listQuery,
         method: listMethodOf(col),
         listBody: isRecord(body) ? structuredClone(body) : {},
-        ...(typeof itemsField === 'string' && itemsField !== ''
-          ? { itemsField }
+        // A string is the dot-path; null or "" is the body root (Pagination
+        // Schemes §4.4.2); omitted or another type leaves the array to be
+        // located as before.
+        ...(typeof itemsField === 'string' || itemsField === null
+          ? { itemsField: itemsField ?? '' }
           : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),

@@ -231,6 +231,59 @@ impl Catalog {
         }
         Some(out)
     }
+    /// Whether the operation that `method` and `path` resolve to declares a
+    /// header parameter called `name` (compared case-insensitively), on the
+    /// operation or its path item, with `$ref`s resolved. It decides only
+    /// whether the caller's header of that name may go upstream; the value
+    /// itself is not validated. Anything unresolvable is `false`.
+    pub fn declares_header_parameter(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+        name: &str,
+    ) -> bool {
+        let declared = || -> Option<bool> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            // A path item may itself be a local `$ref` (OpenAPI 3.1).
+            let mut path_item = paths.get(template)?;
+            if let Some(reference) = path_item.get("$ref") {
+                path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;
+            }
+            let path_item = path_item.as_object()?;
+            let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
+            Some(
+                operation
+                    .get("parameters")
+                    .into_iter()
+                    .chain(path_item.get("parameters"))
+                    .flat_map(Value::as_array)
+                    .flatten()
+                    .filter_map(|parameter| match parameter.get("$ref") {
+                        Some(reference) => document.pointer(reference.as_str()?.strip_prefix('#')?),
+                        None => Some(parameter),
+                    })
+                    .any(|parameter| {
+                        parameter.get("in").and_then(Value::as_str) == Some("header")
+                            && parameter
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+                    }),
+            )
+        };
+        declared().unwrap_or(false)
+    }
     /// A bounded, explicit request validation against the composed OAD:
     /// every declared *required* query parameter must be present, a
     /// declared enum-constrained query parameter's value must be one of the
@@ -651,6 +704,44 @@ pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_header_parameter_is_declared_only_where_the_operation_or_its_path_says_so() {
+        use serde_json::json;
+        let catalog = super::Catalog::from_test_document(
+            "test",
+            json!({"servers":[{"url":"https://example.com/v1"}],
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}},
+                "pathItems":{"shared":{"put":{"parameters":[{"$ref":"#/components/parameters/key"}]}}}},
+            "paths":{
+                "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
+                    "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
+                "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
+                    "patch":{}},
+                "/other":{"post":{}},
+                "/shared":{"$ref":"#/components/pathItems/shared"}
+            }}),
+            json!({}),
+        );
+        let declared = |method, path| {
+            catalog.declares_header_parameter("test", method, path, "idempotency-key")
+        };
+        assert!(declared("POST", "/v1/items"));
+        assert!(declared("PUT", "/v1/shared"));
+        assert!(declared("PATCH", "/v1/items/7"));
+        // A query parameter of that name, another operation, another path,
+        // a path outside the server URL or an unknown platform: not declared.
+        assert!(!declared("PUT", "/v1/items"));
+        assert!(!declared("GET", "/v1/items"));
+        assert!(!declared("POST", "/v1/other"));
+        assert!(!declared("POST", "/items"));
+        assert!(!catalog.declares_header_parameter(
+            "other",
+            "POST",
+            "/v1/items",
+            "idempotency-key"
+        ));
+    }
+
     #[test]
     fn fixed_header_defaults_are_explicit_and_operation_overrides_path() {
         use serde_json::json;

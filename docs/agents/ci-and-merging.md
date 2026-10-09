@@ -59,7 +59,8 @@ reason to wait, not a reason to merge.
   PRs conflict on every merge. Recipe: take `main`'s version of the file,
   put the PR's own rows (or version bumps) back in, then run
   `browser/node_modules/.bin/oxfmt -c browser/.oxfmtrc.json integrations`
-  (the table is column-padded). Then diff against `origin/main` and check
+  (the table is column-padded). For **`usertest/builds.json`**, take
+  `main`'s and run `node usertest/catalog.mjs --record` after the merge. Then diff against `origin/main` and check
   that only your rows differ. Never `git checkout --theirs` (or `--ours`) on a
   whole shared file: that lost the Moneybird entry once (#242).
 

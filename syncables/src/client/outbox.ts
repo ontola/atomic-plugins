@@ -43,6 +43,18 @@ export interface StoredWrite {
   seq?: number;
   /** A failed update whose record a complete refresh no longer returned. */
   missingRecord?: 'deleted' | 'unknown';
+  /**
+   * The earliest time the write may be sent again (ms since the epoch), from
+   * a throttling answer's earliest retry time. Kept across a restart and a
+   * `resolveWrite` retry, so the write is never sent before it.
+   */
+  notBefore?: number;
+}
+
+/** A bucket a `quotaExhausted` answer declared exhausted (`null`: every write) until `until` (ms since the epoch). */
+export interface StoredThrottlingPause {
+  bucket: string | null;
+  until: number;
 }
 
 /** The writes of one record (collection, bound context, id), oldest first. */
@@ -104,6 +116,8 @@ export interface OutboxDocument {
   feedCursors: StoredFeedCursor[];
   /** Added within version 1; absent in an outbox without stored tombstones. */
   feedTombstones: StoredFeedTombstones[];
+  /** Added within version 1; absent in an outbox without exhausted buckets. */
+  throttlingPauses: StoredThrottlingPause[];
   /**
    * Entries this version cannot restore (malformed, or for a collection the
    * current document does not have). They are written back unchanged.
@@ -148,6 +162,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unknown') &&
+    (value['notBefore'] === undefined ||
+      typeof value['notBefore'] === 'number') &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.
     value['lastKnown'] === undefined
@@ -222,6 +238,16 @@ function isAuthBlock(value: unknown): value is AuthBlock {
   );
 }
 
+function isStoredThrottlingPause(
+  value: unknown,
+): value is StoredThrottlingPause {
+  return (
+    isRecord(value) &&
+    (value['bucket'] === null || typeof value['bucket'] === 'string') &&
+    typeof value['until'] === 'number'
+  );
+}
+
 export function emptyOutbox(): OutboxDocument {
   return {
     version: OUTBOX_VERSION,
@@ -229,6 +255,7 @@ export function emptyOutbox(): OutboxDocument {
     rebuild: [],
     feedCursors: [],
     feedTombstones: [],
+    throttlingPauses: [],
     unrestorable: [],
   };
 }
@@ -265,6 +292,9 @@ export function readOutbox(value: unknown): OutboxDocument {
   for (const entry of list('feedTombstones'))
     if (isStoredFeedTombstones(entry)) outbox.feedTombstones.push(entry);
     else outbox.unrestorable.push(entry);
+  // A malformed pause is dropped, not kept: it names no collection to regain.
+  for (const entry of list('throttlingPauses'))
+    if (isStoredThrottlingPause(entry)) outbox.throttlingPauses.push(entry);
   // Entries set aside earlier are tried again: the document may have
   // regained their collection. Malformed ones stay set aside.
   for (const entry of list('unrestorable'))

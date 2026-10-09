@@ -191,7 +191,10 @@ example target; and for each edit, in the edit's direction, PutGet
 (`get(put(v, s)) = v` on the fields the view holds, and, under `absent:
 "unset"`, a field the view leaves out reads back absent) and stable put
 (putting the same view twice changes nothing more). They hold on the
-examples, which is evidence, not a proof over all values. The backward
+examples, which is evidence, not a proof over all values. Backward, a
+one-way field has no inverse to read back through, so PutGet checks that
+the put wrote the target `get` gives for the view's source value (or
+nothing, when the view lacks it and the field removes). The backward
 limits are listed under "Mapping version 3".
 
 ### Mapping version 3 (pieces.md L2)
@@ -238,7 +241,8 @@ exact meaning, and published version 2 files are unchanged.
   A read-only field is never written forward, so there its `absent` only
   matters backward. Only an object member can be removed: `parseMapping`
   refuses `unset` or `default` on a field whose source or target ends in an
-  array index, which would shift every later index. An object that a
+  array index or in `-` (JSON Pointer's "after the last item"), which would
+  shift every later index. An object that a
   removal leaves empty is removed too (`/due/date` leaves no `due: {}`),
   but never the row itself or an array item. A `default` must be a source
   value the field's converter accepts, checked when the mapping is parsed.
@@ -262,7 +266,8 @@ Backward limits, stated plainly:
   GetPut is not claimed.
 - **A backward view built from a row can fall outside the guards**, because
   it lacks provider places no field maps (Raindrop's `_id`). `put` refuses
-  such a view, and the law check gives no GetPut verdict for it.
+  such a view, and the law check gives no GetPut verdict for it; PutGet and
+  stable put for the example's backward edits still run.
 
 ### Examples
 
