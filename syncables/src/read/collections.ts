@@ -1,5 +1,6 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 import {
   applySelection,
   asText,
@@ -169,6 +170,7 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
+      declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
   // Zones are read once per read and again after it (Filtering 0.2.0-draft).
