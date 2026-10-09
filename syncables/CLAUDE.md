@@ -139,6 +139,12 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   leaves `generated` `addedFields` out of the body (`createBody`) and reads
+   the identity from its `url` source through the identity template in
+   reverse (`createdIdentity`, after CRUD Causality 0.5.0's
+   `created_identity()`); without one the 2xx create is `uncertain` with
+   `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
    updates select declared PUT, otherwise PATCH, and currently send JSON
    records rather than JSON Patch. Read-only operations fail before local edits.
 

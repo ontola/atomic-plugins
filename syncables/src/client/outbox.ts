@@ -44,6 +44,11 @@ export interface StoredWrite {
   /** A failed update whose record a complete refresh no longer returned. */
   missingRecord?: 'deleted' | 'unknown';
   /**
+   * Added within version 1: a create answered 2xx whose identity could not
+   * be determined (CRUD Causality §4.3.2); never sent again.
+   */
+  unbound?: true;
+  /**
    * The earliest time the write may be sent again (ms since the epoch), from
    * a throttling answer's earliest retry time. Kept across a restart and a
    * `resolveWrite` retry, so the write is never sent before it.
@@ -162,6 +167,7 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unknown') &&
+    (value['unbound'] === undefined || value['unbound'] === true) &&
     (value['notBefore'] === undefined ||
       typeof value['notBefore'] === 'number') &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
