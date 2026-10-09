@@ -12,6 +12,10 @@ name: Overlays CI
 
 on:
   pull_request:
+  # After a merge too, so main itself is known green: a test that depends on
+  # another overlay or on the OAD history can break without a PR touching it.
+  push:
+    branches: [main]
   # Required so the merge queue's temporary gh-readonly-queue/... commit gets
   # a CI run at all: GitHub gates required checks on the merge_group event,
   # not on the pull_request run from the PR head. See ci.yml, which has the
@@ -19,9 +23,16 @@ on:
   merge_group:
   workflow_dispatch:
 
+# Every job reads the checkout only. The `changes` job widens this for itself
+# with `pull-requests: read`, which dorny/paths-filter needs on a PR.
+permissions:
+  contents: read
+
 concurrency:
   group: overlays-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR supersedes the older run; runs on main each vouch for
+  # their own merge commit, so they are not cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -66,9 +77,6 @@ jobs:
         run: git clone --filter=blob:none --no-checkout --single-branch https://github.com/ontola/openapi-directory.git /tmp/openapi-directory
       - name: Validate every overlay's OAD path and last-change pin
         run: python scripts/validate_oad_pins.py --directory /tmp/openapi-directory --published origin/main --fetch-missing
-      - run: python tests/test_oad_pins.py
-      - name: Check reviewed pagination variants against their pinned OAD schemas
-        run: python tests/test_pagination_collection.py --directory /tmp/openapi-directory
       - name: Every catalog overlay is published from overlays/
         run: |
           python - <<'PY'
@@ -88,4 +96,25 @@ jobs:
               raise SystemExit("\n".join(errors))
           PY
       - run: python tests/generate_identity_catalog_fixtures.py --output /tmp/identity-catalog
-      - run: python tests/test_identity_overlays.py
+      # Every tests/test_*.py, discovered rather than listed, so a new overlay
+      # test runs without a workflow change. A test whose source declares a
+      # "--directory" option (argparse, as test_pagination_collection.py does)
+      # gets the openapi-directory clone above; the others run bare. Each test
+      # runs even after an earlier one fails, and the step fails if any did.
+      - name: Run every overlay test
+        run: |
+          set -u
+          status=0
+          for test in tests/test_*.py; do
+            args=()
+            if grep -q -- '"--directory"' "$test"; then
+              args=(--directory /tmp/openapi-directory)
+            fi
+            echo "::group::python $test ${args[*]}"
+            if ! python "$test" "${args[@]}"; then
+              echo "::error file=overlays/$test::$test failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
