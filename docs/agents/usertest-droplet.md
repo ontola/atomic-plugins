@@ -21,14 +21,17 @@ This page is the short runbook, and what needs whose OK.
 | Changed | Deploy | Restart |
 | --- | --- | --- |
 | `usertest/page/` only | `deploy.sh` | none |
-| an app's source | bump `VERSIONS` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
-| `usertest/sample-data/`, or a fixture it imports | bump `SAMPLE_VERSION` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
+| an app's source (or a pin bump that changes its build) | bump `VERSIONS` in `usertest/catalog.mjs`, `catalog.mjs --record` (commit `usertest/builds.json`), `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
+| `usertest/sample-data/`, or a fixture it imports | bump `SAMPLE_VERSION` in `usertest/catalog.mjs`, `catalog.mjs --record` (commit `usertest/builds.json`), `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
 | `usertest/moderator/` (session plans included) | `deploy.sh` | moderator (`moderator/run.sh`) |
 | `/etc/*.env` on the droplet | none | the container that reads it |
 | `usertest/collector/` | `deploy.sh` | collector (`collector/run.sh`) |
 | atomic-server version or plugin routes | `deploy.sh` if `server.sh` changed | atomic-server (`server.sh`) |
 
-Say in the PR which row applies.
+Say in the PR which row applies. CI's tooling unit tests rebuild every
+user-testing module and fail when one differs from what its version was
+recorded with in `usertest/builds.json`, so a forgotten bump fails CI
+instead of reaching the droplet.
 
 ## Commands
 
