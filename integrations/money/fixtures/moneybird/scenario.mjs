@@ -1,8 +1,16 @@
 /**
- * Moneybird mock-proxy fixture. SYNTHETIC, not recorded: it replays the
- * hand-written bodies in synthetic.mjs (read that header for what they are
- * and are not). Registered as `moneybird` in
- * integrations/localthought/fixtures/index.mjs.
+ * Moneybird mock-proxy fixture, registered as `moneybird` in
+ * integrations/localthought/fixtures/index.mjs. Its rows come from one of
+ * two sources, in this order:
+ *
+ *   api/            the recorded, redacted API v2 answers record.mjs writes
+ *                   against a real test administration (atomic-plugins#102).
+ *                   Not present yet: nobody here has an account.
+ *   synthetic.mjs   SYNTHETIC rows hand-written from the pinned read-only
+ *                   OpenAPI document (read its header). Used until api/
+ *                   exists.
+ *
+ * `recorded()` says which; `source()` gives the rows either way.
  *
  * Served, read-only like the real proxy's Moneybird catalog entry:
  *   GET /proxy/moneybird/api/v2/administrations.json
@@ -16,7 +24,7 @@
  * Any other method is 403; any other path, or an unknown administration, 404.
  *
  * Behaviours that are the fixture's own, for tests, and NOT claims about
- * Moneybird:
+ * Moneybird, over whichever rows it serves:
  * - Contacts and time entries pages hold at most PAGE_CAP (2) records
  *   whatever `per_page` asks (the real API honours per_page up to 100), so
  *   every read crosses a page boundary. The next page is announced with a
@@ -30,29 +38,26 @@
  *   the limit the pinned document states; a test lowers it to exercise the
  *   app's period halving) within the `period` the filter asks, oldest
  *   first. It has no pages, as in the document. `this_year` and no filter
- *   mean the fixture's YEAR.
+ *   mean the source's YEAR: the current civil year in Europe/Amsterdam for
+ *   the synthetic rows, the recording's year (meta.json) once recorded.
  * - The time entries `filter` is accepted and not applied beyond `period:
- *   this_year` (every entry is in YEAR); other periods return the same.
+ *   this_year` (every synthetic entry is in YEAR; a recording holds what
+ *   Moneybird answered for that filter); other periods return the same.
  *
  * Archived contacts are left out unless `include_archived=true`, which is
  * what overlays/APIs/moneybird.com/v2-readonly/all-records-selection.json asks for.
  *
- * Recording: replacing synthetic.mjs with a redacted recording needs a
- * Moneybird test administration and an API token (MONEYBIRD_TOKEN,
- * MONEYBIRD_ADMINISTRATION_ID), following the todoist recorder's layout
- * (integrations/issue-tracker/fixtures/todoist/record.mjs: api/ pages of
- * { status, headers, body } and an exported REDACTIONS list). Not done:
- * nobody here has an account (atomic-plugins#102).
+ * Recording: `MONEYBIRD_TOKEN=<token> node
+ * integrations/money/fixtures/moneybird/record.mjs` (its header has the
+ * options and the redaction list). The app asks for `period:this_year` by
+ * its own clock, so a recording's dated rows match the app's requests only
+ * in the year it was made; re-record after New Year.
  */
-import {
-  administrations,
-  contacts,
-  financialAccounts,
-  financialMutations,
-  timeEntries,
-  YEAR,
-} from './synthetic.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import * as synthetic from './synthetic.mjs';
 
+/** record.mjs writes here; a test may point `apiDir` at an invented api/. */
+export const API_DIR = new URL('./api/', import.meta.url);
 export const PAGE_CAP = 2;
 /** The document's stated limit on one financial_mutations.json answer. */
 export const MUTATIONS_CAP = 100;
@@ -63,10 +68,86 @@ const PERIOD = /(?:^|,)period:(\d{8})\.\.(\d{8})(?:,|$)/;
 /** `YYYYMMDD` of a `YYYY-MM-DD` date. */
 const compact = date => date.replace(/-/g, '');
 
+export const recorded = (apiDir = API_DIR) =>
+  existsSync(new URL('meta.json', apiDir));
+
+const loadJson = file => JSON.parse(readFileSync(file, 'utf8'));
+
+/** Every page of one recorded paged collection, flattened to its rows. */
+function loadPages(apiDir, administration, collection) {
+  const rows = [];
+
+  for (let n = 1; ; n++) {
+    const file = new URL(
+      `GET__${administration}__${collection}__page-${n}.json`,
+      apiDir,
+    );
+    if (!existsSync(file)) break;
+    rows.push(...loadJson(file).body);
+  }
+
+  return rows;
+}
+
+/**
+ * The rows per administration and the year their dated rows fall in, from
+ * api/ or synthetic.mjs: `{ synthetic, year, administrations, contacts,
+ * timeEntries, financialAccounts, financialMutations }`, the last four keyed
+ * by administration id.
+ */
+export function source({ apiDir = API_DIR } = {}) {
+  if (!recorded(apiDir))
+    return {
+      synthetic: true,
+      year: synthetic.YEAR,
+      administrations: structuredClone(synthetic.administrations),
+      contacts: structuredClone(synthetic.contacts),
+      timeEntries: structuredClone(synthetic.timeEntries),
+      financialAccounts: structuredClone(synthetic.financialAccounts),
+      financialMutations: structuredClone(synthetic.financialMutations),
+    };
+  const meta = loadJson(new URL('meta.json', apiDir));
+  if (!Number.isInteger(Number(meta.year)) || !(Number(meta.year) > 2000))
+    throw new Error(
+      `${new URL('meta.json', apiDir).pathname}: no "year" (the civil year the recording's dated rows fall in); re-run record.mjs`,
+    );
+  const administrations = loadJson(
+    new URL('GET__administrations.json', apiDir),
+  ).body;
+  const byAdministration = load =>
+    Object.fromEntries(administrations.map(a => [String(a.id), load(a.id)]));
+
+  const single = collection => id => {
+    const file = new URL(`GET__${id}__${collection}.json`, apiDir);
+
+    return existsSync(file) ? loadJson(file).body : [];
+  };
+
+  return {
+    synthetic: false,
+    year: Number(meta.year),
+    administrations,
+    contacts: byAdministration(id => loadPages(apiDir, id, 'contacts')),
+    timeEntries: byAdministration(id => loadPages(apiDir, id, 'time_entries')),
+    financialAccounts: byAdministration(single('financial_accounts')),
+    financialMutations: byAdministration(single('financial_mutations')),
+  };
+}
+
 export function moneybirdFixture({
   outage = true,
   mutationCap = MUTATIONS_CAP,
+  apiDir = API_DIR,
 } = {}) {
+  const {
+    synthetic: isSynthetic,
+    year,
+    administrations,
+    contacts,
+    timeEntries,
+    financialAccounts,
+    financialMutations,
+  } = source({ apiDir });
   const reads = new Map();
   /** Every financial_mutations.json filter asked, in order (for tests). */
   const mutationFilters = [];
@@ -99,6 +180,8 @@ export function moneybirdFixture({
   };
 
   return {
+    synthetic: isSynthetic,
+    year,
     reads,
     mutationFilters,
     request(method, url) {
@@ -150,7 +233,7 @@ export function moneybirdFixture({
       const [from, to] = range
         ? [range[1], range[2]]
         : filter.includes('period:this_year')
-          ? [`${YEAR}0101`, `${YEAR}1231`]
+          ? [`${year}0101`, `${year}1231`]
           : [undefined, undefined];
       if (!from)
         return { status: 400, body: { error: 'Unsupported period filter' } };

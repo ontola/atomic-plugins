@@ -25,10 +25,12 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WindowRange,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
-import { readCollections } from './collections.js';
+import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -80,6 +82,8 @@ export interface ReadOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Make one request to the first root collection, read nothing, return an empty result. */
   probe?: boolean;
+  /** The range for collections read by range windows; see `CollectionReadOptions.ranges`. */
+  ranges?: NonNullable<CollectionReadOptions['ranges']>;
 }
 
 export interface ReadRecord {
@@ -185,6 +189,12 @@ export interface PaginateOptions {
   transport: Transport;
   /** Optional storage hook for original data-read responses. */
   storeResponse?: StoreReadResponse;
+  /**
+   * Dot-path to the items array in each page body, `''` for the body root
+   * (an Envelope Object's `itemsField`). Without it, the scheme's own
+   * `response.envelope` applies, else the array is located.
+   */
+  itemsField?: string;
   /** A path template from `document.paths`, e.g. `/v1/search`. */
   path: string;
   /** Default `GET`. */
@@ -196,6 +206,11 @@ export interface PaginateOptions {
   body?: Record<string, unknown>;
   /** Sent through the scheme's `pageSize`-role field, when it declares one. */
   pageSize?: number;
+  /**
+   * The range to read when the operation applies a `rangeWindow` scheme
+   * (Pagination Schemes 0.5.0 §4.6), both bounds in its window format.
+   */
+  range?: WindowRange;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -220,6 +235,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
+    declaredThrottling(doc),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({
@@ -232,6 +248,10 @@ export async function paginate(
     query: options.query ?? {},
     body: options.body ?? {},
     ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+    ...(options.itemsField === undefined
+      ? {}
+      : { itemsField: options.itemsField }),
+    ...(options.range ? { range: options.range } : {}),
   })) {
     items.push(...page.items);
     if (items.length > budget.limits.maxRecords) {
