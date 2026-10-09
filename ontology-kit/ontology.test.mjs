@@ -307,7 +307,7 @@ test('a branch behind main is told to merge, not to restore what main published 
 
     const problems = publishedProblems('main', dir);
     assert.deepEqual(problems, [
-      '2 file(s) published at main are not on this branch, which is behind it: merge main (never restore them by hand)',
+      '2 file(s) published at main are not on this branch, which is behind it (ontology/properties/weight, ontology/v2): merge main (never restore them by hand)',
     ]);
 
     // A file the branch did have, and lost, is still "deleted".
@@ -321,6 +321,26 @@ test('a branch behind main is told to merge, not to restore what main published 
     git(dir, 'checkout', '-q', '--', 'ontology');
     git(dir, 'merge', '-q', 'main');
     assert.deepEqual(publishedProblems('main', dir), []);
+  }));
+
+test('in a shallow clone, a missing published term is "deleted" and may mean the branch is behind', () =>
+  using({}, dir => {
+    const clone = mkdtempSync(join(tmpdir(), 'atomic-ontology-shallow-'));
+
+    try {
+      execFileSync(
+        'git',
+        ['clone', '-q', '--depth', '1', pathToFileURL(dir).href, clone],
+        { stdio: 'pipe' },
+      );
+      rmSync(join(clone, 'ontology/properties/owner'));
+      assert.match(
+        publishedProblems('origin/main', clone).join('\n'),
+        /ontology\/properties\/owner is published at origin\/main and was deleted\. Published terms stay available: restore it\. \(This shallow clone cannot tell whether the branch is behind origin\/main: if it is, merge origin\/main first instead\.\)/,
+      );
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
   }));
 
 test('build removes term files the source no longer produces, which check reports', () =>

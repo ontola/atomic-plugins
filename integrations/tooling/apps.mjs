@@ -267,6 +267,28 @@ export function mergeBaseWith(ref, base = root) {
   }
 }
 
+/** Whether `base` is a shallow clone (CI's checkout is). */
+export function isShallow(base = root) {
+  try {
+    return (
+      git(base, ['rev-parse', '--is-shallow-repository']).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one line for published files missing here because the branch is
+ * behind `ref`, naming the first few.
+ */
+export function behindLine(ref, paths) {
+  const shown = paths.slice(0, 3).join(', ');
+  const more = paths.length > 3 ? `, and ${paths.length - 3} more` : '';
+
+  return `${paths.length} file(s) published at ${ref} are not on this branch, which is behind it (${shown}${more}): merge ${ref} (never restore them by hand)`;
+}
+
 /** Whether `path` exists in the tree of commit `treeish`. */
 export function inTree(treeish, path, base = root) {
   try {
@@ -294,6 +316,14 @@ export function publishedProblems(ref, base = root) {
     mergeBase !== undefined &&
     mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
   const behind = [];
+  // Without a merge-base (unrelated histories, or a shallow clone such as
+  // CI's, where `git merge-base` fails or may stop short), a file main
+  // published since cannot be told from one this branch lost: say both.
+  const shallow = isShallow(base);
+  const unsure =
+    mergeBase === undefined || shallow
+      ? ` (This ${shallow ? 'shallow clone' : 'checkout'} cannot tell whether the branch is behind ${ref}: if it is, merge ${ref} first instead.)`
+      : '';
 
   for (const [path, blob] of publishedModules(ref, base)) {
     const file = resolve(base, path);
@@ -301,7 +331,7 @@ export function publishedProblems(ref, base = root) {
       if (behindRef && !inTree(mergeBase, path, base)) behind.push(path);
       else
         problems.push(
-          `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.`,
+          `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.${unsure}`,
         );
     } else if (blobId(readFileSync(file)) !== blob)
       problems.push(
@@ -309,10 +339,7 @@ export function publishedProblems(ref, base = root) {
       );
   }
 
-  if (behind.length)
-    problems.push(
-      `${behind.length} file(s) published at ${ref} are not on this branch, which is behind it: merge ${ref} (never restore them by hand)`,
-    );
+  if (behind.length) problems.push(behindLine(ref, behind));
 
   return problems;
 }

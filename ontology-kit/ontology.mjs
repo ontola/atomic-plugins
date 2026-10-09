@@ -599,6 +599,28 @@ export function mergeBaseWith(ref, base = root) {
   }
 }
 
+/** Whether `base` is a shallow clone (CI's checkout is). */
+export function isShallow(base = root) {
+  try {
+    return (
+      git(base, ['rev-parse', '--is-shallow-repository']).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one line for published files missing here because the branch is
+ * behind `ref`, naming the first few.
+ */
+export function behindLine(ref, paths) {
+  const shown = paths.slice(0, 3).join(', ');
+  const more = paths.length > 3 ? `, and ${paths.length - 3} more` : '';
+
+  return `${paths.length} file(s) published at ${ref} are not on this branch, which is behind it (${shown}${more}): merge ${ref} (never restore them by hand)`;
+}
+
 /** Whether `path` exists in the tree of commit `treeish`. */
 export function inTree(treeish, path, base = root) {
   try {
@@ -664,6 +686,14 @@ export function publishedProblems(ref, base = root) {
   // the merge as the fix, since "restore it" is the one thing a stale
   // branch must not do by hand.
   const behind = [];
+  // Without a merge-base (unrelated histories, or a shallow clone such as
+  // CI's, where `git merge-base` fails or may stop short), a file main
+  // published since cannot be told from one this branch lost: say both.
+  const shallow = isShallow(base);
+  const unsure =
+    mergeBase === undefined || shallow
+      ? ` (This ${shallow ? 'shallow clone' : 'checkout'} cannot tell whether the branch is behind ${ref}: if it is, merge ${ref} first instead.)`
+      : '';
 
   for (const [path, blob] of publishedTerms(ref, base)) {
     const file = resolve(base, path);
@@ -673,8 +703,8 @@ export function publishedProblems(ref, base = root) {
       else
         problems.push(
           path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
-            ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.`
-            : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
+            ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.${unsure}`
+            : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.${unsure}`,
         );
       continue;
     }
@@ -695,10 +725,7 @@ export function publishedProblems(ref, base = root) {
     );
   }
 
-  if (behind.length)
-    problems.push(
-      `${behind.length} file(s) published at ${ref} are not on this branch, which is behind it: merge ${ref} (never restore them by hand)`,
-    );
+  if (behind.length) problems.push(behindLine(ref, behind));
 
   return problems;
 }
