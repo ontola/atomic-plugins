@@ -317,12 +317,17 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field's `start` (default 1), used for the first page, the next
   page and by the mock server. `walkPages` reads a `pageNumber` scheme's
   `shortPage`: before a page is handed on it throws `PageReadError` for
-  more than `size` items or a page whose identities repeat the previous
-  one; after it, a page with fewer than `size` items ends the walk
-  (`PageWalk.outcome` not complete unless `assurance: documented`), and a
-  full page goes on to the next page number unless another declared signal
-  (`totalCount`, `totalPages`, a token or link) ends it. The validator
-  checks §9 rules 19–21, `resolveEffectiveScheme` rule 22.
+  more than the full size (`size`, or a reported `pageSize` field) or an
+  item identity an earlier page of the read returned; after it, a page
+  with fewer items ends the walk (`PageWalk.outcome` not complete unless
+  `assurance: documented`; an error under `documented` when `totalPages` or
+  `totalCount` says more follow, not complete otherwise), and a full page
+  goes on to the next page number unless `totalPages` (a count: the last
+  page is `start + totalPages − 1`) or `totalCount` ends it, which is
+  complete whatever the assurance. `currentPage` is numbered like the
+  `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
+  capped at the parameter's `maximum`. The validator checks §9 rules
+  19–21, `resolveEffectiveScheme` rule 22.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

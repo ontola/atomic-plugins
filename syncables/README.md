@@ -1060,8 +1060,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `shortPage.size`.
 - **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
   short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
-  0.6.0: a short page ends the list, an oversized or repeated page ends the
-  read with `PageReadError`, and only `assurance: documented` makes such a
+  0.6.0: a short page ends the list, an oversized page or an item an
+  earlier page returned ends the read with `PageReadError`, a short page
+  that `totalPages`/`totalCount` contradicts is an error under `documented`
+  and not complete otherwise, a `totalPages` (a count from `start`) or
+  `totalCount` end on a full page is complete, `currentPage` is numbered
+  like the page field, and only `assurance: documented` makes such a
   read complete. The validator checks §9 rules 19–21 and
   `resolveEffectiveScheme` rule 22. Exports `PageReadError` and
   `ShortPageObject`.

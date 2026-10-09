@@ -218,7 +218,7 @@ describe('short pages (§4.4.5)', () => {
       });
     const result = await read(zeroBased(), transport);
     expect(result.complete).toBe(false);
-    expect(result.errors[0]).toMatch(/repeats the page before it/);
+    expect(result.errors[0]).toMatch(/an earlier page returned/);
   });
 
   it('give way to another declared end signal on a full page', async () => {
@@ -354,5 +354,111 @@ describe('the page size sent (review of #424)', () => {
     });
     expect(new Set(sizes)).toEqual(new Set(['50']));
     expect(items).toHaveLength(100);
+  });
+});
+
+describe('end signals and numbering (review of #415)', () => {
+  const withFields = (
+    assurance: 'documented' | 'assumed',
+    fields: Record<string, string>,
+  ): PaginationSchemeObject => {
+    const scheme = zeroBased(assurance);
+    scheme.response!.bodyFields = Object.fromEntries(
+      Object.entries(fields).map(([name, role]) => [
+        name,
+        { role } as { role: 'totalPages' },
+      ]),
+    );
+    return scheme;
+  };
+  const answering =
+    (
+      total: number,
+      size: number,
+      extra: (page: number) => Record<string, unknown>,
+    ): { transport: Transport; pages: number[] } => {
+      const pages: number[] = [];
+      const transport: Transport = (request) => {
+        const page = Number(request.url.searchParams.get('page'));
+        pages.push(page);
+        const items = Array.from(
+          { length: Math.max(0, Math.min(size, total - page * size)) },
+          (_, i) => ({ id: `t${page * size + i}` }),
+        );
+        return Promise.resolve({
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ items, ...extra(page) }),
+        });
+      };
+      return { transport, pages };
+    };
+
+  it('counts totalPages from start: pages 0, 1 and 2 of 3, complete whatever the assurance', async () => {
+    const { transport, pages } = answering(300, 100, () => ({ pages: 3 }));
+    const result = await read(withFields('assumed', { pages: 'totalPages' }), transport);
+    expect(pages).toEqual([0, 1, 2]);
+    expect(result).toMatchObject({ items: 300, complete: true });
+  });
+
+  it('numbers currentPage like the page field', async () => {
+    const scheme = withFields('assumed', {
+      current: 'currentPage',
+      pages: 'totalPages',
+    });
+    delete scheme.response!.shortPage;
+    const { transport, pages } = answering(300, 100, (page) => ({
+      current: page,
+      pages: 3,
+    }));
+    const result = await read(scheme, transport);
+    expect(pages).toEqual([0, 1, 2]);
+    expect(result).toMatchObject({ items: 300, complete: true });
+  });
+
+  it('treats a short page that the total contradicts as an error under documented', async () => {
+    const { transport } = answering(150, 100, () => ({ total: 300 }));
+    const documented = await read(
+      withFields('documented', { total: 'totalCount' }),
+      transport,
+    );
+    expect(documented.complete).toBe(false);
+    expect(documented.errors[0]).toMatch(/says more pages follow/);
+    const assumed = await read(
+      withFields('assumed', { total: 'totalCount' }),
+      transport,
+    );
+    expect(assumed).toMatchObject({ items: 150, complete: false, errors: [] });
+    expect(assumed.notComplete).toMatch(/says more pages follow/);
+  });
+
+  it('takes a reported pageSize as the full size', async () => {
+    const { transport, pages } = answering(120, 60, () => ({ limit: 60 }));
+    const result = await read(
+      withFields('documented', { limit: 'pageSize' }),
+      transport,
+    );
+    expect(pages).toEqual([0, 1, 2]);
+    expect(result).toMatchObject({ items: 120, complete: true });
+  });
+
+  it('ends with an error on an item any earlier page returned', async () => {
+    let call = 0;
+    const transport: Transport = () => {
+      call += 1;
+      const items =
+        call === 1
+          ? Array.from({ length: 100 }, (_, i) => ({ id: `a${i}` }))
+          : call === 2
+            ? Array.from({ length: 100 }, (_, i) => ({ id: `b${i}` }))
+            : [{ id: 'a5' }];
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items }),
+      });
+    };
+    const result = await read(zeroBased(), transport);
+    expect(result.errors[0]).toMatch(/an earlier page returned/);
   });
 });
