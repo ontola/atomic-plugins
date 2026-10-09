@@ -23,7 +23,8 @@ pub enum Checked {
     /// 403, 404, a 401 after one refresh, a 2xx without a key, or the
     /// connection is gone.
     Failed,
-    /// 3xx, 5xx, a timeout, a failed refresh: nothing is known.
+    /// 3xx, 5xx, a 2xx that is not JSON, a timeout, a failed refresh, a
+    /// database error: nothing is known.
     Unavailable,
     /// The request cannot be made as asked (parameters, catalog).
     Invalid(&'static str),
@@ -63,16 +64,23 @@ pub async fn check_access(
     let Ok(path) = fill_path(&source.access_path, parameters) else {
         return Checked::Invalid("access parameters must fill the access path, one segment each");
     };
-    match crate::proxy::receiver_call(state, security, connection_id, platform, Method::GET, &path)
-        .await
-    {
+    let reply =
+        crate::proxy::receiver_call(state, security, connection_id, platform, Method::GET, &path)
+            .await;
+    classify(reply, source)
+}
+
+/// What an access check's reply says. Only an answer that is known to deny
+/// access is a failure: a 2xx that is not JSON is as uninformative as a 5xx.
+fn classify(reply: ReceiverReply, source: &super::metadata::Source) -> Checked {
+    match reply {
         ReceiverReply::Answered(status, body) if status.is_success() => {
-            match serde_json::from_slice::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| source.access_key.key(&value))
-            {
-                Some(key) => Checked::Passed(key),
-                None => Checked::Failed,
+            match serde_json::from_slice::<serde_json::Value>(&body) {
+                Err(_) => Checked::Unavailable,
+                Ok(value) => match source.access_key.key(&value) {
+                    Some(key) => Checked::Passed(key),
+                    None => Checked::Failed,
+                },
             }
         }
         ReceiverReply::Answered(
@@ -254,5 +262,52 @@ impl HookDeleter for ProviderHookDeleter {
                 ReceiverReply::RefreshRefused => Err(CleanupError::Permanent("refresh-refused")),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Bytes;
+
+    fn project() -> super::super::metadata::Source {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../openapi-extensions/spec/webhook-deliveries/examples/tracker.yaml");
+        let document = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        Deliveries::from_document(&document).unwrap().sources["project"].clone()
+    }
+
+    fn answered(status: StatusCode, body: &'static str) -> ReceiverReply {
+        ReceiverReply::Answered(status, Bytes::from_static(body.as_bytes()))
+    }
+
+    /// Re-review of #394: a 2xx that is not JSON says nothing about access,
+    /// so it must not fail (and so suspend) a binding.
+    #[test]
+    fn a_2xx_that_is_not_json_is_unavailable_not_failed() {
+        let source = project();
+        assert_eq!(
+            classify(
+                answered(StatusCode::OK, "<html>maintenance</html>"),
+                &source
+            ),
+            Checked::Unavailable
+        );
+        assert_eq!(
+            classify(answered(StatusCode::OK, r#"{"id": 7}"#), &source),
+            Checked::Passed("7".into())
+        );
+        assert_eq!(
+            classify(answered(StatusCode::OK, r#"{"name": "no id"}"#), &source),
+            Checked::Failed
+        );
+        assert_eq!(
+            classify(ReceiverReply::Unreachable, &source),
+            Checked::Unavailable
+        );
+        assert_eq!(
+            classify(answered(StatusCode::FORBIDDEN, ""), &source),
+            Checked::Failed
+        );
     }
 }

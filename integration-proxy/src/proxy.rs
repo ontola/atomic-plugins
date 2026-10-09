@@ -129,6 +129,13 @@ struct RefreshToken {
     expires_in: Option<u64>,
 }
 
+/// A token endpoint's error response (RFC 6749 §5.2).
+#[derive(Deserialize)]
+struct TokenError {
+    #[serde(default)]
+    error: String,
+}
+
 fn needs_refresh(credential: &StoredCredential) -> bool {
     matches!(
         credential,
@@ -139,11 +146,12 @@ fn needs_refresh(credential: &StoredCredential) -> bool {
 /// Why a token refresh failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefreshFailure {
-    /// The provider refused the refresh (`400`/`401` from the token
-    /// endpoint, e.g. `invalid_grant`), or there is no refresh token: no
+    /// The provider refused the refresh token (`invalid_grant` in a `400`
+    /// or `401` from the token endpoint), or there is no refresh token: no
     /// later attempt will do better.
     Refused,
-    /// The token endpoint could not be reached or answered otherwise.
+    /// The token endpoint could not be reached or answered otherwise,
+    /// including another `400`/`401` error such as `invalid_client`.
     Unavailable,
 }
 
@@ -186,7 +194,20 @@ async fn refresh_token(
     match response.status() {
         status if status.is_success() => {}
         reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED => {
-            return Err(RefreshFailure::Refused)
+            // Only `invalid_grant` says this refresh token will never work
+            // (RFC 6749 §5.2). Others, such as `invalid_client` after a
+            // misconfigured client secret, are the proxy's own problem and
+            // must not end a user's subscription.
+            let error = response
+                .json::<TokenError>()
+                .await
+                .map(|body| body.error)
+                .unwrap_or_default();
+            return Err(if error == "invalid_grant" {
+                RefreshFailure::Refused
+            } else {
+                RefreshFailure::Unavailable
+            });
         }
         _ => return Err(RefreshFailure::Unavailable),
     }
@@ -717,8 +738,12 @@ pub(crate) async fn receiver_call(
     relative_path: &str,
 ) -> ReceiverReply {
     const MAX_CHECK_RESPONSE: usize = 1_048_576;
-    let Ok(Some(record)) = security.load_connection(connection_id).await else {
-        return ReceiverReply::Refused("unknown-connection");
+    // Only a connection that is known to be gone is a refusal; a database
+    // error says nothing about it.
+    let record = match security.load_connection(connection_id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return ReceiverReply::Refused("unknown-connection"),
+        Err(_) => return ReceiverReply::Unreachable,
     };
     let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&record.credential) else {
         return ReceiverReply::Refused("unreadable-credential");
@@ -955,7 +980,7 @@ mod tests {
     /// refresh, landing between this call's read and its 401.
     #[allow(clippy::type_complexity)]
     async fn oauth_receiver(
-        token_answers: Vec<StatusCode>,
+        token_answers: Vec<(StatusCode, &'static str)>,
         expires_at: Option<u64>,
     ) -> (
         AppState,
@@ -990,17 +1015,16 @@ mod tests {
                     let answers = answers.clone();
                     async move {
                         counter.fetch_add(1, Ordering::SeqCst);
-                        let status = {
+                        let (status, error) = {
                             let mut answers = answers.lock().unwrap();
                             if answers.is_empty() {
-                                StatusCode::OK
+                                (StatusCode::OK, "")
                             } else {
                                 answers.remove(0)
                             }
                         };
                         if status != StatusCode::OK {
-                            return (status, axum::Json(json!({"error": "invalid_grant"})))
-                                .into_response();
+                            return (status, axum::Json(json!({"error": error}))).into_response();
                         }
                         axum::Json(json!({"access_token": "new-token", "expires_in": 3600}))
                             .into_response()
@@ -1062,7 +1086,7 @@ mod tests {
     async fn postgres_a_failed_forced_refresh_does_not_arm_the_cooldown() {
         let far = crate::now_secs() + 86_400;
         let (s, security, id, tokens, _) =
-            oauth_receiver(vec![StatusCode::SERVICE_UNAVAILABLE], Some(far)).await;
+            oauth_receiver(vec![(StatusCode::SERVICE_UNAVAILABLE, "")], Some(far)).await;
         assert!(matches!(
             check(&s, &security, &id).await,
             ReceiverReply::Unreachable
@@ -1111,17 +1135,62 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn postgres_a_refused_refresh_is_a_refusal_on_expiry_and_on_401() {
-        let (s, security, id, _, _) = oauth_receiver(vec![StatusCode::BAD_REQUEST], Some(0)).await;
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![(StatusCode::BAD_REQUEST, "invalid_grant")], Some(0)).await;
         assert!(matches!(
             check(&s, &security, &id).await,
             ReceiverReply::RefreshRefused
         ));
         let far = crate::now_secs() + 86_400;
         let (s, security, id, _, _) =
-            oauth_receiver(vec![StatusCode::BAD_REQUEST], Some(far)).await;
+            oauth_receiver(vec![(StatusCode::BAD_REQUEST, "invalid_grant")], Some(far)).await;
         assert!(matches!(
             check(&s, &security, &id).await,
             ReceiverReply::RefreshRefused
+        ));
+    }
+
+    /// Re-review of #394: a 400 or 401 from the token endpoint with another
+    /// error, such as `invalid_client`, is the proxy's own problem, so it is
+    /// unknown rather than a refusal; `invalid_grant` in a 401 still refuses.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_only_invalid_grant_refuses_a_refresh() {
+        let far = crate::now_secs() + 86_400;
+        for (status, expires_at) in [
+            (StatusCode::BAD_REQUEST, Some(0)),
+            (StatusCode::UNAUTHORIZED, Some(0)),
+            (StatusCode::BAD_REQUEST, Some(far)),
+        ] {
+            let (s, security, id, _, _) =
+                oauth_receiver(vec![(status, "invalid_client")], expires_at).await;
+            assert!(
+                matches!(check(&s, &security, &id).await, ReceiverReply::Unreachable),
+                "{status} invalid_client, expires {expires_at:?}"
+            );
+        }
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![(StatusCode::UNAUTHORIZED, "invalid_grant")], Some(0)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+    }
+
+    /// Re-review of #394: a connection that cannot be loaded is unknown;
+    /// only one that is known to be missing is `unknown-connection`.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_connection_that_cannot_be_loaded_is_unreachable() {
+        let (s, security, _, _, _) = oauth_receiver(vec![], None).await;
+        // PostgreSQL refuses a NUL in text, so the lookup itself fails.
+        assert!(matches!(
+            check(&s, &security, "broken\0id").await,
+            ReceiverReply::Unreachable
+        ));
+        assert!(matches!(
+            check(&s, &security, "no-such-connection").await,
+            ReceiverReply::Refused("unknown-connection")
         ));
     }
 

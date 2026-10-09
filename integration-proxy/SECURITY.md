@@ -488,8 +488,12 @@ generic code.
   replaced it meanwhile, and are otherwise unknown (never a failed check),
   so concurrent checks on one connection spend one refresh token. A failed
   refresh does not start that minute. A refresh the token endpoint refuses
-  (`400`/`401`, such as `invalid_grant`), on a 401 or because the token
-  expired, is a failed check; one that cannot complete is not. A revocation delivery suspends the bindings it names until
+  with `invalid_grant` (in a `400` or `401`), on a 401 or because the token
+  expired, is a failed check, and so is a credential with no refresh token.
+  Anything else is unknown, never a failed check: another token error such
+  as `invalid_client` (the proxy's own configuration), a refresh that cannot
+  complete, a connection that cannot be loaded from the database, or a 2xx
+  answer that is not JSON. A revocation delivery suspends the bindings it names until
   the next check: a failure closes them, a pass resumes with an
   `access-suspended` gap.
 - **Consumers.** Every route is signed by the subscription's consumer, and
