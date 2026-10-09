@@ -378,8 +378,13 @@ sync-status card reads "Synced just now", "2 transactions from 1
 statement; 2 arrived at the last sync", no "Last sync:" counts line, and
 "Read-only: edits here stay in Atomic. There is no bank connection". Not
 verified end to end: the card on the importer's table, on a table without
-import dates, after a load error (the pill and the card's "Sync failed") or
-a stopped import, and with incomplete rows (`app/status.test.ts` and `app/view.test.ts` only).
+import dates, after a stopped import, and with incomplete rows
+(`app/status.test.ts` and `app/view.test.ts` only). After a load error it
+is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
+app's `getData` once, by failing the page store's read of the app's table,
+and checks the pill and the card's "Sync failed", "Couldn't load the
+transactions." with the error and "Try again.", then that Try again loads
+the rows and clears the failure.
 
 At 0.4.1 (`plugin.js` sha256
 `b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
