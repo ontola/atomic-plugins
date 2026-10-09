@@ -56,6 +56,20 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+Discord's guild list needs no pagination for these user tokens. Discord's
+reference for `GET /users/@me/guilds`
+(https://docs.discord.com/developers/resources/user, "Get Current User
+Guilds", checked 2026-10-09) says it "returns 200 guilds by default, which
+is the maximum number of guilds a non-bot user can join", and that
+pagination is not needed to list a user's guilds; `limit` is 1–200. The
+CRUD overlay's fixed `limit: 200` read of `myGuilds` therefore returns every
+guild of a `discordUser` connection, and a guild missing from it is one the
+user left. The comment in
+`APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+that Syncables "cannot derive a cursor" for `before`/`after` is moot for
+this read: no cursor is needed. It would matter only for a bot token (the
+`discordBot` profile), which no catalog selects.
+
 `catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
 platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
 the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
