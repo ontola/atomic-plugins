@@ -19,7 +19,8 @@ OUTCOMES = {"deleted", "unavailable"}
 
 def _known_absent(value):
     return isinstance(value, str) and value in ABSENT
-FIELDS = {"absent", "notFound", "parentAbsent", "description"}
+FIELDS = {"absent", "notFound", "gone", "parentAbsent", "description"}
+READ_FIELDS = ("notFound", "gone")  # describe the resource's read: 404 and 410 (§4.3)
 VARIABLE = re.compile(r"\{([^{}]+)\}")
 
 
@@ -38,11 +39,12 @@ def _object(value, where, errors, on_collection):
         errors.append(f"{where}: unknown fields {sorted(unknown)}")
     if not _known_absent(value.get("absent")):
         errors.append(f"{where}.absent: expected deleted or removed")
-    if "notFound" in value:
-        if not isinstance(value["notFound"], str) or value["notFound"] not in OUTCOMES:
-            errors.append(f"{where}.notFound: expected deleted or unavailable")
-        elif value.get("absent") == "deleted":
-            errors.append(f"{where}.notFound: not allowed with absent: deleted")
+    for field in READ_FIELDS:
+        if field in value:
+            if not isinstance(value[field], str) or value[field] not in OUTCOMES:
+                errors.append(f"{where}.{field}: expected deleted or unavailable")
+            elif value.get("absent") == "deleted":
+                errors.append(f"{where}.{field}: not allowed with absent: deleted")
     if "parentAbsent" in value:
         if not on_collection:
             errors.append(f"{where}.parentAbsent: only on a Collection Object")
@@ -94,14 +96,15 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         declared = declarations_of(document, resource_name)
-        explicit = {d["notFound"] for d in declared.values()
-                    if d and "notFound" in d and isinstance(d["notFound"], (str, int, float, bool, type(None)))}
-        if len(explicit) > 1:
-            errors.append(f"crudResources.{resource_name}: collections declare different notFound values {sorted(map(str, explicit))}")
-        if explicit:
-            defaulted = sorted(n for n, d in declared.items() if d and d.get("absent") == "removed" and "notFound" not in d)
-            if defaulted:
-                errors.append(f"crudResources.{resource_name}: {defaulted} default notFound while another collection states it")
+        for field in READ_FIELDS:
+            explicit = {d[field] for d in declared.values()
+                        if d and field in d and isinstance(d[field], (str, int, float, bool, type(None)))}
+            if len(explicit) > 1:
+                errors.append(f"crudResources.{resource_name}: collections declare different {field} values {sorted(map(str, explicit))}")
+            if explicit:
+                defaulted = sorted(n for n, d in declared.items() if d and d.get("absent") == "removed" and field not in d)
+                if defaulted:
+                    errors.append(f"crudResources.{resource_name}: {defaulted} default {field} while another collection states it")
         for name, collection in (resource.get("collections") or {}).items():
             if not isinstance(collection, dict) or "x-completeness" not in collection:
                 continue
@@ -148,15 +151,23 @@ def _same(a, b):
     return type(a) is type(b) and a == b
 
 
-def classify_read(declaration, tombstone, id_field, object_id, status, body, resource_not_found=None):
+def classify_read(declaration, tombstone, id_field, object_id, status, body, resource_not_found=None,
+                  resource_gone=None):
     """§4.3: 'present', 'deleted', 'unavailable' or 'unknown' for one read of an absent object.
 
     `declaration` is the collection's Completeness Object (or None), `tombstone`
     the resource's x-read-tombstone (or None), `body` the parsed JSON body (or
     None). `resource_not_found` is the notFound any collection of the resource
     states (resource_not_found(document, resource)); it applies to every read
-    of the resource's objects, through any collection (§4.3).
+    of the resource's objects, through any collection (§4.3). Since 0.3.0,
+    `resource_gone` (resource_read_value(document, resource, "gone")), else
+    the declaration's `gone`, classifies a 410; without either, a 410 is
+    classified like a 404.
     """
+    if status == 410:
+        gone = resource_gone if resource_gone is not None else (declaration or {}).get("gone")
+        if gone is not None:
+            return gone if gone in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
     if status in (404, 410):
         stated = (declaration or {}).get("notFound")
         if resource_not_found is not None:
@@ -180,16 +191,19 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
     return "present"
 
 
-def resource_not_found(document, resource_name):
-    """The notFound any collection of the resource states, or None; it covers every read of its objects (§4.3)."""
-    values = {d["notFound"] if d["notFound"] in OUTCOMES else "unavailable"
-              for d in declarations_of(document, resource_name).values()
-              if d and "notFound" in d and isinstance(d["notFound"], (str, type(None)))}
-    unreadable = any(d and "notFound" in d and not isinstance(d["notFound"], (str, type(None)))
-                     for d in declarations_of(document, resource_name).values())
-    if unreadable:
+def resource_read_value(document, resource_name, field):
+    """The notFound or gone any collection of the resource states, or None; it covers every read of its objects (§4.3)."""
+    declared = declarations_of(document, resource_name).values()
+    values = {d[field] if d[field] in OUTCOMES else "unavailable"
+              for d in declared if d and field in d and isinstance(d[field], (str, type(None)))}
+    if any(d and field in d and not isinstance(d[field], (str, type(None))) for d in declared):
         values.add("unavailable")
     return values.pop() if len(values) == 1 else ("unavailable" if values else None)
+
+
+def resource_not_found(document, resource_name):
+    """The notFound any collection of the resource states, or None (0.2.0 name, kept)."""
+    return resource_read_value(document, resource_name, "notFound")
 
 
 def members_of_gone_parent(declaration, parent_outcome):

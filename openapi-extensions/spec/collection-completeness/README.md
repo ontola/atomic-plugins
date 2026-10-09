@@ -1,6 +1,6 @@
 # OpenAPI Collection Completeness Extension
 
-**Spec version:** 0.2.0-draft
+**Spec version:** 0.3.0-draft
 
 ---
 
@@ -114,7 +114,8 @@ selection, is not a complete read (§3) under either placement.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `absent` | `deleted` \| `removed` | **Yes** | What it means when an object that was a member is absent from a complete read. See §4.2. |
-| `notFound` | `deleted` \| `unavailable` | No | Since 0.2.0. What a `404` or `410` from the resource's `read` operation means for an object absent from a complete read. See §4.3. Default: `deleted`. Not allowed with `absent: deleted`. |
+| `notFound` | `deleted` \| `unavailable` | No | Since 0.2.0. What a `404` (and, without `gone`, a `410`) from the resource's `read` operation means for an object absent from a complete read. See §4.3. Default: `deleted`. Not allowed with `absent: deleted`. |
+| `gone` | `deleted` \| `unavailable` | No | Since 0.3.0. What a `410` from the resource's `read` operation means for such an object. See §4.3. Default: the resource's `notFound`. Not allowed with `absent: deleted`. |
 | `parentAbsent` | `unavailable` | No | Since 0.2.0. The members of this collection are unavailable once the object that supplies one of its path variables is concluded gone. See §4.4. Only on a Collection Object. |
 | `description` | string | No | Human-readable description. |
 | `x-*` | any | No | Extension fields. |
@@ -149,11 +150,12 @@ object reads it with the resource's `read` operation. The answer means:
 |--------|---------|
 | 2xx, the object, without a read-tombstone marker | It exists; it left the collection (or, without a Completeness Object, the list does not return it). Its current values are the body. |
 | 2xx, the object, with the resource's `x-read-tombstone` marker ([Deletion Feeds](../deletion-feeds/README.md) §4.4) | It was deleted, as that section defines, possibly restorably. |
-| `404` or `410` | What `notFound` says (below). |
+| `404` | What `notFound` says (below). |
+| `410` | What `gone` says, or, without `gone`, what `notFound` says (below). |
 | Anything else, a failure, or no read made | Nothing: the object's state is unknown until a later read. |
 
-| `notFound` | Meaning of a `404` or `410` |
-|------------|-----------------------------|
+| `notFound` (or `gone`) | Meaning of a `404` (or `410`) |
+|------------------------|-------------------------------|
 | `deleted` (default) | The object was deleted. |
 | `unavailable` | This caller can no longer read the object. The API does not say whether it was deleted, moved out of the caller's reach, or the caller lost access. |
 
@@ -180,6 +182,20 @@ declares no Completeness Object or leaves `notFound` out; every
 `notFound` is not allowed with `absent: deleted`: such a collection's absent
 objects are deleted without a read, and §4.2 already says that their read
 answers `404` or `410`.
+
+Since 0.3.0, `gone` separates a `410` from a `404`. Some providers answer
+`404` for objects the caller can no longer reach, whatever happened to them,
+and `410` only for a deletion the caller may know about: GitHub documents "If
+the issue was deleted from a repository where the authenticated user has read
+access, the API returns a 410 Gone status", while a `404` may also mean a
+transfer. Such a document declares `notFound: unavailable, gone: deleted`.
+Declare `gone: deleted` only when the provider documents a `410` for its
+objects as their deletion. `gone` follows the same rules as `notFound`: it
+describes the resource's `read`, so once any collection of a resource states
+it, it applies to every read of that resource's objects and every
+`absent: removed` collection of the resource states the same value; it is
+not allowed with `absent: deleted`. Without `gone`, a `410` means what
+`notFound` says, as in 0.2.0.
 
 How many absent objects a consumer reads in one pass is its own policy. An
 object it does not read in a pass stays unknown, not deleted, until it does.
@@ -352,7 +368,12 @@ A conforming document:
   Completeness Object; once any collection of a resource states `notFound`,
   MUST state it, with the same value, on every collection of that resource
   declared `absent: removed`; MUST NOT declare `notFound: deleted` without
-  provider documentation for it.
+  provider documentation for it;
+* since 0.3.0: MUST give `gone`, when present, one of the values in §4.3;
+  MUST NOT declare it together with `absent: deleted`; once any collection of
+  a resource states `gone`, MUST state it, with the same value, on every
+  collection of that resource declared `absent: removed`; MUST NOT declare
+  `gone: deleted` without provider documentation that a `410` is a deletion.
 
 A conforming consumer:
 
@@ -369,7 +390,8 @@ A conforming consumer:
 * since 0.2.0: MUST NOT send a write it queued for an `unavailable` object
   without its user's or application's decision;
 * since 0.2.0: MUST apply a resource's stated `notFound` to every read of its
-  objects, through any collection (§4.3);
+  objects, through any collection (§4.3); since 0.3.0, the same for `gone`,
+  which classifies a `410` (falling back to `notFound` when absent);
 * since 0.2.0: MUST NOT apply `parentAbsent` before it has concluded, in one
   of the three ways of §4.4, that the parent object is gone, and MUST then
   mark the members `unavailable`, never `deleted`; MUST NOT mark a member a
@@ -379,8 +401,9 @@ A conforming consumer:
   for its `notFound`, which describes the resource's read (§4.3) and is
   honoured whatever `absent` says; under an unrecognised `absent`, a `404` or
   `410` is classified by a recognised `notFound`, else as `unavailable`, never
-  by the `deleted` default; a `notFound` as `unavailable`; a `parentAbsent`
-  as `unavailable`.
+  by the `deleted` default; an unrecognised `notFound` value as
+  `unavailable`; since 0.3.0, an unrecognised `gone` value as `unavailable`;
+  a `parentAbsent` as `unavailable`.
 
 ## 8. Not covered
 
@@ -413,6 +436,10 @@ python3 validate.py examples/nested-tasks.yaml
 
 ## Changes
 
+- **0.3.0-draft** (2026-10-09): adds `gone` (§4.3: what a `410` means,
+  defaulting to `notFound`), so that a `410` documented as a deletion can mean
+  `deleted` while a `404` stays `unavailable`. A 0.2.0 document stays valid
+  and means the same.
 - **0.2.0-draft** (2026-10-08): adds `notFound` (§4.3: what a `404` or `410`
   from reading an absent object means, `deleted` by default or
   `unavailable`, resource-wide once stated) and `parentAbsent` (§4.4: the
