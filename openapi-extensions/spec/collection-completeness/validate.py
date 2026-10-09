@@ -96,6 +96,10 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         declared = declarations_of(document, resource_name)
+        if resource_read_value(document, resource_name, "notFound") == "deleted" \
+                and resource_read_value(document, resource_name, "gone") == "unavailable":
+            errors.append(f"crudResources.{resource_name}: notFound: deleted with gone: unavailable "
+                          "(a 0.2.0 consumer would read the 410 as a deletion)")
         for field in READ_FIELDS:
             explicit = {d[field] for d in declared.values()
                         if d and field in d and isinstance(d[field], (str, int, float, bool, type(None)))}

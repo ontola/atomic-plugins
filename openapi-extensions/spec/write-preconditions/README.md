@@ -232,7 +232,8 @@ resource was deleted, for this object: a [Deletion Feeds](../deletion-feeds/READ
 tombstone for this object; a collection of the resource that declares
 `notFound: deleted` explicitly (for a `404`, and for a `410` without `gone`);
 for a `410`, a collection of the resource that declares `gone: deleted`
-(Collection Completeness 0.3.0-draft §4.3); or a collection declared
+(Collection Completeness 0.3.0-draft §4.3; a stated `gone` decides every
+`410`, so `gone: unavailable` never confirms one); or a collection declared
 `absent: deleted` that
 the object was a member of when the client last read it, which rests on
 [Collection Completeness](../collection-completeness/README.md) §4.2's rule

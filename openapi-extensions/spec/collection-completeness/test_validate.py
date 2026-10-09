@@ -172,14 +172,14 @@ class ClassifyTests(unittest.TestCase):
 class GoneTests(unittest.TestCase):
     """0.3.0: gone classifies a 410 separately from a 404."""
 
-    def github_shaped(self):
+    def deletion_only_410(self):
         document = example()
         for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
             completeness(document, resource, collection)["gone"] = "deleted"
         return document
 
     def test_gone_deleted_with_not_found_unavailable(self):
-        document = self.github_shaped()
+        document = self.deletion_only_410()
         validate(document)
         declaration = completeness(document)
         not_found = resource_not_found(document, "task")
@@ -196,8 +196,22 @@ class GoneTests(unittest.TestCase):
         self.assertEqual(classify_read({"absent": "removed"}, None, "id", "t1", 410, None), "deleted")
         self.assertEqual(classify_read(dict(declaration, gone="purged"), None, "id", "t1", 410, None), "unavailable")
 
+    def test_not_found_deleted_with_gone_unavailable_is_forbidden(self):
+        document = example()
+        for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
+            completeness(document, resource, collection)["notFound"] = "deleted"
+        completeness(document)["gone"] = "unavailable"
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("notFound: deleted with gone: unavailable", str(raised.exception))
+
+    def test_unrecognised_absent_still_honours_gone(self):
+        declaration = {"absent": "archived", "notFound": "unavailable", "gone": "deleted"}
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 410, None), "deleted")
+        self.assertEqual(classify_read(declaration, None, "id", "t1", 404, None), "unavailable")
+
     def test_gone_rules(self):
-        document = self.github_shaped()
+        document = self.deletion_only_410()
         document["components"]["crudResources"]["task"]["collections"]["starred"] = {
             "urlTemplate": "/starred", "x-completeness": {"absent": "removed", "notFound": "unavailable", "gone": "deleted"}}
         validate(document)
@@ -205,14 +219,14 @@ class GoneTests(unittest.TestCase):
         with self.assertRaises(ValueError) as raised:
             validate(document)
         self.assertIn("different gone values", str(raised.exception))
-        document = self.github_shaped()
+        document = self.deletion_only_410()
         document["components"]["crudResources"]["task"]["collections"]["starred"] = {
             "urlTemplate": "/starred", "x-completeness": {"absent": "removed", "notFound": "unavailable"}}
         with self.assertRaises(ValueError) as raised:
             validate(document)
         self.assertIn("['starred'] default gone", str(raised.exception))
         for value, fragment in (("later", "gone: expected deleted or unavailable"), (["deleted"], "gone: expected")):
-            document = self.github_shaped()
+            document = self.deletion_only_410()
             completeness(document)["gone"] = value
             with self.subTest(value=value), self.assertRaises(ValueError) as raised:
                 validate(document)

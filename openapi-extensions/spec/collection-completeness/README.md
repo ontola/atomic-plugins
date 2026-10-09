@@ -183,14 +183,17 @@ declares no Completeness Object or leaves `notFound` out; every
 objects are deleted without a read, and §4.2 already says that their read
 answers `404` or `410`.
 
-Since 0.3.0, `gone` separates a `410` from a `404`. Some providers answer
+Since 0.3.0, `gone` separates a `410` from a `404`. A provider that answers
 `404` for objects the caller can no longer reach, whatever happened to them,
-and `410` only for a deletion the caller may know about: GitHub documents "If
-the issue was deleted from a repository where the authenticated user has read
-access, the API returns a 410 Gone status", while a `404` may also mean a
-transfer. Such a document declares `notFound: unavailable, gone: deleted`.
-Declare `gone: deleted` only when the provider documents a `410` for its
-objects as their deletion. `gone` follows the same rules as `notFound`: it
+and `410` for a deletion and nothing else, declares
+`notFound: unavailable, gone: deleted`. Declare `gone: deleted` only when the
+provider documents that it sends a `410` for that resource's objects **only**
+when the object was deleted. A `410` that also covers another state is not
+such evidence. GitHub is the counter-example: it documents a `410` for a
+deleted issue, but it also answers `410` for every issue of a repository whose
+issues are turned off ("Issues are disabled for this repo"), a state the owner
+can switch back. GitHub therefore declares no `gone`, or `gone: unavailable`,
+never `gone: deleted`. `gone` follows the same rules as `notFound`: it
 describes the resource's `read`, so once any collection of a resource states
 it, it applies to every read of that resource's objects and every
 `absent: removed` collection of the resource states the same value; it is
@@ -373,7 +376,10 @@ A conforming document:
   MUST NOT declare it together with `absent: deleted`; once any collection of
   a resource states `gone`, MUST state it, with the same value, on every
   collection of that resource declared `absent: removed`; MUST NOT declare
-  `gone: deleted` without provider documentation that a `410` is a deletion.
+  `gone: deleted` without provider documentation that a `410` is sent for
+  that resource's objects only when the object was deleted; MUST NOT declare
+  `notFound: deleted` together with `gone: unavailable` (a 0.2.0 consumer,
+  which ignores `gone`, would read that `410` as a deletion).
 
 A conforming consumer:
 
@@ -399,8 +405,9 @@ A conforming consumer:
 * since 0.2.0: SHOULD treat a value it does not recognise as follows: a
   Completeness Object whose `absent` it does not recognise as absent, except
   for its `notFound`, which describes the resource's read (§4.3) and is
-  honoured whatever `absent` says; under an unrecognised `absent`, a `404` or
-  `410` is classified by a recognised `notFound`, else as `unavailable`, never
+  honoured whatever `absent` says; under an unrecognised `absent`, a `410` is
+  classified by a recognised `gone`, and a `404` (or a `410` without a
+  recognised `gone`) by a recognised `notFound`, else as `unavailable`, never
   by the `deleted` default; an unrecognised `notFound` value as
   `unavailable`; since 0.3.0, an unrecognised `gone` value as `unavailable`;
   a `parentAbsent` as `unavailable`.
