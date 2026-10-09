@@ -1,0 +1,58 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+# Source: https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling, headers and signals).
+# The same declarations as the api.github.com.2022-11-28 throttling overlay: the
+# github-issues subset is served by the same REST API and rate limits.
+overlay: 1.0.0
+info:
+  title: GitHub Issues API rate-limit headers and throttling signals
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        headers:
+          x-ratelimit-limit:
+            role: limit
+            description: The maximum number of requests per hour for the resource named by x-ratelimit-resource.
+          x-ratelimit-remaining:
+            role: remaining
+          x-ratelimit-used:
+            role: used
+          x-ratelimit-reset:
+            role: reset
+            unit: epochSeconds
+            description: GitHub documents this as UTC epoch seconds.
+          retry-after:
+            role: retryAfter
+            unit: deltaSeconds
+            description: GitHub documents this as a number of seconds.
+        signals:
+          - status: [403, 429]
+            header: { name: x-ratelimit-remaining, equals: '0' }
+            meaning: quotaExhausted
+            description: >-
+              Primary rate limit, documented as 403 or 429 with
+              x-ratelimit-remaining 0. Wait until x-ratelimit-reset. The
+              exhausted bucket is the one x-ratelimit-resource names (core,
+              search, graphql, ...), which this version cannot express, so no
+              bucket is given. A permission 403 sent while the quota happens to
+              be used up also matches; it then costs only a wait until the reset.
+          - status: [403, 429]
+            header: { name: retry-after, present: true }
+            meaning: throttled
+            description: Secondary rate limit with a retry-after header.
+          - status: [403, 429]
+            body: { pointer: /message, contains: secondary rate limit }
+            meaning: throttled
+            minDelaySeconds: 60
+            description: >-
+              Secondary rate limit without retry-after. GitHub documents "an
+              error message that indicates that you exceeded a secondary rate
+              limit" and asks clients to wait at least one minute; it quotes no
+              exact wording, so this text is an observation (the issue-tracker
+              app matches the same phrase), not documented. GitHub also asks
+              for exponentially increasing waits on repeated secondary limits,
+              which is consumer policy.

@@ -1,0 +1,40 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/calendar/api/guides/errors (Workspace-wide error format)
+# Source: https://developers.google.com/workspace/tasks/limits (courtesy limit only)
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling, headers and signals).
+# The error evidence is the Calendar API's error guide, not a Tasks-specific error document.
+overlay: 1.0.0
+info:
+  title: Google Tasks v1 throttling signals
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSecondsOrHttpDate
+            description: >-
+              The standard RFC 9110 header. Google's error guides recommend
+              exponential backoff and do not document sending it.
+        signals:
+          - status: [403, 429]
+            body:
+              pointer: /error/errors
+              item:
+                pointer: /reason
+                in: [rateLimitExceeded, userRateLimitExceeded]
+            meaning: throttled
+            description: >-
+              Inferred: generalised from the Google Workspace error format that
+              the Calendar API error guide documents (rateLimitExceeded with 403
+              or 429, userRateLimitExceeded with 403 only, both in
+              error.errors[].reason, handled with exponential backoff). The
+              Tasks limits page states only a courtesy limit of 50,000 queries
+              per day and documents no error responses, so this is not verified
+              against a Tasks-specific error document. quotaExceeded (Calendar's
+              own usage limits in that guide) and daily-quota reasons are not
+              declared, because no document establishes what Tasks uses. Supersede
+              this revision if Tasks turns out to differ.
