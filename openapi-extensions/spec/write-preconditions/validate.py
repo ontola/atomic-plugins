@@ -248,6 +248,10 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
                     action=None, deletion_confirmed=False, tombstone=None):
     """§4.5 after an unknown outcome.
 
+    Only a known update or delete is resolved: by `action`, else by a PUT,
+    PATCH or DELETE method; anything else (a POST without x-crud, a create)
+    is 'unknown' and never resent.
+
     Returns 'resend' (no read needed), 'read-first', 'applied', 'not-applied',
     'conflict', 'refused', 'gone' (an update whose object is gone or deleted:
     stop), 'gone-unconfirmed' (a delete whose object is gone without
@@ -268,7 +272,9 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
     kind = declaration.get("kind")
     method = method.lower()
     if action is None:
-        action = "delete" if method == "delete" else "update"
+        action = {"put": "update", "patch": "update", "delete": "delete"}.get(method)
+    if action not in ("update", "delete"):
+        return "unknown"  # §4.5 covers only known updates and deletes: never resend a possible create
     idempotent = declaration.get("idempotent", method in ("put", "delete"))
     if read is None:
         if kind != "readVerify" and idempotent:
@@ -292,8 +298,10 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
         return "refused"  # rule 4
     if kind == "ifMatch" and sent_version is not None:  # rule 5
         return "not-applied" if _same(version_of(declaration, body, headers), sent_version) else "conflict"
-    compared = baseline.items() if action == "delete" else ((f, baseline.get(f)) for f in written)
-    return "not-applied" if all(_same(_field(body, f), v) for f, v in compared) else "conflict"  # rule 6
+    fields = list(baseline) if action == "delete" else list(written)
+    if not fields or any(f not in baseline for f in fields):
+        return "unknown"  # rule 6 needs a baseline for every compared field
+    return "not-applied" if all(_same(_field(body, f), baseline[f]) for f in fields) else "conflict"  # rule 6
 
 
 def _load(path):

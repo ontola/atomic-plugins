@@ -203,6 +203,14 @@ provider applied it: no response arrived, or a gateway answered `502`, `503`
 or `504`, or the provider answered another `5xx` that it does not document as
 "not applied".
 
+**Which writes this section covers.** Only a write known to be an update or
+a delete: by its operation's `x-crud` action (`update` or `delete`), or, without
+`x-crud`, by its method (`PUT` or `PATCH` an update, `DELETE` a delete). Any
+other write (a `POST` without `x-crud`, which may be a create, or an `x-crud`
+`create`) is outside this section: its unknown outcome stays unknown, and the
+client never resends it on this section's rules, since a resent create may
+duplicate the object.
+
 **Whether to read first.**
 
 * Under `readVerify`, a client MUST read the object and resolve the outcome
@@ -211,13 +219,12 @@ or `504`, or the provider answered another `5xx` that it does not document as
   the meantime.
 * Under `ifMatch` or `none`, when `idempotent` is `true`, a client MAY send
   the same request again (under `ifMatch` with the same version) without
-  reading. When it is `false`, it MUST read the object first.
+  reading; that resend is a new send, to which §4.2 and §4.4 apply again. When
+  it is `false`, it MUST read the object first.
 
 **Resolving by a read.** The client reads the object (§3) and compares:
 
-Which rule applies follows the write's action: the operation's `x-crud`
-action (`update` or `delete`) when it declares one, else the HTTP method
-(`DELETE` is a delete, anything else an update).
+Which rule applies follows the write's action, as above.
 
 _Deletion confirmed_ means the document says that a missing object of this
 resource was deleted, for this object: a [Deletion Feeds](../deletion-feeds/README.md)
@@ -252,7 +259,8 @@ decides:
 6. Otherwise, compare with the baseline: when every written field (for a
    delete, every field the client holds a baseline for) still holds its
    baseline, the write was not applied and the client MAY send it again;
-   anything else is a conflict.
+   anything else is a conflict. A compared field without a baseline leaves
+   the outcome unknown.
 7. Any other answer leaves the outcome unknown.
 
 The baseline of a delete is the object as the client last read it before

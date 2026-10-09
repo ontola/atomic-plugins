@@ -169,6 +169,22 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(resolve_unknown(VERIFY, "PATCH", {"title": "A"}, {"title": "B"}, read({"title": "A", "in_trash": True}),
                                          tombstone=tombstone), "gone")
 
+    def test_possible_creates_are_never_resent(self):
+        # The round-7 probe: a POST create without x-crud must not be resent by §4.5.
+        none_idempotent = {"kind": "none", "idempotent": True}
+        self.assertEqual(resolve_unknown(none_idempotent, "POST", {}, {"title": "B"}), "unknown")
+        self.assertEqual(resolve_unknown(none_idempotent, "POST", {}, {"title": "B"}, {"status": 200, "body": {"title": "A"}}), "unknown")
+        self.assertEqual(resolve_unknown(none_idempotent, "PUT", {}, {"title": "B"}, action="create"), "unknown")
+        # A POST known to be an update by x-crud is resolved as one.
+        self.assertEqual(resolve_unknown(VERIFY, "POST", {"title": "A"}, {"title": "B"}, {"status": 200, "body": {"title": "B"}},
+                                         action="update"), "applied")
+
+    def test_rule_6_needs_a_baseline_for_every_compared_field(self):
+        read = {"status": 200, "body": {"title": "A", "notes": "n"}}
+        self.assertEqual(resolve_unknown(VERIFY, "PATCH", {}, {"title": "B"}, read), "unknown")
+        self.assertEqual(resolve_unknown(VERIFY, "PATCH", {"title": "A"}, {"title": "B", "notes": "m"}, read), "unknown")
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {}, {}, read), "unknown")
+
     def test_the_writes_own_answer(self):
         self.assertEqual(write_answer("delete", 404), "gone-unconfirmed")
         self.assertEqual(write_answer("delete", 410, deletion_confirmed=True), "applied")
