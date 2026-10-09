@@ -42,6 +42,7 @@ export type {
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
+export { mergePatch } from './client/merge-patch.js';
 
 // The read path (also available without Node built-ins as `syncables/browser`).
 export {

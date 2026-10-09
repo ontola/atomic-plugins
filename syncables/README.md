@@ -130,8 +130,54 @@ immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. Both currently send JSON records, not JSON Patch documents.
-An update's response is merged over the record it sent, so a provider that
+when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
+`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+body:
+
+- `mode: replace`, no `x-crud`, or a legacy document (no
+  `components.crudResources`): the last known record with the changes on
+  top, as JSON.
+- `mode: patch, patchFormat: jsonMergePatch`: the changes alone, as an
+  [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396) JSON Merge Patch, with
+  `Content-Type: application/merge-patch+json` when the operation's
+  `requestBody.content` declares that media type, else `application/json`.
+  The local copy follows RFC 7396 too: `null` removes the field, and a
+  nested object merges into the existing one (on other routes `null` is a
+  value and a nested object replaces the field). Each queued edit sends only
+  its own changes, in order, also after a restart. `mergePatch(target,
+  patch)` is exported.
+- `mode: patch, patchFormat: jsonPatch` (RFC 6902): `update()` throws
+  ("declares its PATCH update with patchFormat jsonPatch (RFC 6902), which
+  this client does not send") before any local change; create and delete
+  are unaffected.
+- `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
+  record, as for `replace`. Whether the provider accepts that is not checked.
+
+A declared PUT is chosen even when the item's PATCH is declared as a merge
+patch, so such a document still sends full records; preferring the merge
+patch there is a possible follow-up, not done.
+
+A merge-patch edit records the confirmed values of the top-level fields it
+names, so a remote change anywhere inside a nested object it patches is
+reported as a `WriteConflict` on that field, even when the two changes touch
+different nested members. A refresh is compared with the field as the
+client's own patches leave it, applied in order (a `null` matches an absent
+field), so a refresh that shows the client's own merge patch applied before
+its response arrived is not a conflict, for that write or a later queued
+one. A failed merge-patch update loses only the nested members a later
+settled merge patch sets, and `resolveWrite` `retry` strips only those of
+newer queued merge patches; other routes do this by top-level field.
+
+Each update stores the body format it was made with (`updateBody` in the
+outbox). A client restarted on a document that now declares another format
+for the route does not send or replay the update under the new one: the
+update, and every write queued before it, becomes `failed` with a
+`lastError` that says so; it stays visible as made, `retry` throws, and
+`discard` drops it. When a create is queued before such an update, the
+record's writes are kept unrestorable instead (written back unchanged).
+An update's response is merged over the record it sent (a shallow spread,
+on merge-patch routes too: a `null` in a response is stored as a value,
+not read as a removal), so a provider that
 answers with only some fields (or only bookkeeping such as `updatedAt`) does
 not shrink the confirmed record or revert the edit. The trade-off: a field
 that the provider removed in that response, rather than omitted, stays in the
@@ -383,6 +429,11 @@ value this client has queued, or holds as failed, for that field), the client
 records a conflict.
 A refresh that shows an earlier queued edit applied, before or after its
 response arrives, is not a conflict.
+For a JSON Merge Patch update, conflicts are per top-level field: a remote
+change to any nested member of an object the patch touches is reported on
+the whole field, even when the patch sets other members. Its expected value
+is the patch applied to its own base, or to what the queued patches before
+it leave; failed patches are not counted as applied.
 The local value stays visible, the queued write still sends it (local wins on
 acknowledgement), and the conflict is observable in two ways:
 
@@ -409,9 +460,10 @@ or the list may just not return it (a default filter, a view that depends on
 the credentials). The client does not send such an update on the record's
 last known copy: a PUT built on it could recreate a deleted record on some
 providers, or write back fields that changed remotely. That applies to PATCH
-too, since the client's PATCH body also carries the whole last known record
-with the changes on top (JSON, not JSON Patch); a PATCH to a deleted record is
-a 404 at best and recreates it at worst.
+too: unless its operation declares `patchFormat: jsonMergePatch`, the
+client's PATCH body also carries the whole last known record with the
+changes on top, and a PATCH to a deleted record (merge patch included) is a
+404 at best and recreates it at worst.
 
 When a complete read lacks the record (and no write to it settled during the
 read), every queued update of the record up to its first create, apart from
@@ -873,16 +925,19 @@ the methods that wait for it, rather than overwrite writes this client cannot
 read. Entries for a collection the current document lacks (queued writes and
 pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
-tombstones of such a collection. The write fields `lastStatus`
-and `missingRecord`, the state `blocked` and the top-level `authBlock`,
-`feedCursors` and `feedTombstones` were added within version `1`, as were
-the write field `notBefore` (a throttling answer's earliest retry time) and
-the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Downgrading: an older syncables that
-reads this outbox does not know `notBefore` and `throttlingPauses` and
-drops them, so it may send a held write before the time the API asked for,
-though never a second time; the version stays `1` because every write it
-holds is still one that older client can read and send. Set `outboxNamespace` to
+tombstones of such a collection. The write fields `lastStatus`,
+`missingRecord` and `updateBody`, the state `blocked` and the top-level
+`authBlock`, `feedCursors` and `feedTombstones` were added within version
+`1`, as were the write field `notBefore` (a throttling answer's earliest
+retry time) and the top-level `throttlingPauses` (exhausted buckets); a
+stored `authBlock` that does not parse still blocks the client (`status` 0)
+until `authRenewed()`. Downgrading: an older syncables that reads this
+outbox does not know `notBefore` and `throttlingPauses` and drops them, so
+it may send a held write before the time the API asked for, though never a
+second time. A client from before `updateBody` ignores that field too:
+downgraded with a merge-patch update queued, it would send that update as a
+full record, with a `null` stored as a value and a nested patch replacing
+its field; settle or discard such writes before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -1192,6 +1247,23 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Update modes from CRUD Causality 0.4.0 (§4.3 `mode`,
+  §4.6 `patchFormat`) on the chosen update operation's `x-crud` (PUT still
+  preferred, else PATCH; an `x-crud` naming another resource is ignored).
+  `mode: patch, patchFormat: jsonMergePatch` sends the changes alone as an
+  RFC 7396 merge patch (`application/merge-patch+json` when the operation
+  declares it, else `application/json`) and applies RFC 7396 locally
+  (`null` removes a field, nested objects merge) in `update()`'s returned
+  record, the visible record and the queue's replay. `patchFormat:
+  jsonPatch` makes `update()` throw. `replace`, `custom`, `mode: patch`
+  without a `patchFormat`, no `x-crud` and legacy documents keep the full
+  record. `mergePatch` is exported from both entries. Behaviour change only
+  for documents that declare `jsonMergePatch` or `jsonPatch` on their
+  update operation. Conflict checks, superseding and `retry` follow the
+  merge patch's nested members; each update stores its body format
+  (`updateBody`, added within outbox version 1), and one restored under a
+  document that declares another format fails instead of being
+  reinterpreted. `mergePatch` treats a `__proto__` member as data.
 - **Unreleased**: A page size sent is capped at the pageSize parameter's
   documented `maximum`; `paginate` takes `idField` to keep an item two
   windows return once (items without it are kept as is); a walk's outcome
