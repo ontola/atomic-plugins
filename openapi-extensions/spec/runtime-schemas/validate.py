@@ -140,7 +140,9 @@ def derive_class(runtime, describer):
 
     Returns {"properties": {id: property}, "undescribed": [id], "names":
     {id: name} for every definition, "duplicates": [id], "duplicateNames":
-    [name], "duplicateOptions": {id: [option id]}}. Each property is {"name",
+    [name], "duplicateIdNames": {name: id} (the other names a repeated id
+    goes by), "duplicateOptions": {id: [option id]}}. A name that is not a
+    string is replaced by the map key (with `keyedBy: name`), else the id. Each property is {"name",
     "type", "schema", "key"}, with "description" when the document names
     that field, and for an option type "options" (option id -> name or None,
     the first of a repeated id kept) and "multiple". A definition id that
@@ -149,6 +151,7 @@ def derive_class(runtime, describer):
     fields = runtime["definition"]
     properties, undescribed, names = {}, [], {}
     seen, duplicates, name_count, duplicate_options = set(), [], {}, {}
+    duplicate_names = {}
     for key, definition in _definitions(runtime, describer):
         if not isinstance(definition, dict):
             continue
@@ -156,14 +159,18 @@ def derive_class(runtime, describer):
         kind = get_path(definition, fields["type"])
         if not isinstance(identifier, str) or not isinstance(kind, str):
             continue
+        name = get_path(definition, fields["name"]) if "name" in fields else MISSING
+        if not isinstance(name, str):
+            # Absent, or not a string (an object, say): the map key, else the id.
+            name = key if isinstance(key, str) and runtime["keyedBy"] == "name" else identifier
         if identifier in seen:
             if identifier not in duplicates:
                 duplicates.append(identifier)
+            # Every name a repeated id goes by points at it, so a member keyed
+            # by any of them is undescribed rather than unmatched.
+            duplicate_names[name] = identifier
             continue
         seen.add(identifier)
-        name = get_path(definition, fields["name"]) if "name" in fields else MISSING
-        if name is MISSING:
-            name = key if key is not None and runtime["keyedBy"] == "name" else identifier
         names[identifier] = name
         name_count[name] = name_count.get(name, 0) + 1
         described = runtime["types"].get(kind)
@@ -186,7 +193,7 @@ def derive_class(runtime, describer):
                     duplicate_options.setdefault(identifier, []).append(option_id)
                     continue
                 option_name = get_path(option, spec["name"])
-                prop["options"][option_id] = None if option_name is MISSING else option_name
+                prop["options"][option_id] = option_name if isinstance(option_name, str) else None
             prop["multiple"] = described.get("multiple", False)
         properties[identifier] = prop
     for identifier in duplicates:
@@ -199,6 +206,7 @@ def derive_class(runtime, describer):
         "names": names,
         "duplicates": duplicates,
         "duplicateNames": [name for name, count in name_count.items() if count > 1],
+        "duplicateIdNames": duplicate_names,
         "duplicateOptions": duplicate_options,
     }
 
@@ -225,7 +233,8 @@ def read_members(runtime, derived, item):
     option value is its option id (or a list of them); an option id the
     definition no longer lists is kept (§5.3 rule 4). A member without a
     value at its type's `value` path has no value (§4.4). A member whose
-    option value has the wrong shape is "invalid" and has no value. Two or
+    option value has the wrong shape, or whose `memberId` value is present
+    but not a string, is "invalid" and has no value. Two or
     more members that match the same definition are all "conflicting", and
     none gives a value.
     """
@@ -243,12 +252,17 @@ def read_members(runtime, derived, item):
         by_key.update({identifier: identifier for identifier in skipped})
     else:
         by_key = {name: identifier for identifier, name in names.items() if name not in ambiguous_names}
+        by_key.update(derived.get("duplicateIdNames") or {})
     matched = {}
     for key, member in members.items():
         if runtime["match"] == "id":
             identifier = get_path(member, runtime["memberId"]) if isinstance(member, dict) else MISSING
         else:
             identifier = by_key.get(key, MISSING)
+        if identifier is not MISSING and not isinstance(identifier, str):
+            # A memberId that is an object, an array or a number: no definition id.
+            result["invalid"].append(key)
+            continue
         if identifier in skipped:
             result["undescribed"].append(key)
             continue

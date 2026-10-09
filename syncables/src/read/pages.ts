@@ -170,20 +170,55 @@ export function pageItems(
   return array.filter(isRecord);
 }
 
-/** The array at a dot-path of the body (`''`: the body), its objects only. */
-function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
+/**
+ * The caller's envelope (a Collection Object's), else the scheme's own
+ * (Pagination Schemes §4.4.2; `null` means the body root); undefined when
+ * neither declares one and the array is located.
+ */
+function declaredItemsField(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject | undefined,
+): string | undefined {
+  const schemeEnvelope = scheme?.response?.envelope;
+  return (
+    walk.itemsField ??
+    (schemeEnvelope === undefined
+      ? undefined
+      : typeof schemeEnvelope.itemsField === 'string'
+        ? schemeEnvelope.itemsField
+        : '')
+  );
+}
+
+/**
+ * The array at a dot-path of the body (`''`: the body). An item that is not
+ * an object is an error, so an array of strings never reads as empty
+ * (#384); a feed read (`skipNonObjects`) skips such items instead, as its
+ * documentation says.
+ */
+function itemsAt(
+  body: unknown,
+  path: string,
+  skipNonObjects = false,
+): Record<string, unknown>[] {
   const array =
     path === ''
       ? body
       : isRecord(body)
         ? readNestedField(body, path)
         : undefined;
+  const where = path
+    ? `${path} (the declared envelope.itemsField)`
+    : 'the body root';
   if (!Array.isArray(array)) {
-    throw new Error(
-      `No items array at ${path || 'the body root'} (the declared envelope.itemsField)`,
-    );
+    throw new Error(`No items array at ${where}`);
   }
-  return array.filter(isRecord);
+  if (skipNonObjects) return array.filter(isRecord);
+  const odd = array.findIndex((item) => !isRecord(item));
+  if (odd !== -1) {
+    throw new Error(`Item ${odd} at ${where} is not an object`);
+  }
+  return array as Record<string, unknown>[];
 }
 
 /** Fills `{name}` path variables, percent-encoding each value. */
@@ -215,9 +250,12 @@ export interface PageWalk {
   pageSize?: number;
   /**
    * Dot-path to the items array in each body, `''` for the body itself.
-   * Without it, `pageItems` locates the array.
+   * Without it, the pagination scheme's own `response.envelope` applies,
+   * and without that `pageItems` locates the array.
    */
   itemsField?: string;
+  /** Skip items that are not objects instead of failing the page (the deletion feed read). */
+  skipNonObjects?: boolean;
   /**
    * The range a `rangeWindow` operation is read over (Pagination Schemes
    * 0.5.0 §4.6.3), both bounds in the window's format. Required for such an
@@ -360,10 +398,11 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
+    const itemsField = declaredItemsField(walk, scheme);
     const items =
-      walk.itemsField === undefined
+      itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, walk.itemsField);
+        : itemsAt(body, itemsField, walk.skipNonObjects);
     itemsSoFar += items.length;
     yield { url, items, body };
 
@@ -489,10 +528,11 @@ async function* walkWindows(
     } catch {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
+    const itemsField = declaredItemsField(walk, scheme);
     const items =
-      walk.itemsField === undefined
+      itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, walk.itemsField);
+        : itemsAt(body, itemsField, walk.skipNonObjects);
     if (items.length >= window.cap) {
       const split = halves(low, high, window);
       if (!split) {

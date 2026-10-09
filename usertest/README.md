@@ -83,7 +83,14 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 1. Change the app, then bump its entry in `VERSIONS` in `catalog.mjs`.
    Its sample-data entry, if it has one, follows: its version is the app's
    plus `SAMPLE_VERSION`. A change to `sample-data/` or to a fixture it
-   imports bumps `SAMPLE_VERSION` instead.
+   imports bumps `SAMPLE_VERSION` instead. Then run
+   `node usertest/catalog.mjs --record` and commit `usertest/builds.json`,
+   the sha256 of each module's build (without the collector prelude) per
+   `<id>/<version>`. CI's tooling unit tests (`integrations/tooling/apps.test.mjs`)
+   rebuild every module and fail when one differs from what its version was
+   recorded with, or is not recorded: that is the forgotten bump.
+   `catalog.mjs` itself then exits 1 without writing `catalog.json`, and
+   `--record` refuses to overwrite a recorded hash.
 2. Run `USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs`,
    then `sh usertest/deploy.sh root@178.62.223.35`.
 3. On Integrations, testers who installed the old version see "Update to
