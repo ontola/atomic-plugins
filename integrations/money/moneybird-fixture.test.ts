@@ -22,10 +22,14 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { fixtures } from '../localthought/fixtures/index.mjs';
 import {
+  arg,
+  args,
+  checkArgv,
   civilYear as recorderYear,
   nextLink,
   REDACTIONS,
   redactor,
+  valueless,
 } from './fixtures/moneybird/record.mjs';
 import { civilYear } from './moneybird/read';
 import scenario, {
@@ -532,6 +536,154 @@ describe('moneybird fixture: always-on checks', () => {
     expect(
       REDACTIONS.find(r => /\bsepa_mandate_id\b/.test(r.field))?.replace,
     ).toMatch(/"redacted"/);
+  });
+
+  it('trusts an array only when EMPTIED or NESTED: KEEP and KEEP_NUMBERS never reach into one', () => {
+    const redact = redactor();
+    const mutation: Row = redact.row('financial_mutation', {
+      id: '999000777',
+      amount: ['Jansen', ['NL02RABO0123456789', 12], { date: '2026-01-20' }],
+      currency: [['EUR']],
+      version: [7],
+      date: [],
+      ledger_account_bookings: [{ description: 'secret' }],
+    });
+    const entry: Row = redact.row('time_entry', {
+      id: '999000555',
+      paused_duration: [1800, [3600]],
+      // A NESTED field holding a list: its objects are that resource, any
+      // other item is redacted.
+      user: [{ id: '999000333', name: 'Piet Jansen' }, 'Piet', [123]],
+    });
+    const project: Row = redact.row('project', {
+      id: '999000444',
+      budget: [123456789],
+      state: [true, null, ''],
+    });
+    const text = JSON.stringify([mutation, entry, project]);
+    for (const secret of [
+      'Jansen',
+      'RABO',
+      'secret',
+      '2026-01-20',
+      'EUR',
+      'Piet',
+      '123456789',
+      '1800',
+      '3600',
+    ])
+      expect(text, secret).not.toContain(secret);
+    expect(mutation).toMatchObject({
+      amount: ['redacted', ['redacted', 'redacted'], { date: 'redacted' }],
+      currency: [['redacted']],
+      version: ['redacted'],
+      date: [],
+      ledger_account_bookings: [],
+    });
+    expect(entry).toMatchObject({
+      paused_duration: ['redacted', ['redacted']],
+      user: [{ name: 'Redacted user 1' }, 'redacted', ['redacted']],
+    });
+    expect((entry.user as Row[])[0].id).toMatch(/^3000\d{14}$/);
+    // Booleans, null and "" stay, as everywhere.
+    expect(project).toMatchObject({
+      budget: ['redacted'],
+      state: [true, null, ''],
+    });
+    expect(redact.unknown()).toEqual([
+      'financial_mutation.amount',
+      'financial_mutation.amount.date',
+      'financial_mutation.currency',
+      'financial_mutation.date',
+      'financial_mutation.version',
+      'project.budget',
+      'project.state',
+      'time_entry.paused_duration',
+      'time_entry.user',
+    ]);
+  });
+
+  it('keeps a KEEP string only in its shape; free text there is redacted and reported', () => {
+    const redact = redactor();
+    const kept = {
+      amount: '-120.5',
+      amount_open: '0.0',
+      date: '2026-01-20',
+      created_at: '2026-01-20T09:00:00.000Z',
+      processed_at: '2026-01-20T09:00:00+01:00',
+      state: 'processed',
+      currency: 'EUR',
+      type: 'bank_account',
+      time_zone: 'Europe/Amsterdam',
+      delivery_method: 'Email',
+    };
+    expect(
+      redact.row('financial_mutation', { id: '999000777', ...kept }),
+    ).toMatchObject(kept);
+    expect(redact.unknown()).toEqual([]);
+
+    const wrong: Row = redact.row('financial_mutation', {
+      id: '999000778',
+      amount: 'Jansen paid 12',
+      amount_open: '1e3',
+      original_amount: '12,50',
+      date: 'next Tuesday',
+      updated_at: '20 January 2026',
+      state: 'Piet Jansen',
+      type: 'NL02RABO0123456789',
+      country: 'nl02rabo',
+      currency: 'Jansen',
+      language: 'a'.repeat(40),
+      time_zone: 'Jansen',
+      delivery_method: 'Jansen',
+    });
+    for (const [field, v] of Object.entries(wrong))
+      if (field !== 'id') expect(v, field).toBe('redacted');
+    expect(redact.unknown()).toEqual(
+      [
+        'amount',
+        'amount_open',
+        'country',
+        'currency',
+        'date',
+        'delivery_method',
+        'language',
+        'original_amount',
+        'state',
+        'time_zone',
+        'type',
+        'updated_at',
+      ].map(field => `financial_mutation.${field}`),
+    );
+  });
+
+  it('reads options without taking the next flag as a value, and refuses --x=5', () => {
+    const argv = ['node', 'record.mjs', '--per-page', '5', '--max-pages', '2'];
+    expect(arg('per-page', '2', argv)).toBe('5');
+    expect(arg('max-pages', '3', argv)).toBe('2');
+    expect(arg('per-page', '2', ['node', 'record.mjs'])).toBe('2');
+    expect(() =>
+      arg('per-page', '2', ['node', 'record.mjs', '--per-page', '--max-pages']),
+    ).toThrow('--per-page needs a value');
+    expect(() =>
+      arg('per-page', '2', ['node', 'record.mjs', '--per-page']),
+    ).toThrow('--per-page needs a value');
+    const repeated = [
+      'node',
+      'record.mjs',
+      '--administration',
+      '--per-page',
+      '5',
+      '--administration',
+      '123',
+      '--administration',
+    ];
+    expect(args('administration', repeated)).toEqual(['123']);
+    expect(valueless('administration', repeated)).toBe(2);
+    expect(() => checkArgv(argv)).not.toThrow();
+    expect(() => checkArgv(['node', 'record.mjs', '--per-page=5'])).toThrow(
+      'write --per-page 5 instead of --per-page=5',
+    );
   });
 
   it('reports an unknown field by its full nesting path', () => {

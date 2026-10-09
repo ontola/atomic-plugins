@@ -207,6 +207,25 @@ export const REDACTIONS = [
       'not know could hold anything under a familiar name (amount, type).',
   },
   {
+    field:
+      'an array other than an EMPTIED one or a NESTED field holding its resource',
+    replace:
+      'every string and number inside "redacted" (nested arrays and objects ' +
+      'too), KEEP and KEEP_NUMBERS not applied; reported by its path',
+    reason:
+      'An array under a familiar name (amount: ["…"]) is no amount; only ' +
+      'arrays this list knows are read.',
+  },
+  {
+    field: 'a KEEP string of the wrong shape',
+    replace:
+      '"redacted" and reported. Amounts must be decimal strings, dates and ' +
+      'timestamps ISO 8601, time_zone an IANA name, delivery_method one of ' +
+      "Moneybird's values, other KEEP fields short lowercase or uppercase " +
+      'tokens without digits',
+    reason: 'A KEEP field holding free text or a number fails closed too.',
+  },
+  {
     field: 'an object key not in FIELDS (the field names this list knows)',
     replace:
       'redacted-key-<n>, stable per key, its value redacted as an unknown ' +
@@ -248,6 +267,37 @@ const KEEP = new Set([
   'si_identifier_type',
   'credit_card_type',
 ]);
+
+/**
+ * The shape a KEEP string must have to be kept; any other value is
+ * "redacted" and reported, so a KEEP field holding free text (an amount
+ * field with a name in it, say) fails closed. Amounts are decimal strings,
+ * dates and timestamps ISO 8601, time_zone an IANA name, delivery_method one
+ * of Moneybird's values, and every other KEEP field a short lowercase or
+ * uppercase token without digits (`open`, `bank_account`, `EUR`, `NL`).
+ */
+const AMOUNT = /^-?\d{1,15}(\.\d{1,10})?$/;
+const ISO =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+const TOKEN = /^([a-z][a-z_]{0,31}|[A-Z][A-Z_]{0,31})$/;
+const KEEP_SHAPE = {
+  amount: AMOUNT,
+  amount_open: AMOUNT,
+  original_amount: AMOUNT,
+  created_at: ISO,
+  updated_at: ISO,
+  started_at: ISO,
+  ended_at: ISO,
+  processed_at: ISO,
+  date: ISO,
+  sepa_mandate_date: ISO,
+  tax_number_validated_at: ISO,
+  period_locked_until: ISO,
+  period_start_date: ISO,
+  time_zone: /^[A-Z][A-Za-z_]{1,30}(\/[A-Z][A-Za-z_]{1,30}){1,2}$/,
+  delivery_method: /^(Email|Simplerinvoicing|Peppol|Manual|Post)$/,
+};
+const keepable = (field, v) => (KEEP_SHAPE[field] ?? TOKEN).test(v);
 
 /**
  * Numbers kept verbatim: record versions and quantities the app reads. Any
@@ -425,11 +475,24 @@ export function redactor() {
    */
   const value = (v, field, { resource, row, path, known }) => {
     if (v === null || typeof v === 'boolean' || v === '') return v;
-    const here = { resource, row, path, known };
-    if (Array.isArray(v))
-      return known && EMPTIED.has(field)
-        ? []
-        : v.map(item => value(item, field, here));
+
+    if (Array.isArray(v)) {
+      // Arrays are trusted only where the list knows them: EMPTIED ones are
+      // emptied, and a NESTED field's objects are that resource. Any other
+      // array is an unknown field: reported, and everything in it redacted
+      // (KEEP and KEEP_NUMBERS do not reach into it).
+      if (known && EMPTIED.has(field)) return [];
+      const untrusted = { resource: 'other', row, path, known: false };
+      if (known && NESTED[field])
+        return v.map(item =>
+          item && typeof item === 'object' && !Array.isArray(item)
+            ? redactRow(NESTED[field], item, path, true)
+            : value(item, field, untrusted),
+        );
+      unknown.add(path);
+
+      return v.map(item => value(item, field, untrusted));
+    }
 
     if (typeof v === 'object') {
       // An object this list does not know inherits no fake kind from its
@@ -467,7 +530,12 @@ export function redactor() {
       return 'redacted';
     }
 
-    if (KEEP.has(field)) return v;
+    if (KEEP.has(field)) {
+      if (keepable(field, v)) return v;
+      unknown.add(path);
+
+      return 'redacted';
+    }
 
     if (field === 'name') {
       if (resource === 'administration')
@@ -546,19 +614,48 @@ export function redactor() {
   };
 }
 
-const arg = (name, fallback) => {
-  const i = process.argv.indexOf(`--${name}`);
+/** Whether `argv[i + 1]` is no value for the option at `argv[i]`. */
+const noValue = (argv, i) =>
+  argv[i + 1] === undefined || argv[i + 1].startsWith('--');
 
-  return i === -1 ? fallback : process.argv[i + 1];
+/**
+ * Refuses the `--<name>=<value>` form, which `arg` and `args` would not see
+ * (the option would silently keep its default).
+ */
+export function checkArgv(argv = process.argv) {
+  const joined = argv.find(a => /^--[^=]+=/.test(a));
+  if (joined)
+    throw new Error(
+      `write ${joined.replace('=', ' ')} instead of ${joined}: options take their value as the next argument`,
+    );
+}
+
+/**
+ * The value of a single `--<name> <value>` option, or `fallback` when it is
+ * not given. A flag right after the option (`--per-page --max-pages 2`), or
+ * nothing at all, is no value: that throws.
+ */
+export const arg = (name, fallback, argv = process.argv) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i === -1) return fallback;
+  if (noValue(argv, i)) throw new Error(`--${name} needs a value`);
+
+  return argv[i + 1];
 };
 
-/** Every value of a repeatable `--<name> <value>` option, in order. */
-const args = name =>
-  process.argv.flatMap((a, i) =>
-    a === `--${name}` && process.argv[i + 1] !== undefined
-      ? [process.argv[i + 1]]
-      : [],
+/**
+ * Every value of a repeatable `--<name> <value>` option, in order. A flag
+ * right after the option, or the end of the line, is not its value;
+ * `valueless` counts those.
+ */
+export const args = (name, argv = process.argv) =>
+  argv.flatMap((a, i) =>
+    a === `--${name}` && !noValue(argv, i) ? [argv[i + 1]] : [],
   );
+
+/** How many times a `--<name>` option is given without a value. */
+export const valueless = (name, argv = process.argv) =>
+  argv.filter((a, i) => a === `--${name}` && noValue(argv, i)).length;
 
 /** The `rel="next"` target of a Link header, if any. */
 export function nextLink(link) {
@@ -673,10 +770,16 @@ export const civilYear = () =>
 
 async function main() {
   const dir = new URL('./', import.meta.url);
+  checkArgv();
   const token = process.env.MONEYBIRD_TOKEN;
   if (!token) throw new Error('MONEYBIRD_TOKEN must be set');
   const perPage = Number(arg('per-page', '2'));
   const maxPages = Number(arg('max-pages', '3'));
+  const skipped = valueless('administration');
+  if (skipped)
+    console.warn(
+      `record: ${skipped} --administration option(s) without a value (at the end, or followed by another --option) ignored.`,
+    );
   if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100)
     throw new Error('--per-page must be an integer from 1 to 100');
   if (!Number.isInteger(maxPages) || maxPages < 1)
