@@ -90,9 +90,19 @@ export interface ReadCoverage {
    * after the read differs from the one a value was written in, or could
    * not be read again; read again for a known span. `noRangePredicate`: a
    * parameter declares no `x-filter` with `gte`, `gt`, `lte` or `lt`, so
-   * its value bounds nothing known. `incomplete`: the read did not finish.
+   * its value bounds nothing known. `otherFilters`: another query
+   * parameter with a value narrows the read in a way no span describes (an
+   * equality or other `x-filter`, an undeclared predicate, a range bound
+   * that is not an instant); paging parameters and the collection's own
+   * fixed `listQuery` values do not count. `incomplete`: the read did not
+   * finish.
    */
-  reason?: 'empty' | 'zoneChanged' | 'noRangePredicate' | 'incomplete';
+  reason?:
+    | 'empty'
+    | 'zoneChanged'
+    | 'noRangePredicate'
+    | 'otherFilters'
+    | 'incomplete';
 }
 
 /** Current offsets run from UTC−12 to UTC+14; the fallback narrows by 14 hours. */
@@ -320,6 +330,48 @@ export function timeZoneParameters(
   return found;
 }
 
+/** A query parameter's `x-filter` range role, when it declares one. */
+export interface RangeParameter {
+  bound: 'lower' | 'upper';
+  inclusive: boolean;
+  field: string;
+}
+
+/**
+ * Every query parameter of a list operation (its path item's and its own,
+ * its own winning by name) that declares an `x-filter` with `gte`, `gt`,
+ * `lte` or `lt`, by name, with its range role.
+ */
+export function rangeParameters(
+  pathItemParameters: unknown,
+  operation: OperationObject,
+): Map<string, RangeParameter> {
+  const found = new Map<string, RangeParameter>();
+  for (const list of [pathItemParameters, operation.parameters])
+    for (const parameter of Array.isArray(list) ? list : []) {
+      if (!isRecord(parameter) || parameter['in'] !== 'query') continue;
+      const name = String(parameter['name']);
+      found.delete(name);
+      const filter = parameter['x-filter'];
+      const operator = isRecord(filter) ? filter['operator'] : undefined;
+      const field = isRecord(filter) ? filter['field'] : undefined;
+      if (typeof field !== 'string') continue;
+      if (operator === 'gte' || operator === 'gt')
+        found.set(name, {
+          bound: 'lower',
+          inclusive: operator === 'gte',
+          field,
+        });
+      else if (operator === 'lte' || operator === 'lt')
+        found.set(name, {
+          bound: 'upper',
+          inclusive: operator === 'lte',
+          field,
+        });
+    }
+  return found;
+}
+
 /** The value at a JSON Pointer, or undefined. */
 export function atPointer(value: unknown, pointer: string): unknown {
   if (pointer === '') return value;
@@ -478,16 +530,35 @@ export function zoneReader(
 }
 
 /**
+ * The rest of a request's query, for its coverage: the range parameters
+ * without `x-time-zone` (`ranges`), the paging parameters (`paging`) and
+ * the collection's own fixed `listQuery` values (`fixed`), which define the
+ * collection rather than narrow it.
+ */
+export interface OtherQuery {
+  ranges: Map<string, RangeParameter>;
+  paging: Set<string>;
+  fixed: Record<string, string>;
+}
+
+/**
  * Steps 2 and 3 for one request: the query with each `x-time-zone`
  * parameter's instant written as wall-clock digits plus `suffix`, and what
- * the request covers, or no coverage when none of them has a value. The
- * keys are the zone sources the coverage depends on.
+ * the request covers, or no coverage when none of them has a value. Range
+ * parameters without `x-time-zone` add their instants to the spans of their
+ * fields; any other narrowing value (`others`) makes the coverage unknown.
+ * The keys are the zone sources the coverage depends on.
  */
 export async function wallClockQuery(
   parameters: TimeZoneParameter[],
   query: Record<string, string>,
   path: Record<string, string>,
   read: ReturnType<typeof zoneReader>['read'],
+  others: OtherQuery = {
+    ranges: new Map(),
+    paging: new Set(),
+    fixed: {},
+  },
 ): Promise<{
   query: Record<string, string>;
   coverage?: ReadCoverage;
@@ -509,6 +580,33 @@ export async function wallClockQuery(
     }
   >();
   let noRange = false;
+  /** The tighter end wins; at the same instant, an excluded one. */
+  const addEnd = (
+    field: string,
+    bound: 'lower' | 'upper',
+    at: number,
+    inclusive: boolean,
+  ): void => {
+    const end = ends.get(field) ?? {};
+    ends.set(field, end);
+    if (bound === 'lower') {
+      if (
+        end.from === undefined ||
+        at > end.from ||
+        (at === end.from && !inclusive)
+      ) {
+        end.from = at;
+        end.fromInclusive = inclusive;
+      }
+    } else if (
+      end.to === undefined ||
+      at < end.to ||
+      (at === end.to && !inclusive)
+    ) {
+      end.to = at;
+      end.toInclusive = inclusive;
+    }
+  };
   for (const parameter of parameters) {
     const value = query[parameter.name];
     if (value === undefined || value === '') continue;
@@ -531,31 +629,26 @@ export async function wallClockQuery(
       parameter.declaration.ambiguous,
     );
     const inclusive = parameter.inclusive === true;
-    const end = ends.get(parameter.field) ?? {};
-    ends.set(parameter.field, end);
-    if (one?.from !== undefined) {
-      const at = Date.parse(one.from);
-      // The tighter end wins; at the same instant, an excluded one.
-      if (
-        end.from === undefined ||
-        at > end.from ||
-        (at === end.from && !inclusive)
-      ) {
-        end.from = at;
-        end.fromInclusive = inclusive;
-      }
+    if (one?.from !== undefined)
+      addEnd(parameter.field, 'lower', Date.parse(one.from), inclusive);
+    if (one?.to !== undefined)
+      addEnd(parameter.field, 'upper', Date.parse(one.to), inclusive);
+  }
+  // The rest of the query: range bounds without a zone are instants as
+  // given; any other narrowing value leaves the coverage unknown.
+  const zonedNames = new Set(parameters.map((p) => p.name));
+  let otherFilters = false;
+  for (const [name, value] of Object.entries(query)) {
+    if (zonedNames.has(name) || value === undefined || value === '') continue;
+    if (others.paging.has(name) || others.fixed[name] === value) continue;
+    const range = others.ranges.get(name);
+    const at = /(Z|[+-]\d{2}:\d{2})$/i.test(value) ? Date.parse(value) : NaN;
+    if (!range || Number.isNaN(at)) {
+      otherFilters = true;
+      continue;
     }
-    if (one?.to !== undefined) {
-      const at = Date.parse(one.to);
-      if (
-        end.to === undefined ||
-        at < end.to ||
-        (at === end.to && !inclusive)
-      ) {
-        end.to = at;
-        end.toInclusive = inclusive;
-      }
-    }
+    instants[name] = new Date(at).toISOString();
+    addEnd(range.field, range.bound, at, range.inclusive);
   }
   if (!Object.keys(values).length) return { query: sent, keys };
   const base = { parameters: values, instants, zones };
@@ -565,25 +658,27 @@ export async function wallClockQuery(
   );
   const coverage: ReadCoverage = noRange
     ? { ...base, spans: null, reason: 'noRangePredicate' }
-    : empty
-      ? { ...base, spans: null, reason: 'empty' }
-      : {
-          ...base,
-          spans: [...ends].map(([field, end]) => ({
-            field,
-            ...(end.from === undefined
-              ? {}
-              : {
-                  from: new Date(end.from).toISOString(),
-                  fromInclusive: end.fromInclusive === true,
-                }),
-            ...(end.to === undefined
-              ? {}
-              : {
-                  to: new Date(end.to).toISOString(),
-                  toInclusive: end.toInclusive === true,
-                }),
-          })),
-        };
+    : otherFilters
+      ? { ...base, spans: null, reason: 'otherFilters' }
+      : empty
+        ? { ...base, spans: null, reason: 'empty' }
+        : {
+            ...base,
+            spans: [...ends].map(([field, end]) => ({
+              field,
+              ...(end.from === undefined
+                ? {}
+                : {
+                    from: new Date(end.from).toISOString(),
+                    fromInclusive: end.fromInclusive === true,
+                  }),
+              ...(end.to === undefined
+                ? {}
+                : {
+                    to: new Date(end.to).toISOString(),
+                    toInclusive: end.toInclusive === true,
+                  }),
+            })),
+          };
   return { query: sent, coverage, keys };
 }

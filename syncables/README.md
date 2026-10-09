@@ -132,6 +132,15 @@ client steps say, when a `selection` gives it a value:
   when several bound the same end), with `fromInclusive`/`toInclusive` from
   the operator, and `ambiguous` picks the offset in a repeated or skipped
   hour (`unspecified`: the reading that covers least).
+- The rest of the same request's query counts too. A range `x-filter`
+  parameter without `x-time-zone` whose value is an instant (`Z` or an
+  offset) adds its bound to its field's span, merged by the same
+  tighter-bound rule (its instant is in `instants`). Any other value that
+  narrows the read (an `eq` `x-filter`, a parameter without `x-filter`, a
+  range bound that is not an instant) makes the coverage unknown
+  (`otherFilters`): the read asked for less than the spans say. Paging
+  parameters of the operation's pagination scheme, and the collection's own
+  fixed `listQuery` values, do not count.
 - A zone that cannot be read (an error status, nothing at the pointer, not
   an IANA name this runtime knows, a zone operation that needs a parameter
   the request does not have) is not taken as UTC: the UTC digits are sent
@@ -163,8 +172,8 @@ every span at once. It does not say that every such item is in the local
 copy (an incomplete or failed read, a record the caller dropped). `spans` is
 null when the request covers nothing known; `reason` is then `empty` (some
 field's lower end is not before its upper end), `zoneChanged`,
-`noRangePredicate` (a parameter with a value but no range `x-filter`) or
-`incomplete`. An open end is left out. A `probe` read reads no zone and
+`noRangePredicate` (an `x-time-zone` parameter with a value but no range
+`x-filter`), `otherFilters` (above) or `incomplete`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
 `readPlatform` does not report coverage. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.

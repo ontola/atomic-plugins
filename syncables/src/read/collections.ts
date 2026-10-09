@@ -1,4 +1,4 @@
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { declaredThrottling } from '../throttling/throttling.js';
 import {
@@ -22,7 +22,9 @@ import {
   type WalkOutcome,
   type WindowRange,
 } from './pages.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import {
+  rangeParameters,
   timeZoneParameters,
   wallClockQuery,
   zoneReader,
@@ -159,6 +161,11 @@ export async function readCollections(
 ): Promise<CollectionReadResult> {
   const doc = resolveRefs(document);
   const model = discoverReadModel(doc, options.legacy);
+  // The collections' own fixed query values, before a selection narrows
+  // them: they define a collection rather than narrow it (coverage).
+  const fixedQueries = new Map(
+    model.collections.map((c) => [c.name, { ...c.listQuery }]),
+  );
   applySelection(doc, model, options.selection);
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
@@ -240,11 +247,31 @@ export async function readCollections(
                 )
               : [];
           if (timeZoned.length) {
+            let paging = new Set<string>();
+            try {
+              const scheme = resolveEffectiveScheme(
+                doc,
+                operation as OperationObject,
+              )?.scheme;
+              paging = new Set(
+                Object.keys(scheme?.request?.queryParameters ?? {}),
+              );
+            } catch {
+              // An unusable scheme fails the read in walkPages below.
+            }
             const written = await wallClockQuery(
               timeZoned,
               query,
               path,
               zones.read,
+              {
+                ranges: rangeParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation as OperationObject,
+                ),
+                paging,
+                fixed: fixedQueries.get(collection.name) ?? {},
+              },
             );
             query = written.query;
             if (written.coverage) {
