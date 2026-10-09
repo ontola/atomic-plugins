@@ -4,6 +4,7 @@ import type {
   OperationObject,
   ParameterObject,
 } from '../openapi/types.js';
+import type { PaginationSchemeObject } from '../pagination/types.js';
 import { isRecord } from './model.js';
 
 /**
@@ -328,6 +329,26 @@ export function timeZoneParameters(
     });
   }
   return found;
+}
+
+/**
+ * The query parameters of a pagination scheme that coverage leaves out:
+ * those `walkPages` overwrites or that only size the pages (roles
+ * `pageSize`, `offset`, `page`). None under a `rangeWindow` scheme, which
+ * sets its window fields instead, so a value a selection gives such a
+ * field narrows the read. A `pageToken` or `cursor` is never left out.
+ */
+export function pagingFields(
+  scheme: PaginationSchemeObject | undefined,
+): Set<string> {
+  if (!scheme || scheme.type === 'rangeWindow') return new Set();
+  return new Set(
+    Object.entries(scheme.request?.queryParameters ?? {})
+      .filter(([, field]) =>
+        ['pageSize', 'offset', 'page'].includes(String(field.role)),
+      )
+      .map(([name]) => name),
+  );
 }
 
 /** A query parameter's `x-filter` range role, when it declares one. */

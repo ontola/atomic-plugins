@@ -24,6 +24,7 @@ import {
 } from './pages.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import {
+  pagingFields,
   rangeParameters,
   timeZoneParameters,
   wallClockQuery,
@@ -249,19 +250,9 @@ export async function readCollections(
           if (timeZoned.length) {
             let paging = new Set<string>();
             try {
-              const scheme = resolveEffectiveScheme(
-                doc,
-                operation as OperationObject,
-              )?.scheme;
-              // Only the fields walkPages overwrites (or that only size
-              // the pages): a token or cursor the selection sets narrows
-              // where the read starts, so it is another filter.
-              paging = new Set(
-                Object.entries(scheme?.request?.queryParameters ?? {})
-                  .filter(([, field]) =>
-                    ['pageSize', 'offset', 'page'].includes(String(field.role)),
-                  )
-                  .map(([name]) => name),
+              paging = pagingFields(
+                resolveEffectiveScheme(doc, operation as OperationObject)
+                  ?.scheme,
               );
             } catch {
               // An unusable scheme fails the read in walkPages below.

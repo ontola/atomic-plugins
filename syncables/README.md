@@ -155,7 +155,9 @@ client steps say, when a `selection` gives it a value:
   (`otherFilters`): the read asked for less than the spans say. Not
   counted: the pagination scheme's fields that `walkPages` overwrites or
   that only size the pages (roles `pageSize`, `offset`, `page`; a
-  `pageToken` or `cursor` a selection sets is `otherFilters`), and the
+  `pageToken` or `cursor` a selection sets is `otherFilters`, and so is any
+  of them under a `rangeWindow` scheme, which sets its window fields
+  instead), and the
   collection's own fixed `listQuery` values, which define the collection
   (a fixed range bound that is an instant still adds to its field's span).
 - A zone that cannot be read (an error status, nothing at the pointer, not

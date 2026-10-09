@@ -11,6 +11,8 @@ import {
   type Transport,
   type TransportRequest,
 } from '../../../src/browser.js';
+import type { PaginationSchemeObject } from '../../../src/pagination/types.js';
+import { pagingFields } from '../../../src/read/time-zone.js';
 
 // Filtering 0.2.0-draft `x-time-zone` (pieces.md K12, time-zone half). The
 // conversions mirror `WallClockTests` in
@@ -880,3 +882,47 @@ describe('x-time-zone in a collection read', () => {
     ]);
   });
 });
+
+describe('pagingFields (#428 re-review)', () => {
+  it('leaves out only the fields walkPages overwrites or that size the pages', () => {
+    expect(
+      pagingFields({
+        type: 'pageNumber',
+        request: {
+          queryParameters: {
+            page: { role: 'page' },
+            size: { role: 'pageSize' },
+            skip: { role: 'offset' },
+            token: { role: 'pageToken' },
+            after: { role: 'cursor' },
+          },
+        },
+      } as PaginationSchemeObject),
+    ).toEqual(new Set(['page', 'size', 'skip']));
+  });
+
+  it('leaves out nothing under a rangeWindow scheme, which sets its window fields instead', () => {
+    expect(
+      pagingFields({
+        type: 'rangeWindow',
+        window: {
+          unit: 'second',
+          format: 'dateTime',
+          bounds: 'halfOpen',
+          cap: 100,
+        },
+        request: {
+          queryParameters: {
+            from: { role: 'windowStart' },
+            to: { role: 'windowEnd' },
+            page: { role: 'page' },
+            size: { role: 'pageSize' },
+            skip: { role: 'offset' },
+          },
+        },
+      } as unknown as PaginationSchemeObject),
+    ).toEqual(new Set());
+    expect(pagingFields(undefined)).toEqual(new Set());
+  });
+});
+
