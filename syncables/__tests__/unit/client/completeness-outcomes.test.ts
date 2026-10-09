@@ -588,6 +588,90 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     ]);
   });
 
+  it('keeps holding a DELETE of a kept unavailable record when the next check is unknown, and removes the record once it settles', async () => {
+    let listTom = true;
+    let tomRead: number = 404;
+    const fake = provider([rex, tom], {
+      listed: (pet) => listTom || pet['id'] !== '2',
+      item: (id) =>
+        id === '2' && tomRead !== 200
+          ? response({ error: 'x' }, tomRead)
+          : undefined,
+      behave: (r) =>
+        r.method === 'DELETE' ? response(undefined, 204) : undefined,
+    });
+    const client = createApiClient(document({ completeness: UNAVAILABLE }), {
+      transport: fake.transport,
+      missingRecordChecks: 'all',
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.sync();
+    listTom = false;
+    await client.sync();
+    expect(await client.get('/pets', '2')).toEqual(tom);
+    await client.remove('/pets', '2');
+    // The review's probe: the next check answers 503 (unknown).
+    tomRead = 503;
+    await client.sync();
+    await settle();
+    expect(fake.writes).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'delete', state: 'pending', awaitingRefresh: true },
+    ]);
+    // Readable again (filtered): released, sent, settled, and gone.
+    tomRead = 200;
+    fake.pets.set('2', tom);
+    await client.sync();
+    await vi.waitFor(() =>
+      expect(fake.writes.map((w) => w.method)).toEqual(['DELETE']),
+    );
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    await settle();
+    expect(await client.get('/pets', '2')).toBeUndefined();
+  });
+
+  for (const [label, feed, tomRead, deletions] of [
+    ['a later filtered GET (releaseRefreshed)', false, 200, []],
+    ['a later feed tombstone (finishFeeds)', true, 404, ['2']],
+  ] as const)
+    it(`removes a kept record without writes once ${label} clears its mark`, async () => {
+      let listTom = true;
+      let read: number = 404;
+      let feedIds: string[] = [];
+      const fake = provider([rex, tom], {
+        listed: (pet) => listTom || pet['id'] !== '2',
+        item: (id) =>
+          id === '2' && read !== 200 ? response({ error: 'x' }, read) : undefined,
+        deletions: () => feedIds.map((id) => ({ id, deleted: true })),
+      });
+      const doc = document({ completeness: UNAVAILABLE, feed });
+      const client = createApiClient(doc, {
+        transport: fake.transport,
+        missingRecordChecks: 'all',
+        retry: { baseDelayMs: 60_000 },
+      });
+      await client.sync();
+      listTom = false;
+      // A held update seeds the confirmed copy; discarding it leaves the
+      // record kept as unavailable and confirmed, without writes.
+      fake.pets.delete('2');
+      await client.sync();
+      await client.update('/pets', '2', { name: 'Tommy' });
+      await client.sync();
+      await client.resolveWrite('/pets', '2', { action: 'discard' });
+      expect(client.pendingWrites()).toEqual([]);
+      expect(await client.get('/pets', '2')).toEqual(tom);
+      // Concluded otherwise by the next check: no longer kept.
+      read = tomRead;
+      if (tomRead === 200) fake.pets.set('2', tom);
+      feedIds = [...deletions];
+      // A changed list, so the read is compared again.
+      fake.pets.set('3', { id: '3', name: 'Jo', tag: 'cat' });
+      await client.sync();
+      await settle();
+      expect(await client.get('/pets', '2')).toBeUndefined();
+    });
+
   it('keeps an unavailable record after its held writes are discarded, across a restart, until a read returns it', async () => {
     const { client, storage, fake, relist } = await editedThenMissing({
       doc: document({ completeness: UNAVAILABLE }),

@@ -67,6 +67,30 @@ Data flows through four stages, each its own directory under `src/`:
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
    completion/error status. `read/read.ts` adds ontology/type projection.
+   `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
+   extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
+   #398; the spec's `validate.py` `derive_class`/`read_members` are its
+   reference; keep `deriveRuntimeClass`/`readRuntimeMembers` in step with
+   them): after the collections, `readCollections` reads each
+   describer the items' reference binds (`describerPath`), keyed per
+   resource and path, through the read's `Budget`, plus at most one re-read
+   when a member is unmatched (then, under `match: id` only, the items with
+   an unmatched member are interpreted again), and returns `describers` and
+   per-snapshot `runtimeMembers` (aligned with `items`). Under `match: key`
+   the lookup covers every definition's name or id (`names`), skipping
+   `duplicateNames`, so undescribed and duplicate-id members are not
+   unmatched. Absent values stay absent (`MISSING`, never `null`); two
+   members of one definition are `conflicting`; a describer that fails keeps
+   its `error`, no class, and an entry in `errors`. `runtimeSchemasOf`
+   checks the declaration (dot-paths through the spec's `SEGMENT` grammar,
+   non-empty `types`, a `schema` per type) and a failure fails the
+   resource's collections before any request. Describer errors are also
+   in `describerErrors`; `sync()` subtracts them from `errors` before its
+   "Read incomplete" check and returns them as `SyncResult.warnings`, with
+   `describers`, and keeps each complete snapshot's members per scope
+   (`runtimeMembersByScope`, in memory) for `runtimeMembers()`. An item
+   without a class gets `noClass: true`. `readPlatform` maps snapshot items
+   to records by object identity to set `ReadRecord.runtime`.
 
    For compatibility, the client opts into `resources/discover.ts` path-pair
    discovery when CRUD metadata is absent. The mock server still uses that
@@ -88,8 +112,16 @@ Data flows through four stages, each its own directory under `src/`:
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
    the same `walkPages` as the reader, including POST-body cursors, next-link
-   checks and budgets. Failed/incomplete collections do not replace or prune
-   stored records. Tell before prune: in `performSync`, the records a
+   checks and budgets. Failed collections do not replace or prune stored
+   records. A snapshot that ended without an error but is not complete
+   (`notComplete`: range windows, an undocumented short-page end) goes to
+   `upsertIncomplete`: its records are merged into the confirmed copy and
+   rebuilt (per record, skipped when a write settled on it during the read;
+   whole scope skipped when one settled on the scope), `lastSyncedItems` is
+   dropped for the scope so a later complete read still prunes, and nothing
+   is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
+   such collection is listed in `SyncResult.incomplete`.
+   Tell before prune: in `performSync`, the records a
    complete read removes (not returned, no writes, not in
    `unavailableKept`, including ones a reused storage held) are passed to
    `options.onPresence` (awaited) before `confirmed` is replaced and the
@@ -381,6 +413,21 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
+- Pagination Schemes 0.6.0: `request-builder.ts`'s `pageStart` is the
+  `page` field's `start` (default 1), used for the first page, the next
+  page and by the mock server. `walkPages` reads a `pageNumber` scheme's
+  `shortPage`: before a page is handed on it throws `PageReadError` for
+  more than the full size (`size`, or a reported `pageSize` field) or an
+  item identity an earlier page of the read returned; after it, a page
+  with fewer items ends the walk (`PageWalk.outcome` not complete unless
+  `assurance: documented`; an error under `documented` when `totalPages` or
+  `totalCount` says more follow, not complete otherwise), and a full page
+  goes on to the next page number unless `totalPages` (a count: the last
+  page is `start + totalPages − 1`) or `totalCount` ends it, which is
+  complete whatever the assurance. `currentPage` is numbered like the
+  `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
+  capped at the parameter's `maximum`. The validator checks §9 rules
+  19–21, `resolveEffectiveScheme` rule 22.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -500,6 +547,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/runtime-classes.test.ts` covers the classes in
+  `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
+  `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
+  a failed collection still throwing).
+- `unit/read/runtime-schemas-reference.test.ts` mirrors the spec's
+  `ReadingTests` (same TABLE and ROW) against `deriveRuntimeClass` and
+  `readRuntimeMembers`, plus the declarations `runtimeSchemasOf` refuses.
+- `unit/read/runtime-schemas.test.ts` runs Runtime Schemas on the spec's
+  §7.1 example (`__tests__/fixtures/runtime-schemas.ts`): the derived class
+  and values, a rename, one describer read per read and the one re-read,
+  absent values, kept unknown options, invalid option shapes, undescribed
+  types, duplicate ids, `memberType`, unreadable or unbound describers, and
+  an unusable declaration.
 - `unit/read/collections.test.ts` covers the Collection Object's
   `envelope.itemsField` in the collection read (#373): the model field, a
   nested dot-path, a missing or non-array path (an incomplete read with

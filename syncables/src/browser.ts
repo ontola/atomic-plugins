@@ -62,6 +62,7 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  IncompleteRead,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
@@ -78,6 +79,12 @@ export type {
   CollectionSnapshot,
 } from './read/collections.js';
 export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
+export type {
+  RuntimeClass,
+  RuntimeDescriber,
+  RuntimeMembers,
+  RuntimeProperty,
+} from './read/runtime-schemas.js';
 
 export { applyOverlay } from './openapi/apply-overlay.js';
 export type {
@@ -129,7 +136,9 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
+export { PageReadError } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
+export type { ShortPageObject } from './pagination/types.js';
 export type {
   AutoDetectObject,
   PaginationApplicationObject,

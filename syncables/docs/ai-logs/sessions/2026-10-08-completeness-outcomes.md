@@ -196,3 +196,24 @@ vanished-record test now expects the record kept, and the moved-member test
 became the review's probe. Not done: telling the app before pruning in
 general (records pruned by a complete read without any check) is the
 K4/K5 work; kept records are not looked up again by themselves.
+
+## Turn (2026-10-09): re-review blockers
+
+**Human (via the coordinator session):** Blocker 1: a held DELETE of an
+unavailable record was released when the next check was `unknown` (a 503)
+and sent without a decision; and a settled delete left the record visible
+through `unavailableKept`. Blocker 2: a kept record later concluded
+`deleted` or `filtered` stayed visible, because only `unavailable`
+conclusions rebuilt the record (`releaseRefreshed`, and `finishFeeds`'
+vanished branch). Nits: say that a kept record without writes is not checked
+again yet, that a delete is released on `filtered`, and the downgrade
+behaviour.
+
+**Assistant:** A held delete of a record kept as unavailable stays held on
+an `unknown` check; `settled` clears the record's mark on any accepted
+write; every vanished conclusion rebuilds the record, in `releaseRefreshed`
+and in `finishFeeds`. Tests for the review's probes (the 503, then a
+filtered read releasing and settling the delete; a kept record cleared by a
+filtered GET and by a feed tombstone), each failing without the fix.
+README: the not-yet note, the delete's release rules, and what an older
+client does with `missingRecord: 'unavailable'` and the stored marks.

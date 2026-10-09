@@ -1,0 +1,68 @@
+openapi: 3.0.3
+info:
+  title: Illustrative nested collections with read outcomes
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Google Tasks: tasks can move between lists; a task
+    read answers 200 with deleted true for a while after deletion, and 404
+    later or when the caller cannot reach it.
+servers:
+  - url: https://api.example.com
+components:
+  crudResources:
+    taskList:
+      identity:
+        urlTemplate: /users/me/lists/{listId}
+        bindings:
+          listId: { field: id }
+      collections:
+        taskLists:
+          urlTemplate: /users/me/lists
+          x-completeness:
+            absent: removed
+            notFound: unavailable
+    task:
+      identity:
+        urlTemplate: /lists/{listId}/tasks/{taskId}
+        bindings:
+          taskId: { field: id }
+      x-read-tombstone:
+        field: deleted
+        values: [true]
+      collections:
+        listTasks:
+          urlTemplate: /lists/{listId}/tasks
+          x-completeness:
+            absent: removed
+            notFound: unavailable
+            parentAbsent: unavailable
+paths:
+  /users/me/lists:
+    get:
+      x-crud: { action: list, resource: taskList, collection: taskLists }
+      responses:
+        '200': { description: The user's task lists. }
+  /users/me/lists/{listId}:
+    get:
+      parameters:
+        - { name: listId, in: path, required: true, schema: { type: string } }
+      x-crud: { action: read, resource: taskList }
+      responses:
+        '200': { description: One task list. }
+        '404': { description: 'Not found, or not readable by this caller.' }
+  /lists/{listId}/tasks:
+    get:
+      parameters:
+        - { name: listId, in: path, required: true, schema: { type: string } }
+      x-crud: { action: list, resource: task, collection: listTasks }
+      responses:
+        '200': { description: The list's tasks. }
+  /lists/{listId}/tasks/{taskId}:
+    get:
+      parameters:
+        - { name: listId, in: path, required: true, schema: { type: string } }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      x-crud: { action: read, resource: task }
+      responses:
+        '200': { description: 'The task, possibly with deleted true.' }
+        '404': { description: 'Not found, or not readable by this caller.' }
