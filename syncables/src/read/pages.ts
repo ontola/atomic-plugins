@@ -159,6 +159,26 @@ export function pageItems(
 }
 
 /**
+ * The caller's envelope (a Collection Object's), else the scheme's own
+ * (Pagination Schemes §4.4.2; `null` means the body root); undefined when
+ * neither declares one and the array is located.
+ */
+function declaredItemsField(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject | undefined,
+): string | undefined {
+  const schemeEnvelope = scheme?.response?.envelope;
+  return (
+    walk.itemsField ??
+    (schemeEnvelope === undefined
+      ? undefined
+      : typeof schemeEnvelope.itemsField === 'string'
+        ? schemeEnvelope.itemsField
+        : '')
+  );
+}
+
+/**
  * The array at a dot-path of the body (`''`: the body). An item that is not
  * an object is an error, so an array of strings never reads as empty
  * (#384); a feed read (`skipNonObjects`) skips such items instead, as its
@@ -366,16 +386,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
-    // The caller's envelope (a Collection Object's), else the scheme's own
-    // (Pagination Schemes §4.4.2; `null` means the body root), else located.
-    const schemeEnvelope = scheme?.response?.envelope;
-    const itemsField =
-      walk.itemsField ??
-      (schemeEnvelope === undefined
-        ? undefined
-        : typeof schemeEnvelope.itemsField === 'string'
-          ? schemeEnvelope.itemsField
-          : '');
+    const itemsField = declaredItemsField(walk, scheme);
     const items =
       itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
@@ -505,10 +516,11 @@ async function* walkWindows(
     } catch {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
+    const itemsField = declaredItemsField(walk, scheme);
     const items =
-      walk.itemsField === undefined
+      itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, walk.itemsField);
+        : itemsAt(body, itemsField, walk.skipNonObjects);
     if (items.length >= window.cap) {
       const split = halves(low, high, window);
       if (!split) {

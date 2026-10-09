@@ -1054,7 +1054,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `envelope.itemsField: null` or `""` means the body root for the list read
   and the feed alike; dot-paths accept bracket escapes (`["a.b"]`); the
   "declared envelope" suffix is gone from the body-root error; the pagination
-  scheme's own `response.envelope` is read, and `ApiClient.paginate`
+  scheme's own `response.envelope` is read (by `rangeWindow` reads too),
+  and `ApiClient.paginate`
   applies the Collection Object's envelope (when several fixed-read
   collections share the URL, the one fixing the most of the query and body
   values the call sends; none when that leaves none, or several with
