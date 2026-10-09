@@ -323,6 +323,47 @@ test('a branch behind main is told to merge, not to restore what main published 
     assert.deepEqual(publishedProblems('main', dir), []);
   }));
 
+test('a shallow clone never trusts its merge-base: a branch behind main gets "deleted" with the merge hint', () =>
+  using({}, dir => {
+    // main publishes a release with a new property after the first commit.
+    const s = source();
+    s.properties.weight = {
+      name: 'Weight',
+      description: 'How heavy.',
+      datatype: STRING,
+    };
+    s.releases.v2 = {
+      name: 'Release 2',
+      description: 'Adds a property.',
+      classes: ['thing-v1'],
+      properties: ['colour', 'owner', 'weight'],
+    };
+    put(dir, 'ontology-kit/source.json', JSON.stringify(s));
+    build({ base: dir });
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'later');
+    const clone = mkdtempSync(join(tmpdir(), 'atomic-ontology-shallow-'));
+
+    try {
+      // Two commits deep: the branch point is there, but the clone is
+      // shallow, so the check must not lean on it.
+      execFileSync(
+        'git',
+        ['clone', '-q', '--depth', '2', pathToFileURL(dir).href, clone],
+        { stdio: 'pipe' },
+      );
+      git(clone, 'checkout', '-q', '-b', 'topic', 'HEAD~1');
+      const problems = publishedProblems('origin/main', clone).join('\n');
+      assert.doesNotMatch(problems, /are not on this branch/);
+      assert.match(
+        problems,
+        /ontology\/properties\/weight is published at origin\/main and was deleted\. Published terms stay available: restore it\. \(This shallow clone cannot tell whether the branch is behind origin\/main: if it is, merge origin\/main first instead\.\)/,
+      );
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
+  }));
+
 test('in a shallow clone, a missing published term is "deleted" and may mean the branch is behind', () =>
   using({}, dir => {
     const clone = mkdtempSync(join(tmpdir(), 'atomic-ontology-shallow-'));
