@@ -260,13 +260,17 @@
         "ontology/**",
         "ontology-kit/**",
         "integrations/tooling/e2e/ontology.spec.ts",
+        "integrations/tooling/e2e/lens-catalog.spec.ts",
         "integrations/tooling/dev-server.mjs",
         "integrations/tooling/serve.mjs",
         "integrations/tooling/run-lane.mjs",
         ".atomic-server-ref"
       ],
-      "note": "A tooling lane (#177), not a plugin: it runs only when the shared ontology (ontology/, ontology-kit/), the dev-server that serves it, or the pin changes. Its node tests (ontology-kit/*.test.mjs) run in shared-checks. The e2e checks that the pinned host reads a generated class (event-v1) from the dev-server's /ontology/ path, which serves the committed term files with their subjects moved to its own origin and GitHub Pages' headers, and that atomic-server accepts a hand-made table of that class and a row with one of its properties. With ATOMIC_SERVER_IMAGE set the spec uses host.docker.internal, so the server in Docker fetches the same URL as the browser.",
-      "e2e": ["integrations/tooling/e2e/ontology.spec.ts"]
+      "note": "A tooling lane (#177), not a plugin: it runs only when the shared ontology (ontology/, ontology-kit/), the dev-server that serves it, or the pin changes. Its node tests (ontology-kit/*.test.mjs) run in shared-checks. The e2e checks that the pinned host reads a generated class (event-v1) from the dev-server's /ontology/ path, which serves the committed term files with their subjects moved to its own origin and GitHub Pages' headers, and that atomic-server accepts a hand-made table of that class and a row with one of its properties. With ATOMIC_SERVER_IMAGE set the spec uses host.docker.internal, so the server in Docker fetches the same URL as the browser. lens-catalog.spec.ts (atomic-server candidate21 or later) seeds localStorage lens-catalog-url to the dev-server's /ontology/lenses/v1 and the split-pieces flag, adds a probe integration that renders only the Todoist lens's record endpoint, and checks that Connect offers it on a hand-made issue-v1 table 'via lens' and that its frame gets that catalog lens in lensPath. It uses localhost even with ATOMIC_SERVER_IMAGE set: only the browser fetches the catalog, and the host refuses a plain-http catalog URL that is not loopback.",
+      "e2e": [
+        "integrations/tooling/e2e/ontology.spec.ts",
+        "integrations/tooling/e2e/lens-catalog.spec.ts"
+      ]
     },
     {
       "id": "google-tasks",
