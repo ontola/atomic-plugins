@@ -196,6 +196,32 @@ function entryFor(source, id, version, bytes, fields) {
   return entry;
 }
 
+/** The install loop CI runs for every plugin's own dependencies. */
+const INSTALL =
+  'for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+
+/**
+ * `run()`, with a build that fails on a missing package (esbuild's "Could
+ * not resolve", Node's ERR_MODULE_NOT_FOUND) explained: the plugin's
+ * dependencies are most likely not installed in this checkout.
+ */
+export async function explained(what, run) {
+  try {
+    return await run();
+  } catch (error) {
+    const text = String(error?.message ?? error);
+    if (
+      error?.code === 'ERR_MODULE_NOT_FOUND' ||
+      /Could not resolve|Cannot find (module|package)/.test(text)
+    )
+      throw new Error(
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here. From the repository root: ${INSTALL}\n${text}`,
+        { cause: error },
+      );
+    throw error;
+  }
+}
+
 /** What builds.json records for a module's text. */
 export const sha256 = text =>
   'sha256-' + createHash('sha256').update(text).digest('base64');
@@ -216,13 +242,17 @@ export async function buildCatalog(out, { logUrl } = {}) {
 
   for (const [id, app] of Object.entries(APPS)) {
     const version = VERSIONS[id];
-    const { build } = await import(
-      pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+    const { build } = await explained(
+      id,
+      () =>
+        import(
+          pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+        ),
     );
     const file = resolve(out, 'apps', id, version, 'ui.js');
     mkdirSync(dirname(file), { recursive: true });
     // The app alone, before the prelude: what a sample entry wraps.
-    await build({ outfile: file });
+    await explained(id, () => build({ outfile: file }));
     const plain = readFileSync(file, 'utf8');
     modules.push({ key: `${id}/${version}`, sha256: sha256(plain) });
     const own = app.report ? prelude : '';
@@ -250,7 +280,9 @@ export async function buildCatalog(out, { logUrl } = {}) {
     const sampleFile = resolve(out, 'apps', sampleId, sampleVersion, 'ui.js');
     const appFile = resolve(out, 'apps', id, version, 'plain.js');
     writeFileSync(appFile, plain);
-    const sampleText = await buildSample(id, appFile);
+    const sampleText = await explained(sampleId, () =>
+      buildSample(id, appFile),
+    );
     rmSync(appFile);
     modules.push({
       key: `${sampleId}/${sampleVersion}`,
