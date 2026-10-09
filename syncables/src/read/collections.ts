@@ -17,6 +17,8 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
+  type WindowRange,
 } from './pages.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import type { Transport } from './transport.js';
@@ -37,6 +39,17 @@ export interface CollectionReadOptions {
    * `storeResponse` are not used: the budget's own transport and limits are.
    */
   budget?: Budget;
+  /**
+   * The range to read a collection over when its list operation applies a
+   * `rangeWindow` pagination scheme (Pagination Schemes 0.5.0 §4.6), both
+   * bounds in the scheme's window format; `undefined` leaves such a
+   * collection unread, with an error. Which range to read is the caller's
+   * choice. Not called for other collections.
+   */
+  ranges?: (
+    collection: ReadCollection,
+    path: Record<string, string>,
+  ) => WindowRange | undefined;
   /** Called per accepted record, before it is added to its collection. */
   onRecord?: (
     value: Record<string, unknown>,
@@ -49,9 +62,16 @@ export interface CollectionSnapshot {
   collection: ReadCollection;
   pathParams: Record<string, string>;
   items: Record<string, unknown>[];
-  /** False when a page, identity check, storage hook or budget failed. */
+  /**
+   * False when a page, identity check, storage hook or budget failed, or
+   * when the read returned every page but is never complete in the
+   * Collection Completeness sense (`notComplete` says why). Only a complete
+   * snapshot may be used to infer that an absent record is gone.
+   */
   complete: boolean;
   error?: string;
+  /** Why a read that ended without an error is still not complete. */
+  notComplete?: string;
 }
 
 export interface CollectionReadResult {
@@ -186,6 +206,8 @@ export async function readCollections(
               `${collection.url} declares no ${collection.method} operation`,
             );
           }
+          const outcome: WalkOutcome = { complete: true };
+          const range = options.ranges?.(collection, path);
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -199,6 +221,9 @@ export async function readCollections(
             ...(collection.itemsField !== undefined
               ? { itemsField: collection.itemsField }
               : {}),
+            ...(range ? { range } : {}),
+            identity: (value) => asText(value[collection.idField]),
+            outcome,
           })) {
             if (options.probe) throw new ProbeDone();
             for (const value of page.items) {
@@ -224,7 +249,10 @@ export async function readCollections(
               snapshot.items.push(value);
             }
           }
-          snapshot.complete = true;
+          snapshot.complete = outcome.complete;
+          if (!outcome.complete && outcome.reason) {
+            snapshot.notComplete = outcome.reason;
+          }
           read.push(...snapshot.items.map((value) => ({ value, path })));
         } catch (error) {
           if (error instanceof ProbeDone)

@@ -18,6 +18,13 @@ import {
   setNestedField,
 } from '../pagination/response-parser.js';
 import type { PaginationSchemeObject } from '../pagination/types.js';
+import {
+  halves,
+  parseBound,
+  WindowReadError,
+  windowRequest,
+  windowWidth,
+} from '../pagination/window.js';
 import { isRecord } from './model.js';
 import {
   lowerCaseHeaders,
@@ -199,6 +206,35 @@ export interface PageWalk {
    * Without it, `pageItems` locates the array.
    */
   itemsField?: string;
+  /**
+   * The range a `rangeWindow` operation is read over (Pagination Schemes
+   * 0.5.0 §4.6.3), both bounds in the window's format. Required for such an
+   * operation, ignored for any other: which range to read is the caller's
+   * choice.
+   */
+  range?: WindowRange;
+  /**
+   * An item's identity, for a windowed read: an item that a later window
+   * returns again (its field changed during the read) is yielded once
+   * (§4.6.4 rule 3).
+   */
+  identity?: (item: Record<string, unknown>) => string;
+  /**
+   * Set when the walk ends normally: `complete` is false for a read that
+   * returned every page but is never complete in the Collection
+   * Completeness sense (a windowed read, §4.6.4 rule 5), with `reason`.
+   */
+  outcome?: WalkOutcome;
+}
+
+export interface WindowRange {
+  start: string;
+  end: string;
+}
+
+export interface WalkOutcome {
+  complete: boolean;
+  reason?: string;
 }
 
 export interface Page {
@@ -250,6 +286,14 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   const responseSchema =
     operation.responses?.['200']?.content?.['application/json']?.schema;
   const basePath = upstream.pathname.replace(/\/$/, '');
+  if (walk.outcome) {
+    walk.outcome.complete = true;
+    delete walk.outcome.reason;
+  }
+  if (scheme?.type === 'rangeWindow') {
+    yield* walkWindows(walk, scheme, responseSchema);
+    return;
+  }
   const seen = new Set<string>();
   let cursor: PageCursor = {};
   let next: URL | undefined;
@@ -360,5 +404,108 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       cursor = following;
       next = undefined;
     }
+  }
+}
+
+/**
+ * A `rangeWindow` read (Pagination Schemes 0.5.0 §4.6.3): the whole range
+ * first, then, for an answer with `cap` items or more (full, §4.6.4 rule 2),
+ * its two halves, depth first and the first half first, down to windows
+ * narrower than `2 × minimumWidth`. A full window that cannot be split
+ * throws `WindowReadError`; the read is then not complete. The items of a
+ * full answer are not yielded: they do not make the window complete, and
+ * its halves return them. Every window sends the same fixed query, body
+ * and headers; only the window fields change. An item an earlier window
+ * returned is yielded once (`walk.identity`). The read is never complete in
+ * the Collection Completeness sense (§4.6.4 rule 5): `walk.outcome` says so.
+ */
+async function* walkWindows(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject,
+  responseSchema: SchemaObject | undefined,
+): AsyncGenerator<Page> {
+  const window = scheme.window;
+  if (!window) {
+    throw new WindowReadError('A rangeWindow scheme needs a window');
+  }
+  if (!walk.range) {
+    throw new WindowReadError(
+      `${walk.path} is read by range windows; pass the range to read`,
+    );
+  }
+  const { start, end } = walk.range;
+  if (
+    windowWidth(parseBound(start, window), parseBound(end, window), window) < 1
+  ) {
+    throw new WindowReadError(`The range ${start}..${end} is empty`);
+  }
+  const { budget, upstream } = walk;
+  const basePath = upstream.pathname.replace(/\/$/, '');
+  const yielded = new Set<string>();
+  const pending: [string, string][] = [[start, end]];
+  while (pending.length) {
+    const [low, high] = pending.shift() as [string, string];
+    const values = windowRequest(scheme, low, high);
+    const url = new URL(upstream.href);
+    url.pathname = basePath + walk.path;
+    for (const [key, value] of Object.entries({
+      ...walk.query,
+      ...values.queryParameters,
+    })) {
+      url.searchParams.set(key, value);
+    }
+    const request: TransportRequest = {
+      url,
+      method: walk.method,
+      headers: { ...values.headerFields, accept: 'application/json' },
+    };
+    if (walk.method === 'POST') {
+      request.headers['content-type'] = 'application/json';
+      request.body = JSON.stringify(withBody(walk.body, values.bodyFields));
+    }
+    const response = await budget.send(request);
+    if (response.status < 200 || response.status >= 300) {
+      throw new PageStatusError(
+        `${request.method} ${url.pathname} responded ${response.status} for the window ${low}..${high} (failed with status ${response.status})`,
+        response.status,
+        response.body,
+      );
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(response.body);
+    } catch {
+      throw new Error(`${request.method} ${url.pathname} did not return JSON`);
+    }
+    const items =
+      walk.itemsField === undefined
+        ? pageItems(body, responseSchema, scheme)
+        : itemsAt(body, walk.itemsField);
+    if (items.length >= window.cap) {
+      const split = halves(low, high, window);
+      if (!split) {
+        throw new WindowReadError(
+          `The window ${low}..${high} answered ${items.length} items, at least the cap of ${window.cap}, and is too narrow to split; the read is not complete`,
+        );
+      }
+      pending.unshift(...split);
+      continue;
+    }
+    const fresh = walk.identity
+      ? items.filter((item) => {
+          const id = (walk.identity as (i: Record<string, unknown>) => string)(
+            item,
+          );
+          if (yielded.has(id)) return false;
+          yielded.add(id);
+          return true;
+        })
+      : items;
+    yield { url, items: fresh, body };
+  }
+  if (walk.outcome) {
+    walk.outcome.complete = false;
+    walk.outcome.reason =
+      'read by range windows: never a complete read (Pagination Schemes 0.5.0 §4.6.4)';
   }
 }

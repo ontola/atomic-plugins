@@ -1067,7 +1067,24 @@ const { records, ontology, errors } = await readPlatform(document, {
   records read so far and reports the stop in `errors`.
 
 `paginate(document, { transport, path, method, pathParams, query, body,
-pageSize })` walks every page of one operation, without `crudResources`.
+pageSize, range })` walks every page of one operation, without `crudResources`.
+
+An operation whose `x-pagination` applies a `rangeWindow` scheme
+(Pagination Schemes 0.5.0 §4.6: no page parameter, at most `cap` items per
+answer, such as Moneybird's financial mutations) is read over a range of
+one item field that the caller chooses: `range: { start, end }` for
+`paginate`, or `ranges(collection, path)` for `readCollections` and
+`readPlatform`, both bounds in the window's format. The whole range is
+asked first; an answer with `cap` items or more is full, and its window is
+halved (the first half holding the extra unit), depth first, down to
+`2 × minimumWidth`. A full window that cannot be split ends the read with
+`WindowReadError`. An item two windows return is kept once. Such a read is
+never complete in the Collection Completeness sense: its snapshot has
+`complete: false` and `notComplete` saying why, with no error, so the
+client does not apply it (it applies complete snapshots only). Without a
+range the collection is left unread, with an error. A `rangeWindow` scheme
+is never auto-detected, and `x-pagination` that applies it with another
+scheme throws `PaginationSchemeError`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
@@ -1090,6 +1107,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   (`updateBody`, added within outbox version 1), and one restored under a
   document that declares another format fails instead of being
   reinterpreted. `mergePatch` treats a `__proto__` member as data.
+- **Unreleased**: `rangeWindow` pagination (Pagination Schemes 0.5.0 §4.6):
+  a read by windows over a caller-chosen range (`range` for `paginate`,
+  `ranges` for `readCollections`/`readPlatform`), halving full windows,
+  `WindowReadError` for a full window too narrow to split, items two windows
+  return kept once, and `complete: false` with `notComplete` for every such
+  read. The validator checks §9 rules 12–17 (rule 18, the window fields
+  against the operation's parameters, is left to the spec's validator).
+  Exports `WindowReadError`, `halves` and the window types.
 - **Unreleased**: Two reads that could end early and look complete now end
   with an error (#384 items 1 and 2): an explicit `x-pagination` whose
   scheme is undeclared, invalid or made invalid by its overrides (a typo

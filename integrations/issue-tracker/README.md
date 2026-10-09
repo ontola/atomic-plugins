@@ -641,9 +641,11 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   serves. A new release needs a version bump in `app/package.json` and the
   catalog, then `node integrations/tooling/apps.mjs write issue-tracker`.
 
-`app/package.json` pins `devonian@0.8.0` from npm (install it with
+`app/package.json` pins `devonian@0.9.0` from npm (install it with
 `pnpm install --frozen-lockfile` in `app/`), bundled as `devonian/atomic` plus
-`reconcileRecord`; `@tomic/lib` is shimmed as in notion. It lives in `app/`
+`reconcileRecord`. 0.9.0 only added `devonian/lenses`, which the app does not
+import, so the bundle is byte-identical to the 0.8.0 one and the app version
+is unchanged; `@tomic/lib` is shimmed as in notion. It lives in `app/`
 rather than here because `certify.mjs` treats a `package.json` in a plugin
 folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for

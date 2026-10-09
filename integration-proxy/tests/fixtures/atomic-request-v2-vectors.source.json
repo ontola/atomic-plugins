@@ -1,0 +1,7 @@
+{
+  "note": "Provenance of atomic-request-v2-vectors.json: a verbatim copy of atomic-server's golden v2 request-signature vectors at the atomic-plugins pin (.atomic-server-ref, the candidate20 pin). signature::tests checks the copy's SHA-256 against this file (an edit fails the tests) and, when ATOMIC_SERVER_CHECKOUT is set, compares it with that checkout's copy; refresh both together when atomic-server changes the vectors.",
+  "repository": "https://github.com/ontola/atomic-server",
+  "commit": "0fa9c07856de9b136119e45d9bcb0cc44e38a992",
+  "path": "lib/src/authentication_v2_vectors.json",
+  "sha256": "57c8c947669dac0affd154b9bf57a4d934e4073540f271aa0fac4580b570c50b"
+}

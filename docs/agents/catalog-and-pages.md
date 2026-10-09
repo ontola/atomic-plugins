@@ -44,7 +44,10 @@ change to an app's source:
 - `apps.mjs check` rebuilds each app and compares it with the committed
   `apps/<id>/<version>/ui.js`, and its sha384 with `app-module-integrity`. A
   pin bump that changes esbuild's output makes this fail; the fix is a new
-  version.
+  version. Locally it first runs `pnpm install --frozen-lockfile` in an
+  app's plugin folder or app folder whose lockfile has no `node_modules`
+  yet (`--no-install` skips that), so a fresh worktree needs no manual
+  install step before it.
 - `usertest/check-live.mjs` compares the catalog `usertest/catalog.mjs` just
   built with the droplet's live one:
 

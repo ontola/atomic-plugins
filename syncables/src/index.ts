@@ -94,6 +94,14 @@ export { parseLinkHeader } from './pagination/response-parser.js';
 export { LinkRefused, resolveLink } from './pagination/links.js';
 export type { ResolveLinkOptions } from './pagination/links.js';
 export type { LinkResolutionObject } from './pagination/types.js';
+export { halves, WindowReadError } from './pagination/window.js';
+export type {
+  RangeWindowObject,
+  WindowBounds,
+  WindowFormat,
+  WindowUnit,
+} from './pagination/types.js';
+export type { WalkOutcome, WindowRange } from './read/pages.js';
 
 export {
   PaginationSchemeError,
