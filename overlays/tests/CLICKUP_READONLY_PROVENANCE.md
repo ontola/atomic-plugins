@@ -28,16 +28,17 @@ a cap of 100 tasks per response. It does not document a response continuation
 field. CRUD metadata carries the Workspace ID from a root team record into the
 task collection and retains `task.parent` as ordinary task data.
 
-The pagination limitation is tracked in
-[openapi-extensions issue #25](https://github.com/pondersource/openapi-extensions/issues/25).
-The current Pagination Schemes page role is 1-based, while ClickUp's `page` is
-0-based; it also cannot express “request another page while the prior page
-contained 100 items” when the API provides no continuation field. The actual
-Syncables fixture records this result: it reaches the task collection at
-`page=0`, imports 100 synthetic tasks, and stops without requesting a next
-page. This is evidence that the current generic consumer cannot establish a
-complete task listing. It is not evidence of provider response validity or a
-live ClickUp synchronization.
+Pagination follows Pagination Schemes 0.6.0 (the gap of
+[openapi-extensions issue #25](https://github.com/pondersource/openapi-extensions/issues/25)):
+the `page` field starts at 0 (`start: 0`), and a page with fewer than 100
+tasks ends the list (`shortPage: { size: 100, assurance: assumed }`). The
+assurance is `assumed` because the reference documents only the 100-task cap,
+not that a short page is the last one; a task read is therefore never
+complete, and no absence is inferred from it. The Syncables fixture serves
+250 synthetic tasks: it requests `page=0`, `page=1` and `page=2`, imports all
+250, and `readCollections` reports the task read as not complete. This needs
+a Syncables release with the 0.6.0 consumer. It is not evidence of provider
+response validity or a live ClickUp synchronization.
 
 Run from the atomic-plugins repository root:
 

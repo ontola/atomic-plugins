@@ -87,11 +87,17 @@ class ClickUpOverlayTests(unittest.TestCase):
         tasks = resources["task"]["collections"]["workspaceTasks"]
         self.assertEqual(tasks["urlTemplate"], "/v2/team/{team_Id}/task")
         self.assertEqual(tasks["envelope"]["itemsField"], "tasks")
-        self.assertEqual(tasks["x-list-query"], {"page": 0})
+        # The page number is the scheme's (Pagination Schemes 0.6.0 start: 0), not a fixed query.
+        self.assertNotIn("x-list-query", tasks)
+        self.assertNotIn("listQuery", tasks)
         self.assertEqual(doc["paths"]["/v2/team/{team_Id}/task"]["get"]["x-pagination"][0]["scheme"], "workspaceTaskPages")
         pagination = doc["components"]["paginationSchemes"]["workspaceTaskPages"]
-        self.assertNotIn("request", pagination)
+        self.assertEqual(pagination["request"]["queryParameters"]["page"], {"role": "page", "start": 0})
         self.assertEqual(pagination["response"]["envelope"]["itemsField"], "tasks")
+        self.assertEqual(
+            {k: v for k, v in pagination["response"]["shortPage"].items() if k != "description"},
+            {"size": 100, "assurance": "assumed"},
+        )
         self.assertNotIn("bodyFields", pagination["response"])
 
 
