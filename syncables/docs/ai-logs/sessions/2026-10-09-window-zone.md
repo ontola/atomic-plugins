@@ -31,3 +31,18 @@ hook leaves alone, a template, the repeated hour (2026-10-25 00:40Z–01:20Z)
 as `WindowReadError`, the skipped hour (2026-03-29) without error, and no
 hook. README and CLAUDE.md updated. Wiring the hook in `readCollections`
 (the zone read, the format check, the span) is left to the time-zone side.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review blocker: the
+different-clocks rule infers "converted" from a changed value; in
+Europe/London (offset 0) or with `unixSeconds` the digits do not change,
+so an inverted window is sent (`2026-10-25T00:40Z..01:20Z`). Decide per
+parameter, for example by the hook returning `undefined` when it does not
+apply. Nit: the JSDoc placement.
+
+**Assistant:** `windowValue` now returns the bound to send, or `undefined`
+when it does not convert that parameter; bounds are compared when both or
+neither are converted. The `convertWindowQuery` JSDoc sits above its own
+function again, and `walkWindows` keeps its own. Test: the London window is
+refused.

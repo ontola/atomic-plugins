@@ -232,9 +232,11 @@ export interface PageWalk {
    * instants, and a parameter the API reads as wall-clock time in a zone
    * (Filtering 0.2.0-draft `x-time-zone`) needs other digits. Applied to
    * each bound separately, before a `windowRange` template is filled; header
-   * and body window fields are sent as they are. Returns the bound to send.
+   * and body window fields are sent as they are. Returns the bound to send,
+   * or `undefined` when it does not convert that parameter (the bound is
+   * then sent as it is).
    */
-  windowValue?: (parameter: string, bound: string) => string;
+  windowValue?: (parameter: string, bound: string) => string | undefined;
 }
 
 export interface WindowRange {
@@ -418,31 +420,22 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
 }
 
 /**
- * A `rangeWindow` read (Pagination Schemes 0.5.0 §4.6.3): the whole range
- * first, then, for an answer with `cap` items or more (full, §4.6.4 rule 2),
- * its two halves, depth first and the first half first, down to windows
- * narrower than `2 × minimumWidth`. A full window that cannot be split
- * throws `WindowReadError`; the read is then not complete. The items of a
- * full answer are not yielded: they do not make the window complete, and
- * its halves return them. Every window sends the same fixed query, body
- * and headers; only the window fields change. An item an earlier window
- * returned is yielded once (`walk.identity`). The read is never complete in
- * the Collection Completeness sense (§4.6.4 rule 5): `walk.outcome` says so.
- */
-/**
  * Applies `PageWalk.windowValue` to the query fields that carry a window.
- * The converted bounds must still be in order (fixed-width digits compare
- * as strings): two instants an hour apart in a repeated hour convert to the
- * same wall-clock digits, and a window inside that hour would be sent
- * inverted or empty. It cannot be sent, so the read ends with
- * `WindowReadError` and is not complete.
+ * The hook says, per parameter, whether it converts it: `undefined` sends
+ * the bound as it is. Bounds on one clock must still be in order
+ * (fixed-width digits compare as strings): two instants an hour apart in a
+ * repeated hour convert to the same wall-clock digits, and a window inside
+ * that hour would be sent inverted or empty. It cannot be sent, so the read
+ * ends with `WindowReadError` and is not complete. A start that is
+ * converted and an end that is not (or the reverse) are on different
+ * clocks and are not compared.
  */
 function convertWindowQuery(
   scheme: PaginationSchemeObject,
   window: NonNullable<PaginationSchemeObject['window']>,
   low: string,
   high: string,
-  convert: (parameter: string, bound: string) => string,
+  convert: (parameter: string, bound: string) => string | undefined,
   values: { queryParameters: Record<string, string> },
 ): void {
   const fields = windowFields(scheme).filter(
@@ -455,12 +448,12 @@ function convertWindowQuery(
     fields.find((f) => f.role === 'windowEnd') ??
     fields.find((f) => f.role === 'windowRange');
   if (!startField || !endField) return;
-  const start = convert(startField.name, low);
-  const end = convert(endField.name, high);
-  // Bounds on one clock compare; a start converted and an end sent as it
-  // is (or the reverse) are on different clocks and are not compared.
+  const convertedStart = convert(startField.name, low);
+  const convertedEnd = convert(endField.name, high);
+  const start = convertedStart ?? low;
+  const end = convertedEnd ?? high;
   const sameClock =
-    startField.name === endField.name || (start !== low) === (end !== high);
+    (convertedStart === undefined) === (convertedEnd === undefined);
   const inOrder = window.bounds === 'closed' ? start <= end : start < end;
   if (sameClock && !inOrder) {
     throw new WindowReadError(
@@ -479,6 +472,18 @@ function convertWindowQuery(
   }
 }
 
+/**
+ * A `rangeWindow` read (Pagination Schemes 0.5.0 §4.6.3): the whole range
+ * first, then, for an answer with `cap` items or more (full, §4.6.4 rule 2),
+ * its two halves, depth first and the first half first, down to windows
+ * narrower than `2 × minimumWidth`. A full window that cannot be split
+ * throws `WindowReadError`; the read is then not complete. The items of a
+ * full answer are not yielded: they do not make the window complete, and
+ * its halves return them. Every window sends the same fixed query, body
+ * and headers; only the window fields change. An item an earlier window
+ * returned is yielded once (`walk.identity`). The read is never complete in
+ * the Collection Completeness sense (§4.6.4 rule 5): `walk.outcome` says so.
+ */
 async function* walkWindows(
   walk: PageWalk,
   scheme: PaginationSchemeObject,

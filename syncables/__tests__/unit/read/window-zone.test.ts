@@ -14,6 +14,28 @@ import { Budget, walkPages } from '../../../src/read/pages.js';
 // are converted. Invented data; the zone conversion here stands in for the
 // one readCollections supplies.
 
+const zoned = (timeZone: string): Intl.DateTimeFormat =>
+  new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+/** A UTC bound as Europe/London wall-clock digits with a `Z` (offset 0 in winter). */
+function london(bound: string): string {
+  const parts = Object.fromEntries(
+    zoned('Europe/London')
+      .formatToParts(new Date(bound))
+      .map((p) => [p.type, p.value]),
+  );
+  return `${parts['year']}-${parts['month']}-${parts['day']}T${parts['hour']}:${parts['minute']}:${parts['second']}Z`;
+}
+
 const AMSTERDAM = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/Amsterdam',
   hourCycle: 'h23',
@@ -71,7 +93,7 @@ async function walk(
   scheme: PaginationSchemeObject,
   range: { start: string; end: string },
   answer: (query: URLSearchParams) => unknown[],
-  windowValue?: (parameter: string, bound: string) => string,
+  windowValue?: (parameter: string, bound: string) => string | undefined,
 ): Promise<{ queries: URLSearchParams[]; items: unknown[] }> {
   const queries: URLSearchParams[] = [];
   const transport: Transport = (request) => {
@@ -124,7 +146,7 @@ describe('PageWalk.windowValue', () => {
 
   it('leaves a parameter the hook does not convert as it is', async () => {
     const { queries } = await walk(pair(10), JANUARY, () => [], (name, bound) =>
-      name === 'start' ? wallClock(bound) : bound,
+      name === 'start' ? wallClock(bound) : undefined,
     );
     expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual([
       '2026-01-01T01:00:00Z',
@@ -185,5 +207,18 @@ describe('PageWalk.windowValue', () => {
       JANUARY.start,
       JANUARY.end,
     ]);
+  });
+
+  it('decides per parameter, so an offset-0 zone is still checked (review of #433)', async () => {
+    // London, 2026-10-25: 00:40Z is 01:40 BST, 01:20Z is 01:20 GMT; the end's
+    // digits do not change, but it is converted, so the window is refused.
+    await expect(
+      walk(
+        pair(10),
+        { start: '2026-10-25T00:40:00Z', end: '2026-10-25T01:20:00Z' },
+        () => [],
+        (_, bound) => london(bound),
+      ),
+    ).rejects.toThrow(WindowReadError);
   });
 });
