@@ -30,6 +30,7 @@ import {
 import type { ListMethod, Transport } from './transport.js';
 import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -234,6 +235,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
+    declaredThrottling(doc),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({

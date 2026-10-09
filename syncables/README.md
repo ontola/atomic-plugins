@@ -170,10 +170,11 @@ A write the server answers with a non-2xx status is classified. The defaults
 | Response | Class | What the client does |
 | --- | --- | --- |
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
+| A response that is throttling under the document's `x-throttling` ([below](#throttling)): a matching signal, or any 429 | `retry` | Sent again no earlier than the earliest retry time the response gives, else after the backoff |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
-| 403 with `Retry-After` or `x-ratelimit-remaining: 0` | `retry` | A rate limit, as GitHub sends it |
+| 403 with `Retry-After` or `x-ratelimit-remaining: 0`, when the document declares no `x-throttling.signals` | `retry` | A rate limit, as GitHub sends it; with signals declared, a 403 is throttling only when a signal matches |
 | Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
-| 408, 425, 429 | `retry` | Backoff retry, or the `Retry-After` delay |
+| 408, 425 | `retry` | Backoff retry, or the `Retry-After` delay |
 | Every other 4xx: 400, 404 or 410 to a create or update, 405, 409, 413, 415, 422, ... | `permanent` | The write becomes `failed` at once, after 1 attempt |
 | Anything else: 5xx, and a 1xx or 3xx the transport passed on | `retry` | Backoff retry, or the `Retry-After` delay; a create's 5xx other than 503 becomes `uncertain` without a usable idempotency key ([Uncertain creates](#uncertain-creates)) |
 
@@ -212,10 +213,62 @@ such responses as `permanent` to catch that.
 
 Set `classifyWriteFailure` to change the classes. It receives the write's
 `type`, the HTTP `method`, `status`, lower-cased `headers`, the response
-`body`, `resource`, `id` and `afterRenewal`, and returns `'retry'`,
-`'permanent'`, `'auth'` or `'satisfied'`. A classifier that throws or returns
-another value gets the default class; `satisfied` for a create or update
-counts as `permanent`.
+`body`, `resource`, `id`, `afterRenewal`, `throttling` (the verdict below,
+when the response is throttling) and `signalsDeclared`, and returns
+`'retry'`, `'permanent'`, `'auth'` or `'satisfied'`. A classifier that
+throws or returns another value gets the default class; `satisfied` for a
+create or update counts as `permanent`.
+
+#### Throttling
+
+The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
+(0.2.0-draft) lets a document say, at the root `x-throttling`, which
+response headers report the rate limit (`headers`: roles `limit`,
+`remaining`, `used`, `reset` and `retryAfter`, the last two with a time
+unit) and which responses are rate-limit refusals (`signals`: a status
+list plus a header or JSON-body predicate, with the meaning `throttled` or
+`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
+`declaredThrottling` reads it and `classifyThrottling` (both exported)
+applies it to a response, after the spec's `classify()`: the first signal
+that matches decides; without one, a 429 is `throttled` (with or without a
+declaration) and nothing else is throttling. The earliest retry time is
+the later of the `retryAfter` time and, for `quotaExhausted` or
+`remaining: 0`, the `reset` time; else the response time plus the signal's
+`minDelaySeconds`; else, for `quotaExhausted` with a bucket whose window is
+declared, plus that window; else the client's own backoff. An absolute time
+is measured against both the client's clock and the response's `Date`
+header, taking the later, so neither a wrong clock nor a wrong `Date` makes
+it earlier; a header value that does not parse in its declared unit is
+ignored. When no `retryAfter` role is declared, the standard `Retry-After`
+header is read as RFC 9110 defines it, as before the extension.
+
+For a write, a throttling verdict means `retry`, sent again no earlier than
+that time and never below the backoff. The time is stored with the queued
+write (`notBefore` in the outbox), so a restart or a `resolveWrite` `retry`
+keeps it: a restored or retried write waits it out too. A time further away
+than `retry.maxRetryAfterMs` is not cut short: the write becomes `failed`
+with `lastError` naming the time and the cap, since the extension forbids
+retrying earlier and allows giving up; `resolveWrite` `retry` queues it
+again, and it fails again at once while the time is still that far away. A
+`quotaExhausted` answer, to a write or to a read, also holds back every
+other request counted against the same bucket (the operation's
+`x-throttling` selection, else the root `applies`; every request when the
+signal names no bucket) until that time, or, when it carries no time and
+its bucket has no declared window, until the throttled write's own
+backoff; the paused buckets are stored in the outbox too. A write held
+that way longer than `retry.maxRetryAfterMs` fails with `lastError` "Held
+until … not sent" rather than waiting unseen. A create answered by a 5xx
+stays `uncertain` even when a declared signal matches the response: the
+extension says such a response may follow partial processing, and that
+"not applied" is only an inference ([Uncertain creates](#uncertain-creates)).
+For a read, the client's transport first waits out a paused bucket of the
+request's operation (through `sleep`; a pause longer than `limits.timeoutMs`
+stops the read with an error), then the budget waits the earliest retry
+time of a throttled answer and sends the request again, up to
+`limits.maxRetries` times, or stops with "API retry delay exceeds the
+remaining read time"; a throttled answer without a time is returned to the
+read as before. Pacing requests against the announced `limits` is not
+implemented, and nothing here has been checked against a real provider.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -807,8 +860,14 @@ pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
 tombstones of such a collection. The write fields `lastStatus`
 and `missingRecord`, the state `blocked` and the top-level `authBlock`,
-`feedCursors` and `feedTombstones` were added within version `1`; a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Set `outboxNamespace` to
+`feedCursors` and `feedTombstones` were added within version `1`, as were
+the write field `notBefore` (a throttling answer's earliest retry time) and
+the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that does not parse still blocks the client
+(`status` 0) until `authRenewed()`. Downgrading: an older syncables that
+reads this outbox does not know `notBefore` and `throttlingPauses` and
+drops them, so it may send a held write before the time the API asked for,
+though never a second time; the version stays `1` because every write it
+holds is still one that older client can read and send. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -1110,6 +1169,32 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `syncToken`) and checks `linkResolution` (§9 rules 8–10). The
   `incrementalSync` scheme type and the scheme-level `response.envelope`
   are still not read.
+- **Unreleased**: The document's root `x-throttling` (draft Throttling
+  extension 0.2.0) drives rate-limit handling: `headers` give the header
+  roles and units, `signals` say which responses are rate-limit refusals,
+  and the earliest retry time follows the spec (the later of `retryAfter`
+  and `reset`, measured against both clocks; else `minDelaySeconds`, else
+  the bucket window, else the backoff). `defaultWriteFailureClass` calls a
+  matching signal or a 429 `retry`; with signals declared, a 403 that
+  matches none is no longer taken as a rate limit by its headers (the
+  heuristic stays for documents without signals). A write is never sent
+  before the earliest retry time, which is stored with the write
+  (`notBefore`) so that a restart or a `resolveWrite` retry keeps it: one
+  further away than `retry.maxRetryAfterMs` now fails instead of being
+  retried early. A `quotaExhausted` answer, to a write or a read, pauses
+  every request counted against the bucket (writes and reads; the pauses are
+  stored too); a write held past the cap fails with a `lastError` saying
+  why, and a read that cannot wait within its time stops with an error. A
+  create answered by a 5xx stays uncertain even when a signal matches it.
+  The read budget waits the same time for a declared signal, not only for a
+  429. A read counts against its own operation's buckets (a POST list read,
+  `listMethod: POST`, against its path's `post`). Downgrading: the outbox
+  stays at version 1, so an older syncables reads it but drops `notBefore`
+  and `throttlingPauses`; it may send a held write before the API's time,
+  but never twice.
+  `WriteFailure` gains `throttling` and `signalsDeclared`.
+  `declaredThrottling`, `classifyThrottling`, `headerTime` and
+  `operationBuckets` are exported.
 - **0.20.0**: A queued update (PUT or PATCH) whose record a complete
   refresh no longer returns is held rather than sent on its last known copy,
   in memory as after a restart; the client checks the record, within the
