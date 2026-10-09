@@ -418,8 +418,8 @@ def _short_page_problems(scheme, applied):
     problems = []
     if short.get("size") == "request" and not _role_fields(scheme, "pageSize"):
         problems.append("response.shortPage.size: 'request' needs a request field with role pageSize (rule 21)")
-    if applied and not _role_fields(scheme, "page"):
-        problems.append("response.shortPage: needs a request field with role page (rule 22)")
+    if applied and len(_role_fields(scheme, "page")) != 1:
+        problems.append("response.shortPage: needs exactly one request field with role page (rule 22)")
     return problems
 
 
@@ -438,43 +438,86 @@ def _items(body, scheme):
     return value
 
 
-def read_pages(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+def _role_value(body, scheme, role):
+    """The value of the response body field with this role, or None (top-level and dot-paths)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                value = value.get(segment) if isinstance(value, dict) else None
+            return value
+    return None
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda item: item["id"], max_pages=None):
     """A page-number read with `start` and a Short Page Object (§4.3.1, §4.4.5).
 
     `request(values)` sends one page, with `values` mapping (location, name)
     of the `page` field (and the `pageSize` field, when `page_size` is given)
-    to their values, and returns the response body. Returns {"items", "pages",
-    "complete"}: "complete" is True only when a short page ended the read and
-    the assurance is `documented`. Raises PageReadError for a page with more
-    than `size` items, a page that repeats the one before it, or `max_pages`
-    reached; such a read is not complete.
+    to their values, and returns the response body. `maximum` is the
+    documented maximum of the pageSize parameter; a `page_size` above it is
+    refused. A body field with the `totalPages` role (a count: the last page
+    is `start + totalPages - 1`) or the `totalCount` role ends the read on a
+    full page, and a `pageSize` role field reports the size applied.
+
+    Returns {"items", "pages", "complete"}. "complete" is True for a read
+    ended by `totalPages` or `totalCount`, and for one ended by a short page
+    only when the assurance is `documented`. Raises PageReadError for a page
+    with more than the full size, a page holding an item an earlier page
+    returned, a short page that `totalPages` or `totalCount` contradicts
+    under `documented`, or `max_pages` pages requested without reaching the
+    end; such a read is not complete.
     """
     short = scheme["response"]["shortPage"]
-    [page_field] = _role_fields(scheme, "page")
+    page_fields = _role_fields(scheme, "page")
+    if len(page_fields) != 1:
+        raise ValueError("a shortPage scheme has exactly one page field (rule 22)")
+    [page_field] = page_fields
     location, name = page_field
     first = scheme["request"][location][name].get("start", 1)
-    size = page_size if short["size"] == "request" else short["size"]
     if short["size"] == "request" and page_size is None:
         raise ValueError("size 'request' needs the page size the client sends")
+    if page_size is not None and maximum is not None and page_size > maximum:
+        raise ValueError(f"page size {page_size} is above the documented maximum {maximum}")
+    size = page_size if short["size"] == "request" else short["size"]
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
-    items, previous, pages = [], None, 0
+    items, seen, pages = [], set(), 0
     number = first
     while True:
         if max_pages is not None and pages >= max_pages:
-            raise PageReadError(f"stopped after {max_pages} pages; the read is not complete")
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
         values = {page_field: number}
         values.update({field: page_size for field in size_fields})
-        page = _items(request(values), scheme)
+        body = request(values)
+        page = _items(body, scheme)
         pages += 1
-        if len(page) > size:
-            raise PageReadError(f"page {number} holds {len(page)} items, more than the declared {size}")
+        reported = _count(_role_value(body, scheme, "pageSize"))
+        full = reported if reported else size
+        if len(page) > full:
+            raise PageReadError(f"page {number} holds {len(page)} items, more than the declared {full}")
         ids = [identity(item) for item in page]
-        if page and ids == previous:
-            raise PageReadError(f"page {number} repeats the page before it")
+        if any(i in seen for i in ids):
+            raise PageReadError(f"page {number} holds an item an earlier page returned")
+        seen.update(ids)
         items.extend(page)
-        if len(page) < size:
-            return {"items": items, "pages": pages, "complete": short["assurance"] == "documented"}
-        previous, number = ids, number + 1
+        total_pages = _count(_role_value(body, scheme, "totalPages"))
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        last = first + total_pages - 1 if total_pages is not None else None
+        ended = (last is not None and number >= last) or (total_count is not None and len(items) >= total_count)
+        more = (last is not None and number < last) or (total_count is not None and len(items) < total_count)
+        if len(page) < full:
+            if more:
+                if short["assurance"] == "documented":
+                    raise PageReadError(f"page {number} is short, but the response says more pages follow")
+                return {"items": items, "pages": pages, "complete": False}
+            return {"items": items, "pages": pages, "complete": ended or short["assurance"] == "documented"}
+        if ended:
+            return {"items": items, "pages": pages, "complete": True}
+        number += 1
 
 
 def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):
