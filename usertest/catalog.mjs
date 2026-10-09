@@ -103,7 +103,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-export const SAMPLE_VERSION = 'sample-2';
+export const SAMPLE_VERSION = 'sample-3';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
