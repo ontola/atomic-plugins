@@ -5,6 +5,7 @@ import {
   type OpenApiDocument,
   type Transport,
 } from '../../../src/browser.js';
+import { fixedReads } from '../../fixtures/fixed-reads.js';
 
 // #384 items 7 and 10b in the client: the deletion feed's envelope with
 // `itemsField: null`, and the Collection Object's envelope in
@@ -136,6 +137,46 @@ describe('ApiClient.paginate applies the Collection Object envelope (item 10b)',
       await client.paginate('/entries', { query: { state: 'archived' } }),
     ).toEqual([{ id: 'a1' }]);
     expect(await client.paginate('/entries')).toEqual([{ id: 'e1' }]);
+  });
+});
+
+describe('ApiClient.paginate matches a fixed listBody whatever its key order', () => {
+  it('applies the POST search envelope when the call sends the same nested body in another order', async () => {
+    const search = structuredClone(fixedReads);
+    const page = (
+      search.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, Record<string, unknown>>>
+      >
+    )['page']!['collections']!['searchedPages']!;
+    page['envelope'] = { itemsField: 'data.rows' };
+    const transport = vi.fn<Transport>(async () =>
+      reply({
+        data: { rows: [{ id: 'p1' }] },
+        results: [{ id: 'x' }],
+        next_cursor: null,
+      }),
+    );
+    const client = createApiClient(search, { transport });
+    expect(
+      await client.paginate('/search', {
+        method: 'POST',
+        body: {
+          page_size: 100,
+          filter: { value: 'page', property: 'object' },
+        },
+      }),
+    ).toEqual([{ id: 'p1' }]);
+    // A different nested value is another read: no Collection envelope.
+    expect(
+      await client.paginate('/search', {
+        method: 'POST',
+        body: {
+          page_size: 100,
+          filter: { value: 'database', property: 'object' },
+        },
+      }),
+    ).toEqual([{ id: 'x' }]);
   });
 });
 

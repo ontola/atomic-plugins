@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - an **API client** (`createApiClient`) that talks to any server implementing
   that document and keeps a local copy of each resource collection in sync.
 
-Both understand the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Both understand the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 when a document declares `components.paginationSchemes` (see below) —
 the mock server paginates list responses accordingly, and the client walks
 every page automatically.
@@ -279,7 +279,7 @@ rather than relying on the generated value to differ per item.
 
 ### Pagination (`src/pagination/`)
 
-Implements the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
