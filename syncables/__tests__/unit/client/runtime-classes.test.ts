@@ -114,6 +114,7 @@ describe('readPlatform and runtime classes', () => {
     expect(result.errors).toEqual([
       'row: describer /tables/t1: GET /v1/tables/t1 responded 404',
     ]);
+    expect(result.describerErrors).toEqual(result.errors);
   });
 
   it('adds nothing for a document without the extension', async () => {
@@ -215,5 +216,40 @@ describe('sync() and runtime classes', () => {
       noClass: true,
       values: {},
     });
+  });
+});
+
+describe('sync() with a failed collection and a failed describer', () => {
+  it('throws naming only the collection', async () => {
+    // Two collections: the rows (whose describer fails) and the tables
+    // listing, which fails itself.
+    const twoCollections = structuredClone(userDefinedColumns);
+    const crud = twoCollections.components!['crudResources'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    crud['table']!['collections'] = { tables: { urlTemplate: '/tables' } };
+    twoCollections.paths['/tables'] = {
+      get: { responses: { '200': { description: 'Every table.' } } },
+    };
+    const client = createApiClient(twoCollections, {
+      transport: async (r): Promise<TransportResponse> =>
+        r.url.pathname.endsWith('/rows')
+          ? json([ROW])
+          : r.url.pathname === '/v1/tables'
+            ? json({ message: 'down' }, 500)
+            : json({ message: 'no access' }, 403),
+      constants: { tableId: 't1' },
+      limits: { maxRetries: 0 },
+    });
+    const error = (await client.sync().catch((e: unknown) => e)) as Error;
+    expect(error.message).toMatch(/^Read incomplete: tables: /);
+    expect(error.message).not.toMatch(/describer/);
+    // The rows were still applied, with no class.
+    expect(await client.list('rows')).toHaveLength(1);
+    expect(client.runtimeMembers('rows', 'r1')).toMatchObject({
+      noClass: true,
+    });
+    expect(client.authBlocked()).toBeUndefined();
   });
 });

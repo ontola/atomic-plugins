@@ -504,8 +504,8 @@ export interface ApiClient {
   /**
    * A record's user-defined members (`x-runtime-schema`), as the latest
    * complete read of its collection interpreted them against its
-   * describer's class: of the confirmed remote record, not of local edits
-   * still pending. Undefined when no complete read of this client returned
+   * describer's class: of the record as that read returned it, so local
+   * edits still pending are not in them. Undefined when no complete read of this client returned
    * the record, or its resource declares no runtime schema. Kept in memory
    * only: after a restart, until the next sync.
    */
@@ -3297,14 +3297,16 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released);
-    // A describer that could not be read leaves its items without a class,
-    // not their collection incomplete: a warning, not a failed sync.
+    // A describer that could not be read (whatever the status: a 401 or
+    // 403 here is not an auth block) or that the budget left unread leaves
+    // its items without a class, not their collection incomplete: a
+    // warning, not a failed sync. readCollections appends those entries
+    // last, so the collection failures are the ones before them.
     const warnings = result.describerErrors ?? [];
-    const failures = [...result.errors];
-    for (const warning of warnings) {
-      const at = failures.indexOf(warning);
-      if (at >= 0) failures.splice(at, 1);
-    }
+    const failures = result.errors.slice(
+      0,
+      result.errors.length - warnings.length,
+    );
     if (failures.length)
       throw new Error(`Read incomplete: ${failures.join('; ')}`);
     return {

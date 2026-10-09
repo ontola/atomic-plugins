@@ -124,6 +124,11 @@ export interface ReadResult {
    * defines.
    */
   describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read (the
+   * last ones); present with `describers`.
+   */
+  describerErrors?: string[];
 }
 
 const TIMESTAMP =
@@ -207,6 +212,9 @@ export async function readPlatform(
     records,
     errors: result.errors,
     ...(result.describers ? { describers: result.describers } : {}),
+    ...(result.describerErrors
+      ? { describerErrors: result.describerErrors }
+      : {}),
   };
 }
 

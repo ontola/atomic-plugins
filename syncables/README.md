@@ -1121,16 +1121,20 @@ const { records, ontology, errors } = await readPlatform(document, {
   cannot use (a missing field, a malformed dot-path, no `types`, a type
   without `schema`, an unknown reference) fails that resource's collections
   before any request, with the reason in `errors`; the entries about
-  describers are also in `describerErrors`, and an item without a class has
-  `noClass: true`. `readPlatform` returns the same `describers` and gives
-  each record its members as `runtime`. The client's `sync()` returns
-  `describers`, and `client.runtimeMembers(resource, id, context?)` gives a
-  record's members from the latest complete read of its collection (of the
-  confirmed remote record, not local edits; in memory only, so undefined
-  after a restart until the next sync). A describer `sync()` cannot read
-  does not make it throw: the collection is applied, the describer error is
-  in `SyncResult.warnings`, and the records' members have `noClass`; a
-  collection that could not be read still makes it throw. Writes and value
+  describers are also in `describerErrors` (the last entries of `errors`),
+  and an item without a class has `noClass: true`. `readPlatform` returns
+  the same `describers` and `describerErrors`, and gives each record its
+  members as `runtime`. The client's `sync()` returns `describers`, and
+  `client.runtimeMembers(resource, id, context?)` gives a record's members
+  as the latest complete read of its collection returned it (local edits
+  still pending are not in them; in memory only, so undefined after a
+  restart until the next sync). A describer `sync()` cannot read does not
+  make it throw: the collection is applied, the describer error is in
+  `SyncResult.warnings`, and the records' members have `noClass`; a
+  collection that could not be read still makes it throw. A describer's
+  401 or 403, or a budget spent before it was read, is such a warning too:
+  it does not block the client's writes as an auth refusal would
+  (`authBlocked()`). Writes and value
   conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
   one property per field, typed with Atomic Data datatype URLs. Each record's

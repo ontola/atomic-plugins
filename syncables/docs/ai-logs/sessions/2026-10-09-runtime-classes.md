@@ -26,3 +26,22 @@ unbound reference, an unreadable describer) has `noClass: true`.
 `conflicting` comes through `RuntimeMembers` from K16's review fixes.
 Tests in `unit/client/runtime-classes.test.ts`; README, changelog and
 CLAUDE.md updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** Merge main in (after #435's own
+merge), and fold in the review nits of #449: split collection errors from
+describer errors without string matching; say "of the latest complete
+read"; give `ReadResult` the `describerErrors` too; document that a
+describer's 401/403 or a spent budget is a warning that does not trigger
+auth handling; test a sync where a collection and a describer both fail.
+
+**Assistant:** Merged the K16 branch's merge commit (which carries main).
+`readCollections` appends describer errors last, documented, and `sync()`
+takes the entries before them as the collection failures. `ReadResult`
+has `describerErrors`. The `runtimeMembers()` doc and README say the
+members are those of the latest complete read, and the README notes that
+a describer's 401/403 or a spent budget is a warning, not an auth block. A
+new test has a failing collection and a failing (403) describer in one
+sync: the thrown message names only the collection, the rows are applied
+with `noClass`, and the client is not auth-blocked.

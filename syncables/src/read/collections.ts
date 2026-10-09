@@ -100,7 +100,8 @@ export interface CollectionReadResult {
   describers?: RuntimeDescriber[];
   /**
    * The entries of `errors` about describers that could not be read: they
-   * leave items without a class, not a collection incomplete. Present with
+   * leave items without a class, not a collection incomplete. They are the
+   * last entries of `errors`, after every collection's. Present with
    * `describers`.
    */
   describerErrors?: string[];
@@ -339,6 +340,7 @@ export async function readCollections(
     upstream,
     describerErrors,
   );
+  // Last, after every collection error: callers split `errors` by count.
   errors.push(...describerErrors);
   return { collections, errors, describers, describerErrors };
 }
