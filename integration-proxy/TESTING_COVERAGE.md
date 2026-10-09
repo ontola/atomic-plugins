@@ -24,7 +24,7 @@
 | Tenant routes and parameters removed (`/session`, `/auth/*`, `POST /connect`, `/proxy`, `/oauth/{p}/start`, signed legacy `/connect`), `Bearer` codes refused | `connect::removed_tenant_routes_are_gone`, `connect::legacy_connect_parameters_are_refused`, `proxy::postgres_each_verification_step_fails_closed` |
 | CORS for a null-origin frame: preflight of `authorization` and the five `x-atomic-*` headers; exposed headers | `browser_tests::a_null_origin_frame_may_preflight_signed_proxy_requests` |
 | Composed catalog fixtures still yield the OAuth provider and scopes; leftover `tenantIdentity` selections are ignored | `src/identity_catalog_tests.rs` |
-| Produced classes (pieces.md D4): an overlay's `x-produces` on a CRUD Resource Object and a selection's `x-produces` come back unchanged (strings, URNs, nested `x-*` values, numbers, `null`) from `/catalog/<name>.yaml` and `.selection.json`, and the selection's is not merged into the document | `catalog::a_produced_class_declaration_passes_through_unchanged` |
+| Produced classes (pieces.md D4): an overlay's `x-produces` on a CRUD Resource Object comes back unchanged (strings, URNs, nested `x-*` values, numbers, `null`) from `/catalog/<name>.yaml` | `catalog::a_produced_class_declaration_passes_through_unchanged` |
 
 ## Webhook inbox (#369, step 2)
 

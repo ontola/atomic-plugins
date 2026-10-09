@@ -1608,10 +1608,8 @@ mod tests {
 
     /// pieces.md D4: a Produced Classes declaration (`x-produces`,
     /// openapi-extensions/spec/produced-classes) set by an overlay on a CRUD
-    /// Resource Object, or carried in a catalog entry's `selection`, comes
-    /// back unchanged from `/catalog/<name>.yaml` and
-    /// `/catalog/<name>.selection.json`. The proxy composes and serves it
-    /// like any other member and never reads it.
+    /// Resource Object comes back unchanged from `/catalog/<name>.yaml`. The
+    /// proxy composes and serves it like any other member and never reads it.
     #[tokio::test]
     async fn a_produced_class_declaration_passes_through_unchanged() {
         use crate::config::OVERLAYS_PAGES_BASE;
@@ -1624,9 +1622,6 @@ mod tests {
             },
             {"class": "urn:example:classes:cost-centre"}
         ]);
-        let selection = serde_json::json!({
-            "x-produces": {"project": [{"class": "https://ontology.example/classes/work-project-v1"}]}
-        });
         let mirror = tempfile_path("mirror");
         let source = mirror.join("example");
         fs::create_dir_all(&source).unwrap();
@@ -1669,7 +1664,6 @@ mod tests {
                     format!("{OVERLAYS_PAGES_BASE}example/crud-overlay.yaml"),
                     format!("{OVERLAYS_PAGES_BASE}example/produces-overlay.yaml"),
                 ],
-                "selection": selection,
             }]})
             .to_string(),
         )
@@ -1703,11 +1697,6 @@ mod tests {
         assert!(document["components"]["crudResources"]["project"]
             .get("x-produces")
             .is_none());
-        // The selection's declaration stays in the selection, unchanged, and
-        // is not merged into the document.
-        let served: Value =
-            serde_json::from_slice(&get("/catalog/example.selection.json").await).unwrap();
-        assert_eq!(served, selection);
         assert!(document.get("x-produces").is_none());
         fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }

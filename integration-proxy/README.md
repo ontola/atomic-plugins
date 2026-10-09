@@ -359,9 +359,8 @@ empty object when absent).
 [`openapi-extensions/spec/produced-classes`](../openapi-extensions/spec/produced-classes/README.md),
 docs/design/pieces.md D4): the shared classes a CRUD resource's objects can
 be represented as. An overlay sets it on a CRUD Resource Object, and it comes
-back unchanged in `/catalog/{platform}.yaml`; the catalog fallback,
-`selection.x-produces` keyed by resource name, comes back unchanged in
-`.selection.json`. The proxy never reads it: nothing it allows, forwards or
+back unchanged in `/catalog/{platform}.yaml`. It has no place in a catalog
+entry's `selection`. The proxy never reads it: nothing it allows, forwards or
 asks consent for depends on it.
 
 ### Authentication profiles

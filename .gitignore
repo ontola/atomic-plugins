@@ -22,3 +22,5 @@ usertest/out/
 # is not a package (each plugin folder has its own), and nothing reads these.
 /integrations/package.json
 /integrations/pnpm-lock.yaml
+# Python bytecode from the openapi-extensions validators and other scripts.
+__pycache__/

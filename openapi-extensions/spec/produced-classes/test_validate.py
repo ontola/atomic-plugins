@@ -1,4 +1,4 @@
-"""Produced Classes 0.1.0-draft: rules 1-6 and the catalog fallback."""
+"""Produced Classes 0.1.0-draft: rules 1-6."""
 import copy
 import pathlib
 import unittest
@@ -6,7 +6,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import absolute_uri, validate, validate_selection
+from validate import absolute_uri, same_subject, validate
 
 ROOT = pathlib.Path(__file__).parent
 EXAMPLE = yaml.safe_load((ROOT / "examples" / "time-entries.yaml").read_text(encoding="utf-8"))
@@ -57,6 +57,23 @@ class ValidationTests(unittest.TestCase):
         self.invalid(lambda d: d.update({"x-produces": entry}), "x-produces: x-produces is allowed only")
         self.invalid(lambda d: d["components"].update({"x-produces": entry}), "components.x-produces")
 
+    def test_rule_1_ignores_property_names_and_data_values(self):
+        document = example()
+        schema = document["components"]["schemas"]["TimeEntry"]
+        schema["properties"]["x-produces"] = {"type": "string", "example": "x"}
+        schema["example"] = {"x-produces": [{"class": "nope"}]}
+        schema["properties"]["description"]["default"] = {"x-produces": 1}
+        schema["properties"]["description"]["enum"] = [{"x-produces": 1}]
+        document["paths"]["/projects"]["get"]["responses"]["200"]["content"]["application/json"]["examples"] = {
+            "one": {"value": [{"x-produces": []}]}
+        }
+        validate(document)
+        # A real misplacement inside a property's schema is still found.
+        schema["properties"]["description"]["x-produces"] = []
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("properties.description.x-produces: x-produces is allowed only", str(raised.exception))
+
     def test_rule_1_swagger_root_resources(self):
         document = {"swagger": "2.0", "x-crudResources": {"item": {"x-produces": [{"class": "https://o.example/c"}]}}}
         validate(document)
@@ -84,9 +101,22 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.invalid(lambda d: produces(d)[0].update({"class": bad}), "x-produces[0].class: expected an absolute URI")
         self.invalid(lambda d: produces(d)[0].update({"lens": "lenses/x"}), "x-produces[0].lens: expected an absolute URI")
-        for good in ["https://o.example/c", "http://o.example/c#Thing", "urn:example:c", "did:web:o.example"]:
+        for good in ["https://o.example/c", "http://o.example/c#Thing", "urn:example:c", "did:web:o.example",
+                     "https://ontologie.example/klassen/tijdregistratie-ü", "https://例え.example/クラス"]:
             with self.subTest(good=good):
                 self.assertTrue(absolute_uri(good))
+
+    def test_rule_5_compares_scheme_and_host_case_insensitively(self):
+        self.invalid(
+            lambda d: produces(d).append({"class": "HTTPS://Ontology.Example/classes/time-entry-v1"}),
+            "x-produces[1].class: HTTPS://Ontology.Example/classes/time-entry-v1 appears twice",
+        )
+        # The path is case-sensitive.
+        document = example()
+        produces(document).append({"class": "https://ontology.example/classes/Time-Entry-v1"})
+        validate(document)
+        self.assertEqual(same_subject("HTTPS://User@Host.Example/A"), "https://User@host.example/A")
+        self.assertEqual(same_subject("URN:Example:A"), "urn:Example:A")
 
     def test_rule_5_unique_classes(self):
         self.invalid(lambda d: produces(d).append({"class": produces(d)[0]["class"]}), "x-produces[1].class: https://ontology.example/classes/time-entry-v1 appears twice")
@@ -101,25 +131,6 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as raised:
             validate(document)
         self.assertEqual(len(str(raised.exception).splitlines()), 2)
-
-
-class SelectionTests(unittest.TestCase):
-    def test_a_selection_without_the_field_is_valid(self):
-        validate_selection({"query_overrides": []}, example())
-        validate_selection({}, example())
-
-    def test_a_valid_fallback(self):
-        validate_selection({"x-produces": {"project": [{"class": "https://o.example/c"}]}}, example())
-
-    def test_unknown_resource_and_bad_entries(self):
-        with self.assertRaises(ValueError) as raised:
-            validate_selection({"x-produces": {"invoice": [{"class": "nope"}]}}, example())
-        message = str(raised.exception)
-        self.assertIn("selection.x-produces.invoice: no such CRUD resource", message)
-        self.assertIn("selection.x-produces.invoice[0].class: expected an absolute URI", message)
-        for bad in [[], {}, "https://o.example/c"]:
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                validate_selection({"x-produces": bad}, example())
 
 
 if __name__ == "__main__":

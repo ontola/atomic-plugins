@@ -16,7 +16,7 @@ such as `timeEntry`, which says nothing about a shared vocabulary.
 
 This extension adds one statement to a CRUD Resource Object:
 
-* an `x-produces` field, listing the shared classes (by their subject URIs,
+* an `x-produces` field, listing the shared classes (by their subject IRIs,
   for example classes of an RDF or Atomic Data ontology) that an object of
   this resource can be represented as, each optionally with a lens: a
   separately published mapping document from the resource's objects to that
@@ -54,13 +54,22 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "MAY" are to be
 interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 A _class_ is a type of record in some shared vocabulary, named by an
-absolute URI (its _subject_). A _lens_ is a document, also named by an
-absolute URI, that maps an object of a resource to an instance of a class
+absolute IRI (its _subject_). A _lens_ is a document, also named by an
+absolute IRI, that maps an object of a resource to an instance of a class
 and, where it can, back. Neither is defined here.
 
-An _absolute URI_ is a URI with a scheme, per
-[RFC 3986 §4.3](https://www.rfc-editor.org/rfc/rfc3986#section-4.3): no
-relative references, no whitespace. `https` subjects are RECOMMENDED.
+An _absolute IRI_ is an IRI with a scheme and no fragment-only or relative
+form, per [RFC 3987 §2.2](https://www.rfc-editor.org/rfc/rfc3987#section-2.2)
+(`absolute-IRI`, plus an optional fragment): every absolute URI
+([RFC 3986 §4.3](https://www.rfc-editor.org/rfc/rfc3986#section-4.3)) is one,
+and non-ASCII characters are allowed; whitespace and control characters are
+not. RDF and Atomic Data name classes by IRI. `https` subjects are
+RECOMMENDED.
+
+Two subjects are the _same_ when they are equal after lower-casing the
+scheme and, for an IRI with an authority, the host
+([RFC 3986 §6.2.2.1](https://www.rfc-editor.org/rfc/rfc3986#section-6.2.2.1)).
+The path, query and fragment are compared exactly.
 
 ## 4. Object Definitions
 
@@ -86,17 +95,22 @@ name anywhere else in the document has no meaning under this version.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `class` | string (absolute URI) | **Yes** | The class subject. |
-| `lens` | string (absolute URI) | No | A mapping document from this resource's objects to `class`. |
+| `class` | string (absolute IRI) | **Yes** | The class subject. |
+| `lens` | string (absolute IRI) | No | A mapping document from this resource's objects to `class`. |
 | `description` | string | No | Human-readable notes, such as which objects map poorly. |
 | `x-*` | any | No | Extension fields. |
 
-Within one `x-produces` array, each `class` appears at most once.
+Within one `x-produces` array, each `class` appears at most once (§3,
+"the same").
 
 A consumer MUST NOT assume a field mapping from `class` alone: without a
 `lens` the declaration only says which tables the resource is meant for. A
 consumer that cannot fetch or does not understand a `lens` treats the entry
-as if it had none. This extension requires no fetch of a `class` or `lens`
+as if it had none. When the lens document itself names its target class or
+its source resource (ontola/atomic-plugins' lenses do, as `target.class`
+and `source.record.resource`), a consumer SHOULD ignore the lens if the
+target is not this entry's `class` or the source is not this resource, and
+treat the entry as if it had none. This extension requires no fetch of a `class` or `lens`
 URI; whether and from where a consumer fetches them is its own policy.
 
 ### 4.3 What a passing intermediary does
@@ -123,18 +137,10 @@ actions:
         - class: https://ontology.example/classes/time-entry-v1
 ```
 
-That overlay is applied after the overlay that adds `crudResources`.
-
-**Catalog fallback (not part of this extension).** Where the CRUD Resource
-Objects are not available to annotate, a dated catalog in
-ontola/atomic-plugins (`overlays/catalog/`) MAY carry the same declaration in
-a platform entry's `selection`, as `x-produces`: an object whose keys are
-CRUD resource names and whose values are Produced Class Object arrays. The
-integration proxy serves it unchanged at `/catalog/<name>.selection.json`. A
-declaration in the document takes precedence over one in the selection for
-the same resource. This is a convention of that catalog format, recorded
-here so that the two placements cannot drift apart; [`validate.py`](validate.py)
-checks it with `validate_selection`.
+That overlay is applied after the overlay that adds `crudResources`. The
+declaration has one place, the document: a resource without CRUD Causality
+annotations gets them from an overlay first, so no second placement (such as
+a catalog entry's consumer selection) is defined.
 
 ## 6. Examples
 
@@ -175,13 +181,14 @@ synthetic document.
 2. Its value MUST be a nonempty array.
 3. Each element MUST be an object with a `class`, and MAY have `lens`,
    `description` and `x-*` fields; no other fields.
-4. `class` and `lens` MUST be absolute URIs (§3).
-5. A `class` MUST NOT appear twice in one array.
+4. `class` and `lens` MUST be absolute IRIs (§3).
+5. A `class` MUST NOT appear twice in one array, compared as §3 says.
 6. `description` MUST be a string.
 
-For the catalog fallback (§5), a selection's `x-produces` MUST be an object
-whose keys are names of CRUD resources in the composed document and whose
-values obey rules 2–6.
+Rule 1 concerns the document's structure only: a schema property named
+`x-produces` (a key of `properties` or `patternProperties`), and any
+`x-produces` inside example, default, enum or const values, are data, not
+the extension.
 
 A validation error SHOULD identify the precise location of the violation
 (e.g. `components.crudResources.timeEntry.x-produces[0].class`).
@@ -189,7 +196,7 @@ A validation error SHOULD identify the precise location of the violation
 ## Validator and tests
 
 [`validate.py`](validate.py) checks rules 1–6 for a loaded OpenAPI document
-(`validate`) and the catalog fallback (`validate_selection`).
+(`validate`).
 [`test_validate.py`](test_validate.py) covers each rule. It does not fetch or
 check any class or lens URI. From the repository root:
 
@@ -214,11 +221,15 @@ python3 validate.py examples/time-entries.yaml
   one. ontola/atomic-plugins' lens documents (`ontology/lenses/`) are one
   such format.
 - Class subjects on a provisional base (github.io in ontola/atomic-plugins,
-  O11): whether a declaration using one inherits that repository's
-  `enabled: false` gate is not settled here.
+  O11). That repository's gate (`ontology-kit/ontology.mjs check`) keeps
+  only `integrations/catalog.json` entries that use the github.io base at
+  `enabled: false`. It does **not** check overlays or the dated platform
+  catalogs under `overlays/catalog/`: an overlay that declares a github.io
+  class is published and served by the proxy like any other, and nothing
+  stops it. Whether it should is not settled here.
 
 ## Reference Implementation
 
 ontola/atomic-plugins' `integration-proxy` passes the declaration through
-unchanged (§4.3), in `/catalog/<name>.yaml` and `/catalog/<name>.selection.json`,
-and tests that it does. No consumer reads it yet.
+unchanged (§4.3) in `/catalog/<name>.yaml`, and tests that it does. No
+consumer reads it yet.
