@@ -34,3 +34,23 @@ add and update, nothing removed, nothing reported for a complete read and
 pruning after an incomplete one (checked to fail without the
 `lastSyncedItems` invalidation), no item GET for an absent record, and a
 `rangeWindow` collection read over its range. README and CLAUDE.md updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review nits on the syncables
+pagination consumers: `paginate()` windows don't deduplicate and id-less
+items are dropped; `walkPages` should start `outcome.complete` false;
+`parseBound` should throw `WindowReadError`; `readCollections` and `sync()`
+never pass `pageSize`, so `size: request` always fails there; a
+`readPlatform` note on completeness; the mock should use `shortPage.size`.
+Also (from the #415 review) cap the page size at the schema `maximum`.
+
+**Assistant:** `paginate` takes `idField` (default `id`) for the windowed
+read's deduplication, and an item without an identity is kept as is;
+`walkPages` wraps the walk so its outcome is not complete until it ends
+normally (a throw or an early stop leaves it false); `parseBound` throws
+`WindowReadError`; the page size sent is capped at the pageSize
+parameter's `maximum`, and a `size: request` short page without a passed
+size uses the parameter's `default`, sent explicitly; `readPlatform`'s doc
+says its records include incompletely read collections; the mock server
+answers full pages of a numeric `shortPage.size`. Tests for each.

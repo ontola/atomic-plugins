@@ -182,6 +182,47 @@ function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
   return array.filter(isRecord);
 }
 
+/**
+ * The documented `default` and `maximum` of the parameter (or JSON body
+ * property) that a scheme's `pageSize` field names, when they are integers.
+ */
+function pageSizeLimits(
+  scheme: PaginationSchemeObject,
+  operation: OperationObject,
+): { default?: number; maximum?: number } {
+  const schemas: (SchemaObject | undefined)[] = [];
+  for (const [name, field] of Object.entries(
+    scheme.request?.queryParameters ?? {},
+  )) {
+    if (field.role !== 'pageSize') continue;
+    schemas.push(
+      (operation.parameters ?? []).find(
+        (p) => p.in === 'query' && p.name === name,
+      )?.schema,
+    );
+  }
+  const body = operation.requestBody?.content?.['application/json']?.schema;
+  for (const [name, field] of Object.entries(
+    scheme.request?.bodyFields ?? {},
+  )) {
+    if (field.role === 'pageSize') schemas.push(body?.properties?.[name]);
+  }
+  const integer = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 1
+      ? value
+      : undefined;
+  for (const schema of schemas) {
+    if (!schema) continue;
+    const limits: { default?: number; maximum?: number } = {};
+    const fallback = integer(schema.default);
+    const maximum = integer(schema.maximum);
+    if (fallback !== undefined) limits.default = fallback;
+    if (maximum !== undefined) limits.maximum = maximum;
+    return limits;
+  }
+  return {};
+}
+
 /** Fills `{name}` path variables, percent-encoding each value. */
 export function bindPath(
   template: string,
@@ -288,16 +329,28 @@ function withBody(
  * a non-2xx status, or on a non-JSON body.
  */
 export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
+  // Not complete until the walk ends normally: a throw, or a caller that
+  // stops early, leaves `complete: false`.
+  const outcome = walk.outcome;
+  if (outcome) {
+    outcome.complete = false;
+    delete outcome.reason;
+  }
+  const result: WalkOutcome = { complete: true };
+  yield* walkAllPages({ ...walk, outcome: result });
+  if (outcome) {
+    outcome.complete = result.complete;
+    if (result.reason !== undefined) outcome.reason = result.reason;
+  }
+}
+
+async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
   const { document, operation, budget, upstream } = walk;
   const effective = resolveEffectiveScheme(document, operation);
   const scheme = effective?.scheme;
   const responseSchema =
     operation.responses?.['200']?.content?.['application/json']?.schema;
   const basePath = upstream.pathname.replace(/\/$/, '');
-  if (walk.outcome) {
-    walk.outcome.complete = true;
-    delete walk.outcome.reason;
-  }
   if (scheme?.type === 'rangeWindow') {
     yield* walkWindows(walk, scheme, responseSchema);
     return;
@@ -310,10 +363,20 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   // ends a pageNumber list.
   const short =
     scheme?.type === 'pageNumber' ? scheme.response?.shortPage : undefined;
-  const shortSize = short?.size === 'request' ? walk.pageSize : short?.size;
+  // The page size sent: the caller's, capped at the pageSize parameter's
+  // documented maximum (a server caps a larger one, and a short page would
+  // then end the list early); else, for a shortPage that takes the size
+  // sent, the parameter's documented default, sent explicitly.
+  const limits = scheme ? pageSizeLimits(scheme, operation) : {};
+  let pageSize = walk.pageSize;
+  if (pageSize !== undefined && limits.maximum !== undefined)
+    pageSize = Math.min(pageSize, limits.maximum);
+  if (pageSize === undefined && short?.size === 'request')
+    pageSize = limits.default;
+  const shortSize = short?.size === 'request' ? pageSize : short?.size;
   if (short && shortSize === undefined) {
     throw new PageReadError(
-      'The shortPage size of the scheme is the page size the client sends; pass pageSize',
+      'The shortPage size of the scheme is the page size the client sends, and its pageSize parameter documents no default; pass pageSize',
     );
   }
   let previousPage: string | undefined;
@@ -326,7 +389,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       url.pathname = basePath + walk.path;
       const query = {
         ...walk.query,
-        ...(scheme ? buildQuery(scheme, cursor, walk.pageSize) : {}),
+        ...(scheme ? buildQuery(scheme, cursor, pageSize) : {}),
       };
       for (const [key, value] of Object.entries(query)) {
         url.searchParams.set(key, value);
@@ -343,7 +406,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       request.body = JSON.stringify(
         next || !scheme
           ? walk.body
-          : withBody(walk.body, buildBody(scheme, cursor, walk.pageSize)),
+          : withBody(walk.body, buildBody(scheme, cursor, pageSize)),
       );
     }
 
@@ -558,6 +621,8 @@ async function* walkWindows(
           const id = (walk.identity as (i: Record<string, unknown>) => string)(
             item,
           );
+          // An item without an identity cannot be told apart: kept as is.
+          if (id === '') return true;
           if (yielded.has(id)) return false;
           yielded.add(id);
           return true;
