@@ -72,7 +72,14 @@ export function resolveLink(
     throw refused('the link has a scheme without "//" and an authority');
   if (EMPTY_AUTHORITY.test(value))
     throw refused('the link has an empty authority');
+  // Userinfo is refused on the raw authority too: a WHATWG parser drops an
+  // empty one (`//@host/x`, `https://:@host/x`) and would request without
+  // it, where the reference refuses it (#384).
+  if (RAW_AUTHORITY.exec(value)?.[1]?.includes('@'))
+    throw refused('the link contains userinfo');
   if (value.includes('#')) throw refused('the link contains a fragment');
+  if (!isHttp(options.serverUrl))
+    throw refused('the server URL is not http or https');
   const base = baseFor(options);
   let resolved: URL;
   try {
@@ -84,10 +91,18 @@ export function resolveLink(
     throw refused('the link contains userinfo');
   if (resolved.hash || resolved.href.includes('#'))
     throw refused('the link contains a fragment');
-  if (resolved.origin !== options.serverUrl.origin)
+  // Origins are compared as strings, and every non-http(s) origin is the
+  // string "null": refuse those before the comparison.
+  if (!isHttp(resolved) || resolved.origin !== options.serverUrl.origin)
     throw new LinkRefused('Pagination left the API origin');
   return resolved;
 }
+
+/** The authority of a URI reference that has one (`//` after an optional scheme). */
+const RAW_AUTHORITY = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?\/\/([^/?#]*)/;
+
+const isHttp = (url: URL): boolean =>
+  url.protocol === 'https:' || url.protocol === 'http:';
 
 /** The base URL of §4.4.3's table for the field's `linkResolution`. */
 function baseFor({
