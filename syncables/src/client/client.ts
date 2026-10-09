@@ -47,6 +47,7 @@ import {
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
+  lowerCaseHeaders,
   type ListMethod,
   type Transport,
   type TransportRequest,
@@ -830,6 +831,24 @@ function mayHaveApplied(error: unknown): boolean {
   if (error instanceof HttpStatusError)
     return error.status >= 500 && error.status !== 503;
   return true;
+}
+
+/** JSON values equal in structure, whatever the order of object keys. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b))
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, i) => deepEqual(value, b[i]))
+    );
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]))
+  );
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -1928,10 +1947,14 @@ export function createApiClient(
       if (throttled?.retryAt !== undefined)
         write.notBefore = Math.max(write.notBefore ?? 0, throttled.retryAt);
       // An exhausted bucket holds every write counted against it: until the
-      // answer's time, or, without one, until this write's own backoff (set
-      // below, where the backoff is known).
-      if (throttled?.meaning === 'quotaExhausted' && throttled.retryAt)
-        pauseBucket(throttled.bucket, throttled.retryAt);
+      // answer's time, or, without one, at least the client's base backoff,
+      // whatever path the write's class takes below (the retry path extends
+      // it to this write's own backoff).
+      if (throttled?.meaning === 'quotaExhausted')
+        pauseBucket(
+          throttled.bucket,
+          throttled.retryAt ?? Date.now() + retry.baseDelayMs,
+        );
       const classified =
         error instanceof HttpStatusError
           ? classify(write, error, sentAfterRenewal, throttled)
@@ -2011,8 +2034,9 @@ export function createApiClient(
         const now = Date.now();
         const notBefore = Math.max(throttled.retryAt ?? 0, now + backoff);
         write.notBefore = notBefore;
-        // A quotaExhausted answer without a time still pauses its bucket,
-        // until this write's own backoff (the consumer's floor).
+        // A quotaExhausted answer without a time pauses its bucket until
+        // this write's own backoff (the consumer's floor), not only the base
+        // backoff set above.
         if (throttled.meaning === 'quotaExhausted' && !throttled.retryAt)
           pauseBucket(throttled.bucket, notBefore);
         const wait = notBefore - now;
@@ -2496,17 +2520,75 @@ export function createApiClient(
     }
   }
 
-  const conditionalTransport: Transport = async (request) => {
+  /** The operation a read request goes to; a POST list read (listMethod POST) is its path's post. */
+  function readOperation(
+    request: TransportRequest,
+  ): OperationObject | undefined {
     const path = request.url.pathname.slice(
       upstream.pathname.replace(/\/$/, '').length,
     );
     const matched = findRoute(Object.keys(doc.paths), path);
-    // A POST list read (x-list-method / listMethod POST) is its path's post.
-    const operation = matched
+    return matched
       ? doc.paths[matched.template]?.[
           request.method === 'POST' ? 'post' : 'get'
         ]
       : undefined;
+  }
+
+  /**
+   * A read counts against the same buckets as a write: it waits out an
+   * exhausted bucket (a quotaExhausted answer to any request) within what
+   * `remainingMs` says is left of the read's own time, else stops with
+   * RetryBeyondDeadline. Checked again after each sleep, in case another
+   * answer extended the pause meanwhile; a pause that did not move is taken
+   * as waited out (the `sleep` option may return early, in tests).
+   */
+  async function waitOutPauses(
+    operation: OperationObject | undefined,
+    remainingMs: () => number,
+  ): Promise<void> {
+    let sleptUntil = 0;
+    for (;;) {
+      const paused = pauseForOperation(operation);
+      if (paused <= 0) return;
+      const until = Date.now() + paused;
+      if (until <= sleptUntil) return;
+      const remaining = remainingMs();
+      if (paused > remaining)
+        throw new RetryBeyondDeadline(
+          `A rate limit the API declared exhausted holds this request until ${new Date(until).toISOString()}, longer than the read's remaining time (${remaining} ms)`,
+        );
+      await (options.sleep ?? defaultSleep)(paused);
+      sleptUntil = until;
+    }
+  }
+
+  /** A read's own quotaExhausted answer pauses the bucket for every request, writes included. */
+  async function noteReadThrottling(
+    response: TransportResponse,
+    receivedAt: number,
+  ): Promise<void> {
+    const throttled = classifyThrottling(throttling, {
+      status: response.status,
+      headers: lowerCaseHeaders(response.headers),
+      body: response.body,
+      receivedAt,
+    });
+    if (throttled?.meaning !== 'quotaExhausted') return;
+    // Without a time and a bucket window, the client's base backoff is the
+    // floor, as for a write.
+    pauseBucket(
+      throttled.bucket,
+      throttled.retryAt ?? receivedAt + retry.baseDelayMs,
+    );
+    await persistLater();
+  }
+
+  const readLimitMs =
+    options.limits?.timeoutMs ?? DEFAULT_READ_LIMITS.timeoutMs;
+
+  const conditionalTransport: Transport = async (request) => {
+    const operation = readOperation(request);
     // A paginated operation is not cached conditionally. An explicit
     // x-pagination that cannot be applied counts as paginated here; the read
     // itself fails on it (walkPages).
@@ -2518,55 +2600,15 @@ export function createApiClient(
       headers['if-none-match'] = cached.headers['etag'];
     if (cached?.headers['last-modified'])
       headers['if-modified-since'] = cached.headers['last-modified'];
-    // A read counts against the same buckets as a write: it waits out an
-    // exhausted bucket (a quotaExhausted answer to any request), within the
-    // read's time budget, and its own quotaExhausted answer pauses the
-    // bucket for every request, writes included.
-    // Checked again after each sleep, in case another answer extended the
-    // pause meanwhile; a pause that did not move is taken as waited out
-    // (the `sleep` option may return early, in tests).
-    let sleptUntil = 0;
-    for (;;) {
-      const paused = pauseForOperation(operation);
-      if (paused <= 0) break;
-      const until = Date.now() + paused;
-      if (until <= sleptUntil) break;
-      // What is left of the read's time: the running sync's budget, else
-      // the whole limit when no sync is running.
-      const remaining =
-        activeBudget?.remainingMs() ??
-        options.limits?.timeoutMs ??
-        DEFAULT_READ_LIMITS.timeoutMs;
-      if (paused > remaining)
-        throw new RetryBeyondDeadline(
-          `A rate limit the API declared exhausted holds this request until ${new Date(until).toISOString()}, longer than the read's remaining time (${remaining} ms)`,
-        );
-      await (options.sleep ?? defaultSleep)(paused);
-      sleptUntil = until;
-    }
+    // What is left of the read's time: the running sync's budget (this
+    // transport serves only sync()), else the whole limit.
+    await waitOutPauses(
+      operation,
+      () => activeBudget?.remainingMs() ?? readLimitMs,
+    );
     const raw = await readTransport({ ...request, headers });
-    const received = Date.now();
-    const response = {
-      ...raw,
-      headers: Object.fromEntries(
-        Object.entries(raw.headers).map(([k, v]) => [k.toLowerCase(), v]),
-      ),
-    };
-    const throttled = classifyThrottling(throttling, {
-      status: response.status,
-      headers: response.headers,
-      body: response.body,
-      receivedAt: received,
-    });
-    if (throttled?.meaning === 'quotaExhausted') {
-      // Without a time and a bucket window, the client's base backoff is the
-      // floor, as for a write.
-      pauseBucket(
-        throttled.bucket,
-        throttled.retryAt ?? received + retry.baseDelayMs,
-      );
-      await persistLater();
-    }
+    const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
+    await noteReadThrottling(response, Date.now());
     if (response.status === 304 && cached) return cached;
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
@@ -3757,7 +3799,7 @@ export function createApiClient(
         given: Record<string, unknown>,
       ): boolean =>
         Object.entries(fixed).every(([key, value]) =>
-          sameValue(given[key], value),
+          deepEqual(given[key], value),
         );
       const candidates = routes.filter(
         (r) =>
@@ -3776,11 +3818,21 @@ export function createApiClient(
           .map((r) => r.collection.itemsField),
       );
       const envelope = envelopes.size === 1 ? [...envelopes][0] : undefined;
+      const deadline = Date.now() + readLimitMs;
       return paginateOperation(doc, {
         ...pagination,
         ...(envelope === undefined ? {} : { itemsField: envelope }),
         path: template,
-        transport: readTransport,
+        // The exhausted buckets hold paginate()'s requests too, within its
+        // own read limit (not a sync's budget, even while one runs).
+        transport: async (request) => {
+          await waitOutPauses(readOperation(request), () =>
+            Math.max(0, deadline - Date.now()),
+          );
+          const response = await readTransport(request);
+          await noteReadThrottling(response, Date.now());
+          return response;
+        },
         pathParams: {
           ...options.constants,
           ...(doc.paths[path] ? {} : matched?.params),
