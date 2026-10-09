@@ -4,10 +4,13 @@ info:
   title: ClickUp filtered Workspace task pagination
   version: 1.0.0
   description: >-
-    ClickUp documents zero-based page numbers and a maximum of 100 tasks per
-    response. The current API reference declares no continuation field, so
-    this metadata describes page selection and the response envelope without
-    asserting a terminal-page signal.
+    Pagination Schemes 0.6.0: ClickUp documents zero-based page numbers
+    ("Page to fetch (starts at 0)") and "Responses are limited to 100 tasks
+    per page"; the response holds only `tasks`, with no continuation or
+    count field. The page role starts at 0, and a page with fewer than 100
+    tasks ends the list. ClickUp does not document that a short page is
+    the last one, so the end is assumed: a read is not complete, and no
+    absence is inferred from it.
 actions:
 - target: $.components
   update:
@@ -16,14 +19,24 @@ actions:
         type: pageNumber
         autoDetect: false
         description: >-
-          The page query parameter starts at 0 and responses are capped at
-          100 tasks. The API reference does not document a continuation field.
-          Pagination Schemes defines page-number requests as 1-based and does
-          not describe a response-less terminal rule, so no page role is
-          assigned here.
+          page starts at 0; responses are limited to 100 tasks per page; the
+          response has no continuation or count field
+          (https://developer.clickup.com/reference/getfilteredteamtasks,
+          checked 2026-10-08).
+        request:
+          queryParameters:
+            page:
+              role: page
+              start: 0
         response:
           envelope:
             itemsField: tasks
+          shortPage:
+            size: 100
+            assurance: assumed
+            description: >-
+              The reference documents only "Responses are limited to 100 tasks
+              per page"; it does not say that a short page is the last one.
 - target: $.paths['/v2/team/{team_Id}/task'].get
   update:
     x-pagination:

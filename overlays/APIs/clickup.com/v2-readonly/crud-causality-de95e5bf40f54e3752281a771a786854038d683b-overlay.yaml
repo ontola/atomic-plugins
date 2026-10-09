@@ -37,8 +37,6 @@ actions:
             urlTemplate: /v2/team/{team_Id}/task
             envelope:
               itemsField: tasks
-            x-list-query:
-              page: 0
 - target: $.paths['/v2/team'].get
   update:
     x-crud:

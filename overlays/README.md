@@ -750,18 +750,16 @@ the proxy parser. The Google Tasks importer fixture is
 `tests/google_tasks_syncables.test.ts`; its composition checks are
 `tests/test_google_tasks_readonly.py`. Real-account sync is not certified.
 
-## ClickUp preparation — pagination blocked
+## ClickUp preparation
 
 `catalog/2026-10-08-gitlab-tasks-clickup.json` is a prepared fourteen-entry
 candidate. It preserves the thirteen GitLab/Google Tasks entries and adds
-three ClickUp GET operations. It is not approved for production activation:
-ClickUp's page-number response supplies no documented continuation/count
-signal that the current importer can use. A Workspace with more than 100
-matching tasks would stop after its first page. Its zero-based page also
-conflicts with the current specification's one-based `page` role, so assigning
-that role would skip page zero. The generic specification
-gap is recorded in [openapi-extensions#25](https://github.com/pondersource/openapi-extensions/issues/25);
-no provider-specific runtime workaround or invented response field is used.
+three ClickUp GET operations. Task pages follow Pagination Schemes 0.6.0:
+`page` starts at 0, and a page with fewer than 100 tasks ends the list, with
+`assurance: assumed`, since ClickUp documents only the 100-task cap. Every
+task read is therefore not complete, and no deletion is inferred from it.
+Activation needs a Syncables release that reads `start` and `shortPage`: an
+older consumer would ask for page 1 first and skip page 0.
 
 ClickUp OAuth has no selectable read scopes; the proxy profile limits reads
 to these three operations, while the provider token can have broader access
