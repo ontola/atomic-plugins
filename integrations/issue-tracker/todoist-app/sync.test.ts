@@ -139,7 +139,9 @@ describe('import', () => {
       [p.priority]: 'Urgent',
       [p.project]: 'Inbox',
     });
-    expect(plants).not.toHaveProperty(TASK_BODY);
+    // The catalog lens copies an empty description as an empty body
+    // (todoist-task-issue-v2 maps /description by identity).
+    expect(plants[TASK_BODY]).toBe('');
     expect(plants).not.toHaveProperty(p.lastSeen);
     const source = JSON.parse(plants[p.source] as string);
     expect(source).toMatchObject({

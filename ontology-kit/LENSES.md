@@ -321,6 +321,35 @@ difference from #2069's `lens.ts` at `bab52555`:
 release 1 lenses are version 2 (they need pointers), so a v1-only host
 would skip all of them. Release 2's Clockify, Todoist and Raindrop lenses are version 3: a host that runs only version 2 would skip them, so it stays pinned to `lenses/v1` until it runs version 3.
 
+## Bundling a catalog lens
+
+A plugin can run a published lens without any host support: `build` also
+writes `ontology-kit/lenses.mjs` (with `lenses.d.mts`), one export per
+published lens (`todoistTaskIssueV2` for `todoist-task-issue-v2`) holding
+what a plugin runs: `@id`, `release`, `name`, `source`, `target` and
+`mapping`. Examples and limits stay in the published files. A plugin
+imports the one it uses, with `lens.mjs` to run it, by relative path, as it
+does `terms.mjs`:
+
+```ts
+import { lensPut } from '../../../ontology-kit/lens.mjs';
+import { todoistTaskIssueV2 } from '../../../ontology-kit/lenses.mjs';
+```
+
+- Each export is `/* @__PURE__ */ JSON.parse('…')`, so esbuild leaves out
+  the lenses a plugin does not import; `lenses`, all of them by name,
+  bundles every one.
+- The data is exactly the published file's, checked by `check` (freshness)
+  and by `lens-catalog.test.mjs`. A lens version is immutable, so a bundle
+  never runs a different mapping than the file at its `@id`; a new lens
+  version reaches a plugin only through a rebuild and a new app version.
+- The github.io gate still applies: the bundle carries the base, so the
+  plugin's catalog entry stays `enabled: false` (`ontology-kit/README.md`,
+  "Gate").
+- First use: the Todoist drive app, 0.3.0 (`integrations/issue-tracker/
+todoist-app/lens.ts`), writes its `issue-v1` rows through
+  `todoist-task-issue-v2`'s backward put.
+
 ## Trust and review (Q-089)
 
 - **Catalog lenses are reviewed by being in a release.** A host trusts the
