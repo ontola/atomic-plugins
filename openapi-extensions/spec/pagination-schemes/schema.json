@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.4.0",
-  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3). Covers validation rules 1-4 and 8-10; validate.py adds 5 and 11.",
+  "title": "Pagination Schemes 0.5.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1). Covers validation rules 1-4, 8-10 and 12-16; validate.py adds 5, 11, 17 and 18.",
   "$ref": "#/$defs/scheme",
   "$defs": {
     "scheme": {
@@ -10,16 +10,81 @@
       "required": ["type"],
       "anyOf": [{ "required": ["request"] }, { "required": ["response"] }],
       "properties": {
-        "type": { "enum": ["pageNumber", "pageToken", "nextLink", "incrementalSync"] },
+        "type": { "enum": ["pageNumber", "pageToken", "nextLink", "incrementalSync", "rangeWindow"] },
         "description": { "type": "string" },
         "autoDetect": {
           "oneOf": [{ "type": "boolean" }, { "$ref": "#/$defs/autoDetect" }]
         },
+        "window": { "$ref": "#/$defs/window" },
         "request": { "$ref": "#/$defs/request" },
         "response": { "$ref": "#/$defs/response" }
       },
       "patternProperties": { "^x-": true },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": { "required": ["type"], "properties": { "type": { "const": "rangeWindow" } } },
+      "then": {
+        "description": "Rules 12, 14 (window fields counted by validate.py) and 16.",
+        "required": ["window", "request"],
+        "properties": { "autoDetect": { "const": false } }
+      },
+      "else": {
+        "description": "Rules 12 and 14: no window, and no window role, outside a rangeWindow scheme.",
+        "not": { "required": ["window"] },
+        "properties": { "request": { "$ref": "#/$defs/pagedRequest" } }
+      }
+    },
+    "pagedRequest": {
+      "type": "object",
+      "properties": {
+        "queryParameters": { "$ref": "#/$defs/pagedFields" },
+        "bodyFields": { "$ref": "#/$defs/pagedFields" },
+        "headerFields": { "$ref": "#/$defs/pagedFields" }
+      }
+    },
+    "pagedFields": {
+      "type": "object",
+      "additionalProperties": {
+        "not": {
+          "required": ["role"],
+          "properties": { "role": { "enum": ["windowStart", "windowEnd", "windowRange"] } }
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": ["unit", "format", "bounds", "cap"],
+      "properties": {
+        "unit": { "enum": ["day", "second", "integer"] },
+        "format": { "enum": ["date", "basicDate", "dateTime", "unixSeconds", "integer"] },
+        "bounds": { "enum": ["closed", "halfOpen"] },
+        "cap": { "type": "integer", "minimum": 1 },
+        "minimumWidth": { "type": "integer", "minimum": 1 },
+        "field": { "type": "string", "pattern": "^(/([^~]|~[01])*)*$" },
+        "timeZone": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "Rule 13: format fits unit.",
+          "if": { "required": ["unit"], "properties": { "unit": { "const": "day" } } },
+          "then": { "properties": { "format": { "enum": ["date", "basicDate"] } } }
+        },
+        {
+          "if": { "required": ["unit"], "properties": { "unit": { "const": "second" } } },
+          "then": { "properties": { "format": { "enum": ["dateTime", "unixSeconds"] } } }
+        },
+        {
+          "if": { "required": ["unit"], "properties": { "unit": { "const": "integer" } } },
+          "then": { "properties": { "format": { "const": "integer" } } }
+        },
+        {
+          "description": "Rule 12: timeZone only with unit day.",
+          "if": { "required": ["unit"], "properties": { "unit": { "const": "day" } } },
+          "else": { "not": { "required": ["timeZone"] } }
+        }
+      ]
     },
     "application": {
       "type": "object",
@@ -68,14 +133,35 @@
         "schema": { "type": "object" },
         "role": {
           "anyOf": [
-            { "enum": ["page", "pageSize", "offset", "pageToken", "cursor", "previousPageToken", "syncToken"] },
+            {
+              "enum": [
+                "page",
+                "pageSize",
+                "offset",
+                "pageToken",
+                "cursor",
+                "previousPageToken",
+                "syncToken",
+                "windowStart",
+                "windowEnd",
+                "windowRange"
+              ]
+            },
             { "type": "string", "pattern": "^x-" }
           ]
         },
-        "required": { "type": "boolean" }
+        "required": { "type": "boolean" },
+        "template": {
+          "description": "Rule 15: {start} and {end} once each, no other braces.",
+          "type": "string",
+          "pattern": "^(?:[^{}]*\\{start\\}[^{}]*\\{end\\}[^{}]*|[^{}]*\\{end\\}[^{}]*\\{start\\}[^{}]*)$"
+        }
       },
       "patternProperties": { "^x-": true },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": { "required": ["role"], "properties": { "role": { "const": "windowRange" } } },
+      "then": { "required": ["template"] },
+      "else": { "not": { "required": ["template"] } }
     },
     "response": {
       "type": "object",

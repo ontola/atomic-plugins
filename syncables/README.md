@@ -23,6 +23,20 @@ Syncables builds on three complementary projects:
 | [openapi-extensions](../openapi-extensions/README.md) | Shared vocabulary for the missing behavior: [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) describe how to reach the next page; [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) describes collections, record identities and operation effects. Syncables implements a subset of these specifications. |
 | [overlays](../overlays/README.md) | Reusable additions to API descriptions, so collection and pagination metadata can be maintained separately from the provider's document. Dated catalogs pair documents with their overlay revisions. |
 
+The extension versions this source reads, against the specifications in
+[`openapi-extensions/spec/`](../openapi-extensions/README.md):
+
+| Extension | Version | What Syncables reads |
+| --- | --- | --- |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
+| [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
+
+The other specifications there (Filtering, Runtime Schemas, the
+authentication and webhook extensions) are not read by Syncables.
+
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
 it does not look up a directory or catalog on each request. An API whose document
@@ -170,10 +184,11 @@ A write the server answers with a non-2xx status is classified. The defaults
 | Response | Class | What the client does |
 | --- | --- | --- |
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
+| A response that is throttling under the document's `x-throttling` ([below](#throttling)): a matching signal, or any 429 | `retry` | Sent again no earlier than the earliest retry time the response gives, else after the backoff |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
-| 403 with `Retry-After` or `x-ratelimit-remaining: 0` | `retry` | A rate limit, as GitHub sends it |
+| 403 with `Retry-After` or `x-ratelimit-remaining: 0`, when the document declares no `x-throttling.signals` | `retry` | A rate limit, as GitHub sends it; with signals declared, a 403 is throttling only when a signal matches |
 | Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
-| 408, 425, 429 | `retry` | Backoff retry, or the `Retry-After` delay |
+| 408, 425 | `retry` | Backoff retry, or the `Retry-After` delay |
 | Every other 4xx: 400, 404 or 410 to a create or update, 405, 409, 413, 415, 422, ... | `permanent` | The write becomes `failed` at once, after 1 attempt |
 | Anything else: 5xx, and a 1xx or 3xx the transport passed on | `retry` | Backoff retry, or the `Retry-After` delay; a create's 5xx other than 503 becomes `uncertain` without a usable idempotency key ([Uncertain creates](#uncertain-creates)) |
 
@@ -212,10 +227,62 @@ such responses as `permanent` to catch that.
 
 Set `classifyWriteFailure` to change the classes. It receives the write's
 `type`, the HTTP `method`, `status`, lower-cased `headers`, the response
-`body`, `resource`, `id` and `afterRenewal`, and returns `'retry'`,
-`'permanent'`, `'auth'` or `'satisfied'`. A classifier that throws or returns
-another value gets the default class; `satisfied` for a create or update
-counts as `permanent`.
+`body`, `resource`, `id`, `afterRenewal`, `throttling` (the verdict below,
+when the response is throttling) and `signalsDeclared`, and returns
+`'retry'`, `'permanent'`, `'auth'` or `'satisfied'`. A classifier that
+throws or returns another value gets the default class; `satisfied` for a
+create or update counts as `permanent`.
+
+#### Throttling
+
+The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
+(0.2.0-draft) lets a document say, at the root `x-throttling`, which
+response headers report the rate limit (`headers`: roles `limit`,
+`remaining`, `used`, `reset` and `retryAfter`, the last two with a time
+unit) and which responses are rate-limit refusals (`signals`: a status
+list plus a header or JSON-body predicate, with the meaning `throttled` or
+`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
+`declaredThrottling` reads it and `classifyThrottling` (both exported)
+applies it to a response, after the spec's `classify()`: the first signal
+that matches decides; without one, a 429 is `throttled` (with or without a
+declaration) and nothing else is throttling. The earliest retry time is
+the later of the `retryAfter` time and, for `quotaExhausted` or
+`remaining: 0`, the `reset` time; else the response time plus the signal's
+`minDelaySeconds`; else, for `quotaExhausted` with a bucket whose window is
+declared, plus that window; else the client's own backoff. An absolute time
+is measured against both the client's clock and the response's `Date`
+header, taking the later, so neither a wrong clock nor a wrong `Date` makes
+it earlier; a header value that does not parse in its declared unit is
+ignored. When no `retryAfter` role is declared, the standard `Retry-After`
+header is read as RFC 9110 defines it, as before the extension.
+
+For a write, a throttling verdict means `retry`, sent again no earlier than
+that time and never below the backoff. The time is stored with the queued
+write (`notBefore` in the outbox), so a restart or a `resolveWrite` `retry`
+keeps it: a restored or retried write waits it out too. A time further away
+than `retry.maxRetryAfterMs` is not cut short: the write becomes `failed`
+with `lastError` naming the time and the cap, since the extension forbids
+retrying earlier and allows giving up; `resolveWrite` `retry` queues it
+again, and it fails again at once while the time is still that far away. A
+`quotaExhausted` answer, to a write or to a read, also holds back every
+other request counted against the same bucket (the operation's
+`x-throttling` selection, else the root `applies`; every request when the
+signal names no bucket) until that time, or, when it carries no time and
+its bucket has no declared window, until the throttled write's own
+backoff; the paused buckets are stored in the outbox too. A write held
+that way longer than `retry.maxRetryAfterMs` fails with `lastError` "Held
+until … not sent" rather than waiting unseen. A create answered by a 5xx
+stays `uncertain` even when a declared signal matches the response: the
+extension says such a response may follow partial processing, and that
+"not applied" is only an inference ([Uncertain creates](#uncertain-creates)).
+For a read, the client's transport first waits out a paused bucket of the
+request's operation (through `sleep`; a pause longer than `limits.timeoutMs`
+stops the read with an error), then the budget waits the earliest retry
+time of a throttled answer and sends the request again, up to
+`limits.maxRetries` times, or stops with "API retry delay exceeds the
+remaining read time"; a throttled answer without a time is returned to the
+read as before. Pacing requests against the announced `limits` is not
+implemented, and nothing here has been checked against a real provider.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -360,7 +427,7 @@ update that is not in flight, the client looks for evidence:
 | `filtered` | A GET of the record answers 2xx with a JSON object whose identity field is the record's id, and that is not a read tombstone | Stay `pending` and are sent on the returned record, which becomes the confirmed copy; a field it changed under an update is a conflict (`onConflict`), as for any refresh |
 | `unknown` | The GET answers any other status, its 2xx body is not that record, it throws, the item path declares no GET, or `missingRecordChecks` is `'none'`; for a collection with a deletion feed, only once this sync's feed read has no tombstone for it | Fail as for `deleted`, with `missingRecord: 'unknown'` and `lastError` "Record <id> is not in the refreshed collection <collection> (...)" |
 
-`x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md),
+`x-completeness` is the draft [Collection Completeness extension](../openapi-extensions/spec/collection-completeness/README.md) (0.1.0-draft),
 read from the collection's CRUD Causality definition, which covers its fixed
 `listQuery`/`listBody` (or the older `x-list-query`/`x-list-body`), else from
 its list operation, which counts only
@@ -432,7 +499,7 @@ client was sent on the last known copy.)
 ### Deletion feeds
 
 A collection can declare the operation that reports its deletions, with the
-draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md):
+draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md) (0.2.0-draft):
 `x-deletion-feed` on its CRUD Causality definition, else on its list
 operation.
 
@@ -807,8 +874,14 @@ pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
 tombstones of such a collection. The write fields `lastStatus`
 and `missingRecord`, the state `blocked` and the top-level `authBlock`,
-`feedCursors` and `feedTombstones` were added within version `1`; a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Set `outboxNamespace` to
+`feedCursors` and `feedTombstones` were added within version `1`, as were
+the write field `notBefore` (a throttling answer's earliest retry time) and
+the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that does not parse still blocks the client
+(`status` 0) until `authRenewed()`. Downgrading: an older syncables that
+reads this outbox does not know `notBefore` and `throttlingPauses` and
+drops them, so it may send a held write before the time the API asked for,
+though never a second time; the version stays `1` because every write it
+holds is still one that older client can read and send. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -982,9 +1055,15 @@ const { records, ontology, errors } = await readPlatform(document, {
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
   collection's read with "No items array at <path>", never an empty read.
-  Without it (or with `itemsField: null`), the array is located as before: a
-  top-level array body, else the response schema's array property, else a
-  common envelope name (`items`, `data`, `results`, `records`, `content`).
+  `itemsField: null` (or `""`) says the body root is the array, and an item
+  that is not an object fails the read ("Item <n> at <path> is not an
+  object") instead of being dropped. Without an envelope, the pagination
+  scheme's own `response.envelope` applies (Pagination Schemes §4.4.2); else
+  the array is located as before: a top-level array body, else the response
+  schema's array property, else a common envelope name (`items`, `data`,
+  `results`, `records`, `content`). `ApiClient.paginate` applies the
+  Collection Object's envelope to its own list operation too. Dot-paths may
+  bracket-escape a segment that holds a `.` (`meta["page.info"].next`).
 - **Pagination** follows the operation's pagination scheme: page numbers or
   offsets, page tokens or cursors, and next links in the body or a `Link`
   header. A cursor declared in `request.bodyFields` travels in the JSON body
@@ -1011,54 +1090,139 @@ const { records, ontology, errors } = await readPlatform(document, {
   `values` are keyed by property shortname, and `date-time` strings are
   converted to epoch milliseconds.
 - **Limits** (`DEFAULT_READ_LIMITS`): 10,000 requests, 5,000 records and 30
-  minutes per read, plus at most 3 retries of a 429 per request, each after
-  its `Retry-After`. When a limit is reached, the read stops. It keeps the
+  minutes per read, plus at most 3 retries per request of a 429 or a
+  response a declared throttling signal matches, each after the earliest
+  retry time it gives (`Retry-After`, or the declared headers). When a limit is reached, the read stops. It keeps the
   records read so far and reports the stop in `errors`.
 
 `paginate(document, { transport, path, method, pathParams, query, body,
-pageSize })` walks every page of one operation, without `crudResources`.
+pageSize, range })` walks every page of one operation, without `crudResources`.
+
+An operation whose `x-pagination` applies a `rangeWindow` scheme
+(Pagination Schemes 0.5.0 §4.6: no page parameter, at most `cap` items per
+answer, such as Moneybird's financial mutations) is read over a range of
+one item field that the caller chooses: `range: { start, end }` for
+`paginate`, or `ranges(collection, path)` for `readCollections` and
+`readPlatform`, both bounds in the window's format. The whole range is
+asked first; an answer with `cap` items or more is full, and its window is
+halved (the first half holding the extra unit), depth first, down to
+`2 × minimumWidth`. A full window that cannot be split ends the read with
+`WindowReadError`. An item two windows return is kept once. Such a read is
+never complete in the Collection Completeness sense: its snapshot has
+`complete: false` and `notComplete` saying why, with no error, so the
+client does not apply it (it applies complete snapshots only). Without a
+range the collection is left unread, with an error. A `rangeWindow` scheme
+is never auto-detected, and `x-pagination` that applies it with another
+scheme throws `PaginationSchemeError`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
-- **Unreleased**: Two reads that could end early and look complete now end
-  with an error (#384 items 1 and 2): an explicit `x-pagination` whose
-  scheme is undeclared, invalid or made invalid by its overrides (a typo
-  such as `linkResolution.base: servr`) fails the read before any request
-  (`PaginationSchemeError`, exported) instead of being dropped, and a `Link`
-  header whose `rel` lists several relation types (`rel="last next"`) is
-  read as the next page, as RFC 8288 and Pagination Schemes §4.4.3 say.
-  `parseLinkHeader` takes the relation to look for as a second argument.
-- **Unreleased**: A Collection Object's fixed request values are read from
-  the standard CRUD Causality 0.4.0 fields `listMethod`, `listQuery` and
-  `listBody` (§4.2.1), with the older `x-list-method`, `x-list-query` and
-  `x-list-body` as the fallback, field by field; when both are present the
-  standard field applies. A read sends the path parameters, `listQuery`,
-  `listBody`, then the pagination fields merged over them per page, as
-  before.
-- **Unreleased**: The collection read honours the CRUD Causality Collection
-  Object's `envelope.itemsField` (a dot-path to the items array, as the feed
-  read already did for `x-deletion-feed`), so a list whose items sit at
-  `data.transactions` reads completely and its deletion feed is read. A body
-  without an array at the declared path fails the collection's read with a
-  clear error. Without the declaration, items are located as before
-  (ontola/atomic-plugins#373).
-- **Unreleased**: Relative next links (Pagination Schemes 0.4.0 §4.4.3,
-  §4.4.4): a `nextLink` value is resolved against the request URL, or per
-  the field's `linkResolution` against the server URL or a declared base,
-  then checked before it is requested: the server's origin only, no
-  userinfo or fragment, a string without whitespace, control characters,
-  backslashes or non-ASCII characters, no three leading slashes, no scheme
-  without `//host`, no empty authority. A refused link ends the read with an
-  error instead of being requested or taken as the last page (before, a
-  non-string value was coerced, and `/next#` was followed); `""` ends
-  paging; the URL requested is exactly the checked one.
-  `resolveLink`/`LinkRefused` are exported. The scheme validator accepts the roles added up to 0.4.0
-  (`previousLink`, `previousPageToken`, `nextSyncToken`, `offset`,
-  `syncToken`) and checks `linkResolution` (§9 rules 8–10). The
-  `incrementalSync` scheme type and the scheme-level `response.envelope`
-  are still not read.
+- **0.21.0**: Consumer support for new extension revisions (Pagination
+  Schemes 0.4.0 and 0.5.0, CRUD Causality 0.4.0, Throttling 0.2.0), and the
+  pagination and envelope fixes their reviews found. Behaviour changes to
+  know before upgrading: a next link that leaves the server's origin, or is
+  otherwise refused, now ends the read with an error instead of being
+  followed or taken as the last page; an explicit `x-pagination` whose
+  scheme cannot be applied now fails the read instead of returning one page
+  as complete; a Collection Object's `envelope.itemsField` is honoured, with
+  `null` meaning the body root, and a pagination scheme's
+  `response.envelope` is now read strictly too, so a body without an array
+  at its `itemsField` fails the read where the heuristic used to locate one
+  (the Zendesk and Google overlays declare one); a 403 is no longer taken
+  as a rate limit by its headers once the document declares throttling signals; a throttling
+  wait longer than `retry.maxRetryAfterMs` now fails the write instead of
+  retrying early, and that time is kept across restarts; a create answered
+  by a 5xx stays uncertain even when a throttling signal matches it.
+  - Pagination Schemes 0.4.0, relative next links (§4.4.3, §4.4.4): a
+    `nextLink` value is resolved against the request URL, or per the
+    field's `linkResolution` against the server URL or a declared base,
+    then checked before it is requested: the server's origin only (http or
+    https), no userinfo (in the raw authority too) or fragment, a string
+    without whitespace, control characters, backslashes or non-ASCII
+    characters, no three leading slashes, no scheme without `//host`, no
+    empty authority. A refused link ends the read with an error (before, a
+    non-string value was coerced, and `/next#` was followed); `""` ends
+    paging; the URL requested is exactly the checked one.
+    `resolveLink`/`LinkRefused` are exported. The scheme validator accepts
+    the roles added up to 0.4.0 (`previousLink`, `previousPageToken`,
+    `nextSyncToken`, `offset`, `syncToken`), checks `linkResolution` (§9
+    rules 8–10, the `url` by the spec schema's pattern) and a scheme-level
+    `envelope`. The `incrementalSync` scheme type is still not read.
+  - Pagination Schemes 0.5.0, `rangeWindow` (§4.6): a read by windows over
+    a caller-chosen range (`range` for `paginate`, `ranges` for
+    `readCollections`/`readPlatform`), halving full windows,
+    `WindowReadError` for a full window too narrow to split, items two
+    windows return kept once, and `complete: false` with `notComplete` for
+    every such read. The validator checks §9 rules 12–17 (rule 18, the
+    window fields against the operation's parameters, is left to the spec's
+    validator). Exports `WindowReadError`, `halves` and the window types.
+  - Two reads that could end early and look complete now end with an error
+    (#384): an explicit `x-pagination` whose scheme is undeclared, invalid
+    or made invalid by its overrides fails the read before any request
+    (`PaginationSchemeError`, exported) instead of being dropped, and a
+    `Link` header whose `rel` lists several relation types (`rel="last
+    next"`) is read as the next page (RFC 8288). `parseLinkHeader` takes the
+    relation to look for as a second argument.
+  - Envelopes (#373, #384): the collection read honours the CRUD Causality
+    Collection Object's `envelope.itemsField` (a dot-path, as the feed read
+    already did), so a list whose items sit at `data.transactions` reads
+    completely and its deletion feed is read; `null` or `""` means the body
+    root, for the list read and the feed alike; a body without an array at
+    the declared path, or with an item that is not an object, fails the
+    read with a clear error instead of reading as empty (the deletion feed
+    still skips non-object items); the pagination scheme's own
+    `response.envelope` is read, strictly (by `rangeWindow` reads too), and
+    `ApiClient.paginate` applies
+    the Collection Object's envelope (when several fixed-read collections
+    share the URL and method, the one fixing the most of the query and body
+    values the call sends, nested values compared whatever their key order;
+    none when that leaves none, or several with different envelopes);
+    dot-paths accept bracket escapes
+    (`["a.b"]`). Without a declaration, items are located as before.
+  - CRUD Causality 0.4.0, fixed reads (§4.2.1): a Collection Object's
+    `listMethod`, `listQuery` and `listBody` are read first, with the older
+    `x-list-method`, `x-list-query` and `x-list-body` as the fallback, field
+    by field; when both are present the standard field applies. `listMethod`
+    is `GET` or `POST` as written, `x-list-method` in any case; `listQuery`
+    values are strings, while a non-string `x-list-query` value is sent as
+    its JSON text. A read sends the path parameters, `listQuery`,
+    `listBody`, then the pagination fields merged over them per page, as
+    before.
+  - Throttling 0.2.0, headers and signals: the document's root
+    `x-throttling` drives rate-limit handling: `headers` give the header
+    roles and units, `signals` say which responses are rate-limit refusals,
+    and the earliest retry time follows the spec (the later of `retryAfter`
+    and `reset`, measured against both clocks; else `minDelaySeconds`, else
+    the bucket window, else the backoff). `defaultWriteFailureClass` calls a
+    matching signal or a 429 `retry`; with signals declared, a 403 that
+    matches none is a refused credential (the header heuristic stays for
+    documents without signals). A write is never sent before the earliest
+    retry time, which is stored with the write (`notBefore`) so a restart or
+    a `resolveWrite` retry keeps it; one further away than
+    `retry.maxRetryAfterMs` fails instead of being retried early. A
+    `quotaExhausted` answer, to a write or a read, pauses every request
+    counted against the bucket (stored too; without a time, until at least
+    the client's base backoff, whatever becomes of the write), a read
+    counting against its own operation's buckets (a POST list read against
+    its path's `post`) and waiting within what is left of its own time: the
+    sync's budget for `sync()`, its own `limits.timeoutMs` for
+    `ApiClient.paginate`, which now waits out paused buckets too; a write held past the cap
+    fails with a `lastError` saying why, and a read that cannot wait within
+    its time stops with an error. The read budget waits the same time for a
+    declared signal, not only for a 429. `WriteFailure` gains `throttling`
+    and `signalsDeclared`; `declaredThrottling`, `classifyThrottling`,
+    `headerTime` and `operationBuckets` are exported. Pacing against the
+    announced `limits` is not implemented. The earliest retry time holds a
+    write on every path (uncertain, blocked, failed), so a `resolveWrite`
+    retry or `authRenewed()` does not send it early. Downgrading: the outbox
+    stays at version 1, so an older syncables reads it but drops `notBefore`
+    and `throttlingPauses`; it may send a held write before the API's time,
+    but never twice.
+  - Fixtures: the deletion declarations (Deletion Feeds, Collection
+    Completeness) run as the specs' own examples, with pending-edit recovery
+    on them.
 - **0.20.0**: A queued update (PUT or PATCH) whose record a complete
   refresh no longer returns is held rather than sent on its last known copy,
   in memory as after a restart; the client checks the record, within the

@@ -1,6 +1,6 @@
 # OpenAPI Collection Completeness Extension
 
-**Spec version:** 0.1.0-draft
+**Spec version:** 0.2.0-draft
 
 ---
 
@@ -24,7 +24,11 @@ that a list is complete. This extension adds that one statement:
 * an `x-completeness` field on a [CRUD Causality](../crud-causality/README.md)
   Collection Object (§4.2 there), or on the Operation Object of a `list`
   operation, stating that a complete read of the collection returns every
-  member, and what an object's absence from such a read means.
+  member, and what an object's absence from such a read means;
+* since 0.2.0, what a `404` or `410` means when a consumer reads an absent
+  object by its own URL (`notFound`, §4.3), and what the members of a nested
+  collection mean when the object that scopes it is itself absent
+  (`parentAbsent`, §4.4).
 
 It does not describe deletion feeds (tombstones, `deleted_since`
 parameters); the [Deletion Feeds extension](../deletion-feeds/README.md)
@@ -45,6 +49,19 @@ components:
           urlTemplate: /pets
           x-completeness:        # Completeness Object (§4.1)
             absent: deleted
+```
+
+A nested collection whose absent objects must be read to be classified, and
+whose members lose their scope when their parent goes (since 0.2.0):
+
+```yaml
+      collections:
+        listTasks:
+          urlTemplate: /lists/{listId}/tasks
+          x-completeness:
+            absent: removed
+            notFound: unavailable   # §4.3
+            parentAbsent: unavailable   # §4.4
 ```
 
 Or, for a document without `crudResources`, on the list operation itself:
@@ -97,6 +114,8 @@ selection, is not a complete read (§3) under either placement.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `absent` | `deleted` \| `removed` | **Yes** | What it means when an object that was a member is absent from a complete read. See §4.2. |
+| `notFound` | `deleted` \| `unavailable` | No | Since 0.2.0. What a `404` or `410` from the resource's `read` operation means for an object absent from a complete read. See §4.3. Default: `deleted`. Not allowed with `absent: deleted`. |
+| `parentAbsent` | `unavailable` | No | Since 0.2.0. The members of this collection are unavailable once the object that supplies one of its path variables is concluded gone. See §4.4. Only on a Collection Object. |
 | `description` | string | No | Human-readable description. |
 | `x-*` | any | No | Extension fields. |
 
@@ -109,7 +128,7 @@ MAY be present or absent.
 
 | Value | Meaning of an absent object |
 |-------|-----------------------------|
-| `deleted` | It no longer exists: the resource's `read` operation, if it has one, answers 404 or 410 for it. Objects are members of this collection for as long as they exist (no archiving, no moving to another collection). |
+| `deleted` | It no longer exists: the resource's `read` operation, if it has one, answers 404 or 410 for it. Objects are members of this collection for as long as they exist (no archiving, no moving to another collection), and do not leave the caller's reach while they exist (no unsharing, no loss of membership or permission that hides them from the list). |
 | `removed` | It is no longer a member of this collection. It MAY still exist, for example archived or moved to another collection, and remain readable and writable through its own URL. |
 
 For a resource that declares `x-read-tombstone` ([Deletion Feeds](../deletion-feeds/README.md)
@@ -119,6 +138,102 @@ For a resource that declares `x-read-tombstone` ([Deletion Feeds](../deletion-fe
 `removed` still tells a consumer that the list does not filter by default; it
 does not tell it whether the object exists. A consumer that needs to know
 reads the object itself.
+
+### 4.3 Reading an absent object
+
+Added in 0.2.0. When a collection declares `absent: removed`, or no
+Completeness Object, a consumer that wants to know what became of an absent
+object reads it with the resource's `read` operation. The answer means:
+
+| Answer | Meaning |
+|--------|---------|
+| 2xx, the object, without a read-tombstone marker | It exists; it left the collection (or, without a Completeness Object, the list does not return it). Its current values are the body. |
+| 2xx, the object, with the resource's `x-read-tombstone` marker ([Deletion Feeds](../deletion-feeds/README.md) §4.4) | It was deleted, as that section defines, possibly restorably. |
+| `404` or `410` | What `notFound` says (below). |
+| Anything else, a failure, or no read made | Nothing: the object's state is unknown until a later read. |
+
+| `notFound` | Meaning of a `404` or `410` |
+|------------|-----------------------------|
+| `deleted` (default) | The object was deleted. |
+| `unavailable` | This caller can no longer read the object. The API does not say whether it was deleted, moved out of the caller's reach, or the caller lost access. |
+
+For `unavailable`, a consumer MUST NOT report the object as deleted, and MUST
+NOT infer any other state (completed, archived) from the answer. It keeps the
+object's last known values, marked as unavailable. It MUST NOT send a write
+it queued for the object without its user's or application's decision. A
+later complete read that returns the object, or a later 2xx read of it,
+supersedes the mark.
+
+Declare `notFound: deleted` only when the provider documents a `404` or
+`410` for its objects as their deletion, and `unavailable` when it does not
+say, or documents other causes (a missing permission answered as `404`, a
+deleted container). The default is `deleted` because 0.1.0 consumers read a
+`404` that way; a new declaration SHOULD state `notFound` explicitly.
+
+`notFound` describes the resource's `read`, not one collection. Once any
+collection of a resource states it, that value applies to every read of that
+resource's objects, including an object reached through a collection that
+declares no Completeness Object or leaves `notFound` out; every
+`absent: removed` collection of the resource then states the same value
+(§7).
+
+`notFound` is not allowed with `absent: deleted`: such a collection's absent
+objects are deleted without a read, and §4.2 already says that their read
+answers `404` or `410`.
+
+How many absent objects a consumer reads in one pass is its own policy. An
+object it does not read in a pass stays unknown, not deleted, until it does.
+
+### 4.4 Nested collections
+
+Added in 0.2.0. A collection is _nested_ when its `urlTemplate` has a path
+variable that another resource's `identity.bindings` binds to one of that
+resource's own fields (CRUD Causality §4.1.2): `/lists/{listId}/tasks` is
+nested in task lists when the task-list resource binds `listId`. That
+resource is the collection's _parent_, and the object whose field supplied
+the variable for a read is the _parent object_ of that read. `parentAbsent`
+requires exactly one parent: a collection with path variables bound by two
+or more other resources has no single parent object, and this version does
+not describe it.
+
+`parentAbsent` takes one value in this version, `unavailable`. Once a
+consumer has concluded that a parent object is gone (deleted or unavailable),
+in one of the three ways below, every member last read in that parent
+object's collection is marked `unavailable`, as `notFound: unavailable`
+(§4.3) defines: it can no longer be read through this collection, and its
+fate is not known. Deleting a member needs evidence about the member itself:
+its own read, its own tombstone, or its absence from a complete read of a
+collection declared `absent: deleted`.
+
+The three ways to conclude a parent object gone:
+
+1. it was a member of a parent-resource collection declared
+   `absent: deleted`, and is absent from a complete read of it (§4.2);
+2. it was a member of one declared `absent: removed`, is absent from a
+   complete read of it, and its own read showed it deleted or unavailable
+   (§4.3);
+3. a [Deletion Feeds](../deletion-feeds/README.md) tombstone reported it
+   deleted: a feed tombstone (§4.3 there) or a read tombstone (§4.4 there).
+
+A parent object absent from a collection that declares no Completeness Object
+is not concluded gone by that absence; its own read then classifies it under
+the resource's `notFound`, as above. A parent object that its read shows
+still exists has only left that collection; its nested collection is read as
+before.
+
+A consumer applies `parentAbsent` without reading the nested collection: that
+read would answer for a parent that is gone. It does not mark a member that a
+read of the pass returned (it moved, and is present). A later read that
+returns the parent or a member supersedes the marks. Without `parentAbsent`, a
+consumer draws no conclusion about the members: the nested collection can no
+longer be read completely, so §3 applies. The marks go one level only: a
+member marked unavailable is not a parent concluded gone for collections
+nested in its own resource.
+
+**Later versions.** A `deleted` cascade (members deleted with their parent)
+is left out of this version. It needs a stronger guarantee than this version
+can state: that members never move out of their parent and never leave the
+caller's reach while it exists.
 
 ## 5. Applying via OpenAPI Overlays
 
@@ -170,6 +285,53 @@ issue of the project, and its Collection Object can declare
 `absent: deleted` only when they cannot. The same declaration on the list
 operation would not apply to that collection (§4.1).
 
+### 6.1 Task lists and their tasks (since 0.2.0)
+
+An API (shaped like Google Tasks) lists a user's task lists at
+`/users/me/lists` and a list's tasks at `/lists/{listId}/tasks`. A task can be
+moved to another list. A task read by id answers `200` with `deleted: true`
+for a while after its deletion, and `404` later or when the caller cannot
+reach it; the provider does not document which.
+
+```yaml
+components:
+  crudResources:
+    taskList:
+      identity:
+        urlTemplate: /users/me/lists/{listId}
+        bindings:
+          listId: { field: id }
+      collections:
+        taskLists:
+          urlTemplate: /users/me/lists
+          x-completeness:
+            absent: removed
+            notFound: unavailable
+    task:
+      identity:
+        urlTemplate: /lists/{listId}/tasks/{taskId}
+        bindings:
+          taskId: { field: id }
+      x-read-tombstone:          # Deletion Feeds §4.4
+        field: deleted
+        values: [true]
+      collections:
+        listTasks:
+          urlTemplate: /lists/{listId}/tasks
+          x-completeness:
+            absent: removed
+            notFound: unavailable
+            parentAbsent: unavailable
+```
+
+After a complete read of `taskLists` and of each list's tasks:
+
+* a task absent from its list's read is read by id: `200` with the task means
+  it moved or left the list, `200` with `deleted: true` means deleted, `404`
+  means unavailable;
+* a list absent from the lists read is read by id; if it answers `404`, it is
+  unavailable, and so is every task last read in it, without reading them.
+
 ## 7. Validation
 
 A conforming document:
@@ -181,7 +343,16 @@ A conforming document:
   skip members when the collection changes during the read (offset paging
   over a list from which objects are removed, typically), unless consumers
   can tell such a read apart; otherwise an object skipped by the paging looks
-  absent.
+  absent;
+* since 0.2.0: MUST give `notFound`, when present, one of the values in
+  §4.3, and `parentAbsent`, when present, the value `unavailable`; MUST NOT
+  declare `notFound` together with `absent: deleted`; MUST declare
+  `parentAbsent` only on a Collection Object of a nested collection (§4.4)
+  with exactly one parent resource, which has at least one collection with a
+  Completeness Object; once any collection of a resource states `notFound`,
+  MUST state it, with the same value, on every collection of that resource
+  declared `absent: removed`; MUST NOT declare `notFound: deleted` without
+  provider documentation for it.
 
 A conforming consumer:
 
@@ -192,7 +363,24 @@ A conforming consumer:
   `absent: deleted` as deleted without reading it;
 * SHOULD read the object itself (its `read` operation) before treating it as
   deleted when the collection declares no Completeness Object, or declares
-  `absent: removed`.
+  `absent: removed`;
+* since 0.2.0: MUST classify that read's answer as §4.3 says, and MUST NOT
+  report an `unavailable` object as deleted or infer another state from it;
+* since 0.2.0: MUST NOT send a write it queued for an `unavailable` object
+  without its user's or application's decision;
+* since 0.2.0: MUST apply a resource's stated `notFound` to every read of its
+  objects, through any collection (§4.3);
+* since 0.2.0: MUST NOT apply `parentAbsent` before it has concluded, in one
+  of the three ways of §4.4, that the parent object is gone, and MUST then
+  mark the members `unavailable`, never `deleted`; MUST NOT mark a member a
+  read of the pass returned, nor cascade further;
+* since 0.2.0: SHOULD treat a value it does not recognise as follows: a
+  Completeness Object whose `absent` it does not recognise as absent, except
+  for its `notFound`, which describes the resource's read (§4.3) and is
+  honoured whatever `absent` says; under an unrecognised `absent`, a `404` or
+  `410` is classified by a recognised `notFound`, else as `unavailable`, never
+  by the `deleted` default; a `notFound` as `unavailable`; a `parentAbsent`
+  as `unavailable`.
 
 ## 8. Not covered
 
@@ -202,12 +390,40 @@ A conforming consumer:
 * Partial completeness (complete within a time window, or for the
   authenticated principal's own objects only). Describe those with the
   [Filtering proposal](../filtering/README.md) and leave this field out.
+* States other than deletion that a read reports through a field (Todoist's
+  `checked: true` for a completed task). They are values of the object, for a
+  field map or a lens, not an outcome of its absence.
+* How many absent objects a consumer reads per pass (§4.3): consumer policy.
+
+## Validator and tests
+
+[`validate.py`](validate.py) checks the document rules of §7 that a document
+alone can show: the values of `absent`, `notFound` and `parentAbsent`,
+`notFound` with `absent: deleted`, and that `parentAbsent` sits on a nested
+collection whose parent has a Completeness Object. It cannot check the
+evidence rules. It also holds `classify_read(...)` and `members_of_gone_parent(...)`,
+reference implementations of §4.3 and §4.4. From the repository root:
+
+```sh
+cd openapi-extensions/spec/collection-completeness
+pip install -r requirements.txt
+python3 -m unittest test_validate
+python3 validate.py examples/nested-tasks.yaml
+```
 
 ## Changes
 
-- 2026-10-08, wording only, no version change: §3 and §4.1 refer to the
-  fixed reads of CRUD Causality 0.4.0 (`listMethod`, `listQuery`,
-  `listBody`); a complete read may send those values.
+- **0.2.0-draft** (2026-10-08): adds `notFound` (§4.3: what a `404` or `410`
+  from reading an absent object means, `deleted` by default or
+  `unavailable`, resource-wide once stated) and `parentAbsent` (§4.4: the
+  members of a nested collection are `unavailable` once their parent object
+  is gone; a `deleted` cascade is left to a later version), with document and
+  consumer rules, an example, a validator and tests. A 0.1.0 document stays
+  valid and means the same.
+- 0.1.0-draft, 2026-10-08, wording only, no version change: §3 and §4.1
+  refer to the fixed reads of CRUD Causality 0.4.0 (`listMethod`,
+  `listQuery`, `listBody`); a complete read may send those values.
+- **0.1.0-draft**: `absent: deleted | removed`.
 
 ## Reference Implementation
 
@@ -217,4 +433,6 @@ of a collection without a fixed `x-list-query` or `x-list-body`) to treat a
 record missing from a complete refresh as deleted without reading it. A
 selection that adds or changes a query parameter of the collection, `removed`,
 or no declaration makes it read the record first. Not verified against a real
-provider.
+provider. It does not yet read the 0.2.0 fields: it classifies every `404` or
+`410` of that read as deleted (the `notFound` default), and has no
+`unavailable` outcome or `parentAbsent` handling.

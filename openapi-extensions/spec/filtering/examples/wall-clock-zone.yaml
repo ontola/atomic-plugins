@@ -1,0 +1,83 @@
+openapi: 3.0.3
+info:
+  title: Illustrative wall-clock list bounds
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Clockify's time-entry list. The list's start and
+    end are read as wall-clock time in the user's profile zone, which only
+    GET /user answers (settings.timeZone); a Z is required and ignored.
+    /bookings reads its bounds in one fixed zone instead.
+servers:
+  - url: https://api.example.com/v1
+components:
+  parameters:
+    Start:
+      name: start
+      in: query
+      schema: { type: string, format: date-time }
+      x-filter: { field: /timeInterval/start, operator: gte }
+      x-time-zone:
+        interpretation: wallClock
+        zone: { operationId: getCurrentUser, pointer: /settings/timeZone }
+        suffix: Z
+    End:
+      name: end
+      in: query
+      schema: { type: string, format: date-time }
+      x-filter: { field: /timeInterval/start, operator: lt }
+      x-time-zone:
+        interpretation: wallClock
+        zone: { operationId: getCurrentUser, pointer: /settings/timeZone }
+        suffix: Z
+paths:
+  /user:
+    get:
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: The user the credential belongs to.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  settings:
+                    type: object
+                    properties:
+                      timeZone: { type: string, description: An IANA time zone name. }
+  /workspaces/{workspaceId}/users/{userId}/entries:
+    get:
+      parameters:
+        - { name: workspaceId, in: path, required: true, schema: { type: string } }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/Start'
+        - $ref: '#/components/parameters/End'
+      responses:
+        '200':
+          description: The user's entries whose start is in [start, end).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    timeInterval:
+                      type: object
+                      properties:
+                        start: { type: string, format: date-time }
+  /bookings:
+    get:
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string }
+          x-time-zone:
+            interpretation: wallClock
+            zone: { name: Europe/Amsterdam }
+            ambiguous: earlier
+      responses:
+        '200':
+          description: Bookings from the given local time on.

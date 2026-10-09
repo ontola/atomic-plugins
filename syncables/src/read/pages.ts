@@ -7,6 +7,10 @@ import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { locateItemsField } from '../pagination/items.js';
 import { resolveLink } from '../pagination/links.js';
 import {
+  classifyThrottling,
+  type ThrottlingDeclaration,
+} from '../throttling/throttling.js';
+import {
   buildBody,
   buildQuery,
   nextCursor,
@@ -18,6 +22,13 @@ import {
   setNestedField,
 } from '../pagination/response-parser.js';
 import type { PaginationSchemeObject } from '../pagination/types.js';
+import {
+  halves,
+  parseBound,
+  WindowReadError,
+  windowRequest,
+  windowWidth,
+} from '../pagination/window.js';
 import { isRecord } from './model.js';
 import {
   lowerCaseHeaders,
@@ -34,7 +45,7 @@ export interface ReadLimits {
   maxRecords: number;
   /** Wall-clock budget for the whole read, in milliseconds. */
   timeoutMs: number;
-  /** 429 retries per request, honouring `Retry-After`. */
+  /** Retries per throttled request (a 429, or a declared throttling signal), each after the earliest retry time. */
   maxRetries: number;
 }
 
@@ -67,8 +78,11 @@ const defaultSleep = (ms: number): Promise<void> =>
 
 /**
  * Wraps a transport with the whole-read budget: a request count, a
- * deadline, and bounded 429 retries that wait out `Retry-After` (seconds or
- * an HTTP date). A 429 without a usable `Retry-After` is returned as-is.
+ * deadline, and bounded retries of throttled requests (a 429, or a response
+ * that matches a signal of the document's `x-throttling`, draft Throttling
+ * extension) that wait until the earliest retry time the response gives
+ * (`Retry-After`, or the declared `retryAfter`/`reset` headers). A
+ * throttled response without a usable time is returned as-is.
  */
 export class Budget {
   readonly limits: ReadLimits;
@@ -79,9 +93,15 @@ export class Budget {
     private readonly transport: Transport,
     limits: Partial<ReadLimits> = {},
     private readonly sleep: (ms: number) => Promise<void> = defaultSleep,
+    private readonly throttling?: ThrottlingDeclaration,
   ) {
     this.limits = { ...DEFAULT_READ_LIMITS, ...limits };
     this.deadline = Date.now() + this.limits.timeoutMs;
+  }
+
+  /** Milliseconds left before the read's deadline; 0 once past it. */
+  remainingMs(): number {
+    return Math.max(0, this.deadline - Date.now());
   }
 
   async send(request: TransportRequest): Promise<TransportResponse> {
@@ -96,24 +116,23 @@ export class Budget {
         );
       }
       const raw = await this.transport(request);
+      const receivedAt = Date.now();
       const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
-      if (response.status !== 429 || retries >= this.limits.maxRetries) {
+      if (retries >= this.limits.maxRetries) {
         return response;
       }
-      const retryAfter = response.headers['retry-after'];
-      const seconds = Number(retryAfter);
-      const at =
-        retryAfter !== undefined &&
-        retryAfter !== '' &&
-        Number.isFinite(seconds)
-          ? Date.now() + Math.max(0, seconds) * 1000
-          : retryAfter
-            ? Date.parse(retryAfter)
-            : NaN;
-      if (!Number.isFinite(at)) {
+      const throttled = classifyThrottling(this.throttling, {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+        receivedAt,
+      });
+      if (!throttled || throttled.retryAt === undefined) {
         return response;
       }
-      const delay = Math.max(0, at - Date.now());
+      // Never earlier than the response asks (the spec's MUST); a read
+      // that cannot wait that long stops instead.
+      const delay = Math.max(0, throttled.retryAt - Date.now());
       if (Date.now() + delay > this.deadline) {
         throw new RetryBeyondDeadline(
           'API retry delay exceeds the remaining read time',
@@ -151,20 +170,55 @@ export function pageItems(
   return array.filter(isRecord);
 }
 
-/** The array at a dot-path of the body (`''`: the body), its objects only. */
-function itemsAt(body: unknown, path: string): Record<string, unknown>[] {
+/**
+ * The caller's envelope (a Collection Object's), else the scheme's own
+ * (Pagination Schemes §4.4.2; `null` means the body root); undefined when
+ * neither declares one and the array is located.
+ */
+function declaredItemsField(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject | undefined,
+): string | undefined {
+  const schemeEnvelope = scheme?.response?.envelope;
+  return (
+    walk.itemsField ??
+    (schemeEnvelope === undefined
+      ? undefined
+      : typeof schemeEnvelope.itemsField === 'string'
+        ? schemeEnvelope.itemsField
+        : '')
+  );
+}
+
+/**
+ * The array at a dot-path of the body (`''`: the body). An item that is not
+ * an object is an error, so an array of strings never reads as empty
+ * (#384); a feed read (`skipNonObjects`) skips such items instead, as its
+ * documentation says.
+ */
+function itemsAt(
+  body: unknown,
+  path: string,
+  skipNonObjects = false,
+): Record<string, unknown>[] {
   const array =
     path === ''
       ? body
       : isRecord(body)
         ? readNestedField(body, path)
         : undefined;
+  const where = path
+    ? `${path} (the declared envelope.itemsField)`
+    : 'the body root';
   if (!Array.isArray(array)) {
-    throw new Error(
-      `No items array at ${path || 'the body root'} (the declared envelope.itemsField)`,
-    );
+    throw new Error(`No items array at ${where}`);
   }
-  return array.filter(isRecord);
+  if (skipNonObjects) return array.filter(isRecord);
+  const odd = array.findIndex((item) => !isRecord(item));
+  if (odd !== -1) {
+    throw new Error(`Item ${odd} at ${where} is not an object`);
+  }
+  return array as Record<string, unknown>[];
 }
 
 /** Fills `{name}` path variables, percent-encoding each value. */
@@ -196,9 +250,41 @@ export interface PageWalk {
   pageSize?: number;
   /**
    * Dot-path to the items array in each body, `''` for the body itself.
-   * Without it, `pageItems` locates the array.
+   * Without it, the pagination scheme's own `response.envelope` applies,
+   * and without that `pageItems` locates the array.
    */
   itemsField?: string;
+  /** Skip items that are not objects instead of failing the page (the deletion feed read). */
+  skipNonObjects?: boolean;
+  /**
+   * The range a `rangeWindow` operation is read over (Pagination Schemes
+   * 0.5.0 §4.6.3), both bounds in the window's format. Required for such an
+   * operation, ignored for any other: which range to read is the caller's
+   * choice.
+   */
+  range?: WindowRange;
+  /**
+   * An item's identity, for a windowed read: an item that a later window
+   * returns again (its field changed during the read) is yielded once
+   * (§4.6.4 rule 3).
+   */
+  identity?: (item: Record<string, unknown>) => string;
+  /**
+   * Set when the walk ends normally: `complete` is false for a read that
+   * returned every page but is never complete in the Collection
+   * Completeness sense (a windowed read, §4.6.4 rule 5), with `reason`.
+   */
+  outcome?: WalkOutcome;
+}
+
+export interface WindowRange {
+  start: string;
+  end: string;
+}
+
+export interface WalkOutcome {
+  complete: boolean;
+  reason?: string;
 }
 
 export interface Page {
@@ -250,6 +336,14 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   const responseSchema =
     operation.responses?.['200']?.content?.['application/json']?.schema;
   const basePath = upstream.pathname.replace(/\/$/, '');
+  if (walk.outcome) {
+    walk.outcome.complete = true;
+    delete walk.outcome.reason;
+  }
+  if (scheme?.type === 'rangeWindow') {
+    yield* walkWindows(walk, scheme, responseSchema);
+    return;
+  }
   const seen = new Set<string>();
   let cursor: PageCursor = {};
   let next: URL | undefined;
@@ -304,10 +398,11 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
+    const itemsField = declaredItemsField(walk, scheme);
     const items =
-      walk.itemsField === undefined
+      itemsField === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, walk.itemsField);
+        : itemsAt(body, itemsField, walk.skipNonObjects);
     itemsSoFar += items.length;
     yield { url, items, body };
 
@@ -360,5 +455,109 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
       cursor = following;
       next = undefined;
     }
+  }
+}
+
+/**
+ * A `rangeWindow` read (Pagination Schemes 0.5.0 §4.6.3): the whole range
+ * first, then, for an answer with `cap` items or more (full, §4.6.4 rule 2),
+ * its two halves, depth first and the first half first, down to windows
+ * narrower than `2 × minimumWidth`. A full window that cannot be split
+ * throws `WindowReadError`; the read is then not complete. The items of a
+ * full answer are not yielded: they do not make the window complete, and
+ * its halves return them. Every window sends the same fixed query, body
+ * and headers; only the window fields change. An item an earlier window
+ * returned is yielded once (`walk.identity`). The read is never complete in
+ * the Collection Completeness sense (§4.6.4 rule 5): `walk.outcome` says so.
+ */
+async function* walkWindows(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject,
+  responseSchema: SchemaObject | undefined,
+): AsyncGenerator<Page> {
+  const window = scheme.window;
+  if (!window) {
+    throw new WindowReadError('A rangeWindow scheme needs a window');
+  }
+  if (!walk.range) {
+    throw new WindowReadError(
+      `${walk.path} is read by range windows; pass the range to read`,
+    );
+  }
+  const { start, end } = walk.range;
+  if (
+    windowWidth(parseBound(start, window), parseBound(end, window), window) < 1
+  ) {
+    throw new WindowReadError(`The range ${start}..${end} is empty`);
+  }
+  const { budget, upstream } = walk;
+  const basePath = upstream.pathname.replace(/\/$/, '');
+  const yielded = new Set<string>();
+  const pending: [string, string][] = [[start, end]];
+  while (pending.length) {
+    const [low, high] = pending.shift() as [string, string];
+    const values = windowRequest(scheme, low, high);
+    const url = new URL(upstream.href);
+    url.pathname = basePath + walk.path;
+    for (const [key, value] of Object.entries({
+      ...walk.query,
+      ...values.queryParameters,
+    })) {
+      url.searchParams.set(key, value);
+    }
+    const request: TransportRequest = {
+      url,
+      method: walk.method,
+      headers: { ...values.headerFields, accept: 'application/json' },
+    };
+    if (walk.method === 'POST') {
+      request.headers['content-type'] = 'application/json';
+      request.body = JSON.stringify(withBody(walk.body, values.bodyFields));
+    }
+    const response = await budget.send(request);
+    if (response.status < 200 || response.status >= 300) {
+      throw new PageStatusError(
+        `${request.method} ${url.pathname} responded ${response.status} for the window ${low}..${high} (failed with status ${response.status})`,
+        response.status,
+        response.body,
+      );
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(response.body);
+    } catch {
+      throw new Error(`${request.method} ${url.pathname} did not return JSON`);
+    }
+    const itemsField = declaredItemsField(walk, scheme);
+    const items =
+      itemsField === undefined
+        ? pageItems(body, responseSchema, scheme)
+        : itemsAt(body, itemsField, walk.skipNonObjects);
+    if (items.length >= window.cap) {
+      const split = halves(low, high, window);
+      if (!split) {
+        throw new WindowReadError(
+          `The window ${low}..${high} answered ${items.length} items, at least the cap of ${window.cap}, and is too narrow to split; the read is not complete`,
+        );
+      }
+      pending.unshift(...split);
+      continue;
+    }
+    const fresh = walk.identity
+      ? items.filter((item) => {
+          const id = (walk.identity as (i: Record<string, unknown>) => string)(
+            item,
+          );
+          if (yielded.has(id)) return false;
+          yielded.add(id);
+          return true;
+        })
+      : items;
+    yield { url, items: fresh, body };
+  }
+  if (walk.outcome) {
+    walk.outcome.complete = false;
+    walk.outcome.reason =
+      'read by range windows: never a complete read (Pagination Schemes 0.5.0 §4.6.4)';
   }
 }

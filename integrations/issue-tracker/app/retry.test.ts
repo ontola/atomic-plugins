@@ -33,6 +33,26 @@ const limited = (until: number, over = {}) =>
   });
 
 describe('the automatic retry', () => {
+  it('a write GitHub refused (#357) is not retried on a timer: the same request would be refused again', () => {
+    const refused = ready({
+      problem: {
+        kind: 'refused',
+        message: 'HTTP 422',
+        status: 422,
+        detail: '',
+      },
+      failedAt: NOW,
+    });
+    expect(planRetry(refused, false, freshLadder(), NOW)).toEqual({
+      kind: 'clear',
+      reset: false,
+    });
+    expect(planRetry(refused, true, freshLadder(), NOW)).toEqual({
+      kind: 'clear',
+      reset: false,
+    });
+  });
+
   it('a transient failure: the 4-minute ladder, kept while armed', () => {
     const failed = ready({ problem: { kind: 'failed', message: '502' } });
     expect(planRetry(failed, false, freshLadder(), NOW)).toEqual({
