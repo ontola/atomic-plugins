@@ -39,6 +39,31 @@ impl Limiter {
         }
     }
 
+    /// Whether `key`'s window is full at `now`, without counting anything.
+    pub fn blocked(&self, key: &str, now: Instant) -> Option<Duration> {
+        let windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        let key = if windows.contains_key(key) || windows.len() < self.max_keys {
+            key
+        } else {
+            OVERFLOW
+        };
+        let (start, count) = windows.get(key)?;
+        if now.duration_since(*start) >= self.window || *count < self.limit {
+            return None;
+        }
+        Some(
+            self.window
+                .saturating_sub(now.duration_since(*start))
+                .max(Duration::from_secs(1)),
+        )
+    }
+
+    /// How many keys are tracked.
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> usize {
+        self.windows.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
     /// Counts one request for `key` at `now`; `Err(retry_after)` when the
     /// key's window is full.
     pub fn take(&self, key: &str, now: Instant) -> Result<(), Duration> {
@@ -129,6 +154,18 @@ mod tests {
         limiter.take("b", start).unwrap();
         // A new window.
         limiter.take("a", start + Duration::from_secs(60)).unwrap();
+    }
+
+    #[test]
+    fn blocked_tells_without_counting() {
+        let limiter = Limiter::new(2, Duration::from_secs(60));
+        let start = Instant::now();
+        assert_eq!(limiter.blocked("a", start), None);
+        assert_eq!(limiter.blocked("a", start), None);
+        limiter.take("a", start).unwrap();
+        limiter.take("a", start).unwrap();
+        assert_eq!(limiter.blocked("a", start), Some(Duration::from_secs(60)));
+        assert_eq!(limiter.blocked("a", start + Duration::from_secs(60)), None);
     }
 
     #[test]
