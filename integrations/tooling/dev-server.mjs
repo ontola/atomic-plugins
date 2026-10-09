@@ -177,8 +177,8 @@ export function appModuleFile(path, base = root) {
 /**
  * A committed ontology file for a request path, or undefined: a term
  * (`ontology/v<N>`, `ontology/classes/<name>`, `ontology/properties/<shortname>`)
- * or a lens catalog file (`ontology/lenses/v<N>`, `ontology/lenses/<name>-v<N>`,
- * ontology-kit/LENSES.md), all written by `ontology-kit/ontology.mjs build`.
+ * or a lens catalog file (`ontology/lenses/v<N>`, `ontology/lenses/<name>-v<N>`;
+ * see ontology-kit/LENSES.md), all written by `ontology-kit/ontology.mjs build`.
  * The pattern admits no `/`, `.` or upper case in a segment, so the path
  * cannot leave ontology/.
  */

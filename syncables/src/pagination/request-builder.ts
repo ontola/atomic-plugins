@@ -130,6 +130,8 @@ export function nextCursor(
         ? { pageToken: state.nextPageToken }
         : null;
     case 'nextLink':
+    case 'rangeWindow':
+      // A rangeWindow read has no next page; walkPages reads it by windows.
       return null;
     case 'pageNumber':
       if (fieldsWithRole(scheme, 'offset', both).length > 0) {

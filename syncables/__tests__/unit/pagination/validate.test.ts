@@ -19,7 +19,7 @@ describe('validatePaginationScheme', () => {
     });
     expect(errors).toEqual([
       expect.stringContaining(
-        'type must be one of pageNumber, pageToken, or nextLink',
+        'type must be one of pageNumber, pageToken, nextLink, or rangeWindow',
       ),
     ]);
   });
