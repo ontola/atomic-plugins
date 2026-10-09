@@ -130,9 +130,27 @@ Data flows through four stages, each its own directory under `src/`:
    raised before the request reaches the transport (an `authenticate`
    adapter throwing) keep the backoff retry. Non-2xx responses are
    classified (`classify`, `defaultWriteFailureClass`, overridable with
-   `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
-   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
-   never below the backoff), `permanent` (other 4xx: failed
+   `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
+   throttling under the document's root `x-throttling`, draft Throttling
+   extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
+   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   gives the verdict the client attaches as `WriteFailure.throttling`, a
+   matching signal or any 429; with `signalsDeclared` the old 403 header
+   heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
+   the later of `retryAfter` and `reset` measured against both clocks, else
+   `minDelaySeconds`, else the bucket window), stored on the write as
+   `notBefore` (outbox) so a restart or `resolveWrite` retry keeps it; a
+   hold (`notBefore` or a bucket pause) further away than
+   `retry.maxRetryAfterMs` makes the write `gaveUp` with a `lastError`
+   instead of retrying early; a `quotaExhausted` verdict, from a write or a
+   read, pauses every request whose operation selects the bucket
+   (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
+   `pauseForOperation`, `operationBuckets`; the read transport waits within
+   `limits.timeoutMs`), until the answer's time or else the write's backoff;
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
+   retryable answer the delay is max(backoff, `Retry-After` capped at
+   `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
+   uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
    at once, through the same path as `retry.maxAttempts`), `satisfied` (a
    delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
    renewal before an accepted response, then `permanent`; `afterRenewal`
@@ -411,6 +429,17 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   "No items array at <path>", never an empty one), no heuristic once an
   envelope is declared, and the unchanged heuristic without a declaration,
   with `itemsField: null`, or with one that is not a string.
+- `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
+  `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
+  which also holds the GitHub, Google and Moneybird snippets), plus
+  `headerTime`, `declaredThrottling`'s leniency and `operationBuckets`;
+  `unit/client/throttling.test.ts` runs those snippets through writes (the
+  reset wait, the minimum delay, a non-matching 403 blocks, Retry-After,
+  giving up past `maxRetryAfterMs`, a signalled 500 create staying
+  uncertain, the stored `notBefore` across a restart, the backoff floor, the
+  held-write cap, reads sharing the paused buckets, the bucket
+  pause) and reads (the injected sleep, the deadline, the spec example
+  through `sync()`), and the 403 heuristic without signals.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination
