@@ -230,10 +230,19 @@ Data flows through four stages, each its own directory under `src/`:
    on each update up to the first create, never on one with `sending`), at
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
-   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   the route's `x-completeness: { absent: deleted }` (`declaredCompleteness`,
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
-   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
+   the record's resource states `notFound: unavailable` through any
+   collection (`route.notFound`, resource-wide, from `resourceNotFound`
+   over every collection's `rawCompleteness`, after the reference
+   `resource_not_found`; conflicting or unrecognised values are
+   `unavailable`, a value beside an unrecognised `absent` counts; undefined
+   when not stated, which the Write Preconditions consumer must not take as
+   a confirmed deletion; 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   and `parentAbsent`, and ignores a declaration with an unrecognised
+   `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
    on the CRUD Resource Object, else, or when that one does not parse, the
    item GET operation, a Tombstone Object of the deletion-feeds draft; not
@@ -251,7 +260,9 @@ Data flows through four stages, each its own directory under `src/`:
    settled on during the sync, or whose stored tombstone a read dropped
    earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
    `stored`
-   and no GET; unchecked and `unknown` GET answers go there too.
+   and no GET; unchecked, `unknown` and `unavailable` GET answers go there
+   too (a feed tombstone stands over `unavailable`; without one, that
+   answer applies).
    `finishFeeds`, after every collection's checks, reads each feed once
    (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
    `feedCursors`, items counted per read against `maxRecords`;
@@ -269,12 +280,45 @@ Data flows through four stages, each its own directory under `src/`:
    a later complete read that returns the record, or `resolveWrite` `retry`
    on the record, clears the flag.
    `failWrite` and the waiting-path `discard` wake a removed head's drain.
-   `deleted`/`unknown` fail the head and each following held update
-   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
-   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   `deleted`/`unavailable`/`unknown` fail the head and each following held
+   update (`failWrite`, `missingRecord`, stored; a sleeping drain is woken
+   through `wakers`); `filtered` takes the returned record as confirmed (conflicts
    checked) and releases. A record settled on during the check (up to the
    end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   For a nested collection whose Collection Object declares
+   `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
+   the collection that supplies its path variable in `nestedUnder`, from
+   `model.providers`, skipping variables `constants` fix; dropped with two
+   or more parent resources), every parent
+   record concluded `deleted` or `unavailable` (declaration, GET or feed, at
+   the same three points as `reportMissing`) has `applyParentAbsent` conclude
+   the records last read under it (`nestedScopes`: confirmed records and
+   writes in scopes whose variable is the parent id) as `unavailable`,
+   never `deleted` (any `parentAbsent` value), with `source: 'parent'` and
+   the last known values as `record`, failing their heads through
+   `failMissing` and skipping a member a write settled on since the sync
+   began, or one this sync's read returned in the same scope
+   (`SyncRound.returned`, by scope: a bare id under another parent is
+   still marked); nothing is pruned. Records concluded `unavailable`
+   (`reportMissing`) are kept in `unavailableKept` (stored as the outbox's
+   `unavailable`) and `rebuild` falls back to them, so neither a vanished
+   write-less record nor one whose writes were discarded is pruned; a read
+   returning the record, a `filtered` or a `deleted` conclusion clears it.
+   `update()`/`remove()` of a kept record are held (`awaitingRefresh`) for
+   the next refresh. `holdMissing` and `evidenceHead` include deletes: a
+   held delete is released (and woken) unless the evidence is
+   `unavailable`, which fails it. `failMissing` on
+   `unavailable` also fails the rest of the record's queue in order,
+   deletes included, and parks a create in place (state `failed`,
+   `missingRecord`), stopping at a head in flight, not stored or already
+   parked. Each concluded nested scope is marked in `goneParents` (in
+   memory, cleared by a complete read of the scope); `update()` into a
+   marked scope, `remove()` into one, and `create()` into one, are
+   enqueued held and concluded at once (`concludeNew`). An unrecognised
+   `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
+   parent is GETed when `nestedWritesUnder` finds unsettled writes under
+   it, with a revision check around the GET.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
    confirmed copy (`setLastKnown` on every refresh and settled response;
@@ -443,6 +487,32 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/completeness-outcomes.test.ts` covers Collection Completeness
+  0.2.0 §4.3, `notFound`: a 404 or 410 as `unavailable` (PUT and PATCH, the
+  held write, the kept values, the report), the `deleted` default (no field,
+  `deleted`, an unrecognised value, no declaration), the operation and
+  legacy placements, no GET under `absent: deleted`, a later list or GET
+  superseding the mark for new updates, the stored value across a restart,
+  `missingRecordChecks: 'all'`, and precedence against a deletion feed; and
+  §4.4, `parentAbsent`, on the spec's §6.1 task lists
+  (`nestedTaskLists` in `__tests__/fixtures/deletion-declarations.ts`): the
+  tasks of a list that answers 404 concluded unavailable without a request,
+  a queued task update under a vanished list (the list GETed under the
+  default checks, the update failed as unavailable, the list's return), no
+  GET for a vanished list without writes under it, tasks unavailable (never
+  deleted) under a declared-deleted parent (no GET at all), any
+  `parentAbsent` value under parents concluded three ways, a moved member
+  not marked, a resource-wide `notFound` through an undeclared collection
+  (another collection, conflicting values, an unrecognised `absent`, an
+  `x-crud` list operation, none stated), no parent marks under an
+  unrecognised `absent`, `resourceNotFound` itself (wp-consumer R2), and no
+  conclusion for a parent that still exists, without the field, or with it
+  on the list operation; the #399 review:
+  a DELETE behind an unavailable record's update failed rather than sent, a
+  create into an unavailable parent's scope parked, a new edit of a member
+  under an unavailable parent concluded at once and sent again after the
+  parent returns, `record` on unavailable reports, and an unrecognised
+  `notFound` read as `unavailable`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -460,7 +530,8 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   declarations as the draft specs' own examples
   (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
   §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
-  the §5 overlay), each test naming the spec statement it checks, plus
+  the §5 overlay; its §6.1 `nestedTaskLists` is used by
+  `completeness-outcomes.test.ts`), each test naming the spec statement it checks, plus
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
   a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The

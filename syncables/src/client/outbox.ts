@@ -1,6 +1,7 @@
 import { isRecord } from '../read/model.js';
 import type {
   AuthBlock,
+  MissingRecordFailure,
   PendingWriteState,
   PendingWriteType,
   WriteConflict,
@@ -41,8 +42,12 @@ export interface StoredWrite {
   refreshMisses?: number;
   /** The order in which the write was queued. */
   seq?: number;
-  /** A failed update whose record a complete refresh no longer returned. */
-  missingRecord?: 'deleted' | 'unknown';
+  /**
+   * A failed update whose record a complete refresh no longer returned.
+   * `unavailable` was added within version 1; a client from before it keeps
+   * such an entry as unrestorable.
+   */
+  missingRecord?: MissingRecordFailure;
   /**
    * The earliest time the write may be sent again (ms since the epoch), from
    * a throttling answer's earliest retry time. Kept across a restart and a
@@ -108,6 +113,21 @@ export interface StoredFeedTombstones {
   tombstones: string[];
 }
 
+/**
+ * Records concluded `unavailable` (Collection Completeness 0.2.0 §4.3) per
+ * collection and bound context, by id: the last known values the client
+ * keeps, marked, until a later read settles them, and why. No `id` field,
+ * so no record or rebuild entry reads as one.
+ */
+export interface StoredUnavailable {
+  resource: string;
+  context: Record<string, string>;
+  unavailable: Record<
+    string,
+    { record: Record<string, unknown>; detail: string }
+  >;
+}
+
 export interface OutboxDocument {
   version: typeof OUTBOX_VERSION;
   records: StoredRecordWrites[];
@@ -118,6 +138,8 @@ export interface OutboxDocument {
   feedTombstones: StoredFeedTombstones[];
   /** Added within version 1; absent in an outbox without exhausted buckets. */
   throttlingPauses: StoredThrottlingPause[];
+  /** Added within version 1; absent in an outbox without unavailable records. */
+  unavailable: StoredUnavailable[];
   /**
    * Entries this version cannot restore (malformed, or for a collection the
    * current document does not have). They are written back unchanged.
@@ -161,6 +183,7 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['seq'] === undefined || typeof value['seq'] === 'number') &&
     (value['missingRecord'] === undefined ||
       value['missingRecord'] === 'deleted' ||
+      value['missingRecord'] === 'unavailable' ||
       value['missingRecord'] === 'unknown') &&
     (value['notBefore'] === undefined ||
       typeof value['notBefore'] === 'number') &&
@@ -215,6 +238,24 @@ export function isStoredFeedTombstones(
   );
 }
 
+export function isStoredUnavailable(
+  value: unknown,
+): value is StoredUnavailable {
+  return (
+    isRecord(value) &&
+    typeof value['resource'] === 'string' &&
+    isStringMap(value['context']) &&
+    isRecord(value['unavailable']) &&
+    Object.values(value['unavailable']).every(
+      (entry) =>
+        isRecord(entry) &&
+        isRecord(entry['record']) &&
+        typeof entry['detail'] === 'string',
+    ) &&
+    value['id'] === undefined
+  );
+}
+
 export function isStoredFeedCursor(value: unknown): value is StoredFeedCursor {
   return (
     isRecord(value) &&
@@ -256,6 +297,7 @@ export function emptyOutbox(): OutboxDocument {
     feedCursors: [],
     feedTombstones: [],
     throttlingPauses: [],
+    unavailable: [],
     unrestorable: [],
   };
 }
@@ -292,6 +334,9 @@ export function readOutbox(value: unknown): OutboxDocument {
   for (const entry of list('feedTombstones'))
     if (isStoredFeedTombstones(entry)) outbox.feedTombstones.push(entry);
     else outbox.unrestorable.push(entry);
+  for (const entry of list('unavailable'))
+    if (isStoredUnavailable(entry)) outbox.unavailable.push(entry);
+    else outbox.unrestorable.push(entry);
   // A malformed pause is dropped, not kept: it names no collection to regain.
   for (const entry of list('throttlingPauses'))
     if (isStoredThrottlingPause(entry)) outbox.throttlingPauses.push(entry);
@@ -302,6 +347,7 @@ export function readOutbox(value: unknown): OutboxDocument {
     else if (isStoredRebuild(entry)) outbox.rebuild.push(entry);
     else if (isStoredFeedCursor(entry)) outbox.feedCursors.push(entry);
     else if (isStoredFeedTombstones(entry)) outbox.feedTombstones.push(entry);
+    else if (isStoredUnavailable(entry)) outbox.unavailable.push(entry);
     else outbox.unrestorable.push(entry);
   // Added within version 1: an outbox without it was not blocked. A
   // malformed one still blocks, so writes wait for authRenewed().

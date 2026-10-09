@@ -75,6 +75,7 @@ import {
   readOutbox,
   type StoredFeedCursor,
   type StoredFeedTombstones,
+  type StoredUnavailable,
   type StoredRebuild,
   type StoredRecordWrites,
   type StoredThrottlingPause,
@@ -214,11 +215,26 @@ export interface AuthBlock {
  * - `filtered`: it still exists; the list just does not return it. A GET of
  *   the record answered 2xx with the record, without a declared
  *   read-tombstone marker.
+ * - `unavailable`: this caller can no longer read it, and the API does not
+ *   say whether it was deleted, moved out of reach, or access was lost. A
+ *   GET of the record answered 404 or 410 and the collection declares
+ *   `x-completeness: { notFound: unavailable }` (Collection Completeness
+ *   0.2.0 §4.3). Never reported as deleted; the last known values are kept.
  * - `unknown`: neither could be told: the GET answered another status, its
  *   2xx body did not hold the record, it failed, or no GET was made (the
  *   resource declares no item GET, or `missingRecordChecks` is `'none'`).
  */
-export type MissingRecordEvidence = 'deleted' | 'filtered' | 'unknown';
+export type MissingRecordEvidence =
+  | 'deleted'
+  | 'filtered'
+  | 'unavailable'
+  | 'unknown';
+
+/**
+ * Why an update failed because a complete refresh no longer returned its
+ * record: the `MissingRecordEvidence` other than `filtered`.
+ */
+export type MissingRecordFailure = 'deleted' | 'unavailable' | 'unknown';
 
 /** A record a complete refresh no longer returned, and what that means. */
 export interface MissingRecord {
@@ -229,12 +245,20 @@ export interface MissingRecord {
   /**
    * Where the evidence comes from: `declaration` (the API document's
    * `x-completeness`), `feed` (a tombstone in the collection's deletion
-   * feed), `read` (a GET of the record) or `none` (no GET made).
+   * feed), `read` (a GET of the record), `parent` (the record's parent
+   * object, which supplies a path variable of its nested collection, was
+   * concluded deleted or unavailable, and the collection declares
+   * `x-completeness: { parentAbsent }`; the record itself was not read;
+   * Collection Completeness 0.2.0 §4.4) or `none` (no GET made).
    */
-  source: 'declaration' | 'feed' | 'read' | 'none';
+  source: 'declaration' | 'feed' | 'read' | 'parent' | 'none';
   /** The status the GET answered, when one answered. */
   status?: number;
-  /** For `filtered`: the record the GET returned. */
+  /**
+   * For `filtered`: the record the GET returned. For `unavailable`: the
+   * last known values the client keeps, when it has them (a record it had
+   * confirmed before the read, or the last known copy of its writes).
+   */
   record?: Record<string, unknown>;
 }
 
@@ -325,7 +349,9 @@ export interface ApiClientOptions {
    * checks with a GET of the record (see `MissingRecordEvidence`), within the
    * sync's read budget (`limits`):
    * - `'pending'` (the default): records with a queued update, when that
-   *   update is the first unsettled write of the record and not in flight;
+   *   update is the first unsettled write of the record and not in flight,
+   *   and records under which a nested collection declaring
+   *   `x-completeness: { parentAbsent }` has records with unsettled writes;
    * - `'all'`: those, and also records without queued writes, once, in the
    *   sync that first misses them;
    * - `'none'`: no GET and no deletion feed read; without a declaration
@@ -497,11 +523,12 @@ export interface PendingWriteInfo {
   conflicts?: WriteConflict[];
   /**
    * Set on an update that failed because a complete refresh no longer
-   * returned its record: `deleted` (`lastError` "deleted at the provider") or
-   * `unknown` (`lastError` "not in the refreshed collection"). See
+   * returned its record: `deleted` (`lastError` "deleted at the provider"),
+   * `unavailable` (`lastError` "unavailable at the provider") or `unknown`
+   * (`lastError` "not in the refreshed collection"). See
    * `MissingRecordEvidence`.
    */
-  missingRecord?: 'deleted' | 'unknown';
+  missingRecord?: MissingRecordFailure;
 }
 
 export interface ApiClient {
@@ -677,6 +704,22 @@ interface ClientRoute {
   idempotencyHeader?: string;
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
   absentMeansDeleted?: boolean;
+  /**
+   * The `notFound` the route's **resource** states (Collection
+   * Completeness 0.2.0 §4.3): any of its collections, this one or not, set
+   * on every route of the resource; `unavailable` when they differ or a
+   * stated value is not recognised. Undefined: not stated anywhere, so a
+   * 404 or 410 means `deleted` by the spec's default only, which is not a
+   * stated confirmation of a deletion.
+   */
+  notFound?: 'deleted' | 'unavailable';
+  /**
+   * `x-completeness: { parentAbsent }` on a nested collection, any value:
+   * its members are unavailable once the parent object that supplies one
+   * of its path variables is concluded deleted or unavailable (Collection
+   * Completeness 0.2.0 §4.4). Applied without reading them.
+   */
+  parentAbsent?: 'unavailable';
   /** The item URL declares a GET, so a missing record can be read. */
   itemReadable?: boolean;
   /** `x-deletion-feed`: the operation that reports deletions. */
@@ -769,7 +812,7 @@ interface QueuedWrite {
   /** Queue order across the client and its restarts (absent in older outboxes). */
   seq?: number;
   /** Failed because a complete refresh no longer returned the record. */
-  missingRecord?: 'deleted' | 'unknown';
+  missingRecord?: MissingRecordFailure;
   /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
@@ -898,17 +941,29 @@ function declaredIdempotencyHeader(
   )?.name;
 }
 
+/** A parsed Completeness Object (draft Collection Completeness extension, §4.1). */
+interface Completeness {
+  absent: 'deleted' | 'removed';
+  /** §4.4; only from a Collection Object; any value means `unavailable`. */
+  parentAbsent?: 'unavailable';
+}
+
 /**
- * The Collection Completeness extension's `absent` value for a collection:
- * from its CRUD Causality Collection Object, which covers the collection's
- * own fixed `listQuery`/`listBody` (or `x-list-query`/`x-list-body`), else from its list operation,
- * which covers only a read that adds nothing to the operation's request (no
- * fixed query or body), since several collections may share that operation.
+ * A collection's raw Completeness Object (draft Collection Completeness
+ * extension, §4.1): from its CRUD Causality Collection Object, which covers
+ * the collection's own fixed `listQuery`/`listBody` (or
+ * `x-list-query`/`x-list-body`), else from the operation that lists it
+ * (its list path's operation, or one whose `x-crud` is a `list` of this
+ * collection), which covers only a read that adds nothing to the
+ * operation's request (no fixed query or body), since several collections
+ * may share that operation. `onCollection`: it came from the Collection
+ * Object.
  */
-function declaredAbsence(
+function rawCompleteness(
   document: OpenApiDocument,
   collection: ReadCollection,
-): 'deleted' | 'removed' | undefined {
+  evenWithFixedReads = false,
+): { declared: Record<string, unknown>; onCollection: boolean } | undefined {
   const resources = document.components?.['crudResources'];
   const resource = isRecord(resources)
     ? resources[collection.resource]
@@ -917,21 +972,85 @@ function declaredAbsence(
   const definition = isRecord(collections)
     ? collections[collection.name]
     : undefined;
+  if (isRecord(definition) && definition['x-completeness'] !== undefined) {
+    const declared = definition['x-completeness'];
+    return isRecord(declared) ? { declared, onCollection: true } : undefined;
+  }
+  const fixed =
+    Object.keys(collection.listQuery).length > 0 ||
+    Object.keys(collection.listBody).length > 0;
+  if (fixed && !evenWithFixedReads) return undefined;
   const operation =
     document.paths[collection.url]?.[
       collection.method === 'POST' ? 'post' : 'get'
     ];
-  const fixed =
-    Object.keys(collection.listQuery).length > 0 ||
-    Object.keys(collection.listBody).length > 0;
-  const declared =
-    isRecord(definition) && definition['x-completeness'] !== undefined
-      ? definition['x-completeness']
-      : fixed
-        ? undefined
-        : operation?.['x-completeness'];
-  const absent = isRecord(declared) ? declared['absent'] : undefined;
-  return absent === 'deleted' || absent === 'removed' ? absent : undefined;
+  let declared = operation?.['x-completeness'];
+  if (declared === undefined)
+    for (const item of Object.values(document.paths))
+      for (const method of ['get', 'post'] as const) {
+        const listing = item?.[method];
+        const crud = listing?.['x-crud'];
+        if (
+          declared === undefined &&
+          isRecord(crud) &&
+          crud['action'] === 'list' &&
+          crud['resource'] === collection.resource &&
+          crud['collection'] === collection.name
+        )
+          declared = listing?.['x-completeness'];
+      }
+  return isRecord(declared) ? { declared, onCollection: false } : undefined;
+}
+
+/**
+ * The Completeness Object of a collection (`rawCompleteness`), parsed. A
+ * declaration whose `absent` is not `deleted` or `removed` is ignored as a
+ * whole (§7), apart from its `notFound`, which `resourceNotFound` still
+ * counts. `parentAbsent` counts only on the Collection Object, and any
+ * value means `unavailable` (§7, 0.2.0 has no `deleted` cascade).
+ */
+function declaredCompleteness(
+  document: OpenApiDocument,
+  collection: ReadCollection,
+): Completeness | undefined {
+  const raw = rawCompleteness(document, collection);
+  if (!raw) return undefined;
+  const absent = raw.declared['absent'];
+  if (absent !== 'deleted' && absent !== 'removed') return undefined;
+  return {
+    absent,
+    ...(raw.onCollection && raw.declared['parentAbsent'] !== undefined
+      ? { parentAbsent: 'unavailable' as const }
+      : {}),
+  };
+}
+
+/**
+ * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * (after the reference `resource_not_found`): the one value they state,
+ * `unavailable` when they state different ones or one this client does not
+ * recognise, undefined when none states it. A `notFound` stated beside an
+ * `absent` the client does not recognise still counts.
+ */
+export function resourceNotFound(
+  document: OpenApiDocument,
+  collections: ReadCollection[],
+  resource: string,
+): 'deleted' | 'unavailable' | undefined {
+  const stated = new Set<string>();
+  for (const collection of collections) {
+    if (collection.resource !== resource) continue;
+    // A `notFound` on the list operation counts even for a collection with
+    // fixed reads: it says what the resource's read means, and counting it
+    // can only make a 404 `unavailable`, the safe reading.
+    const raw = rawCompleteness(document, collection, true);
+    if (raw && raw.declared['notFound'] !== undefined)
+      stated.add(
+        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
+      );
+  }
+  if (!stated.size) return undefined;
+  return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
 }
 
 /**
@@ -1074,8 +1193,16 @@ function clientRoutes(
           route.deletePath = path;
       }
     }
-    if (declaredAbsence(document, collection) === 'deleted')
-      route.absentMeansDeleted = true;
+    const completeness = declaredCompleteness(document, collection);
+    if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
+    const notFound = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+    );
+    if (notFound) route.notFound = notFound;
+    if (completeness?.parentAbsent)
+      route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
     if (feed) route.deletionFeed = feed;
     const readTombstone = declaredReadTombstone(document, collection);
@@ -1118,7 +1245,8 @@ export function createApiClient(
     options.identityField === undefined
       ? {}
       : { identityField: options.identityField };
-  const routes = clientRoutes(doc, discoverReadModel(doc, legacy).collections);
+  const model = discoverReadModel(doc, legacy);
+  const routes = clientRoutes(doc, model.collections);
   for (const route of routes) {
     // A selection that narrows the read past the collection's own fixed
     // query makes it no longer the read the declaration speaks of: a record
@@ -1138,6 +1266,47 @@ export function createApiClient(
   const byResource = new Map(routes.map((r) => [r.collection.name, r]));
   if (byResource.size !== routes.length)
     throw new Error('Collection names must be unique across resources');
+  // §4.4: the nested collections that declare parentAbsent, by the
+  // collection whose records supply their path variable (`param`). The
+  // declaration needs exactly one parent resource; with more it is ignored.
+  // A variable a constant fixes has no parent object to go missing.
+  // Nested scopes whose parent is concluded gone, until a complete read of
+  // the scope (the parent returned): new writes into them are concluded at
+  // once. In memory only: after a restart, a member's failed writes still
+  // carry `missingRecord`, but a member without writes is not marked.
+  const goneParents = new Map<string, Evidence>();
+  const nestedUnder = new Map<
+    string,
+    { route: ClientRoute; param: string }[]
+  >();
+  for (const route of routes) {
+    if (!route.parentAbsent) continue;
+    const parents = new Map<string, { param: string; collection: string }[]>();
+    for (const param of route.collection.contextParams) {
+      const provider = model.providers.get(param);
+      const resource = model.collections.find(
+        (c) => c.name === provider?.collection,
+      )?.resource;
+      if (!provider || !resource || resource === route.collection.resource)
+        continue;
+      parents.set(resource, [
+        ...(parents.get(resource) ?? []),
+        { param, collection: provider.collection },
+      ]);
+    }
+    const [parent] = [...parents];
+    if (!parent || parents.size !== 1) {
+      delete route.parentAbsent;
+      continue;
+    }
+    for (const { param, collection } of parent[1]) {
+      if (options.constants && param in options.constants) continue;
+      nestedUnder.set(collection, [
+        ...(nestedUnder.get(collection) ?? []),
+        { route, param },
+      ]);
+    }
+  }
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
@@ -1197,6 +1366,25 @@ export function createApiClient(
   const feedTombstones = new Map<
     string,
     { resource: string; context: Record<string, string>; ids: Set<string> }
+  >();
+  /**
+   * Records concluded `unavailable` (Collection Completeness 0.2.0 §4.3), by
+   * record key: their last known values stay visible, marked (the report),
+   * until a later read settles them (a complete read or a GET that returns
+   * them, or evidence of deletion); a discard of their writes falls back to
+   * them, and a new update or delete of them is held. Stored in the outbox.
+   */
+  const unavailableKept = new Map<
+    string,
+    {
+      scope: string;
+      resource: string;
+      context: Record<string, string>;
+      id: string;
+      record: Record<string, unknown>;
+      detail: string;
+      source?: MissingRecord['source'];
+    }
   >();
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
@@ -1261,6 +1449,25 @@ export function createApiClient(
       ...(write.missingRecord ? { missingRecord: write.missingRecord } : {}),
       ...(write.notBefore !== undefined ? { notBefore: write.notBefore } : {}),
     };
+  }
+
+  /** The kept unavailable records, grouped by collection and context. */
+  function storedUnavailable(): { unavailable?: StoredUnavailable[] } {
+    const byScope = new Map<string, StoredUnavailable>();
+    for (const kept of unavailableKept.values()) {
+      let entry = byScope.get(kept.scope);
+      if (!entry)
+        byScope.set(
+          kept.scope,
+          (entry = {
+            resource: kept.resource,
+            context: kept.context,
+            unavailable: {},
+          }),
+        );
+      entry.unavailable[kept.id] = { record: kept.record, detail: kept.detail };
+    }
+    return byScope.size ? { unavailable: [...byScope.values()] } : {};
   }
 
   /**
@@ -1330,6 +1537,7 @@ export function createApiClient(
         rebuild,
         ...(feedCursors.size ? { feedCursors: [...feedCursors.values()] } : {}),
         ...storedFeedTombstones(),
+        ...storedUnavailable(),
         ...storedThrottlingPauses(),
         unrestorable,
         ...(authBlock ? { authBlock } : {}),
@@ -1455,7 +1663,25 @@ export function createApiClient(
     confirmed.clear();
     feedCursors.clear();
     feedTombstones.clear();
+    unavailableKept.clear();
     unrestorable = outbox.unrestorable;
+    for (const entry of outbox.unavailable) {
+      const route = byResource.get(entry.resource);
+      if (!route) {
+        unrestorable.push(entry);
+        continue;
+      }
+      const scope = scopeFor(route, entry.context);
+      for (const [id, { record, detail }] of Object.entries(entry.unavailable))
+        unavailableKept.set(keyFor(scope, id), {
+          scope,
+          resource: entry.resource,
+          context: entry.context,
+          id,
+          record,
+          detail,
+        });
+    }
     for (const entry of outbox.feedTombstones) {
       const route = byResource.get(entry.resource);
       if (route)
@@ -1627,8 +1853,9 @@ export function createApiClient(
   }
 
   async function rebuild(scope: string, id: string): Promise<void> {
-    let value = remote(scope).get(id);
     const key = keyFor(scope, id);
+    // An unavailable record keeps its last known values (§4.3).
+    let value = remote(scope).get(id) ?? unavailableKept.get(key)?.record;
     const pending = [
       ...(gaveUpWrites.get(key) ?? []),
       ...(writeQueues.get(key) ?? []),
@@ -1706,8 +1933,11 @@ export function createApiClient(
       const key = keyFor(write.scope, id);
       recordRevisions.set(key, (recordRevisions.get(key) ?? 0) + 1);
       // The provider accepted a write to the record: a tombstone a feed
-      // reported for it earlier no longer says it is deleted.
+      // reported for it earlier no longer says it is deleted, and the record
+      // is no longer kept as unavailable (a delete removed it; any other
+      // 2xx showed it readable).
       feedTombstones.get(write.scope)?.ids.delete(id);
+      unavailableKept.delete(key);
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -2568,6 +2798,12 @@ export function createApiClient(
     superseded: Set<string>;
     /** `recordRevisions` when the sync began. */
     startedRecords: Map<string, number>;
+    /**
+     * Ids this sync's read returned, per scope (collection and bound
+     * context): a member is exempt from its parent's mark only when this
+     * read returned it under the same identity, parent included.
+     */
+    returned: Map<string, Set<string>>;
   }
 
   function feedEvidence(route: ClientRoute): Evidence {
@@ -2594,19 +2830,93 @@ export function createApiClient(
     holdMissing(key);
     let failed = false;
     for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
+      // A held delete is sent unless the record is unavailable: a deleted
+      // or missing record answers it 404 (settled), an existing one is
+      // deleted as asked. A record kept as unavailable stays held on an
+      // `unknown` answer: only `deleted` or `filtered` (which clear the
+      // mark) release it, and `unavailable` fails it.
+      if (
+        head.type === 'delete' &&
+        unavailableKept.has(key) &&
+        found.evidence === 'unknown'
+      )
+        break;
+      if (head.type === 'delete' && found.evidence !== 'unavailable') {
+        delete head.awaitingRefresh;
+        delete head.refreshMisses;
+        released.add(head);
+        failed = true;
+        // Between retries: sent now that the read has decided.
+        wakers.get(key)?.();
+        continue;
+      }
       failWrite(head, missingMessage(head, found), previous);
-      head.missingRecord = found.evidence === 'deleted' ? 'deleted' : 'unknown';
+      head.missingRecord =
+        found.evidence === 'filtered' ? 'unknown' : found.evidence;
       if (found.status !== undefined) head.lastStatus = found.status;
       released.add(head);
       failed = true;
     }
+    // §4.3: nothing queued for an unavailable record is sent without a
+    // decision, deletes included. The rest of the queue fails in order (a
+    // failed write stays older than every queued one); a create is parked
+    // in place, as a refused create is, and holds back what follows it. A
+    // head in flight, not yet stored, or already parked ends this.
+    if (found.evidence === 'unavailable')
+      for (;;) {
+        const head = writeQueues.get(key)?.[0];
+        if (
+          !head ||
+          head.sending ||
+          head.durable === false ||
+          head.state !== 'pending'
+        )
+          break;
+        if (head.type === 'create') {
+          head.state = 'failed';
+          head.lastError = missingMessage(head, found);
+          delete head.awaitingRefresh;
+        } else failWrite(head, missingMessage(head, found), previous);
+        head.missingRecord = 'unavailable';
+        if (found.status !== undefined) head.lastStatus = found.status;
+        released.add(head);
+        failed = true;
+        if (head.type === 'create') break;
+      }
     return failed;
   }
 
+  /**
+   * A new write into a nested scope whose parent is concluded gone
+   * (`goneParents`): concluded at once with the parent's conclusion, so it
+   * is not sent on a record the client cannot read.
+   */
+  async function concludeNew(
+    scope: string,
+    id: string,
+    found: Evidence,
+  ): Promise<void> {
+    const released = new Set<QueuedWrite>();
+    if (
+      failMissing(
+        scope,
+        id,
+        found,
+        remote(scope).get(id) ?? lastKnownFor(scope, id),
+        released,
+      )
+    ) {
+      await persistLater();
+      await rebuild(scope, id);
+    }
+  }
+
   function missingMessage(write: QueuedWrite, found: Evidence): string {
-    return found.evidence === 'deleted'
-      ? `Record ${write.id} was deleted at the provider (${found.detail}); not sent`
-      : `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely; ${found.detail}); not sent, to avoid a partial update`;
+    if (found.evidence === 'deleted')
+      return `Record ${write.id} was deleted at the provider (${found.detail}); not sent`;
+    if (found.evidence === 'unavailable')
+      return `Record ${write.id} is unavailable at the provider (${found.detail}); not sent without a decision: retry or discard it with resolveWrite`;
+    return `Record ${write.id} is not in the refreshed collection ${write.route.collection.name} (filtered or deleted remotely; ${found.detail}); not sent, to avoid a partial update`;
   }
 
   /**
@@ -2617,7 +2927,8 @@ export function createApiClient(
   function holdMissing(key: string): void {
     for (const write of writeQueues.get(key) ?? []) {
       if (write.type === 'create') return;
-      if (write.type !== 'update') continue;
+      // A delete waits too: it is not sent for a record that may be
+      // unavailable (§4.3, §7) before its read says what became of it.
       if (write.sending) write.holdIfQueued = true;
       else write.awaitingRefresh = true;
     }
@@ -2632,7 +2943,7 @@ export function createApiClient(
   function evidenceHead(key: string): QueuedWrite | undefined {
     const head = writeQueues.get(key)?.[0];
     return head &&
-      head.type === 'update' &&
+      (head.type === 'update' || head.type === 'delete') &&
       head.awaitingRefresh &&
       head.state === 'pending' &&
       !head.sending &&
@@ -2867,13 +3178,23 @@ export function createApiClient(
     const { status } = response;
     // Rate-limited after the budget's own 429 retries: not checked.
     if (status === 429) return undefined;
+    // §4.3 of the Collection Completeness draft: what the status means is
+    // the resource's stated `notFound`, through any collection, `deleted`
+    // by default.
     if (status === 404 || status === 410)
-      return {
-        evidence: 'deleted',
-        source: 'read',
-        status,
-        detail: `GET ${path} answered ${status}`,
-      };
+      return route.notFound === 'unavailable'
+        ? {
+            evidence: 'unavailable',
+            source: 'read',
+            status,
+            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+          }
+        : {
+            evidence: 'deleted',
+            source: 'read',
+            status,
+            detail: `GET ${path} answered ${status}`,
+          };
     if (status >= 200 && status < 300) {
       let body: unknown;
       try {
@@ -2927,7 +3248,27 @@ export function createApiClient(
     context: Record<string, string>,
     id: string,
     found: Evidence,
+    lastKnown?: Record<string, unknown>,
   ): void {
+    const record =
+      found.record ??
+      (found.evidence === 'unavailable' ? lastKnown : undefined);
+    const scope = scopeFor(route, context);
+    const key = keyFor(scope, id);
+    // §4.3: an unavailable record keeps its last known values, marked,
+    // until a later read settles it; deletion or a 2xx read settles it.
+    if (found.evidence === 'unavailable' && record)
+      unavailableKept.set(key, {
+        scope,
+        resource: route.collection.name,
+        context: { ...context },
+        id,
+        record: structuredClone(record),
+        detail: found.detail,
+        source: found.source,
+      });
+    else if (found.evidence === 'deleted' || found.evidence === 'filtered')
+      unavailableKept.delete(key);
     try {
       options.onMissingRecord?.({
         resource: route.collection.name,
@@ -2936,11 +3277,124 @@ export function createApiClient(
         evidence: found.evidence,
         source: found.source,
         ...(found.status !== undefined ? { status: found.status } : {}),
-        ...(found.record ? { record: structuredClone(found.record) } : {}),
+        ...(record ? { record: structuredClone(record) } : {}),
       });
     } catch {
       // A failing callback does not stop the sync.
     }
+  }
+
+  /**
+   * The scopes (bound contexts) of nested collection `route` whose `param`
+   * is `parentId`, among the confirmed records and the unsettled writes,
+   * each with its context.
+   */
+  function nestedScopes(
+    route: ClientRoute,
+    param: string,
+    parentId: string,
+  ): { scope: string; context: Record<string, string> }[] {
+    const params = route.collection.contextParams;
+    const index = params.indexOf(param);
+    const found = new Map<string, Record<string, string>>();
+    for (const scope of [
+      ...confirmed.keys(),
+      ...allWrites().map((w) => w.scope),
+    ]) {
+      if (found.has(scope)) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(scope);
+      } catch {
+        continue;
+      }
+      if (
+        !Array.isArray(parsed) ||
+        parsed[0] !== route.collection.name ||
+        !Array.isArray(parsed[1]) ||
+        parsed[1][index] !== parentId
+      )
+        continue;
+      const values = parsed[1] as string[];
+      found.set(
+        scope,
+        Object.fromEntries(params.map((p, i) => [p, values[i] as string])),
+      );
+    }
+    return [...found].map(([scope, context]) => ({ scope, context }));
+  }
+
+  /**
+   * Whether a nested collection declaring `parentAbsent` has unsettled
+   * writes under record `id` of `route`: then the record's fate decides
+   * theirs, so it is checked even without writes of its own.
+   */
+  function nestedWritesUnder(route: ClientRoute, id: string): boolean {
+    return (nestedUnder.get(route.collection.name) ?? []).some(
+      ({ route: nested, param }) =>
+        nestedScopes(nested, param, id).some(({ scope }) =>
+          allWrites().some((w) => w.scope === scope),
+        ),
+    );
+  }
+
+  /**
+   * Collection Completeness §4.4: once record `id` of `route` is concluded
+   * deleted or unavailable (`found`), the members last read under it in
+   * each nested collection declaring `parentAbsent` are concluded
+   * `unavailable`, never `deleted`, without being read (the spec's
+   * `members_of_gone_parent`; 0.2.0 has no deleted cascade). Each is
+   * reported (`source: 'parent'`) and its held updates fail as for any
+   * missing record. A member a write settled on during this sync is left
+   * to a later sync, and so is one this sync's read of the same nested
+   * collection returned under another parent (it moved, and is present).
+   * Nothing is pruned.
+   * Returns the members whose writes failed, for rebuilding.
+   */
+  function applyParentAbsent(
+    route: ClientRoute,
+    id: string,
+    found: Evidence,
+    round: SyncRound,
+    released: Set<QueuedWrite>,
+  ): { scope: string; id: string }[] {
+    const touched: { scope: string; id: string }[] = [];
+    if (found.evidence !== 'deleted' && found.evidence !== 'unavailable')
+      return touched;
+    for (const { route: nested, param } of nestedUnder.get(
+      route.collection.name,
+    ) ?? []) {
+      const evidence: MissingRecordEvidence = 'unavailable';
+      for (const { scope, context } of nestedScopes(nested, param, id)) {
+        const conclusion: Evidence = {
+          evidence,
+          source: 'parent',
+          detail: `its parent ${route.collection.resource} ${id} of ${route.collection.name} was concluded ${found.evidence}: ${found.detail}`,
+        };
+        goneParents.set(scope, conclusion);
+        const members = new Set([
+          ...remote(scope).keys(),
+          ...allWrites()
+            .filter((w) => w.scope === scope)
+            .map((w) => w.id),
+        ]);
+        for (const member of members) {
+          const key = keyFor(scope, member);
+          if (
+            (round.startedRecords.get(key) ?? 0) !==
+              (recordRevisions.get(key) ?? 0) ||
+            round.returned.get(scope)?.has(member)
+          )
+            continue;
+          const lastKnown =
+            remote(scope).get(member) ?? lastKnownFor(scope, member);
+          reportMissing(nested, context, member, conclusion, lastKnown);
+          if (failMissing(scope, member, conclusion, lastKnown, released))
+            touched.push({ scope, id: member });
+        }
+      }
+    }
+    return touched;
   }
 
   /**
@@ -3017,8 +3471,13 @@ export function createApiClient(
         }
 
     // Undecided by this sync's GETs: the feed read at the end may decide.
+    // A tombstone there is positive evidence of deletion, so it also stands
+    // over an `unavailable` answer; without one, that answer applies.
     const undecided = (found: Evidence | undefined): boolean =>
-      feedRead && (!found || found.evidence === 'unknown');
+      feedRead &&
+      (!found ||
+        found.evidence === 'unknown' ||
+        found.evidence === 'unavailable');
     const evidence = new Map<string, Evidence>();
     for (const id of missing) {
       const key = keyFor(scope, id);
@@ -3050,10 +3509,18 @@ export function createApiClient(
       }
       if (!found) continue;
       evidence.set(id, found);
-      reportMissing(route, context, id, found);
+      reportMissing(
+        route,
+        context,
+        id,
+        found,
+        previous.get(id) ?? lastKnownFor(scope, id),
+      );
     }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
+    // Members of nested collections concluded with this read's records.
+    const nested: { scope: string; id: string }[] = [];
     for (const [id, found] of evidence) {
       const key = keyFor(scope, id);
       // A write to the record settled while it was checked: a later sync
@@ -3071,6 +3538,7 @@ export function createApiClient(
       }
       if (failMissing(scope, id, found, previous.get(id), released))
         touchedIds.add(id);
+      nested.push(...applyParentAbsent(route, id, found, sync, released));
     }
     const taken = new Map<string, Record<string, unknown>>();
     for (const write of allWrites()) {
@@ -3085,23 +3553,39 @@ export function createApiClient(
       delete write.awaitingRefresh;
       delete write.refreshMisses;
     }
-    if (options.missingRecordChecks === 'all')
-      for (const id of vanished) {
-        if (writeQueues.has(keyFor(scope, id))) continue;
-        const found = await findEvidence(route, context, id, budget);
-        if (undecided(found))
-          sync.undecided.push({
-            scope,
-            context,
-            id,
-            ...(found ? { found } : {}),
-            revision: recordRevisions.get(keyFor(scope, id)) ?? 0,
-            previous: undefined,
-            vanished: true,
-          });
-        else if (found) reportMissing(route, context, id, found);
+    // Records without writes: checked under 'all', or when the writes of a
+    // nested collection declaring parentAbsent depend on their fate.
+    for (const id of vanished) {
+      if (writeQueues.has(keyFor(scope, id))) continue;
+      if (
+        options.missingRecordChecks !== 'all' &&
+        !nestedWritesUnder(route, id)
+      )
+        continue;
+      const revision = recordRevisions.get(keyFor(scope, id)) ?? 0;
+      const found = await findEvidence(route, context, id, budget);
+      if (undecided(found))
+        sync.undecided.push({
+          scope,
+          context,
+          id,
+          ...(found ? { found } : {}),
+          revision,
+          previous: previous.get(id),
+          vanished: true,
+        });
+      else if (found) {
+        // A write to it settled during the GET: a later sync decides.
+        if ((recordRevisions.get(keyFor(scope, id)) ?? 0) !== revision)
+          continue;
+        reportMissing(route, context, id, found, previous.get(id));
+        // Kept with its last known values when unavailable (§4.3); a
+        // conclusion that clears a kept mark removes the record again.
+        touchedIds.add(id);
+        nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
-    if (!touchedIds.size) return;
+    }
+    if (!touchedIds.size && !nested.length) return;
     if (taken.size) {
       for (const [id, record] of taken) {
         remote(scope).set(id, record);
@@ -3111,8 +3595,11 @@ export function createApiClient(
     }
     await persistLater();
     for (const id of touchedIds) await rebuild(scope, id);
+    for (const member of nested) await rebuild(member.scope, member.id);
+    const scopes = new Set([scope, ...nested.map((member) => member.scope)]);
     for (const [key, queue] of writeQueues)
-      if (queue[0]?.scope === scope && !draining.has(key)) void drainQueue(key);
+      if (queue[0] && scopes.has(queue[0].scope) && !draining.has(key))
+        void drainQueue(key);
   }
 
   /**
@@ -3150,12 +3637,22 @@ export function createApiClient(
             ? feedEvidence(route)
             : record.found;
         if (!found) continue;
-        reportMissing(route, record.context, record.id, found);
+        reportMissing(
+          route,
+          record.context,
+          record.id,
+          found,
+          record.previous ?? lastKnownFor(scope, record.id),
+        );
         if (
-          !record.vanished &&
-          failMissing(scope, record.id, found, record.previous, released)
+          (!record.vanished &&
+            failMissing(scope, record.id, found, record.previous, released)) ||
+          record.vanished
         )
           touched.push({ scope, id: record.id });
+        touched.push(
+          ...applyParentAbsent(route, record.id, found, round, released),
+        );
       }
     }
     if (!touched.length && !round.tombstonesChanged) return;
@@ -3287,7 +3784,23 @@ export function createApiClient(
       tombstonesChanged: false,
       superseded: new Set(),
       startedRecords,
+      returned: new Map(),
     };
+    let keptSettled = false;
+    for (const snapshot of result.collections) {
+      const route = byResource.get(snapshot.collection.name) as ClientRoute;
+      const scope = scopeFor(route, contextFor(route, snapshot.pathParams));
+      const idField = snapshot.collection.idField;
+      const ids = round.returned.get(scope) ?? new Set();
+      for (const item of snapshot.items) {
+        const id = String(item[idField]);
+        ids.add(id);
+        // A read that returns an unavailable record settles its mark.
+        if (unavailableKept.delete(keyFor(scope, id))) keptSettled = true;
+      }
+      round.returned.set(scope, ids);
+    }
+    if (keptSettled) await persistLater();
     const changed = new Set<string>();
     const incomplete: IncompleteRead[] = [];
     for (const snapshot of result.collections) {
@@ -3307,6 +3820,8 @@ export function createApiClient(
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const context = contextFor(route, snapshot.pathParams);
       const scope = scopeFor(route, context);
+      // Read completely: its parent is back, and so are its members.
+      goneParents.delete(scope);
       if (snapshot.runtimeMembers) {
         const members = new Map<string, RuntimeMembers>();
         snapshot.items.forEach((item, i) => {
@@ -3495,6 +4010,11 @@ export function createApiClient(
           ? crypto.randomUUID()
           : String(data[route.collection.idField]);
       const record = { ...data, [route.collection.idField]: id };
+      // Into a nested scope whose parent is concluded gone (its members
+      // are unavailable): not sent without a decision (parked, like a
+      // refused create).
+      const gone = goneParents.get(scope);
+      const held = gone !== undefined;
       await enqueue({
         route,
         scope,
@@ -3502,10 +4022,12 @@ export function createApiClient(
         id,
         type: 'create',
         data: record,
+        ...(held ? { awaitingRefresh: true } : {}),
         ...(route.idempotencyHeader
           ? { idempotencyKey: crypto.randomUUID() }
           : {}),
       });
+      if (gone && held) await concludeNew(scope, id, gone);
       return record;
     },
     async update(
@@ -3534,6 +4056,13 @@ export function createApiClient(
         !remote(scope).has(id) &&
         Boolean(failed?.some((w) => w.missingRecord)) &&
         !writeQueues.get(key)?.some((w) => w.type === 'create');
+      // Its parent is concluded gone and the collection not read since: the
+      // record is still there locally (nothing is pruned), so the edit is
+      // held and concluded like the record's earlier writes were.
+      const gone = goneParents.get(scope);
+      // A record kept as unavailable (§4.3; no writes left, or never had
+      // any): the edit waits for the next refresh, which checks it again.
+      const kept = unavailableKept.has(key);
       // The visible record carries failed changes; seeding from it would send
       // them implicitly. With failed writes, seed from their last known record.
       const seed = failed
@@ -3551,7 +4080,7 @@ export function createApiClient(
         id,
         type: 'update',
         changes: data,
-        ...(stillMissing ? { awaitingRefresh: true } : {}),
+        ...(stillMissing || gone || kept ? { awaitingRefresh: true } : {}),
         ...(confirmedRecord
           ? {
               base: Object.fromEntries(
@@ -3560,6 +4089,7 @@ export function createApiClient(
             }
           : {}),
       });
+      if (gone) await concludeNew(scope, id, gone);
       return record;
     },
     async remove(resource, id, supplied): Promise<void> {
@@ -3573,7 +4103,20 @@ export function createApiClient(
         ...context,
         [route.collection.itemParam ?? 'id']: id,
       });
-      await enqueue({ route, scope, context, id, type: 'delete' });
+      // Into a gone parent's scope: held and concluded at once, as an
+      // update is. Of a record kept as unavailable: held until the next
+      // refresh checks it (§4.3: not sent without a decision).
+      const gone = goneParents.get(scope);
+      const kept = unavailableKept.has(keyFor(scope, id));
+      await enqueue({
+        route,
+        scope,
+        context,
+        id,
+        type: 'delete',
+        ...(gone || kept ? { awaitingRefresh: true } : {}),
+      });
+      if (gone) await concludeNew(scope, id, gone);
     },
     pendingWrites(resource): PendingWriteInfo[] {
       const name = resource
@@ -3630,6 +4173,8 @@ export function createApiClient(
         }
         if (resolution.action === 'confirm') head.confirmedId = resolution.id;
         if (head.state === 'failed') head.attempts = 0;
+        // Describes the failure, which this retry leaves behind.
+        delete head.missingRecord;
         head.state = 'pending';
         await persistLater();
         if (!draining.has(key)) void drainQueue(key);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   apiKeyAuth,
   bearerAuth,
@@ -111,6 +111,14 @@ describe('shared transport and collection reads', () => {
   });
 
   it('uses the reader rate-limit policy and captures each attempt', async () => {
+    // The wait is measured from the clock when the client sleeps, so a
+    // millisecond between receiving the 429 and sleeping makes it 1999
+    // (the retry is still not early). A frozen clock makes it exact.
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const saved: RawReadResponse[] = [];
     const sleep = vi.fn(async () => {});
     let attempt = 0;
