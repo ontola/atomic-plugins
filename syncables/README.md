@@ -123,6 +123,85 @@ const handle = client.startPolling({
 handle.stop();
 ```
 
+### Wall-clock date-time parameters (`x-time-zone`)
+
+Some APIs read a date-time query parameter as wall-clock time in a zone the
+request does not carry (Clockify's time-entry `start` and `end`, in the
+user's profile zone). A parameter that declares `x-time-zone` (Filtering
+0.2.0-draft, `openapi-extensions/spec/filtering/`) is sent as the spec's
+client steps say, when a `selection` gives it a value:
+
+- The value must be an instant with `Z` or an offset
+  (`2026-01-01T00:00:00Z`); anything else fails that collection's read.
+- The zone is read before the list request: a fixed `zone.name`, or a GET of
+  `zone.operationId` with the request's own path values (matched by name),
+  at `zone.pointer`. One read per zone source and bound path values per
+  `readCollections`/`sync()`, through the read's budget (and its
+  `storeResponse` hook, like any read response). Conversion uses `Intl`, so
+  it is as accurate as the runtime's time zone data.
+- The value sent is the wall-clock digits in that zone,
+  `yyyy-MM-ddTHH:mm:ss` (whole seconds, truncated), plus `suffix`.
+- The UTC span covered is computed from the digits sent, one span per
+  `x-filter` field (bounds of different fields are never merged): `gte`/`gt`
+  parameters give the lower end, `lte`/`lt` the upper one (the tighter one
+  when several bound the same end), with `fromInclusive`/`toInclusive` from
+  the operator, and `ambiguous` picks the offset in a repeated or skipped
+  hour (`unspecified`: the reading that covers least).
+- The rest of the same request's query counts too. A range `x-filter`
+  parameter without `x-time-zone` whose value is an instant (`Z` or an
+  offset) adds its bound to its field's span, merged by the same
+  tighter-bound rule (its instant is in `instants`). Any other value that
+  narrows the read (an `eq` `x-filter`, a parameter without `x-filter`, a
+  range bound that is not an instant) makes the coverage unknown
+  (`otherFilters`): the read asked for less than the spans say. Not
+  counted: the pagination scheme's fields that `walkPages` overwrites or
+  that only size the pages (roles `pageSize`, `offset`, `page`; a
+  `pageToken` or `cursor` a selection sets is `otherFilters`, and so is any
+  of them under a `rangeWindow` scheme, which sets its window fields
+  instead), and the
+  collection's own fixed `listQuery` values, which define the collection
+  (a fixed range bound that is an instant still adds to its field's span).
+- A zone that cannot be read (an error status, nothing at the pointer, not
+  an IANA name this runtime knows, a zone operation that needs a parameter
+  the request does not have) is not taken as UTC: the UTC digits are sent
+  and each bound covers 14 hours less, so a window of 28 hours or less
+  covers nothing.
+- After the read, each operation zone source is read again; if the zone
+  differs or cannot be read, the spans are discarded (`zoneChanged`). The
+  items are kept. syncables does not read again by itself: the caller
+  decides.
+
+The result is on `CollectionSnapshot.coverage` (from `readCollections`) and
+on `SyncResult.coverage` (per collection and bound context):
+
+```ts
+const { coverage } = await client.sync();
+// [{ collection: 'entries', context: {...},
+//    parameters: { start: '2026-01-01T01:00:00Z', end: '2026-02-01T01:00:00Z' },
+//    instants: { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' },
+//    zones: { start: 'Europe/Amsterdam', end: 'Europe/Amsterdam' },
+//    spans: [{ field: '/timeInterval/start',
+//              from: '2026-01-01T00:00:00.000Z', fromInclusive: true,
+//              to: '2026-02-01T00:00:00.000Z', toInclusive: false }] }]
+```
+
+`parameters` holds the values sent (wall-clock digits plus `suffix`), and
+`instants` the instants they were written from. Coverage describes the
+query, per request: the provider was asked for the collection's items whose fields lie in
+every span at once. It does not say that every such item is in the local
+copy (an incomplete or failed read, a record the caller dropped). `spans` is
+null when the request covers nothing known; `reason` is then `empty` (some
+field's lower end is not before its upper end), `zoneChanged`,
+`noRangePredicate` (an `x-time-zone` parameter with a value but no range
+`x-filter`), `otherFilters` (above) or `incomplete`. An open end is left out. A `probe` read reads no zone and
+converts nothing.
+`readPlatform` does not report coverage. Only query parameters are read;
+an `x-time-zone` in a request body or path is ignored.
+`wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
+`wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
+the offsets a day either side of the wall-clock time, so two offset
+changes within two days are not told apart.
+
 ## Writing
 
 `create`/`update`/`remove` are local-first: they update local storage
@@ -1192,6 +1271,17 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Filtering 0.2.0-draft `x-time-zone` on list query
+  parameters: the zone is read (a fixed name, or another operation's
+  response at a pointer) once per read and again after it, values are sent
+  as wall-clock digits plus `suffix`, and the covered UTC spans (per
+  `x-filter` field, with inclusive ends) are reported
+  on `CollectionSnapshot.coverage` and `SyncResult.coverage` (new), with
+  the 14-hour narrowing when the zone cannot be read and the span discarded
+  when the zone changed. `wallClockParam`, `instantsOf` and `coveredSpan`
+  are exported. Behaviour change only for documents that declare
+  `x-time-zone`: their values are now converted, and a value without `Z`
+  or an offset fails the read.
 - **Unreleased**: A page size sent is capped at the pageSize parameter's
   documented `maximum`; `paginate` takes `idField` to keep an item two
   windows return once (items without it are kept as is); a walk's outcome

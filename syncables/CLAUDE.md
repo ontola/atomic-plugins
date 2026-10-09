@@ -66,7 +66,14 @@ Data flows through four stages, each its own directory under `src/`:
    the collection read passes to `walkPages`; without it `pageItems`
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
-   completion/error status. `read/read.ts` adds ontology/type projection.
+   completion/error status. `read/time-zone.ts` implements Filtering
+   0.2.0-draft `x-time-zone` on list query parameters (the spec's
+   `validate.py` client steps, with `Intl`): `zoneReader` reads each zone
+   source once per `readCollections` through its budget and re-checks it at
+   the end, `wallClockQuery` rewrites the query and computes the
+   `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
+   `SyncResult.coverage`).
+   `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its

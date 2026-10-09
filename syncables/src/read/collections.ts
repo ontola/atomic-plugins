@@ -1,4 +1,4 @@
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { declaredThrottling } from '../throttling/throttling.js';
 import {
@@ -16,11 +16,21 @@ import {
   bindPath,
   Budget,
   BudgetExhausted,
+  RetryBeyondDeadline,
   walkPages,
   type ReadLimits,
   type WalkOutcome,
   type WindowRange,
 } from './pages.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import {
+  pagingFields,
+  rangeParameters,
+  timeZoneParameters,
+  wallClockQuery,
+  zoneReader,
+  type ReadCoverage,
+} from './time-zone.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import {
   interpretRuntimeItems,
@@ -78,6 +88,12 @@ export interface CollectionSnapshot {
    */
   complete: boolean;
   error?: string;
+  /**
+   * Present when the list operation has `x-time-zone` query parameters
+   * (Filtering 0.2.0-draft) with values: the values sent and the UTC span
+   * the read is known to cover.
+   */
+  coverage?: ReadCoverage;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
   /**
@@ -173,6 +189,11 @@ export async function readCollections(
 ): Promise<CollectionReadResult> {
   const doc = resolveRefs(document);
   const model = discoverReadModel(doc, options.legacy);
+  // The collections' own fixed query values, before a selection narrows
+  // them: they define a collection rather than narrow it (coverage).
+  const fixedQueries = new Map(
+    model.collections.map((c) => [c.name, { ...c.listQuery }]),
+  );
   applySelection(doc, model, options.selection);
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
@@ -187,6 +208,15 @@ export async function readCollections(
       declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
+  // Zones are read once per read and again after it (Filtering 0.2.0-draft).
+  const zones = zoneReader(
+    doc,
+    upstream,
+    (request) => budget.send(request),
+    (error) =>
+      error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
+  );
+  const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
   // A resource whose x-runtime-schema cannot be used fails its collections
   // before any request: its items' members could not be interpreted.
   const runtimeFailures = new Map<string, string>();
@@ -241,6 +271,45 @@ export async function readCollections(
               `${collection.url} declares no ${collection.method} operation`,
             );
           }
+          let query = collection.listQuery;
+          // A probe makes one request and reads nothing: no zone reads.
+          const timeZoned =
+            operation && !options.probe
+              ? timeZoneParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation,
+                )
+              : [];
+          if (timeZoned.length) {
+            let paging = new Set<string>();
+            try {
+              paging = pagingFields(
+                resolveEffectiveScheme(doc, operation as OperationObject)
+                  ?.scheme,
+              );
+            } catch {
+              // An unusable scheme fails the read in walkPages below.
+            }
+            const written = await wallClockQuery(
+              timeZoned,
+              query,
+              path,
+              zones.read,
+              {
+                ranges: rangeParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation as OperationObject,
+                ),
+                paging,
+                fixed: fixedQueries.get(collection.name) ?? {},
+              },
+            );
+            query = written.query;
+            if (written.coverage) {
+              snapshot.coverage = written.coverage;
+              zoned.push({ snapshot, keys: written.keys });
+            }
+          }
           const outcome: WalkOutcome = { complete: true };
           const range = options.ranges?.(collection, path);
           for await (const page of walkPages({
@@ -250,7 +319,7 @@ export async function readCollections(
             upstream,
             path: bindPath(collection.url, path),
             method: collection.method,
-            query: collection.listQuery,
+            query,
             body: collection.listBody,
             // The declared envelope, if any; else walkPages locates the array.
             ...(collection.itemsField !== undefined
@@ -313,6 +382,24 @@ export async function readCollections(
     pending = waiting;
   }
   if (options.probe) throw new Error('No collection available to check');
+  if (zoned.length) {
+    // Step 4: a zone that changed during the read leaves its span unknown.
+    let changed = new Set<string>();
+    try {
+      if (!exhausted) changed = await zones.recheck();
+    } catch {
+      // The budget ran out: no zone could be checked again.
+      changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    }
+    if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    for (const { snapshot, keys } of zoned) {
+      const coverage = snapshot.coverage as ReadCoverage;
+      if (!snapshot.complete)
+        snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
+      else if ([...keys].some((key) => changed.has(key)))
+        snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
+    }
+  }
   if (!schemas.size) return { collections, errors };
   // Runtime Schemas §5.2: the describers are read in the same read as the
   // items, after them, through the same budget.
