@@ -69,3 +69,15 @@ is smaller. The documented default page size is capped at the `maximum`;
 body property; `resolveEffectiveScheme` requires exactly one `page` field
 for a `shortPage` scheme; `pageStart` lives once, in `response-parser.ts`,
 and `request-builder.ts` re-exports it. Tests for each.
+
+## Turn 4
+
+**Human (via the coordinator session):** Take the minimum of `size` and
+`pageSize` only when the scheme has a `pageSize` field, so the size is
+actually sent; remove the stale JSDoc above `export { pageStart }`.
+
+**Assistant:** `walkAllPages` uses the smaller size only when the scheme
+declares a `pageSize` request field; a page size passed without one leaves
+`size` as the full size. The stale JSDoc is replaced by a one-line comment.
+Test: `size: 100` with no field and `pageSize: 50` reads 250 items in three
+pages.

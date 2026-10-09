@@ -552,3 +552,31 @@ describe('second review of #424', () => {
     ).toThrow(/exactly one request field with role page/);
   });
 });
+
+describe('third review of #424', () => {
+  it('ignores a page size the scheme has no field to send', async () => {
+    // size 100, no pageSize field, pageSize 50 passed: full pages are 100.
+    const pages: string[] = [];
+    const transport: Transport = (request) => {
+      const page = Number(request.url.searchParams.get('page'));
+      pages.push(String(page));
+      const items = Array.from(
+        { length: Math.max(0, Math.min(100, 250 - page * 100)) },
+        (_, i) => ({ id: `t${page * 100 + i}` }),
+      );
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items }),
+      });
+    };
+    const items = await paginate(document(zeroBased('documented')), {
+      transport,
+      path: '/team/{teamId}/task',
+      pathParams: { teamId: 'w1' },
+      pageSize: 50,
+    });
+    expect(items).toHaveLength(250);
+    expect(pages).toEqual(['0', '1', '2']);
+  });
+});

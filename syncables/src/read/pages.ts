@@ -400,11 +400,20 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         ? Math.min(limits.default, limits.maximum)
         : limits.default;
   // The full size (spec 0.6.0 §4.4.5): `size`, or the page size sent when
-  // it is smaller, so that a smaller page does not look short.
+  // it is smaller, so that a smaller page does not look short. A page size
+  // is only sent through a pageSize field; without one it changes nothing.
+  const sendsPageSize = Boolean(
+    scheme &&
+      (['queryParameters', 'bodyFields'] as const).some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.role === 'pageSize',
+        ),
+      ),
+  );
   const shortSize =
     short?.size === 'request'
       ? pageSize
-      : short && pageSize !== undefined
+      : short && pageSize !== undefined && sendsPageSize
         ? Math.min(short.size, pageSize)
         : short?.size;
   if (short && shortSize === undefined) {
