@@ -50,6 +50,7 @@ def _path_item_operations(document, item, location, seen):
     if not isinstance(item, dict) or id(item) in seen:
         return
     seen.add(id(item))
+    yield location, None, item, None  # the path item itself; operations() leaves it out
     for method in METHODS:
         operation = item.get(method)
         if not isinstance(operation, dict):
@@ -64,6 +65,15 @@ def _path_item_operations(document, item, location, seen):
 
 def operations(document, callable_only=False):
     """Every operation in the document; with callable_only, only those under `paths`."""
+    return (entry for entry in _entries(document, callable_only) if entry[3] is not None)
+
+
+def path_items(document):
+    """(location, path item) of every path item, operations or not."""
+    return ((entry[0], entry[2]) for entry in _entries(document, False) if entry[3] is None)
+
+
+def _entries(document, callable_only):
     seen = set()
     for path, item in (document.get("paths") or {}).items():
         yield from (
@@ -96,16 +106,23 @@ def parameters_of(document, item, operation):
 
 
 def _parameter_formats(document, parameter):
-    """The `format` of every schema the parameter declares: `schema`, or each `content` entry's."""
-    schemas = [parameter.get("schema")]
+    """The `format` of every schema the parameter declares: `schema`, or each `content` entry's,
+    and the schemas their `allOf`, `oneOf` and `anyOf` hold."""
+    pending = [parameter.get("schema")]
     for media in (parameter.get("content") or {}).values():
         if isinstance(media, dict):
-            schemas.append(media.get("schema"))
-    formats = []
-    for schema in schemas:
-        schema = _deref(document, schema)
-        if isinstance(schema, dict) and "format" in schema:
+            pending.append(media.get("schema"))
+    formats, seen = [], set()
+    while pending:
+        schema = _deref(document, pending.pop())
+        if not isinstance(schema, dict) or id(schema) in seen:
+            continue
+        seen.add(id(schema))
+        if "format" in schema:
             formats.append(schema["format"])
+        for key in ("allOf", "oneOf", "anyOf"):
+            if isinstance(schema.get(key), list):
+                pending.extend(schema[key])
     return formats
 
 
@@ -208,6 +225,25 @@ def validate(document):
             zone = parameter.get("x-time-zone")
             if isinstance(zone, dict):
                 errors += _zone_operation_errors(document, zone.get("zone"), where + ".x-time-zone", own_path)
+    # Parameters listed on a path item or operation but not in effect: a path-item
+    # parameter an operation shadows, or one on a path item without operations.
+    for location, item in path_items(document):
+        listed = [(f"{location}.parameters", raw) for raw in item.get("parameters") or []]
+        for method in METHODS:
+            operation = item.get(method)
+            if isinstance(operation, dict):
+                listed += [(f"{location}.{method}.parameters", raw) for raw in operation.get("parameters") or []]
+        for where, raw in listed:
+            parameter = _deref(document, raw)
+            if not isinstance(parameter, dict) or id(parameter) in used:
+                continue
+            where = f"{where}[{parameter.get('in')}:{parameter.get('name')}]"
+            annotated.add(id(parameter))
+            used.add(id(parameter))
+            check_shape(parameter, where)
+            zone = parameter.get("x-time-zone")
+            if isinstance(zone, dict):
+                errors += _zone_operation_errors(document, zone.get("zone"), where + ".x-time-zone")
     for name, raw in ((document.get("components") or {}).get("parameters") or {}).items():
         parameter = _deref(document, raw)
         if not isinstance(parameter, dict):
