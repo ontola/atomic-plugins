@@ -1029,8 +1029,7 @@ halved (the first half holding the extra unit), depth first, down to
 `2 × minimumWidth`. A full window that cannot be split ends the read with
 `WindowReadError`. An item two windows return is kept once. Such a read is
 never complete in the Collection Completeness sense: its snapshot has
-`complete: false` and `notComplete` saying why, with no error, so the
-client does not apply it (it applies complete snapshots only). Without a
+`complete: false` and `notComplete` saying why, with no error. Without a
 range the collection is left unread, with an error. A `rangeWindow` scheme
 is never auto-detected, and `x-pagination` that applies it with another
 scheme throws `PaginationSchemeError`.
@@ -1045,12 +1044,26 @@ items, or one that repeats the page before it, ends the read with
 `PageReadError` before its items are taken. A read ended by a short page is
 complete only when the `assurance` is `documented`; with `observed` or
 `assumed` its snapshot has `complete: false` and `notComplete`, with no
-error, so the client does not apply it.
+error.
+
+`ApiClient.sync()` applies such a read conservatively: the records it
+returns are added or updated, and nothing is removed, held, checked or
+reported missing for the records it does not return; no deletion feed is
+read for it. `SyncResult.incomplete` lists each collection (and parent
+context) read that way, with the reason, so an app can show that the copy
+may be incomplete. A read that failed with an error is still not applied at
+all. `ApiClientOptions.ranges` gives the range for `rangeWindow`
+collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: `sync()` applies reads that ended without an error but
+  are not complete (range windows, short pages whose end is not documented)
+  by adding and updating their records only, never removing or checking an
+  absent one, and lists them in `SyncResult.incomplete` (`IncompleteRead`).
+  `ApiClientOptions.ranges` passes the range for `rangeWindow` collections.
 - **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
   short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
   0.6.0: a short page ends the list, an oversized or repeated page ends the

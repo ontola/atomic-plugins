@@ -28,6 +28,7 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  IncompleteRead,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,

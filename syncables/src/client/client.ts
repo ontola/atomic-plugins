@@ -7,7 +7,11 @@ import type {
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
-import { readCollections } from '../read/collections.js';
+import {
+  readCollections,
+  type CollectionReadOptions,
+  type CollectionSnapshot,
+} from '../read/collections.js';
 import {
   asText,
   discoverReadModel,
@@ -205,6 +209,13 @@ export interface ApiClientOptions {
   /** Root path bindings; per-call context overrides these. */
   constants?: Record<string, string>;
   selection?: QuerySelection;
+  /**
+   * The range `sync()` reads a collection over when its list operation
+   * applies a `rangeWindow` pagination scheme (Pagination Schemes 0.5.0
+   * §4.6), as for `readCollections`. Such a read is never complete: its
+   * records are added or updated, nothing is removed (`SyncResult.incomplete`).
+   */
+  ranges?: NonNullable<CollectionReadOptions['ranges']>;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
   /** Optional, awaited storage of original collection-read responses. */
@@ -308,6 +319,22 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * Collections this sync read without error but not completely: a read by
+   * range windows (Pagination Schemes 0.5.0 §4.6.4) or one ended by a short
+   * page whose end is not documented (0.6.0 §4.4.5). Their records were
+   * added or updated; nothing was removed or concluded about the records
+   * they did not return. One entry per collection and parent context.
+   */
+  incomplete: IncompleteRead[];
+}
+
+export interface IncompleteRead {
+  collection: string;
+  /** The parent path parameters the collection was read under. */
+  context: Record<string, string>;
+  /** Why the read is not complete. */
+  reason: string;
 }
 
 export interface PollOptions {
@@ -2835,6 +2862,55 @@ export function createApiClient(
       if (queue.length && !draining.has(key)) void drainQueue(key);
   }
 
+  /**
+   * A snapshot read without error but not completely (`notComplete`):
+   * its records are added to, or updated in, the confirmed copy; nothing
+   * is removed, no absent record is held, checked or reported missing, and
+   * no deletion feed is read or moved. Skipped for a scope a write settled
+   * on during the read, and per record for a record one settled on.
+   */
+  async function upsertIncomplete(
+    snapshot: CollectionSnapshot,
+    started: Map<string, number>,
+    startedRecords: Map<string, number>,
+    changed: Set<string>,
+  ): Promise<IncompleteRead> {
+    const route = byResource.get(snapshot.collection.name) as ClientRoute;
+    const context = contextFor(route, snapshot.pathParams);
+    const scope = scopeFor(route, context);
+    const report: IncompleteRead = {
+      collection: route.collection.name,
+      context: { ...context },
+      reason: snapshot.notComplete ?? 'not complete',
+    };
+    if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0))
+      return report;
+    const before = remote(scope);
+    const updated = new Map<string, Record<string, unknown>>();
+    for (const item of snapshot.items) {
+      const id = String(item[route.collection.idField]);
+      const key = keyFor(scope, id);
+      if ((startedRecords.get(key) ?? 0) !== (recordRevisions.get(key) ?? 0))
+        continue;
+      if (sameValue(before.get(id), item)) continue;
+      updated.set(id, item);
+    }
+    if (!updated.size) return report;
+    confirmed.set(scope, new Map([...before, ...updated]));
+    // A later complete read must compare against the confirmed copy, not
+    // the last complete snapshot, so that it can still prune.
+    lastSyncedItems.delete(scope);
+    for (const write of allWrites()) {
+      const record = write.scope === scope ? updated.get(write.id) : undefined;
+      if (record) setLastKnown(keyFor(scope, write.id), record);
+    }
+    detectConflicts(scope, updated);
+    for (const id of updated.keys()) await rebuild(scope, id);
+    changed.add(route.collection.name);
+    if (writeQueues.size || gaveUpWrites.size) await persistLater();
+    return report;
+  }
+
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
     const started = new Map(revisions);
@@ -2852,6 +2928,7 @@ export function createApiClient(
       legacy,
       budget,
       ...(options.selection ? { selection: options.selection } : {}),
+      ...(options.ranges ? { ranges: options.ranges } : {}),
     });
     const round: SyncRound = {
       feeds: [],
@@ -2861,8 +2938,15 @@ export function createApiClient(
       startedRecords,
     };
     const changed = new Set<string>();
+    const incomplete: IncompleteRead[] = [];
     for (const snapshot of result.collections) {
-      if (!snapshot.complete) continue;
+      if (!snapshot.complete) {
+        if (snapshot.notComplete !== undefined && snapshot.error === undefined)
+          incomplete.push(
+            await upsertIncomplete(snapshot, started, startedRecords, changed),
+          );
+        continue;
+      }
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const context = contextFor(route, snapshot.pathParams);
       const scope = scopeFor(route, context);
@@ -2960,7 +3044,7 @@ export function createApiClient(
     await countRefreshMisses(released);
     if (result.errors.length)
       throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
-    return { changed: [...changed] };
+    return { changed: [...changed], incomplete };
   }
 
   function sync(): Promise<SyncResult> {
