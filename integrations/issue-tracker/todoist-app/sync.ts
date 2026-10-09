@@ -1,8 +1,10 @@
 // @wc-ignore-file
 /**
- * One import pass: Todoist's active tasks into the app's `issue-v1` table,
- * through ../todoist.ts for what each task becomes and for what happens to a
- * task that stops appearing (#99).
+ * One import pass: Todoist's active tasks into the app's `issue-v1` table.
+ * What a task's issue-v1 values are comes from the shared lens catalog
+ * (`lens.ts`, `todoist-task-issue-v2`); ../todoist.ts decides what happens
+ * to a task that stops appearing (#99) and the app's own bookkeeping
+ * (presence, priority, project, last seen).
  *
  * Reads first, all of them, then writes: a read that fails leaves the table
  * as it was. Rows are matched by `todoist-task-id`. Todoist owns the
@@ -44,11 +46,10 @@ import {
   PARENT,
   recordSync,
   TAG_DONE,
-  TAG_TODO,
-  TASK_BODY,
   TASK_DUE_DATE,
   TASK_STATUS,
 } from './drive.js';
+import { issueFromTask, LENS_FIELDS } from './lens.js';
 import {
   lookupTasks,
   rateLimited,
@@ -86,6 +87,11 @@ export interface SyncSummary {
   checked: number;
   /** Whether the active-task read was complete (a partial read settles nothing). */
   complete: boolean;
+  /**
+   * Tasks the catalog lens refused (deleted, without content, a due date
+   * with a fixed time zone): their rows kept their issue-v1 values.
+   */
+  unmapped: { id: string; reason: string }[];
 }
 
 /**
@@ -172,29 +178,43 @@ async function previousTasks(
   return { previous, rows };
 }
 
-/** What a row should hold for one reconciled task record. */
+/** A row's current values of the fields the lens writes. */
+function lensValues(row: PluginResource | undefined) {
+  const values: Record<string, JSONValue> = {};
+
+  for (const property of LENS_FIELDS) {
+    const value = row?.get(property);
+    if (value !== undefined) values[property] = value;
+  }
+
+  return values;
+}
+
+/**
+ * What a row should hold for one reconciled task record: the issue-v1
+ * values from the catalog lens (or, when it refuses the task, none, so the
+ * row keeps its own), and the app's bookkeeping.
+ */
 function rowValues(
   record: FetchedRecord,
   drive: Drive,
   projects: Map<string, string>,
-): { set: Record<string, JSONValue>; unset: string[] } {
+  row: PluginResource | undefined,
+): {
+  set: Record<string, JSONValue>;
+  unset: string[];
+  refused?: string;
+} {
   const p = drive.properties;
   const v = record.values;
   const presence = v[todoistFields.presence] as TodoistPresence;
   const active = presence === 'active';
-  const shared: Record<string, unknown> = {
-    [NAME]: record.name,
-    [TASK_STATUS]: [v[todoistFields.done] === true ? TAG_DONE : TAG_TODO],
-  };
-  const unset: string[] = [];
-  const body = text(v.description);
-  if (body) shared[TASK_BODY] = body;
-  else unset.push(TASK_BODY);
-  const due = text(v[todoistFields.dueDay]);
-  if (due) shared[TASK_DUE_DATE] = due;
-  else unset.push(TASK_DUE_DATE);
+  const mapped = issueFromTask(v, lensValues(row));
+  const unset: string[] = 'refused' in mapped ? [] : [...mapped.unset];
 
-  const set = resolver.write(shared, ISSUE_V1) as Record<string, JSONValue>;
+  const set = (
+    'refused' in mapped ? {} : resolver.write(mapped.set, ISSUE_V1)
+  ) as Record<string, JSONValue>;
   set[p.taskId] = record.id;
   set[p.presence] = presence;
 
@@ -213,7 +233,9 @@ function rowValues(
     active ? rest : { ...rest, [todoistFields.lastSeen]: seen },
   );
 
-  return { set, unset };
+  return 'refused' in mapped
+    ? { set, unset, refused: mapped.refused }
+    : { set, unset };
 }
 
 export interface SyncOptions {
@@ -270,13 +292,15 @@ export async function syncTasks(
     reappeared: summary.reappeared,
     checked: lookups.length,
     complete: summary.complete,
+    unmapped: [],
   };
 
   for (const record of platform.records) {
     if (record.resource !== 'task') continue;
     out.total++;
-    const { set, unset } = rowValues(record, drive, projects);
     const row = rows.get(record.id);
+    const { set, unset, refused } = rowValues(record, drive, projects, row);
+    if (refused) out.unmapped.push({ id: record.id, reason: refused });
 
     if (!row) {
       await store.newResource({

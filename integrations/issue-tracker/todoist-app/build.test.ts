@@ -20,14 +20,16 @@ describe('Todoist drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 38,912 bytes minified on 2026-10-06 for 0.2.0, at the
-    // a12b74a6783b pin: ../todoist.ts, ontology-kit's terms and resolver,
-    // the issue-v1 provisioning and the plain-DOM view, the hand-made and
-    // incomplete rows with "Open row" (0.1.1, 26,857 bytes), plus (0.2.0)
-    // the shared sync-status card with its minified CSS, the status
-    // mapping and the rate-limit handling. The limit is that plus about
-    // 10%, rounded up.
-    expect(bytes).toBeLessThan(43_000);
+    // Measured 51,993 bytes minified on 2026-10-08 for 0.3.0, at the
+    // 0fa9c07856de pin: 0.2.0 (38,912 bytes on 2026-10-06: ../todoist.ts,
+    // ontology-kit's terms and resolver, the issue-v1 provisioning and the
+    // plain-DOM view, the hand-made and incomplete rows with "Open row",
+    // the shared sync-status card with its minified CSS, the status mapping
+    // and the rate-limit handling) plus (0.3.0) ontology-kit's lens
+    // interpreter lens.mjs and the published todoist-task-issue-v2 mapping,
+    // which replace the app's own task-to-issue mapping. The limit is that
+    // plus about 10%, rounded up.
+    expect(bytes).toBeLessThan(57_200);
   });
 
   it('bundles the shared sync-status card and its minified stylesheet', () => {

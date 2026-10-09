@@ -42,7 +42,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const NAME = 'https://atomicdata.dev/properties/name';
 const PARENT = 'https://atomicdata.dev/properties/parent';

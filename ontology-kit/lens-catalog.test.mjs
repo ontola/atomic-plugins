@@ -571,3 +571,30 @@ test('v3 backward edits may expect a refusal, and their laws are checked', () =>
     /edit 2 \(backward\): expected a read-only refusal, got .*outside this lens's domain/,
   );
 });
+
+test('this repository: lenses.mjs exports exactly the published lens data', async t => {
+  const source = readLensSource(root);
+  if (!source) return t.skip('no ontology-kit/lenses.json here');
+  const generated = await import('./lenses.mjs');
+  const { lensExportName } = await import('./ontology.mjs');
+  assert.deepEqual(
+    Object.keys(generated.lenses).sort(),
+    Object.keys(source.lenses).sort(),
+  );
+
+  for (const name of Object.keys(source.lenses)) {
+    const file = JSON.parse(
+      readFileSync(join(root, 'ontology/lenses', name), 'utf8'),
+    );
+    const want = {
+      '@id': file['@id'],
+      release: file.release,
+      name: file.name,
+      source: file.source,
+      target: file.target,
+      mapping: file.mapping,
+    };
+    assert.deepEqual(generated.lenses[name], want, name);
+    assert.equal(generated[lensExportName(name)], generated.lenses[name], name);
+  }
+});
