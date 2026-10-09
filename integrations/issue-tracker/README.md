@@ -794,9 +794,10 @@ extras were declared, Publish to GitHub, reopening, a revoked grant and
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and
-every test under `devonian/github-issues/`. The latter import the `devonian`
-package from source, so install its dependencies first
-(`cd devonian && pnpm install --frozen-lockfile`).
+every test under `devonian/github-issues/`. The latter import the npm
+`devonian` that `app/package.json` pins, installed in `app/node_modules`
+(`cd integrations/issue-tracker/app && pnpm install --frozen-lockfile`;
+`run-lane.mjs` does it when it is missing).
 
 API reference: https://docs.github.com/en/rest/issues/issues
 Label operations: https://docs.github.com/en/rest/issues/labels

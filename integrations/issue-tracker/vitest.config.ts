@@ -5,19 +5,22 @@ export default {
   resolve: {
     alias: {
       vitest: at('../../browser/node_modules/vitest/dist/index.js'),
-      // The Devonian GitHub issues lens in devonian/github-issues/ imports the
-      // `devonian` package. devonian/ is a sibling package in this repo, not an
-      // installed dependency, so its bare specifier is aliased to its source,
-      // the same way timesheets aliased its lens. devonian's own dependencies
-      // must be installed (`pnpm install` in devonian/; ci.yml's lane job
-      // does it).
-      // The drive app (app/) imports the `devonian/atomic` subpath. Same
-      // source, so the app's tests and the lens's agree; app/build.mjs
-      // bundles the npm package (app/package.json) instead. Listed before
-      // `devonian`, which would otherwise match it as a prefix.
-      'devonian/atomic': at('../../devonian/src/atomic/index.ts'),
-      'devonian/lenses': at('../../devonian/src/lenses/index.ts'),
-      devonian: at('../../devonian/src/main.ts'),
+      // The lenses in devonian/github-issues/ and devonian/todoist/, and the
+      // drive app (app/), import the npm `devonian` package, pinned in
+      // app/package.json and installed in app/node_modules (`pnpm install
+      // --frozen-lockfile` in app/; CI's "Install plugin npm dependencies"
+      // does it). The lens folders have no package of their own, so their
+      // bare specifiers are aliased to that install's compiled entry points:
+      // tests, the app's bundle and the lenses all run the same published
+      // devonian. Listed before `devonian`, which would otherwise match them
+      // as a prefix.
+      'devonian/atomic': at(
+        'app/node_modules/devonian/build/src/atomic/index.js',
+      ),
+      'devonian/lenses': at(
+        'app/node_modules/devonian/build/src/lenses/index.js',
+      ),
+      devonian: at('app/node_modules/devonian/build/src/main.js'),
       // devonian's @tomic/lib peer, and the host modules the lens was written
       // against (its consumer used to supply them), resolve to the symlinked
       // atomic-server checkout, like every other import under integrations/.
@@ -46,6 +49,10 @@ export default {
     // The drive app imports its stylesheets as text (`./x.css?raw`);
     // Vitest otherwise empties every .css import, `?raw` included.
     css: true,
+    // devonian/atomic's compiled JS imports @tomic/lib; inlining devonian
+    // lets Vite apply the @tomic/lib alias above instead of Node loading it
+    // from node_modules, where no built @tomic/lib is installed.
+    server: { deps: { inline: [/[\\/]node_modules[\\/]devonian[\\/]/] } },
     include: [
       '*.test.ts',
       'app/**/*.test.ts',
