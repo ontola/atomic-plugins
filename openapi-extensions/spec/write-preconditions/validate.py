@@ -231,7 +231,7 @@ def may_send(declaration, baseline, written, current, headers=None, body=None, s
     return "send", {}
 
 
-def write_answer(action, status, deletion_confirmed=False):
+def write_answer(action, status, deletion_confirmed=False, gone_deleted=False):
     """§4.5 "The write's own answer": classify a 404/410 to the write itself, on any send.
 
     Returns 'applied' or 'gone-unconfirmed' for a delete, 'gone' for an update,
@@ -240,12 +240,13 @@ def write_answer(action, status, deletion_confirmed=False):
     if status not in (404, 410):
         return None
     if action == "delete":
-        return "applied" if deletion_confirmed else "gone-unconfirmed"
+        confirmed = deletion_confirmed or (status == 410 and gone_deleted)
+        return "applied" if confirmed else "gone-unconfirmed"
     return "gone"
 
 
 def resolve_unknown(declaration, method, baseline, written, read=None, sent_version=None,
-                    action=None, deletion_confirmed=False, tombstone=None):
+                    action=None, deletion_confirmed=False, tombstone=None, gone_deleted=False):
     """§4.5 after an unknown outcome.
 
     Only a known update or delete is resolved: by `action`, else by a PUT,
@@ -265,8 +266,10 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
     the version an ifMatch write sent. `deletion_confirmed` is true for a
     Deletion Feeds tombstone for this object, an explicit notFound: deleted on
     a collection of the resource, or an absent: deleted collection the object
-    was a member of when last read; `tombstone` is the resource's
-    x-read-tombstone or None.
+    was a member of when last read. `gone_deleted` is true when a collection of
+    the resource states gone: deleted (Collection Completeness 0.3.0): it
+    confirms a 410, while a 404 still needs `deletion_confirmed`.
+    `tombstone` is the resource's x-read-tombstone or None.
     """
     declaration = declaration or {}
     kind = declaration.get("kind")
@@ -282,7 +285,7 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
         return "read-first"
     status, body = read.get("status"), read.get("body")
     headers = read.get("headers")
-    gone = write_answer(action, status, deletion_confirmed)
+    gone = write_answer(action, status, deletion_confirmed, gone_deleted)
     if gone:  # rule 1
         return gone
     if not (isinstance(status, int) and 200 <= status < 300) or not isinstance(body, dict):
