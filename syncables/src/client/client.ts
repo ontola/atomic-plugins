@@ -1873,8 +1873,11 @@ export function createApiClient(
       const key = keyFor(write.scope, id);
       recordRevisions.set(key, (recordRevisions.get(key) ?? 0) + 1);
       // The provider accepted a write to the record: a tombstone a feed
-      // reported for it earlier no longer says it is deleted.
+      // reported for it earlier no longer says it is deleted, and the record
+      // is no longer kept as unavailable (a delete removed it; any other
+      // 2xx showed it readable).
       feedTombstones.get(write.scope)?.ids.delete(id);
+      unavailableKept.delete(key);
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -2769,7 +2772,15 @@ export function createApiClient(
     for (let head = evidenceHead(key); head; head = evidenceHead(key)) {
       // A held delete is sent unless the record is unavailable: a deleted
       // or missing record answers it 404 (settled), an existing one is
-      // deleted as asked.
+      // deleted as asked. A record kept as unavailable stays held on an
+      // `unknown` answer: only `deleted` or `filtered` (which clear the
+      // mark) release it, and `unavailable` fails it.
+      if (
+        head.type === 'delete' &&
+        unavailableKept.has(key) &&
+        found.evidence === 'unknown'
+      )
+        break;
       if (head.type === 'delete' && found.evidence !== 'unavailable') {
         delete head.awaitingRefresh;
         delete head.refreshMisses;
@@ -3498,8 +3509,9 @@ export function createApiClient(
         if ((recordRevisions.get(keyFor(scope, id)) ?? 0) !== revision)
           continue;
         reportMissing(route, context, id, found, previous.get(id));
-        // Kept with its last known values (§4.3), not pruned.
-        if (found.evidence === 'unavailable') touchedIds.add(id);
+        // Kept with its last known values when unavailable (§4.3); a
+        // conclusion that clears a kept mark removes the record again.
+        touchedIds.add(id);
         nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
     }
@@ -3565,7 +3577,7 @@ export function createApiClient(
         if (
           (!record.vanished &&
             failMissing(scope, record.id, found, record.previous, released)) ||
-          (record.vanished && found.evidence === 'unavailable')
+          record.vanished
         )
           touched.push({ scope, id: record.id });
         touched.push(

@@ -461,12 +461,17 @@ kept, not pruned, also without writes (a vanished record read under
 known values stay visible, marked by the `onMissingRecord` report and
 stored in the outbox (`unavailable`, added within version 1), until a later
 read settles it (a complete read that returns it, a GET that answers 2xx,
-or evidence of its deletion). Kept records are not looked up again by
-themselves. A new `update()` or `remove()` of a kept record is held for the
-next refresh, which checks the record again. A queued delete of a record a
-complete read no longer returns is held like an update and checked first:
-sent when the read says deleted, unknown or present, failed (held for a
-decision) when it says unavailable. It still
+or evidence of its deletion, after which the record is removed again; a
+write to it that the provider accepts also ends the mark). Not yet: a kept
+record without writes is not looked up again by itself, so it stays kept
+until a read returns it or a new write to it is checked (lookups of such
+records are the next step). A new `update()` or `remove()` of a kept record
+is held for the next refresh, which checks the record again. A queued
+delete of a record a complete read no longer returns is held like an update
+and checked first: released and sent when the read says deleted, present
+(`filtered`) or, for a record not kept as unavailable, unknown; failed
+(held for a decision) when it says unavailable; still held when the record
+is kept as unavailable and the read is unknown. It still
 applies when a `selection` narrows the read, since it says what the record's
 own read means. A `notFound` on the list operation counts even for a
 collection with fixed reads (the safe reading). With `absent: deleted`, where the spec does not allow it, no GET is
@@ -959,7 +964,12 @@ the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that 
 reads this outbox does not know `notBefore` and `throttlingPauses` and
 drops them, so it may send a held write before the time the API asked for,
 though never a second time; the version stays `1` because every write it
-holds is still one that older client can read and send. Set `outboxNamespace` to
+holds is still one that older client can read and send. An older client
+also does not know the write value `missingRecord: 'unavailable'` (it keeps
+such a record's entry as unrestorable and writes it back unchanged, so the
+held writes are neither sent nor lost) nor the top-level `unavailable`
+(the kept records, which it drops: their marks are lost, and its next
+complete read removes the records from its local copy). Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
