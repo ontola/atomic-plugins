@@ -14,7 +14,10 @@
  * atomic-server comes from one of two places:
  *
  *   - by default, the binary at $ATOMIC_SERVER_CHECKOUT/target/e2e/atomic-server,
- *     built from source (AGENTS.md, "Shared pinned atomic-server build");
+ *     built from source (AGENTS.md, "Shared pinned atomic-server build").
+ *     When the SessionStart hook's stamp next to it names another commit
+ *     than the checkout is at, it is refused as stale (binaryProblem), with
+ *     the full build lines; a stampless build is trusted;
  *   - with ATOMIC_SERVER_IMAGE set (e.g.
  *     `ghcr.io/ontola/atomic-server-e2e:$(cat .atomic-server-ref)`), that
  *     image, run with `docker run` on the same port. Everything else is
@@ -221,6 +224,65 @@ export function dockerRunArgs({
 // Not link-atomic-server.mjs's pinnedRef(): that module imports this one.
 const readPin = () =>
   readFileSync(resolve(root, '.atomic-server-ref'), 'utf8').trim();
+
+/**
+ * The stamp .claude/hooks/session-start.sh writes next to the e2e binary
+ * once a build finished: the commit it was built from. Absent for a build
+ * made by hand.
+ */
+export const BUILD_STAMP = 'target/e2e/.built-for-atomic-plugins';
+
+/**
+ * How to build the e2e binary in `checkout`: ci.yml's build-server steps as
+ * the SessionStart hook runs them (the browser WASM bundle first, which the
+ * data-browser embeds, then the server), so a stale binary is never
+ * "fixed" with the cargo line alone.
+ */
+export const buildInstructions = checkout =>
+  [
+    `  cd ${checkout}`,
+    `  (cd wasm && CARGO_ENCODED_RUSTFLAGS='--cfg'$'\\x1f''getrandom_backend="wasm_js"' wasm-pack build --target web --out-dir pkg --no-opt && mkdir -p ../browser/data-browser/public/wasm && cp pkg/atomic_wasm.js pkg/atomic_wasm_bg.wasm ../browser/data-browser/public/wasm/)`,
+    `  SKIP_WASM_BUILD=1 VITE_E2E=true cargo build --profile e2e -p atomic-server --no-default-features --features wasm-plugins`,
+    `  git rev-parse HEAD > ${BUILD_STAMP}`,
+  ].join('\n');
+
+/** HEAD of the git checkout at `checkout`, or undefined when it has none. */
+export function checkoutHead(checkout) {
+  const result = spawnSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  });
+
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+/**
+ * Why the local e2e binary cannot be run, or undefined: it does not exist,
+ * or its stamp says it was built from another commit than the checkout is
+ * at now (after a pin bump moved the checkout, say), which would test the
+ * wrong host without a word. A binary without a stamp is trusted. `head`
+ * is the checkout's commit (tests pass one; callers let it be read).
+ */
+export function binaryProblem({
+  checkout,
+  binary = resolve(checkout, 'target/e2e/atomic-server'),
+  head = checkoutHead(checkout),
+}) {
+  if (!existsSync(binary))
+    return (
+      `${binary} does not exist. Build it first:\n${buildInstructions(checkout)}\n` +
+      'Or point ATOMIC_SERVER_CHECKOUT at a checkout that already has one, or set ATOMIC_SERVER_IMAGE to run the published image instead.'
+    );
+  const stampFile = resolve(checkout, BUILD_STAMP);
+  if (!existsSync(stampFile) || head === undefined) return undefined;
+  const stamp = readFileSync(stampFile, 'utf8').trim();
+  if (!stamp || stamp === head) return undefined;
+
+  return (
+    `${binary} was built from ${stamp.slice(0, 12)} (${stampFile}), but ${checkout} is at ${head.slice(0, 12)}: ` +
+    `that binary is a stale host. Rebuild it:\n${buildInstructions(checkout)}\n` +
+    `Or delete ${stampFile} to run it anyway.`
+  );
+}
 
 /** The named volume that holds one label's store when running the image. */
 export const storeVolume = label => `atomic-plugins-lane-store-${label}`;
@@ -445,12 +507,12 @@ export async function bringUp({
     const problem = imagePinProblem(image, readPin());
     if (problem) console.warn(`warning: ${problem}`);
     pullImage(image);
-  } else if (!existsSync(binary)) {
+  } else {
     // Checked up front: spawn's ENOENT surfaces asynchronously, so without this
-    // the caller waits out the full readiness timeout before seeing the cause.
-    throw new Error(
-      `${binary} does not exist. Build it first:\n  cd ${serverCheckout()} && cargo build --profile e2e -p atomic-server --no-default-features --features wasm-plugins\nOr point ATOMIC_SERVER_CHECKOUT at a checkout that already has one, or set ATOMIC_SERVER_IMAGE to run the published image instead.`,
-    );
+    // the caller waits out the full readiness timeout before seeing the cause;
+    // and a binary whose stamp names another commit would run without a word.
+    const problem = binaryProblem({ checkout: serverCheckout(), binary });
+    if (problem) throw new Error(problem);
   }
 
   await assertFree(ports, config);

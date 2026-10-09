@@ -1,5 +1,10 @@
 import { expect, it } from 'vitest';
-import { proxyTransport } from './proxy.mjs';
+import {
+  NOT_APPLIED,
+  proxyTransport,
+  refusalDetail,
+  refusedWrite,
+} from './proxy.mjs';
 
 it('needs a dispatch function: there is no direct, code-spending transport any more', () => {
   expect(() =>
@@ -124,4 +129,121 @@ it('dispatches through the host without handling a credential, and journals its 
     call('update_comment', { id: 5, body: 'x' }, 'u1'),
   ).rejects.toThrow('Uncertain GitHub write');
   expect(sent.length).toBe(before);
+});
+
+it('a write GitHub refused whole (#357) drops the journal entry and rejects as refused, not uncertain', async () => {
+  const journal = {};
+  const answers = [];
+  let saves = 0;
+  const call = proxyTransport({
+    repository: 'owner/repo',
+    journal,
+    save: async () => {
+      saves++;
+    },
+    dispatch: async () => answers.shift(),
+  });
+  answers.push({
+    status: 422,
+    body: JSON.stringify({
+      message: 'Validation Failed',
+      errors: [
+        {
+          resource: 'Issue',
+          field: 'title',
+          code: 'custom',
+          message: 'title is too long (maximum is 256 characters)',
+        },
+      ],
+      documentation_url:
+        'https://docs.github.com/rest/issues/issues#create-an-issue',
+    }),
+  });
+  const error = await call('create_issue', { title: 'T' }, 'c1').catch(e => e);
+  expect(error).toMatchObject({
+    notSent: true,
+    refused: true,
+    status: 422,
+    detail: 'Validation Failed; title is too long (maximum is 256 characters)',
+  });
+  expect(error.message).toBe(
+    'GitHub refused create_issue (HTTP 422: Validation Failed; title is too long (maximum is 256 characters)). Nothing was applied.',
+  );
+  // Journalled before it left, dropped once GitHub refused it.
+  expect(journal).toEqual({});
+  expect(saves).toBe(2);
+
+  // The same operation is sent again, not refused as uncertain.
+  answers.push({ status: 201, body: '{"number":7}' });
+  const receipt = await call('create_issue', { title: 'T' }, 'c1');
+  expect(receipt.status).toBe(201);
+  expect(journal.c1.receipt).toBe(receipt);
+});
+
+it('400, 404, 409, 410 and 422 refuse a write; 401, 403 and 5xx leave it uncertain; a read passes through', async () => {
+  expect([...NOT_APPLIED].sort()).toEqual([400, 404, 409, 410, 422]);
+  const transport = (status, body = '{}') =>
+    proxyTransport({
+      repository: 'owner/repo',
+      journal: {},
+      save: async () => {},
+      dispatch: async () => ({ status, body }),
+    });
+
+  for (const status of NOT_APPLIED) {
+    const journal = {};
+    const call = proxyTransport({
+      repository: 'owner/repo',
+      journal,
+      save: async () => {},
+      dispatch: async () => ({ status, body: '{"message":"Not Found"}' }),
+    });
+    await expect(
+      call('update_comment', { id: 1, body: 'x' }, 'u'),
+    ).rejects.toMatchObject({ refused: true, notSent: true, status });
+    expect(journal).toEqual({});
+  }
+
+  for (const status of [401, 403, 500, 502]) {
+    const journal = {};
+    const call = proxyTransport({
+      repository: 'owner/repo',
+      journal,
+      save: async () => {},
+      dispatch: async () => ({ status, body: '{"message":"Bad credentials"}' }),
+    });
+    const receipt = await call('update_comment', { id: 1, body: 'x' }, 'u');
+    expect(receipt.status).toBe(status);
+    expect(journal.u).toEqual({ signature: expect.any(String) });
+    await expect(
+      call('update_comment', { id: 1, body: 'x' }, 'u'),
+    ).rejects.toThrow('Uncertain GitHub write');
+  }
+
+  // A 404 on a read is GitHub's answer, not a refused write.
+  const read = await transport(404)('get_issue', { number: 9 }, 'r');
+  expect(read.status).toBe(404);
+});
+
+it("keeps GitHub's words for a refusal, bounded", () => {
+  expect(refusalDetail('{"message":"Not Found"}')).toBe('Not Found');
+  expect(
+    refusalDetail({
+      message: 'Validation Failed',
+      errors: [
+        { field: 'labels', code: 'invalid' },
+        { message: 'body is too long' },
+        'plain text',
+        { unrelated: true },
+      ],
+    }),
+  ).toBe('Validation Failed; labels invalid; body is too long; plain text');
+  expect(refusalDetail('not json')).toBe('not json');
+  expect(refusalDetail('')).toBe('');
+  expect(refusalDetail(null)).toBe('');
+  expect(refusalDetail(undefined)).toBe('');
+  expect(refusalDetail({ message: 'x'.repeat(400) })).toHaveLength(300);
+  expect(refusedWrite('update_issue', { status: 410, body: '' }).message).toBe(
+    'GitHub refused update_issue (HTTP 410). Nothing was applied.',
+  );
 });

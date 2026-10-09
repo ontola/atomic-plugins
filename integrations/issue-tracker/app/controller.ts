@@ -90,6 +90,15 @@ export type Problem =
    * retries at `until`; approved changes stay approved for that retry.
    */
   | { kind: 'rate-limited'; message: string; until: number }
+  /**
+   * GitHub refused a write whole (`proxy.mjs` `NOT_APPLIED`: 400, 404, 409,
+   * 410 or 422; #357). Nothing was applied, the journal entry and the saved
+   * operation are gone, and the next pass holds the change for review
+   * again. Not retried on a timer: the same request would be refused again
+   * until the change is edited. `detail` is GitHub's own explanation, and
+   * may be empty.
+   */
+  | { kind: 'refused'; message: string; status: number; detail: string }
   /** Anything else; "Sync now" retries. */
   | { kind: 'failed'; message: string };
 
@@ -275,17 +284,36 @@ const PAUSED: [RegExp, PausedReason][] = [
   [/^The integration proxy refused the request/, 'other'],
 ];
 
+/** "GitHub refused a change and applied nothing (HTTP 422: Validation Failed; …)." */
+export const refusalText = (p: { status: number; detail: string }): string =>
+  `GitHub refused a change and applied nothing (HTTP ${p.status}${p.detail ? `: ${p.detail}` : ''}).`;
+
 /** The `other-table` state on a table that is bound but whose grant lapsed. */
 export const PAUSED_NOTE =
   'Syncing with GitHub is paused: this app may no longer edit this table’s rows, or keep its GitHub issue numbers on them. Allow editing again to go on.';
 
 const sentence = (text: string) => text.replace(/\.?$/, '.');
 
+/** `proxyTransport`'s `refusedWrite` (`proxy.mjs`): a write GitHub refused whole. */
+const isRefusedWrite = (
+  error: unknown,
+): error is Error & { refused: true; status: number; detail: string } =>
+  error instanceof Error &&
+  (error as { refused?: unknown }).refused === true &&
+  typeof (error as { status?: unknown }).status === 'number';
+
 export function classify(error: unknown): Problem {
   const e = error as PassError;
   const message = error instanceof Error ? error.message : String(error);
   if (isRateLimitError(error))
     return { kind: 'rate-limited', message, until: error.rateLimit.until };
+  if (isRefusedWrite(error))
+    return {
+      kind: 'refused',
+      message,
+      status: error.status,
+      detail: typeof error.detail === 'string' ? error.detail : '',
+    };
   if (e?.subject && Array.isArray(e.fields))
     return {
       kind: 'conflict',
@@ -1188,6 +1216,8 @@ export function describe(state: ViewState): string {
           return `Sync paused: ${message}. Nothing is resent automatically; check the issue on GitHub before syncing again.`;
         if (kind === 'rate-limited')
           return `GitHub is rate-limiting; retrying at ${clock(state.problem.until)}. Changes waiting to send are kept and go out then. (${message})`;
+        if (kind === 'refused')
+          return `${refusalText(state.problem)} The change is held for review again: edit it here, then Review and send. Nothing is resent on its own.`;
 
         return `Sync failed: ${message}`;
       }

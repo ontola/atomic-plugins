@@ -80,6 +80,8 @@ export function pillFor(state: ViewState, now: number): Pill | undefined {
         return { state: 'paused', text: 'Sync paused' };
       if (p?.kind === 'rate-limited')
         return { state: 'paused', text: 'GitHub rate limit' };
+      if (p?.kind === 'refused')
+        return { state: 'paused', text: 'GitHub refused a change' };
       if (p?.kind === 'failed') return { state: 'error', text: 'Sync failed' };
       if (!state.last?.at) return { state: 'idle', text: 'Not synced yet' };
 

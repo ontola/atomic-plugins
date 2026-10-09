@@ -33,7 +33,7 @@ import { before } from '../../../browser/e2e/tests/test-utils';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
