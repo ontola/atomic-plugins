@@ -91,3 +91,15 @@ in-flight update marked for holding by a complete read is retried after an
 incomplete read returns its record, and a stored feed tombstone is dropped
 when an incomplete read returns the record (both checked to fail without the
 change). Lint is clean.
+
+**User:** Merge `origin/main` into the branch through #424. Add a test that
+pins the `JSON.stringify` identity, with a feed item repeated on a later
+page.
+
+**Assistant:** Merged `claude/syncables-short-page` (with main); the feed
+read keeps main's `skipNonObjects` next to its identity and outcome, and
+`sync()` passes `ranges` inside main's `activeBudget` block. New test: a
+feed paged by a documented short page whose page 2 repeats an item of
+page 1 ends with no tombstone and the cursor unchanged, while page 2 naming
+the same record in another item is read and deletes it; with the record id
+as identity the second case fails.

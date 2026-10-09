@@ -26,6 +26,12 @@ import {
   terms,
   write,
 } from './apps.mjs';
+import {
+  buildCatalog,
+  readBuilds,
+  recordedFor,
+  versionProblems,
+} from '../../usertest/catalog.mjs';
 
 const TEXT = 'export async function view() {}';
 
@@ -430,4 +436,81 @@ test('a new version beside a published one passes', () =>
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
+});
+
+// The user-testing catalog's builds (usertest/catalog.mjs) live here, in
+// CI's tooling unit tests, so that a changed app without a usertest version
+// bump fails CI: the droplet would otherwise serve new bytes under an old
+// version, which the host's integrity check refuses for new installs.
+test('usertest versions: a build that changed under a recorded version is a forgotten bump', () => {
+  const recorded = recordedFor([
+    { key: 'notion/usertest-9', sha256: 'sha256-old' },
+    { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-sample' },
+    { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+  ]);
+  assert.deepEqual(Object.keys(recorded), [
+    'calendar/usertest-12',
+    'notion-sample/usertest-9-sample-2',
+    'notion/usertest-9',
+  ]);
+
+  // Unchanged: nothing to report.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-old' },
+        { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+      ],
+      recorded,
+    ),
+    { changed: [], unrecorded: [] },
+  );
+
+  // Notion's source changed, its version did not (#417): both its module
+  // and its sample's differ from what usertest-9 was recorded with.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-new' },
+        { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-new2' },
+      ],
+      recorded,
+    ),
+    {
+      changed: [
+        "notion: the build differs from what usertest-9 was recorded with (usertest/builds.json): bump VERSIONS['notion'] in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+        "notion-sample: the build differs from what usertest-9-sample-2 was recorded with (usertest/builds.json): bump VERSIONS['notion'] if that app changed, else SAMPLE_VERSION, in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+      ],
+      unrecorded: [],
+    },
+  );
+
+  // Bumped but not recorded yet.
+  assert.deepEqual(
+    versionProblems(
+      [{ key: 'notion/usertest-10', sha256: 'sha256-new' }],
+      recorded,
+    ),
+    {
+      changed: [],
+      unrecorded: [
+        'notion/usertest-10 is not in usertest/builds.json: run node usertest/catalog.mjs --record',
+      ],
+    },
+  );
+});
+
+test("this repository's usertest builds match what their versions were recorded with", async () => {
+  const out = mkdtempSync(join(tmpdir(), 'usertest-catalog-'));
+
+  try {
+    const { modules } = await buildCatalog(out);
+    assert.ok(modules.length > 0);
+    assert.deepEqual(versionProblems(modules, readBuilds()), {
+      changed: [],
+      unrecorded: [],
+    });
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
 });
