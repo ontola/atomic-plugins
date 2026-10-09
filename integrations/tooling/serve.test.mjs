@@ -22,8 +22,11 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
+  binaryProblem,
   bindAddress,
   bringUp,
+  BUILD_STAMP,
+  buildInstructions,
   devServerHost,
   dockerRunArgs,
   IMAGE_STORE,
@@ -46,6 +49,48 @@ const pinnedImage = `ghcr.io/ontola/atomic-server-e2e:${readFileSync(
   join(root, '.atomic-server-ref'),
   'utf8',
 ).trim()}`;
+
+test('binaryProblem: a missing binary gets the full build lines, a stale stamp is refused, no stamp is trusted', () => {
+  const checkout = mkdtempSync(join(tmpdir(), 'atomic-checkout-'));
+  const binary = join(checkout, 'target/e2e/atomic-server');
+  const stamp = join(checkout, BUILD_STAMP);
+  const head = 'b'.repeat(40);
+
+  try {
+    // No binary: how to build it, the WASM bundle included, never cargo alone.
+    const missing = binaryProblem({ checkout, head });
+    assert.match(missing, /does not exist\. Build it first:/);
+    assert.ok(missing.includes(buildInstructions(checkout)));
+    assert.match(missing, /wasm-pack build --target web/);
+    assert.match(missing, /cargo build --profile e2e/);
+    assert.match(missing, /ATOMIC_SERVER_IMAGE/);
+
+    // A binary without a stamp (built by hand) is trusted.
+    mkdirSync(join(checkout, 'target/e2e'), { recursive: true });
+    writeFileSync(binary, '');
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+
+    // A stamp for the checkout's commit passes; another commit is refused.
+    writeFileSync(stamp, `${head}\n`);
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+    writeFileSync(stamp, `${pin}\n`);
+    const stale = binaryProblem({ checkout, head });
+    assert.match(
+      stale,
+      /was built from aaaaaaaaaaaa .*, but .* is at bbbbbbbbbbbb: that binary is a stale host/,
+    );
+    assert.ok(stale.includes(buildInstructions(checkout)));
+    assert.ok(stale.includes(`delete ${stamp}`));
+    // Without a readable HEAD (not a git checkout) the stamp cannot be judged.
+    assert.equal(binaryProblem({ checkout, head: undefined }), undefined);
+    assert.equal(binaryProblem({ checkout }), undefined);
+    // An empty stamp says nothing.
+    writeFileSync(stamp, '\n');
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
 
 test('dockerRunArgs publishes the lane port on loopback, same number inside and out', () => {
   const args = dockerRunArgs({

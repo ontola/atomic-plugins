@@ -103,9 +103,37 @@ export function loadCompleted(apiDir = API_DIR) {
 }
 
 /**
+ * The one answer a recording gives, or undefined when it recorded none.
+ * Every recorded completed task must have answered the same way (the same
+ * status, and for 200 the same `checked`): Todoist has one behaviour, so
+ * answers that disagree mean a task that was not completed after all, or a
+ * recording made across a change; the fixture refuses to pick one.
+ */
+export function completedAnswer(answers, apiDir = API_DIR) {
+  const [first] = answers;
+  if (!first) return undefined;
+  const differs = answers.find(
+    a =>
+      a.status !== first.status ||
+      (a.status === 200 && a.checked !== first.checked),
+  );
+  if (differs)
+    throw new Error(
+      `${apiDir.pathname}: the recorded completed-task answers disagree (${answers
+        .map(
+          a => `${a.status}${a.status === 200 ? ` checked: ${a.checked}` : ''}`,
+        )
+        .join(', ')}); re-record with tasks that are all completed`,
+    );
+
+  return first;
+}
+
+/**
  * The rows to start from, the page size and the completed-task answer, from
  * api/ or synthetic.mjs. `completed` is `{ recorded, status, checked }`:
- * the first recorded answer (`recorded: true`), or ASSUMED_COMPLETED.
+ * the recorded answer (`recorded: true`, every recorded task agreeing), or
+ * ASSUMED_COMPLETED.
  */
 export function source({ apiDir = API_DIR } = {}) {
   if (!recorded(apiDir))
@@ -120,7 +148,7 @@ export function source({ apiDir = API_DIR } = {}) {
     COLLECTIONS.map(c => [c, loadPages(c, apiDir)]),
   );
   const rows = c => pages[c].flatMap(page => page.body.results);
-  const [answer] = loadCompleted(apiDir);
+  const answer = completedAnswer(loadCompleted(apiDir), apiDir);
 
   return {
     synthetic: false,

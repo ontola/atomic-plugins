@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       devonian:
-        specifier: 0.8.0
-        version: 0.8.0
+        specifier: 0.9.0
+        version: 0.9.0
 
 packages:
 
@@ -86,8 +86,8 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  devonian@0.8.0:
-    resolution: {integrity: sha512-jFbmshJRM4rp/bEruIoBMbuIy92ZZSHfYB3XOmx58h6nv7KGP0Mw7K1kdbvmnepLU3dngsjf9xJSdl4xVMupcg==}
+  devonian@0.9.0:
+    resolution: {integrity: sha512-eejJbiBgMDCIkLHS8KvzJsDVAK+ce8zu9pw9JucX0X+n8+Ym4u+WSrBwyTwJwxwQhKU44f7hmz0mQdQWCCizzw==}
     engines: {node: '>= 22.11 < 23'}
     peerDependencies:
       '@tomic/lib': '>=0.40.0'
@@ -208,7 +208,7 @@ snapshots:
   detect-libc@2.1.2:
     optional: true
 
-  devonian@0.8.0:
+  devonian@0.9.0:
     dependencies:
       '@automerge/automerge-repo': 2.5.6
       effect: 3.22.2

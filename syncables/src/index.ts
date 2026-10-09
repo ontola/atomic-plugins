@@ -111,6 +111,14 @@ export type {
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { halves, WindowReadError } from './pagination/window.js';
+export type {
+  RangeWindowObject,
+  WindowBounds,
+  WindowFormat,
+  WindowUnit,
+} from './pagination/types.js';
+export type { WalkOutcome, WindowRange } from './read/pages.js';
 
 export {
   PaginationSchemeError,
