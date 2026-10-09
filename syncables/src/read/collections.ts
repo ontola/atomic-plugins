@@ -1,5 +1,6 @@
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 import {
   applySelection,
   asText,
@@ -21,7 +22,9 @@ import {
   type WalkOutcome,
   type WindowRange,
 } from './pages.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import {
+  rangeParameters,
   timeZoneParameters,
   wallClockQuery,
   zoneReader,
@@ -158,6 +161,11 @@ export async function readCollections(
 ): Promise<CollectionReadResult> {
   const doc = resolveRefs(document);
   const model = discoverReadModel(doc, options.legacy);
+  // The collections' own fixed query values, before a selection narrows
+  // them: they define a collection rather than narrow it (coverage).
+  const fixedQueries = new Map(
+    model.collections.map((c) => [c.name, { ...c.listQuery }]),
+  );
   applySelection(doc, model, options.selection);
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
@@ -169,6 +177,7 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
+      declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
   // Zones are read once per read and again after it (Filtering 0.2.0-draft).
@@ -229,18 +238,40 @@ export async function readCollections(
             );
           }
           let query = collection.listQuery;
-          const timeZoned = operation
-            ? timeZoneParameters(
-                doc.paths[collection.url]?.['parameters'],
-                operation,
-              )
-            : [];
+          // A probe makes one request and reads nothing: no zone reads.
+          const timeZoned =
+            operation && !options.probe
+              ? timeZoneParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation,
+                )
+              : [];
           if (timeZoned.length) {
+            let paging = new Set<string>();
+            try {
+              const scheme = resolveEffectiveScheme(
+                doc,
+                operation as OperationObject,
+              )?.scheme;
+              paging = new Set(
+                Object.keys(scheme?.request?.queryParameters ?? {}),
+              );
+            } catch {
+              // An unusable scheme fails the read in walkPages below.
+            }
             const written = await wallClockQuery(
               timeZoned,
               query,
               path,
               zones.read,
+              {
+                ranges: rangeParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation as OperationObject,
+                ),
+                paging,
+                fixed: fixedQueries.get(collection.name) ?? {},
+              },
             );
             query = written.query;
             if (written.coverage) {
@@ -333,9 +364,9 @@ export async function readCollections(
     for (const { snapshot, keys } of zoned) {
       const coverage = snapshot.coverage as ReadCoverage;
       if (!snapshot.complete)
-        snapshot.coverage = { ...coverage, span: null, reason: 'incomplete' };
+        snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
-        snapshot.coverage = { ...coverage, span: null, reason: 'zoneChanged' };
+        snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
     }
   }
   return { collections, errors };

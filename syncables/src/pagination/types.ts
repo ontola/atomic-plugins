@@ -112,7 +112,17 @@ export interface ResponseFieldObject {
   [key: `x-${string}`]: unknown;
 }
 
+/**
+ * Envelope Object (spec §4.4.2): where the items array sits in the body.
+ * `itemsField` omitted or `null` means the body root is the array.
+ */
+export interface EnvelopeObject {
+  itemsField?: string | null;
+  [key: `x-${string}`]: unknown;
+}
+
 export interface ResponsePaginationFieldsObject {
+  envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
   [key: `x-${string}`]: unknown;

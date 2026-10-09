@@ -32,7 +32,7 @@ export {
 } from './read/ontology.js';
 export type { Datatype, Ontology, Term } from './read/ontology.js';
 export { coveredSpan, instantsOf, wallClockParam } from './read/time-zone.js';
-export type { CoveredSpan, ReadCoverage } from './read/time-zone.js';
+export type { CoveredSpan, FieldSpan, ReadCoverage } from './read/time-zone.js';
 export { DEFAULT_READ_LIMITS } from './read/pages.js';
 export type { ReadLimits } from './read/pages.js';
 export { fetchTransport } from './read/transport.js';
@@ -105,6 +105,24 @@ export { parseLinkHeader } from './pagination/response-parser.js';
 export { LinkRefused, resolveLink } from './pagination/links.js';
 export type { ResolveLinkOptions } from './pagination/links.js';
 export type { LinkResolutionObject } from './pagination/types.js';
+export {
+  classifyThrottling,
+  declaredThrottling,
+  headerTime,
+  operationBuckets,
+} from './throttling/throttling.js';
+export type {
+  BodyPredicate,
+  HeaderPredicate,
+  HeaderRole,
+  HeaderRoleObject,
+  SignalObject,
+  ThrottlingDeclaration,
+  ThrottlingMeaning,
+  ThrottlingResponse,
+  ThrottlingVerdict,
+  TimeUnit,
+} from './throttling/throttling.js';
 export { halves, WindowReadError } from './pagination/window.js';
 export type {
   RangeWindowObject,

@@ -140,7 +140,9 @@ def derive_class(runtime, describer):
 
     Returns {"properties": {id: property}, "undescribed": [id], "names":
     {id: name} for every definition, "duplicates": [id], "duplicateNames":
-    [name], "duplicateOptions": {id: [option id]}}. Each property is {"name",
+    [name], "duplicateIdNames": {name: id} (the other names a repeated id
+    goes by), "duplicateOptions": {id: [option id]}}. A name that is not a
+    string is replaced by the map key (with `keyedBy: name`), else the id. Each property is {"name",
     "type", "schema", "key"}, with "description" when the document names
     that field, and for an option type "options" (option id -> name or None,
     the first of a repeated id kept) and "multiple". A definition id that
@@ -149,6 +151,7 @@ def derive_class(runtime, describer):
     fields = runtime["definition"]
     properties, undescribed, names = {}, [], {}
     seen, duplicates, name_count, duplicate_options = set(), [], {}, {}
+    duplicate_names = {}
     for key, definition in _definitions(runtime, describer):
         if not isinstance(definition, dict):
             continue
@@ -156,14 +159,18 @@ def derive_class(runtime, describer):
         kind = get_path(definition, fields["type"])
         if not isinstance(identifier, str) or not isinstance(kind, str):
             continue
+        name = get_path(definition, fields["name"]) if "name" in fields else MISSING
+        if not isinstance(name, str):
+            # Absent, or not a string (an object, say): the map key, else the id.
+            name = key if isinstance(key, str) and runtime["keyedBy"] == "name" else identifier
         if identifier in seen:
             if identifier not in duplicates:
                 duplicates.append(identifier)
+            # Every name a repeated id goes by points at it, so a member keyed
+            # by any of them is undescribed rather than unmatched.
+            duplicate_names[name] = identifier
             continue
         seen.add(identifier)
-        name = get_path(definition, fields["name"]) if "name" in fields else MISSING
-        if name is MISSING:
-            name = key if key is not None and runtime["keyedBy"] == "name" else identifier
         names[identifier] = name
         name_count[name] = name_count.get(name, 0) + 1
         described = runtime["types"].get(kind)
@@ -199,6 +206,7 @@ def derive_class(runtime, describer):
         "names": names,
         "duplicates": duplicates,
         "duplicateNames": [name for name, count in name_count.items() if count > 1],
+        "duplicateIdNames": duplicate_names,
         "duplicateOptions": duplicate_options,
     }
 
@@ -243,6 +251,7 @@ def read_members(runtime, derived, item):
         by_key.update({identifier: identifier for identifier in skipped})
     else:
         by_key = {name: identifier for identifier, name in names.items() if name not in ambiguous_names}
+        by_key.update(derived.get("duplicateIdNames") or {})
     matched = {}
     for key, member in members.items():
         if runtime["match"] == "id":

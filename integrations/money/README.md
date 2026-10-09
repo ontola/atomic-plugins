@@ -628,7 +628,36 @@ in `localthought/fixtures/index.mjs`). It pages contacts and time entries by
 contacts on page 2 with 503, and answers at most 100 mutations per period
 window (a test lowers that); all three are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
-administration and API token**; the steps are in `scenario.mjs`'s header.
+administration and API token**; the recorder is ready for them:
+
+```sh
+MONEYBIRD_TOKEN=<API token> node integrations/money/fixtures/moneybird/record.mjs
+```
+
+It makes GET requests only, on the five operations the app reads, as the
+app sends them (`per_page` 2 by default so a few records span pages,
+`include_archived=true`, `period:this_year`), writes `fixtures/moneybird/api/`
+redacted per its exported `REDACTIONS` list (ids to stable 18-digit fakes
+that keep references intact, names, addresses, e-mails, IBANs and messages
+to stable fakes (one fake per real value, so a project nested in several
+time entries keeps one name), the nested arrays the app never reads to
+`[]`, any unrecognised string, and any number other than `version`,
+`budget`, `paused_duration`, `max_transfer_amount` and `child_order`, to
+`"redacted"` and listed in `api/meta.json` by its full path; inside a
+nested object the list does not know (`sepa_fields`, say) everything is
+redacted whatever its field names, and an object key the recorder's
+`FIELDS` list does not know becomes `redacted-key-<n>`, so a field Moneybird
+adds shows up as a redacted key until it is added there), and never writes the token. Once `api/meta.json` exists, `scenario.mjs` replays the
+recording instead of `synthetic.mjs`, with the same page cap, outage and
+mutation cap, and `this_year` meaning the recording's year;
+`moneybird-fixture.test.ts` proves that replay against an invented `api/`
+and, once recorded, checks the recorded rows hold what the app reads and
+were recorded this civil year (the app asks for `period:this_year` by its
+own clock, so a recording goes stale at New Year). `moneybird/moneybird.test.ts`
+and `e2e/moneybird.spec.ts` import `synthetic.mjs`'s names and counts and
+need their expectations updated to the recorded rows. What the recording
+settles is the right-hand column of the table above; nothing in it moves
+until then.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).

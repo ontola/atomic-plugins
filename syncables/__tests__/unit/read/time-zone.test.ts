@@ -329,11 +329,20 @@ describe('x-time-zone in a collection read', () => {
         start: '2026-01-01T01:00:00Z',
         end: '2026-02-01T01:00:00Z',
       },
-      zones: { start: AMS, end: AMS },
-      span: {
-        from: iso('2026-01-01T00:00:00'),
-        to: iso('2026-02-01T00:00:00'),
+      instants: {
+        start: iso('2026-01-01T00:00:00'),
+        end: iso('2026-02-01T00:00:00'),
       },
+      zones: { start: AMS, end: AMS },
+      spans: [
+        {
+          field: '/timeInterval/start',
+          from: iso('2026-01-01T00:00:00'),
+          fromInclusive: true,
+          to: iso('2026-02-01T00:00:00'),
+          toInclusive: false,
+        },
+      ],
     });
   });
 
@@ -380,10 +389,15 @@ describe('x-time-zone in a collection read', () => {
     );
     expect(entries).toHaveLength(2);
     for (const snapshot of entries)
-      expect(snapshot.coverage?.span).toEqual({
-        from: iso('2026-01-01T00:00:00'),
-        to: iso('2026-02-01T00:00:00'),
-      });
+      expect(snapshot.coverage?.spans).toEqual([
+        {
+          field: '/timeInterval/start',
+          from: iso('2026-01-01T00:00:00'),
+          fromInclusive: true,
+          to: iso('2026-02-01T00:00:00'),
+          toInclusive: false,
+        },
+      ]);
   });
 
   it('discards the span when the zone changed during the read', async () => {
@@ -395,7 +409,7 @@ describe('x-time-zone in a collection read', () => {
     expect(snapshot.items).toHaveLength(1);
     expect(snapshot.coverage).toMatchObject({
       zones: { start: AMS, end: AMS },
-      span: null,
+      spans: null,
       reason: 'zoneChanged',
     });
   });
@@ -406,7 +420,7 @@ describe('x-time-zone in a collection read', () => {
       window('2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z'),
     );
     expect(snapshot.coverage).toMatchObject({
-      span: null,
+      spans: null,
       reason: 'zoneChanged',
     });
   });
@@ -430,11 +444,20 @@ describe('x-time-zone in a collection read', () => {
           start: '2026-01-10T00:00:00Z',
           end: '2026-01-20T00:00:00Z',
         },
-        zones: { start: null, end: null },
-        span: {
-          from: iso('2026-01-10T14:00:00'),
-          to: iso('2026-01-19T10:00:00'),
+        instants: {
+          start: iso('2026-01-10T00:00:00'),
+          end: iso('2026-01-20T00:00:00'),
         },
+        zones: { start: null, end: null },
+        spans: [
+          {
+            field: '/timeInterval/start',
+            from: iso('2026-01-10T14:00:00'),
+            fromInclusive: true,
+            to: iso('2026-01-19T10:00:00'),
+            toInclusive: false,
+          },
+        ],
       });
       // An unread zone is not read again after the list.
       expect(
@@ -448,7 +471,7 @@ describe('x-time-zone in a collection read', () => {
       window('2026-01-10T00:00:00Z', '2026-01-11T00:00:00Z'),
     );
     expect(snapshot.complete).toBe(true);
-    expect(snapshot.coverage).toMatchObject({ span: null, reason: 'empty' });
+    expect(snapshot.coverage).toMatchObject({ spans: null, reason: 'empty' });
   });
 
   it('binds the zone operation’s path parameters from the request', async () => {
@@ -487,14 +510,14 @@ describe('x-time-zone in a collection read', () => {
     expect(listed(requests)!.searchParams.get('start')).toBe(
       '2026-10-25T02:30:00Z',
     );
-    expect(snapshot.coverage?.span?.from).toBe(iso('2026-10-25T00:30:00'));
+    expect(snapshot.coverage?.spans?.[0]?.from).toBe(iso('2026-10-25T00:30:00'));
     // unspecified: the later instant for a lower bound.
     const plain = await read(
       [],
       window('2026-10-25T00:30:00Z', '2026-11-01T00:00:00Z'),
       document({ name: AMS }),
     );
-    expect(plain.snapshot.coverage?.span?.from).toBe(
+    expect(plain.snapshot.coverage?.spans?.[0]?.from).toBe(
       iso('2026-10-25T01:30:00'),
     );
   });
@@ -525,7 +548,7 @@ describe('x-time-zone in a collection read', () => {
       doc,
     );
     expect(snapshot.coverage).toMatchObject({
-      span: null,
+      spans: null,
       reason: 'noRangePredicate',
     });
   });
@@ -546,11 +569,245 @@ describe('x-time-zone in a collection read', () => {
           start: '2026-01-01T01:00:00Z',
           end: '2026-02-01T01:00:00Z',
         },
-        zones: { start: AMS, end: AMS },
-        span: {
-          from: iso('2026-01-01T00:00:00'),
-          to: iso('2026-02-01T00:00:00'),
+        instants: {
+          start: iso('2026-01-01T00:00:00'),
+          end: iso('2026-02-01T00:00:00'),
         },
+        zones: { start: AMS, end: AMS },
+        spans: [
+          {
+            field: '/timeInterval/start',
+            from: iso('2026-01-01T00:00:00'),
+            fromInclusive: true,
+            to: iso('2026-02-01T00:00:00'),
+            toInclusive: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('gives one span per x-filter field, never merging bounds of different fields', async () => {
+    const doc = document();
+    const params = doc.components!['parameters'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    // `end` bounds another field, exclusively, and a third parameter bounds
+    // the first field again, inclusively from above.
+    params['End']!['x-filter'] = { field: '/updatedAt', operator: 'lt' };
+    params['Until'] = {
+      ...structuredClone(params['Start']!),
+      name: 'until',
+      'x-filter': { field: '/timeInterval/start', operator: 'lte' },
+    };
+    (
+      doc.paths[ENTRIES]!.get!.parameters as unknown as Record<string, string>[]
+    ).push({ $ref: '#/components/parameters/Until' });
+    const { snapshot } = await read([AMS], {
+      query_overrides: [
+        {
+          path: ENTRIES,
+          values: {
+            start: '2026-01-01T00:00:00Z',
+            end: '2025-06-01T00:00:00Z',
+            until: '2026-02-01T00:00:00Z',
+          },
+        },
+      ],
+    }, doc);
+    // `end` is before `start`, but bounds another field: not empty.
+    expect(snapshot.coverage?.spans).toEqual([
+      {
+        field: '/timeInterval/start',
+        from: iso('2026-01-01T00:00:00'),
+        fromInclusive: true,
+        to: iso('2026-02-01T00:00:00'),
+        toInclusive: true,
+      },
+      {
+        field: '/updatedAt',
+        to: iso('2025-06-01T00:00:00'),
+        toInclusive: false,
+      },
+    ]);
+  });
+
+  it('reads no zone in probe mode', async () => {
+    const fake = provider([AMS]);
+    await readCollections(document(), {
+      transport: fake.transport,
+      constants,
+      selection: window('2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z'),
+      probe: true,
+    });
+    expect(fake.requests.map((r) => r.url.pathname)).toEqual([
+      '/v1/workspaces/w1/users/u1/entries',
+    ]);
+  });
+
+  // #428 review: the other query parameters of the same request.
+  /** document() with extra query parameters on the entries list. */
+  function withParameters(
+    extra: Record<string, unknown>[],
+    fixed?: Record<string, string>,
+  ): OpenApiDocument {
+    const doc = document();
+    (
+      doc.paths[ENTRIES]!.get!.parameters as unknown as Record<
+        string,
+        unknown
+      >[]
+    ).push(...extra);
+    if (fixed) {
+      const resources = doc.components!['crudResources'] as Record<
+        string,
+        { collections: Record<string, Record<string, unknown>> }
+      >;
+      resources['entry']!.collections['entries']!['listQuery'] = fixed;
+    }
+    return doc;
+  }
+  const query = (
+    name: string,
+    filter?: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    name,
+    in: 'query',
+    schema: { type: 'string' },
+    ...(filter ? { 'x-filter': filter } : {}),
+  });
+  const values = (extra: Record<string, string>): QuerySelection => ({
+    query_overrides: [
+      {
+        path: ENTRIES,
+        values: {
+          start: '2026-01-01T00:00:00Z',
+          end: '2026-02-01T00:00:00Z',
+          ...extra,
+        },
+      },
+    ],
+  });
+  const reviewProbe = withParameters([
+    query('updatedAfter', { field: '/updatedAt', operator: 'gte' }),
+    query('project', { field: '/projectId', operator: 'eq' }),
+    query('startUtc', { field: '/timeInterval/start', operator: 'gte' }),
+    query('hydrated'),
+  ]);
+
+  it('adds a range parameter without x-time-zone as a span of its own field', async () => {
+    const { snapshot } = await read(
+      [AMS],
+      values({ updatedAfter: '2026-01-15T12:00:00+01:00' }),
+      reviewProbe,
+    );
+    expect(snapshot.coverage?.instants).toMatchObject({
+      updatedAfter: iso('2026-01-15T11:00:00'),
+    });
+    expect(snapshot.coverage?.spans).toEqual([
+      {
+        field: '/timeInterval/start',
+        from: iso('2026-01-01T00:00:00'),
+        fromInclusive: true,
+        to: iso('2026-02-01T00:00:00'),
+        toInclusive: false,
+      },
+      {
+        field: '/updatedAt',
+        from: iso('2026-01-15T11:00:00'),
+        fromInclusive: true,
+      },
+    ]);
+  });
+
+  for (const [label, extra] of [
+    ['an equality x-filter', { project: 'p1' }],
+    ['a parameter without x-filter', { hydrated: 'true' }],
+    ['a range bound that is not an instant', { startUtc: 'yesterday' }],
+    [
+      'all three of the review probe',
+      {
+        updatedAfter: '2026-01-15T00:00:00Z',
+        project: 'p1',
+        startUtc: '2026-01-05T00:00:00Z',
+      },
+    ],
+  ] as const)
+    it(`covers nothing known with ${label} (otherFilters)`, async () => {
+      const { snapshot, requests } = await read(
+        [AMS],
+        values(extra),
+        reviewProbe,
+      );
+      // The request is still sent with the values.
+      expect(listed(requests)!.searchParams.get('start')).toBe(
+        '2026-01-01T01:00:00Z',
+      );
+      expect(snapshot.coverage).toMatchObject({
+        spans: null,
+        reason: 'otherFilters',
+      });
+    });
+
+  it('does not count the collection’s own fixed listQuery value as a narrowing', async () => {
+    const { snapshot } = await read(
+      [AMS],
+      values({}),
+      withParameters([query('hydrated')], { hydrated: 'true' }),
+    );
+    expect(snapshot.coverage?.spans).toHaveLength(1);
+    expect(snapshot.coverage).not.toHaveProperty('reason');
+  });
+
+  it('keeps the tighter of two lower bounds on one field, zoned or not', async () => {
+    const { snapshot } = await read(
+      [AMS],
+      values({ startUtc: '2026-01-05T00:00:00Z' }),
+      reviewProbe,
+    );
+    expect(snapshot.coverage?.spans).toEqual([
+      {
+        field: '/timeInterval/start',
+        from: iso('2026-01-05T00:00:00'),
+        fromInclusive: true,
+        to: iso('2026-02-01T00:00:00'),
+        toInclusive: false,
+      },
+    ]);
+    // A looser one does not widen it.
+    const looser = await read(
+      [AMS],
+      values({ startUtc: '2025-12-01T00:00:00Z' }),
+      reviewProbe,
+    );
+    expect(looser.snapshot.coverage?.spans?.[0]?.from).toBe(
+      iso('2026-01-01T00:00:00'),
+    );
+  });
+
+  it('takes the excluded end when two bounds meet at the same instant', async () => {
+    const doc = withParameters([
+      query('after', { field: '/timeInterval/start', operator: 'gt' }),
+      query('until', { field: '/timeInterval/start', operator: 'lte' }),
+    ]);
+    const { snapshot } = await read(
+      [AMS],
+      values({
+        // start (gte, zoned) is 2026-01-01T00:00:00Z: the same instant.
+        after: '2026-01-01T01:00:00+01:00',
+        // end (lt, zoned) is 2026-02-01T00:00:00Z: the same instant.
+        until: '2026-02-01T00:00:00Z',
+      }),
+      doc,
+    );
+    expect(snapshot.coverage?.spans).toEqual([
+      {
+        field: '/timeInterval/start',
+        from: iso('2026-01-01T00:00:00'),
+        fromInclusive: false,
+        to: iso('2026-02-01T00:00:00'),
+        toInclusive: false,
       },
     ]);
   });
