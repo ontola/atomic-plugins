@@ -708,6 +708,31 @@ class ReadPagesSmallerPageSizeTests(unittest.TestCase):
         self.assertEqual([n for n, _ in calls], [0, 1, 2, 3, 4, 5])
         self.assertTrue(result["complete"])
 
+    def test_a_page_size_without_a_page_size_field_changes_nothing(self):
+        document = example("short-page.yaml")
+        scheme = document["components"]["paginationSchemes"]["zeroBasedPages"]  # no pageSize field
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append(number)
+            return {"tasks": [{"id": str(i)} for i in range(number * 100, min(250, (number + 1) * 100))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+
+    def test_a_reported_page_size_of_zero_is_absent(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["response"]["bodyFields"] = {"limit": {"role": "pageSize"}}
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            return {"limit": 0, "tasks": [{"id": str(i)} for i in range(number * 100, min(150, (number + 1) * 100))]}
+
+        self.assertEqual(len(read_pages(scheme, request)["items"]), 150)
+
     def test_rule_21_is_checked_after_overrides_only(self):
         document = example("short-page.yaml")
         sized = document["components"]["paginationSchemes"]["sizedPages"]
