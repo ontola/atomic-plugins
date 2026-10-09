@@ -69,7 +69,7 @@ def check_list(value, where):
             errors.append(f"{at}: class is required")
         for key in ("class", "lens"):
             if key in entry and not absolute_uri(entry[key]):
-                errors.append(f"{at}.{key}: expected an absolute URI")
+                errors.append(f"{at}.{key}: expected an absolute IRI")
         if "description" in entry and not isinstance(entry["description"], str):
             errors.append(f"{at}.description: expected a string")
         subject = entry.get("class")
@@ -92,20 +92,28 @@ def _resource_maps(document):
     return found
 
 
-def _misplaced(node, path, allowed, errors, names=False):
+def _misplaced(node, path, allowed, errors, names=False, parent=None):
     """Rule 1: report every `x-produces` key that is not on a Resource Object.
 
-    Data values (DATA_KEYS) are not searched, and the keys of a NAME_MAPS
-    object are property names, not fields, so they are never reported.
+    Data values (DATA_KEYS) are not searched, except a Responses Object's
+    `default`, which is a Response Object; the keys of a NAME_MAPS object
+    are property names, not fields, so they are never reported.
     """
     if isinstance(node, dict):
         for key, value in node.items():
             here = f"{path}.{key}" if path else str(key)
             if key == FIELD and not names and id(node) not in allowed:
                 errors.append(f"{here}: x-produces is allowed only on a CRUD Resource Object")
-            if not names and key in DATA_KEYS:
+            if not names and key in DATA_KEYS and not (key == "default" and parent == "responses"):
                 continue
-            _misplaced(value, here, allowed, errors, names=not names and key in NAME_MAPS)
+            _misplaced(
+                value,
+                here,
+                allowed,
+                errors,
+                names=not names and key in NAME_MAPS,
+                parent=None if names else key,
+            )
     elif isinstance(node, list):
         for index, value in enumerate(node):
             _misplaced(value, f"{path}[{index}]", allowed, errors)

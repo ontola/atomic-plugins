@@ -68,6 +68,13 @@ class ValidationTests(unittest.TestCase):
             "one": {"value": [{"x-produces": []}]}
         }
         validate(document)
+        # A Responses Object's `default` is a response, not a value.
+        responses = document["paths"]["/projects"]["get"]["responses"]
+        responses["default"] = {"description": "Error", "x-produces": []}
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("responses.default.x-produces: x-produces is allowed only", str(raised.exception))
+        responses.pop("default")
         # A real misplacement inside a property's schema is still found.
         schema["properties"]["description"]["x-produces"] = []
         with self.assertRaises(ValueError) as raised:
@@ -99,8 +106,8 @@ class ValidationTests(unittest.TestCase):
     def test_rule_4_absolute_uris(self):
         for bad in ["time-entry-v1", "/classes/time-entry-v1", "https://", "https:///path", "https://a b", "", 7, None]:
             with self.subTest(bad=bad):
-                self.invalid(lambda d: produces(d)[0].update({"class": bad}), "x-produces[0].class: expected an absolute URI")
-        self.invalid(lambda d: produces(d)[0].update({"lens": "lenses/x"}), "x-produces[0].lens: expected an absolute URI")
+                self.invalid(lambda d: produces(d)[0].update({"class": bad}), "x-produces[0].class: expected an absolute IRI")
+        self.invalid(lambda d: produces(d)[0].update({"lens": "lenses/x"}), "x-produces[0].lens: expected an absolute IRI")
         for good in ["https://o.example/c", "http://o.example/c#Thing", "urn:example:c", "did:web:o.example",
                      "https://ontologie.example/klassen/tijdregistratie-ü", "https://例え.example/クラス"]:
             with self.subTest(good=good):
