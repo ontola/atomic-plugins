@@ -30,6 +30,7 @@ OVERLAYS = {
     "github": "APIs/github.com/api.github.com.2022-11-28/1.1.4/throttling-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml",
     "google_tasks": "APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
     "moneybird": "APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml",
+    "github_issues": "APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
 }
 
 
@@ -73,6 +74,14 @@ class ThrottlingOverlayTests(unittest.TestCase):
         self.assertEqual(self.classify("github", 403, {"x-ratelimit-remaining": "12"}, message)["retryAt"], NOW + 60)
         permission = {"message": "Resource not accessible by integration"}
         self.assertIsNone(self.classify("github", 403, {"x-ratelimit-remaining": "4990"}, permission))
+
+    def test_github_issues_declares_the_same_as_the_versioned_rest_overlay(self):
+        # Same REST API, same limits: the github-issues subset (the issue-tracker app's platform) declares the same.
+        self.assertEqual(self.documents["github_issues"][1]["x-throttling"], self.documents["github"][1]["x-throttling"])
+        primary = self.classify("github_issues", 429, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(NOW + 60)})
+        self.assertEqual(primary, {"meaning": "quotaExhausted", "bucket": None, "retryAt": NOW + 60})
+        app = (ROOT.parent / "integrations/issue-tracker/app/rateLimit.ts").read_text()
+        self.assertIn("secondary rate limit", app)
 
     def test_google_tasks_reasons_and_other_403s(self):
         for status in (403, 429):
