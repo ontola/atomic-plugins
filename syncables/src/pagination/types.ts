@@ -8,7 +8,11 @@
  * transformation.
  */
 
-export type SchemeType = 'pageNumber' | 'pageToken' | 'nextLink';
+export type SchemeType =
+  | 'pageNumber'
+  | 'pageToken'
+  | 'nextLink'
+  | 'rangeWindow';
 
 export type RequestRole =
   | 'page'
@@ -17,7 +21,42 @@ export type RequestRole =
   | 'pageToken'
   | 'cursor'
   | 'previousPageToken'
-  | 'syncToken';
+  | 'syncToken'
+  | 'windowStart'
+  | 'windowEnd'
+  | 'windowRange';
+
+export type WindowUnit = 'day' | 'second' | 'integer';
+export type WindowFormat =
+  | 'date'
+  | 'basicDate'
+  | 'dateTime'
+  | 'unixSeconds'
+  | 'integer';
+export type WindowBounds = 'closed' | 'halfOpen';
+
+/**
+ * Range Window Object (spec 0.5.0 §4.6.1): a `rangeWindow` scheme's
+ * operation has no page parameter and answers at most `cap` items; a client
+ * reads a range of one item field as windows, splitting a full window.
+ */
+export interface RangeWindowObject {
+  unit: WindowUnit;
+  /** How a bound is written (§4.6.2); fits `unit`. */
+  format: WindowFormat;
+  /** `closed`: `[start, end]`; `halfOpen`: `[start, end)`. */
+  bounds: WindowBounds;
+  /** The most items one answer holds; an answer with that many is full. */
+  cap: number;
+  /** The narrowest window the operation selects correctly, in units. Default 1. */
+  minimumWidth?: number;
+  /** JSON Pointer to the item field the range selects on. */
+  field?: string;
+  /** `unit: day` only: an IANA time zone, or `unspecified`. */
+  timeZone?: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
 
 export type ResponseRole =
   | 'nextPageToken'
@@ -52,6 +91,8 @@ export interface RequestFieldObject {
   schema?: unknown;
   role?: RequestRole;
   required?: boolean;
+  /** `windowRange` only: the field's value, with `{start}` and `{end}` once each (§4.6.1). */
+  template?: string;
   [key: `x-${string}`]: unknown;
 }
 
@@ -100,6 +141,8 @@ export interface PaginationSchemeObject {
   type: SchemeType;
   description?: string;
   autoDetect?: boolean | AutoDetectObject;
+  /** Required for `rangeWindow`, absent otherwise (§4.6). */
+  window?: RangeWindowObject;
   request?: RequestPaginationFieldsObject;
   response?: ResponsePaginationFieldsObject;
   [key: `x-${string}`]: unknown;

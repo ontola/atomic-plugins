@@ -25,9 +25,10 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WindowRange,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
-import { readCollections } from './collections.js';
+import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 
 /**
@@ -80,6 +81,8 @@ export interface ReadOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Make one request to the first root collection, read nothing, return an empty result. */
   probe?: boolean;
+  /** The range for collections read by range windows; see `CollectionReadOptions.ranges`. */
+  ranges?: NonNullable<CollectionReadOptions['ranges']>;
 }
 
 export interface ReadRecord {
@@ -202,6 +205,11 @@ export interface PaginateOptions {
   body?: Record<string, unknown>;
   /** Sent through the scheme's `pageSize`-role field, when it declares one. */
   pageSize?: number;
+  /**
+   * The range to read when the operation applies a `rangeWindow` scheme
+   * (Pagination Schemes 0.5.0 §4.6), both bounds in its window format.
+   */
+  range?: WindowRange;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -241,6 +249,7 @@ export async function paginate(
     ...(options.itemsField === undefined
       ? {}
       : { itemsField: options.itemsField }),
+    ...(options.range ? { range: options.range } : {}),
   })) {
     items.push(...page.items);
     if (items.length > budget.limits.maxRecords) {
