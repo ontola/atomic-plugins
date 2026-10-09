@@ -261,3 +261,36 @@ describe('PageWalk.windowValue and number formats (second review of #433)', () =
     expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['999', '1001']);
   });
 });
+
+describe('PageWalk.windowValue with one bound outside the query (third review of #433)', () => {
+  it('converts a query start even when the end is sent as a header', async () => {
+    const scheme: PaginationSchemeObject = {
+      ...pair(10),
+      request: {
+        queryParameters: { start: { role: 'windowStart' } },
+        headerFields: { 'x-end': { role: 'windowEnd' } },
+      },
+    };
+    const sent: [string | null, string | undefined][] = [];
+    const transport: Transport = (request) => {
+      sent.push([request.url.searchParams.get('start'), request.headers['x-end']]);
+      return Promise.resolve({ status: 200, headers: {}, body: '[]' });
+    };
+    const doc = document(scheme);
+    for await (const page of walkPages({
+      document: doc,
+      operation: doc.paths['/entries']!.get!,
+      budget: new Budget(transport),
+      upstream: new URL('https://api.example.com/v1'),
+      path: '/entries',
+      method: 'GET',
+      query: {},
+      body: {},
+      range: JANUARY,
+      windowValue: (_, bound) => wallClock(bound),
+    }))
+      expect(page.items).toEqual([]);
+    // The start is converted; the header is not a query field and is sent as it is.
+    expect(sent).toEqual([['2026-01-01T01:00:00Z', JANUARY.end]]);
+  });
+});

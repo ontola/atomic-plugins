@@ -62,3 +62,12 @@ case as a known limit. Tests: an integer window with no conversion and a
 unixSeconds window with both bounds passed through are sent without an
 error. The latest #428 head is merged in, which fixes the two lint
 warnings.
+
+**User:** Convert the start even when the end field isn't in the query. Add
+a JSDoc note that the comparison assumes offset-free digits.
+
+**Assistant:** `convertWindowQuery` now converts each bound whose field is
+in the query, and returns early only when neither is. The JSDoc says the
+comparison assumes wall-clock digits with one fixed suffix, not each
+bound's own offset. Test: a query `start` with a header `x-end` sends the
+converted start and the end unchanged.

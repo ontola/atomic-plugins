@@ -478,7 +478,12 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
  * repeated hour convert to the same wall-clock digits, and a window inside
  * that hour would be sent inverted or empty. It cannot be sent, so the read
  * ends with `WindowReadError` and is not complete. Only two converted
- * bounds are compared.
+ * bounds are compared, and the comparison assumes offset-free digits: the
+ * hook returns wall-clock digits followed by one fixed suffix on every
+ * bound (`2026-10-25T02:30:00Z`, where `Z` is the declared suffix, not the
+ * instant's offset), which order as strings as their times do. Bounds that
+ * each carry their own offset (`+02:00`, then `+01:00`) do not, and are
+ * compared wrongly.
  *
  * Known limit: a start that is converted and an end that is not (or the
  * reverse) are on different clocks and are not compared, so a window whose
@@ -503,9 +508,11 @@ function convertWindowQuery(
   const endField =
     fields.find((f) => f.role === 'windowEnd') ??
     fields.find((f) => f.role === 'windowRange');
-  if (!startField || !endField) return;
-  const convertedStart = convert(startField.name, low);
-  const convertedEnd = convert(endField.name, high);
+  if (!startField && !endField) return;
+  // Each bound is converted when its own field is in the query, so a start
+  // in the query is converted even when the end is sent elsewhere.
+  const convertedStart = startField ? convert(startField.name, low) : undefined;
+  const convertedEnd = endField ? convert(endField.name, high) : undefined;
   const start = convertedStart ?? low;
   const end = convertedEnd ?? high;
   // Compared only when both bounds were converted, and only for the
