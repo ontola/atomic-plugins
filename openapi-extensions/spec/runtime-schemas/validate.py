@@ -193,7 +193,7 @@ def derive_class(runtime, describer):
                     duplicate_options.setdefault(identifier, []).append(option_id)
                     continue
                 option_name = get_path(option, spec["name"])
-                prop["options"][option_id] = None if option_name is MISSING else option_name
+                prop["options"][option_id] = option_name if isinstance(option_name, str) else None
             prop["multiple"] = described.get("multiple", False)
         properties[identifier] = prop
     for identifier in duplicates:
@@ -233,7 +233,8 @@ def read_members(runtime, derived, item):
     option value is its option id (or a list of them); an option id the
     definition no longer lists is kept (§5.3 rule 4). A member without a
     value at its type's `value` path has no value (§4.4). A member whose
-    option value has the wrong shape is "invalid" and has no value. Two or
+    option value has the wrong shape, or whose `memberId` value is present
+    but not a string, is "invalid" and has no value. Two or
     more members that match the same definition are all "conflicting", and
     none gives a value.
     """
@@ -258,6 +259,10 @@ def read_members(runtime, derived, item):
             identifier = get_path(member, runtime["memberId"]) if isinstance(member, dict) else MISSING
         else:
             identifier = by_key.get(key, MISSING)
+        if identifier is not MISSING and not isinstance(identifier, str):
+            # A memberId that is an object, an array or a number: no definition id.
+            result["invalid"].append(key)
+            continue
         if identifier in skipped:
             result["undescribed"].append(key)
             continue

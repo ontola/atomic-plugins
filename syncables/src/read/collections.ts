@@ -32,6 +32,13 @@ import {
   type ReadCoverage,
 } from './time-zone.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import {
+  interpretRuntimeItems,
+  runtimeSchemasOf,
+  type RuntimeDescriber,
+  type RuntimeItem,
+  type RuntimeMembers,
+} from './runtime-schemas.js';
 import type { Transport } from './transport.js';
 
 export interface CollectionReadOptions {
@@ -89,11 +96,31 @@ export interface CollectionSnapshot {
   coverage?: ReadCoverage;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
+  /**
+   * For a resource that declares `x-runtime-schema` (Runtime Schemas
+   * 0.1.0-draft): each item's user-defined members, interpreted against its
+   * describer's class, in the order of `items`.
+   */
+  runtimeMembers?: RuntimeMembers[];
 }
 
 export interface CollectionReadResult {
   collections: CollectionSnapshot[];
   errors: string[];
+  /**
+   * Present when a read resource declares `x-runtime-schema`: every
+   * describer the items named, read once (twice after an unmatched member),
+   * with the class derived from it or the error that left its items without
+   * one.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read: they
+   * leave items without a class, not a collection incomplete. They are the
+   * last entries of `errors`, after every collection's. Present with
+   * `describers`.
+   */
+  describerErrors?: string[];
 }
 
 interface Origin {
@@ -190,6 +217,10 @@ export async function readCollections(
       error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
   );
   const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
+  // A resource whose x-runtime-schema cannot be used fails its collections
+  // before any request: its items' members could not be interpreted.
+  const runtimeFailures = new Map<string, string>();
+  const schemas = runtimeSchemasOf(doc, runtimeFailures);
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];
   const origins = new Map<string, Origin[]>();
@@ -224,6 +255,8 @@ export async function readCollections(
         };
         collections.push(snapshot);
         try {
+          const failure = runtimeFailures.get(collection.resource);
+          if (failure !== undefined) throw new Error(failure);
           const operation = listOperation(
             doc,
             collection.url,
@@ -367,5 +400,34 @@ export async function readCollections(
         snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
     }
   }
-  return { collections, errors };
+  if (!schemas.size) return { collections, errors };
+  // Runtime Schemas §5.2: the describers are read in the same read as the
+  // items, after them, through the same budget.
+  const items: RuntimeItem[] = [];
+  for (const snapshot of collections) {
+    if (!schemas.has(snapshot.collection.resource)) continue;
+    const members: RuntimeMembers[] = [];
+    snapshot.runtimeMembers = members;
+    snapshot.items.forEach((item, index) =>
+      items.push({
+        resource: snapshot.collection.resource,
+        item,
+        context: snapshot.pathParams,
+        set: (interpreted) => {
+          members[index] = interpreted;
+        },
+      }),
+    );
+  }
+  const describerErrors: string[] = [];
+  const describers = await interpretRuntimeItems(
+    schemas,
+    items,
+    budget,
+    upstream,
+    describerErrors,
+  );
+  // Last, after every collection error: callers split `errors` by count.
+  errors.push(...describerErrors);
+  return { collections, errors, describers, describerErrors };
 }

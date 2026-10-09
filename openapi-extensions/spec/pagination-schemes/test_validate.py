@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.5.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.6.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, WindowReadError, halves, read_range, resolve_link, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml")
 
 
 def example(name):
@@ -491,6 +491,259 @@ class ReadRangeTests(unittest.TestCase):
                   "request": {"queryParameters": {"n": {"role": "windowRange", "template": "{start}:{end}"}}}}
         result = read_range(scheme, "1", "2", lambda values: next(answers))
         self.assertEqual(result["items"], [{"id": "1", "v": 2}])
+
+
+class ShortPageSchemaTests(unittest.TestCase):
+    def document(self):
+        return example("short-page.yaml")
+
+    def scheme(self, document, name="zeroBasedPages"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_start_only_on_page_and_not_negative(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = -1
+        self.assertInvalid(document, "zeroBasedPages")
+        document = self.document()
+        self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]["start"] = 0
+        self.assertInvalid(document, "sizedPages")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = 1
+        validate(document)
+
+    def test_short_page_fields(self):
+        for mutate in (lambda s: s.pop("size"), lambda s: s.pop("assurance"), lambda s: s.update(size=0),
+                       lambda s: s.update(size="response"), lambda s: s.update(assurance="likely"),
+                       lambda s: s.update(extra=True)):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["shortPage"])
+            self.assertInvalid(document, "zeroBasedPages")
+
+    def test_short_page_only_on_page_number_schemes(self):
+        document = self.document()
+        self.scheme(document)["type"] = "pageToken"
+        self.assertInvalid(document, "zeroBasedPages")
+
+    def test_request_size_needs_a_page_size_field(self):
+        document = self.document()
+        del self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]
+        self.assertInvalid(document, "needs a request field with role pageSize")
+
+    def test_applied_scheme_needs_a_page_field(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["role"] = "x-page"
+        del self.scheme(document)["request"]["queryParameters"]["page"]["start"]
+        self.assertInvalid(document, "needs exactly one request field with role page")
+
+    def test_0_5_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml"):
+            validate(example(name))
+
+
+class ReadPagesTests(unittest.TestCase):
+    def setUp(self):
+        self.document = example("short-page.yaml")
+        self.zero = self.document["components"]["paginationSchemes"]["zeroBasedPages"]
+        self.sized = self.document["components"]["paginationSchemes"]["sizedPages"]
+
+    def provider(self, total, size, first=0, envelope="tasks"):
+        calls = []
+
+        def request(values):
+            calls.append(values)
+            number = values[("queryParameters", "page")] - first
+            page = [{"id": str(i)} for i in range(number * size, min(total, (number + 1) * size))]
+            return {envelope: page} if envelope else page
+
+        return request, calls
+
+    def test_zero_based_pages_start_at_zero_and_end_on_a_short_page(self):
+        request, calls = self.provider(250, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+        self.assertFalse(result["complete"])  # assurance: assumed
+
+    def test_a_full_last_page_needs_one_more_empty_page(self):
+        request, calls = self.provider(200, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result["items"]), 200)
+
+    def test_documented_short_page_makes_the_read_complete(self):
+        request, calls = self.provider(120, 50, first=1, envelope=None)
+        result = read_pages(self.sized, request, page_size=50)
+        self.assertTrue(result["complete"])
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [1, 2, 3])
+        self.assertEqual({c[("queryParameters", "per_page")] for c in calls}, {50})
+
+    def test_request_size_needs_the_page_size(self):
+        with self.assertRaises(ValueError):
+            read_pages(self.sized, lambda values: [])
+
+    def test_an_oversized_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(101)]})
+
+    def test_a_server_that_ignores_the_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(100)]})
+        self.assertIn("earlier page", str(raised.exception))
+
+    def test_page_budget_ends_the_read_incomplete(self):
+        request, _ = self.provider(1000, 100)
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, request, max_pages=3)
+
+
+class ReadPagesReviewTests(unittest.TestCase):
+    """Review of #415: page size maximum, end signals that disagree, zero-based totalPages."""
+
+    def setUp(self):
+        document = example("short-page.yaml")
+        self.zero = document["components"]["paginationSchemes"]["zeroBasedPages"]
+        self.sized = document["components"]["paginationSchemes"]["sizedPages"]
+
+    def pages(self, total, size, first=0, extra=lambda number: {}):
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append(number)
+            n = number - first
+            tasks = [{"id": str(i)} for i in range(n * size, min(total, (n + 1) * size))]
+            return {"tasks": tasks, **extra(number)}
+
+        return request, calls
+
+    def with_fields(self, scheme, **fields):
+        scheme = copy.deepcopy(scheme)
+        scheme["response"]["bodyFields"] = {name: {"role": role} for name, role in fields.items()}
+        return scheme
+
+    def test_page_size_above_the_documented_maximum_is_refused(self):
+        with self.assertRaises(ValueError):
+            read_pages(self.sized, lambda values: [], page_size=500, maximum=50)
+        request, _ = self.pages(30, 50, first=1)
+        result = read_pages(self.sized, lambda v: request(v)["tasks"], page_size=50, maximum=50)
+        self.assertTrue(result["complete"])
+
+    def test_total_pages_counts_from_start(self):
+        # Zero-based: totalPages 3 means pages 0, 1 and 2; a full page 2 ends the read.
+        scheme = self.with_fields(self.zero, total_pages="totalPages")
+        request, calls = self.pages(300, 100, extra=lambda number: {"total_pages": 3})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertTrue(result["complete"])  # a totalPages end is complete whatever the assurance
+
+    def test_total_count_end_on_a_full_page_is_complete(self):
+        scheme = self.with_fields(self.zero, total="totalCount")
+        request, calls = self.pages(200, 100, extra=lambda number: {"total": 200})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1])
+        self.assertTrue(result["complete"])
+
+    def test_short_page_contradicted_by_the_total(self):
+        request, _ = self.pages(150, 100, extra=lambda number: {"total": 300})
+        documented = self.with_fields(self.zero, total="totalCount")
+        documented["response"]["shortPage"]["assurance"] = "documented"
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(documented, request)
+        self.assertIn("more pages follow", str(raised.exception))
+        result = read_pages(self.with_fields(self.zero, total="totalCount"), request)
+        self.assertFalse(result["complete"])
+
+    def test_reported_page_size_is_the_full_size(self):
+        scheme = self.with_fields(self.zero, limit="pageSize")
+        request, calls = self.pages(120, 60, extra=lambda number: {"limit": 60})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(len(result["items"]), 120)
+
+    def test_an_item_seen_on_any_earlier_page_ends_the_read(self):
+        answers = iter([
+            {"tasks": [{"id": str(i)} for i in range(100)]},
+            {"tasks": [{"id": str(i)} for i in range(100, 200)]},
+            {"tasks": [{"id": "5"}]},
+        ])
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(self.zero, lambda values: next(answers))
+        self.assertIn("earlier page", str(raised.exception))
+
+    def test_exactly_one_page_field(self):
+        scheme = copy.deepcopy(self.zero)
+        scheme["request"]["queryParameters"]["p2"] = {"role": "page"}
+        with self.assertRaises(ValueError):
+            read_pages(scheme, lambda values: {"tasks": []})
+        document = example("short-page.yaml")
+        document["components"]["paginationSchemes"]["zeroBasedPages"] = scheme
+        document["paths"]["/team/{teamId}/task"]["get"]["parameters"].append({"name": "p2", "in": "query", "schema": {"type": "integer"}})
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("exactly one request field with role page", str(raised.exception))
+
+
+class ReadPagesSmallerPageSizeTests(unittest.TestCase):
+    """Second review of #415: a whole-number size with a smaller page size sent."""
+
+    def test_the_smaller_page_size_sent_is_the_full_size(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["request"]["queryParameters"]["limit"] = {"role": "pageSize"}
+        scheme["response"]["shortPage"]["assurance"] = "documented"
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append((number, values[("queryParameters", "limit")]))
+            return {"tasks": [{"id": str(i)} for i in range(number * 50, min(250, (number + 1) * 50))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(len(result["items"]), 250)
+        self.assertEqual([n for n, _ in calls], [0, 1, 2, 3, 4, 5])
+        self.assertTrue(result["complete"])
+
+    def test_a_page_size_without_a_page_size_field_changes_nothing(self):
+        document = example("short-page.yaml")
+        scheme = document["components"]["paginationSchemes"]["zeroBasedPages"]  # no pageSize field
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append(number)
+            return {"tasks": [{"id": str(i)} for i in range(number * 100, min(250, (number + 1) * 100))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+
+    def test_a_reported_page_size_of_zero_is_absent(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["response"]["bodyFields"] = {"limit": {"role": "pageSize"}}
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            return {"limit": 0, "tasks": [{"id": str(i)} for i in range(number * 100, min(150, (number + 1) * 100))]}
+
+        self.assertEqual(len(read_pages(scheme, request)["items"]), 150)
+
+    def test_rule_21_is_checked_after_overrides_only(self):
+        document = example("short-page.yaml")
+        sized = document["components"]["paginationSchemes"]["sizedPages"]
+        del sized["request"]["queryParameters"]["per_page"]
+        # The bare scheme is not checked; its application is.
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("(merged)", str(raised.exception))
+        document["paths"]["/projects"]["get"]["x-pagination"][0]["overrides"] = {
+            "request": {"queryParameters": {"per_page": {"role": "pageSize"}}}}
+        validate(document)
 
 
 if __name__ == "__main__":
