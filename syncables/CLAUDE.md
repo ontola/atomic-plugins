@@ -89,7 +89,13 @@ Data flows through four stages, each its own directory under `src/`:
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
    the same `walkPages` as the reader, including POST-body cursors, next-link
    checks and budgets. Failed/incomplete collections do not replace or prune
-   stored records. GET validators reuse raw cached response bodies.
+   stored records. Tell before prune: in `performSync`, the records a
+   complete read removes (not returned, no writes, not in
+   `unavailableKept`, including ones a reused storage held) are passed to
+   `options.onPresence` (awaited) before `confirmed` is replaced and the
+   rebuild removes them; a throwing handler skips that snapshot
+   (`presenceError`, thrown at the end) so the next sync tells again; the
+   changes go on `SyncResult.presence`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
