@@ -291,3 +291,68 @@ describe('validation (§9 rules 19–22)', () => {
     ).toThrow(PaginationSchemeError);
   });
 });
+
+describe('the page size sent (review of #424)', () => {
+  const sized = (): PaginationSchemeObject => ({
+    type: 'pageNumber',
+    autoDetect: false,
+    request: {
+      queryParameters: {
+        page: { role: 'page' },
+        per_page: { role: 'pageSize' },
+      },
+    },
+    response: { shortPage: { size: 'request', assurance: 'documented' } },
+  });
+  const withSchema = (schema: Record<string, unknown>): OpenApiDocument => {
+    const doc = document(sized());
+    doc.paths['/team/{teamId}/task']!.get!.parameters = [
+      { name: 'page', in: 'query' },
+      { name: 'per_page', in: 'query', schema },
+    ];
+    return doc;
+  };
+
+  it('uses the parameter default when the caller passes none (readCollections, sync)', async () => {
+    const sizes: string[] = [];
+    const transport: Transport = (request) => {
+      sizes.push(request.url.searchParams.get('per_page') ?? '');
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items: [{ id: 'a' }] }),
+      });
+    };
+    const result = await readCollections(
+      withSchema({ type: 'integer', default: 30 }),
+      { transport, constants: { teamId: 'w1' } },
+    );
+    expect(result.errors).toEqual([]);
+    expect(sizes).toEqual(['30']);
+  });
+
+  it('caps the page size at the documented maximum', async () => {
+    const sizes: string[] = [];
+    const transport: Transport = (request) => {
+      sizes.push(request.url.searchParams.get('per_page') ?? '');
+      const page = Number(request.url.searchParams.get('page'));
+      const items =
+        page < 3
+          ? Array.from({ length: 50 }, (_, i) => ({ id: `${page}-${i}` }))
+          : [];
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items }),
+      });
+    };
+    const items = await paginate(withSchema({ type: 'integer', maximum: 50 }), {
+      transport,
+      path: '/team/{teamId}/task',
+      pathParams: { teamId: 'w1' },
+      pageSize: 500,
+    });
+    expect(new Set(sizes)).toEqual(new Set(['50']));
+    expect(items).toHaveLength(100);
+  });
+});

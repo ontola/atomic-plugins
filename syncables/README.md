@@ -1039,7 +1039,8 @@ A `page` field's `start` (Pagination Schemes 0.6.0 §4.3.1) gives the first
 page number, so a zero-based `page` (ClickUp's) starts at 0; the default
 stays 1, and the mock server honours it too. A `pageNumber` scheme with a
 `shortPage` (§4.4.5) ends at the first page with fewer than `size` items
-(`size: request` takes `pageSize`, which must then be passed), or at the end
+(`size: request` takes `pageSize`, else the pageSize parameter's documented
+`default`), or at the end
 another declared field shows on a full page. A page with more than `size`
 items, or one that repeats the page before it, ends the read with
 `PageReadError` before its items are taken. A read ended by a short page is
@@ -1051,6 +1052,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: A page size sent is capped at the pageSize parameter's
+  documented `maximum`; `paginate` takes `idField` to keep an item two
+  windows return once (items without it are kept as is); a walk's outcome
+  is not complete until it ends normally; a malformed window bound throws
+  `WindowReadError`; the mock server answers full pages of a numeric
+  `shortPage.size`.
 - **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
   short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
   0.6.0: a short page ends the list, an oversized or repeated page ends the

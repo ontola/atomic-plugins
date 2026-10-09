@@ -7,6 +7,7 @@ import {
   type OpenApiDocument,
   type Transport,
 } from '../../../src/browser.js';
+import { Budget, walkPages } from '../../../src/read/pages.js';
 
 // Pagination Schemes 0.5.0 §4.6.3–§4.6.4: reading a range by windows. The
 // document is shaped like the spec's examples/range-window.yaml (Moneybird's
@@ -233,5 +234,68 @@ describe('completeness of a windowed read (§4.6.4 rule 5)', () => {
     });
     expect(filters).toEqual([]);
     expect(result.errors[0]).toMatch(/pass the range/);
+  });
+});
+
+describe('review follow-ups (#423)', () => {
+  it('deduplicates by idField in paginate, keeping items without one', async () => {
+    let calls = 0;
+    const transport: Transport = () => {
+      calls += 1;
+      const body =
+        calls === 1
+          ? Array.from({ length: 3 }, (_, i) => ({ id: `x${i}` }))
+          : [{ id: 'moved' }, { note: 'no id' }];
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify(body),
+      });
+    };
+    const items = await paginate(document(3), {
+      transport,
+      path: '/ledgers/{ledgerId}/transactions',
+      pathParams: { ledgerId: 'l1' },
+      range: { start: '20260101', end: '20260102' },
+    });
+    expect(items).toEqual([
+      { id: 'moved' },
+      { note: 'no id' },
+      { note: 'no id' },
+    ]);
+  });
+
+  it('refuses a malformed bound with WindowReadError', async () => {
+    const { transport } = provider([]);
+    await expect(
+      paginate(document(), {
+        transport,
+        path: '/ledgers/{ledgerId}/transactions',
+        pathParams: { ledgerId: 'l1' },
+        range: { start: '2026-01-01', end: '20261231' },
+      }),
+    ).rejects.toThrow(WindowReadError);
+  });
+
+  it('leaves outcome not complete when the caller stops early', async () => {
+    const { transport } = provider(['20260101']);
+    const doc = document();
+    const outcome = { complete: true };
+    for await (const page of walkPages({
+      document: doc,
+      operation: doc.paths['/ledgers/{ledgerId}/transactions']!.get!,
+      budget: new Budget(transport),
+      upstream: new URL('https://api.example.com/v2'),
+      path: '/ledgers/l1/transactions',
+      method: 'GET',
+      query: {},
+      body: {},
+      range: YEAR,
+      outcome,
+    })) {
+      expect(page.items).toHaveLength(1);
+      break;
+    }
+    expect(outcome.complete).toBe(false);
   });
 });
