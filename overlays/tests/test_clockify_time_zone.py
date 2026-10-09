@@ -14,6 +14,7 @@ downloaded.
 """
 import argparse
 import copy
+import json
 import datetime
 from pathlib import Path
 import subprocess
@@ -99,10 +100,18 @@ class ClockifyTimeZoneTests(unittest.TestCase):
         self.assertEqual((start, end), (datetime.datetime(2026, 9, 1, 14, tzinfo=UTC),
                                         datetime.datetime(2026, 9, 29, 10, tzinfo=UTC)))
 
-    def test_no_dated_catalog_selects_the_overlay(self):
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # The dated catalog for syncables 0.22.0, which reads x-time-zone, selects it,
+        # in this order; no earlier catalog does.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-09-syncables-0.22.json":
+                    self.assertNotIn(OVERLAY, text)
+                    continue
+                platform = next(p for p in json.loads(text)["platforms"] if p["name"] == "clockify")
+                self.assertEqual([url.rsplit("/", 1)[1] for url in platform["overlays"]],
+                                 [f"{kind}-{PIN}-overlay.yaml" for kind in [*PUBLISHED, "time-zone"]])
 
 
 if __name__ == "__main__":

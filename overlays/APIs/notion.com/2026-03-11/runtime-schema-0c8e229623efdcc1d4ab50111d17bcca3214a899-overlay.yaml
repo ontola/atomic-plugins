@@ -5,12 +5,12 @@ info:
   version: '2026-03-11'
 # Runtime Schemas 0.1.0-draft (openapi-extensions/spec/runtime-schemas) for
 # the read-only page resource of crud-causality-0c8e2296...-overlay.yaml,
-# which this overlay must follow in a catalog. Selected by no dated catalog
-# until syncables reads x-runtime-schema.
+# which this overlay must follow in a catalog. First selected by
+# catalog/2026-10-09-syncables-0.22.json, for syncables 0.22.0, which reads
+# x-runtime-schema; an older reader ignores it.
 #
 # The second action targets $.components rather than the page resource, so
-# that it also resolves against the bare OAD, as validate_oad_pins.py
-# requires of an overlay no catalog selects. After the crud-causality
+# that it also resolves against the bare OAD. After the crud-causality
 # overlay it deep-merges into that overlay's page resource; on its own it
 # would leave a page resource without an identity.
 #

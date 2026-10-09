@@ -95,10 +95,19 @@ class MoneybirdRangeWindowTests(unittest.TestCase):
         self.assertIn("20130101..20130131", described)
         self.assertIn("replaces the defaults below entirely", described)
 
-    def test_no_dated_catalog_selects_the_overlay(self):
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # The dated catalog for syncables 0.22.0, the first release whose sync() applies a
+        # windowed read, selects it,
+        # in this order; no earlier catalog does.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-09-syncables-0.22.json":
+                    self.assertNotIn(OVERLAY, text)
+                    continue
+                platform = next(p for p in json.loads(text)["platforms"] if p["name"] == "moneybird")
+                self.assertEqual([url.rsplit("/", 1)[1] for url in platform["overlays"]],
+                                 [f"{kind}-{PIN}-overlay.yaml" for kind in ["auth", "pagination", "pagination-range-window", "crud-causality", "throttling-v2"]])
 
     def provider(self, dates):
         """A synthetic list that answers at most 100 mutations of a closed period."""

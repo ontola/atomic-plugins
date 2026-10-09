@@ -113,7 +113,8 @@ a working developer connection does not establish public distribution.
 ## Collections with fixed reads
 
 Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
-`listQuery`; no dated catalog selects them.
+`listQuery`; the [syncables 0.22.0 catalog](#syncables-0220-catalog) is the
+first to select them, in place of v1.
 `tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
 pagination overlay, runs the collection-read validator, and checks that each
 fixed read is the request the drive app sends. No provider was called.
@@ -126,7 +127,9 @@ fixed read is the request the drive app sends. No provider was called.
 ## Throttling response signals
 
 Three standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
-`headers` and `signals`; no dated catalog selects them.
+`headers` and `signals`; the [syncables 0.22.0 catalog](#syncables-0220-catalog)
+is the first to select the GitHub Issues, Google Tasks and Moneybird ones (the
+GitHub REST one has no catalog platform).
 `tests/test_throttling_overlays.py` composes each with its pinned OAD and
 classifies synthetic responses shaped as the provider documents them. No
 provider was called.
@@ -137,6 +140,37 @@ provider was called.
 | [GitHub Issues 1.1.4](APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | The same declarations as the GitHub REST 2022-11-28 row: the github-issues subset (the issue-tracker app's catalog platform) is served by the same API and limits. | As above |
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | 403/429 with `rateLimitExceeded` or `userRateLimitExceeded` in `error.errors[].reason` as `throttled`; standard `Retry-After`. | Inferred from the [Calendar error guide](https://developers.google.com/workspace/calendar/api/guides/errors); the [Tasks limits page](https://developers.google.com/workspace/tasks/limits) documents no error responses. |
 | [Moneybird v2-readonly v2](APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's 150-per-300-s source-IP bucket, standard `Retry-After`, and 429 as `quotaExhausted` on that bucket. `RateLimit-*` are not declared: no documented units. | [Introduction, Throttling](https://developer.moneybird.com/introduction) |
+
+## Syncables 0.22.0 catalog
+
+`catalog/2026-10-09-syncables-0.22.json` is `catalog/2026-10-08-gitlab-tasks.json`
+(the 13 platforms, entries, pins and selections unchanged) with the overlays a
+syncables 0.22.0 reader uses. It adds no platform. Per entry:
+
+| Platform | Change to the base entry | Read by |
+| --- | --- | --- |
+| `moneybird` | [`pagination-range-window`](APIs/moneybird.com/v2-readonly/pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) after `pagination`; `throttling-v2` in place of `throttling` | Pagination Schemes 0.5.0 `rangeWindow` (syncables 0.21.0; `sync()` applies such a read from 0.22.0); Throttling 0.2.0-draft (0.21.0) |
+| `clockify` | [`time-zone`](APIs/clockify.me/1.0.0-readonly/time-zone-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) last | Filtering 0.2.0-draft `x-time-zone` (0.22.0) |
+| `notion` | [`runtime-schema`](APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) after `crud-causality` | Runtime Schemas 0.1.0-draft (0.22.0) |
+| `google-tasks` | `crud-causality-v2` in place of `crud-causality`; `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0) |
+| `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality` | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` once a release reads them (#419) |
+| `github-issues` | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
+
+Each v2 file keeps every key its v1 file sets (checked on 2026-10-09: no
+`x-list-query`, `x-list-body` or `x-list-method` in either v1 file, and the
+v2 files only add keys). An older reader ignores the extensions it does not
+read and reads as it did with the base catalog, with one exception: a
+syncables reader from 0.21.0 on leaves Moneybird's `financial_mutations`
+unread, with an error, unless it passes a range for it (`ranges`, or `range`
+for `paginate`), where the base catalog gave it the first 100 mutations as if
+they were all. The catalog waits for the syncables 0.22.0 release; no proxy
+release or deployment selects it, and moving one to it is a deployment
+decision. `tests/test_catalog_syncables_0_22.py` checks each entry against
+its base entry, composes every platform of both catalogs, runs the
+Pagination Schemes, CRUD Causality, Throttling, Filtering and Runtime
+Schemas validators on each composition, and checks that the compositions
+differ from the base ones only by the listed additions. No provider was
+called.
 
 ## Directory layout and OAD revisions
 

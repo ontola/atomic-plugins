@@ -14,6 +14,7 @@ downloaded.
 """
 import argparse
 import copy
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -130,10 +131,18 @@ class NotionRuntimeSchemaTests(unittest.TestCase):
         self.assertEqual(derived["properties"]["a%3Ab"]["name"], "Effort")
         self.assertEqual(read_members(self.runtime, derived, page)["values"]["a%3Ab"], 2.5)
 
-    def test_no_dated_catalog_selects_the_overlay(self):
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # The dated catalog for syncables 0.22.0, which reads x-runtime-schema, selects it,
+        # in this order; no earlier catalog does.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-09-syncables-0.22.json":
+                    self.assertNotIn(OVERLAY, text)
+                    continue
+                platform = next(p for p in json.loads(text)["platforms"] if p["name"] == "notion")
+                self.assertEqual([url.rsplit("/", 1)[1] for url in platform["overlays"]],
+                                 [f"{kind}-{PIN}-overlay.yaml" for kind in [*PUBLISHED, "runtime-schema"]])
 
 
 if __name__ == "__main__":

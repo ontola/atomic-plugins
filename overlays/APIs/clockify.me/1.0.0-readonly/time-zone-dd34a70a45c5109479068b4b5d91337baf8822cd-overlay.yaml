@@ -7,7 +7,8 @@ info:
 # x-time-zone for the time-entry list's `start` and `end`. Compose after
 # crud-causality-dd34a70a...-overlay.yaml, which adds GET /v1/user
 # (getClockifyCurrentUser) and the CurrentUser schema this overlay extends.
-# Selected by no dated catalog until syncables reads x-time-zone.
+# First selected by catalog/2026-10-09-syncables-0.22.json, for syncables 0.22.0, which
+# reads x-time-zone; an older reader ignores it.
 #
 # Basis: checked against a live account on 2026-09-24 (ontola/atomic-plugins
 # #123) and recorded in integrations/timesheets/app/timeZone.ts and
@@ -20,8 +21,7 @@ info:
 # time in a repeated or skipped daylight-saving hour (ambiguous: unspecified).
 #
 # All three actions target paths that exist in the bare OAD, so the overlay
-# also resolves on its own, as validate_oad_pins.py requires of an overlay
-# no catalog selects.
+# also resolves on its own.
 actions:
   - target: $.components.parameters.Start
     update:
