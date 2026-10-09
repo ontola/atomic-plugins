@@ -29,6 +29,7 @@ export type {
   PollOptions,
   SyncResult,
   CollectionCoverage,
+  IncompleteRead,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,

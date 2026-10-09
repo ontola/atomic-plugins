@@ -63,6 +63,7 @@ export type {
   PollOptions,
   SyncResult,
   CollectionCoverage,
+  IncompleteRead,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';

@@ -380,6 +380,9 @@ heuristically.
 - **`Idempotency-Key`** goes only to an operation whose composed document
   declares a header parameter of that name (on the operation or its path
   item, `$ref`s resolved), and never next to a fixed value the catalog sets.
+  A fixed value is any header parameter with a `schema.default` or a
+  one-value `schema.enum`, required or optional (`Catalog::required_headers`),
+  and it replaces a caller's header of the same name.
   A provider scopes keys to the account that sends them. With a credential,
   that is the connection's own account, and the key goes unchanged. A
   no-credential connection sends no account, so every tenant would share one
@@ -389,7 +392,9 @@ heuristically.
   a subkey derived from `ENCRYPTION_KEY`
   (`HMAC-SHA256(ENCRYPTION_KEY, "integration-proxy-idempotency-key-v1")`):
   stable for one connection and key, so a retry still matches; different for
-  every other connection; and not reversible to the caller's key.
+  every other connection; and not reversible to the caller's key. Rotating
+  `ENCRYPTION_KEY` changes every namespaced key: a create retried across
+  the rotation reaches the provider with a new key and may be applied twice.
 - **Outside the signature.** The v2 request signature covers the method,
   the full URL, the timestamp and a hash of the body, not these request
   headers (nor `Content-Type` and `If-Match` before them). That is acceptable
