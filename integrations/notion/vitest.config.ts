@@ -27,5 +27,10 @@ export default {
     // The shared sync-status card (app/view/app.ts) imports card.css?raw;
     // without this Vitest stubs CSS to ''.
     css: { include: [/card\.css/] },
+    // devonian 0.9.0's `devonian/atomic` is compiled JS that imports
+    // @tomic/lib. Node would load it from node_modules directly, past the
+    // alias above, and find no built @tomic/lib; inlining it lets Vite apply
+    // the alias, as for this folder's own sources.
+    server: { deps: { inline: ['devonian'] } },
   },
 };

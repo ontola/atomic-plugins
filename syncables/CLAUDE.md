@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - an **API client** (`createApiClient`) that talks to any server implementing
   that document and keeps a local copy of each resource collection in sync.
 
-Both understand the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Both understand the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 when a document declares `components.paginationSchemes` (see below) —
 the mock server paginates list responses accordingly, and the client walks
 every page automatically.
@@ -130,9 +130,27 @@ Data flows through four stages, each its own directory under `src/`:
    raised before the request reaches the transport (an `authenticate`
    adapter throwing) keep the backoff retry. Non-2xx responses are
    classified (`classify`, `defaultWriteFailureClass`, overridable with
-   `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
-   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
-   never below the backoff), `permanent` (other 4xx: failed
+   `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
+   throttling under the document's root `x-throttling`, draft Throttling
+   extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
+   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   gives the verdict the client attaches as `WriteFailure.throttling`, a
+   matching signal or any 429; with `signalsDeclared` the old 403 header
+   heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
+   the later of `retryAfter` and `reset` measured against both clocks, else
+   `minDelaySeconds`, else the bucket window), stored on the write as
+   `notBefore` (outbox) so a restart or `resolveWrite` retry keeps it; a
+   hold (`notBefore` or a bucket pause) further away than
+   `retry.maxRetryAfterMs` makes the write `gaveUp` with a `lastError`
+   instead of retrying early; a `quotaExhausted` verdict, from a write or a
+   read, pauses every request whose operation selects the bucket
+   (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
+   `pauseForOperation`, `operationBuckets`; the read transport waits within
+   `limits.timeoutMs`), until the answer's time or else the write's backoff;
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
+   retryable answer the delay is max(backoff, `Retry-After` capped at
+   `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
+   uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
    at once, through the same path as `retry.maxAttempts`), `satisfied` (a
    delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
    renewal before an accepted response, then `permanent`; `afterRenewal`
@@ -219,7 +237,7 @@ Data flows through four stages, each its own directory under `src/`:
    superseded stays held. Not read under
    `absent: deleted` or `missingRecordChecks: 'none'`.
    The declaration is dropped for a collection a `selection` narrows past its
-   `x-list-query`, and an operation-level one counts only without a fixed
+   `listQuery` (or `x-list-query`), and an operation-level one counts only without a fixed
    query or body. An update in flight when `holdMissing` ran gets
    `holdIfQueued` (not stored) and is held if its outcome leaves it queued;
    a later complete read that returns the record, or `resolveWrite` `retry`
@@ -286,7 +304,7 @@ rather than relying on the generated value to differ per item.
 
 ### Pagination (`src/pagination/`)
 
-Implements the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
@@ -331,6 +349,19 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `nextLink`-role headers) and derives `hasNextPage`. The `nextLink` value
   is kept raw (`nextLinkValue`, never coerced) with the field's
   `linkResolution` (`nextLinkResolution`).
+- `window.ts` is the `rangeWindow` arithmetic of Pagination Schemes
+  0.5.0 §4.6 (after the spec's `validate.py`): `parseBound`/`formatBound`
+  for the five bound formats as exact strings, `windowWidth`, `halves`
+  (the default split, `undefined` below `2 × minimumWidth`) and
+  `windowRequest` (a template, or a start and an end field, per location).
+  `walkPages` hands a `rangeWindow` scheme to `walkWindows` (in
+  `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
+  first, throws `WindowReadError` for a full window it cannot split, keeps an
+  item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
+  complete: `readCollections` turns that into `complete: false` with
+  `notComplete`, and the client never applies such a snapshot. The
+  validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
+  never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -451,7 +482,26 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   nested dot-path, a missing or non-array path (an incomplete read with
   "No items array at <path>", never an empty one), no heuristic once an
   envelope is declared, and the unchanged heuristic without a declaration,
-  with `itemsField: null`, or with one that is not a string.
+  or with one that is not a string (`null` and `""` mean the body root since
+  #384). `unit/read/envelope.test.ts` covers #384 items 6, 7, 9 and 10a (a
+  non-object item fails the read; `null`/`""` as the root; the body-root
+  error text; the scheme's own `response.envelope`),
+  `unit/client/envelope.test.ts` items 7 and 10b (a feed with
+  `itemsField: null`; `ApiClient.paginate` through the Collection envelope),
+  and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
+  userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
+  dot-paths).
+- `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
+  `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
+  which also holds the GitHub, Google and Moneybird snippets), plus
+  `headerTime`, `declaredThrottling`'s leniency and `operationBuckets`;
+  `unit/client/throttling.test.ts` runs those snippets through writes (the
+  reset wait, the minimum delay, a non-matching 403 blocks, Retry-After,
+  giving up past `maxRetryAfterMs`, a signalled 500 create staying
+  uncertain, the stored `notBefore` across a restart, the backoff floor, the
+  held-write cap, reads sharing the paused buckets, the bucket
+  pause) and reads (the injected sleep, the deadline, the spec example
+  through `sync()`), and the 403 heuristic without signals.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

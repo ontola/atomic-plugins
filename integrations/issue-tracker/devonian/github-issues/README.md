@@ -329,6 +329,14 @@ The earlier demo's design notes are in atomic-server's
 - `proxyTransport`'s `dispatch` errors keep the host's message. Only an
   error marked `notSent` drops the journal entry; anything else leaves the
   write uncertain.
+- A write GitHub answered 400, 404, 409, 410 or 422 (`NOT_APPLIED`, #357)
+  was refused whole: `proxyTransport` drops its journal entry and rejects
+  with `refusedWrite(action, receipt)`, an error marked `notSent` and
+  `refused: true` with the `status` and GitHub's `detail` (`refusalDetail`:
+  the body's `message` and `errors`, at most 300 characters). The Bridge
+  then drops the saved operation as for any `notSent` error. A 401, a 403
+  that is not a rate limit, or a 5xx is returned as a receipt, and the entry
+  stays without one: the next pass refuses to resend it as uncertain.
 
 ### Not yet verified or supported
 

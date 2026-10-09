@@ -245,9 +245,26 @@ export function githubTracker({ scenario } = {}) {
         ? 'Bad credentials'
         : status === 403 || status === 429
           ? 'API rate limit exceeded'
-          : 'Service unavailable';
+          : status === 422
+            ? 'Validation Failed'
+            : 'Service unavailable';
+    // A 422 carries GitHub's `errors`, as a refused write does (#357).
+    const errors =
+      status === 422
+        ? [
+            {
+              resource: 'Issue',
+              field: 'title',
+              code: 'custom',
+              message: 'title is too long (maximum is 256 characters)',
+            },
+          ]
+        : undefined;
     for (let i = 0; i < count; i++)
-      failures.push({ status, body: { message } });
+      failures.push({
+        status,
+        body: { message, ...(errors ? { errors } : {}) },
+      });
 
     return { pending: failures.length };
   };

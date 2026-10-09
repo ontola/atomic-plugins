@@ -13,13 +13,18 @@
  *   browser/node_modules/.bin/vitest run \
  *     --config integrations/issue-tracker/vitest.config.ts todoist-fixture
  */
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterAll, describe, expect, it } from 'vitest';
 import { Datatype } from '../../browser/lib/src/index';
 import type { JSONValue } from '../../browser/lib/src/value';
 import { fixtures } from '../localthought/fixtures/index.mjs';
-import { redactor } from './fixtures/todoist/record.mjs';
+import { args, redactor, scrub } from './fixtures/todoist/record.mjs';
 import scenario, {
+  completedAnswer,
+  loadCompleted,
   recorded,
   source,
   todoistFixture,
@@ -135,6 +140,228 @@ describe('todoist fixture: always-on checks', () => {
     });
     expect(project.color).toBe('red');
     expect(redact.unknown()).toEqual(['task.new_field']);
+  });
+
+  it('redacts a completed task and a 404 body the same way (--completed-task)', () => {
+    const redact = redactor();
+    const done: Row = redact.row('task', {
+      id: '6X2',
+      project_id: '2200',
+      content: 'Pay the dentist',
+      checked: true,
+      completed_at: '2026-09-21T10:00:00.000000Z',
+      is_deleted: false,
+    });
+    expect(done).toMatchObject({
+      checked: true,
+      completed_at: '2026-09-21T10:00:00.000000Z',
+      is_deleted: false,
+    });
+    expect(JSON.stringify(done)).not.toContain('dentist');
+    // A 404 body is scrubbed whole: every string goes, and none of its
+    // fields is reported as a task field to add to KEEP.
+    const missing = scrub({
+      error: 'Task not found: 6X2',
+      error_code: 404,
+      http_code: 404,
+      details: ['6X2', { task: '6X2', retry: false }],
+    });
+    expect(missing).toEqual({
+      error: 'redacted',
+      error_code: 404,
+      http_code: 404,
+      details: ['redacted', { task: 'redacted', retry: false }],
+    });
+    expect(redact.unknown()).toEqual([]);
+  });
+
+  it('reads a repeatable option without taking the next flag as its value', () => {
+    expect(
+      args('completed-task', [
+        'node',
+        'record.mjs',
+        '--completed-task',
+        '--limit',
+        '3',
+        '--completed-task',
+        'abc',
+        '--completed-task',
+      ]),
+    ).toEqual(['abc']);
+    expect(args('completed-task', ['node', 'record.mjs'])).toEqual([]);
+  });
+});
+
+/**
+ * An invented api/ in the recording's layout, so the recorded code path is
+ * proven here without a recording: two pages of two tasks, one project, and
+ * one `tasks__completed-1.json` with the given answer. Nothing in it is
+ * from a real account.
+ */
+type Answer = { status: number; body: Record<string, JSONValue> };
+const invented: string[] = [];
+afterAll(() => {
+  for (const dir of invented) rmSync(dir, { recursive: true, force: true });
+});
+
+function inventedRecording(completed: Answer, more: Answer[] = []): URL {
+  const dir = mkdtempSync(join(tmpdir(), 'todoist-fixture-'));
+  invented.push(dir);
+  const task = (n: number): Row => ({
+    id: `task-${n}`,
+    project_id: 'project-1',
+    content: `Redacted task ${n}`,
+    description: '',
+    checked: false,
+    is_deleted: false,
+    priority: 1,
+    due: null,
+    labels: [],
+    url: `https://app.todoist.com/app/task/task-${n}`,
+  });
+  const page = (results: Row[], next: string | null) => ({
+    status: 200,
+    headers: {},
+    body: { results, next_cursor: next },
+  });
+  const files: Record<string, unknown> = {
+    'meta.json': { recorded_at: '2026-10-08', limit: 2 },
+    'GET__api__v1__projects__page-1.json': page(
+      [{ id: 'project-1', name: 'Inbox', inbox_project: true }],
+      null,
+    ),
+    'GET__api__v1__tasks__page-1.json': page([task(1), task(2)], 'page-2'),
+    'GET__api__v1__tasks__page-2.json': page([task(3), task(4)], null),
+    'GET__api__v1__tasks__completed-1.json': { ...completed, headers: {} },
+  };
+  for (const [i, answer] of more.entries())
+    files[`GET__api__v1__tasks__completed-${i + 2}.json`] = {
+      ...answer,
+      headers: {},
+    };
+  for (const [name, content] of Object.entries(files))
+    writeFileSync(join(dir, name), JSON.stringify(content));
+
+  return pathToFileURL(`${dir}/`);
+}
+
+describe('todoist fixture: a recording settles what a completed task answers (#46)', () => {
+  const get = (fixture: ReturnType<typeof todoistFixture>, path: string) =>
+    fixture.request('GET', new URL(`http://mock/proxy/todoist/api/v1${path}`));
+
+  it('assumes checked: true until something is recorded', () => {
+    const rows = source();
+    if (!isRecorded)
+      expect(rows.completed).toEqual({
+        recorded: false,
+        status: 200,
+        checked: true,
+      });
+    const fixture = todoistFixture();
+    const id = rows.tasks[0].id as string;
+    fixture.completeTask(id);
+    if (rows.completed.status !== 404)
+      expect(get(fixture, `/tasks/${id}`)).toMatchObject({
+        status: 200,
+        body: { id, checked: true },
+      });
+  });
+
+  it('answers 404 by id for a completed task when the recording did', () => {
+    const apiDir = inventedRecording({
+      status: 404,
+      body: { error: 'redacted', http_code: 404 },
+    });
+    expect(recorded(apiDir)).toBe(true);
+    expect(loadCompleted(apiDir)).toEqual([
+      { status: 404, checked: undefined },
+    ]);
+    const rows = source({ apiDir });
+    expect(rows.synthetic).toBe(false);
+    expect(rows.pageSize).toBe(2);
+    expect(rows.tasks.map((t: Row) => t.id)).toEqual([
+      'task-1',
+      'task-2',
+      'task-3',
+      'task-4',
+    ]);
+    expect(rows.completed).toEqual({
+      recorded: true,
+      status: 404,
+      checked: undefined,
+    });
+
+    const fixture = todoistFixture({ apiDir });
+    expect(fixture.completed.status).toBe(404);
+    expect(get(fixture, '/tasks/task-1').status).toBe(200);
+    fixture.completeTask('task-1');
+    expect(paged(path => get(fixture, path) as never, 'tasks')).toHaveLength(3);
+    expect(get(fixture, '/tasks/task-1').status).toBe(404);
+    // Deleted and removed tasks are unchanged by the recording's answer.
+    fixture.deleteTask('task-2');
+    expect(get(fixture, '/tasks/task-2')).toMatchObject({
+      status: 200,
+      body: { is_deleted: true },
+    });
+    // Reopened, the task is reachable again.
+    fixture.reopenTask('task-1');
+    expect(get(fixture, '/tasks/task-1')).toMatchObject({
+      status: 200,
+      body: { checked: false },
+    });
+    expect(fixture.snapshot().tasks.map((t: Row) => t.id)).toHaveLength(4);
+  });
+
+  it('takes several recorded answers only when they agree', () => {
+    const notFound = { status: 404, body: { error: 'redacted' } };
+    const checked = {
+      status: 200,
+      body: { id: 'task-9', content: 'Redacted task 9', checked: true },
+    };
+    // Two 404s, or two checked rows, agree.
+    expect(
+      source({ apiDir: inventedRecording(notFound, [notFound]) }).completed,
+    ).toMatchObject({ recorded: true, status: 404 });
+    expect(
+      source({ apiDir: inventedRecording(checked, [checked]) }).completed,
+    ).toMatchObject({ recorded: true, status: 200, checked: true });
+    // A 404 beside a checked row, or a checked row beside an unchecked one,
+    // is refused rather than settled by whichever came first.
+    expect(() =>
+      source({ apiDir: inventedRecording(notFound, [checked]) }),
+    ).toThrow(/completed-task answers disagree \(404, 200 checked: true\)/);
+    expect(() =>
+      todoistFixture({
+        apiDir: inventedRecording(checked, [
+          { status: 200, body: { ...checked.body, checked: false } },
+        ]),
+      }),
+    ).toThrow(/disagree \(200 checked: true, 200 checked: false\)/);
+    expect(completedAnswer([])).toBeUndefined();
+  });
+
+  it('answers the checked row by id when the recording did', () => {
+    const apiDir = inventedRecording({
+      status: 200,
+      body: {
+        id: 'task-9',
+        project_id: 'project-1',
+        content: 'Redacted task 9',
+        checked: true,
+        completed_at: '2026-10-01T12:00:00.000000Z',
+      },
+    });
+    expect(source({ apiDir }).completed).toEqual({
+      recorded: true,
+      status: 200,
+      checked: true,
+    });
+    const fixture = todoistFixture({ apiDir });
+    fixture.completeTask('task-3');
+    expect(get(fixture, '/tasks/task-3')).toMatchObject({
+      status: 200,
+      body: { id: 'task-3', checked: true },
+    });
   });
 });
 
@@ -291,5 +518,20 @@ describe.skipIf(!isRecorded)('todoist fixture: recorded only', () => {
     for (const p of rows.projects as Row[])
       expect(p.id).toMatch(/^project-\d+$/);
     for (const t of rows.tasks as Row[]) expect(t.id).toMatch(/^task-\d+$/);
+  });
+
+  it('recorded a completed task by id as either 404 or a checked row (#46)', () => {
+    // record.mjs warns when --completed-task was not given; this test then
+    // fails on purpose, so the question stays visible until it is recorded.
+    const answers = loadCompleted();
+    expect(answers.length).toBeGreaterThan(0);
+    // Every recorded task answered the same way; source() refuses otherwise.
+    expect(() => completedAnswer(answers)).not.toThrow();
+    for (const answer of answers)
+      expect(
+        answer.status === 404 ||
+          (answer.status === 200 && answer.checked === true),
+        `GET /tasks/{id} for a completed task answered ${answer.status} with checked: ${answer.checked}; see fixtures/todoist/api/`,
+      ).toBe(true);
   });
 });
