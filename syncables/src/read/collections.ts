@@ -98,6 +98,12 @@ export interface CollectionReadResult {
    * one.
    */
   describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read: they
+   * leave items without a class, not a collection incomplete. Present with
+   * `describers`.
+   */
+  describerErrors?: string[];
 }
 
 interface Origin {
@@ -325,12 +331,14 @@ export async function readCollections(
       }),
     );
   }
+  const describerErrors: string[] = [];
   const describers = await interpretRuntimeItems(
     schemas,
     items,
     budget,
     upstream,
-    errors,
+    describerErrors,
   );
-  return { collections, errors, describers };
+  errors.push(...describerErrors);
+  return { collections, errors, describers, describerErrors };
 }

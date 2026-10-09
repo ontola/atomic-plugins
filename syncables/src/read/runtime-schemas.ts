@@ -71,6 +71,12 @@ export interface RuntimeDescriber {
 export interface RuntimeMembers {
   /** The describer's path; absent when the item's reference identifies none. */
   describer?: string;
+  /**
+   * Present when the item has no class to be read against: its reference
+   * identifies no describer, or the describer could not be read (§5.5).
+   * Every member is then unmatched, and none was interpreted.
+   */
+  noClass?: true;
   /** Values by definition id. An option value is its option id, or an array of them. */
   values: Record<string, unknown>;
   /** Member keys matched to no definition (or under a type the definition no longer has). */
@@ -612,7 +618,11 @@ export async function interpretRuntimeItems(
   ): boolean => {
     const runtime = schemas.get(entry.resource) as RuntimeSchema;
     const members = readRuntimeMembers(runtime, describer?.class, entry.item);
-    entry.set(describer ? { describer: describer.path, ...members } : members);
+    entry.set({
+      ...(describer ? { describer: describer.path } : {}),
+      ...(describer?.class ? {} : { noClass: true as const }),
+      ...members,
+    });
     return members.unmatched.length > 0;
   };
   // Describers are read one at a time, on purpose: each read goes through

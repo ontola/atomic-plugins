@@ -409,8 +409,10 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
       'row: describer /tables/t1: GET /v1/tables/t1 responded 404',
     ]);
     expect(requests).toHaveLength(2);
+    expect(result.describerErrors).toEqual(result.errors);
     expect(result.collections[0]!.runtimeMembers![0]!).toEqual({
       describer: '/tables/t1',
+      noClass: true,
       values: {},
       unmatched: ['Estimate', 'Stage'],
       undescribed: [],
@@ -430,6 +432,7 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
     expect(result.describers).toEqual([]);
     expect(result.collections[0]!.runtimeMembers).toEqual([
       {
+        noClass: true,
         values: {},
         unmatched: ['Estimate', 'Stage'],
         undescribed: [],
@@ -437,6 +440,7 @@ describe('Runtime Schemas: missing describers (§5.5)', () => {
         conflicting: [],
       },
       {
+        noClass: true,
         values: {},
         unmatched: ['Estimate', 'Stage'],
         undescribed: [],

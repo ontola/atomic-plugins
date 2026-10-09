@@ -1120,9 +1120,18 @@ const { records, ontology, errors } = await readPlatform(document, {
   is absent or `null` (no request is made for it). A declaration the reader
   cannot use (a missing field, a malformed dot-path, no `types`, a type
   without `schema`, an unknown reference) fails that resource's collections
-  before any request, with the reason in `errors`. Writes and value
-  conversion are not covered, and `readPlatform` and the client do not use
-  the classes yet.
+  before any request, with the reason in `errors`; the entries about
+  describers are also in `describerErrors`, and an item without a class has
+  `noClass: true`. `readPlatform` returns the same `describers` and gives
+  each record its members as `runtime`. The client's `sync()` returns
+  `describers`, and `client.runtimeMembers(resource, id, context?)` gives a
+  record's members from the latest complete read of its collection (of the
+  confirmed remote record, not local edits; in memory only, so undefined
+  after a restart until the next sync). A describer `sync()` cannot read
+  does not make it throw: the collection is applied, the describer error is
+  in `SyncResult.warnings`, and the records' members have `noClass`; a
+  collection that could not be read still makes it throw. Writes and value
+  conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
   one property per field, typed with Atomic Data datatype URLs. Each record's
   `values` are keyed by property shortname, and `date-time` strings are
@@ -1193,6 +1202,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   read. The validator checks §9 rules 12–17 (rule 18, the window fields
   against the operation's parameters, is left to the spec's validator).
   Exports `WindowReadError`, `halves` and the window types.
+- **Unreleased**: Runtime Schemas classes in `readPlatform` and `sync()`:
+  `ReadResult.describers` and `ReadRecord.runtime`; `SyncResult.describers`
+  and `ApiClient.runtimeMembers(resource, id, context?)`, the members of a
+  record's latest complete read. A describer that cannot be read is a
+  `SyncResult.warnings` entry, not a reason for `sync()` to throw, and its
+  items' members have `noClass: true`; `CollectionReadResult.describerErrors`
+  names those entries of `errors`.
 - **Unreleased**: Runtime Schemas 0.1.0-draft (`x-runtime-schema`, #398):
   `readCollections` reads the describer each item's reference names (once
   per read for each resource and path, at most once more for a member
