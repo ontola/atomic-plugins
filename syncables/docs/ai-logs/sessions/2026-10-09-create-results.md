@@ -35,3 +35,21 @@ cases, generated fields left out (and kept without a declaration), header,
 named header, non-JSON body, body-field and numeric-id cases, four unbound
 cases with a key and across a restart, discard, and an undeclared create
 unchanged. README, changelog and CLAUDE.md updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** CI fails on
+`unified.test.ts > uses the reader rate-limit policy and captures each
+attempt` ("expected spy to be called with [2000]", received 1999), on this
+PR and #419. Find the root cause rather than retrying. Also the review
+follow-ups: "never sent again" holds once the outcome is stored, and the
+outbox version-1 wording needs the settle-before-downgrading caveat.
+
+**Assistant:** The read `Budget` sleeps until the throttling answer's retry
+time measured from the clock at the moment it sleeps; a millisecond between
+receiving the 429 and sleeping gives 1999 (reproduced deterministically
+with a clock that ticks per call; not reproduced by load alone locally).
+The behaviour is right (never earlier than asked), so the test now freezes
+`Date.now`. README: an unbound create is never sent again once that outcome
+is stored (a stop before that is handled as an in-flight create), and the
+version-1 paragraph carries the caveat. Main merged in.
