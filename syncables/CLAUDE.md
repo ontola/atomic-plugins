@@ -315,7 +315,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
   first, throws `WindowReadError` for a full window it cannot split, keeps an
   item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
-  complete: `readCollections` turns that into `complete: false` with
+  complete. `PageWalk.windowValue(parameter, bound)` converts each query
+  window bound before it is sent (for a parameter read as wall-clock time,
+  `x-time-zone`; the caller supplies it), each bound separately before a
+  template is filled; converted bounds on one clock that end up out of
+  order (a window inside a repeated hour) throw `WindowReadError`.
+  `readCollections` turns a windowed read into `complete: false` with
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.

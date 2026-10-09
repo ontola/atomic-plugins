@@ -1093,6 +1093,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: `walkPages` takes `windowValue(parameter, bound)`, which
+  converts each query window bound of a `rangeWindow` read before it is
+  sent (a parameter the API reads as wall-clock time in a zone); bounds
+  are still split as instants, and a window whose converted bounds are out
+  of order (inside a repeated hour) ends the read with `WindowReadError`.
 - **Unreleased**: Filtering 0.2.0-draft `x-time-zone` on list query
   parameters: the zone is read (a fixed name, or another operation's
   response at a pointer) once per read and again after it, values are sent

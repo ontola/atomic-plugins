@@ -22,6 +22,7 @@ import {
   halves,
   parseBound,
   WindowReadError,
+  windowFields,
   windowRequest,
   windowWidth,
 } from '../pagination/window.js';
@@ -225,6 +226,15 @@ export interface PageWalk {
    * Completeness sense (a windowed read, §4.6.4 rule 5), with `reason`.
    */
   outcome?: WalkOutcome;
+  /**
+   * Converts one window bound before it is sent in a query parameter that
+   * carries the window (`parameter` is its name): the bounds are split as
+   * instants, and a parameter the API reads as wall-clock time in a zone
+   * (Filtering 0.2.0-draft `x-time-zone`) needs other digits. Applied to
+   * each bound separately, before a `windowRange` template is filled; header
+   * and body window fields are sent as they are. Returns the bound to send.
+   */
+  windowValue?: (parameter: string, bound: string) => string;
 }
 
 export interface WindowRange {
@@ -419,6 +429,56 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
  * returned is yielded once (`walk.identity`). The read is never complete in
  * the Collection Completeness sense (§4.6.4 rule 5): `walk.outcome` says so.
  */
+/**
+ * Applies `PageWalk.windowValue` to the query fields that carry a window.
+ * The converted bounds must still be in order (fixed-width digits compare
+ * as strings): two instants an hour apart in a repeated hour convert to the
+ * same wall-clock digits, and a window inside that hour would be sent
+ * inverted or empty. It cannot be sent, so the read ends with
+ * `WindowReadError` and is not complete.
+ */
+function convertWindowQuery(
+  scheme: PaginationSchemeObject,
+  window: NonNullable<PaginationSchemeObject['window']>,
+  low: string,
+  high: string,
+  convert: (parameter: string, bound: string) => string,
+  values: { queryParameters: Record<string, string> },
+): void {
+  const fields = windowFields(scheme).filter(
+    (field) => field.location === 'queryParameters',
+  );
+  const startField =
+    fields.find((f) => f.role === 'windowStart') ??
+    fields.find((f) => f.role === 'windowRange');
+  const endField =
+    fields.find((f) => f.role === 'windowEnd') ??
+    fields.find((f) => f.role === 'windowRange');
+  if (!startField || !endField) return;
+  const start = convert(startField.name, low);
+  const end = convert(endField.name, high);
+  // Bounds on one clock compare; a start converted and an end sent as it
+  // is (or the reverse) are on different clocks and are not compared.
+  const sameClock =
+    startField.name === endField.name || (start !== low) === (end !== high);
+  const inOrder = window.bounds === 'closed' ? start <= end : start < end;
+  if (sameClock && !inOrder) {
+    throw new WindowReadError(
+      `The window ${low}..${high} converts to ${start}..${end} (inside a repeated hour of the parameter's time zone, say) and cannot be sent; the read is not complete`,
+    );
+  }
+  for (const field of fields) {
+    values.queryParameters[field.name] =
+      field.role === 'windowStart'
+        ? start
+        : field.role === 'windowEnd'
+          ? end
+          : (field.template ?? '{start}..{end}')
+              .replace('{start}', start)
+              .replace('{end}', end);
+  }
+}
+
 async function* walkWindows(
   walk: PageWalk,
   scheme: PaginationSchemeObject,
@@ -446,6 +506,9 @@ async function* walkWindows(
   while (pending.length) {
     const [low, high] = pending.shift() as [string, string];
     const values = windowRequest(scheme, low, high);
+    if (walk.windowValue) {
+      convertWindowQuery(scheme, window, low, high, walk.windowValue, values);
+    }
     const url = new URL(upstream.href);
     url.pathname = basePath + walk.path;
     for (const [key, value] of Object.entries({
