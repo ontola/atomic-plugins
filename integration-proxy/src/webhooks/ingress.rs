@@ -125,11 +125,13 @@ impl Drop for EndpointRead<'_> {
     }
 }
 
-/// The per-network limit counts only requests that are refused before
-/// verification succeeds (unknown endpoints, bad signatures, oversized
-/// bodies): verified deliveries, which for a shared application hook all
-/// come from the provider's few delivery addresses, never use it up. A
-/// network over its limit is refused before any work.
+/// The rate limits count refusals only and never refuse a delivery that
+/// verifies (see [`super::limits`]). The per-network limit applies only to
+/// ids that are malformed or name no endpoint, after the lookup: a sender
+/// that points a provider's hooks at junk URLs makes the provider's own
+/// addresses collect refusals, which must not cost its real deliveries
+/// anything. The per-endpoint limit counts that endpoint's failed
+/// verifications.
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
@@ -140,35 +142,65 @@ pub async fn receive(
     let Some(webhooks) = state.webhooks.clone() else {
         return answer(StatusCode::NOT_FOUND);
     };
-    let now = std::time::Instant::now();
     let network = crate::client_addr::client_network(
         state.trust_forwarded_for,
         &headers,
         peer.map(|ConnectInfo(peer)| peer),
     );
-    if let Some(retry) = webhooks.limits.ingress_per_network.blocked(&network, now) {
-        return super::limits::too_many(retry);
-    }
     let mut verified = false;
-    let response =
-        receive_checked(&state, &webhooks, endpoint_id, headers, body, &mut verified).await;
+    let response = receive_checked(
+        &state,
+        &webhooks,
+        &network,
+        endpoint_id,
+        headers,
+        body,
+        &mut verified,
+    )
+    .await;
     let status = response.status();
-    if !verified && status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS {
-        let _ = webhooks.limits.ingress_per_network.take(&network, now);
+    // A refusal the sender caused counts against its network. Not 429 (a
+    // limit already answered), and not 400 or 408, which a provider's own
+    // broken or slow upload causes.
+    if !verified
+        && status.is_client_error()
+        && !matches!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::BAD_REQUEST | StatusCode::REQUEST_TIMEOUT
+        )
+    {
+        let _ = webhooks
+            .limits
+            .ingress_per_network
+            .take(&network, std::time::Instant::now());
     }
     response
+}
+
+/// `404` for an id that names no endpoint, or `429` once its network has
+/// been refused too often.
+fn no_endpoint(webhooks: &super::Webhooks, network: &str) -> Response {
+    match webhooks
+        .limits
+        .ingress_per_network
+        .blocked(network, std::time::Instant::now())
+    {
+        Some(retry) => super::limits::too_many(retry),
+        None => answer(StatusCode::NOT_FOUND),
+    }
 }
 
 async fn receive_checked(
     state: &AppState,
     webhooks: &std::sync::Arc<super::Webhooks>,
+    network: &str,
     endpoint_id: String,
     headers: HeaderMap,
     body: Body,
     verified: &mut bool,
 ) -> Response {
     if !endpoint_shaped(&endpoint_id) {
-        return answer(StatusCode::NOT_FOUND);
+        return no_endpoint(webhooks, network);
     }
     let cap = webhooks.store.policy().max_verified_bytes as usize;
     let declared = headers
@@ -185,19 +217,10 @@ async fn receive_checked(
         };
         match webhooks.store.hook_by_endpoint(&endpoint_id).await {
             Ok(Some(hook)) => hook,
-            Ok(None) => return answer(StatusCode::NOT_FOUND),
+            Ok(None) => return no_endpoint(webhooks, network),
             Err(_) => return answer(StatusCode::SERVICE_UNAVAILABLE),
         }
     };
-    // Per endpoint, only for endpoints that exist: random ids never take a
-    // key from real endpoints. Counted before the body is read or verified.
-    if let Err(retry) = webhooks
-        .limits
-        .ingress_per_endpoint
-        .take(&endpoint_id, std::time::Instant::now())
-    {
-        return super::limits::too_many(retry);
-    }
     let Some(deliveries) = super::provider::deliveries(state, &hook.platform) else {
         return answer(StatusCode::NOT_FOUND);
     };
@@ -251,6 +274,15 @@ async fn receive_checked(
             },
             &hook.platform,
         );
+        // Only an endpoint's failed verifications count against it, and
+        // only after verifying: a delivery that verifies is never refused.
+        if let Err(retry) = webhooks
+            .limits
+            .ingress_per_endpoint
+            .take(&endpoint_id, std::time::Instant::now())
+        {
+            return super::limits::too_many(retry);
+        }
         return answer(StatusCode::UNAUTHORIZED);
     }
 

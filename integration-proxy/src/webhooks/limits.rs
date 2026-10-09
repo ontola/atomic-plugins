@@ -1,22 +1,26 @@
 //! Rate limits on the webhook routes (plan: "Rate-limit verification work,
-//! subscription creation"): per endpoint and per client network on
-//! `POST /webhooks/{endpointId}`, checked before any verification work;
-//! per owner on subscription creation, checked before its access check
-//! reaches the provider.
+//! subscription creation"). On `POST /webhooks/{endpointId}` they count
+//! refusals only and never refuse a delivery that verifies, so a third
+//! party cannot make the proxy refuse a provider's real deliveries, which a
+//! provider such as GitHub does not retry: per client network, for ids that
+//! are malformed or name no endpoint; per endpoint, for requests to it that
+//! fail verification. The work a request can cause is bounded by the
+//! ingress gate (lookup, read and database slots), not by these. Per owner
+//! on subscription creation, checked before its access check reaches the
+//! provider.
 //!
-//! Fixed windows, in memory, per proxy instance: what they bound is this
-//! instance's CPU and outbound calls. Memory is bounded too: at most
+//! Fixed windows, in memory, per proxy instance. Memory is bounded: at most
 //! `MAX_KEYS` keys are tracked; past that, expired windows are dropped, and
-//! if none has expired, every new key shares one overflow window with the
-//! same limit, so a flood of addresses cannot grow the map or escape the
-//! limit. Keys are only held in memory, never stored or logged.
+//! if none has expired a new key passes uncounted. A shared overflow window
+//! would let whoever fills the map block every key not yet in it, the
+//! provider's addresses among them. Keys are only held in memory, never
+//! stored or logged.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const MAX_KEYS: usize = 10_000;
-const OVERFLOW: &str = "\0overflow";
 
 pub struct Limiter {
     limit: u32,
@@ -40,13 +44,9 @@ impl Limiter {
     }
 
     /// Whether `key`'s window is full at `now`, without counting anything.
+    /// A key that is not tracked is never blocked.
     pub fn blocked(&self, key: &str, now: Instant) -> Option<Duration> {
         let windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
-        let key = if windows.contains_key(key) || windows.len() < self.max_keys {
-            key
-        } else {
-            OVERFLOW
-        };
         let (start, count) = windows.get(key)?;
         if now.duration_since(*start) >= self.window || *count < self.limit {
             return None;
@@ -65,15 +65,15 @@ impl Limiter {
     }
 
     /// Counts one request for `key` at `now`; `Err(retry_after)` when the
-    /// key's window is full.
+    /// key's window is full. With the map full of live windows, a new key
+    /// passes uncounted.
     pub fn take(&self, key: &str, now: Instant) -> Result<(), Duration> {
         let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
-        let mut key = key;
         if !windows.contains_key(key) && windows.len() >= self.max_keys {
             let window = self.window;
             windows.retain(|_, (start, _)| now.duration_since(*start) < window);
             if windows.len() >= self.max_keys {
-                key = OVERFLOW;
+                return Ok(());
             }
         }
         let entry = windows.entry(key.to_owned()).or_insert((now, 0));
@@ -168,20 +168,31 @@ mod tests {
         assert_eq!(limiter.blocked("a", start + Duration::from_secs(60)), None);
     }
 
+    /// Review of the rate-limits PR, blocker B: with the map full, a key
+    /// that is not in it passes, so whoever fills the map cannot block the
+    /// keys it does not hold (a provider's delivery addresses).
     #[test]
-    fn memory_is_bounded_and_new_keys_share_an_overflow_window() {
+    fn a_full_map_never_blocks_a_key_it_does_not_hold() {
         let limiter = Limiter::with_max_keys(2, Duration::from_secs(60), 3);
         let start = Instant::now();
+        // An attacker fills the map and uses up its own windows.
         for key in ["a", "b", "c"] {
             limiter.take(key, start).unwrap();
+            limiter.take(key, start).unwrap();
+            assert!(limiter.take(key, start).is_err());
+            assert!(limiter.blocked(key, start).is_some());
         }
-        // The map is full and nothing has expired: new keys share one window.
-        limiter.take("d", start).unwrap();
-        limiter.take("e", start).unwrap();
-        assert!(limiter.take("f", start).is_err());
-        assert!(limiter.windows.lock().unwrap().len() <= 4);
-        // Once windows expire, they are dropped for new keys.
-        limiter.take("g", start + Duration::from_secs(61)).unwrap();
-        assert!(limiter.windows.lock().unwrap().len() <= 2);
+        // Keys it does not hold pass, uncounted, however often.
+        for _ in 0..10 {
+            assert_eq!(limiter.blocked("provider", start), None);
+            limiter.take("provider", start).unwrap();
+        }
+        assert_eq!(limiter.tracked(), 3);
+        // Once windows expire, they are dropped and new keys are counted.
+        let later = start + Duration::from_secs(61);
+        limiter.take("provider", later).unwrap();
+        limiter.take("provider", later).unwrap();
+        assert!(limiter.take("provider", later).is_err());
+        assert_eq!(limiter.tracked(), 1);
     }
 }

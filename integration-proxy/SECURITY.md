@@ -519,24 +519,30 @@ generic code.
   release creating dedicated hooks has to decide whether to keep narrow
   cleanup material.
 
-- **Rate limits.** On `POST /webhooks/…`, a client network (120 a minute)
-  is limited only by its refused requests (unknown endpoints, failed
-  verification, oversized bodies): verified deliveries never count, since
-  for a shared application hook they all come from the provider's few
-  delivery addresses, and a network over its limit is refused before any
-  work. An endpoint (600 a minute) is limited once it is known to exist,
-  before its body is read or verified, so random ids never take a real
-  endpoint's window. Subscription requests are limited per owner (20 an
-  hour) before their access check reaches the provider. Over a limit:
-  `429` with `Retry-After`, nothing written. The windows are fixed, in
-  memory and per instance, which is what they bound (this instance's CPU
-  and outbound calls); at most 10,000 keys are held, after which new keys
-  share one overflow window with the same limit. Values come from
+- **Rate limits.** On `POST /webhooks/…` the limits count refusals only
+  and never refuse a delivery that verifies. Anyone can point a provider's
+  hooks at junk URLs, or send junk to a real endpoint, so the provider's
+  own delivery addresses collect refusals too; a limit that refused them
+  would drop real deliveries, which GitHub does not retry. A client network
+  (120 a minute) counts the refusals it caused (unknown or malformed ids,
+  failed verification, oversized bodies; not `400` or `408`, which a
+  provider's own broken or slow upload causes), and once over, only its
+  requests for ids that are malformed or name no endpoint get `429`, after
+  the lookup. An endpoint (600 a minute) counts its failed verifications,
+  and once over answers further ones `429` instead of `401`; random ids
+  never take an endpoint's key. Neither saves the verification work: the
+  ingress gate's lookup, read and database slots bound that. Subscription
+  requests are limited per owner (20 an hour) before their access check
+  reaches the provider; every request counts, a client's retry of the same
+  subscription included. Over a limit: `429` with `Retry-After`, nothing
+  written. The windows are fixed, in memory and per instance; at most
+  10,000 keys are held per limit, and while all of them are live a new key
+  passes uncounted (a shared overflow window would let whoever fills the
+  map block every other key). Values come from
   `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`, `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`
   and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
-  A provider whose deliveries hit the endpoint limit loses them without a
-  gap if it does not retry (GitHub does not); the periodic full reads are
-  the fallback, and the limit is set well above the pilot's volume.
+  Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
+  set (`heroku`), or every sender is one network: the router's.
 
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and how the limits behave across several instances (each counts

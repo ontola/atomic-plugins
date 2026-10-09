@@ -1482,20 +1482,23 @@ fn with_limits(env: &Env, endpoint: u32, network: u32, owner: u32) -> AppState {
     state
 }
 
-/// Ingress limits (review of the rate-limits PR): a network is limited
-/// only by its refused requests, so verified deliveries from a provider's
-/// few addresses never use it up; an endpoint is limited only once it is
-/// known to exist, so random ids never take its window.
+/// Ingress limits (reviews of the rate-limits PR): they count refusals only
+/// and never refuse a delivery that verifies. Blocker A: a third party that
+/// points a provider's hooks at junk URLs, or signs junk for a real
+/// endpoint, makes the provider's own address collect refusals; its real
+/// deliveries must still be accepted. Only ids that name no endpoint are
+/// refused for a network's refusals, and an endpoint's window counts only
+/// its failed verifications.
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
-async fn ingress_limits_count_refusals_per_network_and_real_endpoints_only() {
+async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
     let mut env = env(small()).await;
     let alice = Agent::new(96);
     let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
     env.subscribe_project(&alice, &connection, "p-100").await;
     let endpoint = env.endpoint("tracker").await;
     env.state.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
-    let state = with_limits(&env, 5, 2, 20);
+    let state = with_limits(&env, 2, 2, 20);
     let from = |network: &str, request: Request<Body>| {
         let mut request = request;
         request
@@ -1508,39 +1511,57 @@ async fn ingress_limits_count_refusals_per_network_and_real_endpoints_only() {
         let state = state.clone();
         async move { crate::router(state).oneshot(request).await.unwrap() }
     };
-    // The provider's address: verified deliveries do not count against it.
-    for id in ["a1", "a2", "a3"] {
-        assert_eq!(
-            send(from("192.0.2.1", delivery(id))).await.status(),
-            StatusCode::NO_CONTENT
-        );
-    }
-    // A sender of junk is limited after two refusals, valid or not.
-    let junk = || {
-        let mut request = delivery("j");
+    let junk_id = |n: u32| {
+        Request::post(format!("/webhooks/{:0>43}", n))
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let bad_signature = |id: &str| {
+        let mut request = delivery(id);
         request
             .headers_mut()
             .insert("tracker-signature", "v1=00".parse().unwrap());
-        from("198.51.100.66", request)
+        request
     };
-    assert_eq!(send(junk()).await.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(send(junk()).await.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(send(junk()).await.status(), StatusCode::TOO_MANY_REQUESTS);
-
-    // The endpoint's own window (5: three deliveries, two refusals) is used up.
-    let limited = send(from("192.0.2.1", delivery("a4"))).await;
+    let provider = "192.0.2.1";
+    // Junk arrives from the provider's own address: unknown ids, then bad
+    // signatures for the real endpoint, over both limits (2).
+    for n in 0..2 {
+        assert_eq!(
+            send(from(provider, junk_id(n))).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        send(from(provider, junk_id(9))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "unknown ids from a network over its limit are refused"
+    );
+    assert_eq!(
+        send(from(provider, bad_signature("j1"))).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(from(provider, bad_signature("j2"))).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let limited = send(from(provider, bad_signature("j3"))).await;
     assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(limited.headers().contains_key("retry-after"));
-
-    // Random endpoint ids, from many networks, are refused without taking
-    // a key of the endpoint limiter.
-    for n in 0..50 {
-        let random = format!("{:0>43}", n);
-        let request = Request::post(format!("/webhooks/{random}"))
-            .body(Body::from("{}"))
-            .unwrap();
+    // The provider's real deliveries still go through, more of them than
+    // either limit.
+    for id in ["a1", "a2", "a3", "a4"] {
         assert_eq!(
-            send(from(&format!("203.0.113.{n}"), request))
+            send(from(provider, delivery(id))).await.status(),
+            StatusCode::NO_CONTENT,
+            "{id}"
+        );
+    }
+    // Random endpoint ids, from many networks, never take a key of the
+    // endpoint limiter.
+    for n in 0..50 {
+        assert_eq!(
+            send(from(&format!("203.0.113.{n}"), junk_id(100 + n)))
                 .await
                 .status(),
             StatusCode::NOT_FOUND
@@ -1550,7 +1571,7 @@ async fn ingress_limits_count_refusals_per_network_and_real_endpoints_only() {
     assert_eq!(webhooks.limits.ingress_per_endpoint.tracked(), 1);
     assert_eq!(
         env.count("SELECT count(*) FROM webhook_event_refs").await,
-        3
+        4
     );
     env.drop_schema().await;
 }
