@@ -231,6 +231,33 @@ impl Catalog {
         }
         Some(out)
     }
+    /// The `x-throttling` buckets the proxy paces for the operation that
+    /// `method` and `path` resolve to ([`crate::pacing::selected_buckets`]).
+    /// Nothing when the operation or the declaration cannot be resolved.
+    pub fn paced_buckets(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+    ) -> Vec<crate::pacing::PacedBucket> {
+        let resolve = || -> Option<Vec<crate::pacing::PacedBucket>> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            document.get("x-throttling")?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
+            Some(crate::pacing::selected_buckets(&document, operation))
+        };
+        resolve().unwrap_or_default()
+    }
     /// A bounded, explicit request validation against the composed OAD:
     /// every declared *required* query parameter must be present, a
     /// declared enum-constrained query parameter's value must be one of the

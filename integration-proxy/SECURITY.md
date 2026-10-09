@@ -340,6 +340,30 @@ values, and that a request body's presence and content type match the
 operation's declared `requestBody`. It does not validate full JSON Schema
 for bodies or non-enum query parameter values.
 
+## Pacing under provider quotas (P4, unreleased)
+
+The proxy paces its own requests under `x-throttling` buckets partitioned by
+`sourceIp` or by nothing (README, "Pacing under provider quotas"). Without
+it, one tenant could spend a quota the provider counts on the proxy's
+address and every other tenant of that platform would be refused by the
+provider. What it changes for safety:
+
+- **Only authenticated requests count.** The log is taken after
+  authentication, delegation, the access policy and the catalog checks, so
+  nobody without a connection can fill a bucket. A tenant with a connection
+  still can, by sending up to the bucket's limit itself: the pacing makes
+  the proxy a fair citizen towards the provider, not fair between tenants.
+  The per-owner limit on proxied requests, where deployed, bounds that.
+- **Bounded memory.** One log per declared bucket, keyed by platform and
+  bucket id from the server-owned catalog, never by anything a caller
+  sends; each log holds at most `requests` timestamps, and buckets above
+  10,000 are not paced.
+- **Nothing is learned about other tenants** beyond what a provider's `429`
+  already shows: a `provider_quota` refusal says the shared bucket is full
+  and when it frees, not who filled it.
+- **Fails open.** A malformed or unknown declaration paces nothing; the
+  provider's own limit still applies.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic

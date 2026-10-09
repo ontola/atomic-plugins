@@ -197,6 +197,7 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 | 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
+| 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |
 
 Catalog refusals and upstream failures from `/proxy/…` keep their plain-text
 bodies (`404 method or path is not in the catalog`, `502 upstream request failed`).
@@ -606,6 +607,36 @@ describes the controls and what is not yet verified.
 - Cookies are marked `Secure`, so in production `BASE_URL` must use
   `https://`. `http://localhost` works during local development because
   browsers treat `localhost` as a secure context.
+
+## Pacing under provider quotas
+
+A provider that counts requests per source address counts the proxy's
+address, shared by every tenant (pieces.md P4). When a platform's composed
+document declares such a quota in `x-throttling`
+([Throttling](../openapi-extensions/spec/throttling/README.md)), the proxy
+paces its own requests under it:
+
+- **Which buckets.** Those the operation selects (its own `x-throttling`
+  list, or the root `applies`) whose `partitionBy` is exactly `[sourceIp]`,
+  or `[]` (one counter for all callers: the proxy's traffic alone then stays
+  under the whole limit), with a known `requests` of at most 10,000 and a
+  `window.seconds`. Buckets partitioned by user, credential or anything else
+  are each caller's own and not paced; a bucket over 10,000 requests per
+  window is not paced either.
+- **How.** A sliding log per platform and bucket: at most `requests`
+  requests in any `window.seconds`, which stays under the limit for `fixed`
+  (with or without an `anchor`), `sliding` and `unspecified` windows alike.
+  A request is counted just before the provider is called, after
+  authentication, the catalog checks and any token refresh, and is not
+  given back if the provider then fails. A request that would exceed any
+  selected bucket is refused with `429 provider_quota` and `Retry-After`
+  (the seconds until the oldest counted request leaves the window, rounded
+  up); nothing is queued.
+- **Limits of the model.** The logs are in memory, per instance: N
+  instances behind one egress address may together send up to N times the
+  limit, and a restart starts empty. Other clients behind the same address
+  (or, for `[]`, anywhere) are not seen. The provider still enforces its own
+  limit, and its `429` and `Retry-After` are forwarded as before.
 
 ## Browser clients
 
