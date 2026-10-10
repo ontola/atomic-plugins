@@ -146,3 +146,33 @@ export type {
   ResponseRole,
   SchemeType,
 } from './pagination/types.js';
+
+// The daemon side of a webhook inbox (ontola/atomic-plugins#369): signed
+// requests to the receiver, its consumer routes, and the journal-before-ack
+// consumer. Node only: not in `syncables/browser`.
+export {
+  agentKeyFromSeed,
+  sha256Hex,
+  signedTransport,
+  v2Headers,
+  v2Message,
+} from './inbox/sign.js';
+export type { AtomicAgentKey } from './inbox/sign.js';
+export { InboxClient, InboxError } from './inbox/client.js';
+export type {
+  GapMarker,
+  InboxEvent,
+  InboxEventPage,
+  InboxSubscription,
+  ReconciliationRequired,
+  SubscribeRequest,
+} from './inbox/client.js';
+export { InboxConsumer, InMemoryInboxJournal } from './inbox/consumer.js';
+export type {
+  InboxConsumerOptions,
+  InboxJournal,
+  StepResult,
+  StoredSubscription,
+} from './inbox/consumer.js';
+export { scopedReads } from './inbox/reads.js';
+export type { ScopedRead } from './inbox/reads.js';
