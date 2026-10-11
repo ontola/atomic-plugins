@@ -765,3 +765,30 @@ and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
 catalog. This twelve-entry option allows Tasks deployment independently when
 its OAuth client is ready and GitLab registration is still pending. It changes
 no existing pins or API metadata and does not activate itself.
+
+## Box onboarding catalogs
+
+`catalog/2026-10-11-box.json` preserves all twelve entries from the Google Tasks
+deployment catalog and adds Box 2.0.0 with its existing revision-pinned
+pagination overlay and `OAuth2Security` scheme. The combined
+`catalog/2026-10-11-gitlab-box.json` additionally preserves the GitLab entry
+from its published onboarding catalog. These options let either registration
+finish first without dropping an existing platform or changing its pins.
+
+Box's selected document describes the full API, including write operations;
+it is not a read-only authentication profile. Its OAuth scope list is empty.
+Box's [authorization reference](https://developer.box.com/reference/get-authorize)
+documents that an omitted scope parameter defaults to the permissions
+configured on the application. The current proxy sends an empty `scope`
+parameter for this document; verify that behavior against the registered
+client before activation. Configure the Local Thought application for
+the minimum useful read permissions and register the exact callback
+`https://localthought.io/oauth/box/callback`. Provider permissions must enforce
+that limit; this catalog does not restrict the proxy to GET requests.
+
+Publishing these catalogs does not create a Box account or OAuth client,
+configure `OAUTH_BOX_CLIENT_ID` / `OAUTH_BOX_CLIENT_SECRET`, or switch
+localthought.io. Client authentication and the document's default PKCE
+behavior still require registration and live verification before activation.
+Catalog composition and credential-scheme resolution do not certify a
+real-account OAuth grant, API read, or complete import.
