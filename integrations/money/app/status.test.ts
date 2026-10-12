@@ -231,6 +231,14 @@ describe('Money status card: busy, failed and stopped', () => {
       headline: 'Sync failed 2 min ago',
     });
     expect(lines(s).rows).toBeUndefined();
+    // A message that already ends a sentence keeps its own mark.
+    for (const message of ['Is the table gone?', 'Refused!', 'Not found.'])
+      expect(
+        syncStatusFor({
+          state: state({ view: { kind: 'error', message } }),
+          now: NOW,
+        }).last?.error,
+      ).toBe(`${LOAD_FAILED_LEAD} ${message}`);
     // Without a recorded time (a state from before this version): now.
     expect(
       syncStatusFor({

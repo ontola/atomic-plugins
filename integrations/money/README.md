@@ -370,7 +370,7 @@ minified, one module). Screenshots, axe and the render budget:
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
 0.3.0's bundle with only the manifest's `version` changed; app module
-`apps/money/0.4.2/ui.js`, 120,392 bytes) the five tests of
+`apps/money/0.4.2/ui.js`, 120,392 bytes then, 120,413 since the 2026-10-12 punctuation fix) the five tests of
 `e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-08 against the
 pin `0fa9c07` (the build VPS's source build of it), in 6.1 minutes. What the
 run adds over 0.4.1: after the MT940 import into the app's own table, the

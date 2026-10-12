@@ -150,6 +150,9 @@ export function busyText(state: State): string | undefined {
   return undefined;
 }
 
+/** `text` as a sentence: a period added unless it already ends in . ? or !. */
+const sentence = (text: string) => (/[.?!]$/.test(text) ? text : `${text}.`);
+
 export function syncStatusFor(input: StatusInput): SyncStatus {
   const { state, now } = input;
   const view = state.view;
@@ -174,7 +177,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     status.last = {
       ok: false,
       at: state.failedAt ?? now,
-      error: `${LOAD_FAILED_LEAD} ${view.message.replace(/\.?$/, '.')}`,
+      error: `${LOAD_FAILED_LEAD} ${sentence(view.message)}`,
       nextStep: RETRY_STEP,
     };
 
