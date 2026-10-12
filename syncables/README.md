@@ -604,8 +604,12 @@ record). Held changes that are not told (the sync throws, the handler
 throws at the end, or it threw earlier in the sync, which skips the end
 call) are kept, the latest per record, and told at the end of a later
 sync; they are kept in memory only, so a restart loses them though not the
-marks. A removal the handler refused keeps the record and its mark, so a
-later sync checks it again. The same changes are on
+marks. A removal the handler refused keeps the record and its mark; an
+`unconfirmed` one is checked again by a later sync. A mark dropped because
+a write to the record settled, or because a check found the record while a
+write or confirmed copy keeps it, drops its held change too; if the app had
+been told a mark of the record (or the mark was restored from storage), it
+is told `present` instead (not after a delete the app made). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
 or rejects, the records are not removed (for the read's own removals, that
 collection's read is not applied: its records do not replace the confirmed

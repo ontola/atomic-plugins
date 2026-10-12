@@ -626,6 +626,45 @@ describe('presence marks: #466 second review', () => {
     expect(told.flat()).toEqual([change('unconfirmed', 'read', tom, false)]);
   });
 
+  it('drops a held change with its mark when a check settles the mark untold', async () => {
+    let fail = true;
+    const told: PresenceChange[][] = [];
+    const { client, fake } = await setup(document(), {
+      onPresence: (changes) => {
+        if (fail && changes.length) throw new Error('app busy');
+        told.push(changes);
+      },
+    });
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await expect(client.sync()).rejects.toThrow('app busy');
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unconfirmed' },
+    ]);
+    fail = false;
+    await client.update('/pets', '2', { name: 'Tom II' });
+    // The check now finds the record elsewhere (filtered); the update keeps it.
+    fake.item = (): TransportResponse => response(tom);
+    await client.sync();
+    expect(client.presence()).toEqual([]);
+    expect(told.flat().filter((c) => c.id === '2')).toEqual([]);
+  });
+
+  it('tells present when a check settles a mark the app was told', async () => {
+    const { client, fake, told } = await setup();
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await client.sync();
+    await client.update('/pets', '2', { name: 'Tom II' });
+    fake.item = (): TransportResponse => response(tom);
+    await client.sync();
+    expect(client.presence()).toEqual([]);
+    expect(told.flat().map((c) => [c.id, c.presence, c.pruned])).toEqual([
+      ['2', 'unconfirmed', false],
+      ['2', 'present', false],
+    ]);
+  });
+
   it('keeps the mark of a record whose removal the handler refused, and checks it again', async () => {
     let fail = true;
     const { client, fake } = await setup(document(), {

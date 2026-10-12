@@ -1640,6 +1640,12 @@ export function createApiClient(
        * handler throws, so the record is checked again.
        */
       clearing?: true;
+      /**
+       * The app has been told a mark of this record (or the mark was
+       * restored from storage, whose changes were told or lost with the
+       * process): dropping it is then told as `present` (`dropMark`).
+       */
+      told?: true;
     }
   >();
   /**
@@ -1960,6 +1966,7 @@ export function createApiClient(
           ...(mark.source
             ? { source: mark.source as MissingRecord['source'] }
             : {}),
+          told: true,
         });
     }
     for (const entry of outbox.feedTombstones) {
@@ -2277,7 +2284,8 @@ export function createApiClient(
       // is no longer kept as unavailable (a delete removed it; any other
       // 2xx showed it readable).
       feedTombstones.get(write.scope)?.ids.delete(id);
-      keptMarks.delete(key);
+      // A delete the app made itself is not told back as `present`.
+      dropMark(key, remote(write.scope).get(id), write.type !== 'delete');
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -3262,7 +3270,18 @@ export function createApiClient(
     }
     if (removing.length)
       for (const change of removing) untoldMarks.delete(changeKey(change));
-    else untoldMarks.clear();
+    else {
+      untoldMarks.clear();
+      for (const change of changes) {
+        const route = byResource.get(change.collection);
+        const mark =
+          route &&
+          keptMarks.get(
+            keyFor(scopeFor(route, change.context ?? {}), change.id),
+          );
+        if (mark && change.presence !== 'present') mark.told = true;
+      }
+    }
     round.presence.push(...changes);
     return true;
   }
@@ -3313,6 +3332,7 @@ export function createApiClient(
       detail,
       source,
       presence,
+      ...(before?.told ? { told: true as const } : {}),
     });
     if (before?.presence !== presence) {
       const change = presenceChange(
@@ -3327,6 +3347,35 @@ export function createApiClient(
       untoldMarks.delete(changeKey(change));
       untoldMarks.set(changeKey(change), change);
     }
+  }
+
+  /**
+   * Drops a record's mark outside `tell` and `setMark` (a write settled on
+   * it, or a check settled a clearing mark): a held change of it is dropped
+   * too, and, when the app has been told a mark of the record and
+   * `tellPresent` holds, replaced by a `present` change with `record`.
+   */
+  function dropMark(
+    key: string,
+    record: Record<string, unknown> | undefined,
+    tellPresent = true,
+  ): void {
+    const mark = keptMarks.get(key);
+    if (!mark) return;
+    keptMarks.delete(key);
+    const route = byResource.get(mark.resource);
+    if (!route) return;
+    const change = presenceChange(
+      route,
+      mark.context,
+      mark.id,
+      'present',
+      'read',
+      record ?? mark.record,
+      false,
+    );
+    untoldMarks.delete(changeKey(change));
+    if (mark.told && tellPresent) untoldMarks.set(changeKey(change), change);
   }
 
   /**
@@ -3355,19 +3404,13 @@ export function createApiClient(
             w.id === target.id &&
             w.durable !== false,
         );
-      // A clearing mark on a record that stays is simply settled.
-      if (mark?.clearing && stays) keptMarks.delete(key);
-      if (
-        stays ||
-        (mark && !mark.clearing) ||
-        allWrites().some(
-          (w) =>
-            w.scope === target.scope &&
-            w.id === target.id &&
-            w.durable !== false,
-        )
-      )
-        continue;
+      // A clearing mark on a record that stays is settled.
+      if (mark?.clearing && stays)
+        dropMark(
+          key,
+          target.found?.record ?? remote(target.scope).get(target.id),
+        );
+      if (stays || (mark && !mark.clearing)) continue;
       const stored = await storage.get(target.scope, target.id);
       if (!stored) continue;
       held.add(key);
@@ -3388,7 +3431,9 @@ export function createApiClient(
     }
     const told = removing.length ? await tell(round, removing) : true;
     // Told: the clearing marks of the removed records go. Not told: they
-    // stay (not clearing any more), so the records are checked again.
+    // stay, not clearing any more: an `unconfirmed` mark is checked again
+    // by a later sync; an `unavailable` or `deleted` one stays until a read
+    // settles it.
     for (const target of targets) {
       const key = keyFor(target.scope, target.id);
       const mark = keptMarks.get(key);
