@@ -127,7 +127,21 @@ Data flows through four stages, each its own directory under `src/`:
    whole scope skipped when one settled on the scope), `lastSyncedItems` is
    dropped for the scope so a later complete read still prunes, and nothing
    is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
-   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
+   such collection is listed in `SyncResult.incomplete`.
+   Tell before prune: in `performSync`, the records a
+   complete read removes (not returned, no writes, not in
+   `unavailableKept`, including ones a reused storage held) are passed to
+   `options.onPresence` (awaited) before `confirmed` is replaced and the
+   rebuild removes them; a throwing handler skips that snapshot
+   (`SyncRound.presenceError`, thrown at the end; `skipped`, so
+   `countRefreshMisses` does not count its held writes) so the next sync
+   tells again; after the handler, a write that settled on the scope sends
+   the snapshot down the stale path (upsert only); a record whose writes are
+   all non-durable is not rebuilt there. Removals after a check
+   (`releaseRefreshed`, `finishFeeds`, parent members) go through
+   `rebuildTelling`, which tells each record the rebuild would remove (no
+   confirmed copy, no kept mark, no durable write, stored now) first. The
+   changes go on `SyncResult.presence` (`SyncRound.presence`). GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
