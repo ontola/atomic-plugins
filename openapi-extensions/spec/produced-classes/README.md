@@ -107,11 +107,12 @@ A consumer MUST NOT assume a field mapping from `class` alone: without a
 `lens` the declaration only says which tables the resource is meant for. A
 consumer that cannot fetch or does not understand a `lens` treats the entry
 as if it had none. When the lens document itself names its target class or
-its source resource (ontola/atomic-plugins' lenses do, as `target.class`
-and `source.record.resource`), a consumer SHOULD ignore the lens if the
-target is not this entry's `class` or the source is not this resource, and
-treat the entry as if it had none. This extension requires no fetch of a `class` or `lens`
-URI; whether and from where a consumer fetches them is its own policy.
+its source (ontola/atomic-plugins' lenses do, as `target.class` and
+`source.record.provider` and `.resource`), a consumer SHOULD ignore the lens
+if the target is not this entry's `class` or the source is not this
+provider's resource, and treat the entry as if it had none. This extension
+requires no fetch of a `class` or `lens` IRI; whether and from where a
+consumer fetches them is its own policy.
 
 ### 4.3 What a passing intermediary does
 
@@ -188,7 +189,8 @@ synthetic document.
 Rule 1 concerns the document's structure only: a schema property named
 `x-produces` (a key of `properties` or `patternProperties`), and any
 `x-produces` inside example, default, enum or const values, are data, not
-the extension.
+the extension. A Responses Object's `default` is a Response Object, not a
+value, and is checked like any other response.
 
 A validation error SHOULD identify the precise location of the violation
 (e.g. `components.crudResources.timeEntry.x-produces[0].class`).
@@ -198,7 +200,7 @@ A validation error SHOULD identify the precise location of the violation
 [`validate.py`](validate.py) checks rules 1–6 for a loaded OpenAPI document
 (`validate`).
 [`test_validate.py`](test_validate.py) covers each rule. It does not fetch or
-check any class or lens URI. From the repository root:
+check any class or lens IRI. From the repository root:
 
 ```sh
 cd openapi-extensions/spec/produced-classes

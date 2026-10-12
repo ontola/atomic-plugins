@@ -166,6 +166,13 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// The header values the catalog fixes for an operation: a header
+    /// parameter with a `schema.default`, or a `schema.enum` of exactly one
+    /// value, whether it is `required` or not (a required one with neither
+    /// refuses the operation: `None`). They are always sent, and since the
+    /// header allowlists of pieces.md P1-P3 a fixed value also replaces a
+    /// caller's header of the same name (`proxy::upstream_request`), so an
+    /// optional header with a default can no longer be chosen by the caller.
     pub fn required_headers(
         &self,
         platform: &str,
@@ -255,7 +262,11 @@ impl Catalog {
             let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
-            // A path item may itself be a local `$ref` (OpenAPI 3.1).
+            // A path item may itself be a local `$ref` (OpenAPI 3.1). Resolved
+            // here for consistency of the declaration check only: `allows`,
+            // `required_headers` and `validate_request` do not resolve one,
+            // so an operation under such a path item is refused as not in
+            // the catalog before this answer is used.
             let mut path_item = paths.get(template)?;
             if let Some(reference) = path_item.get("$ref") {
                 path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;

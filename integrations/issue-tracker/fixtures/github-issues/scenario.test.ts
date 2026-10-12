@@ -120,6 +120,38 @@ describe('github-issues fixture drivers', () => {
     );
   });
 
+  it('failNext can fail only writes, and only one repository', () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(422, 1, { writes: true, repository: WEBSITE });
+    const other = 'atomic-fixture/tracker';
+    const patch = (name: string) =>
+      tracker.request('PATCH', url(`/repos/${name}/issues/1`), {
+        title: 'Edited',
+      });
+
+    // Reads, and another repository's writes, go through.
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      200,
+    );
+    expect(patch(other).status).toBe(200);
+    // Then the first write to the repository is refused, as GitHub does.
+    expect(patch(WEBSITE)).toMatchObject({
+      status: 422,
+      body: { message: 'Validation Failed', errors: [{ field: 'title' }] },
+    });
+    expect(patch(WEBSITE).status).toBe(200);
+  });
+
+  it("reset keeps another repository's pending failures", () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(503, 1, { repository: WEBSITE });
+    tracker.reset('atomic-fixture/other');
+
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      503,
+    );
+  });
+
   it('failNext answers the next requests with an error, then recovers', () => {
     const tracker = githubTracker({ scenario: 'user-testing' });
     tracker.failNext(503, 2);

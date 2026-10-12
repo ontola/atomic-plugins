@@ -149,7 +149,11 @@ function typedValue(value: unknown, datatype: string): unknown {
 
 /**
  * Walks every `crudResources` collection of `document` through `transport`
- * and returns the records plus the derived ontology. A collection whose
+ * and returns the records plus the derived ontology. The records include
+ * those of collections read without error but not completely (by range
+ * windows, or ended by a short page whose end is not documented), which a
+ * caller must not use to conclude that an absent record is gone;
+ * `readCollections` reports that per snapshot (`complete`, `notComplete`). A collection whose
  * path variables come from a parent runs once per parent record, after the
  * parent. A failed collection becomes an entry in `errors` and the read
  * continues; a budget running out (`limits`) stops every collection but
@@ -244,6 +248,12 @@ export interface PaginateOptions {
    * (Pagination Schemes 0.5.0 §4.6), both bounds in its window format.
    */
   range?: WindowRange;
+  /**
+   * The item field that identifies an item, for a windowed read: an item
+   * two windows return is kept once. Default `id`; an item without it is
+   * kept as is.
+   */
+  idField?: string;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -285,6 +295,7 @@ export async function paginate(
       ? {}
       : { itemsField: options.itemsField }),
     ...(options.range ? { range: options.range } : {}),
+    identity: (item) => asText(item[options.idField ?? 'id']),
   })) {
     items.push(...page.items);
     if (items.length > budget.limits.maxRecords) {

@@ -28,6 +28,7 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  IncompleteRead,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
@@ -41,6 +42,7 @@ export type {
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
+export { mergePatch } from './client/merge-patch.js';
 
 // The read path (also available without Node built-ins as `syncables/browser`).
 export {
@@ -124,7 +126,9 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
+export { PageReadError } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
+export type { ShortPageObject } from './pagination/types.js';
 
 export {
   PaginationSchemeError,
