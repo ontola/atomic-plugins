@@ -1227,8 +1227,9 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). A client from the first presence-mark version keeps
-the kept records but not their `presence`, `source` or `lastSeen`: once it
+from its local copy). A client from before the presence marks, which already
+keeps unavailable records, keeps the kept records but not their `presence`
+or `source`: once it
 stores the outbox again, `unconfirmed` and retained `deleted` marks come
 back after an upgrade as `unavailable` for good (kept, not checked again by
 themselves). A `presence` value this client does not know is read as
