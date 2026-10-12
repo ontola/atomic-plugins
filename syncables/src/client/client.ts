@@ -65,6 +65,7 @@ import {
   classifyThrottling,
   declaredThrottling,
   operationBuckets,
+  parseHttpDate,
   type ThrottlingVerdict,
 } from '../throttling/throttling.js';
 import { paginate as paginateOperation } from '../read/read.js';
@@ -975,14 +976,16 @@ function retryAfterMs(headers: Record<string, string>): number | undefined {
   // Only space, tab, CR and LF are stripped, as for the Throttling roles.
   const value = headers['retry-after']?.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
   if (!value) return undefined;
-  // An HTTP date has letters (a day or month name); anything else that is
-  // not delay-seconds up to 2^53 − 1, such as "1.5", is unusable.
+  // Delay-seconds up to 2^53 − 1, or an HTTP-date in one of its exact
+  // forms (RFC 9110 §5.6.7); anything else, such as "1.5" or a date with a
+  // no-break space, is unusable.
+  const date = /^\d+$/.test(value) ? undefined : parseHttpDate(value);
   const ms = /^\d+$/.test(value)
     ? Number.isSafeInteger(Number(value))
       ? Number(value) * 1000
       : NaN
-    : /[a-z]/i.test(value)
-      ? Date.parse(value) - Date.now()
+    : date !== undefined
+      ? date - Date.now()
       : NaN;
   return Number.isFinite(ms) ? Math.max(0, ms) : undefined;
 }

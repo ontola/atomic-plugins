@@ -313,3 +313,24 @@ describe('number bounds and stripped characters (Throttling follow-up)', () => {
     },
   );
 });
+
+describe('body HTTP-dates (#491 review)', () => {
+  const doc = withThrottling({
+    bodyFields: { 'error.retry_at': { role: 'retryAfter', unit: 'httpDate' } },
+  });
+
+  it('reads an IMF-fixdate body string and refuses one with other whitespace', () => {
+    const at = new Date(NOW + 60_000).toUTCString();
+    expect(classify(doc, 429, {}, { error: { retry_at: at } })!.retryAt).toBe(
+      NOW + 60_000,
+    );
+    for (const value of [
+      `\u00a0${at}`,
+      `\ufeff${at}`,
+      at.replace(' ', '\u2003'),
+    ])
+      expect(
+        classify(doc, 429, {}, { error: { retry_at: value } })!.retryAt,
+      ).toBeUndefined();
+  });
+});

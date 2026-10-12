@@ -448,17 +448,67 @@ function integer(value: string): number | undefined {
   return Number.isSafeInteger(n) ? n : undefined;
 }
 
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+const MONTH = MONTHS.join('|');
+const DAY = 'Mon|Tue|Wed|Thu|Fri|Sat|Sun';
+const LONG_DAY = 'Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday';
+const IMF_FIXDATE = new RegExp(
+  `^(?:${DAY}), (\\d{2}) (${MONTH}) (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const RFC850_DATE = new RegExp(
+  `^(?:${LONG_DAY}), (\\d{2})-(${MONTH})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const ASCTIME_DATE = new RegExp(
+  `^(?:${DAY}) (${MONTH}) ( \\d|\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$`,
+);
+
 /**
- * An HTTP-date (RFC 9110 §5.6.7) in milliseconds since the epoch. The
- * obsolete asctime form has no zone and is read as GMT. A value without a
- * letter is not a date (`Date.parse('120')` would be a year).
+ * An HTTP-date (RFC 9110 §5.6.7) in milliseconds since the epoch, in one of
+ * its three exact forms: IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`), the
+ * obsolete RFC 850 form (a two-digit year more than 50 years ahead is read
+ * as the previous century) or asctime (no zone: GMT). Anything else, a
+ * value carrying U+00A0, a byte-order mark or another character the form
+ * does not have included, does not parse; no lenient `Date.parse` reading.
  */
-function httpDate(value: string): number | undefined {
-  if (!/[a-zA-Z]/.test(value)) return undefined;
-  const zoned = /(GMT|UTC|UT|[+-][0-9]{2}:?[0-9]{2})\s*$/i.test(value);
-  const ms = Date.parse(zoned ? value : `${value} GMT`);
-  return Number.isFinite(ms) ? ms : undefined;
+export function parseHttpDate(value: string): number | undefined {
+  let day: string, month: string, year: number;
+  let hour: string, minute: string, second: string;
+  let match = IMF_FIXDATE.exec(value);
+  if (match) {
+    [, day, month, , hour, minute, second] = match as unknown as string[];
+    year = Number(match[3]);
+  } else if ((match = RFC850_DATE.exec(value))) {
+    [, day, month, , hour, minute, second] = match as unknown as string[];
+    year = 2000 + Number(match[3]);
+    if (year > new Date().getUTCFullYear() + 50) year -= 100;
+  } else if ((match = ASCTIME_DATE.exec(value))) {
+    [, month, day, hour, minute, second] = match as unknown as string[];
+    year = Number(match[6]);
+  } else return undefined;
+  const m = MONTHS.indexOf(month!);
+  const d = Number(day!.trim());
+  const [h, min, sec] = [Number(hour!), Number(minute!), Number(second!)];
+  if (h > 23 || min > 59 || sec > 60) return undefined;
+  const ms = Date.UTC(year, m, d, h, min, sec);
+  // A day the month does not have (31 Feb) does not parse.
+  if (new Date(ms).getUTCDate() !== d) return undefined;
+  return ms;
 }
+
+const httpDate = parseHttpDate;
 
 /**
  * The time a header's value names, in milliseconds since the epoch, under

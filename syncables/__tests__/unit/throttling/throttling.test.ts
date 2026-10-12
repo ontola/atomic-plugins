@@ -279,6 +279,52 @@ describe('header values: number bounds and stripped characters (Throttling follo
   });
 });
 
+describe('HTTP-dates: only the exact RFC 9110 forms (#491 review)', () => {
+  const DATE = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+
+  it.each([
+    ['IMF-fixdate', 'Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['the RFC 850 form', 'Wednesday, 21-Oct-15 07:28:00 GMT'],
+    ['asctime', 'Wed Oct 21 07:28:00 2015'],
+  ])('reads %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBe(DATE);
+  });
+
+  it('reads a header IMF-fixdate after stripping space and tab', () => {
+    expect(
+      classify(429, { 'Retry-After': ' Wed, 21 Oct 2015 07:28:00 GMT\t' })!
+        .retryAt,
+    ).toBe(DATE);
+  });
+
+  it.each([
+    ['a leading U+00A0', '\u00a0Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['a leading byte-order mark', '\ufeffWed, 21 Oct 2015 07:28:00 GMT'],
+    ['an em space inside', 'Wed,\u200321 Oct 2015 07:28:00 GMT'],
+    ['an ISO date', '2015-10-21T07:28:00Z'],
+    ['UTC instead of GMT', 'Wed, 21 Oct 2015 07:28:00 UTC'],
+    ['a day the month lacks', 'Sat, 31 Feb 2015 07:28:00 GMT'],
+    ['a free-form date', 'October 21, 2015 07:28'],
+  ])('refuses %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBeUndefined();
+    expect(
+      classify(429, { 'Retry-After': value }, undefined)!.retryAt,
+    ).toBeUndefined();
+  });
+
+  it('refuses a Date header with a U+00A0: the consumer clock alone counts', () => {
+    const at = String(NOW / 1000 + 60);
+    expect(
+      headerTime(
+        at,
+        'epochSeconds',
+        NOW,
+        '\u00a0Fri, 15 Jan 2027 07:00:00 GMT',
+      ),
+    ).toBe(NOW + 60_000);
+  });
+});
+
 describe('headerTime', () => {
   it('reads each unit, and refuses the others', () => {
     expect(headerTime('120', 'deltaSeconds', NOW)).toBe(s(120));

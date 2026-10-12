@@ -26,3 +26,23 @@ strings with U+00A0, U+2003 and U+FEFF; a 400-digit `Retry-After`, a reset
 of 2^53 against 2^53 − 1, header stripping and a header predicate; two
 client cases. The stripping cases fail on main; the bound cases already
 passed. The spec branch was not pushed yet, so the cases follow the brief.
+
+## Turn 2
+
+**Human (via the coordinator session):** #491 review: `httpDate` and the
+client's `retryAfterMs` pass the stripped value to the lenient
+`Date.parse`, so an HTTP-date wrapped in U+00A0, U+FEFF or U+2003 still
+parses. Refuse other whitespace or a BOM, better still require the strict
+format; cover headers, body strings and the client's `Retry-After`.
+
+**Assistant:** `parseHttpDate` (exported from `throttling.ts`) accepts only
+RFC 9110 §5.6.7's three forms by exact pattern: IMF-fixdate, the obsolete
+RFC 850 form (two-digit year, read in the previous century when more than
+50 years ahead) and asctime (GMT); it checks the hour, minute, second and
+that the day exists in the month. `httpDate` (roles, body fields, the
+`Date` header) and the client's `retryAfterMs` use it instead of
+`Date.parse`. Tests: the three forms, stripped space and tab, refusals
+(U+00A0, BOM, U+2003, an ISO date, `UTC`, 31 February, a free-form date),
+a `Date` header with U+00A0 ignored, a body `httpDate` field, and a 503
+`Retry-After` with U+00A0 or a BOM against a valid one. They fail on the
+previous code.
