@@ -1136,15 +1136,15 @@ client from before `updateBody` ignores that field too: downgraded with a
 merge-patch update queued, it would send that update as a full record, with
 a `null` stored as a value and a nested patch replacing its field. An older
 client also ignores `unbound`, so a `retry` there would send an unbound
-create again. The version stays `1` because every write it holds is still
-one an older client can read and send, with those caveats: settle or
-discard merge-patch updates and unbound creates before downgrading. An
-older client also does not know the write value
+create again. An older client also does not know the write value
 `missingRecord: 'unavailable'` (it keeps such a record's entry as
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). Set `outboxNamespace` to
+from its local copy). The version stays `1` because an older client can
+read every write it holds and either sends it or keeps it unchanged, with
+those caveats: settle or discard merge-patch updates, unbound creates and
+writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
