@@ -33,9 +33,10 @@ The extension versions this source reads, against the specifications in
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
+| [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 
-The other specifications there (Filtering, Runtime Schemas, the
-authentication and webhook extensions) are not read by Syncables.
+The other specifications there (Filtering, the authentication and webhook
+extensions) are not read by Syncables.
 
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
@@ -129,8 +130,54 @@ immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
 replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. Both currently send JSON records, not JSON Patch documents.
-An update's response is merged over the record it sent, so a provider that
+when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
+`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+body:
+
+- `mode: replace`, no `x-crud`, or a legacy document (no
+  `components.crudResources`): the last known record with the changes on
+  top, as JSON.
+- `mode: patch, patchFormat: jsonMergePatch`: the changes alone, as an
+  [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396) JSON Merge Patch, with
+  `Content-Type: application/merge-patch+json` when the operation's
+  `requestBody.content` declares that media type, else `application/json`.
+  The local copy follows RFC 7396 too: `null` removes the field, and a
+  nested object merges into the existing one (on other routes `null` is a
+  value and a nested object replaces the field). Each queued edit sends only
+  its own changes, in order, also after a restart. `mergePatch(target,
+  patch)` is exported.
+- `mode: patch, patchFormat: jsonPatch` (RFC 6902): `update()` throws
+  ("declares its PATCH update with patchFormat jsonPatch (RFC 6902), which
+  this client does not send") before any local change; create and delete
+  are unaffected.
+- `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
+  record, as for `replace`. Whether the provider accepts that is not checked.
+
+A declared PUT is chosen even when the item's PATCH is declared as a merge
+patch, so such a document still sends full records; preferring the merge
+patch there is a possible follow-up, not done.
+
+A merge-patch edit records the confirmed values of the top-level fields it
+names, so a remote change anywhere inside a nested object it patches is
+reported as a `WriteConflict` on that field, even when the two changes touch
+different nested members. A refresh is compared with the field as the
+client's own patches leave it, applied in order (a `null` matches an absent
+field), so a refresh that shows the client's own merge patch applied before
+its response arrived is not a conflict, for that write or a later queued
+one. A failed merge-patch update loses only the nested members a later
+settled merge patch sets, and `resolveWrite` `retry` strips only those of
+newer queued merge patches; other routes do this by top-level field.
+
+Each update stores the body format it was made with (`updateBody` in the
+outbox). A client restarted on a document that now declares another format
+for the route does not send or replay the update under the new one: the
+update, and every write queued before it, becomes `failed` with a
+`lastError` that says so; it stays visible as made, `retry` throws, and
+`discard` drops it. When a create is queued before such an update, the
+record's writes are kept unrestorable instead (written back unchanged).
+An update's response is merged over the record it sent (a shallow spread,
+on merge-patch routes too: a `null` in a response is stored as a value,
+not read as a removal), so a provider that
 answers with only some fields (or only bookkeeping such as `updatedAt`) does
 not shrink the confirmed record or revert the edit. The trade-off: a field
 that the provider removed in that response, rather than omitted, stays in the
@@ -382,6 +429,11 @@ value this client has queued, or holds as failed, for that field), the client
 records a conflict.
 A refresh that shows an earlier queued edit applied, before or after its
 response arrives, is not a conflict.
+For a JSON Merge Patch update, conflicts are per top-level field: a remote
+change to any nested member of an object the patch touches is reported on
+the whole field, even when the patch sets other members. Its expected value
+is the patch applied to its own base, or to what the queued patches before
+it leave; failed patches are not counted as applied.
 The local value stays visible, the queued write still sends it (local wins on
 acknowledgement), and the conflict is observable in two ways:
 
@@ -408,9 +460,10 @@ or the list may just not return it (a default filter, a view that depends on
 the credentials). The client does not send such an update on the record's
 last known copy: a PUT built on it could recreate a deleted record on some
 providers, or write back fields that changed remotely. That applies to PATCH
-too, since the client's PATCH body also carries the whole last known record
-with the changes on top (JSON, not JSON Patch); a PATCH to a deleted record is
-a 404 at best and recreates it at worst.
+too: unless its operation declares `patchFormat: jsonMergePatch`, the
+client's PATCH body also carries the whole last known record with the
+changes on top, and a PATCH to a deleted record (merge patch included) is a
+404 at best and recreates it at worst.
 
 When a complete read lacks the record (and no write to it settled during the
 read), every queued update of the record up to its first create, apart from
@@ -872,16 +925,19 @@ the methods that wait for it, rather than overwrite writes this client cannot
 read. Entries for a collection the current document lacks (queued writes and
 pending rebuilds), and entries that do not parse, are kept and written back
 unchanged; the next client tries them again; so are stored feed cursors and
-tombstones of such a collection. The write fields `lastStatus`
-and `missingRecord`, the state `blocked` and the top-level `authBlock`,
-`feedCursors` and `feedTombstones` were added within version `1`, as were
-the write field `notBefore` (a throttling answer's earliest retry time) and
-the top-level `throttlingPauses` (exhausted buckets); a stored `authBlock` that does not parse still blocks the client
-(`status` 0) until `authRenewed()`. Downgrading: an older syncables that
-reads this outbox does not know `notBefore` and `throttlingPauses` and
-drops them, so it may send a held write before the time the API asked for,
-though never a second time; the version stays `1` because every write it
-holds is still one that older client can read and send. Set `outboxNamespace` to
+tombstones of such a collection. The write fields `lastStatus`,
+`missingRecord` and `updateBody`, the state `blocked` and the top-level
+`authBlock`, `feedCursors` and `feedTombstones` were added within version
+`1`, as were the write field `notBefore` (a throttling answer's earliest
+retry time) and the top-level `throttlingPauses` (exhausted buckets); a
+stored `authBlock` that does not parse still blocks the client (`status` 0)
+until `authRenewed()`. Downgrading: an older syncables that reads this
+outbox does not know `notBefore` and `throttlingPauses` and drops them, so
+it may send a held write before the time the API asked for, though never a
+second time. A client from before `updateBody` ignores that field too:
+downgraded with a merge-patch update queued, it would send that update as a
+full record, with a `null` stored as a value and a nested patch replacing
+its field; settle or discard such writes before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
@@ -1085,6 +1141,56 @@ const { records, ontology, errors } = await readPlatform(document, {
   same read stops the collection with an error (rule 5). The value is
   resolved with the WHATWG URL parser once rule 2 has removed the inputs
   parsers disagree on. `resolveLink` (exported) is this rule set on its own.
+- **User-defined fields** (draft
+  [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
+  0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
+  `derive_class` and `read_members`): for items whose fields their users
+  define (Notion pages, whose `properties` their data source describes),
+  `readCollections` reads each describer the items' reference names, after
+  the items, through the same budget, once per read for each resource and
+  path (two resources that name one path read it once each, under their own
+  declarations). It returns the class derived from each in `describers`:
+  one property per definition, keyed by the definition's stable id, with its
+  name (a string; else the map key, else the id), type, schema and, for an
+  option type, its options by id (name `null` when an option has none; of a
+  repeated option id the first, the rest in `duplicateOptions`); `names` for
+  every definition, `undescribed` and `duplicates` for those that get no
+  property, `duplicateNames` for names two definitions share. Each item's
+  members are in its snapshot's `runtimeMembers`, in the order of `items`:
+  `values` by definition id (an option value is its option id), and the
+  member keys that are `unmatched` (no definition, a name two definitions
+  share under `match: key`, or a type other than the definition's under
+  `memberType`), `undescribed` (a type the document does not describe, or a
+  duplicated id), `invalid` (an option value of the wrong shape, or a
+  `memberId` that is present but not a string) or
+  `conflicting` (two or more members matching one definition: none gives a
+  value). A member whose value path is absent has no value, never `null`.
+  When a member matches no definition, the describer is read once more,
+  never a third time; under `match: id` the items with an unmatched member
+  are then interpreted again, under `match: key` they keep their first
+  interpretation. A describer that cannot be read (a status, a body that is
+  not JSON, a spent budget) is listed with its `error` and no class, named
+  in `errors` as `<resource>: describer <path>: <message>`, and its items'
+  members are all unmatched, as are those of an item whose reference field
+  is absent or `null` (no request is made for it). A declaration the reader
+  cannot use (a missing field, a malformed dot-path, no `types`, a type
+  without `schema`, an unknown reference) fails that resource's collections
+  before any request, with the reason in `errors`; the entries about
+  describers are also in `describerErrors` (the last entries of `errors`),
+  and an item without a class has `noClass: true`. `readPlatform` returns
+  the same `describers` and `describerErrors`, and gives each record its
+  members as `runtime`. The client's `sync()` returns `describers`, and
+  `client.runtimeMembers(resource, id, context?)` gives a record's members
+  as the latest complete read of its collection returned it (local edits
+  still pending are not in them; in memory only, so undefined after a
+  restart until the next sync). A describer `sync()` cannot read does not
+  make it throw: the collection is applied, the describer error is in
+  `SyncResult.warnings`, and the records' members have `noClass`; a
+  collection that could not be read still makes it throw. A describer's
+  401 or 403, or a budget spent before it was read, is such a warning too:
+  it does not block the client's writes as an auth refusal would
+  (`authBlocked()`). Writes and value
+  conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
   one property per field, typed with Atomic Data datatype URLs. Each record's
   `values` are keyed by property shortname, and `date-time` strings are
@@ -1109,16 +1215,95 @@ halved (the first half holding the extra unit), depth first, down to
 `2 × minimumWidth`. A full window that cannot be split ends the read with
 `WindowReadError`. An item two windows return is kept once. Such a read is
 never complete in the Collection Completeness sense: its snapshot has
-`complete: false` and `notComplete` saying why, with no error, so the
-client does not apply it (it applies complete snapshots only). Without a
+`complete: false` and `notComplete` saying why, with no error. Without a
 range the collection is left unread, with an error. A `rangeWindow` scheme
 is never auto-detected, and `x-pagination` that applies it with another
 scheme throws `PaginationSchemeError`.
+
+A `page` field's `start` (Pagination Schemes 0.6.0 §4.3.1) gives the first
+page number, so a zero-based `page` (ClickUp's) starts at 0; the default
+stays 1, and the mock server honours it too. A `pageNumber` scheme with a
+`shortPage` (§4.4.5) ends at the first page with fewer than `size` items
+(`size: request` takes `pageSize`, else the pageSize parameter's documented
+`default`), or at the end
+another declared field shows on a full page. A page with more than `size`
+items, or one that repeats the page before it, ends the read with
+`PageReadError` before its items are taken. A read ended by a short page is
+complete only when the `assurance` is `documented`; with `observed` or
+`assumed` its snapshot has `complete: false` and `notComplete`, with no
+error.
+
+`ApiClient.sync()` applies such a read conservatively: the records it
+returns are added or updated, and nothing is removed, held, checked or
+reported missing for the records it does not return; no deletion feed is
+read for it. `SyncResult.incomplete` lists each collection (and parent
+context) read that way, with the reason, so an app can show that the copy
+may be incomplete. A read that failed with an error is still not applied at
+all. `ApiClientOptions.ranges` gives the range for `rangeWindow`
+collections, as for `readCollections`.
+
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Update modes from CRUD Causality 0.4.0 (§4.3 `mode`,
+  §4.6 `patchFormat`) on the chosen update operation's `x-crud` (PUT still
+  preferred, else PATCH; an `x-crud` naming another resource is ignored).
+  `mode: patch, patchFormat: jsonMergePatch` sends the changes alone as an
+  RFC 7396 merge patch (`application/merge-patch+json` when the operation
+  declares it, else `application/json`) and applies RFC 7396 locally
+  (`null` removes a field, nested objects merge) in `update()`'s returned
+  record, the visible record and the queue's replay. `patchFormat:
+  jsonPatch` makes `update()` throw. `replace`, `custom`, `mode: patch`
+  without a `patchFormat`, no `x-crud` and legacy documents keep the full
+  record. `mergePatch` is exported from both entries. Behaviour change only
+  for documents that declare `jsonMergePatch` or `jsonPatch` on their
+  update operation. Conflict checks, superseding and `retry` follow the
+  merge patch's nested members; each update stores its body format
+  (`updateBody`, added within outbox version 1), and one restored under a
+  document that declares another format fails instead of being
+  reinterpreted. `mergePatch` treats a `__proto__` member as data.
+- **Unreleased**: A page size sent is capped at the pageSize parameter's
+  documented `maximum`; `paginate` takes `idField` to keep an item two
+  windows return once (items without it are kept as is); a walk's outcome
+  is not complete until it ends normally; a malformed window bound throws
+  `WindowReadError`; the mock server answers full pages of a numeric
+  `shortPage.size`.
+- **Unreleased**: `sync()` applies reads that ended without an error but
+  are not complete (range windows, short pages whose end is not documented)
+  by adding and updating their records only, never removing or checking an
+  absent one, and lists them in `SyncResult.incomplete` (`IncompleteRead`).
+  `ApiClientOptions.ranges` passes the range for `rangeWindow` collections.
+- **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
+  short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
+  0.6.0: a short page ends the list, an oversized page or an item an
+  earlier page returned ends the read with `PageReadError`, a short page
+  that `totalPages`/`totalCount` contradicts is an error under `documented`
+  and not complete otherwise, a `totalPages` (a count from `start`) or
+  `totalCount` end on a full page is complete, `currentPage` is numbered
+  like the page field, and only `assurance: documented` makes such a
+  read complete. The validator checks §9 rules 19–21 and
+  `resolveEffectiveScheme` rule 22. Exports `PageReadError` and
+  `ShortPageObject`.
+- **Unreleased**: Runtime Schemas classes in `readPlatform` and `sync()`:
+  `ReadResult.describers` and `ReadRecord.runtime`; `SyncResult.describers`
+  and `ApiClient.runtimeMembers(resource, id, context?)`, the members of a
+  record's latest complete read. A describer that cannot be read is a
+  `SyncResult.warnings` entry, not a reason for `sync()` to throw, and its
+  items' members have `noClass: true`; `CollectionReadResult.describerErrors`
+  names those entries of `errors`.
+- **Unreleased**: Runtime Schemas 0.1.0-draft (`x-runtime-schema`, #398):
+  `readCollections` reads the describer each item's reference names (once
+  per read for each resource and path, at most once more for a member
+  matching no definition) and returns the derived classes
+  (`CollectionReadResult.describers`) and each item's interpreted members
+  (`CollectionSnapshot.runtimeMembers`), keeping unmatched, undescribed,
+  invalid and conflicting members apart and never writing `null` for an
+  absent value. A describer it cannot read is named in `errors`; a
+  declaration it cannot use fails that resource's collections. Both fields
+  are absent for a document without the extension. Types `RuntimeClass`,
+  `RuntimeDescriber`, `RuntimeMembers` and `RuntimeProperty` are exported.
 - **0.21.0**: Consumer support for new extension revisions (Pagination
   Schemes 0.4.0 and 0.5.0, CRUD Causality 0.4.0, Throttling 0.2.0), and the
   pagination and envelope fixes their reviews found. Behaviour changes to

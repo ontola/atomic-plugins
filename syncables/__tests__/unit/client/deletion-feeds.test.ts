@@ -1225,3 +1225,111 @@ describe('deletion feeds: precedence', () => {
     ]);
   });
 });
+
+describe('deletion feeds: a feed read that is not complete (review of #431)', () => {
+  /** The feed paged by a short-page scheme, with the given assurance. */
+  function pagedFeed(assurance: 'documented' | 'observed'): OpenApiDocument {
+    const doc = feedDocument();
+    doc.components!['paginationSchemes'] = {
+      changePages: {
+        type: 'pageNumber',
+        autoDetect: false,
+        request: { queryParameters: { page: { role: 'page' } } },
+        response: { shortPage: { size: 2, assurance } },
+      },
+    };
+    const get = doc.paths['/pet-changes']!.get!;
+    get.parameters = [
+      ...(get.parameters ?? []),
+      { name: 'page', in: 'query', schema: { type: 'integer' } },
+    ];
+    get['x-pagination'] = [{ scheme: 'changePages' }];
+    return doc;
+  }
+
+  it('leaves the cursor where it was and gives no tombstones', async () => {
+    const outcomes: Record<string, unknown> = {};
+    for (const assurance of ['observed', 'documented'] as const) {
+      // Rex is deleted; the feed says so in one item, a short page: the end
+      // of the list only if that end is documented.
+      const fake = provider([rex, tom], {
+        write: unavailable,
+        item: unavailable,
+        feed: () =>
+          response({ changes: [{ id: '1', state: 'deleted' }], next: 'c1' }),
+      });
+      const { client, storage } = await edited({
+        doc: pagedFeed(assurance),
+        fake,
+      });
+      fake.pets.delete('1');
+      await client.sync();
+      const cursors = (
+        storage.outbox() as { feedCursors?: unknown[] } | undefined
+      )?.feedCursors;
+      outcomes[assurance] = {
+        cursor: Boolean(cursors?.length),
+        missingRecord: client.pendingWrites()[0]?.missingRecord,
+      };
+    }
+    expect(outcomes).toEqual({
+      // Not complete: no tombstone, so the GET's unknown answer decides.
+      observed: { cursor: false, missingRecord: 'unknown' },
+      documented: { cursor: true, missingRecord: 'deleted' },
+    });
+  });
+
+  it('takes the whole item as its identity: a repeated item ends the read, a record named again does not', async () => {
+    const outcomes: Record<string, unknown> = {};
+    // Page 1 is full (size 2), page 2 short. Rex (1) is deleted; page 2
+    // names him again, once as the same item and once as a later one.
+    const pages: Record<string, unknown[][]> = {
+      sameItem: [
+        [
+          { id: '1', state: 'deleted' },
+          { id: '2', state: 'active' },
+        ],
+        [{ id: '1', state: 'deleted' }],
+      ],
+      sameRecord: [
+        [
+          { id: '1', state: 'active' },
+          { id: '2', state: 'active' },
+        ],
+        [{ id: '1', state: 'deleted' }],
+      ],
+    };
+    for (const [label, changes] of Object.entries(pages)) {
+      const fake = provider([rex, tom], {
+        write: unavailable,
+        item: unavailable,
+        feed: () => {
+          const page = Number(
+            (fake.lastFeedUrl as URL).searchParams.get('page') ?? '1',
+          );
+          return response({ changes: changes[page - 1] ?? [], next: 'c1' });
+        },
+      });
+      const { client, storage } = await edited({
+        doc: pagedFeed('documented'),
+        fake,
+      });
+      fake.pets.delete('1');
+      await client.sync();
+      const cursors = (
+        storage.outbox() as { feedCursors?: unknown[] } | undefined
+      )?.feedCursors;
+      outcomes[label] = {
+        cursor: Boolean(cursors?.length),
+        missingRecord: client.pendingWrites()[0]?.missingRecord,
+      };
+    }
+    expect(outcomes).toEqual({
+      // An item an earlier page returned: PageReadError, so no tombstones
+      // and the cursor stays.
+      sameItem: { cursor: false, missingRecord: 'unknown' },
+      // The record id again, in another item: a valid change list.
+      sameRecord: { cursor: true, missingRecord: 'deleted' },
+    });
+  });
+});

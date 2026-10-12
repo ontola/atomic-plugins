@@ -371,6 +371,14 @@ A composed document whose `paths` holds a path item that is a `$ref`
 (OpenAPI 3.1) or not an object is refused at load, naming the platform and
 path: the proxy does not resolve `$ref` path items, and no catalog uses one.
 
+**Produced classes** (`x-produces`,
+[`openapi-extensions/spec/produced-classes`](../openapi-extensions/spec/produced-classes/README.md),
+docs/design/pieces.md D4): the shared classes a CRUD resource's objects can
+be represented as. An overlay sets it on a CRUD Resource Object, and it comes
+back unchanged in `/catalog/{platform}.yaml`. It has no place in a catalog
+entry's `selection`. The proxy never reads it: nothing it allows, forwards or
+asks consent for depends on it.
+
 ### Authentication profiles
 
 A document that declares more than one kind of security scheme (OAuth and an

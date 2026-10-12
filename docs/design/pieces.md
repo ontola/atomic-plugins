@@ -133,9 +133,9 @@ freeze (2026-10-01) an **as** gap becomes an issue draft for Joep, not a PR
 
 | Question | Sketch                                                                                                                                                                                                       |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Where    | An `x-produces` (name open) on a CRUD Resource Object in `components.crudResources`, or on a `list` operation, set by an overlay. Fallback: a field on the dated catalog's platform entry or its `selection` |
-| Value    | One or more class subject URLs, for example `https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1`; optionally a field map from provider fields (JSON Pointers) to property subjects (O8)  |
-| Proxy    | Passes it through unchanged inside `/catalog/<name>.yaml` (the composed document) or `.selection.json`; no parsing, no Atomic knowledge (D4). No proxy change if it sits in the document (S7)                |
+| Where    | Specified as [Produced Classes](../../openapi-extensions/spec/produced-classes/README.md) 0.1.0-draft: `x-produces` on a CRUD Resource Object in `components.crudResources`, set by an overlay; no catalog or `selection` placement (a resource without CRUD annotations gets them from an overlay first) |
+| Value    | One or more class subject IRIs, for example `https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1`, each with an optional `lens` IRI that maps the resource to the class; the spec defines no field map of its own (O8)  |
+| Proxy    | Passes it through unchanged inside `/catalog/<name>.yaml` (the composed document); no parsing, no Atomic knowledge (D4). No proxy change was needed; a test checks the pass-through                |
 | Spec     | A new spec, `openapi-extensions/spec/produced-classes/` (name open), specified there first per AGENTS.md, with a row in the README; it references CRUD Causality's Resource Object, which it annotates       |
 
 ### 3.3 Lenses

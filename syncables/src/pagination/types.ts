@@ -93,6 +93,8 @@ export interface RequestFieldObject {
   required?: boolean;
   /** `windowRange` only: the field's value, with `{start}` and `{end}` once each (§4.6.1). */
   template?: string;
+  /** `page` only: the number of the first page (spec 0.6.0 §4.3.1). Default 1. */
+  start?: number;
   [key: `x-${string}`]: unknown;
 }
 
@@ -113,6 +115,19 @@ export interface ResponseFieldObject {
 }
 
 /**
+ * Short Page Object (spec 0.6.0 §4.4.5), on a `pageNumber` scheme: a page
+ * with fewer than `size` items ends the list. Only `documented` makes a
+ * read ended that way complete.
+ */
+export interface ShortPageObject {
+  /** Items in a full page, or `request` for the `pageSize` the client sends. */
+  size: number | 'request';
+  assurance: 'documented' | 'observed' | 'assumed';
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
+
+/**
  * Envelope Object (spec §4.4.2): where the items array sits in the body.
  * `itemsField` omitted or `null` means the body root is the array.
  */
@@ -125,6 +140,7 @@ export interface ResponsePaginationFieldsObject {
   envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
+  shortPage?: ShortPageObject;
   [key: `x-${string}`]: unknown;
 }
 

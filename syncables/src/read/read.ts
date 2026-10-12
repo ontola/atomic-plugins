@@ -31,6 +31,7 @@ import type { ListMethod, Transport } from './transport.js';
 import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import { declaredThrottling } from '../throttling/throttling.js';
+import type { RuntimeDescriber, RuntimeMembers } from './runtime-schemas.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -101,6 +102,12 @@ export interface ReadRecord {
    * are left out; everything else is the provider's JSON value as-is.
    */
   values: Record<string, unknown>;
+  /**
+   * For a resource that declares `x-runtime-schema`: its user-defined
+   * members, interpreted against the class of its describer (one of the
+   * result's `describers`). `values` keeps the raw field as before.
+   */
+  runtime?: RuntimeMembers;
 }
 
 export interface ReadResult {
@@ -109,6 +116,19 @@ export interface ReadResult {
   records: ReadRecord[];
   /** Non-fatal per-collection failures, as `<collection>: <message>`. */
   errors: string[];
+  /**
+   * The describers read and the classes derived from them, when a resource
+   * declares `x-runtime-schema` (Runtime Schemas 0.1.0-draft); absent
+   * otherwise. These classes are per describer (one per Notion data
+   * source), so they are not part of `ontology`, which the document alone
+   * defines.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read (the
+   * last ones); present with `describers`.
+   */
+  describerErrors?: string[];
 }
 
 const TIMESTAMP =
@@ -129,7 +149,11 @@ function typedValue(value: unknown, datatype: string): unknown {
 
 /**
  * Walks every `crudResources` collection of `document` through `transport`
- * and returns the records plus the derived ontology. A collection whose
+ * and returns the records plus the derived ontology. The records include
+ * those of collections read without error but not completely (by range
+ * windows, or ended by a short page whose end is not documented), which a
+ * caller must not use to conclude that an absent record is gone;
+ * `readCollections` reports that per snapshot (`complete`, `notComplete`). A collection whose
  * path variables come from a parent runs once per parent record, after the
  * parent. A failed collection becomes an entry in `errors` and the read
  * continues; a budget running out (`limits`) stops every collection but
@@ -150,6 +174,7 @@ export async function readPlatform(
       .map((t) => [t.shortname, t.datatype]),
   );
   const records: ReadRecord[] = [];
+  const byItem = new Map<Record<string, unknown>, ReadRecord>();
   const result = await readCollections(doc, {
     ...options,
     onRecord(value, collection, path): void {
@@ -165,23 +190,35 @@ export async function readPlatform(
         (v): v is string => typeof v === 'string' && v !== '',
       );
       const id = asText(value[collection.idField]);
-      records.push({
+      const record: ReadRecord = {
         resource: ontologyShortname(collection.resource),
         namespace: collection.contextParams.map((p) => path[p] ?? '').join('/'),
         id,
         name: name ?? id,
         values,
-      });
+      };
+      records.push(record);
+      byItem.set(value, record);
     },
   });
   if (!records.length && result.errors.length) {
     throw new Error(`Read incomplete: ${result.errors.join('; ')}`);
   }
+  for (const snapshot of result.collections)
+    snapshot.items.forEach((item, i) => {
+      const record = byItem.get(item);
+      const runtime = snapshot.runtimeMembers?.[i];
+      if (record && runtime) record.runtime = runtime;
+    });
   return {
     platform: options.platform,
     ontology,
     records,
     errors: result.errors,
+    ...(result.describers ? { describers: result.describers } : {}),
+    ...(result.describerErrors
+      ? { describerErrors: result.describerErrors }
+      : {}),
   };
 }
 
@@ -211,6 +248,12 @@ export interface PaginateOptions {
    * (Pagination Schemes 0.5.0 §4.6), both bounds in its window format.
    */
   range?: WindowRange;
+  /**
+   * The item field that identifies an item, for a windowed read: an item
+   * two windows return is kept once. Default `id`; an item without it is
+   * kept as is.
+   */
+  idField?: string;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -252,6 +295,7 @@ export async function paginate(
       ? {}
       : { itemsField: options.itemsField }),
     ...(options.range ? { range: options.range } : {}),
+    identity: (item) => asText(item[options.idField ?? 'id']),
   })) {
     items.push(...page.items);
     if (items.length > budget.limits.maxRecords) {

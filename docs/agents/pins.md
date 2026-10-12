@@ -78,6 +78,12 @@ On an atomic-plugins branch, once the candidate is green:
 4. `node integrations/tooling/apps.mjs check --published origin/main`. A pin
    bump can change esbuild's output, and then a drive app needs a new version
    (see [catalog-and-pages.md](catalog-and-pages.md)).
+   The user-testing builds change with it: `node --test
+   integrations/tooling/apps.test.mjs` fails on any app whose bytes moved.
+   Bump that app's entry in `VERSIONS` (or `SAMPLE_VERSION`) in
+   `usertest/catalog.mjs` and run `node usertest/catalog.mjs --record`. The
+   same holds for a devonian or syncables bump in a plugin's `package.json`
+   that changes an app's bundle.
 5. Commit as `pin candidateN (<short sha>)…` and say in the body what the
    candidate adds and whether the fixtures changed, like `efa7825`.
 6. Lanes that set `pluginRoutes` need the `-plugin-routes` build of the new

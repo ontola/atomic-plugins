@@ -76,6 +76,71 @@ const REQUEST_LOCATIONS = [
 const isPositiveInteger = (value: unknown): boolean =>
   typeof value === 'number' && Number.isInteger(value) && value >= 1;
 
+const SHORT_PAGE_KEYS = new Set(['size', 'assurance', 'description']);
+const ASSURANCES = new Set(['documented', 'observed', 'assumed']);
+
+/**
+ * Spec 0.6.0 §9 rules 19–21: `start` only on a `page` field, an integer of
+ * at least 0; `shortPage` only on a `pageNumber` scheme, with a `size`
+ * (a positive integer, or `request`, which needs a `pageSize` field) and
+ * an `assurance`. Rule 22 (a `page` field where the scheme is applied) is
+ * checked by `resolveEffectiveScheme`.
+ */
+function checkShortPage(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const fields = REQUEST_LOCATIONS.flatMap((location) =>
+    Object.entries(scheme.request?.[location] ?? {}).map(([name, field]) => ({
+      at: `${path}.request.${location}.${name}`,
+      field,
+    })),
+  );
+  for (const { at, field } of fields) {
+    if (field.start === undefined) continue;
+    if (field.role !== 'page') {
+      errors.push(`${at}.start is allowed only on a page field`);
+    } else if (
+      typeof field.start !== 'number' ||
+      !Number.isInteger(field.start) ||
+      field.start < 0
+    ) {
+      errors.push(`${at}.start must be an integer of at least 0`);
+    }
+  }
+  const short = scheme.response?.shortPage as unknown;
+  if (short === undefined) return;
+  const at = `${path}.response.shortPage`;
+  if (scheme.type !== 'pageNumber') {
+    errors.push(`${at} is allowed only on a pageNumber scheme`);
+  }
+  if (typeof short !== 'object' || short === null || Array.isArray(short)) {
+    errors.push(`${at} must be an object`);
+    return;
+  }
+  const s = short as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (!SHORT_PAGE_KEYS.has(key) && !isExtensionKey(key)) {
+      errors.push(`${at}.${key} is not a Short Page Object field`);
+    }
+  }
+  if (s['size'] !== 'request' && !isPositiveInteger(s['size'])) {
+    errors.push(`${at}.size must be an integer of at least 1, or request`);
+  }
+  if (
+    s['size'] === 'request' &&
+    !fields.some(({ field }) => field.role === 'pageSize')
+  ) {
+    errors.push(`${at}.size request needs a request field with role pageSize`);
+  }
+  if (typeof s['assurance'] !== 'string' || !ASSURANCES.has(s['assurance'])) {
+    errors.push(
+      `${at}.assurance must be one of documented, observed, or assumed`,
+    );
+  }
+}
+
 /**
  * Spec 0.5.0 §9 rules 12–16, which `schema.json` covers in the spec folder:
  * a `rangeWindow` scheme has a valid `window` (unit, a format that fits it,
@@ -294,6 +359,7 @@ export function validatePaginationScheme(
     );
   }
   checkWindow(path, scheme, errors);
+  checkShortPage(path, scheme, errors);
 
   if (!scheme.request && !scheme.response) {
     errors.push(`${path} must define at least one of "request" or "response"`);
