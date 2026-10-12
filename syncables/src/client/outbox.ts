@@ -20,7 +20,12 @@ export const OUTBOX_RECORD_ID = 'outbox';
 
 /** One queued or failed write, as stored. */
 export interface StoredWrite {
-  type: PendingWriteType;
+  /**
+   * `followUp` (added within version 1) for a compound create's follow-up
+   * update: a client from before it does not know the type and keeps the
+   * record's writes as unrestorable, never sending them.
+   */
+  type: PendingWriteType | 'followUp';
   data?: Record<string, unknown>;
   changes?: Record<string, unknown>;
   attempts: number;
@@ -65,6 +70,34 @@ export interface StoredWrite {
    * `resolveWrite` retry, so the write is never sent before it.
    */
   notBefore?: number;
+  /**
+   * Added within version 1, with `type: 'followUp'`: a follow-up update of
+   * a compound create (CRUD Causality 0.5.0 §4.7): its operation, the field
+   * it sets, the object the create planned, and why it was not applied
+   * (`refused`, `unknown`, `notSent`).
+   */
+  followUp?: StoredFollowUp;
+}
+
+/** A compound create's follow-up, as the outbox stores it. */
+export interface StoredFollowUp {
+  operation: string;
+  field: string;
+  planned: Record<string, unknown>;
+  reason?: 'refused' | 'unknown' | 'notSent';
+}
+
+function isFollowUp(value: unknown): value is StoredFollowUp {
+  return (
+    isRecord(value) &&
+    typeof value['operation'] === 'string' &&
+    typeof value['field'] === 'string' &&
+    isRecord(value['planned']) &&
+    (value['reason'] === undefined ||
+      value['reason'] === 'refused' ||
+      value['reason'] === 'unknown' ||
+      value['reason'] === 'notSent')
+  );
 }
 
 /** A bucket a `quotaExhausted` answer declared exhausted (`null`: every write) until `until` (ms since the epoch). */
@@ -135,7 +168,15 @@ export interface StoredUnavailable {
   context: Record<string, string>;
   unavailable: Record<
     string,
-    { record: Record<string, unknown>; detail: string }
+    {
+      record: Record<string, unknown>;
+      detail: string;
+      /** Added later within version 1; absent: `unavailable`. */
+      presence?: 'unconfirmed' | 'deleted' | string;
+      source?: string;
+      /** Added later within version 1: when a read last returned it. */
+      lastSeen?: string;
+    }
   >;
 }
 
@@ -164,7 +205,7 @@ export interface OutboxDocument {
   authBlock?: AuthBlock;
 }
 
-const TYPES = new Set(['create', 'update', 'delete']);
+const TYPES = new Set(['create', 'update', 'delete', 'followUp']);
 const STATES = new Set(['pending', 'uncertain', 'failed', 'blocked']);
 
 function isStringMap(value: unknown): value is Record<string, string> {
@@ -201,6 +242,9 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       value['updateBody'] === 'mergePatch') &&
     (value['notBefore'] === undefined ||
       typeof value['notBefore'] === 'number') &&
+    (value['type'] === 'followUp'
+      ? isFollowUp(value['followUp'])
+      : value['followUp'] === undefined) &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.
     value['lastKnown'] === undefined
@@ -264,7 +308,15 @@ export function isStoredUnavailable(
       (entry) =>
         isRecord(entry) &&
         isRecord(entry['record']) &&
-        typeof entry['detail'] === 'string',
+        typeof entry['detail'] === 'string' &&
+        // Any string: a value added later within version 1 is read as
+        // `unavailable` by this client.
+        (entry['presence'] === undefined ||
+          typeof entry['presence'] === 'string') &&
+        (entry['source'] === undefined ||
+          typeof entry['source'] === 'string') &&
+        (entry['lastSeen'] === undefined ||
+          typeof entry['lastSeen'] === 'string'),
     ) &&
     value['id'] === undefined
   );
