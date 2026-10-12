@@ -178,7 +178,10 @@ Data flows through four stages, each its own directory under `src/`:
    (defaults, or `{ refused }` for a declaration it cannot read),
    `versionOf`, `refusalOf`, `maySend`, `writeAnswer` and `resolveUnknown`,
    ports of the spec's `validate.py` functions of the same names; keep them
-   in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`).
+   in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`,
+   and its `ValidationTests` through `parsePrecondition`, which refuses
+   whatever `validate()` refuses, placement rules included when given a
+   `PreconditionPlace`; it never falls back to a default on bad input).
    The client reads each write operation's declaration into
    `route.preconditions` (or `route.preconditionRefused`, which makes the
    write call throw). `attemptWrite` first runs `resolveByRead` for a write

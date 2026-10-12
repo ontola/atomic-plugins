@@ -1371,22 +1371,37 @@ function clientRoutes(
     if (readTombstone) route.readTombstone = readTombstone;
     if (item?.get) route.itemReadable = true;
     // Write Preconditions: the declaration on each write operation.
+    const updateMethod = route.updateMethod === 'PUT' ? 'put' : 'patch';
     const writeOperations = {
       create: route.createPath
-        ? document.paths[route.createPath]?.post
+        ? ([route.createPath, 'post'] as const)
         : undefined,
-      update: route.updateMethod
-        ? item?.[route.updateMethod === 'PUT' ? 'put' : 'patch']
-        : undefined,
+      update:
+        route.updateMethod && collection.itemUrl
+          ? ([collection.itemUrl, updateMethod] as const)
+          : undefined,
       delete: route.deletePath
-        ? document.paths[route.deletePath]?.delete
+        ? ([route.deletePath, 'delete'] as const)
         : undefined,
     };
-    for (const [type, operation] of Object.entries(writeOperations) as [
+    for (const [type, place] of Object.entries(writeOperations) as [
       'create' | 'update' | 'delete',
-      OperationObject | undefined,
+      readonly [string, 'post' | 'put' | 'patch' | 'delete'] | undefined,
     ][]) {
-      const parsed = parsePrecondition(operation?.['x-write-precondition']);
+      if (!place) continue;
+      const [path, method] = place;
+      const operation = document.paths[path]?.[method];
+      // With its place, so the spec's placement rules apply too (a create
+      // takes only source refusals; a source's identity variables must be
+      // path parameters of the operation).
+      const parsed = parsePrecondition(operation?.['x-write-precondition'], {
+        method,
+        ...(operation
+          ? { operation: operation as Record<string, unknown> }
+          : {}),
+        document: document as unknown as Record<string, unknown>,
+        path,
+      });
       if (!parsed) continue;
       if ('refused' in parsed)
         (route.preconditionRefused ??= {})[type] = parsed.refused;
@@ -2580,11 +2595,14 @@ export function createApiClient(
       current = read.body;
       headers = read.headers;
     }
+    // A DELETE has no body: undefined, so every `when` fails closed (the
+    // Refusal Object applies on its own field, §4.4.1), never matched
+    // against an empty object.
     const body =
       write.type === 'create'
         ? write.data
         : write.type === 'delete'
-          ? {}
+          ? undefined
           : writeBody(write) === 'mergePatch'
             ? (write.changes ?? {})
             : {
@@ -2656,6 +2674,13 @@ export function createApiClient(
         write.precondition = 'source-unknown';
         write.lastError = `Not sent yet: the ${verdict.refusal.source?.resource ?? ''} object that may refuse it could not be read (x-write-precondition, fail closed)`;
         return { status: 'retry', delayMs: retry.baseDelayMs };
+      case 'unusable-version':
+        // Not a state of its own: the write fails, and `resolveWrite`
+        // `retry` checks again once the provider sends a usable version.
+        write.lastError =
+          "Not sent: the object's version is neither a string nor a number, so it cannot be sent (x-write-precondition ifMatch)";
+        delete write.lastStatus;
+        return { status: 'gaveUp' };
       default:
         return retryLater(
           write,

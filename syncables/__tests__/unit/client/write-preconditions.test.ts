@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   InMemoryStorageAdapter,
+  mergePatch,
   prepareDocument,
   type ApiClient,
   type MissingRecord,
@@ -45,7 +46,12 @@ function headerOf(r: TransportRequest, name: string): string | undefined {
  * collection the given `x-completeness`.
  */
 function document(
-  declared: { put?: unknown; delete?: unknown; post?: unknown } = {},
+  declared: {
+    put?: unknown;
+    patch?: unknown;
+    delete?: unknown;
+    post?: unknown;
+  } = {},
   completeness?: Record<string, string>,
 ): OpenApiDocument {
   const doc = prepareDocument({
@@ -70,6 +76,23 @@ function document(
     },
   });
   const item = doc.paths['/pets/{petId}']!;
+  if (declared.patch !== undefined) {
+    // A JSON Merge Patch update in place of the PUT.
+    item.patch = {
+      ...structuredClone(item.put!),
+      requestBody: {
+        content: { 'application/merge-patch+json': { schema: {} } },
+      },
+      'x-crud': {
+        action: 'update',
+        mode: 'patch',
+        patchFormat: 'jsonMergePatch',
+        resource: 'pet',
+      },
+      'x-write-precondition': declared.patch,
+    };
+    delete item.put;
+  }
   if (declared.put !== undefined)
     item.put!['x-write-precondition'] = declared.put;
   if (declared.delete !== undefined)
@@ -148,7 +171,14 @@ function provider(initial: Pet[]): {
         answer = response(undefined, 204);
       } else {
         const n = Number(String(current['version']).slice(1)) + 1;
-        const updated = { ...(body as Pet), id, version: `v${n}` };
+        const updated =
+          r.method === 'PATCH'
+            ? {
+                ...(mergePatch(current, body) as Pet),
+                id,
+                version: `v${n}`,
+              }
+            : { ...(body as Pet), id, version: `v${n}` };
         fake.pets.set(id, updated);
         answer = response(updated);
       }
@@ -702,5 +732,73 @@ describe('write preconditions: declarations', () => {
     await again.ready();
     expect(again.pendingWrites()).toHaveLength(1);
     expect(again.pendingWrites()[0]).not.toHaveProperty('precondition');
+  });
+});
+
+describe('write preconditions: review cases', () => {
+  it('fails a write whose object version cannot be sent as a header', async () => {
+    const { client, fake } = await synced(document({ put: IF_MATCH_BODY }), {
+      pets: [{ ...rex, version: { major: 1 } }],
+    });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.log).toEqual([]);
+    expect(client.pendingWrites()[0]?.lastError).toContain(
+      'neither a string nor a number',
+    );
+    expect(client.pendingWrites()[0]).not.toHaveProperty('precondition');
+  });
+
+  it('fails a bodiless DELETE closed on a when it cannot evaluate', async () => {
+    const doc = document({
+      delete: {
+        kind: 'none',
+        refuseWhen: [
+          {
+            field: 'locked',
+            values: [true],
+            when: { field: 'force', values: [false, null] },
+          },
+        ],
+      },
+    });
+    const { client, fake } = await synced(doc, {
+      pets: [{ ...rex, locked: true }],
+    });
+    await client.remove('/pets', '1');
+    await stopped(client);
+    expect(fake.log).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'delete', precondition: 'refused' },
+    ]);
+  });
+
+  it('settles an unknown merge-patch update by the values after the patch', async () => {
+    const { client, fake } = await synced(
+      document({ patch: { ...IF_MATCH_BODY, idempotent: false } }),
+      { retryMs: 1, pets: [{ ...rex, meta: { a: '1', b: '2' } }] },
+    );
+    fake.applyThenFail = true;
+    await client.update('/pets', '1', { meta: { a: null } });
+    await idle(client);
+    // The read shows meta as the patch leaves it ({ b: '2' }): applied.
+    expect(fake.log).toEqual(['PATCH 1 if-match v1', 'GET 1']);
+    expect(fake.bodies).toEqual([{ meta: { a: null } }]);
+  });
+
+  it("refuses a declaration whose source is not one of the document's resources", async () => {
+    const { client } = await synced(
+      document({
+        post: {
+          kind: 'none',
+          refuseWhen: [
+            { source: { resource: 'owner' }, field: 'locked', values: [true] },
+          ],
+        },
+      }),
+    );
+    await expect(client.create('/pets', { name: 'Kit' })).rejects.toThrow(
+      /not a crudResources key/,
+    );
   });
 });

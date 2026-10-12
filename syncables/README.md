@@ -1009,7 +1009,8 @@ answers as the extension says. An operation without one is unchanged.
   that has no version field, is read with the item GET first. An answer in
   `conflictStatus` (default `[412]`) stops the write with
   `precondition: 'conflict'` in `pendingWrites()` (state `failed`). It is not
-  sent again.
+  sent again. A version that is neither a string nor a number (an object,
+  say) is never sent as text: the write fails with a `lastError` saying so.
 - **`kind: readVerify`**: the item GET is read before every send. If a field
   the update writes changed since it was last read (for a delete, any field
   the client holds), the write is not sent. It stops as a `conflict`, and each
@@ -1021,7 +1022,9 @@ answers as the extension says. An operation without one is unchanged.
   that resource's object through its item GET, with path variables taken from
   the write's context. The source is read once per sync pass. While it cannot
   be read, the write stays `pending` with `precondition: 'source-unknown'` and
-  is retried (fail closed). Nothing is sent.
+  is retried (fail closed). Nothing is sent. A DELETE has no body, so a
+  `when` cannot be ruled out for it: the Refusal Object applies on its own
+  field (fail closed).
 - **The write's own 404 or 410**: an update stops with
   `precondition: 'gone'` and is not sent again, since that could recreate
   the object. A delete settles when the deletion is confirmed, by any of:
@@ -1044,10 +1047,20 @@ answers as the extension says. An operation without one is unchanged.
   The same holds for such a write found in flight at a restart. The version
   an `ifMatch` write sent is stored (`sentVersion`) for this comparison.
 
-A declaration this client cannot use (an unknown `kind`, an `ifMatch` without
-a usable `version`, a Refusal Object it cannot read) makes `create()`,
-`update()` or `remove()` of that type throw, rather than send the write
-unconditionally. `resolveWrite` `retry` clears the verdict, so the
+A declaration this client cannot use makes `create()`, `update()` or
+`remove()` of that type throw, rather than send the write unconditionally.
+That is anything the spec's `validate()` refuses, for example:
+
+- an unknown `kind` or an unknown field;
+- an `ifMatch` without a usable `version`;
+- a `header`, `conflictStatus` or `idempotent` that is not well-formed, or
+  that sits where the kind does not allow it;
+- a Refusal Object or `when` it cannot read;
+- a create with anything but `kind: none` and source refusals;
+- a source that is not a `crudResources` key, or whose identity variables
+  are not path parameters of the operation.
+
+Nothing falls back to a default. `resolveWrite` `retry` clears the verdict, so the
 precondition is checked again when the write is sent. Not verified against a
 live provider; the tests use invented transports.
 

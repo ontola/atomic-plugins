@@ -33,3 +33,20 @@ a read before anything is sent again, also after a restart.
 client tests in `write-preconditions.test.ts`, plus a conflicting-`gone`
 test in `completeness-outcomes.test.ts`; README section, changelog,
 CLAUDE.md. The README line on a 410 following `gone` waits for #466.
+
+## Turn 2
+
+**Human (via the coordinator session):** After the #486 review: merge the
+stricter core in; a caller passing `current = null` must get `read-first`,
+not a comparison; a bodiless DELETE must fail closed on every `when`;
+handle both deliberately. The merge-patch expected-value rule lands here.
+
+**Assistant:** Merged #486's fixes. The client passes each operation's
+place to `parsePrecondition`, so the placement rules make the write call
+throw too. `maySend` treats `null` like undefined (not read). `precheck`
+passes no body for a DELETE, so each `when` fails closed. An
+`unusable-version` answer fails the write with a `lastError`. Tests: an
+object version, a bodiless DELETE refused through `when`, an unknown
+merge-patch update settled by the values after the patch (`writtenOf`
+through `patchedField`), a source that is not a resource, and `null`
+passed to `maySend`; README updated.

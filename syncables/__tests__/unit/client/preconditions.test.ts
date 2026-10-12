@@ -29,6 +29,89 @@ const read = (
   status = 200,
 ): { status: number; body: unknown } => ({ status, body });
 
+type Doc = {
+  paths: Record<string, Record<string, Record<string, unknown>>>;
+  components?: Record<string, unknown>;
+};
+
+/** The spec's examples/conditional-writes.yaml, as far as the rules read it. */
+function example(): Doc {
+  return {
+    paths: {
+      '/events/{eventId}': {
+        get: {},
+        patch: {
+          'x-write-precondition': {
+            kind: 'ifMatch',
+            version: { in: 'body', name: 'etag' },
+            conflictStatus: [412],
+          },
+        },
+        delete: {
+          'x-write-precondition': {
+            kind: 'ifMatch',
+            version: { in: 'body', name: 'etag' },
+          },
+        },
+      },
+      '/pages/{pageId}': {
+        get: {},
+        patch: {
+          'x-write-precondition': {
+            kind: 'readVerify',
+            refuseWhen: [
+              {
+                field: 'in_trash',
+                values: [true],
+                description: 'The owner trashed the page.',
+              },
+            ],
+          },
+        },
+      },
+      '/notes/{noteId}': {
+        put: { 'x-write-precondition': { kind: 'none' } },
+      },
+    },
+  };
+}
+
+/** `validate()` of the spec, through `parsePrecondition` with its place. */
+function validate(document: Doc): string[] {
+  const refused: string[] = [];
+  for (const [path, item] of Object.entries(document.paths))
+    for (const [method, operation] of Object.entries(item)) {
+      if (!('x-write-precondition' in operation)) continue;
+      const parsed = parsePrecondition(operation['x-write-precondition'], {
+        method,
+        operation,
+        document,
+        path,
+      });
+      if (parsed && 'refused' in parsed) refused.push(parsed.refused);
+    }
+  return refused;
+}
+
+function decl(
+  document: Doc,
+  path: string,
+  method: string,
+): Record<string, unknown> {
+  return document.paths[path]![method]!['x-write-precondition'] as Record<
+    string,
+    unknown
+  >;
+}
+
+/** Mutates the example and expects a refusal containing `fragment`. */
+function invalid(mutate: (d: Doc) => void, fragment: string): void {
+  const document = example();
+  mutate(document);
+  const refused = validate(document);
+  expect(refused.join('\n')).toContain(fragment);
+}
+
 describe('parsePrecondition', () => {
   it('applies the defaults', () => {
     expect(p(IF_MATCH)).toEqual({
@@ -61,6 +144,97 @@ describe('parsePrecondition', () => {
       'ifMatch',
     ])
       expect(parsePrecondition(bad)).toHaveProperty('refused');
+  });
+});
+
+describe('the spec ValidationTests', () => {
+  it('the example is valid', () => {
+    expect(validate(example())).toEqual([]);
+  });
+
+  it('kind and its fields', () => {
+    const events = (d: Doc): Record<string, unknown> =>
+      decl(d, '/events/{eventId}', 'patch');
+    invalid((d) => (events(d)['kind'] = 'etag'), 'kind');
+    invalid((d) => delete events(d)['version'], 'version');
+    invalid(
+      (d) => (events(d)['version'] = { in: 'query', name: 'v' }),
+      'version',
+    );
+    invalid(
+      (d) => (events(d)['version'] = { in: 'body', name: '' }),
+      'version',
+    );
+    invalid(
+      (d) => (events(d)['version'] = { in: 'body', name: 'etag', where: 'x' }),
+      'version',
+    );
+    invalid(
+      (d) =>
+        (decl(d, '/pages/{pageId}', 'patch')['version'] = {
+          in: 'body',
+          name: 'etag',
+        }),
+      'only for kind ifMatch',
+    );
+    invalid(
+      (d) => (decl(d, '/notes/{noteId}', 'put')['header'] = 'If-Match'),
+      'only for kind ifMatch',
+    );
+    invalid((d) => (events(d)['header'] = ''), 'header');
+    invalid((d) => (events(d)['header'] = 7), 'header');
+    for (const statuses of [[], [500], [412, 412], ['412'], [true], 412])
+      invalid(
+        (d) => (events(d)['conflictStatus'] = statuses),
+        'conflictStatus',
+      );
+    invalid((d) => (events(d)['extra'] = 1), 'unknown fields');
+    const document = example();
+    events(document)['x-note'] = 'an extension field is allowed';
+    expect(validate(document)).toEqual([]);
+  });
+
+  it('refusals and idempotent', () => {
+    const page = (d: Doc): Record<string, unknown> =>
+      decl(d, '/pages/{pageId}', 'patch');
+    const refusals = (d: Doc): unknown[] => page(d)['refuseWhen'] as unknown[];
+    invalid((d) => (page(d)['refuseWhen'] = { field: 'x' }), 'not an array');
+    invalid((d) => refusals(d).push({ field: '', values: [1] }), 'field');
+    invalid((d) => refusals(d).push({ field: 'x', values: [] }), 'values');
+    invalid(
+      (d) => refusals(d).push({ field: 'x', values: [{ a: 1 }] }),
+      'values',
+    );
+    invalid(
+      (d) => refusals(d).push({ field: 'x', values: [1], other: 1 }),
+      'unknown fields',
+    );
+    // Not read as false or true: a resend must never rest on a guess.
+    for (const bad of ['yes', 'false', 0, null])
+      invalid((d) => (page(d)['idempotent'] = bad), 'idempotent');
+    const document = example();
+    page(document)['idempotent'] = true;
+    refusals(document).push({ field: 'archived', values: [true, null] });
+    expect(validate(document)).toEqual([]);
+  });
+
+  it('placement', () => {
+    expect.assertions(2);
+    invalid(
+      (d) =>
+        (d.paths['/pages/{pageId}']!['get']!['x-write-precondition'] = {
+          kind: 'none',
+        }),
+      'only on PUT, PATCH, POST or DELETE',
+    );
+    invalid(
+      (d) =>
+        (d.paths['/pages/{pageId}']!['patch']!['x-crud'] = {
+          action: 'read',
+          resource: 'p',
+        }),
+      'x-crud action is not update or delete',
+    );
   });
 });
 
@@ -594,6 +768,129 @@ describe('the spec ClientTests', () => {
       maySend(recurring, {}, ['summary'], { etag: '"v"', recurrence: null })
         .result,
     ).toBe('send');
+    const document = example();
+    (
+      decl(document, '/pages/{pageId}', 'patch')['refuseWhen'] as unknown[]
+    ).push({ field: 'recurrence', present: true });
+    expect(validate(document)).toEqual([]);
+    for (const bad of [
+      { field: 'x', present: false },
+      { field: 'x', present: true, values: [1] },
+      { field: 'x' },
+    ]) {
+      const document = example();
+      (
+        decl(document, '/pages/{pageId}', 'patch')['refuseWhen'] as unknown[]
+      ).push(bad);
+      expect(validate(document)).toHaveLength(1);
+    }
+  });
+
+  it('source and when validation', () => {
+    const documentWith = (refusal: Record<string, unknown>): Doc => {
+      const document = example();
+      document.components = {
+        crudResources: {
+          workspace: {
+            identity: {
+              urlTemplate: '/workspaces/{workspaceId}',
+              bindings: { workspaceId: { field: 'id' } },
+            },
+            collections: { workspaces: { urlTemplate: '/workspaces' } },
+          },
+        },
+      };
+      document.paths['/workspaces/{workspaceId}/entries/{entryId}'] = {
+        put: {
+          'x-write-precondition': { kind: 'none', refuseWhen: [refusal] },
+        },
+      };
+      return document;
+    };
+    const good = {
+      source: { resource: 'workspace' },
+      field: 'settings.forceProjects',
+      values: [true],
+      when: { field: 'projectId', values: [null] },
+    };
+    expect(validate(documentWith(good))).toEqual([]);
+    for (const [bad, fragment] of [
+      [{ ...good, source: { resource: 'nope' } }, 'not a crudResources key'],
+      [
+        { ...good, when: { field: 'projectId' } },
+        'exactly one of values and present',
+      ],
+      [{ ...good, when: { field: '', present: true } }, 'when.field'],
+      [
+        { ...good, when: { field: 'p', present: true, x: 1 } },
+        'when has unknown fields',
+      ],
+      [{ ...good, when: 'projectId' }, 'when is not an object'],
+    ] as const)
+      expect(validate(documentWith(bad)).join('\n')).toContain(fragment);
+    const document = documentWith(good);
+    (
+      document.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, unknown>>
+      >
+    )['workspace']!['identity']!['urlTemplate'] =
+      '/orgs/{orgId}/workspaces/{workspaceId}';
+    expect(validate(document).join('\n')).toContain(
+      'identity variables orgId are not path parameters',
+    );
+  });
+
+  it('creates take only source refusals', () => {
+    const documentWith = (declaration: Record<string, unknown>): Doc => {
+      const document = example();
+      document.components = {
+        crudResources: {
+          workspace: {
+            identity: {
+              urlTemplate: '/workspaces/{workspaceId}',
+              bindings: { workspaceId: { field: 'id' } },
+            },
+          },
+        },
+      };
+      document.paths['/workspaces/{workspaceId}/entries'] = {
+        post: {
+          'x-crud': {
+            action: 'create',
+            resource: 'entry',
+            url: { source: 'template' },
+          },
+          'x-write-precondition': declaration,
+        },
+      };
+      return document;
+    };
+    const source = {
+      source: { resource: 'workspace' },
+      field: 'settings.forceProjects',
+      values: [true],
+      when: { field: 'projectId', values: [null] },
+    };
+    expect(
+      validate(documentWith({ kind: 'none', refuseWhen: [source] })),
+    ).toEqual([]);
+    expect(
+      validate(
+        documentWith({ kind: 'none', refuseWhen: [source], idempotent: true }),
+      ).join('\n'),
+    ).toContain('idempotent is not for a create');
+    for (const bad of [
+      { kind: 'none' },
+      { kind: 'readVerify', refuseWhen: [source] },
+      {
+        kind: 'none',
+        refuseWhen: [source, { field: 'in_trash', values: [true] }],
+      },
+    ])
+      expect(validate(documentWith(bad)).join('\n')).toContain(
+        'on a create takes only kind none with source refusals',
+      );
   });
 
   it('a source refusal fails closed', () => {
@@ -664,5 +961,27 @@ describe('the spec ClientTests', () => {
     expect(maySend(header, {}, ['x'], { x: 1 }, {})).toEqual({
       result: 'read-first',
     });
+  });
+
+  it('an object version is refused, never sent as text', () => {
+    const declaration = p(IF_MATCH);
+    for (const etag of [{ v: 1 }, ['v'], true, Number.NaN])
+      expect(maySend(declaration, {}, ['summary'], { etag }).result).toBe(
+        'unusable-version',
+      );
+    expect(maySend(declaration, {}, ['summary'], { etag: 7 })).toEqual({
+      result: 'send',
+      headers: { 'If-Match': '7' },
+    });
+  });
+
+  it('an object passed as null was not read: read first, never compared', () => {
+    expect(maySend(p(IF_MATCH), {}, ['summary'], null).result).toBe(
+      'read-first',
+    );
+    expect(
+      maySend(p({ kind: 'readVerify' }), { summary: null }, ['summary'], null)
+        .result,
+    ).toBe('read-first');
   });
 });

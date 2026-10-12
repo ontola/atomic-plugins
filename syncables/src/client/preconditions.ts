@@ -43,47 +43,138 @@ export interface Precondition {
   idempotent?: boolean;
 }
 
-function predicate(value: unknown): FieldPredicate | undefined {
-  if (!isRecord(value) || typeof value['field'] !== 'string' || !value['field'])
-    return undefined;
+const KINDS = new Set(['ifMatch', 'readVerify', 'none']);
+const FIELDS = new Set([
+  'kind',
+  'version',
+  'header',
+  'conflictStatus',
+  'refuseWhen',
+  'idempotent',
+  'description',
+]);
+const WRITES = new Set(['put', 'patch', 'post', 'delete']);
+const VARIABLE = /\{([^{}]+)\}/g;
+
+/** Keys of `value` outside `allowed` that are not `x-` extensions. */
+function unknownKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string> | readonly string[],
+): string[] {
+  const known = new Set(allowed);
+  return Object.keys(value).filter((k) => !known.has(k) && !k.startsWith('x-'));
+}
+
+function isScalar(v: unknown): v is Scalar {
+  return (
+    v === null ||
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    typeof v === 'boolean'
+  );
+}
+
+/**
+ * A field predicate (`_predicate` of the spec's validate.py): a nonempty
+ * `field` and exactly one of a nonempty `values` array of JSON scalars and
+ * `present: true`. A reason when it is not one.
+ */
+function predicate(
+  value: Record<string, unknown>,
+  label: string,
+): FieldPredicate | string {
+  if (typeof value['field'] !== 'string' || !value['field'])
+    return `${label}.field: expected a nonempty string`;
   const values = value['values'];
   const present = value['present'];
-  if ((values === undefined) === (present === undefined)) return undefined;
+  if ((values === undefined) === (present === undefined))
+    return `${label}: exactly one of values and present`;
   if (present !== undefined)
     return present === true
       ? { field: value['field'], present: true }
-      : undefined;
-  if (
-    !Array.isArray(values) ||
-    !values.length ||
-    !values.every(
-      (v) =>
-        v === null ||
-        typeof v === 'string' ||
-        typeof v === 'number' ||
-        typeof v === 'boolean',
-    )
-  )
-    return undefined;
+      : `${label}.present: expected true`;
+  if (!Array.isArray(values) || !values.length || !values.every(isScalar))
+    return `${label}.values: expected a nonempty array of JSON scalars`;
   return { field: value['field'], values: values as Scalar[] };
+}
+
+/** Where a declaration sits, for the placement rules of §7 (all optional). */
+export interface PreconditionPlace {
+  /** The operation's method, any case. */
+  method?: string;
+  /** The operation object, for its `x-crud` action. */
+  operation?: Record<string, unknown>;
+  /** The document, for a source's `crudResources` entry. */
+  document?: Record<string, unknown>;
+  /** The operation's path template, for a source's identity variables. */
+  path?: string;
+}
+
+function crudResources(
+  document: Record<string, unknown>,
+): Record<string, unknown> {
+  const holder =
+    'swagger' in document ? document : (document['components'] ?? {});
+  const resources = isRecord(holder)
+    ? holder['swagger' in document ? 'x-crudResources' : 'crudResources']
+    : undefined;
+  return isRecord(resources) ? resources : {};
+}
+
+function variables(template: string): Set<string> {
+  return new Set([...template.matchAll(VARIABLE)].map((m) => m[1] as string));
 }
 
 /**
  * The operation's `x-write-precondition`, parsed, or a reason this client
- * cannot use it (`{ refused }`: an unknown kind, a missing version, a
- * malformed Refusal Object). Undefined when the operation declares none.
+ * cannot use it (`{ refused }`). Undefined when the operation declares
+ * none. It refuses what the spec's `validate()` refuses (§7, `_check`):
+ * unknown fields, an unknown `kind`, an `ifMatch` without a usable
+ * `version`, a `header` or `conflictStatus` (unique integers 400-499) that
+ * is not usable or not under `ifMatch`, a non-boolean `idempotent`, and a
+ * Refusal Object or `when` it cannot read. With `place`, also the
+ * placement rules: a write method, an `x-crud` action of update or delete,
+ * or on a create only `kind: none` with source refusals and no
+ * `idempotent`; a source naming a `crudResources` key whose identity
+ * variables are path parameters of `place.path`. Nothing falls back to a
+ * default on bad input: a write is never sent under a precondition other
+ * than the one declared.
  */
 export function parsePrecondition(
   declared: unknown,
+  place: PreconditionPlace = {},
 ): Precondition | { refused: string } | undefined {
   if (declared === undefined) return undefined;
-  if (!isRecord(declared))
-    return { refused: 'x-write-precondition is not an object' };
+  const refuse = (reason: string): { refused: string } => ({
+    refused: `x-write-precondition ${reason}`,
+  });
+  if (!isRecord(declared)) return refuse('is not an object');
+  const unknown = unknownKeys(declared, FIELDS);
+  if (unknown.length) return refuse(`has unknown fields ${unknown.join(', ')}`);
+  if (place.method && !WRITES.has(place.method.toLowerCase()))
+    return refuse('is only on PUT, PATCH, POST or DELETE');
+  const crud = place.operation?.['x-crud'];
+  const action = isRecord(crud) ? crud['action'] : undefined;
   const kind = declared['kind'];
-  if (kind !== 'ifMatch' && kind !== 'readVerify' && kind !== 'none')
-    return {
-      refused: `x-write-precondition kind ${JSON.stringify(kind)} is not one this client knows`,
-    };
+  const rawRefusals = declared['refuseWhen'] ?? [];
+  if (action === 'create') {
+    if (
+      kind !== 'none' ||
+      !Array.isArray(rawRefusals) ||
+      !rawRefusals.length ||
+      !rawRefusals.every((r) => isRecord(r) && 'source' in r)
+    )
+      return refuse('on a create takes only kind none with source refusals');
+    if ('idempotent' in declared)
+      return refuse(
+        'idempotent is not for a create (§4.5 does not cover creates)',
+      );
+  } else if (isRecord(crud) && action !== 'update' && action !== 'delete')
+    return refuse(
+      'is on an operation whose x-crud action is not update or delete',
+    );
+  if (typeof kind !== 'string' || !KINDS.has(kind))
+    return refuse(`kind ${JSON.stringify(kind)} is not one this client knows`);
   let version: Precondition['version'];
   if (kind === 'ifMatch') {
     const raw = declared['version'];
@@ -91,58 +182,99 @@ export function parsePrecondition(
       !isRecord(raw) ||
       (raw['in'] !== 'header' && raw['in'] !== 'body') ||
       typeof raw['name'] !== 'string' ||
-      !raw['name']
+      !raw['name'] ||
+      unknownKeys(raw, ['in', 'name']).length
     )
-      return { refused: 'x-write-precondition ifMatch has no usable version' };
+      return refuse('ifMatch has no usable version');
     version = { in: raw['in'], name: raw['name'] };
-  }
+    if (
+      'header' in declared &&
+      (typeof declared['header'] !== 'string' || !declared['header'])
+    )
+      return refuse('header is not a nonempty string');
+    if ('conflictStatus' in declared) {
+      const statuses = declared['conflictStatus'];
+      if (
+        !Array.isArray(statuses) ||
+        !statuses.length ||
+        new Set(statuses).size !== statuses.length ||
+        !statuses.every(
+          (s) =>
+            Number.isInteger(s) && (s as number) >= 400 && (s as number) <= 499,
+        )
+      )
+        return refuse('conflictStatus is not unique integers 400-499');
+    }
+  } else
+    for (const field of ['version', 'header', 'conflictStatus'])
+      if (field in declared) return refuse(`${field} is only for kind ifMatch`);
+  if (!Array.isArray(rawRefusals)) return refuse('refuseWhen is not an array');
   const refuseWhen: Refusal[] = [];
-  const rawRefusals = declared['refuseWhen'] ?? [];
-  if (!Array.isArray(rawRefusals))
-    return { refused: 'x-write-precondition refuseWhen is not an array' };
-  for (const raw of rawRefusals) {
-    const own = predicate(raw);
-    if (!own || !isRecord(raw))
-      return {
-        refused:
-          'x-write-precondition has a Refusal Object this client cannot read',
-      };
+  for (const [index, raw] of rawRefusals.entries()) {
+    const label = `refuseWhen[${index}]`;
+    if (!isRecord(raw)) return refuse(`${label} is not an object`);
+    const own = predicate(raw, label);
+    if (typeof own === 'string') return refuse(own);
+    if (
+      unknownKeys(raw, [
+        'field',
+        'values',
+        'present',
+        'source',
+        'when',
+        'description',
+      ]).length
+    )
+      return refuse(`${label} has unknown fields`);
     const refusal: Refusal = { ...own };
     if (raw['source'] !== undefined) {
       const source = raw['source'];
       if (!isRecord(source) || typeof source['resource'] !== 'string')
-        return {
-          refused: 'x-write-precondition has a source this client cannot read',
-        };
+        return refuse(`${label}.source is not one this client can read`);
+      if (place.document) {
+        const resource = crudResources(place.document)[source['resource']];
+        if (!isRecord(resource))
+          return refuse(`${label}.source.resource is not a crudResources key`);
+        const identity = resource['identity'];
+        const template =
+          isRecord(identity) && typeof identity['urlTemplate'] === 'string'
+            ? identity['urlTemplate']
+            : '';
+        if (place.path !== undefined) {
+          const params = variables(place.path);
+          const missing = [...variables(template)].filter(
+            (v) => !params.has(v),
+          );
+          if (missing.length)
+            return refuse(
+              `${label}.source: identity variables ${missing.join(', ')} are not path parameters of ${place.path}`,
+            );
+        }
+      }
       refusal.source = { resource: source['resource'] };
     }
     if (raw['when'] !== undefined) {
-      const when = predicate(raw['when']);
-      if (!when)
-        return {
-          refused: 'x-write-precondition has a when this client cannot read',
-        };
-      refusal.when = when;
+      const when = raw['when'];
+      if (!isRecord(when)) return refuse(`${label}.when is not an object`);
+      const parsed = predicate(when, `${label}.when`);
+      if (typeof parsed === 'string') return refuse(parsed);
+      if (unknownKeys(when, ['field', 'values', 'present']).length)
+        return refuse(`${label}.when has unknown fields`);
+      refusal.when = parsed;
     }
     if (typeof raw['description'] === 'string')
       refusal.description = raw['description'];
     refuseWhen.push(refusal);
   }
-  const header =
-    typeof declared['header'] === 'string' && declared['header']
-      ? declared['header']
-      : 'If-Match';
-  const conflictStatus =
-    Array.isArray(declared['conflictStatus']) &&
-    declared['conflictStatus'].length &&
-    declared['conflictStatus'].every((s) => Number.isInteger(s))
-      ? (declared['conflictStatus'] as number[])
-      : [412];
+  if ('idempotent' in declared && typeof declared['idempotent'] !== 'boolean')
+    return refuse('idempotent is not a boolean');
   return {
-    kind,
+    kind: kind as Precondition['kind'],
     ...(version ? { version } : {}),
-    header,
-    conflictStatus,
+    header: (declared['header'] as string | undefined) ?? 'If-Match',
+    conflictStatus: (declared['conflictStatus'] as number[] | undefined) ?? [
+      412,
+    ],
     refuseWhen,
     ...(typeof declared['idempotent'] === 'boolean'
       ? { idempotent: declared['idempotent'] }
@@ -163,7 +295,9 @@ export function fieldValue(value: unknown, path: string): unknown {
 /**
  * Same JSON value: numbers by value (1 equals 1.0), booleans only with
  * booleans, strings and `null` exactly, arrays and objects member by member
- * (object key order aside); `undefined` is `null`.
+ * (object key order aside); `undefined` is `null`. As the spec says (an
+ * absent field equals `null`), `{ a: null }` and `{}` are equal at any
+ * depth, also inside nested objects, unlike Python's `==`.
  */
 export function sameJson(a: unknown, b: unknown): boolean {
   const x = a === undefined ? null : a;
@@ -252,14 +386,16 @@ export type MaySend =
   | { result: 'send'; headers: Record<string, string> }
   | { result: 'refused' | 'source-unknown'; refusal: Refusal }
   | { result: 'conflict'; fields: string[] }
-  | { result: 'read-first' };
+  | { result: 'read-first' }
+  | { result: 'unusable-version' };
 
 /**
  * §4.2/§4.4: whether a write may be sent now. `baseline` maps fields to
  * their last read values, `written` lists the fields the write sets,
  * `current` is the object as just read (`readVerify`) or as last read, or
- * undefined when not read, `headers` that read's response headers. `body`
- * and `sources` as for `refusalOf`. A delete (`action`) compares every
+ * undefined (or `null`) when not read, `headers` that read's response headers. `body`
+ * and `sources` as for `refusalOf`. `unusable-version`: an `ifMatch`
+ * version that is neither a string nor a finite number. A delete (`action`) compares every
  * baseline field.
  */
 export function maySend(
@@ -273,8 +409,10 @@ export function maySend(
   action: 'update' | 'delete' | 'create' = 'update',
 ): MaySend {
   const own = declaration.refuseWhen.filter((r) => !r.source);
+  // Not read (undefined, or `null` from a caller): never compared as an
+  // object whose fields are all null.
   if (
-    current === undefined &&
+    (current === undefined || current === null) &&
     (declaration.kind === 'ifMatch' ||
       declaration.kind === 'readVerify' ||
       own.length)
@@ -285,6 +423,13 @@ export function maySend(
   if (declaration.kind === 'ifMatch') {
     const value = versionOf(declaration, current, headers);
     if (value === null || value === undefined) return { result: 'read-first' };
+    // Only a string or a finite number can be sent as a header value; an
+    // object, array or boolean is refused, never sent as `[object Object]`.
+    if (
+      typeof value !== 'string' &&
+      !(typeof value === 'number' && Number.isFinite(value))
+    )
+      return { result: 'unusable-version' };
     return { result: 'send', headers: { [declaration.header]: String(value) } };
   }
   if (declaration.kind === 'readVerify') {
