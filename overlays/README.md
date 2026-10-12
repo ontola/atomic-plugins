@@ -110,6 +110,28 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
 ## Read tombstones
 
 [Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
