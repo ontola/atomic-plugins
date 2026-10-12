@@ -195,7 +195,9 @@ Data flows through four stages, each its own directory under `src/`:
    `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
    throttling under the document's root `x-throttling`, draft Throttling
    extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
-   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   `headers` (roles and time units), `bodyFields` (0.3.0: the same roles by
+   literal JSON dot-path, read from a throttling JSON body; a body wait of
+   no time counts as absent) and `signals`, `classifyThrottling`
    gives the verdict the client attaches as `WriteFailure.throttling`, a
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
@@ -603,6 +605,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
   userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
   dot-paths).
+- `unit/throttling/body-fields.test.ts` mirrors the Throttling spec's
+  `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
+  rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
+  `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus

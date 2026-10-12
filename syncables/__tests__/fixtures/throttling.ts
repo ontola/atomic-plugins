@@ -147,6 +147,62 @@ export const moneybirdThrottling = {
   ],
 };
 
+/**
+ * 0.3.0's `examples/body-fields.yaml` (on the spec's follow-up branch,
+ * #463): a 429 whose JSON body carries `error_extra.retry_after` in
+ * seconds, a field the API may also send on other errors. Synthetic.
+ */
+export const bodyFieldsExample: OpenApiDocument = {
+  openapi: '3.0.3',
+  info: {
+    title: 'Illustrative rate-limit backoff in the error body',
+    version: '1.0.0',
+  },
+  servers: [{ url: 'https://api.example.com' }],
+  'x-throttling': {
+    bodyFields: {
+      'error_extra.retry_after': { role: 'retryAfter', unit: 'deltaSeconds' },
+    },
+    signals: [{ status: [429], meaning: 'throttled' }],
+  },
+  paths: {
+    '/tasks': {
+      get: {
+        responses: {
+          '200': { description: 'Tasks' },
+          '429': { description: 'Too many requests' },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * The `x-throttling` of the held Todoist API v1 overlay
+ * (`overlays/APIs/todoist.com/1/throttling-ac07532b…-overlay.yaml`, branch
+ * `claude/todoist-throttling`): Todoist's documented
+ * `error_extra.retry_after`, read from a 429 only. Not verified against the
+ * live API.
+ */
+export const todoistThrottling = {
+  bodyFields: {
+    'error_extra.retry_after': {
+      role: 'retryAfter',
+      unit: 'deltaSeconds',
+      description:
+        'Seconds to wait before retrying, in the JSON error body. Todoist may send it on other errors too; it is read only from a throttled response.',
+    },
+  },
+  signals: [
+    {
+      status: [429],
+      meaning: 'throttled',
+      description:
+        'The user has sent too many requests in a given amount of time. Todoist documents no other status for rate limiting, so no other response is throttling.',
+    },
+  ],
+};
+
 /** The pets fixture with a root `x-throttling`. */
 export function throttledPets(throttling: unknown): Record<string, unknown> {
   return {
