@@ -135,7 +135,47 @@ Data flows through four stages, each its own directory under `src/`:
    whole scope skipped when one settled on the scope), `lastSyncedItems` is
    dropped for the scope so a later complete read still prunes, and nothing
    is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
-   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
+   such collection is listed in `SyncResult.incomplete`.
+   Tell before prune: in `performSync`, the records a
+   complete read removes (not returned, no writes, not in
+   `unavailableKept`, including ones a reused storage held) are passed to
+   `options.onPresence` (awaited) before `confirmed` is replaced and the
+   rebuild removes them; a throwing handler skips that snapshot
+   (`SyncRound.presenceError`, thrown at the end; `skipped`, so
+   `countRefreshMisses` does not count its held writes) so the next sync
+   tells again; after the handler, a write that settled on the scope sends
+   the snapshot down the stale path (upsert only); a record whose writes are
+   all non-durable is not rebuilt there. Removals after a check
+   (`releaseRefreshed`, `finishFeeds`, parent members) go through
+   `rebuildTelling`, which tells each record the rebuild would remove (no
+   confirmed copy, no kept mark, no durable write, stored now) first. The
+   changes go on `SyncResult.presence` (`SyncRound.presence`). Presence
+   marks (K4/K5): `keptMarks` (was `unavailableKept`; `presence`
+   `unconfirmed`/`unavailable`/`deleted`, stored as the outbox's
+   `unavailable` entries with `presence`/`source`) is the one map `rebuild`
+   falls back to. In the candidate loop a vanished write-less record is
+   `deleted` under `absent: deleted` (removed, or `setMark` under
+   `retainDeleted`), `unconfirmed` (kept) when `lookupPlanned` or
+   `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
+   (not `'none'`, an item GET or a declaration, and `absent: removed`,
+   `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
+   lookups (previously unconfirmed first, also when `!differs`) run in
+   `releaseRefreshed`'s vanished loop, counted against
+   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   the evidence into marks (`setMark`: changes go to the client-level
+   `untoldMarks`, the latest per record, kept across syncs until told).
+   `tell()` sends removals at once (dropping a held change of the same
+   record) and the held mark changes at the end of a sync (skipped when the
+   handler already threw in it); after a removal, records that gained a
+   write or a confirmed copy get `pruned: false`. A `deleted` or `filtered`
+   conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
+   the removal is told, or keeps the mark (not clearing) when the handler
+   throws, so the record is checked again. `dropMark` drops a mark outside
+   `tell`/`setMark` (`settled`, a clearing mark on a record that stays) and
+   its held change, replaced by `present` when the mark is `told` (set by
+   a successful end tell, kept by `setMark`, and set on restored marks).
+   `client.presence()` lists
+   `keptMarks`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
