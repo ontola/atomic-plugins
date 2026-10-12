@@ -6,13 +6,42 @@ import type {
   SchemeType,
 } from './types.js';
 
+/**
+ * The segments of a dot-path (spec §4.4): each is a literal property name,
+ * and one that holds a `.` is bracket-escaped as `["a.b"]` (a `"` or `\`
+ * inside it escaped with `\`). `pagination.total_count` gives two segments,
+ * `meta["page.info"].next` three.
+ */
+export function splitPath(path: string): string[] {
+  const segments: string[] = [];
+  const pattern = /\[\s*"((?:[^"\\]|\\.)*)"\s*\]|([^.[]+)|(\.)|(\[)/g;
+  let expectDot = false;
+  for (const match of path.matchAll(pattern)) {
+    const [, quoted, plain, dot, bracket] = match;
+    if (quoted !== undefined) {
+      segments.push(quoted.replace(/\\(.)/g, '$1'));
+      expectDot = true;
+    } else if (plain !== undefined) {
+      segments.push(plain);
+      expectDot = true;
+    } else if (dot !== undefined) {
+      if (!expectDot) segments.push('');
+      expectDot = false;
+    } else if (bracket !== undefined) {
+      throw new Error(`Malformed dot-path ${JSON.stringify(path)}`);
+    }
+  }
+  if (!expectDot) segments.push('');
+  return segments;
+}
+
 /** Reads a dot-separated path out of a plain object, e.g. "pagination.total_count". */
 export function readNestedField(
   body: Record<string, unknown>,
   path: string,
 ): unknown {
   let node: unknown = body;
-  for (const segment of path.split('.')) {
+  for (const segment of splitPath(path)) {
     if (typeof node !== 'object' || node === null) {
       return undefined;
     }
@@ -27,7 +56,7 @@ export function setNestedField(
   path: string,
   value: unknown,
 ): void {
-  const segments = path.split('.');
+  const segments = splitPath(path);
   let node = body;
   for (let i = 0; i < segments.length - 1; i += 1) {
     const segment = segments[i] as string;
@@ -41,23 +70,40 @@ export function setNestedField(
 }
 
 /**
- * Parses an RFC 8288 Link header value and extracts the URL with rel="next".
- * Example: `<https://api.example.com/items?page=2>; rel="next", <...>; rel="prev"`
+ * Parses an RFC 8288 Link header value and extracts the target of the link
+ * whose `rel` includes `relation` (default `next`). Example:
+ * `<https://api.example.com/items?page=2>; rel="next", <...>; rel="prev"`.
+ * A `rel` value is a quoted, space-separated list of relation types, or one
+ * unquoted token; relation types compare case-insensitively, and a link
+ * with `rel="last next"` is the next page (Pagination Schemes §4.4.3 rule 1
+ * says "rel includes next"). The first `rel` parameter of a link counts
+ * (RFC 8288 §3.3). The target is returned as written, relative or not.
  */
-export function parseLinkHeader(header: string): string | null {
+export function parseLinkHeader(
+  header: string,
+  relation = 'next',
+): string | null {
   if (!header) {
     return null;
   }
+  const wanted = relation.toLowerCase();
   const parts = header.split(/,\s*(?=<)/);
   for (const part of parts) {
-    const match = part.match(/^\s*<([^>]+)>(.*)/);
+    const match = part.match(/^\s*<([^>]*)>(.*)$/s);
     if (!match) {
       continue;
     }
     const [, url, attrs] = match;
-    const relMatch = attrs?.match(/\brel\s*=\s*"?([^";,\s]+)"?/i);
-    if (relMatch?.[1]?.trim().toLowerCase() === 'next') {
-      return url ?? null;
+    const rel = attrs?.match(/;\s*rel\s*=\s*(?:"([^"]*)"|([^;,\s"]+))/i);
+    if (!rel) {
+      continue;
+    }
+    const types = (rel[1] ?? rel[2] ?? '')
+      .trim()
+      .split(/\s+/)
+      .map((type) => type.toLowerCase());
+    if (types.includes(wanted)) {
+      return url ? url : null;
     }
   }
   return null;
@@ -143,6 +189,7 @@ function deriveHasNextPage(
   type: SchemeType,
   state: PaginationResponseState,
   itemsFetchedSoFar?: number,
+  firstPage = 1,
 ): boolean {
   if (state.nextLink !== null || state.nextPageToken !== null) {
     return true;
@@ -151,18 +198,33 @@ function deriveHasNextPage(
     return itemsFetchedSoFar < state.totalCount;
   }
   if (type === 'pageNumber') {
-    if (state.currentPage !== null && state.totalPages !== null) {
-      return state.currentPage < state.totalPages;
+    // currentPage is numbered like the request's page field (from its
+    // start); totalPages is a count (spec 0.6.0 §4.5).
+    const ordinal =
+      state.currentPage !== null ? state.currentPage - firstPage + 1 : null;
+    if (ordinal !== null && state.totalPages !== null) {
+      return ordinal < state.totalPages;
     }
     if (
-      state.currentPage !== null &&
+      ordinal !== null &&
       state.totalCount !== null &&
       state.pageSize !== null
     ) {
-      return state.currentPage * state.pageSize < state.totalCount;
+      return ordinal * state.pageSize < state.totalCount;
     }
   }
   return false;
+}
+
+/** The `start` of the scheme's `page` field (spec 0.6.0 §4.3.1), else 1. */
+export function pageStart(scheme: PaginationSchemeObject): number {
+  for (const location of ['queryParameters', 'bodyFields'] as const) {
+    for (const field of Object.values(scheme.request?.[location] ?? {})) {
+      if (field.role === 'page' && typeof field.start === 'number')
+        return field.start;
+    }
+  }
+  return 1;
 }
 
 /**
@@ -199,6 +261,11 @@ export function parsePaginationState(
     pageSize: toNumberOrNull(roles.get('pageSize') ?? null),
     hasNextPage: false,
   };
-  state.hasNextPage = deriveHasNextPage(scheme.type, state, itemsFetchedSoFar);
+  state.hasNextPage = deriveHasNextPage(
+    scheme.type,
+    state,
+    itemsFetchedSoFar,
+    pageStart(scheme),
+  );
   return state;
 }
