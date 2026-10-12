@@ -1,0 +1,65 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://developers.google.com/workspace/calendar/api/guides/quota
+#   "Per minute per project": "10,000 requests"; "Per minute per user per project": "600
+#   requests"; "Quotas are calculated per minute using a sliding window. A rapid burst of
+#   traffic that exceeds your per-minute quota during one minute will result in rate limiting
+#   during the next window"; exceeding them returns "403 usageLimits" or "429 usageLimits".
+# Source: https://developers.google.com/workspace/calendar/api/guides/errors
+#   403 userRateLimitExceeded: "One of the limits from the Developer Console has been
+#   reached."; 403 rateLimitExceeded: "The user has reached Google Calendar API's maximum
+#   request rate per calendar or per authenticated user."; 429 rateLimitExceeded: "the user
+#   has sent too many requests in a given amount of time"; each in error.errors[].reason with
+#   domain usageLimits, handled with exponential backoff.
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, signals).
+# Not declared: Retry-After (neither page documents it; the consumer's own backoff applies,
+# as Google recommends); 403 quotaExceeded ("Calendar usage limits exceeded", limits "in
+# place to protect Google users and infrastructure from abusive behavior", which the guide
+# answers by reviewing the Workspace usage limits, not by retrying); the per-calendar and
+# "operational" limits, which have no published numbers. The per-minute numbers are the
+# defaults the quota page states; a project's own quota in the Google Cloud console may
+# differ, and this document cannot know it.
+overlay: 1.0.0
+info:
+  title: Google Calendar API v3 throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perProject:
+            requests: 10000
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [application]
+            description: >-
+              "Per minute per project": "10,000 requests", the default. The
+              application is the Google Cloud project the OAuth client belongs
+              to, shared by every user of that client. Google calls the window
+              sliding but lets a burst carry over into "the next window", which
+              is not the extension's sliding model, so the algorithm is left
+              unspecified.
+          perUser:
+            requests: 600
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [application, user]
+            description: >-
+              "Per minute per user per project": "600 requests", the default,
+              counted per Google account within the project. Same window note
+              as perProject.
+        applies: [perProject, perUser]
+        signals:
+          - status: [403, 429]
+            body:
+              pointer: /error/errors
+              item:
+                pointer: /reason
+                in: [rateLimitExceeded, userRateLimitExceeded]
+            meaning: throttled
+            description: >-
+              The error guide's rate-limit errors: userRateLimitExceeded (403)
+              and rateLimitExceeded (403 or 429), both with domain usageLimits,
+              answered with exponential backoff. The guide does not say which
+              of the limits above a response reports ("One of the limits from
+              the Developer Console", or a rate "per calendar or per
+              authenticated user"), so no bucket is named.
