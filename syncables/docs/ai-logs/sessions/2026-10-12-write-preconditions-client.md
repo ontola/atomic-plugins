@@ -69,3 +69,21 @@ read as the write's own answer would. An unknown stored state is read as
 `resolving` (dropped on a create). Tests: the retry repro, a numeric
 version, a throttled and a 401 read, the follow-up under a `readVerify`
 update, and a restore test that starts from a real resolving write.
+
+## Turn 4
+
+**Human (via the coordinator session):** Merge main again (#466 and
+#473). Blocker: #473's `missingSources` lacks `write`, so a mark with
+`source: 'write'` lost its source on restore; add it with a restore test.
+Nits: key `sourceErrors` by URL; `readRefused` should send again after a
+renewal; assert `notBefore` in the throttling test; test the
+`resolveByRead` and `source-unknown` paths of `readRefused`.
+
+**Assistant:** Merged main (a changelog conflict; a duplicated `gone`
+entry removed). `missingSources` includes `write`; a test deletes a pet the
+provider no longer has and restores the `write` source. `sourceErrors` is
+keyed by URL (`sourceUrl`) and keeps the credential epoch, and
+`readRefused` returns a retry for a refusal sent before the latest
+renewal. Tests: `notBefore` from a 429's `Retry-After` stored for the
+pre-send read, the resolving read (throttled, and a 401 that blocks), and
+the source read (throttled, and a 401 that blocks).
