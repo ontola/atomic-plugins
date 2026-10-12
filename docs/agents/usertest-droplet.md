@@ -46,14 +46,33 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
 ```
 
 - **On the build VPS** (`usertest.michielbdejong.com`, since 2026-10-02) the
-  catalog is served from `/srv/catalog` on the same host, so there is no
-  `ssh`: build the catalog, then copy `usertest/out/apps` and `samples`
-  in with `tar` (older versions stay). `/srv/catalog` itself is owned by
-  root, so `tar` cannot replace `catalog.json` there; the file belongs to
-  `claude`, so write it in place instead:
-  `cat usertest/out/catalog.json > /srv/catalog/catalog.json`. A moderator
-  change is copied into `/opt/usertest/moderator/` and started with
-  `sudo sh /opt/usertest/moderator/run.sh`. Done this way on 2026-10-12.
+  catalog and moderator are on the same host, so there is no `ssh` and
+  `deploy.sh` does not apply. From a checkout of `main`:
+
+  ```sh
+  node usertest/catalog.mjs
+  (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog
+  cat usertest/out/catalog.json > /srv/catalog/catalog.json
+  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
+  ```
+
+  `/srv/catalog` itself is owned by root, so `tar` cannot replace
+  `catalog.json` there (it deletes the old file first); the file belongs to
+  `claude`, so it is written in place. Existing app versions stay. The
+  2026-10-12 build set no `USERTEST_LOG_URL`, and neither did the modules
+  already deployed, so the apps send no logs; `logs.usertest.michielbdejong.com`
+  answers, but setting `USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log`
+  is not verified here. A moderator change is copied in without the
+  root-owned `node_modules/`, then started (this ends sessions in progress):
+
+  ```sh
+  tar -C usertest/moderator --exclude node_modules -cf - . | sudo tar -xf - -C /opt/usertest/moderator
+  sudo sh /opt/usertest/moderator/run.sh
+  ```
+
+  The other files `deploy.sh` copies (the page, the collector, the
+  Caddyfile, `server.sh`) are root-owned here and need `sudo`; that has not
+  been done on this host.
 - **Env files are read when a container is created.** `moderator/run.sh`
   passes `/etc/anthropic.env`, `/etc/usertest-moderator.env`,
   `/etc/usertest-salt.env` and `/etc/github-findings.env` with `--env-file`,
