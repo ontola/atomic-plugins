@@ -140,6 +140,7 @@ export function parseFollowUps(
       path: string;
       method: FollowUp['method'];
       op: Record<string, unknown>;
+      item: Record<string, unknown>;
     }[] = [];
     for (const [path, item] of Object.entries(document.paths ?? {}))
       for (const method of METHODS) {
@@ -149,6 +150,7 @@ export function parseFollowUps(
             path,
             method: method.toUpperCase() as FollowUp['method'],
             op,
+            item: item as unknown as Record<string, unknown>,
           });
       }
     if (found.length !== 1)
@@ -207,7 +209,47 @@ export function parseFollowUps(
         throw new Error(
           `${where}.bind: path parameter ${variable} is neither bound nor carried from the create`,
         );
-    const parameters = (target.op['parameters'] ?? []) as ParameterObject[];
+    // The operation's parameters over its path item's (rule 24).
+    const byKey = new Map<string, ParameterObject>();
+    for (const parameter of [
+      ...((target.item['parameters'] ?? []) as ParameterObject[]),
+      ...((target.op['parameters'] ?? []) as ParameterObject[]),
+    ])
+      if (isRecord(parameter) && typeof parameter.name === 'string')
+        byKey.set(
+          `${parameter.in}.${parameter.in === 'header' ? parameter.name.toLowerCase() : parameter.name}`,
+          parameter,
+        );
+    const parameters = [...byKey.values()];
+    // Rule 23: a parameter bind key names a parameter the operation
+    // declares, and a body bind needs a JSON request body.
+    for (const key of Object.keys(parsed)) {
+      const [kind, ...rest] = key.split('.');
+      const name = rest.join('.');
+      if (kind === 'path' || kind === 'query' || kind === 'header') {
+        const lookup = `${kind}.${kind === 'header' ? name.toLowerCase() : name}`;
+        if (!byKey.has(lookup))
+          throw new Error(
+            `${where}.bind.${key}: ${String(operation)} declares no ${kind} parameter ${name}`,
+          );
+      }
+    }
+    if (
+      Object.keys(parsed).some((k) => k === 'body' || k.startsWith('body.'))
+    ) {
+      const body = target.op['requestBody'];
+      const content = isRecord(body) ? body['content'] : undefined;
+      const json =
+        isRecord(content) &&
+        Object.keys(content).some((type) => {
+          const media = type.split(';')[0]!.trim().toLowerCase();
+          return media === 'application/json' || media.endsWith('+json');
+        });
+      if (!json)
+        throw new Error(
+          `${where}.bind: ${String(operation)} declares no JSON request body`,
+        );
+    }
     for (const parameter of parameters)
       if (
         (parameter.in === 'query' || parameter.in === 'header') &&

@@ -2622,6 +2622,11 @@ export function createApiClient(
 
   /** How long a request to `operation` must wait for its exhausted buckets; 0 when none. */
   function pauseForOperation(operation: OperationObject | undefined): number {
+    return Math.max(0, pausedUntil(operation) - Date.now());
+  }
+
+  /** When the exhausted buckets `operation` counts against reset (ms since the epoch); 0 when none is paused. */
+  function pausedUntil(operation: OperationObject | undefined): number {
     if (!pausedBuckets.size) return 0;
     const now = Date.now();
     for (const [key, until] of pausedBuckets)
@@ -2631,7 +2636,7 @@ export function createApiClient(
       ? operationBuckets(throttling, operation)
       : [])
       until = Math.max(until, pausedBuckets.get(bucket) ?? 0);
-    return Math.max(0, until - now);
+    return until;
   }
 
   /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
@@ -2890,7 +2895,13 @@ export function createApiClient(
           // Keep the array owned by an in-flight worker: replacing it would
           // leave that worker acknowledging a different queue and resend its head.
           const existing = writeQueues.get(key) ?? [];
-          existing.push(...rest);
+          // The create's follow-ups go first (§4.7.2 step 4), ahead of writes
+          // already queued under the server's id, but never ahead of a head
+          // another worker may have in flight.
+          const followUps = rest.filter((w) => w.followUp);
+          const at = existing.length && draining.has(key) ? 1 : 0;
+          existing.splice(at, 0, ...followUps);
+          existing.push(...rest.filter((w) => !w.followUp));
           writeQueues.set(key, existing);
           ownsQueue = !draining.has(key);
           if (ownsQueue) draining.add(key);
@@ -2932,6 +2943,28 @@ export function createApiClient(
    * writes lose those fields, and are dropped when nothing is left (always,
    * for a failed delete, or after a settled create or delete).
    */
+  /**
+   * Whether `later` (settled, or queued ahead) makes a failed follow-up
+   * moot: a delete of the record, or an app update that sets the
+   * follow-up's field. The match is on the field's first path segment, as
+   * updates change top-level fields: an update of `meta` supersedes a
+   * follow-up of `meta.tags`, which may drop a follow-up whose nested value
+   * the update left alone, the cautious direction (nothing sent over the
+   * app's edit).
+   */
+  function supersedesFollowUp(
+    followUp: QueuedWrite,
+    later: QueuedWrite,
+  ): boolean {
+    const top = followUp.followUp!.field.split('.')[0] as string;
+    return (
+      later.type === 'delete' ||
+      (later.type === 'update' &&
+        !later.followUp &&
+        Object.hasOwn(later.changes ?? {}, top))
+    );
+  }
+
   function supersede(key: string, settled: QueuedWrite): void {
     const failed = gaveUpWrites.get(key);
     if (!failed) return;
@@ -2939,15 +2972,7 @@ export function createApiClient(
       if (write.type !== 'update') return false;
       // A failed follow-up has no changes of its own: it stays until a
       // settled write sets its field (or deletes the record).
-      if (write.followUp) {
-        const top = write.followUp.field.split('.')[0] as string;
-        return !(
-          settled.type === 'delete' ||
-          (settled.type === 'update' &&
-            !settled.followUp &&
-            Object.hasOwn(settled.changes ?? {}, top))
-        );
-      }
+      if (write.followUp) return !supersedesFollowUp(write, settled);
       write.changes = withoutSetBy(write, settled);
       return Object.keys(write.changes).length > 0;
     });
@@ -3143,9 +3168,11 @@ export function createApiClient(
   ): Promise<void> {
     let sleptUntil = 0;
     for (;;) {
-      const paused = pauseForOperation(operation);
+      // The pause's own end, not now plus what is left of it: a clock tick
+      // between two readings must not look like a pause that moved later.
+      const until = pausedUntil(operation);
+      const paused = until - Date.now();
       if (paused <= 0) return;
-      const until = Date.now() + paused;
       if (until <= sleptUntil) return;
       const remaining = remainingMs();
       if (paused > remaining)
@@ -4742,6 +4769,15 @@ export function createApiClient(
         // A restored update waiting for a refresh: send it now, or drop it.
         if (resolution.action === 'confirm')
           throw new Error('Only an uncertain create can be confirmed');
+        // A follow-up whose outcome is unknown is read back before it is
+        // sent again (§4.7.2 step 6): a retry would skip that.
+        if (
+          resolution.action === 'retry' &&
+          waiting.some((w) => w.followUp?.reason === 'unknown')
+        )
+          throw new Error(
+            `The follow-up of record ${id} of ${resource} has an unknown outcome and waits for a read of the record before it is sent again (CRUD Causality §4.7.2); sync() reads it, or discard it`,
+          );
         const sleeper = queue[0];
         // Retrying sends now: an in-flight write marked for holding is not
         // held after its response either.
@@ -4780,6 +4816,15 @@ export function createApiClient(
         const newer = queue ?? [];
         const retried = failed.flatMap((write): QueuedWrite[] => {
           if (newer.length && write.type === 'delete') return [];
+          // A follow-up has no changes for withoutSetBy to strip: a newer
+          // queued delete, or a newer update that sets its field, supersedes
+          // it, as supersede() does for settled writes (§4.7.2 step 6: the
+          // app's own edit of the field wins).
+          if (
+            write.followUp &&
+            newer.some((later) => supersedesFollowUp(write, later))
+          )
+            return [];
           let changes = { ...write.changes };
           for (const later of newer)
             changes = withoutSetBy({ ...write, changes }, later);

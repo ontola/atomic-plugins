@@ -170,8 +170,10 @@ Data flows through four stages, each its own directory under `src/`:
    confirmed record at send time (nothing missing: settled without a
    request), a refusal fails it `refused` and the following follow-ups
    `notSent` (a 403 is `permanent` by default for a follow-up,
-   `WriteFailure.followUp`; `supersede` keeps a failed follow-up until a
-   settled write sets its field or deletes the record), an unknown outcome sets `awaitingRefresh` (read back first),
+   `WriteFailure.followUp`; `supersedesFollowUp` drops a failed follow-up
+   once a settled write, in `supersede`, or a newer queued one, in
+   `resolveWrite` `retry`, sets its field's first segment or deletes the
+   record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
    and a `confirm`ed uncertain create queues them `awaitingRefresh`;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,

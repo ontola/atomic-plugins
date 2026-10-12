@@ -46,3 +46,29 @@ blocking, a custom classifier seeing `followUp` and deciding. Fixed along
 the way: a settled later write dropped the failed follow-up (it has no
 changes of its own); `supersede` now keeps it until a settled write sets
 its field or deletes the record (tested). README and CLAUDE.md updated.
+
+## Turn 3
+
+**Human (via the coordinator session):** The #480 review. B1: a retried
+follow-up overwrites a newer queued app edit of its field. S1: `retry` on
+an unknown-outcome follow-up sends it without the read-back. Nits: a test
+for a rate-limit 403 retried; rules 23/24 against the path item's and the
+operation's declared parameters and a JSON request body; follow-ups first
+when the queue moves to the server id; a test that a retry re-queues the
+`notSent` siblings; a comment on the first-segment match; the README's 403
+rationale weaker long after the create. Also a timing-sensitive
+quotaExhausted test.
+
+**Assistant:** `supersedesFollowUp` (a delete, or a non-follow-up update
+setting the field's first segment) now drops a failed follow-up in
+`resolveWrite` `retry` too, as `supersede` did for settled writes; `retry`
+throws for a follow-up with `reason: 'unknown'` that waits for its read.
+`parseFollowUps` merges path-item and operation parameters, refuses a
+parameter bind key the operation does not declare and a body bind without
+a JSON body. The queue move puts follow-ups first, never ahead of an
+in-flight head. The flaky test came from `waitOutPauses` adding "now plus
+what is left" to the clock read again, so a clock tick between two readings
+made the same pause look later and slept twice; it now compares the
+pause's own end (`pausedUntil`), and a test with an irregularly ticking
+`Date.now` fails before the fix. Tests for B1, S1, the rate-limit 403, the
+siblings, and the parse rules; README and CLAUDE.md updated.

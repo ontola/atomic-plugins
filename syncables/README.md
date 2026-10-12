@@ -1029,28 +1029,41 @@ push access and `POST …/issues/{issue_number}/labels` then adds).
   `reason: 'refused'`, and the later follow-ups of the same create fail
   with `reason: 'notSent'`: the create is partly applied. Writes the app
   queued after the create go on; one that sets a follow-up's field (or
-  deletes the record) supersedes the failed follow-up. `resolveWrite`
-  `retry` sends the follow-ups again, each with what is still missing;
+  deletes the record), settled or still queued, supersedes the failed
+  follow-up, so a retry never sends it over the app's own edit (the field's
+  first path segment is compared, the cautious direction for a nested
+  field). `resolveWrite` `retry` sends the failed follow-ups again, the
+  `notSent` ones included and in order, each with what is still missing;
   `discard` drops them.
 - A follow-up answered `403` is such a refusal under the default failure
   classes (`WriteFailure.followUp` is set, and `method` is the follow-up's):
   the create just succeeded with the same credentials, so the `403` refuses
   that field (GitHub's labels without push access), not the credentials,
-  and the client is not blocked. A rate-limit `403` is still retried, a
-  `401` still blocks, and a `classifyWriteFailure` still decides.
+  and the client is not blocked. That reasoning is weaker for a follow-up
+  sent long after its create (after a restart, a read-back or a retry days
+  later), when the credentials may have changed meanwhile; an app that
+  cares passes a `classifyWriteFailure`. A rate-limit `403` is still
+  retried, a `401` still blocks, and a `classifyWriteFailure` still
+  decides.
 - A follow-up whose outcome is unknown (no answer, a 5xx other than 503)
   stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
   sent before a complete read of its collection, and then only if the
-  field is still missing. A throttled answer is waited out as for any
-  write.
+  field is still missing; `resolveWrite` `retry` refuses it (it would skip
+  the read), `discard` drops it. A throttled answer is waited out as for
+  any write.
 - An uncertain create settled with `resolveWrite` `confirm` queues its
   follow-ups with `awaitingRefresh`, so the object is read before any is
   sent. An unbound create sends none.
 - A `followUps` the client cannot use (a follow-up operation that is not
   exactly one `update` of the same resource, a bind key or source it cannot
-  fill, a path parameter neither bound nor carried from the create, a
-  resource without a usable identity) makes `create()` throw, rather than
-  create the record without the field.
+  fill, a `path.`/`query.`/`header.` key naming a parameter the operation
+  and its path item do not declare, a `body` bind without a JSON request
+  body, a path parameter neither bound nor carried from the create, a
+  required query or header parameter not bound, a resource without a
+  usable identity) makes `create()` throw, rather than create the record
+  without the field.
+- When the create's record moves to the server's id, its follow-ups go
+  first, ahead of writes already queued under that id.
 
 Write Preconditions on a follow-up operation are not read. Not verified
 against a live provider.

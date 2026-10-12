@@ -8,6 +8,7 @@ import {
   withoutOmitted,
   type FollowUp,
 } from '../../../src/client/compound-create.js';
+import type { OpenApiDocument } from '../../../src/browser.js';
 import { compoundDocument } from '../../fixtures/compound-create.js';
 
 // The pure parts of CRUD Causality 0.5.0 §4.7.2, after the reference
@@ -108,6 +109,65 @@ describe('parseFollowUps', () => {
     ],
   ])('refuses %j', (raw, message) => {
     expect(() => followUps(raw as unknown[])).toThrow(message);
+  });
+});
+
+describe('parseFollowUps, rules 23 and 24 against declared parameters (#480)', () => {
+  const LABELS = '/repos/{owner}/{repo}/issues/{issue_number}/labels';
+  const bound = {
+    field: 'labels',
+    create: 'include',
+    operation: 'issues-add-labels',
+    bind: {
+      'path.issue_number': { from: 'created', field: 'number' },
+      'body.labels': { from: 'missing', field: 'labels' },
+    },
+  };
+  const parse = (
+    change: (doc: OpenApiDocument) => void,
+    raw: unknown[] = [bound],
+  ): FollowUp[] => {
+    const doc = compoundDocument(raw);
+    change(doc);
+    const crud = (doc.paths[CREATE]!.post as Record<string, unknown>)[
+      'x-crud'
+    ] as Record<string, unknown>;
+    return parseFollowUps(doc, crud, CREATE)!;
+  };
+
+  it("reads the path item's parameters as well as the operation's", () => {
+    expect(
+      parse((doc) => {
+        const item = doc.paths[LABELS] as Record<string, unknown>;
+        const op = item['post'] as Record<string, unknown>;
+        item['parameters'] = op['parameters'];
+        delete op['parameters'];
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('refuses a bind key that names a parameter the operation does not declare', () => {
+    expect(() =>
+      parse(() => {}, [
+        {
+          ...bound,
+          bind: {
+            ...bound.bind,
+            'query.per_page': { from: 'planned', field: 'labels' },
+          },
+        },
+      ]),
+    ).toThrow(/declares no query parameter per_page/);
+  });
+
+  it('refuses a body bind without a JSON request body', () => {
+    expect(() =>
+      parse((doc) => {
+        delete (doc.paths[LABELS]!.post as Record<string, unknown>)[
+          'requestBody'
+        ];
+      }),
+    ).toThrow(/declares no JSON request body/);
   });
 });
 

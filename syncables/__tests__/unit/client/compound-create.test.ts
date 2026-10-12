@@ -36,7 +36,7 @@ interface Issue {
 function github(
   options: {
     pushAccess?: boolean;
-    labelsAnswer?: () => number;
+    labelsAnswer?: () => number | TransportResponse;
     assigneesAnswer?: () => number;
   } = {},
 ): {
@@ -76,7 +76,9 @@ function github(
       }
       const labels = /^\/repos\/o\/r\/issues\/(\d+)\/labels$/.exec(path);
       if (r.method === 'POST' && labels) {
-        const status = options.labelsAnswer?.() ?? 200;
+        const answer = options.labelsAnswer?.() ?? 200;
+        if (typeof answer !== 'number') return answer;
+        const status = answer;
         if (status >= 300) return json({ message: 'no' }, status);
         const issue = issues.get(Number(labels[1]))!;
         for (const name of body.labels as string[]) issue.labels.push({ name });
@@ -237,6 +239,101 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     );
     await c.update('issues', '7', { labels: [] });
     await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+  });
+
+  it('retrying a refused follow-up does not overwrite a newer queued app edit of its field (#480 B1)', async () => {
+    let patch = 503;
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const inner = fake.transport;
+    fake.transport = async (r): Promise<TransportResponse> =>
+      r.method === 'PATCH' && patch >= 300
+        ? json({ message: 'busy' }, patch)
+        : inner(r);
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 60_000 },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+      ]),
+    );
+    // The app sets the labels itself; its PATCH waits between retries.
+    await c.update('issues', '7', { labels: ['ui'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+        { type: 'update', state: 'pending', attempts: 1 },
+      ]),
+    );
+    await expect(
+      c.resolveWrite('issues', '7', { action: 'retry' }),
+    ).rejects.toThrow(/superseded by queued writes/);
+    expect(lines(fake).filter((l) => l.endsWith('/labels'))).toHaveLength(1);
+    patch = 200;
+  });
+
+  it('refuses retry of a follow-up whose outcome is unknown: it is read back first (#480 S1)', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 502 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+      ]),
+    );
+    await expect(
+      c.resolveWrite('issues', '7', { action: 'retry' }),
+    ).rejects.toThrow(/unknown outcome and waits for a read/);
+    expect(lines(fake)).toHaveLength(2);
+  });
+
+  it('retries a rate-limit 403 on a follow-up instead of refusing it', async () => {
+    let calls = 0;
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () =>
+        ++calls === 1
+          ? {
+              status: 403,
+              headers: { 'x-ratelimit-remaining': '0' },
+              body: '{"message":"API rate limit exceeded"}',
+            }
+          : 200,
+    });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake).filter((l) => l.endsWith('/labels'))).toHaveLength(2);
+    expect(c.authBlocked()).toBeUndefined();
+  });
+
+  it('retrying a refused follow-up re-queues its notSent siblings, in order', async () => {
+    let answer = 403;
+    const fake = github({ pushAccess: false, labelsAnswer: () => answer });
+    const c = client(fake);
+    await c.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+      assignees: ['ada'],
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+        { followUp: { reason: 'notSent' } },
+      ]),
+    );
+    answer = 200;
+    await c.resolveWrite('issues', '7', { action: 'retry' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/assignees',
+    ]);
   });
 
   it('a 401 on a follow-up still goes through the auth handling', async () => {
