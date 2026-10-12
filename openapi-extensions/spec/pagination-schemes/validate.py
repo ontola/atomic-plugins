@@ -571,9 +571,13 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
     When the scheme declares a `nextLink` body field (0.7.1), the link
     leads under either rule: `follow(link)` requests the page a link names
     and returns its body, and a response whose link is absent, None or ""
-    ends the read; the offset is not used after the first request.
+    ends the read; the offset is not used after the first request. Such a
+    read is not complete (`complete` False) when that last response's
+    `totalCount` exceeds the items read. Only a `nextLink` in the response
+    body is detected here: a `nextLink` declared as a response header (a
+    `Link` header) is not, since `request` and `follow` return bodies only.
 
-    Returns {"items", "pages", "offsets", "links"}. Raises PageReadError when, under
+    Returns {"items", "pages", "offsets", "links", "complete"}. Raises PageReadError when, under
     `pageSize`, neither page size is known, for a page holding an item an
     earlier page returned, or after `max_pages` pages without reaching the
     end.
@@ -615,7 +619,9 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             # 0.7.1: the link leads under either rule; none ends the read.
             link = _role_value(body, scheme, "nextLink")
             if link is None or link == "":
-                return {"items": items, "pages": len(offsets) + len(links), "offsets": offsets, "links": links}
+                total_count = _count(_role_value(body, scheme, "totalCount"))
+                return {"items": items, "pages": len(offsets) + len(links), "offsets": offsets, "links": links,
+                        "complete": total_count is None or total_count <= len(items)}
             continue
         total_count = _count(_role_value(body, scheme, "totalCount"))
         if advance == "pageSize":
@@ -627,13 +633,13 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             following = offset + step
             if total_count is not None:
                 if following >= total_count:
-                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
+                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
             elif not page:
-                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
         else:
             following = offset + len(page)
             if not page or (total_count is not None and following >= total_count):
-                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
         offset = following
 
 

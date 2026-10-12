@@ -1470,8 +1470,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 - **Unreleased**: Pagination Schemes 0.7.1 §4.3.2: in a scheme that
   declares both an offset and a `nextLink` field, the link leads under
   either `advance`. The client follows it while there is one. An absent,
-  `null` or empty link ends the read, also when a `totalCount` says more
-  items exist. Before, under `advance: pageSize`, the read stepped from an
+  `null` or empty link ends the read. When the last response's
+  `totalCount` exceeds the items read, the read still ends there, but is
+  not complete (`notComplete`), so nothing is concluded about records it
+  did not return. Before, under `advance: pageSize`, the read stepped from an
   offset that was not advanced while links were followed. It then asked
   for a page it already had and ended with an error.
 - **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an

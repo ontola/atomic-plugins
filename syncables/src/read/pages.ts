@@ -803,14 +803,20 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       continue;
     }
     // 0.7.1 §4.3.2: in an offset scheme that declares a next link, an
-    // absent, null or empty link ends the read under either advance, even
-    // when a totalCount says more items exist.
+    // absent, null or empty link ends the read under either advance. When
+    // the last response's totalCount exceeds the items read, the read ends
+    // there but is not complete.
     if (
       !linkPresent &&
       scheme.type === 'pageNumber' &&
       offsetAdvance(scheme) !== undefined &&
       declaresRole(scheme, 'nextLink')
     ) {
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      if (walk.outcome && totalCount !== undefined && totalCount > itemsSoFar) {
+        walk.outcome.complete = false;
+        walk.outcome.reason = `ended by a response without a next link while its totalCount (${totalCount}) exceeds the ${itemsSoFar} items read: not a complete read (Pagination Schemes 0.7.1 §4.3.2)`;
+      }
       return;
     }
     if (!state.hasNextPage && !linkPresent) {

@@ -940,6 +940,14 @@ class OffsetAdvanceValueTests(unittest.TestCase):
                     self.assertEqual([item["id"] for item in result["items"]], ["0", "1", "2", "3", "4", "5"])
                     self.assertEqual(result["offsets"], [0])
                     self.assertEqual(len(result["links"]), 2)
+                    self.assertTrue(result["complete"])
+        # An absent link while totalCount says more: ends, not complete.
+        scheme = self.scheme()
+        scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+        result = read_offsets(scheme, lambda values: {"entries": [{"id": "a"}], "limit": 2, "total_count": 5},
+                              follow=lambda link: {"entries": []})
+        self.assertEqual(result["offsets"], [0])
+        self.assertFalse(result["complete"])
         with self.assertRaises(ValueError):
             scheme = self.scheme()
             scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}

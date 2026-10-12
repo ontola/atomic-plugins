@@ -46,3 +46,22 @@ absent link ends an offset read before `hasNextPage` (which a
 `totalCount` would keep true). The pinned test is replaced by tests for
 the new behaviour under both advances and for an absent link with a
 larger `total_count`.
+
+## Turn 3
+
+**Human (via the coordinator session):** #509 blocker: an absent declared
+link while `totalCount` says more items exist ended the read silently,
+marked complete; mark it not complete, and say so in §4.3.2. Nits: spec
+wording (the table's rules decide nothing; a repeated item still errors;
+the first request uses the offset field), note that `read_offsets` sees
+only body links, the changelog wording, and a 0.7.1 clause in the
+openapi-extensions README row.
+
+**Assistant:** `walkPages` sets the outcome not complete, with a reason,
+when it ends at a missing link while the last response's `totalCount`
+exceeds the items read; the test checks the collection read's
+`notComplete`, and a matching `totalCount` stays complete. §4.3.2 and the
+0.7.1 history entry are reworded as asked; `read_offsets` returns
+`complete` (False in that case, with a test) and its docstring notes that
+only body links are detected; the openapi-extensions README row gains a
+0.7.1 clause.

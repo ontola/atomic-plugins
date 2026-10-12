@@ -468,7 +468,8 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   the scheme declares a `nextLink` (`declaresRole`), which then leads under
   either advance (0.7.1): the offset cursor is not advanced while links
   are followed, so neither advance branch runs for such a scheme, and an
-  absent or `null` link ends the read before `hasNextPage` is asked. The repeat check (`seenIds` by `PageWalk.identity`,
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.

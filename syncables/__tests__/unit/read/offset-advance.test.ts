@@ -270,7 +270,29 @@ describe('an offset scheme that also declares a next link', () => {
       };
       expect(await read(s, more, 2)).toHaveLength(4);
       expect(offsets).toEqual([0, 2]);
+      // The read ends there, but is not complete.
+      const result = await readCollections(document(s), {
+        transport: more,
+        constants: { folder_id: '0' },
+      });
+      const [snapshot] = result.collections;
+      expect(result.errors).toEqual([]);
+      expect(snapshot!.items).toHaveLength(4);
+      expect(snapshot!.complete).toBe(false);
+      expect(snapshot!.notComplete).toMatch(
+        /totalCount \(10\) exceeds the 4 items read: not a complete read/,
+      );
     }
+  });
+
+  it('is complete at an absent link when total_count matches the items read', async () => {
+    const { transport } = linkingProvider(4);
+    const result = await readCollections(document(linked('pageSize')), {
+      transport,
+      constants: { folder_id: '0' },
+    });
+    expect(result.collections[0]!.complete).toBe(true);
+    expect(result.collections[0]!.items).toHaveLength(4);
   });
 });
 
