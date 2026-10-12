@@ -219,7 +219,12 @@ export async function readCollections(
     (error) =>
       error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
   );
-  const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
+  const zoned: {
+    snapshot: CollectionSnapshot;
+    keys: Set<string>;
+    /** Read by range windows whose bounds went to x-time-zone parameters. */
+    windowed: boolean;
+  }[] = [];
   // A resource whose x-runtime-schema cannot be used fails its collections
   // before any request: its items' members could not be interpreted.
   const runtimeFailures = new Map<string, string>();
@@ -335,7 +340,11 @@ export async function readCollections(
             query = written.query;
             if (written.coverage) {
               snapshot.coverage = written.coverage;
-              zoned.push({ snapshot, keys: written.keys });
+              zoned.push({
+                snapshot,
+                keys: written.keys,
+                windowed: windows !== undefined,
+              });
             }
           }
           const outcome: WalkOutcome = { complete: true };
@@ -420,18 +429,22 @@ export async function readCollections(
       changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
     }
     if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
-    for (const { snapshot, keys } of zoned) {
+    for (const { snapshot, keys, windowed } of zoned) {
       const coverage = snapshot.coverage as ReadCoverage;
-      if (
-        snapshot.error !== undefined ||
-        (!snapshot.complete && snapshot.notComplete === undefined)
-      )
+      // A read by range windows that finished is never complete
+      // (Pagination Schemes 0.5.0 §4.6.4) but asked for its whole range;
+      // any other read that is not complete (failed, or ended by a short
+      // page that is not documented as the last) covers nothing known.
+      const finishedWindows =
+        windowed &&
+        snapshot.error === undefined &&
+        snapshot.notComplete !== undefined;
+      if (!snapshot.complete && !finishedWindows)
         snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
         snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
-      else if (!snapshot.complete && coverage.spans)
-        // Finished but never complete (range windows): the spans asked for
-        // stay, marked incomplete.
+      else if (finishedWindows && coverage.spans)
+        // The spans asked for stay, marked incomplete.
         snapshot.coverage = { ...coverage, reason: 'incomplete' };
     }
   }

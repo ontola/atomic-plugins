@@ -77,8 +77,10 @@ Data flows through four stages, each its own directory under `src/`:
    `walkPages` the `windowValue` hook (wall-clock digits per zoned window
    parameter, from the same cached zone reads) and the outer range's
    coverage (`wallClockQuery` on the query with the range's ends in the
-   window fields); a finished windowed read keeps its spans with reason
-   `incomplete`.
+   window fields; a zoned `windowRange` field gives `noRangePredicate`);
+   a finished windowed read keeps its spans with reason `incomplete`,
+   while any other read that is not complete (failed, or an undocumented
+   short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,

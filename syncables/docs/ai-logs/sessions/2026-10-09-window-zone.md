@@ -109,3 +109,32 @@ parameter gives `noRangePredicate`. At the end a failed read gets
 `spans: null`, a changed zone `zoneChanged`, and a finished windowed read
 keeps its spans with `reason: incomplete`. Tests updated to the new shape,
 plus a failed windowed read and another narrowing query value.
+
+## Turn 7
+
+**Human (via the coordinator session):** Review findings on #465. A zoned
+`windowRange` parameter gives no coverage instead of `noRangePredicate`
+when it is the only zoned one. Spans are kept with `reason: incomplete`
+for any finished read that is not complete, including a `pageNumber` read
+ended by an `observed`/`assumed` short page, which got `spans: null` on
+main: restrict that to range windows. Merge main. Nits: a return type on
+the `windowValue` arrow; unzoned window fields in the outer query give
+`otherFilters` (exclude or document); a tighter failure regex; a DST-edge
+test.
+
+**Assistant:** `wallClockWindows` builds the `noRangePredicate` coverage
+for a zoned `windowRange` parameter itself (`parameters`: the template
+over the two wall-clock ends; `instants`: the outer range as an ISO 8601
+interval), whether or not `wallClockQuery` gave one. `readCollections`
+marks each zoned snapshot read through `wallClockWindows` as windowed;
+only those keep their spans when they finish, and every other read that is
+not complete gets `spans: null`, as on main. Unzoned window fields stay in
+the outer query, now documented: with a range `x-filter` they bound their
+field; without one, or as a `windowRange` field (now included too), they
+narrow the read in a way no span describes, so `otherFilters` (excluding
+them would claim spans the windows did not ask for). Tests: the zoned
+`windowRange` read, an unzoned `windowEnd` without `x-filter`, the
+Amsterdam windows across 2026-10-25 sent in order, an outer start in the
+repeated hour covering from the later instant, and a zoned read ended by an
+observed short page with `spans: null`. Merged main. README, CLAUDE.md and
+the `reason` doc comment follow.

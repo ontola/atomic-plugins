@@ -11,14 +11,51 @@ import {
 // x-time-zone parameters (Filtering 0.2.0-draft), shaped like Clockify's
 // time entries. Invented users, zones and entries.
 
+const ZONE = {
+  interpretation: 'wallClock',
+  zone: { operationId: 'getUser', pointer: '/settings/timeZone' },
+  suffix: 'Z',
+};
+
 function document(
-  options: { format?: string; zonedEnd?: boolean } = {},
+  options: {
+    format?: string;
+    zonedEnd?: boolean;
+    endFilter?: boolean;
+    windowRange?: boolean;
+  } = {},
 ): OpenApiDocument {
-  const zone = {
-    interpretation: 'wallClock',
-    zone: { operationId: 'getUser', pointer: '/settings/timeZone' },
-    suffix: 'Z',
-  };
+  const zone = ZONE;
+  const parameters = options.windowRange
+    ? [
+        {
+          name: 'range',
+          in: 'query',
+          schema: { type: 'string' },
+          'x-time-zone': zone,
+        },
+      ]
+    : [
+        {
+          name: 'start',
+          in: 'query',
+          schema: { type: 'string', format: 'date-time' },
+          'x-filter': { field: '/start', operator: 'gte' },
+          'x-time-zone': zone,
+        },
+        {
+          name: 'end',
+          in: 'query',
+          schema: { type: 'string', format: 'date-time' },
+          ...(options.endFilter === false
+            ? {}
+            : { 'x-filter': { field: '/start', operator: 'lt' } }),
+          ...(options.zonedEnd === false ? {} : { 'x-time-zone': zone }),
+        },
+      ];
+  const queryParameters = options.windowRange
+    ? { range: { role: 'windowRange', template: '{start}..{end}' } }
+    : { start: { role: 'windowStart' }, end: { role: 'windowEnd' } };
   return {
     openapi: '3.0.3',
     info: { title: 'Zoned windows', version: '1.0.0' },
@@ -32,22 +69,7 @@ function document(
       },
       '/entries': {
         get: {
-          parameters: [
-            {
-              name: 'start',
-              in: 'query',
-              schema: { type: 'string', format: 'date-time' },
-              'x-filter': { field: '/start', operator: 'gte' },
-              'x-time-zone': zone,
-            },
-            {
-              name: 'end',
-              in: 'query',
-              schema: { type: 'string', format: 'date-time' },
-              'x-filter': { field: '/start', operator: 'lt' },
-              ...(options.zonedEnd === false ? {} : { 'x-time-zone': zone }),
-            },
-          ],
+          parameters,
           'x-pagination': [{ scheme: 'windows' }],
           responses: { '200': { description: 'Entries' } },
         },
@@ -67,12 +89,7 @@ function document(
             bounds: 'halfOpen',
             cap: 2,
           },
-          request: {
-            queryParameters: {
-              start: { role: 'windowStart' },
-              end: { role: 'windowEnd' },
-            },
-          },
+          request: { queryParameters },
         },
       },
       crudResources: {
@@ -112,8 +129,11 @@ function server(
       );
     }
     calls += 1;
+    const params = request.url.searchParams;
     log.push(
-      `entries ${request.url.searchParams.get('start')} ${request.url.searchParams.get('end')}`,
+      params.has('range')
+        ? `entries ${params.get('range')}`
+        : `entries ${params.get('start')} ${params.get('end')}`,
     );
     return Promise.resolve({
       status: 200,
@@ -214,7 +234,10 @@ describe('range windows over x-time-zone parameters', () => {
   });
 
   it('reports zoneChanged when the zone differs after the read', async () => {
-    const { transport } = server(['Europe/Amsterdam', 'Europe/London'], () => []);
+    const { transport } = server(
+      ['Europe/Amsterdam', 'Europe/London'],
+      () => [],
+    );
     const result = await read(document(), transport);
     expect(result.collections[0]!.coverage).toMatchObject({
       spans: null,
@@ -235,7 +258,7 @@ describe('range windows over x-time-zone parameters', () => {
       { id: `b${call}` },
     ]);
     const result = await read(document(), transport);
-    expect(result.errors[0]).toMatch(/cannot be split|too narrow|split/i);
+    expect(result.errors[0]).toMatch(/is too narrow to split/);
     expect(result.collections[0]!.coverage).toMatchObject({
       spans: null,
       reason: 'incomplete',
@@ -261,6 +284,187 @@ describe('range windows over x-time-zone parameters', () => {
     expect(result.collections[0]!.coverage).toMatchObject({
       spans: null,
       reason: 'otherFilters',
+    });
+  });
+
+  it('sends a zoned windowRange parameter as wall-clock digits and gives noRangePredicate', async () => {
+    const { transport, log } = server(['Europe/Amsterdam'], () => []);
+    const result = await read(document({ windowRange: true }), transport);
+    expect(result.errors).toEqual([]);
+    expect(log).toEqual([
+      'user',
+      'entries 2026-01-01T01:00:00Z..2026-01-01T01:00:10Z',
+      'user',
+    ]);
+    expect(result.collections[0]!.coverage).toEqual({
+      parameters: { range: '2026-01-01T01:00:00Z..2026-01-01T01:00:10Z' },
+      instants: { range: '2026-01-01T00:00:00.000Z/2026-01-01T00:00:10.000Z' },
+      zones: { range: 'Europe/Amsterdam' },
+      spans: null,
+      reason: 'noRangePredicate',
+    });
+  });
+
+  it('counts a window field without x-time-zone or x-filter as another filter', async () => {
+    const { transport, log } = server(['Europe/Amsterdam'], () => []);
+    const result = await read(
+      document({ zonedEnd: false, endFilter: false }),
+      transport,
+    );
+    expect(log[1]).toBe('entries 2026-01-01T01:00:00Z 2026-01-01T00:00:10Z');
+    expect(result.collections[0]!.coverage).toMatchObject({
+      parameters: { start: '2026-01-01T01:00:00Z' },
+      spans: null,
+      reason: 'otherFilters',
+    });
+  });
+
+  it('sends the windows in order across the end of summer time', async () => {
+    // Amsterdam 2026-10-25: 03:00 at +02:00 (01:00Z) becomes 02:00 at
+    // +01:00, so 02:00..03:00 local is repeated. The range is 00:00..03:00
+    // local; the first answer is full, so it splits at 00:00Z (02:00 local,
+    // the first time).
+    const { transport, log } = server(['Europe/Amsterdam'], (call) =>
+      call === 1 ? [{ id: 'a' }, { id: 'b' }] : [{ id: `c${call}` }],
+    );
+    const result = await readCollections(document(), {
+      transport,
+      constants: {},
+      ranges: () => ({
+        start: '2026-10-24T22:00:00Z',
+        end: '2026-10-25T02:00:00Z',
+      }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(log).toEqual([
+      'user',
+      'entries 2026-10-25T00:00:00Z 2026-10-25T03:00:00Z',
+      'entries 2026-10-25T00:00:00Z 2026-10-25T02:00:00Z',
+      'entries 2026-10-25T02:00:00Z 2026-10-25T03:00:00Z',
+      'user',
+    ]);
+    expect(result.collections[0]!.coverage).toMatchObject({
+      spans: [
+        {
+          field: '/start',
+          from: '2026-10-24T22:00:00.000Z',
+          to: '2026-10-25T02:00:00.000Z',
+        },
+      ],
+      reason: 'incomplete',
+    });
+  });
+
+  it('records the later instant for an outer start in the repeated hour', async () => {
+    // 00:30Z is 02:30 at +02:00; 02:30 local also means 01:30Z (+01:00).
+    // With ambiguous unspecified a lower bound covers from the later one
+    // (Filtering x-time-zone, step 3).
+    const { transport, log } = server(['Europe/Amsterdam'], () => []);
+    const result = await readCollections(document(), {
+      transport,
+      constants: {},
+      ranges: () => ({
+        start: '2026-10-25T00:30:00Z',
+        end: '2026-10-25T02:00:00Z',
+      }),
+    });
+    expect(log[1]).toBe('entries 2026-10-25T02:30:00Z 2026-10-25T03:00:00Z');
+    expect(result.collections[0]!.coverage).toMatchObject({
+      instants: {
+        start: '2026-10-25T00:30:00.000Z',
+        end: '2026-10-25T02:00:00.000Z',
+      },
+      spans: [
+        {
+          field: '/start',
+          from: '2026-10-25T01:30:00.000Z',
+          fromInclusive: true,
+          to: '2026-10-25T02:00:00.000Z',
+          toInclusive: false,
+        },
+      ],
+      reason: 'incomplete',
+    });
+  });
+});
+
+describe('x-time-zone coverage of a read that is not by windows', () => {
+  /** pageNumber pages of size 2 whose short-page end is only observed. */
+  function shortPages(): OpenApiDocument {
+    return {
+      openapi: '3.0.3',
+      info: { title: 'Zoned short pages', version: '1.0.0' },
+      servers: [{ url: 'https://api.example.com/v1' }],
+      paths: {
+        '/user': {
+          get: {
+            operationId: 'getUser',
+            responses: { '200': { description: 'The user' } },
+          },
+        },
+        '/entries': {
+          get: {
+            parameters: [
+              { name: 'page', in: 'query' },
+              {
+                name: 'since',
+                in: 'query',
+                schema: { type: 'string', format: 'date-time' },
+                'x-filter': { field: '/start', operator: 'gte' },
+                'x-time-zone': ZONE,
+              },
+            ],
+            'x-pagination': [{ scheme: 'pages' }],
+            responses: { '200': { description: 'Entries' } },
+          },
+        },
+        '/entries/{id}': {
+          get: { responses: { '200': { description: 'One entry' } } },
+        },
+      },
+      components: {
+        paginationSchemes: {
+          pages: {
+            type: 'pageNumber',
+            autoDetect: false,
+            request: { queryParameters: { page: { role: 'page' } } },
+            response: { shortPage: { size: 2, assurance: 'observed' } },
+          },
+        },
+        crudResources: {
+          entry: {
+            identity: {
+              urlTemplate: '/entries/{id}',
+              bindings: { id: { field: 'id' } },
+            },
+            collections: { entries: { urlTemplate: '/entries' } },
+          },
+        },
+      },
+    } as unknown as OpenApiDocument;
+  }
+
+  it('gives a read ended by an observed short page no spans', async () => {
+    const { transport } = server(['Europe/Amsterdam'], (call) =>
+      call === 1 ? [{ id: 'a' }, { id: 'b' }] : [{ id: 'c' }],
+    );
+    const result = await readCollections(shortPages(), {
+      transport,
+      constants: {},
+      selection: {
+        query_overrides: [
+          { path: '/entries', values: { since: '2026-01-01T00:00:00Z' } },
+        ],
+      },
+    });
+    expect(result.errors).toEqual([]);
+    const [snapshot] = result.collections;
+    expect(snapshot!.complete).toBe(false);
+    expect(snapshot!.notComplete).toMatch(/short page/);
+    expect(snapshot!.coverage).toMatchObject({
+      parameters: { since: '2026-01-01T01:00:00Z' },
+      spans: null,
+      reason: 'incomplete',
     });
   });
 });
