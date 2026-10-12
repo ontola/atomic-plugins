@@ -133,6 +133,12 @@ export interface ShortPageObject {
  */
 export interface EnvelopeObject {
   itemsField?: string | null;
+  /**
+   * Pagination Schemes 0.7.0 §4.4.2: a body in which the `itemsField` field
+   * is absent is a page with no items (for providers that leave an empty
+   * array out). Only with a non-empty string `itemsField` (rule 23).
+   */
+  emptyWhenAbsent?: boolean;
   [key: `x-${string}`]: unknown;
 }
 

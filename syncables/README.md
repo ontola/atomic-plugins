@@ -1317,7 +1317,12 @@ const { records, ontology, errors } = await readPlatform(document, {
   Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
-  collection's read with "No items array at <path>", never an empty read.
+  collection's read with "No items array at <path>", never an empty read,
+  unless the envelope (the Collection Object's or the scheme's) declares
+  `emptyWhenAbsent: true` (Pagination Schemes 0.7.0): then a body in which
+  the field is absent (an object along the path lacks the next segment) is
+  a page with no items, for providers that leave an empty array out. A
+  present `null` or other non-array still fails the read.
   `itemsField: null` (or `""`) says the body root is the array, and an item
   that is not an object fails the read ("Item <n> at <path> is not an
   object") instead of being dropped. Without an envelope, the pagination
@@ -1454,6 +1459,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
+  Envelope Object (a scheme's `response.envelope` or a Collection Object's
+  `envelope`): with a non-empty `itemsField`, a body in which that field is
+  absent is a page with no items instead of an error. `paginate` takes
+  `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
+  the collection envelope it uses. The scheme validator checks rule 23.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as

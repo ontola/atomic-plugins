@@ -449,6 +449,14 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

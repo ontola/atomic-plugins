@@ -110,6 +110,28 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Google Tasks empty lists
+
+`catalog/2026-10-12-tasks-empty-lists.json` is `catalog/2026-10-11-gitlab-box.json`
+with Google Tasks' pagination overlay replaced by
+[v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml);
+every other entry is unchanged. v1 declares `envelope.itemsField: items`, and
+a syncables reader from 0.21.0 on fails a body without that array ("No
+items array at items"). An empty task list is expected to come back without
+`items`: the Protocol Buffers JSON mapping leaves an empty repeated field
+out, and the google-tasks drive app reads an absent `items` as empty. The
+Tasks reference does not say what an empty list returns, and no live empty
+list was read. v2 declares `emptyWhenAbsent: true` (Pagination Schemes
+0.7.0), which a reader that does not know the field ignores, failing such a
+read as before. No Google Calendar overlay is changed: Calendar's reference
+does not say it leaves `items` out, and the Calendar drive app
+(`integrations/calendar/app/relay.ts`) requires the array.
+`tests/test_google_tasks_empty_lists.py` checks v2 against v1, the composed
+Tasks platform with the reference validator, and the catalog against its
+base; `tests/google_tasks_empty_lists_syncables.test.ts` reads an empty
+list through both catalogs with syncables (run from `syncables/` with
+`npx vitest run --root .. overlays/tests/google_tasks_empty_lists_syncables.test.ts`).
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
@@ -295,6 +317,7 @@ directly.
 | [Gmail v1](APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml) | Five mailbox/CSE collections with operation-specific envelopes and page-size inputs. | [Provider documentation](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list) |
 | [Google People v1](APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Five full-list contact and directory collections; sync checkpoints remain separate. | [Provider documentation](https://developers.google.com/people/api/rest/v1/people.connections/list) |
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Tasks v1 v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#442-envelope-object) `emptyWhenAbsent` on both envelopes: an empty list answered without `items` is a page with no items. Declared, not verified against a live empty list. | [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list), [ProtoJSON format](https://protobuf.dev/programming-guides/json/) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |

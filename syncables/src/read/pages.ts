@@ -21,6 +21,7 @@ import {
   parsePaginationState,
   readNestedField,
   setNestedField,
+  splitPath,
 } from '../pagination/response-parser.js';
 import type {
   PaginationResponseState,
@@ -184,22 +185,43 @@ export function pageItems(
 
 /**
  * The caller's envelope (a Collection Object's), else the scheme's own
- * (Pagination Schemes §4.4.2; `null` means the body root); undefined when
- * neither declares one and the array is located.
+ * (Pagination Schemes §4.4.2; `null` means the body root), with its
+ * `emptyWhenAbsent` (0.7.0); undefined when neither declares one and the
+ * array is located.
  */
-function declaredItemsField(
+function declaredEnvelope(
   walk: PageWalk,
   scheme: PaginationSchemeObject | undefined,
-): string | undefined {
+): { path: string; emptyWhenAbsent: boolean } | undefined {
+  if (walk.itemsField !== undefined)
+    return {
+      path: walk.itemsField,
+      emptyWhenAbsent: walk.emptyWhenAbsent === true,
+    };
   const schemeEnvelope = scheme?.response?.envelope;
-  return (
-    walk.itemsField ??
-    (schemeEnvelope === undefined
-      ? undefined
-      : typeof schemeEnvelope.itemsField === 'string'
-        ? schemeEnvelope.itemsField
-        : '')
-  );
+  if (schemeEnvelope === undefined) return undefined;
+  return typeof schemeEnvelope.itemsField === 'string'
+    ? {
+        path: schemeEnvelope.itemsField,
+        emptyWhenAbsent: schemeEnvelope.emptyWhenAbsent === true,
+      }
+    : { path: '', emptyWhenAbsent: false };
+}
+
+/**
+ * Whether the field at a dot-path is absent (Pagination Schemes 0.7.0
+ * §4.4.2): the body is an object and some object along the path lacks the
+ * next segment. A present `null`, or a value along the way that is not an
+ * object, is not absent.
+ */
+function isAbsent(body: unknown, path: string): boolean {
+  let node: unknown = body;
+  for (const segment of splitPath(path)) {
+    if (!isRecord(node)) return false;
+    if (!Object.prototype.hasOwnProperty.call(node, segment)) return true;
+    node = node[segment];
+  }
+  return false;
 }
 
 /**
@@ -212,7 +234,11 @@ function itemsAt(
   body: unknown,
   path: string,
   skipNonObjects = false,
+  emptyWhenAbsent = false,
 ): Record<string, unknown>[] {
+  // Pagination Schemes 0.7.0: only a declared envelope makes an absent
+  // field an empty page; a mistyped itemsField must not read as empty.
+  if (emptyWhenAbsent && path !== '' && isAbsent(body, path)) return [];
   const array =
     path === ''
       ? body
@@ -327,6 +353,13 @@ export interface PageWalk {
    * and without that `pageItems` locates the array.
    */
   itemsField?: string;
+  /**
+   * With `itemsField`: a body in which that field is absent is a page with
+   * no items (an Envelope Object's `emptyWhenAbsent`, Pagination Schemes
+   * 0.7.0). Ignored without `itemsField`; the scheme's own envelope then
+   * says.
+   */
+  emptyWhenAbsent?: boolean;
   /** Skip items that are not objects instead of failing the page (the deletion feed read). */
   skipNonObjects?: boolean;
   /**
@@ -541,11 +574,16 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
-    const itemsField = declaredItemsField(walk, scheme);
+    const envelope = declaredEnvelope(walk, scheme);
     const items =
-      itemsField === undefined
+      envelope === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, itemsField, walk.skipNonObjects);
+        : itemsAt(
+            body,
+            envelope.path,
+            walk.skipNonObjects,
+            envelope.emptyWhenAbsent,
+          );
     // Pagination Schemes 0.6.0 §4.4.5: checked before the page is handed
     // on, so that its items are not taken.
     const number = cursor.page ?? first;
@@ -824,11 +862,16 @@ async function* walkWindows(
     } catch {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
-    const itemsField = declaredItemsField(walk, scheme);
+    const envelope = declaredEnvelope(walk, scheme);
     const items =
-      itemsField === undefined
+      envelope === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, itemsField, walk.skipNonObjects);
+        : itemsAt(
+            body,
+            envelope.path,
+            walk.skipNonObjects,
+            envelope.emptyWhenAbsent,
+          );
     if (items.length >= window.cap) {
       const split = halves(low, high, window);
       if (!split) {
