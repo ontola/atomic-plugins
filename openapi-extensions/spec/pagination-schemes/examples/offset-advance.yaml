@@ -1,0 +1,79 @@
+openapi: 3.0.3
+info:
+  title: Illustrative offsets that advance by the page size
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Box's offset lists: a page holds `entries`, the
+    response reports the `limit` it applied and a `total_count` that can be
+    larger than the entries left, and the next offset is the previous
+    offset plus the previous limit, not plus the entries returned, which
+    can be fewer. The scheme is type pageNumber because this extension
+    describes offset paging (an `offset` field) under that type (§4.2,
+    §4.5); there is no separate offset type.
+servers:
+  - url: https://api.example.com/2.0
+paths:
+  /folders/{folder_id}/items:
+    get:
+      operationId: listFolderItems
+      parameters:
+        - name: folder_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 1000
+      x-pagination:
+        - scheme: limitPages
+      responses:
+        '200':
+          description: One page of items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_count:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+components:
+  paginationSchemes:
+    limitPages:
+      type: pageNumber
+      autoDetect: false
+      request:
+        queryParameters:
+          offset:
+            role: offset
+            advance: pageSize
+          limit:
+            role: pageSize
+      response:
+        envelope:
+          itemsField: entries
+        bodyFields:
+          total_count:
+            role: totalCount
+          limit:
+            role: pageSize
+          offset:
+            role: offset
