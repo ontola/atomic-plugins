@@ -147,7 +147,7 @@ const onDelete = (id: ExternalId, revision: number) =>
   });
 ```
 
-Write `revisions` at the same checkpoint as the store snapshot; if the two can diverge after a crash, an event may be applied twice, which is safe only because ingest of the same record is a no-op. The recipe does not resolve competing edits made on both sides (that needs `reconcileRecord` or connector logic), and whether the library should offer this as an opt-in hook is still open (#259).
+Write `revisions` atomically with the store snapshot, in the same file or the same transaction. If they diverge after a crash, neither direction is safe: with `revisions` ahead of the store, events the store never applied are dropped as stale and their data is lost; with `revisions` behind it, a redelivered event older than the store's real state passes the check and rolls the record back. Every ingest path for the lens, full re-fetches and backfills included, must go through the same host chain; a direct `lens.ingest` call skips the revision check. The recipe does not resolve competing edits made on both sides (that needs `reconcileRecord` or connector logic), and whether the library should offer this as an opt-in hook is still open (#259).
 
 The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the default event ordering with the host ordering recipe above.
 
