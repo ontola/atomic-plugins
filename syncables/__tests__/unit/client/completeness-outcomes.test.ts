@@ -344,6 +344,69 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     ]);
   });
 
+  for (const status of [404, 410])
+    it(`reads a ${status} under an unrecognised absent with no notFound as unavailable, never the deleted default (§7)`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness: { absent: 'archived' } }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([
+        {
+          evidence: 'unavailable',
+          source: 'read',
+          status,
+        },
+      ]);
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'failed', missingRecord: 'unavailable' },
+      ]);
+    });
+
+  // §7: under an unrecognised `absent`, a 410 by a recognised `gone`, then
+  // a recognised `notFound`; a 404 by a recognised `notFound`; else
+  // `unavailable`.
+  for (const [label, completeness, status, evidence] of [
+    [
+      'a 410 by a recognised gone first',
+      { absent: 'archived', notFound: 'unavailable', gone: 'deleted' },
+      410,
+      'deleted',
+    ],
+    [
+      'a 404 by notFound, not by gone',
+      { absent: 'archived', notFound: 'unavailable', gone: 'deleted' },
+      404,
+      'unavailable',
+    ],
+    [
+      'a 410 without gone by a recognised notFound',
+      { absent: 'archived', notFound: 'deleted' },
+      410,
+      'deleted',
+    ],
+    [
+      'a 404 by a recognised notFound',
+      { absent: 'archived', notFound: 'deleted' },
+      404,
+      'deleted',
+    ],
+    [
+      'a 404 without notFound as unavailable, whatever gone says',
+      { absent: 'archived', gone: 'deleted' },
+      404,
+      'unavailable',
+    ],
+  ] as const)
+    it(`under an unrecognised absent, classifies ${label} (§7)`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([{ evidence, source: 'read', status }]);
+    });
+
   for (const [label, completeness] of [
     ['no notFound', { absent: 'removed' }],
     ['notFound: deleted', { absent: 'removed', notFound: 'deleted' }],

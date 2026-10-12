@@ -623,7 +623,11 @@ Since Collection Completeness 0.3.0, a `410` follows the resource's `gone`
 instead, when one is stated (`notFound: unavailable, gone: deleted` for a
 provider whose 410 means deletion and nothing else), read the same way:
 resource-wide, conflicting or unrecognised values `unavailable`; without
-`gone`, a 410 means what `notFound` says.
+`gone`, a 410 means what `notFound` says. Under an `absent` the client does
+not recognise on the record's own collection (§7), the order is the same: a
+`410` by a stated `gone`, else a stated `notFound`; a `404` by a stated
+`notFound`; and what neither classifies is `unavailable`, never the
+`deleted` default.
 `unavailable` means the
 record is kept with its last known values and its queued writes fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
@@ -1494,6 +1498,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
+  whose collection declares an `absent` the client does not recognise is
+  classified by the resource's stated `gone` (a 410), then its stated
+  `notFound`, and otherwise `unavailable` (fail closed), as the reference
+  `classify_read` reads it, not the `deleted` default.
 - **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
   of a missing record means the resource's stated `gone` (resource-wide,
   like `notFound`; `route.gone`), else what `notFound` says.
