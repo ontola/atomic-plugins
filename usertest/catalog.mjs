@@ -210,23 +210,33 @@ function entryFor(source, id, version, bytes, fields) {
 /**
  * The folders whose lockfiles the apps built here need, relative to the
  * repository root: each app's plugin folders (deps.mjs
- * `pluginDependencyDirs`) and the shared packages its lane's `paths` import
- * from source (`sharedDependencyDirs`).
+ * `pluginDependencyDirs`), by its `base` plugin, and the shared packages
+ * that plugin's lane's `paths` import from source (`sharedDependencyDirs`).
  */
 export function dependencyDirs(lanes = loadLanes().lanes) {
   return [
     ...new Set(
-      Object.keys(APPS).flatMap(id => [
-        ...pluginDependencyDirs(id),
-        ...sharedDependencyDirs(lanes.find(l => l.id === id)?.paths),
+      Object.values(APPS).flatMap(({ base }) => [
+        ...pluginDependencyDirs(base),
+        ...sharedDependencyDirs(lanes.find(l => l.id === base)?.paths),
       ]),
     ),
   ];
 }
 
-/** The install loop CI runs for every plugin's own dependencies. */
+/** The ids of the apps built here, for tests. */
+export const APP_IDS = Object.keys(APPS);
+
+/** Each app's `base` plugin, for tests. */
+export const appBase = id => APPS[id].base;
+
+/**
+ * What to do when a build still misses a package: catalog.mjs installs a
+ * missing node_modules itself, unless it ran with --no-install; one that is
+ * present but stale it cannot notice.
+ */
 const INSTALL =
-  'for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+  'run catalog.mjs without --no-install, which installs a missing node_modules; a node_modules that is present but stale it cannot notice, so in that plugin folder run pnpm install --frozen-lockfile by hand. CI installs every one with: for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
 
 /**
  * `run()`, with a build that fails on a missing package (esbuild's "Could
@@ -243,7 +253,7 @@ export async function explained(what, run) {
       /Could not resolve|Cannot find (module|package)/.test(text)
     )
       throw new Error(
-        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here. From the repository root: ${INSTALL}\n${text}`,
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here, or stale: ${INSTALL}\n${text}`,
         { cause: error },
       );
     throw error;
