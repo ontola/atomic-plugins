@@ -601,7 +601,11 @@ are always checked. Under `missingRecordChecks: 'none'`, or without an item
 GET, nothing is checked, reported or counted, and an `absent: removed`
 record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
 lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
-`record`); a record without a mark is present as far as the client knows.
+`record`, and `lastSeen`: when a read last returned the record, the start
+of that sync, absent when no read of this client returned it, such as a
+record kept from storage written before a restart); a record without a mark
+is present as far as the client knows. The read times are kept in memory
+for every record read; only a mark stores its `lastSeen` (in the outbox).
 A new `update()` or `remove()` of a marked record is held for the next
 refresh, which checks it.
 
@@ -1331,7 +1335,8 @@ or `source`: once it
 stores the outbox again, `unconfirmed` and retained `deleted` marks come
 back after an upgrade as `unavailable` for good (kept, not checked again by
 themselves). A `presence` value this client does not know is read as
-`unavailable` in the same way. The version stays `1` because an older client can
+`unavailable` in the same way. A client from before `lastSeen` drops it
+the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1644,6 +1649,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
+  record (the start of that sync), stored with the mark in the outbox
+  (within version 1; an older client drops it); absent for a record no read
+  of this client returned.
 - **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
   wherever a check will be made) a record a complete read lacks is kept,
   marked `unconfirmed`, before its check, then marked `unavailable`,

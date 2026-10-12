@@ -174,6 +174,8 @@ export interface StoredUnavailable {
       /** Added later within version 1; absent: `unavailable`. */
       presence?: 'unconfirmed' | 'deleted' | string;
       source?: string;
+      /** Added later within version 1: when a read last returned it. */
+      lastSeen?: string;
     }
   >;
 }
@@ -311,7 +313,10 @@ export function isStoredUnavailable(
         // `unavailable` by this client.
         (entry['presence'] === undefined ||
           typeof entry['presence'] === 'string') &&
-        (entry['source'] === undefined || typeof entry['source'] === 'string'),
+        (entry['source'] === undefined ||
+          typeof entry['source'] === 'string') &&
+        (entry['lastSeen'] === undefined ||
+          typeof entry['lastSeen'] === 'string'),
     ) &&
     value['id'] === undefined
   );

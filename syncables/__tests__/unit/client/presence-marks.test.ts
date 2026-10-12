@@ -162,6 +162,7 @@ describe('presence marks under absent: removed (the Google Tasks table)', () => 
         source: 'read',
         detail: expect.stringContaining('404'),
         record: tom,
+        lastSeen: expect.any(String),
       },
     ]);
   });
@@ -566,6 +567,83 @@ describe('presence marks: #466 review', () => {
     expect(client.presence()).toMatchObject([
       { id: '2', presence: 'unavailable', record: tom },
     ]);
+  });
+
+  it('drops an unknown stored source instead of passing it on', async () => {
+    const storage = new InMemoryStorageAdapter();
+    await storage.put('syncables:outbox', 'outbox', {
+      version: 1,
+      records: [],
+      rebuild: [],
+      unrestorable: [],
+      unavailable: [
+        {
+          resource: 'pets',
+          context: {},
+          unavailable: {
+            '2': {
+              record: tom,
+              detail: 'later',
+              presence: 'unavailable',
+              source: 'oracle',
+            },
+            '3': {
+              record: { id: '3', name: 'Kit' },
+              detail: 'kept',
+              presence: 'unavailable',
+              source: 'feed',
+            },
+          },
+        },
+      ],
+    });
+    const client = createApiClient(document(), {
+      storage,
+      transport: provider([rex]).transport,
+    });
+    await client.ready();
+    const marks = client.presence();
+    expect(marks.find((m) => m.id === '2')).not.toHaveProperty('source');
+    expect(marks.find((m) => m.id === '3')).toMatchObject({ source: 'feed' });
+  });
+});
+
+describe('presence marks: lastSeen', () => {
+  it('is the start of the last sync whose read returned the record, kept across a restart', async () => {
+    const before = Date.now();
+    const { client, fake, storage } = await setup();
+    const after = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.hidden.add('2');
+    await client.sync();
+    const [mark] = client.presence();
+    expect(mark?.presence).toBe('unavailable');
+    const seen = Date.parse(mark?.lastSeen ?? '');
+    expect(seen).toBeGreaterThanOrEqual(before);
+    expect(seen).toBeLessThanOrEqual(after);
+    // Unchanged by later syncs that do not return it.
+    await client.sync();
+    expect(client.presence()[0]?.lastSeen).toBe(mark?.lastSeen);
+    const again = createApiClient(document(), {
+      storage,
+      transport: fake.transport,
+    });
+    await again.ready();
+    expect(again.presence()[0]?.lastSeen).toBe(mark?.lastSeen);
+  });
+
+  it('is absent for a record no read of this client returned (storage from before a restart)', async () => {
+    const { fake, storage } = await setup();
+    fake.hidden.add('2');
+    const again = createApiClient(document(), {
+      storage,
+      transport: fake.transport,
+    });
+    await again.sync();
+    expect(again.presence()).toMatchObject([
+      { id: '2', presence: 'unavailable' },
+    ]);
+    expect(again.presence()[0]).not.toHaveProperty('lastSeen');
   });
 });
 
