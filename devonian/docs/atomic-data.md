@@ -113,9 +113,32 @@ Construct the schema and identity map before loading, to register the mapping pr
 
 The queue serializes calls to one lens instance. It is not a distributed lock and does not serialize direct store edits or other lens instances. Coordinate writes to shared resources at the application level. Transformations should return projections rather than mutate the store while awaiting work. A connector write and local identity persistence are not a distributed transaction; stable idempotency keys are necessary for retry recovery.
 
+What that means in practice, as `__tests__/atomic/concurrency.test.ts` pins it with deterministic fakes:
+
+- **One lens.** Calls run one after another in call order. Two `publish(subject)` calls for a resource with no platform identity create it once, then update it.
+- **Two lenses on the same store, scope and entity.** Nothing coordinates them. Both see no identity and both call `create`, with the same idempotency key. A connector that honours the key returns the same record twice and both publishes succeed. One that ignores it creates a duplicate: the second publish then rejects with `Conflicting identity mapping`, the identity stays with the first record, and the duplicate stays on the platform for the host to find and remove.
+- **Edits during a publish.** `publish` reads the resource when its turn in the queue starts, before any connector call. An edit made after `publish()` is called but before its turn is sent. An edit to the resource itself while the publish awaits the platform (`get`, `create`, `update`) is not; the next publish sends it. A linked resource that `write` reads from the store (the example's customer) is read inside `write`, after `connector.get`, so an edit to it made during that await is sent.
+
+Host locking recipe: run every lens call that can touch the same resources, from every lens instance in this process, through one shared promise chain, the way a lens queues its own work:
+
+```ts
+let tail: Promise<unknown> = Promise.resolve();
+const locked = <T>(operation: () => Promise<T>): Promise<T> => {
+  const result = tail.then(operation);
+  tail = result.catch(() => undefined); // a failure does not block later work
+  return result;
+};
+await Promise.all([
+  locked(() => first.publish(subject)),
+  locked(() => second.publish(subject)),
+]); // one create, then an update, even when the connector ignores the key
+```
+
+That covers one JavaScript process only. Separate tabs, workers or processes need a lock they share (the background scheduler's `withLock` uses Web Locks where available; see the README). Whether the library should ship a shared coordinator is still open (#259); it does not today.
+
 There are no revision clocks, stale-event rejection, cross-system conflict resolution, signed Atomic Commits, Atomic Server transport, permissions, or Automerge integration in the resource API yet. Ingest applies events in call order; it can restore an earlier-deleted resource, so the application must order or filter delayed webhooks. Native data alone does not supply distributed convergence.
 
-The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses and deletion failures.
+The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the concurrency contract above.
 
 Specification references: [JSON-AD](https://docs.atomicdata.dev/core/json-ad.html), [Atomic Schema](https://docs.atomicdata.dev/schema/intro.html), [Atomic Commits](https://docs.atomicdata.dev/commits/intro.html), [TypeScript SDK](https://atomicdata-dev.github.io/atomic-data-browser/docs/modules/_tomic_lib.html).
 
