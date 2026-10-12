@@ -1,0 +1,39 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD's Event.status description (calendar.events.get, calendar.events.list)
+# Source: https://developers.google.com/workspace/calendar/api/v3/reference/events
+# Needs Deletion Feeds 0.2.0-draft (openapi-extensions/spec/deletion-feeds, x-read-tombstone, §4.4).
+# Selected by no dated catalog yet.
+#
+# The pinned document says of Event.status: "cancelled" - "The event is
+# cancelled (deleted). The list method returns cancelled events only on
+# incremental sync (when syncToken or updatedMin are specified) or if the
+# showDeleted flag is set to true. The get method always returns them." and
+# "All other cancelled events represent deleted events. Clients should remove
+# their locally synced copies." A cancelled exception of a recurring event
+# means "this instance should no longer be presented to the user", the
+# deletion of that instance. So a 2xx from calendar.events.get whose `status`
+# is "cancelled" is a read tombstone (§4.4): the event was deleted when it was
+# read. The same description says that on the organizer's calendar
+# cancelled events "can be restored (undeleted)", so a consumer treats the
+# read tombstone as restorable, as §4.4 requires of every read tombstone.
+# Cancelled events "will eventually disappear", after which the read is
+# expected to answer 404 (not stated in the document).
+#
+# Declared on the item read operation (§4.4 allows it there), not on the
+# CRUD Resource Object, so it applies whichever crud-causality overlay a
+# catalog selects for the `event` resource, and resolves against the bare
+# OAD. Not declared: an `x-deletion-feed` over the event list with
+# syncToken (Deletion Feeds §1.1 and §8 leave the showDeleted list
+# unsettled).
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+info:
+  title: Google Calendar v3 cancelled events as read tombstones
+  version: 1.0.0
+actions:
+  - target: $.paths['/calendars/{calendarId}/events/{eventId}'].get
+    update:
+      x-read-tombstone:
+        field: status
+        values:
+          - cancelled

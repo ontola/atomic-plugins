@@ -110,6 +110,25 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Read tombstones
+
+[Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
+`x-read-tombstone: { field: status, values: [cancelled] }` on the event read
+(`GET /calendars/{calendarId}/events/{eventId}`). The pinned document's
+`Event.status` says "cancelled" is "The event is cancelled (deleted)", that
+"The get method always returns them", and that on the organizer's calendar
+cancelled events "can be restored (undeleted)"; a consumer treats every
+read tombstone as restorable. It is declared on the operation, so it
+applies with either crud-causality overlay, and no dated catalog selects
+it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
+edit's event is missing from a complete read and its GET answers
+`status: cancelled`, the edit fails as `deleted` rather than `filtered`. No
+deletion feed over the event list is declared (Deletion Feeds §8).
+`tests/test_calendar_read_tombstone.py` composes it after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
