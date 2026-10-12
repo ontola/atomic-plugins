@@ -378,8 +378,13 @@ applied the write before the answer was lost. Widening the set to 401/403 is
 a follow-up question, not done here. Tested with the fake store's `refuse`
 knob (`app/controller.test.ts`, "writes GitHub refused"), the transport's
 tests (`devonian/github-issues/proxy.test.mjs`), the card
-(`app/status.test.ts`) and the retry plan (`app/retry.test.ts`); no real
-GitHub refusal has been observed through the drive app.
+(`app/status.test.ts`) and the retry plan (`app/retry.test.ts`), and end
+to end in `e2e/issue-tracker.spec.ts` (step 6): the mock proxy's
+github-issues fixture refuses the comment's write with a 422
+(`failNext(422, 1, { writes: true, repository })`), the pill, the card's
+failed line and next step show, nothing reaches the fixture, and the comment
+is sent after a second review. No real GitHub refusal has been observed
+through the drive app.
 
 **The last sync, across reloads (0.4.0).** Each completed pass stamps the
 sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
@@ -641,9 +646,11 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   serves. A new release needs a version bump in `app/package.json` and the
   catalog, then `node integrations/tooling/apps.mjs write issue-tracker`.
 
-`app/package.json` pins `devonian@0.8.0` from npm (install it with
+`app/package.json` pins `devonian@0.9.0` from npm (install it with
 `pnpm install --frozen-lockfile` in `app/`), bundled as `devonian/atomic` plus
-`reconcileRecord`; `@tomic/lib` is shimmed as in notion. It lives in `app/`
+`reconcileRecord`. 0.9.0 only added `devonian/lenses`, which the app does not
+import, so the bundle is byte-identical to the 0.8.0 one and the app version
+is unchanged; `@tomic/lib` is shimmed as in notion. It lives in `app/`
 rather than here because `certify.mjs` treats a `package.json` in a plugin
 folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
@@ -792,9 +799,10 @@ extras were declared, Publish to GitHub, reopening, a revoked grant and
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and
-every test under `devonian/github-issues/`. The latter import the `devonian`
-package from source, so install its dependencies first
-(`cd devonian && pnpm install --frozen-lockfile`).
+every test under `devonian/github-issues/`. The latter import the npm
+`devonian` that `app/package.json` pins, installed in `app/node_modules`
+(`cd integrations/issue-tracker/app && pnpm install --frozen-lockfile`;
+`run-lane.mjs` does it when it is missing).
 
 API reference: https://docs.github.com/en/rest/issues/issues
 Label operations: https://docs.github.com/en/rest/issues/labels

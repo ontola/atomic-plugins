@@ -138,24 +138,37 @@ async function importInto(
 /**
  * The tab closing mid-import: from the `after`-th table create on, host
  * writes never answer and nothing more of that pass runs, so the sync state
- * holds only what was flushed before.
+ * holds only what was flushed before. `closed` resolves once that pass has
+ * hung there; `reopen` restores the host. Waiting on `closed` rather than a
+ * fixed time keeps a slow machine from reopening before the cut, which let
+ * the first pass go on beside the second and import twice.
  */
 function closeTabAfter(store: FakeStore, after: number) {
   const newResource = store.newResource.bind(store);
   let creates = 0;
+  let hung!: () => void;
+  const closed = new Promise<void>(resolve => (hung = resolve));
 
   store.newResource = async args => {
     // Counts imported rows (they carry an issue number) and Messages only.
     const imported =
       args?.isA?.includes(MESSAGE) ||
       Object.values(args?.propVals ?? {}).some(v => typeof v === 'number');
-    if (imported && ++creates > after) return new Promise(() => {});
+
+    if (imported && ++creates > after) {
+      hung();
+
+      return new Promise(() => {});
+    }
 
     return newResource(args);
   };
 
-  return () => {
-    store.newResource = newResource;
+  return {
+    closed,
+    reopen: () => {
+      store.newResource = newResource;
+    },
   };
 }
 
@@ -250,10 +263,12 @@ group('first import of a large repository (#206)', () => {
       const store = fakeStore();
       seed(store);
       // Every issue and 30 comments; the state was last flushed at 75.
-      const reopen = closeTabAfter(store, ISSUES + 30);
+      const tab = closeTabAfter(store, ISSUES + 30);
       void importInto(store);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      reopen();
+      await tab.closed;
+      // Writes already under way when the pass hung (a state flush) finish.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      tab.reopen();
 
       // The host may still read the sync resource as it was earlier.
       if (stale)

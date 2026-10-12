@@ -395,15 +395,45 @@ mod tests {
         }
     }
 
-    /// Golden vectors shared with atomic-server (`lib/src/authentication_v2_vectors.json`
-    /// on its `claude/atomic-signature-v2` branch, copied verbatim), so the
-    /// signer and this verifier cannot drift apart unnoticed.
+    const VECTORS: &str = include_str!("../tests/fixtures/atomic-request-v2-vectors.json");
+    const VECTORS_SOURCE: &str =
+        include_str!("../tests/fixtures/atomic-request-v2-vectors.source.json");
+
+    /// The vendored vectors are atomic-server's file at the commit
+    /// `tests/fixtures/atomic-request-v2-vectors.source.json` names, byte for
+    /// byte (its SHA-256), and, where an atomic-server checkout is at hand
+    /// (`ATOMIC_SERVER_CHECKOUT`, as the lanes set it), still equal to that
+    /// checkout's copy. Not tied to `.atomic-server-ref`: a pin bump does not
+    /// run this suite, and the vectors rarely change.
+    #[test]
+    fn the_vendored_v2_vectors_are_atomic_servers_recorded_file() {
+        let source: serde_json::Value = serde_json::from_str(VECTORS_SOURCE).unwrap();
+        assert_eq!(
+            sha256_hex(VECTORS.as_bytes()),
+            source["sha256"].as_str().unwrap(),
+            "the vendored copy was edited; refresh it from the pin together with its source note"
+        );
+        if let Ok(checkout) = std::env::var("ATOMIC_SERVER_CHECKOUT") {
+            let path = std::path::Path::new(&checkout).join(source["path"].as_str().unwrap());
+            if let Ok(upstream) = std::fs::read_to_string(&path) {
+                assert_eq!(
+                    upstream,
+                    VECTORS,
+                    "{} differs from the vendored copy",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Golden vectors shared with atomic-server, which signs with
+    /// `lib/src/authentication.rs` and `browser/lib/src/authentication.ts`:
+    /// every one verifies here, the message is built byte for byte the same,
+    /// and signing it again with the vector's key gives the same signature,
+    /// so signer and verifier cannot drift apart unnoticed.
     #[test]
     fn atomic_server_v2_vectors_verify_here() {
-        let vectors: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/atomic-request-v2-vectors.json"
-        ))
-        .unwrap();
+        let vectors: serde_json::Value = serde_json::from_str(VECTORS).unwrap();
         let vectors = vectors["vectors"].as_array().unwrap();
         assert!(!vectors.is_empty());
         for vector in vectors {
@@ -431,9 +461,49 @@ mod tests {
                 ),
                 (VERSION_HEADER, "2".to_owned()),
             ];
-            let verified = verify(&headers(pairs), method, url, body, timestamp)
+            let verified = verify(&headers(pairs.clone()), method, url, body, timestamp)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(verified.agent.as_str(), vector["agent"], "{name}");
+
+            // The signing side: the vector's seed gives its public key, and
+            // Ed25519 is deterministic, so signing the message again gives
+            // the vector's signature exactly.
+            let seed: [u8; 32] = agent_id::decode_base64(vector["private_key"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let signer = Agent(ed25519_dalek::SigningKey::from_bytes(&seed));
+            assert_eq!(signer.public_key(), vector["public_key"], "{name}");
+            let resigned = base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                ed25519_dalek::Signer::sign(
+                    &signer.0,
+                    vector["message"].as_str().unwrap().as_bytes(),
+                )
+                .to_bytes(),
+            );
+            assert_eq!(resigned, vector["signature"], "{name}");
+
+            // And the signature covers what it should: another body, method
+            // or URL does not verify.
+            for (other_method, other_url, other_body) in [
+                (method, url, b"x".as_slice()),
+                ("PUT", url, body),
+                (method, "https://proxy.example/other", body),
+            ] {
+                assert_eq!(
+                    verify(
+                        &headers(pairs.clone()),
+                        other_method,
+                        other_url,
+                        other_body,
+                        timestamp
+                    )
+                    .unwrap_err(),
+                    ApiError::BadSignature,
+                    "{name}"
+                );
+            }
         }
     }
 

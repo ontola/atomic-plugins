@@ -166,6 +166,13 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// The header values the catalog fixes for an operation: a header
+    /// parameter with a `schema.default`, or a `schema.enum` of exactly one
+    /// value, whether it is `required` or not (a required one with neither
+    /// refuses the operation: `None`). They are always sent, and since the
+    /// header allowlists of pieces.md P1-P3 a fixed value also replaces a
+    /// caller's header of the same name (`proxy::upstream_request`), so an
+    /// optional header with a default can no longer be chosen by the caller.
     pub fn required_headers(
         &self,
         platform: &str,
@@ -230,6 +237,63 @@ impl Catalog {
             out.push((name.to_owned(), value.to_owned()));
         }
         Some(out)
+    }
+    /// Whether the operation that `method` and `path` resolve to declares a
+    /// header parameter called `name` (compared case-insensitively), on the
+    /// operation or its path item, with `$ref`s resolved. It decides only
+    /// whether the caller's header of that name may go upstream; the value
+    /// itself is not validated. Anything unresolvable is `false`.
+    pub fn declares_header_parameter(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+        name: &str,
+    ) -> bool {
+        let declared = || -> Option<bool> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            // A path item may itself be a local `$ref` (OpenAPI 3.1). Resolved
+            // here for consistency of the declaration check only: `allows`,
+            // `required_headers` and `validate_request` do not resolve one,
+            // so an operation under such a path item is refused as not in
+            // the catalog before this answer is used.
+            let mut path_item = paths.get(template)?;
+            if let Some(reference) = path_item.get("$ref") {
+                path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;
+            }
+            let path_item = path_item.as_object()?;
+            let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
+            Some(
+                operation
+                    .get("parameters")
+                    .into_iter()
+                    .chain(path_item.get("parameters"))
+                    .flat_map(Value::as_array)
+                    .flatten()
+                    .filter_map(|parameter| match parameter.get("$ref") {
+                        Some(reference) => document.pointer(reference.as_str()?.strip_prefix('#')?),
+                        None => Some(parameter),
+                    })
+                    .any(|parameter| {
+                        parameter.get("in").and_then(Value::as_str) == Some("header")
+                            && parameter
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+                    }),
+            )
+        };
+        declared().unwrap_or(false)
     }
     /// A bounded, explicit request validation against the composed OAD:
     /// every declared *required* query parameter must be present, a
@@ -651,6 +715,44 @@ pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_header_parameter_is_declared_only_where_the_operation_or_its_path_says_so() {
+        use serde_json::json;
+        let catalog = super::Catalog::from_test_document(
+            "test",
+            json!({"servers":[{"url":"https://example.com/v1"}],
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}},
+                "pathItems":{"shared":{"put":{"parameters":[{"$ref":"#/components/parameters/key"}]}}}},
+            "paths":{
+                "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
+                    "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
+                "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
+                    "patch":{}},
+                "/other":{"post":{}},
+                "/shared":{"$ref":"#/components/pathItems/shared"}
+            }}),
+            json!({}),
+        );
+        let declared = |method, path| {
+            catalog.declares_header_parameter("test", method, path, "idempotency-key")
+        };
+        assert!(declared("POST", "/v1/items"));
+        assert!(declared("PUT", "/v1/shared"));
+        assert!(declared("PATCH", "/v1/items/7"));
+        // A query parameter of that name, another operation, another path,
+        // a path outside the server URL or an unknown platform: not declared.
+        assert!(!declared("PUT", "/v1/items"));
+        assert!(!declared("GET", "/v1/items"));
+        assert!(!declared("POST", "/v1/other"));
+        assert!(!declared("POST", "/items"));
+        assert!(!catalog.declares_header_parameter(
+            "other",
+            "POST",
+            "/v1/items",
+            "idempotency-key"
+        ));
+    }
+
     #[test]
     fn fixed_header_defaults_are_explicit_and_operation_overrides_path() {
         use serde_json::json;
@@ -1604,6 +1706,101 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
+    }
+
+    /// pieces.md D4: a Produced Classes declaration (`x-produces`,
+    /// openapi-extensions/spec/produced-classes) set by an overlay on a CRUD
+    /// Resource Object comes back unchanged from `/catalog/<name>.yaml`. The
+    /// proxy composes and serves it like any other member and never reads it.
+    #[tokio::test]
+    async fn a_produced_class_declaration_passes_through_unchanged() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let produces = serde_json::json!([
+            {
+                "class": "https://ontology.example/classes/time-entry-v1",
+                "lens": "https://ontology.example/lenses/example-time-entry-v1",
+                "description": "Een lopende timer heeft geen einde: \"end\" ontbreekt.",
+                "x-note": {"since": "2026-10-08", "weights": [1, 2.5, null, true]}
+            },
+            {"class": "urn:example:classes:cost-centre"}
+        ]);
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("openapi.yaml"),
+            "openapi: 3.0.3\ninfo: {title: Example, version: '1'}\nservers: [{url: 'https://api.example'}]\npaths: {}\ncomponents: {}\n",
+        )
+        .unwrap();
+        let resources = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "CRUD", "version": "1"},
+            "actions": [{"target": "$.components", "update": {"crudResources": {
+                "timeEntry": {"identity": {"urlTemplate": "/time-entries/{id}"}},
+                "project": {"identity": {"urlTemplate": "/projects/{id}"}}
+            }}}]
+        });
+        let classes = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "Produced classes", "version": "1"},
+            "actions": [{"target": "$.components.crudResources.timeEntry",
+                "update": {"x-produces": produces}}]
+        });
+        fs::write(
+            source.join("crud-overlay.yaml"),
+            serde_yaml::to_string(&resources).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            source.join("produces-overlay.yaml"),
+            serde_yaml::to_string(&classes).unwrap(),
+        )
+        .unwrap();
+        let catalog_file = mirror.join("catalog.json");
+        fs::write(
+            &catalog_file,
+            serde_json::json!({"platforms": [{
+                "name": "example",
+                "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                "overlays": [
+                    format!("{OVERLAYS_PAGES_BASE}example/crud-overlay.yaml"),
+                    format!("{OVERLAYS_PAGES_BASE}example/produces-overlay.yaml"),
+                ],
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load_with_mirror(
+            &catalog_file.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&mirror),
+        )
+        .await
+        .unwrap();
+        let mut state = crate::test_support::state(None);
+        state.catalog = catalog;
+        let app = crate::router(state);
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                to_bytes(response.into_body(), usize::MAX).await.unwrap()
+            }
+        };
+        let document: Value = serde_yaml::from_slice(&get("/catalog/example.yaml").await).unwrap();
+        assert_eq!(
+            document["components"]["crudResources"]["timeEntry"]["x-produces"],
+            produces
+        );
+        assert!(document["components"]["crudResources"]["project"]
+            .get("x-produces")
+            .is_none());
+        assert!(document.get("x-produces").is_none());
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]
