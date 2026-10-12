@@ -41,3 +41,25 @@ cases (410 by `gone` first, 404 by `notFound` not `gone`, 410 without
 `gone` by `notFound`, 404 by `notFound`, 404 without `notFound`) beside the
 two `unavailable` cases. README notFound paragraph, changelog and CLAUDE.md
 updated.
+
+## Turn 3
+
+**Human (via the coordinator session):** Nits from the #485 review: the
+route check counts the list operation's declaration for a fixed-read
+collection (`evenWithFixedReads`), unlike the reference `declarations_of`;
+match it or explain the safe-side choice. Say "no recognised absent value"
+in the detail. Tests for a sibling collection's unrecognised `absent`, a
+declaration with no `absent`, and the fixed-read case. Also, from #480: a
+test for the queued branch of the S1 guard.
+
+**Assistant:** Kept `evenWithFixedReads` with a comment: matching the
+reference would turn that corner back to the `deleted` default, the less
+safe reading, as `resourceNotFound` already argues for `notFound`. The
+detail now says "no recognised absent value", which covers a declaration
+without `absent`. Tests: a declaration `{}` reads a 404 as `unavailable`;
+an unrecognised `absent` on a sibling collection leaves the route with the
+`deleted` default; a list-operation declaration with an unrecognised
+`absent` counts for a fixed-read collection. For #480, a test restores an
+outbox where the record has a failed edit and a queued `unknown` follow-up:
+retrying the edit leaves the follow-up waiting for its read (it fails with
+the guard removed).

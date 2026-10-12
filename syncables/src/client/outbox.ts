@@ -168,7 +168,15 @@ export interface StoredUnavailable {
   context: Record<string, string>;
   unavailable: Record<
     string,
-    { record: Record<string, unknown>; detail: string }
+    {
+      record: Record<string, unknown>;
+      detail: string;
+      /** Added later within version 1; absent: `unavailable`. */
+      presence?: 'unconfirmed' | 'deleted' | string;
+      source?: string;
+      /** Added later within version 1: when a read last returned it. */
+      lastSeen?: string;
+    }
   >;
 }
 
@@ -300,7 +308,15 @@ export function isStoredUnavailable(
       (entry) =>
         isRecord(entry) &&
         isRecord(entry['record']) &&
-        typeof entry['detail'] === 'string',
+        typeof entry['detail'] === 'string' &&
+        // Any string: a value added later within version 1 is read as
+        // `unavailable` by this client.
+        (entry['presence'] === undefined ||
+          typeof entry['presence'] === 'string') &&
+        (entry['source'] === undefined ||
+          typeof entry['source'] === 'string') &&
+        (entry['lastSeen'] === undefined ||
+          typeof entry['lastSeen'] === 'string'),
     ) &&
     value['id'] === undefined
   );

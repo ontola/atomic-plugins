@@ -110,27 +110,44 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
-## List tombstones
+## Read and list tombstones
 
-[Google Calendar v3 list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#45-list-tombstones)
-`x-list-tombstone: { field: status, values: [cancelled], except: [{ field:
-recurringEventId, present: true }] }` on the event list
-(`GET /calendars/{calendarId}/events`). The pinned document's
-`Event.status` says "cancelled" is "The event is cancelled (deleted)",
-that the list returns cancelled events with `showDeleted=true` or on
-incremental sync, that "Cancelled exceptions of an uncancelled recurring
-event indicate that this instance should no longer be presented to the
-user. Clients should store these events", and that "All other cancelled
-events represent deleted events". The `except` condition keeps every item
-with `recurringEventId` a member, as the document asks of cancelled
-exceptions; a cancelled exception of a deleted series is kept too (the
-item does not say its series' state), and the series' own item reports the
-series. Cancelled events "can be restored (undeleted)"; a later list
-returning the event with another status brings it back. Declared on the
-list operation, so it applies to every collection that lists events, and no
-dated catalog selects it yet. syncables reads it.
-`tests/test_calendar_list_tombstone.py` composes it after the catalog's
+Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
+tombstones on its events with one reading, wherever an event is answered:
+
+* [read tombstones, revision 2](APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-read-tombstone: { field: status, values: [cancelled], except: [{
+  field: recurringEventId, present: true }] }` on the event read
+  (`GET /calendars/{calendarId}/events/{eventId}`);
+* [list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-list-tombstone` with the same marker and exception on the event list
+  (`GET /calendars/{calendarId}/events`).
+
+The pinned document's `Event.status` says "cancelled" is "The event is
+cancelled (deleted)", that "The get method always returns them", that the
+list returns them with `showDeleted=true` or on incremental sync, and that
+on the organizer's calendar cancelled events "can be restored (undeleted)";
+a consumer treats every such tombstone as restorable. The document gives
+"cancelled" a second meaning: "Cancelled exceptions of an uncancelled
+recurring event indicate that this instance should no longer be presented
+to the user. Clients should store these events for the lifetime of the
+parent recurring event", and "All other cancelled events represent deleted
+events". A cancelled exception carries `recurringEventId`, so the `except`
+condition keeps it out of both declarations: it is not a deletion, whether a
+read or a list answers it, as Deletion Feeds §4.3 requires of a marked state
+the provider documents as something else. A cancelled exception of a
+deleted series is kept too (the item does not say its series' state); the
+series' own tombstone reports the series. This supersedes the reading of
+the first read-tombstone revision,
+[`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(#489), which declared cancelled exceptions as deletions of their
+occurrence; that file stays, as published revision files are immutable,
+and no catalog selects it. Both declarations are on operations, so they
+apply with either crud-causality overlay, and no dated catalog selects them
+yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
+`tests/test_calendar_list_tombstone.py` compose them after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 

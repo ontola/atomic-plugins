@@ -6,7 +6,7 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import list_tombstone, validate
+from validate import list_tombstone, read_tombstone, tombstone, validate
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -141,6 +141,40 @@ class ListTombstoneTests(unittest.TestCase):
         # The same object in a later read, without the marker (§4.5).
         self.assertTrue(list_tombstone(self.declaration, {"id": "e1", "status": "cancelled"}))
         self.assertFalse(list_tombstone(self.declaration, {"id": "e1", "status": "confirmed"}))
+
+
+class SharedExceptTests(unittest.TestCase):
+    """0.3.0: one Tombstone Object rule for feeds, reads and lists (§4.3)."""
+
+    CALENDAR = {"field": "status", "values": ["cancelled"],
+                "except": [{"field": "recurringEventId", "present": True}]}
+
+    def test_read_and_list_give_one_reading(self):
+        exception = {"id": "e2_1", "status": "cancelled", "recurringEventId": "e2"}
+        deleted = {"id": "e1", "status": "cancelled"}
+        self.assertFalse(read_tombstone(self.CALENDAR, exception, "id", "e2_1"))
+        self.assertFalse(list_tombstone(self.CALENDAR, exception))
+        self.assertTrue(read_tombstone(self.CALENDAR, deleted, "id", "e1"))
+        self.assertTrue(list_tombstone(self.CALENDAR, deleted))
+        # A read body about another object is never a read tombstone.
+        self.assertFalse(read_tombstone(self.CALENDAR, deleted, "id", "e9"))
+
+    def test_except_is_checked_on_read_tombstones_and_feeds(self):
+        document = example()
+        document["paths"]["/calendars/{calendarId}/events/{eventId}"]["get"]["x-read-tombstone"] = dict(self.CALENDAR)
+        validate(document)
+        document["paths"]["/calendars/{calendarId}/events/{eventId}"]["get"]["x-read-tombstone"]["except"] = [{"field": "x"}]
+        with self.assertRaises(ValueError) as caught:
+            validate(document)
+        self.assertIn("x-read-tombstone.except[0]", str(caught.exception))
+        document = example()
+        collection = document["components"]["crudResources"]["event"]["collections"]["eventsWithDeleted"]
+        collection["x-deletion-feed"] = {"operationId": "listEvents",
+                                         "tombstone": {**self.CALENDAR, "except": []}}
+        with self.assertRaises(ValueError) as caught:
+            validate(document)
+        self.assertIn("tombstone.except: expected a nonempty array", str(caught.exception))
+        self.assertTrue(tombstone({"field": "deleted", "values": [True]}, {"deleted": True}))
 
 
 if __name__ == "__main__":
