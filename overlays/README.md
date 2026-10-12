@@ -110,6 +110,28 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
 ## Read and list tombstones
 
 Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
@@ -136,8 +158,12 @@ events". A cancelled exception carries `recurringEventId`, so the `except`
 condition keeps it out of both declarations: it is not a deletion, whether a
 read or a list answers it, as Deletion Feeds §4.3 requires of a marked state
 the provider documents as something else. A cancelled exception of a
-deleted series is kept too (the item does not say its series' state); the
-series' own tombstone reports the series. This supersedes the reading of
+deleted series is kept too (the item does not say its series' state). In a
+`singleEvents=false` list, as the Calendar drive app reads, the series' own
+item, which has no `recurringEventId`, reports the series. With
+`singleEvents=true` there is no series item: every instance carries
+`recurringEventId`, so the instances of a deleted series are kept as
+members and nothing in that list reports the deletion. This supersedes the reading of
 the first read-tombstone revision,
 [`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
 (#489), which declared cancelled exceptions as deletions of their
@@ -146,8 +172,6 @@ and no catalog selects it. Both declarations are on operations, so they
 apply with either crud-causality overlay, and no dated catalog selects them
 yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 `tests/test_calendar_list_tombstone.py` compose them after the catalog's
-Calendar overlays. Declared from the document; not verified against a live
-calendar.
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 

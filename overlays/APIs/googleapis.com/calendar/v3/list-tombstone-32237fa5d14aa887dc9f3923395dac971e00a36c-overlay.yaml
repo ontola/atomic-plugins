@@ -21,10 +21,12 @@
 # clients store, not remove (a state it does not call deletion, so §4.5's
 # MUST excludes it with an except condition on the item). A cancelled
 # exception of a cancelled series is, by the same text, deleted too; the
-# item does not say whether its series is, so it is kept as a member (the
-# series' own item reports the series). The same holds for the single
-# instances that showDeleted=true with singleEvents=true returns: they carry
-# recurringEventId. "On the organizer's calendar, cancelled events continue
+# item does not say whether its series is, so it is kept as a member. With
+# singleEvents=false (the Calendar drive app's read) the series' own item,
+# which has no recurringEventId, reports the series. With singleEvents=true
+# there is no series item: every instance carries recurringEventId, so the
+# instances of a deleted series are kept as members and nothing in that list
+# reports the deletion. "On the organizer's calendar, cancelled events continue
 # to expose event details ... so that they can be restored (undeleted)": a
 # later list that returns the event with another status supersedes the
 # list tombstone, as §4.5 says of every list tombstone.

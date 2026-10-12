@@ -569,8 +569,11 @@ deleted; `{ "id": "e2_20261012", "status": "cancelled", "recurringEventId":
 "e2" }` is a member, an exception the consumer keeps with its status. A
 cancelled exception of a series that was itself deleted is, by that
 documentation, deleted too; the item does not say whether its series is,
-so the declaration keeps it as a member and the series' own list tombstone
-reports the series. When the organizer restores `e1`, a later read returns
+so the declaration keeps it as a member. In a list that returns series as
+items (Google Calendar's `singleEvents=false`), the series' own list
+tombstone reports the series; in one that expands series into instances
+(`singleEvents=true`), every instance carries `recurringEventId` and nothing
+in the list reports the deletion. When the organizer restores `e1`, a later read returns
 it with another status, as a member again.
 [`examples/list-tombstones.yaml`](examples/list-tombstones.yaml) is this
 document in full. This example is not a declaration for Google Calendar.

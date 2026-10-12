@@ -486,14 +486,15 @@ const ASCTIME_DATE = new RegExp(
 export function parseHttpDate(value: string): number | undefined {
   let day: string, month: string, year: number;
   let hour: string, minute: string, second: string;
+  let twoDigitYear = false;
   let match = IMF_FIXDATE.exec(value);
   if (match) {
     [, day, month, , hour, minute, second] = match as unknown as string[];
     year = Number(match[3]);
   } else if ((match = RFC850_DATE.exec(value))) {
     [, day, month, , hour, minute, second] = match as unknown as string[];
-    year = 2000 + Number(match[3]);
-    if (year > new Date().getUTCFullYear() + 50) year -= 100;
+    year = Number(match[3]);
+    twoDigitYear = true;
   } else if ((match = ASCTIME_DATE.exec(value))) {
     [, month, day, hour, minute, second] = match as unknown as string[];
     year = Number(match[6]);
@@ -502,10 +503,42 @@ export function parseHttpDate(value: string): number | undefined {
   const d = Number(day!.trim());
   const [h, min, sec] = [Number(hour!), Number(minute!), Number(second!)];
   if (h > 23 || min > 59 || sec > 60) return undefined;
-  const ms = Date.UTC(year, m, d, h, min, sec);
-  // A day the month does not have (31 Feb) does not parse.
-  if (new Date(ms).getUTCDate() !== d) return undefined;
-  return ms;
+  const time = ((h * 60 + min) * 60 + sec) * 1000;
+  if (twoDigitYear) {
+    // RFC 9110 §5.6.7: a date that appears more than 50 years in the
+    // future is the most recent past year with the same last two digits;
+    // full dates are compared, not only years.
+    const now = new Date();
+    const century = Math.floor(now.getUTCFullYear() / 100) * 100;
+    const limit = new Date(now.getTime());
+    limit.setUTCFullYear(now.getUTCFullYear() + 50);
+    let start = utcDay(century + year, m, d);
+    if (start === undefined) return undefined;
+    if (start + time > limit.getTime())
+      start = utcDay(century + year - 100, m, d);
+    return start === undefined ? undefined : start + time;
+  }
+  const start = utcDay(year, m, d);
+  return start === undefined ? undefined : start + time;
+}
+
+/**
+ * Midnight UTC of a calendar day, in milliseconds since the epoch; undefined
+ * for a day the month does not have (31 Feb). The day is checked before the
+ * time is added, so `23:59:60` (a leap second) still names that day, and
+ * `setUTCFullYear` keeps a year below 100 as written (`Date.UTC` would add
+ * 1900).
+ */
+function utcDay(year: number, month: number, day: number): number | undefined {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== day
+  )
+    return undefined;
+  return date.getTime();
 }
 
 const httpDate = parseHttpDate;

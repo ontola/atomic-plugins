@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
