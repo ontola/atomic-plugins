@@ -1,5 +1,5 @@
 // @wc-ignore-file
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyThrottling,
   declaredThrottling,
@@ -310,6 +310,62 @@ describe('HTTP-dates: only the exact RFC 9110 forms (#491 review)', () => {
     expect(
       classify(429, { 'Retry-After': value }, undefined)!.retryAt,
     ).toBeUndefined();
+  });
+
+  it('reads a space-padded asctime day', () => {
+    expect(headerTime('Thu Oct  1 07:28:00 2015', 'httpDate', NOW)).toBe(
+      Date.parse('2015-10-01T07:28:00Z'),
+    );
+  });
+
+  it('reads a leap second as the next second of the same day', () => {
+    expect(headerTime('Sat, 31 Dec 2016 23:59:60 GMT', 'httpDate', NOW)).toBe(
+      Date.parse('2017-01-01T00:00:00Z'),
+    );
+    expect(headerTime('Sat Dec 31 23:59:60 2016', 'httpDate', NOW)).toBe(
+      Date.parse('2017-01-01T00:00:00Z'),
+    );
+  });
+
+  it('keeps a 4-digit year below 100 as written, not 19xx', () => {
+    const expected = new Date(0);
+    expected.setUTCFullYear(50, 0, 1);
+    expected.setUTCHours(7, 28, 0);
+    expect(headerTime('Sat, 01 Jan 0050 07:28:00 GMT', 'httpDate', NOW)).toBe(
+      expected.getTime(),
+    );
+    expect(expected.getUTCFullYear()).toBe(50);
+    expect(headerTime('Sat Jan  1 07:28:00 0050', 'httpDate', NOW)).toBe(
+      expected.getTime(),
+    );
+  });
+
+  describe('the RFC 850 century rule compares full dates', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-12T12:00:00Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('keeps a date at most 50 years ahead in this century', () => {
+      expect(
+        headerTime('Sunday, 11-Oct-76 07:28:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('2076-10-11T07:28:00Z'));
+    });
+
+    it('rolls a date more than 50 years ahead back a century, in the same year', () => {
+      expect(
+        headerTime('Wednesday, 13-Oct-76 07:28:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('1976-10-13T07:28:00Z'));
+    });
+
+    it('rolls a later two-digit year back a century', () => {
+      expect(
+        headerTime('Friday, 01-Jan-99 00:00:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('1999-01-01T00:00:00Z'));
+    });
   });
 
   it('refuses a Date header with a U+00A0: the consumer clock alone counts', () => {

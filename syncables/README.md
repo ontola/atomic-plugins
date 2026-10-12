@@ -1665,6 +1665,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   (`parseHttpDate`), not through `Date.parse`. The same applies to the `Retry-After` of a retryable
   answer outside `x-throttling`, which before took any long digit string
   and capped the wait at `retry.maxRetryAfterMs`.
+- **Unreleased**: `parseHttpDate` fixes: a leap second (`23:59:60`) reads
+  as the next second instead of failing the day check, a 4-digit year below
+  100 keeps its value (`0050` was read as 1950), and the RFC 850
+  "more than 50 years ahead" rule compares full dates, not only years.
 - **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
   record (the start of that sync), stored with the mark in the outbox
   (within version 1; an older client drops it); absent for a record no read
