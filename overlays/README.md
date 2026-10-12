@@ -119,7 +119,19 @@ declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/
 `Event.status` says "cancelled" is "The event is cancelled (deleted)", that
 "The get method always returns them", and that on the organizer's calendar
 cancelled events "can be restored (undeleted)"; a consumer treats every
-read tombstone as restorable. It is declared on the operation, so it
+read tombstone as restorable. The document sets cancelled exceptions of a
+recurring event apart: "Cancelled exceptions of an uncancelled recurring
+event indicate that this instance should no longer be presented to the
+user. Clients should store these events for the lifetime of the parent
+recurring event." They are declared too: the object is that one instance
+(its own event id), its status is the same "cancelled" defined as
+"(deleted)", and an instance that should no longer be presented is that
+occurrence's deletion, not an archived state of a live object; a consumer
+concludes about the instance it read, never about the series, and a read
+tombstone does not remove a stored exception. A consumer that lists events
+with `showDeleted=true`, or with `syncToken` or `updatedMin`, never hits
+this, because cancelled events then appear in the list itself; the Calendar
+drive app lists with `showDeleted=true`. It is declared on the operation, so it
 applies with either crud-causality overlay, and no dated catalog selects
 it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
 edit's event is missing from a complete read and its GET answers

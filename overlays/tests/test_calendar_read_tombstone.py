@@ -1,7 +1,8 @@
 """Google Calendar v3: cancelled events as read tombstones (Deletion Feeds 0.2.0-draft §4.4).
 
-Composes the Google Calendar entry of the newest dated catalog with the
-unpublished read-tombstone overlay after it, and checks that the
+Composes the Google Calendar entry of catalog/2026-10-12-box-pagination-v2.json
+(the newest dated catalog when this was written) with the unpublished
+read-tombstone overlay after it, and checks that the
 declaration has the Tombstone Object's shape (§4.3), sits on the event read
 operation that the composed CRUD Causality metadata names as the `event`
 resource's read, that the composition still passes the CRUD Causality
@@ -63,11 +64,16 @@ class CalendarReadTombstoneTests(unittest.TestCase):
         for words in ('"cancelled" - The event is cancelled (deleted).',
                       "The get method always returns them.",
                       "All other cancelled events represent deleted events.",
+                      "Cancelled exceptions of an uncancelled recurring event indicate that this instance "
+                      "should no longer be presented to the user.",
                       "can be restored (undeleted)"):
             self.assertIn(words, status)
         self.assertEqual(self.original["paths"][READ]["get"]["operationId"], "calendar.events.get")
 
     def test_no_dated_catalog_selects_the_overlay(self):
+        # Whoever adds the overlay to a dated catalog changes this test to
+        # assert that only that catalog selects it, after the Calendar
+        # crud-causality overlay.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
                 self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
