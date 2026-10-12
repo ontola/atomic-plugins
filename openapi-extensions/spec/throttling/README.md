@@ -294,8 +294,9 @@ A body that is not JSON, or a `pointer` that does not resolve, does not match.
 Declare `blocked` only when the provider documents that retrying the response
 will not help. Notion is the example: its `429` with the code `rate_limited`
 carries `additional_data.rate_limit_reason`, and for the reason
-`public_api_request_blocked` it says "API access restricted; retrying won't
-help" ([request limits](https://developers.notion.com/reference/request-limits)).
+`public_api_request_blocked` it says "This connection's API access has been
+restricted. Retrying won't help. Contact Notion support."
+([request limits](https://developers.notion.com/reference/request-limits)).
 Such a response usually also matches a broader signal (Notion's other reasons
 share the code), so the `blocked` signal comes first:
 
