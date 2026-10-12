@@ -27,6 +27,7 @@ import {
   checkArgv,
   civilYear as recorderYear,
   nextLink,
+  positiveInteger,
   REDACTIONS,
   redactor,
   valueless,
@@ -632,9 +633,9 @@ describe('moneybird fixture: always-on checks', () => {
       state: 'Piet Jansen',
       type: 'NL02RABO0123456789',
       country: 'nl02rabo',
-      currency: 'Jansen',
-      language: 'a'.repeat(40),
-      time_zone: 'Jansen',
+      currency: 'JANSEN',
+      language: 'nld',
+      time_zone: 'Europe/Jansen',
       delivery_method: 'Jansen',
     });
     for (const [field, v] of Object.entries(wrong))
@@ -655,6 +656,50 @@ describe('moneybird fixture: always-on checks', () => {
         'updated_at',
       ].map(field => `financial_mutation.${field}`),
     );
+  });
+
+  it('keeps currency, country, language and time_zone only as real codes', () => {
+    const redact = redactor();
+    const good = {
+      currency: 'EUR',
+      country: 'NL',
+      language: 'nl',
+      time_zone: 'Europe/Amsterdam',
+    };
+    expect(redact.row('administration', { id: '1', ...good })).toMatchObject(
+      good,
+    );
+    const bad: Row = redact.row('administration', {
+      id: '2',
+      currency: 'EU',
+      country: 'NLD',
+      language: 'NL',
+      time_zone: 'Jansen/Amsterdam',
+    });
+    expect(bad).toMatchObject({
+      currency: 'redacted',
+      country: 'redacted',
+      language: 'redacted',
+      time_zone: 'redacted',
+    });
+    expect(redact.unknown()).toEqual([
+      'administration.country',
+      'administration.currency',
+      'administration.language',
+      'administration.time_zone',
+    ]);
+  });
+
+  it('takes --per-page (up to 100) and --max-pages only as integers of at least 1', () => {
+    expect(positiveInteger('per-page', '100', 100)).toBe(100);
+    expect(positiveInteger('max-pages', '7')).toBe(7);
+    expect(() => positiveInteger('per-page', '101', 100)).toThrow(
+      '--per-page must be an integer from 1 to 100, not 101',
+    );
+    for (const bad of ['0', '-1', '1.5', '2e1', 'abc', '', ' 3', '0x10'])
+      expect(() => positiveInteger('max-pages', bad), bad).toThrow(
+        `--max-pages must be an integer from 1 up, not ${bad}`,
+      );
   });
 
   it('reads options without taking the next flag as a value, and refuses --x=5', () => {

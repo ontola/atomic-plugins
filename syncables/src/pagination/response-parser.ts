@@ -189,6 +189,7 @@ function deriveHasNextPage(
   type: SchemeType,
   state: PaginationResponseState,
   itemsFetchedSoFar?: number,
+  firstPage = 1,
 ): boolean {
   if (state.nextLink !== null || state.nextPageToken !== null) {
     return true;
@@ -197,18 +198,33 @@ function deriveHasNextPage(
     return itemsFetchedSoFar < state.totalCount;
   }
   if (type === 'pageNumber') {
-    if (state.currentPage !== null && state.totalPages !== null) {
-      return state.currentPage < state.totalPages;
+    // currentPage is numbered like the request's page field (from its
+    // start); totalPages is a count (spec 0.6.0 §4.5).
+    const ordinal =
+      state.currentPage !== null ? state.currentPage - firstPage + 1 : null;
+    if (ordinal !== null && state.totalPages !== null) {
+      return ordinal < state.totalPages;
     }
     if (
-      state.currentPage !== null &&
+      ordinal !== null &&
       state.totalCount !== null &&
       state.pageSize !== null
     ) {
-      return state.currentPage * state.pageSize < state.totalCount;
+      return ordinal * state.pageSize < state.totalCount;
     }
   }
   return false;
+}
+
+/** The `start` of the scheme's `page` field (spec 0.6.0 §4.3.1), else 1. */
+export function pageStart(scheme: PaginationSchemeObject): number {
+  for (const location of ['queryParameters', 'bodyFields'] as const) {
+    for (const field of Object.values(scheme.request?.[location] ?? {})) {
+      if (field.role === 'page' && typeof field.start === 'number')
+        return field.start;
+    }
+  }
+  return 1;
 }
 
 /**
@@ -245,6 +261,11 @@ export function parsePaginationState(
     pageSize: toNumberOrNull(roles.get('pageSize') ?? null),
     hasNextPage: false,
   };
-  state.hasNextPage = deriveHasNextPage(scheme.type, state, itemsFetchedSoFar);
+  state.hasNextPage = deriveHasNextPage(
+    scheme.type,
+    state,
+    itemsFetchedSoFar,
+    pageStart(scheme),
+  );
   return state;
 }

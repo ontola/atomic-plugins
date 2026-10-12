@@ -1,7 +1,7 @@
 // @wc-ignore-file
 /**
  * The deletion declarations of the draft Deletion Feeds (0.2.0-draft) and
- * Collection Completeness (0.1.0-draft) extensions, as their READMEs give
+ * Collection Completeness (0.2.0-draft) extensions, as their READMEs give
  * them (`openapi-extensions/spec/deletion-feeds/README.md`,
  * `openapi-extensions/spec/collection-completeness/README.md`), each
  * completed into a small OpenAPI document that syncables can run against a
@@ -328,6 +328,124 @@ export const completeProjectTasks: OpenApiDocument = {
           projectTasks: {
             urlTemplate: '/projects/{projectId}/tasks',
             'x-completeness': { absent: 'deleted' },
+          },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * Collection Completeness §6.1 (0.2.0): task lists at `/users/me/lists` and
+ * a list's tasks at `/lists/{listId}/tasks`, shaped like Google Tasks. A
+ * task can move between lists; a task read by id answers 200 with
+ * `deleted: true` for a while after its deletion, and 404 later or when the
+ * caller cannot reach it. Both collections declare `absent: removed` and
+ * `notFound: unavailable`; the tasks declare `parentAbsent: unavailable`.
+ * The spec's `examples/nested-tasks.yaml`, with PUT on a task.
+ */
+export const nestedTaskLists: OpenApiDocument = {
+  openapi: '3.0.3',
+  info: { title: 'Collection Completeness §6.1', version: '1.0.0' },
+  servers: [{ url: 'https://api.example.com' }],
+  paths: {
+    '/users/me/lists': {
+      get: {
+        'x-crud': {
+          action: 'list',
+          resource: 'taskList',
+          collection: 'taskLists',
+        },
+        responses: ok("The user's task lists."),
+      } as OperationObject,
+    },
+    '/users/me/lists/{listId}': {
+      get: {
+        parameters: [
+          {
+            name: 'listId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        'x-crud': { action: 'read', resource: 'taskList' },
+        responses: {
+          ...ok('One task list.'),
+          '404': { description: 'Not found, or not readable by this caller.' },
+        },
+      } as OperationObject,
+    },
+    '/lists/{listId}/tasks': {
+      get: {
+        parameters: [
+          {
+            name: 'listId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        'x-crud': { action: 'list', resource: 'task', collection: 'listTasks' },
+        responses: ok("The list's tasks."),
+      } as OperationObject,
+    },
+    '/lists/{listId}/tasks/{taskId}': {
+      get: {
+        parameters: [
+          {
+            name: 'listId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          },
+          {
+            name: 'taskId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        'x-crud': { action: 'read', resource: 'task' },
+        responses: {
+          ...ok('The task, possibly with deleted true.'),
+          '404': { description: 'Not found, or not readable by this caller.' },
+        },
+      } as OperationObject,
+      put: {
+        requestBody: { content: { 'application/json': { schema: {} } } },
+        responses: ok('The updated task'),
+      },
+    },
+  },
+  components: {
+    crudResources: {
+      taskList: {
+        identity: {
+          urlTemplate: '/users/me/lists/{listId}',
+          bindings: { listId: { field: 'id' } },
+        },
+        collections: {
+          taskLists: {
+            urlTemplate: '/users/me/lists',
+            'x-completeness': { absent: 'removed', notFound: 'unavailable' },
+          },
+        },
+      },
+      task: {
+        identity: {
+          urlTemplate: '/lists/{listId}/tasks/{taskId}',
+          bindings: { taskId: { field: 'id' } },
+        },
+        'x-read-tombstone': { field: 'deleted', values: [true] },
+        collections: {
+          listTasks: {
+            urlTemplate: '/lists/{listId}/tasks',
+            'x-completeness': {
+              absent: 'removed',
+              notFound: 'unavailable',
+              parentAbsent: 'unavailable',
+            },
           },
         },
       },

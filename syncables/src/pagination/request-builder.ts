@@ -4,7 +4,7 @@ import type {
   RequestFieldObject,
 } from './types.js';
 import type { PaginationResponseState } from './types.js';
-import { setNestedField } from './response-parser.js';
+import { pageStart, setNestedField } from './response-parser.js';
 
 /** Where the client is in a paginated traversal, independent of scheme type. */
 export interface PageCursor {
@@ -28,6 +28,9 @@ function fieldsWithRole(
       .map(([name]) => name),
   );
 }
+
+// pageStart lives in response-parser.ts; re-exported for the builder's callers.
+export { pageStart };
 
 /**
  * The values a page request carries, by field name, for one location
@@ -53,7 +56,7 @@ function cursorValues(
     values[name] = cursor.offset ?? 0;
   }
   for (const name of withRole('page')) {
-    values[name] = cursor.page ?? 1;
+    values[name] = cursor.page ?? pageStart(scheme);
   }
   if (cursor.pageToken !== undefined) {
     for (const name of [...withRole('pageToken'), ...withRole('cursor')]) {
@@ -138,7 +141,7 @@ export function nextCursor(
         return { offset: (cursor.offset ?? 0) + itemsReturned };
       }
       if (fieldsWithRole(scheme, 'page', both).length > 0) {
-        return { page: (cursor.page ?? 1) + 1 };
+        return { page: (cursor.page ?? pageStart(scheme)) + 1 };
       }
       return null;
   }

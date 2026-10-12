@@ -167,3 +167,28 @@ test('certify.mjs and run-lane.mjs both install before they run', () => {
     assert.match(source, /installMissing\(/, file);
   }
 });
+
+test('the Devonian lens folder of a plugin is one of its dependency folders', () => {
+  assert.deepEqual(pluginDependencyDirs('bookmarks'), [
+    'integrations/bookmarks',
+    'integrations/bookmarks/app',
+    'integrations/bookmarks/e2e',
+    'integrations/bookmarks/devonian',
+  ]);
+  const base = fixture({
+    'integrations/bookmarks/devonian': {},
+    'integrations/solid/devonian': { installed: true },
+  });
+  const { calls, install } = recorder(base);
+
+  try {
+    installMissing(
+      [...pluginDependencyDirs('bookmarks'), ...pluginDependencyDirs('solid')],
+      { base, install, log: () => {} },
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(calls, ['integrations/bookmarks/devonian']);
+});

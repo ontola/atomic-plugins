@@ -56,6 +56,20 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+Discord's guild list needs no pagination for these user tokens. Discord's
+reference for `GET /users/@me/guilds`
+(https://docs.discord.com/developers/resources/user, "Get Current User
+Guilds", checked 2026-10-09) says it "returns 200 guilds by default, which
+is the maximum number of guilds a non-bot user can join", and that
+pagination is not needed to list a user's guilds; `limit` is 1–200. The
+CRUD overlay's fixed `limit: 200` read of `myGuilds` therefore returns every
+guild of a `discordUser` connection, and a guild missing from it is one the
+user left. The comment in
+`APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+that Syncables "cannot derive a cursor" for `before`/`after` is moot for
+this read: no cursor is needed. It would matter only for a bot token (the
+`discordBot` profile), which no catalog selects.
+
 `catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
 platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
 the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
@@ -751,3 +765,30 @@ and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
 catalog. This twelve-entry option allows Tasks deployment independently when
 its OAuth client is ready and GitLab registration is still pending. It changes
 no existing pins or API metadata and does not activate itself.
+
+## Box onboarding catalogs
+
+`catalog/2026-10-11-box.json` preserves all twelve entries from the Google Tasks
+deployment catalog and adds Box 2.0.0 with its existing revision-pinned
+pagination overlay and `OAuth2Security` scheme. The combined
+`catalog/2026-10-11-gitlab-box.json` additionally preserves the GitLab entry
+from its published onboarding catalog. These options let either registration
+finish first without dropping an existing platform or changing its pins.
+
+Box's selected document describes the full API, including write operations;
+it is not a read-only authentication profile. Its OAuth scope list is empty.
+Box's [authorization reference](https://developer.box.com/reference/get-authorize)
+documents that an omitted scope parameter defaults to the permissions
+configured on the application. The current proxy sends an empty `scope`
+parameter for this document; verify that behavior against the registered
+client before activation. Configure the Local Thought application for
+the minimum useful read permissions and register the exact callback
+`https://localthought.io/oauth/box/callback`. Provider permissions must enforce
+that limit; this catalog does not restrict the proxy to GET requests.
+
+Publishing these catalogs does not create a Box account or OAuth client,
+configure `OAUTH_BOX_CLIENT_ID` / `OAUTH_BOX_CLIENT_SECRET`, or switch
+localthought.io. Client authentication and the document's default PKCE
+behavior still require registration and live verification before activation.
+Catalog composition and credential-scheme resolution do not certify a
+real-account OAuth grant, API read, or complete import.

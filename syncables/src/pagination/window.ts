@@ -39,7 +39,7 @@ const INTEGER = /^-?(0|[1-9][0-9]*)$/;
  */
 export function parseBound(bound: unknown, window: RangeWindowObject): number {
   const refuse = (): never => {
-    throw new Error(
+    throw new WindowReadError(
       `bound ${JSON.stringify(bound)} is not in the window format ${window.format}`,
     );
   };

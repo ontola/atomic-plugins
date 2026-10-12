@@ -4,11 +4,14 @@
 
 `.atomic-server-ref` holds one full atomic-server commit SHA. CI, the lanes,
 `link-atomic-server.mjs` and `usertest-deploy.yml` all check out that
-commit. On 2026-10-09 it is candidate21, `e922179e2e16f38ceb5e027479a49f59b22c9539`
-(candidate20 `0fa9c07` plus the host lens catalog behind the split-pieces flag,
-`28da8f0d2`, pinned to `lenses/v1`, and `e922179e2`, in which the demo view and
-integration frame fall back to `isA` and the name property instead of
-`getClasses()` and `title`).
+commit. On 2026-10-09 it is candidate22, `7dab1ce49a9159fdeff97e107fcb5962b615fad4`
+(candidate21 `e922179e2` plus three commits behind the split-pieces flag:
+`54b181996`, in which `renders` accepts `record:`/`rdf:` lens endpoint keys;
+`ce0315bb1`, which moves the default lens catalog pin to `lenses/v2` and
+re-vendors `lens.mjs` from main `67baf939`; and `7dab1ce49`, which shows a
+`record:` key as code text). Candidate21 added the host lens catalog
+(`28da8f0d2`, then pinned to `lenses/v1`) and the demo frames' `isA`/name
+fallback (`e922179e2`).
 
 The pin is always a **candidate**: a commit on an atomic-server branch
 `claude/atomic-plugins-pin-candidateN`, never `develop`. A candidate
@@ -78,6 +81,12 @@ On an atomic-plugins branch, once the candidate is green:
 4. `node integrations/tooling/apps.mjs check --published origin/main`. A pin
    bump can change esbuild's output, and then a drive app needs a new version
    (see [catalog-and-pages.md](catalog-and-pages.md)).
+   The user-testing builds change with it: `node --test
+   integrations/tooling/apps.test.mjs` fails on any app whose bytes moved.
+   Bump that app's entry in `VERSIONS` (or `SAMPLE_VERSION`) in
+   `usertest/catalog.mjs` and run `node usertest/catalog.mjs --record`. The
+   same holds for a devonian or syncables bump in a plugin's `package.json`
+   that changes an app's bundle.
 5. Commit as `pin candidateN (<short sha>)…` and say in the body what the
    candidate adds and whether the fixtures changed, like `efa7825`.
 6. Lanes that set `pluginRoutes` need the `-plugin-routes` build of the new

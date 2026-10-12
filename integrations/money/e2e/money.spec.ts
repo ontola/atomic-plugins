@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -295,6 +295,17 @@ test.describe('money integration', () => {
     await expect(app.getByRole('status').first()).toContainText('Imported 2', {
       timeout: 60_000,
     });
+    // The shared sync-status card (Q-084) dates the import and stays
+    // read-only: there is no provider to send anything to.
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText(
+      '2 transactions from 1 statement; 2 arrived at the last sync',
+    );
+    await expect(syncCard).not.toContainText('Last sync:');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
     const lunch = app.getByRole('button', { name: /Fixture lunch/ });
     await expect(lunch).toBeVisible();
     await expect(
@@ -445,6 +456,54 @@ test.describe('money integration', () => {
         timeout: 30_000,
       })
       .toBe(stub);
+
+    // A load error (0.4.2's card): the host fails the app's first request,
+    // `getData`, as a lost connection would, by failing its read of the
+    // app's table (not of the app: the page needs that to mount the frame).
+    // Back in the same page, without a reload, so the stand-in stays armed.
+    await page.evaluate(subject => {
+      const store = window.store! as unknown as {
+        getResource: (s: string, ...rest: unknown[]) => Promise<unknown>;
+        __getResource?: (s: string, ...rest: unknown[]) => Promise<unknown>;
+      };
+      // Kept on the store, so the recovery below puts the very same method back.
+      const original = store.getResource;
+      store.__getResource = original;
+      store.getResource = (s, ...rest) =>
+        s === subject
+          ? Promise.reject(new Error('Simulated host failure'))
+          : original.call(store, s, ...rest);
+    }, own);
+    await page.goBack();
+    await expect(app.getByRole('status').first()).toContainText('Sync failed', {
+      timeout: 60_000,
+    });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).toContainText("Couldn't load the transactions.");
+    await expect(syncCard).toContainText('Simulated host failure');
+    await expect(syncCard).toContainText('Try again.');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    // The host recovers; Try again loads the rows, and the card says so.
+    await page.evaluate(() => {
+      const store = window.store! as unknown as {
+        getResource: unknown;
+        __getResource?: unknown;
+      };
+      store.getResource = store.__getResource;
+      delete store.__getResource;
+    });
+    await app.getByRole('button', { name: 'Try again' }).click();
+    await expect(
+      app.getByRole('button', { name: 'Fixture lunch', exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(syncCard.locator('[data-key=headline]')).not.toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).not.toContainText('Simulated host failure');
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
