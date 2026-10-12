@@ -156,7 +156,8 @@ export function parsePrecondition(
   const crud = place.operation?.['x-crud'];
   const action = isRecord(crud) ? crud['action'] : undefined;
   const kind = declared['kind'];
-  const rawRefusals = declared['refuseWhen'] ?? [];
+  // Absent means no refusals; a present `null` is not an array (as `_check`).
+  const rawRefusals = 'refuseWhen' in declared ? declared['refuseWhen'] : [];
   if (action === 'create') {
     if (
       kind !== 'none' ||
@@ -393,7 +394,7 @@ export type MaySend =
  * §4.2/§4.4: whether a write may be sent now. `baseline` maps fields to
  * their last read values, `written` lists the fields the write sets,
  * `current` is the object as just read (`readVerify`) or as last read, or
- * undefined when not read, `headers` that read's response headers. `body`
+ * undefined (or `null`) when not read, `headers` that read's response headers. `body`
  * and `sources` as for `refusalOf`. `unusable-version`: an `ifMatch`
  * version that is neither a string nor a finite number. A delete (`action`) compares every
  * baseline field.
@@ -409,8 +410,10 @@ export function maySend(
   action: 'update' | 'delete' | 'create' = 'update',
 ): MaySend {
   const own = declaration.refuseWhen.filter((r) => !r.source);
+  // Not read (undefined, or `null` from a caller): never compared as an
+  // object whose fields are all null.
   if (
-    current === undefined &&
+    (current === undefined || current === null) &&
     (declaration.kind === 'ifMatch' ||
       declaration.kind === 'readVerify' ||
       own.length)

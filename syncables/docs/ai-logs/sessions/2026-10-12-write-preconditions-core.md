@@ -49,3 +49,13 @@ and identity variables). `maySend` answers `unusable-version` for an
 `ValidationTests` and the validate halves of the present-refusal,
 source-and-when and creates cases, on the example document, plus the
 object version.
+
+## Turn 3
+
+**Human (via the coordinator session):** #486 blocker: `refuseWhen: null`
+was read as no refusals, while `_check` rejects it; refuse it with a test.
+Move the `current = null` → not-read fix from #490 into #486.
+
+**Assistant:** `refuseWhen` defaults to none only when absent; `null` is
+refused as not an array. `maySend` reads `null` like undefined: not read,
+so `read-first`, never a comparison. Tests for both.

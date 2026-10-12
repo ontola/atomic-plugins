@@ -199,6 +199,7 @@ describe('the spec ValidationTests', () => {
       decl(d, '/pages/{pageId}', 'patch');
     const refusals = (d: Doc): unknown[] => page(d)['refuseWhen'] as unknown[];
     invalid((d) => (page(d)['refuseWhen'] = { field: 'x' }), 'not an array');
+    invalid((d) => (page(d)['refuseWhen'] = null), 'not an array');
     invalid((d) => refusals(d).push({ field: '', values: [1] }), 'field');
     invalid((d) => refusals(d).push({ field: 'x', values: [] }), 'values');
     invalid(
@@ -973,5 +974,15 @@ describe('the spec ClientTests', () => {
       result: 'send',
       headers: { 'If-Match': '7' },
     });
+  });
+
+  it('an object passed as null was not read: read first, never compared', () => {
+    expect(maySend(p(IF_MATCH), {}, ['summary'], null).result).toBe(
+      'read-first',
+    );
+    expect(
+      maySend(p({ kind: 'readVerify' }), { summary: null }, ['summary'], null)
+        .result,
+    ).toBe('read-first');
   });
 });
