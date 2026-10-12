@@ -48,6 +48,27 @@ function recorder(base, status = 0) {
   };
 }
 
+test("a plugin's lockfile folders match the four globs ci.yml installs", () => {
+  assert.deepEqual(pluginDependencyDirs('notion'), [
+    'integrations/notion',
+    'integrations/notion/app',
+    'integrations/notion/e2e',
+    'integrations/notion/devonian',
+  ]);
+  const workflow = readFileSync(
+    join(import.meta.dirname, '../../.github/workflows/ci.yml'),
+    'utf8',
+  );
+  const loops = workflow.match(/for lock in [^;]*;/g) ?? [];
+  assert.equal(loops.length, 2, 'ci.yml has two plugin install loops');
+  const globs = pluginDependencyDirs('*').map(dir => `${dir}/pnpm-lock.yaml`);
+  for (const loop of loops)
+    assert.deepEqual(
+      loop.slice('for lock in '.length, -1).trim().split(/\s+/),
+      globs,
+    );
+});
+
 test('a lockfile without node_modules is installed, with one line each', () => {
   const base = fixture({
     'integrations/notion': {},
