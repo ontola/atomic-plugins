@@ -185,6 +185,20 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(resolve_unknown(VERIFY, "PATCH", {"title": "A"}, {"title": "B", "notes": "m"}, read), "unknown")
         self.assertEqual(resolve_unknown(VERIFY, "DELETE", {}, {}, read), "unknown")
 
+    def test_gone_deleted_confirms_a_410_only(self):
+        # Collection Completeness 0.3.0: gone: deleted with notFound: unavailable (GitHub issues).
+        read = lambda status: {"status": status, "body": None}
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read(410), gone="deleted"), "applied")
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read(404), gone="deleted"), "gone-unconfirmed")
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read(410)), "gone-unconfirmed")
+        # A stated gone: unavailable decides a 410 even when notFound: deleted confirms 404s.
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read(410), deletion_confirmed=True,
+                                         gone="unavailable"), "gone-unconfirmed")
+        self.assertEqual(resolve_unknown(VERIFY, "DELETE", {"title": "A"}, {}, read(410), deletion_confirmed=True), "applied")
+        self.assertEqual(write_answer("delete", 410, gone="deleted"), "applied")
+        self.assertEqual(write_answer("delete", 404, gone="deleted"), "gone-unconfirmed")
+        self.assertEqual(write_answer("update", 410, gone="deleted"), "gone")
+
     def test_the_writes_own_answer(self):
         self.assertEqual(write_answer("delete", 404), "gone-unconfirmed")
         self.assertEqual(write_answer("delete", 410, deletion_confirmed=True), "applied")

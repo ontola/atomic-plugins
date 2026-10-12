@@ -66,7 +66,22 @@ Data flows through four stages, each its own directory under `src/`:
    the collection read passes to `walkPages`; without it `pageItems`
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
-   completion/error status. `read/read.ts` adds ontology/type projection.
+   completion/error status. `read/time-zone.ts` implements Filtering
+   0.2.0-draft `x-time-zone` on list query parameters (the spec's
+   `validate.py` client steps, with `Intl`): `zoneReader` reads each zone
+   source once per `readCollections` through its budget and re-checks it at
+   the end, `wallClockQuery` rewrites the query and computes the
+   `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
+   `SyncResult.coverage`). For a `rangeWindow` read with a range whose
+   window fields include such parameters, `wallClockWindows` gives
+   `walkPages` the `windowValue` hook (wall-clock digits per zoned window
+   parameter, from the same cached zone reads) and the outer range's
+   coverage (`wallClockQuery` on the query with the range's ends in the
+   window fields; a zoned `windowRange` field gives `noRangePredicate`);
+   a finished windowed read keeps its spans with reason `incomplete`,
+   while any other read that is not complete (failed, or an undocumented
+   short-page end) gets `spans: null`.
+   `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its
@@ -139,6 +154,12 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   leaves `generated` `addedFields` out of the body (`createBody`) and reads
+   the identity from its `url` source through the identity template in
+   reverse (`createdIdentity`, after CRUD Causality 0.5.0's
+   `created_identity()`); without one the 2xx create is `uncertain` with
+   `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
@@ -174,7 +195,9 @@ Data flows through four stages, each its own directory under `src/`:
    `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
    throttling under the document's root `x-throttling`, draft Throttling
    extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
-   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   `headers` (roles and time units), `bodyFields` (0.3.0: the same roles by
+   literal JSON dot-path, read from a throttling JSON body; a body wait of
+   no time counts as absent) and `signals`, `classifyThrottling`
    gives the verdict the client attaches as `WriteFailure.throttling`, a
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
@@ -240,10 +263,19 @@ Data flows through four stages, each its own directory under `src/`:
    on each update up to the first create, never on one with `sending`), at
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
-   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   the route's `x-completeness: { absent: deleted }` (`declaredCompleteness`,
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
-   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
+   the record's resource states `notFound: unavailable` through any
+   collection (`route.notFound`, resource-wide, from `resourceNotFound`
+   over every collection's `rawCompleteness`, after the reference
+   `resource_not_found`; conflicting or unrecognised values are
+   `unavailable`, a value beside an unrecognised `absent` counts; undefined
+   when not stated, which the Write Preconditions consumer must not take as
+   a confirmed deletion; 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   and `parentAbsent`, and ignores a declaration with an unrecognised
+   `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
    on the CRUD Resource Object, else, or when that one does not parse, the
    item GET operation, a Tombstone Object of the deletion-feeds draft; not
@@ -261,7 +293,9 @@ Data flows through four stages, each its own directory under `src/`:
    settled on during the sync, or whose stored tombstone a read dropped
    earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
    `stored`
-   and no GET; unchecked and `unknown` GET answers go there too.
+   and no GET; unchecked, `unknown` and `unavailable` GET answers go there
+   too (a feed tombstone stands over `unavailable`; without one, that
+   answer applies).
    `finishFeeds`, after every collection's checks, reads each feed once
    (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
    `feedCursors`, items counted per read against `maxRecords`;
@@ -279,12 +313,45 @@ Data flows through four stages, each its own directory under `src/`:
    a later complete read that returns the record, or `resolveWrite` `retry`
    on the record, clears the flag.
    `failWrite` and the waiting-path `discard` wake a removed head's drain.
-   `deleted`/`unknown` fail the head and each following held update
-   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
-   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   `deleted`/`unavailable`/`unknown` fail the head and each following held
+   update (`failWrite`, `missingRecord`, stored; a sleeping drain is woken
+   through `wakers`); `filtered` takes the returned record as confirmed (conflicts
    checked) and releases. A record settled on during the check (up to the
    end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   For a nested collection whose Collection Object declares
+   `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
+   the collection that supplies its path variable in `nestedUnder`, from
+   `model.providers`, skipping variables `constants` fix; dropped with two
+   or more parent resources), every parent
+   record concluded `deleted` or `unavailable` (declaration, GET or feed, at
+   the same three points as `reportMissing`) has `applyParentAbsent` conclude
+   the records last read under it (`nestedScopes`: confirmed records and
+   writes in scopes whose variable is the parent id) as `unavailable`,
+   never `deleted` (any `parentAbsent` value), with `source: 'parent'` and
+   the last known values as `record`, failing their heads through
+   `failMissing` and skipping a member a write settled on since the sync
+   began, or one this sync's read returned in the same scope
+   (`SyncRound.returned`, by scope: a bare id under another parent is
+   still marked); nothing is pruned. Records concluded `unavailable`
+   (`reportMissing`) are kept in `unavailableKept` (stored as the outbox's
+   `unavailable`) and `rebuild` falls back to them, so neither a vanished
+   write-less record nor one whose writes were discarded is pruned; a read
+   returning the record, a `filtered` or a `deleted` conclusion clears it.
+   `update()`/`remove()` of a kept record are held (`awaitingRefresh`) for
+   the next refresh. `holdMissing` and `evidenceHead` include deletes: a
+   held delete is released (and woken) unless the evidence is
+   `unavailable`, which fails it. `failMissing` on
+   `unavailable` also fails the rest of the record's queue in order,
+   deletes included, and parks a create in place (state `failed`,
+   `missingRecord`), stopping at a head in flight, not stored or already
+   parked. Each concluded nested scope is marked in `goneParents` (in
+   memory, cleared by a complete read of the scope); `update()` into a
+   marked scope, `remove()` into one, and `create()` into one, are
+   enqueued held and concluded at once (`concludeNew`). An unrecognised
+   `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
+   parent is GETed when `nestedWritesUnder` finds unsettled writes under
+   it, with a revision check around the GET.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
    confirmed copy (`setLastKnown` on every refresh and settled response;
@@ -368,7 +435,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
   first, throws `WindowReadError` for a full window it cannot split, keeps an
   item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
-  complete: `readCollections` turns that into `complete: false` with
+  complete. `PageWalk.windowValue(parameter, bound)` converts each query
+  window bound before it is sent (for a parameter read as wall-clock time,
+  `x-time-zone`; the caller supplies it), each bound separately before a
+  template is filled; converted bounds on one clock that end up out of
+  order (a window inside a repeated hour) throw `WindowReadError`.
+  `readCollections` turns a windowed read into `complete: false` with
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
@@ -453,6 +525,32 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/completeness-outcomes.test.ts` covers Collection Completeness
+  0.2.0 §4.3, `notFound`: a 404 or 410 as `unavailable` (PUT and PATCH, the
+  held write, the kept values, the report), the `deleted` default (no field,
+  `deleted`, an unrecognised value, no declaration), the operation and
+  legacy placements, no GET under `absent: deleted`, a later list or GET
+  superseding the mark for new updates, the stored value across a restart,
+  `missingRecordChecks: 'all'`, and precedence against a deletion feed; and
+  §4.4, `parentAbsent`, on the spec's §6.1 task lists
+  (`nestedTaskLists` in `__tests__/fixtures/deletion-declarations.ts`): the
+  tasks of a list that answers 404 concluded unavailable without a request,
+  a queued task update under a vanished list (the list GETed under the
+  default checks, the update failed as unavailable, the list's return), no
+  GET for a vanished list without writes under it, tasks unavailable (never
+  deleted) under a declared-deleted parent (no GET at all), any
+  `parentAbsent` value under parents concluded three ways, a moved member
+  not marked, a resource-wide `notFound` through an undeclared collection
+  (another collection, conflicting values, an unrecognised `absent`, an
+  `x-crud` list operation, none stated), no parent marks under an
+  unrecognised `absent`, `resourceNotFound` itself (wp-consumer R2), and no
+  conclusion for a parent that still exists, without the field, or with it
+  on the list operation; the #399 review:
+  a DELETE behind an unavailable record's update failed rather than sent, a
+  create into an unavailable parent's scope parked, a new edit of a member
+  under an unavailable parent concluded at once and sent again after the
+  parent returns, `record` on unavailable reports, and an unrecognised
+  `notFound` read as `unavailable`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -470,7 +568,8 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   declarations as the draft specs' own examples
   (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
   §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
-  the §5 overlay), each test naming the spec statement it checks, plus
+  the §5 overlay; its §6.1 `nestedTaskLists` is used by
+  `completeness-outcomes.test.ts`), each test naming the spec statement it checks, plus
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
   a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
@@ -506,6 +605,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
   userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
   dot-paths).
+- `unit/throttling/body-fields.test.ts` mirrors the Throttling spec's
+  `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
+  rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
+  `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus

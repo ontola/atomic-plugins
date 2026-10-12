@@ -1,0 +1,40 @@
+openapi: 3.0.3
+info:
+  title: Illustrative 410 for deletions only
+  version: 1.0.0
+  description: >-
+    Synthetic. A provider that answers 404 for any note the caller can no
+    longer reach (deleted, moved, or access lost) and documents that it
+    answers 410 for a note only when that note was deleted, and for nothing
+    else. Collection Completeness 0.3.0-draft notFound plus gone.
+servers:
+  - url: https://api.example.com
+components:
+  crudResources:
+    note:
+      identity:
+        urlTemplate: /notes/{noteId}
+        bindings:
+          noteId: { field: id }
+      collections:
+        notes:
+          urlTemplate: /notes
+          x-completeness:
+            absent: removed
+            notFound: unavailable
+            gone: deleted
+paths:
+  /notes:
+    get:
+      x-crud: { action: list, resource: note, collection: notes }
+      responses:
+        '200': { description: The caller's notes. }
+  /notes/{noteId}:
+    get:
+      parameters:
+        - { name: noteId, in: path, required: true, schema: { type: string } }
+      x-crud: { action: read, resource: note }
+      responses:
+        '200': { description: The note. }
+        '404': { description: 'Not found, or not readable by this caller.' }
+        '410': { description: 'The note was deleted; sent for deletions only.' }

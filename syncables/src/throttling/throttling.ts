@@ -1,11 +1,12 @@
 // @wc-ignore-file
 /**
- * The consumer side of the OpenAPI Throttling Extension 0.2.0-draft
+ * The consumer side of the OpenAPI Throttling Extension 0.3.0-draft
  * (`openapi-extensions/spec/throttling/README.md`): the root `x-throttling`
- * object's `headers` (header roles), `signals` (which responses mean
+ * object's `headers` (header roles), `bodyFields` (the same roles read from
+ * the JSON response body, since 0.3.0), `signals` (which responses mean
  * throttling) and the earliest retry time, after `classify()` in that
  * folder's `validate.py`. `limits` and `applies` are read only for the
- * bucket a `quotaExhausted` signal names (its window is the floor when no
+ * bucket a `quotaExhausted` signal names (its window is the fallback when no
  * time is given) and for which buckets an operation selects. Pacing against
  * the announced quotas is not implemented.
  */
@@ -73,6 +74,11 @@ export interface ThrottlingDeclaration {
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
   headers: Map<string, HeaderRoleObject>;
+  /**
+   * Header Role Objects by JSON body dot-path (`bodyFields`, 0.3.0): the
+   * path's property names, matched literally and case-sensitively.
+   */
+  bodyFields: Map<string, HeaderRoleObject>;
   /**
    * The Signal Objects, in order. Absent when the document declares none:
    * only a 429 is then throttling, and this extension says nothing about
@@ -156,32 +162,74 @@ export function declaredThrottling(
   const applies = Array.isArray(root['applies'])
     ? root['applies'].filter((b): b is string => typeof b === 'string')
     : [];
-  const headers = new Map<string, HeaderRoleObject>();
-  const rolesSeen = new Set<string>();
-  if (isRecord(root['headers']))
-    for (const [name, value] of Object.entries(root['headers'])) {
-      const key = name.toLowerCase();
-      if (!isRecord(value) || headers.has(key)) continue;
-      const { role, unit, description } = value;
-      if (typeof role !== 'string' || !ROLES.has(role) || rolesSeen.has(role))
-        continue;
-      if (TIMED_ROLES.has(role)) {
-        if (typeof unit !== 'string' || !UNITS.has(unit)) continue;
-      } else if (unit !== undefined) continue;
-      rolesSeen.add(role);
-      headers.set(key, {
-        role: role as HeaderRole,
-        ...(typeof unit === 'string' ? { unit: unit as TimeUnit } : {}),
-        ...(typeof description === 'string' ? { description } : {}),
-      });
-    }
-  const declaration: ThrottlingDeclaration = { windows, applies, headers };
+  const headers = roleMap(root['headers'], (name) => name.toLowerCase());
+  // A dot-path is one or more nonempty property names joined by `.`
+  // (`a..b`, `.a` and `a.` are invalid and left out).
+  const bodyFields = roleMap(root['bodyFields'], (path) =>
+    path.split('.').every((name) => name !== '') ? path : undefined,
+  );
+  const declaration: ThrottlingDeclaration = {
+    windows,
+    applies,
+    headers,
+    bodyFields,
+  };
   if (Array.isArray(root['signals']) && root['signals'].length) {
     const signals = root['signals'].map(parseSignal);
     if (signals.every((s) => s !== undefined))
       declaration.signals = signals as SignalObject[];
   }
   return declaration;
+}
+
+/**
+ * A map of Header Role Objects (`headers` or `bodyFields`) by the key
+ * `keyOf` gives. An entry that does not parse (an unknown role, a missing
+ * or misplaced unit, a role or a key already taken in this map, a key
+ * `keyOf` refuses) is left out.
+ */
+function roleMap(
+  value: unknown,
+  keyOf: (name: string) => string | undefined,
+): Map<string, HeaderRoleObject> {
+  const out = new Map<string, HeaderRoleObject>();
+  const rolesSeen = new Set<string>();
+  if (!isRecord(value)) return out;
+  for (const [name, entry] of Object.entries(value)) {
+    const key = keyOf(name);
+    if (key === undefined || !isRecord(entry) || out.has(key)) continue;
+    const { role, unit, description } = entry;
+    if (typeof role !== 'string' || !ROLES.has(role) || rolesSeen.has(role))
+      continue;
+    if (TIMED_ROLES.has(role)) {
+      if (typeof unit !== 'string' || !UNITS.has(unit)) continue;
+    } else if (unit !== undefined) continue;
+    rolesSeen.add(role);
+    out.set(key, {
+      role: role as HeaderRole,
+      ...(typeof unit === 'string' ? { unit: unit as TimeUnit } : {}),
+      ...(typeof description === 'string' ? { description } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * A body field's value as text (§"Response body fields"): a string with
+ * its surrounding whitespace removed; a number with no fractional part as
+ * its decimal form (`3.0` reads as `3`); undefined for any other number, a
+ * boolean, `null`, an array, an object, or a path that does not resolve.
+ * The path's names are read literally, own properties only.
+ */
+function bodyText(body: unknown, path: string): string | undefined {
+  let node = body;
+  for (const name of path.split('.')) {
+    if (!isRecord(node) || !Object.hasOwn(node, name)) return undefined;
+    node = node[name];
+  }
+  if (typeof node === 'string') return node.trim();
+  if (typeof node === 'number' && Number.isInteger(node)) return String(node);
+  return undefined;
 }
 
 function parseSignal(value: unknown): SignalObject | undefined {
@@ -431,6 +479,13 @@ export function headerTime(
     : Math.max(absolute, receivedAt + (absolute - serverNow));
 }
 
+/** One value of a role, as text, from a header or (`body`) a body field. */
+interface RoleValue {
+  value: string;
+  unit: TimeUnit | undefined;
+  body: boolean;
+}
+
 /**
  * The standard `Retry-After` header as RFC 9110 §10.2.3 defines it, used
  * when the document declares no `retryAfter` role: this extension does not
@@ -485,44 +540,55 @@ export function classifyThrottling(
   }
   if (!signal && response.status !== 429) return undefined;
   const meaning: ThrottlingMeaning = signal?.meaning ?? 'throttled';
-  const roles = new Map<HeaderRole, { value: string; unit?: TimeUnit }>();
+  // Each role's values: from its header, then from its body field (0.3.0).
+  // A role read from both counts once: the later time for retryAfter and
+  // reset, exhausted when either remaining is 0.
+  const roles = new Map<HeaderRole, RoleValue[]>();
+  const add = (role: HeaderRole, entry: RoleValue): void => {
+    roles.set(role, [...(roles.get(role) ?? []), entry]);
+  };
   const declared = declaration?.headers ?? new Map<string, HeaderRoleObject>();
   for (const [name, header] of declared) {
     const value = headerValue(headers, name);
     if (value === undefined) continue;
-    const entry: { value: string; unit?: TimeUnit } = { value };
-    if (header.unit) entry.unit = header.unit;
-    roles.set(header.role, entry);
+    add(header.role, { value, unit: header.unit, body: false });
   }
   if (![...declared.values()].some((h) => h.role === 'retryAfter')) {
     const value = headerValue(headers, 'retry-after');
     if (value !== undefined)
-      roles.set('retryAfter', {
+      add('retryAfter', {
         value,
-        unit: STANDARD_RETRY_AFTER.unit as TimeUnit,
+        unit: STANDARD_RETRY_AFTER.unit,
+        body: false,
       });
   }
-  const dateHeader = headerValue(headers, 'date');
-  const times: number[] = [];
-  const retryAfter = roles.get('retryAfter');
-  if (retryAfter?.unit) {
-    const t = headerTime(
-      retryAfter.value,
-      retryAfter.unit,
-      receivedAt,
-      dateHeader,
-    );
-    if (t !== undefined) times.push(t);
+  // Body fields are read only from a throttling response with a JSON body.
+  if (declaration?.bodyFields.size) {
+    const json = parsedBody();
+    for (const [path, field] of declaration.bodyFields) {
+      const value = bodyText(json, path);
+      if (value === undefined) continue;
+      add(field.role, { value, unit: field.unit, body: true });
+    }
   }
-  const remaining = roles.get('remaining');
+  const dateHeader = headerValue(headers, 'date');
+  /**
+   * The times one role's values name. A body field that gives no wait (a
+   * delay of 0, or a time not after the response) counts as absent, so the
+   * fallbacks below still apply.
+   */
+  const timed = (role: HeaderRole): number[] =>
+    (roles.get(role) ?? []).flatMap(({ value, unit, body }) => {
+      if (!unit) return [];
+      const t = headerTime(value, unit, receivedAt, dateHeader);
+      if (t === undefined || (body && t <= receivedAt)) return [];
+      return [t];
+    });
+  const times = timed('retryAfter');
   const exhausted =
     meaning === 'quotaExhausted' ||
-    (remaining !== undefined && integer(remaining.value) === 0);
-  const reset = roles.get('reset');
-  if (exhausted && reset?.unit) {
-    const t = headerTime(reset.value, reset.unit, receivedAt, dateHeader);
-    if (t !== undefined) times.push(t);
-  }
+    (roles.get('remaining') ?? []).some(({ value }) => integer(value) === 0);
+  if (exhausted) times.push(...timed('reset'));
   const verdict: ThrottlingVerdict = { meaning };
   if (signal) verdict.signal = signal;
   if (signal?.bucket !== undefined) verdict.bucket = signal.bucket;
