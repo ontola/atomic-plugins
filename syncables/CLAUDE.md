@@ -460,8 +460,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
   offset by `state.pageSize` (≥ 1), else the page size sent
   (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
-  and throws `PageReadError` with neither; `itemCount` (default) keeps
-  `nextCursor`'s items-returned step. The validator checks rule 24,
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) keeps `nextCursor`'s
+  items-returned step. The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):

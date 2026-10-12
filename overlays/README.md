@@ -851,7 +851,7 @@ the response array, as this may be less than the limit", while syncables
 (0.21.0 and 0.22.0) advances by the entries returned and stops at the
 first empty page. So with syncables, an offset list whose page holds fewer
 entries than the limit before its end is read again from inside that page
-(the repeated entries fail a collection read), and an empty page before
+(the repeated entries fail the read: a collection read, and from syncables 0.22.0 any offset read), and an empty page before
 `total_count` ends the read as if complete, missing the entries after it
 without an error. Whether Box answers such pages is not verified. The
 marker lists do not have this risk. `GET /files/{file_id}/collaborations`

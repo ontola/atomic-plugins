@@ -167,12 +167,97 @@ describe('advance: itemCount (the default)', () => {
       constants: { folder_id: '0' },
     });
     expect(offsets.slice(0, 2)).toEqual([0, 2]);
-    expect(result.errors.join()).toMatch(/repeated record identity/);
+    expect(result.errors.join()).toMatch(/holds an item an earlier page returned/);
   });
 
   it('stops at an empty page before total_count, as before', async () => {
     const { transport } = provider(10, 4, { holes: [4, 5, 6, 7] });
     expect(await read(scheme(), transport)).toHaveLength(4);
+  });
+});
+
+describe('a server that ignores the offset (review of #484)', () => {
+  for (const advance of ['pageSize', 'itemCount'] as const)
+    it(`ends paginate after the repeated page under ${advance}`, async () => {
+      // The server answers the same two entries whatever the offset.
+      let requests = 0;
+      const transport: Transport = () => {
+        requests += 1;
+        return Promise.resolve({
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            entries: [{ id: 'a' }, { id: 'b' }],
+            limit: 2,
+            total_count: 100,
+          }),
+        });
+      };
+      const s = scheme(advance);
+      // Without a totalCount an itemCount read has no next page at all.
+      if (advance === 'pageSize') delete s.response!.bodyFields!['total_count'];
+      await expect(read(s, transport, 2)).rejects.toThrow(
+        /holds an item an earlier page returned/,
+      );
+      expect(requests).toBe(2);
+    });
+
+  it('ends paginate on a repeated page without ids, by its fingerprint', async () => {
+    let requests = 0;
+    const transport: Transport = () => {
+      requests += 1;
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ entries: [{ name: 'x' }], limit: 1 }),
+      });
+    };
+    const s = scheme('pageSize');
+    delete s.response!.bodyFields!['total_count'];
+    await expect(read(s, transport, 1)).rejects.toThrow(
+      /repeats the page before it/,
+    );
+    expect(requests).toBe(2);
+  });
+});
+
+describe('values that are not integers (review of #484)', () => {
+  for (const reported of [2.5, '2', 0, -2])
+    it(`steps by the size sent when the response reports ${JSON.stringify(reported)}`, async () => {
+      const offsets: number[] = [];
+      const transport: Transport = (request) => {
+        const offset = Number(request.url.searchParams.get('offset') ?? '0');
+        offsets.push(offset);
+        const entries: { id: string }[] = [];
+        for (let i = offset; i < Math.min(6, offset + 3); i += 1)
+          entries.push({ id: `i${i}` });
+        return Promise.resolve({
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ entries, limit: reported, total_count: 6 }),
+        });
+      };
+      await read(scheme('pageSize'), transport, 3);
+      expect(offsets).toEqual([0, 3]);
+    });
+
+  it('does not take a total_count that is a string', async () => {
+    const offsets: number[] = [];
+    const transport: Transport = (request) => {
+      const offset = Number(request.url.searchParams.get('offset') ?? '0');
+      offsets.push(offset);
+      const entries: { id: string }[] = [];
+      for (let i = offset; i < Math.min(4, offset + 2); i += 1)
+        entries.push({ id: `i${i}` });
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ entries, limit: 2, total_count: '4' }),
+      });
+    };
+    await read(scheme('pageSize'), transport, 2);
+    // Without a carried totalCount the read ends at the first empty page.
+    expect(offsets).toEqual([0, 2, 4]);
   });
 });
 

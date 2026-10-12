@@ -1470,8 +1470,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `pageSize` field, else the size sent) instead of the items the page held,
   and ends the read only once it reaches `totalCount` (without one, at an
   empty page); a short or empty page before that no longer ends it. With
-  neither page size known the read ends with an error. `itemCount`, the
-  default, is unchanged. The scheme validator checks rule 24 and
+  neither page size known the read ends with an error. A reported page size
+  counts only as an integer of at least 1 and a `totalCount` as an integer
+  of at least 0, read per response. `itemCount`, the default, steps as
+  before. Every offset read (`paginate` and `ApiClient.paginate` too, not
+  only a collection read) now ends with `PageReadError` at a page holding an
+  item an earlier page returned (by identity, else a page identical to the
+  one before), so a server that ignores the offset is not asked again
+  without end. The scheme validator checks rule 24 and
   `resolveEffectiveScheme` rule 25.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the

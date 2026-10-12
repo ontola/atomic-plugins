@@ -12,7 +12,8 @@ import type { OpenApiDocument } from "../../syncables/src/openapi/types.js";
 // A Box folder listing whose page holds fewer entries than the limit before
 // the end, read with syncables through the actual catalogs, pinned OAD and
 // local overlay bytes: under pagination v2 syncables advances by the
-// entries returned and reads the short page again from inside it; under v3
+// entries returned, reads the short page again from inside it and ends the
+// read on the repeated entries; under v3
 // (Pagination Schemes 0.7.0 `advance: pageSize`) it steps by the limit to
 // `total_count`. Synthetic responses; no provider is called. Run from
 // syncables/ with
@@ -61,12 +62,14 @@ const read = (catalog: string, transport: Transport) =>
   });
 
 describe("Box offset lists through the catalogs", () => {
-  it("re-reads from inside a short page under pagination v2", async () => {
+  it("re-reads from inside a short page under pagination v2, and ends with an error", async () => {
     const { transport, offsets } = folder();
-    const items = await read("2026-10-12-box-pagination-v2.json", transport);
-    expect(offsets.slice(0, 2)).toEqual([0, 2]);
-    // f4 and f5 come back twice.
-    expect(items.length).toBeGreaterThan(8);
+    // f4 and f5 come back twice; the repeat ends the read (Pagination
+    // Schemes 0.7.0 §4.3.2 asks it of every offset read).
+    await expect(
+      read("2026-10-12-box-pagination-v2.json", transport),
+    ).rejects.toThrow(/holds an item an earlier page returned/);
+    expect(offsets).toEqual([0, 2, 4]);
   });
 
   it("steps by the limit to total_count under pagination v3", async () => {

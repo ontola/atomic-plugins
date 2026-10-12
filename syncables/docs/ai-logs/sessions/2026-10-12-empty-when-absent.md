@@ -55,3 +55,18 @@ with `PageReadError`; `itemCount` is unchanged. The validator checks rule
 24 and `resolveEffectiveScheme` rule 25. Tests in
 `unit/read/offset-advance.test.ts`, including the default re-reading a
 short page and stopping at an empty one.
+
+## Turn 4
+
+**Human (via the coordinator session):** Review of #484: `paginate()` has
+no repeat check on offset reads, so an `advance: pageSize` read without
+`totalCount` against a server that ignores `offset` loops until the
+transport stops it; the same gap exists for `itemCount`. Run the check on
+every offset walk. The step must be an integer of at least 1.
+
+**Assistant:** The identity check (else the previous page's fingerprint,
+also when no item has an id) now runs on every offset walk, so such a
+read ends after the second page under either rule. A reported page size
+and a `totalCount` count only as integers (at least 1 and 0), read from
+the body per response. Tests for both advance modes, id-less pages and
+non-integer values.

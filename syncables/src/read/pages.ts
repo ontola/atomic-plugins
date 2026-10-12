@@ -208,6 +208,29 @@ function declaredEnvelope(
     : { path: '', emptyWhenAbsent: false };
 }
 
+/**
+ * The value of the scheme's response body field with `role`, when it is an
+ * integer of at least `min` as the body carries it (spec 0.7.0 §4.3.2).
+ */
+function integerRole(
+  scheme: PaginationSchemeObject,
+  body: unknown,
+  role: string,
+  min: number,
+): number | undefined {
+  if (!isRecord(body)) return undefined;
+  for (const [name, field] of Object.entries(
+    scheme.response?.bodyFields ?? {},
+  )) {
+    if (field.role !== role) continue;
+    const value = readNestedField(body, name);
+    if (typeof value === 'number' && Number.isInteger(value) && value >= min)
+      return value;
+    return undefined;
+  }
+  return undefined;
+}
+
 /** The `advance` of the scheme's offset field (spec 0.7.0 §4.3.2), if any. */
 function offsetAdvance(
   scheme: PaginationSchemeObject,
@@ -615,12 +638,28 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
           `Page ${number} holds ${items.length} items, more than the declared ${full}; the read is not complete`,
         );
       }
+    }
+    // §4.4.5, and §4.3.2 (0.7.0) for every offset read: a page holding an
+    // item an earlier page returned ends the read, so a server that ignores
+    // the page or offset field is not asked again without end.
+    if (
+      scheme &&
+      ((short && shortSize !== undefined) ||
+        (scheme.type === 'pageNumber' && offsetAdvance(scheme) !== undefined))
+    ) {
+      const where =
+        cursor.offset !== undefined || offsetAdvance(scheme) !== undefined
+          ? `The page at offset ${cursor.offset ?? 0}`
+          : `Page ${number}`;
       const identity = walk.identity;
-      if (identity) {
-        const ids = items.map((item) => identity(item)).filter((id) => id);
+      const ids = identity
+        ? items.map((item) => identity(item)).filter((id) => id)
+        : [];
+      // Items without an identity value fall back to the page fingerprint.
+      if (ids.length > 0) {
         if (ids.some((id) => seenIds.has(id))) {
           throw new PageReadError(
-            `Page ${number} holds an item an earlier page returned; the read is not complete`,
+            `${where} holds an item an earlier page returned; the read is not complete`,
           );
         }
         for (const id of ids) seenIds.add(id);
@@ -628,7 +667,7 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         const fingerprint = JSON.stringify(items);
         if (items.length > 0 && fingerprint === previousPage) {
           throw new PageReadError(
-            `Page ${number} repeats the page before it; the read is not complete`,
+            `${where} repeats the page before it; the read is not complete`,
           );
         }
         previousPage = fingerprint;
@@ -699,23 +738,25 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       !linkPresent &&
       offsetAdvance(scheme) === 'pageSize'
     ) {
-      const step =
-        state.pageSize !== null && state.pageSize >= 1
-          ? state.pageSize
-          : sendsPageSize
-            ? pageSize
-            : undefined;
+      // §4.3.2: a reported page size counts as an integer of at least 1,
+      // a totalCount as an integer of at least 0; read per response, as
+      // sent (a string or a fraction is not carried).
+      const reported = integerRole(scheme, body, 'pageSize', 1);
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      const sent =
+        sendsPageSize && Number.isInteger(pageSize) && (pageSize ?? 0) >= 1
+          ? pageSize
+          : undefined;
+      const step = reported ?? sent;
       const offset = cursor.offset ?? 0;
-      if (step === undefined || step < 1) {
+      if (step === undefined) {
         throw new PageReadError(
           `The page at offset ${offset} gives no page size to advance by; the read is not complete`,
         );
       }
       const following = offset + step;
       if (
-        state.totalCount !== null
-          ? following >= state.totalCount
-          : items.length === 0
+        totalCount !== undefined ? following >= totalCount : items.length === 0
       ) {
         return;
       }
