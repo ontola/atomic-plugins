@@ -231,7 +231,7 @@ def may_send(declaration, baseline, written, current, headers=None, body=None, s
     return "send", {}
 
 
-def write_answer(action, status, deletion_confirmed=False):
+def write_answer(action, status, deletion_confirmed=False, gone=None):
     """§4.5 "The write's own answer": classify a 404/410 to the write itself, on any send.
 
     Returns 'applied' or 'gone-unconfirmed' for a delete, 'gone' for an update,
@@ -240,12 +240,16 @@ def write_answer(action, status, deletion_confirmed=False):
     if status not in (404, 410):
         return None
     if action == "delete":
-        return "applied" if deletion_confirmed else "gone-unconfirmed"
+        if status == 410 and gone is not None:
+            confirmed = gone == "deleted"  # a stated gone decides a 410 (Collection Completeness 0.3.0)
+        else:
+            confirmed = deletion_confirmed
+        return "applied" if confirmed else "gone-unconfirmed"
     return "gone"
 
 
 def resolve_unknown(declaration, method, baseline, written, read=None, sent_version=None,
-                    action=None, deletion_confirmed=False, tombstone=None):
+                    action=None, deletion_confirmed=False, tombstone=None, gone=None):
     """§4.5 after an unknown outcome.
 
     Only a known update or delete is resolved: by `action`, else by a PUT,
@@ -265,8 +269,11 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
     the version an ifMatch write sent. `deletion_confirmed` is true for a
     Deletion Feeds tombstone for this object, an explicit notFound: deleted on
     a collection of the resource, or an absent: deleted collection the object
-    was a member of when last read; `tombstone` is the resource's
-    x-read-tombstone or None.
+    was a member of when last read; it decides a 404, and a 410 without
+    `gone`. `gone` is the resource's stated Collection Completeness 0.3.0
+    `gone` value, or None: when stated, it alone decides a 410 (deleted
+    confirms, unavailable does not).
+    `tombstone` is the resource's x-read-tombstone or None.
     """
     declaration = declaration or {}
     kind = declaration.get("kind")
@@ -282,9 +289,9 @@ def resolve_unknown(declaration, method, baseline, written, read=None, sent_vers
         return "read-first"
     status, body = read.get("status"), read.get("body")
     headers = read.get("headers")
-    gone = write_answer(action, status, deletion_confirmed)
-    if gone:  # rule 1
-        return gone
+    answer = write_answer(action, status, deletion_confirmed, gone)
+    if answer:  # rule 1
+        return answer
     if not (isinstance(status, int) and 200 <= status < 300) or not isinstance(body, dict):
         return "unknown"  # rule 7
     if tombstone and any(_same(_field(body, tombstone["field"]), v) for v in tombstone["values"]):

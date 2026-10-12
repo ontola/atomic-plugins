@@ -49,6 +49,12 @@ export interface ReadCollection {
    * envelope name).
    */
   itemsField?: string;
+  /**
+   * The Collection Object's `envelope.emptyWhenAbsent` (Pagination Schemes
+   * 0.7.0 §4.4.2): with a non-empty `itemsField`, a body without that field
+   * is a page with no items.
+   */
+  emptyWhenAbsent?: boolean;
   /** Item URL from the declared identity; absent for a list-only resource. */
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
@@ -217,6 +223,11 @@ export function discoverReadModel(
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;
+      const emptyWhenAbsent =
+        isRecord(col['envelope']) &&
+        col['envelope']['emptyWhenAbsent'] === true &&
+        typeof itemsField === 'string' &&
+        itemsField !== '';
       collections.push({
         name,
         resource,
@@ -232,6 +243,7 @@ export function discoverReadModel(
         ...(typeof itemsField === 'string' || itemsField === null
           ? { itemsField: itemsField ?? '' }
           : {}),
+        ...(emptyWhenAbsent ? { emptyWhenAbsent } : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
       });

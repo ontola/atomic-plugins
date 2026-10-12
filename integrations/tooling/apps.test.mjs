@@ -28,6 +28,7 @@ import {
 } from './apps.mjs';
 import {
   buildCatalog,
+  dependencyDirs,
   explained,
   readBuilds,
   recordedFor,
@@ -610,4 +611,27 @@ test('usertest: a build that misses a package says to install the plugin depende
     /^Error: boom$/,
   );
   assert.equal(await explained('notion', async () => 7), 7);
+});
+
+test("usertest: catalog.mjs installs each app's plugin folders and its lane's shared packages", () => {
+  const dirs = dependencyDirs([
+    { id: 'notion', paths: ['integrations/sync-status/**'] },
+    { id: 'issue-tracker', paths: ['devonian/src/**', 'ontology/**'] },
+  ]);
+
+  for (const id of [
+    'calendar',
+    'issue-tracker',
+    'money',
+    'notion',
+    'timesheets',
+  ])
+    for (const dir of [`integrations/${id}`, `integrations/${id}/app`])
+      assert.ok(dirs.includes(dir), dir);
+  // A lane's shared packages, once each; never a path outside the repository.
+  assert.ok(dirs.includes('devonian'));
+  assert.equal(dirs.filter(d => d === 'devonian').length, 1);
+  assert.ok(dirs.every(d => !d.startsWith('/') && !d.includes('..')));
+  // This repository's lanes resolve too.
+  assert.ok(dependencyDirs().includes('integrations/notion/app'));
 });

@@ -31,6 +31,8 @@ export {
   ontologyShortname,
 } from './read/ontology.js';
 export type { Datatype, Ontology, Term } from './read/ontology.js';
+export { coveredSpan, instantsOf, wallClockParam } from './read/time-zone.js';
+export type { CoveredSpan, FieldSpan, ReadCoverage } from './read/time-zone.js';
 export { DEFAULT_READ_LIMITS } from './read/pages.js';
 export type { ReadLimits } from './read/pages.js';
 export { fetchTransport } from './read/transport.js';
@@ -49,6 +51,7 @@ export type {
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
+  WritePreconditionState,
   WriteConflict,
   WriteResolution,
   WriteFailure,
@@ -56,10 +59,15 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  PresenceChange,
+  PresenceMark,
+  PresenceMarkValue,
+  MissingRecordFailure,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,
   PollOptions,
   SyncResult,
+  CollectionCoverage,
   IncompleteRead,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
