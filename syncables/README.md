@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.6.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -633,8 +633,9 @@ call) are kept, the latest per record, and told at the end of a later
 sync; they are kept in memory only, so a restart loses them though not the
 marks. A removal the handler refused keeps the record and its mark; an
 `unconfirmed` one is checked again by a later sync. A mark dropped because
-a write to the record settled, or because a check found the record while a
-write or confirmed copy keeps it, drops its held change too; if the app had
+a read returned the record, a write to the record settled, or a check
+found the record while a write or confirmed copy keeps it, drops its held
+change too; if the app had
 been told a mark of the record (or the mark was restored from storage), it
 is told `present` instead (not after a delete the app made). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
@@ -1608,7 +1609,12 @@ const { records, ontology, errors } = await readPlatform(document, {
   Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
-  collection's read with "No items array at <path>", never an empty read.
+  collection's read with "No items array at <path>", never an empty read,
+  unless the envelope (the Collection Object's or the scheme's) declares
+  `emptyWhenAbsent: true` (Pagination Schemes 0.7.0): then a body in which
+  the field is absent (an object along the path lacks the next segment) is
+  a page with no items, for providers that leave an empty array out. A
+  present `null` or other non-array still fails the read.
   `itemsField: null` (or `""`) says the body root is the array, and an item
   that is not an object fails the read ("Item <n> at <path> is not an
   object") instead of being dropped. Without an envelope, the pagination
@@ -1747,7 +1753,7 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
-  Schemes 0.6.0, Throttling 0.3.0, Filtering 0.2.0 `x-time-zone`, Runtime
+  Schemes 0.6.0 and 0.7.0, Throttling 0.3.0, Filtering 0.2.0 `x-time-zone`, Runtime
   Schemas 0.1.0, Write Preconditions 0.1.0). Behaviour changes to know
   before upgrading, each only
   for documents that declare the field named:
@@ -1770,6 +1776,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   - a `shortPage` end, an oversized page or a repeated item ends a
     `pageNumber` read as the spec says, and a page size is capped at the
     parameter's `maximum`;
+  - for every document with an `offset` scheme: an `itemCount` read (the
+    default) without a `totalCount` reads on to the first empty page
+    instead of stopping after its first page, and every offset read
+    (`paginate` and `ApiClient.paginate` too) ends with `PageReadError` at
+    a page holding an item an earlier page returned (or a page identical to
+    the one before); `advance: pageSize` steps by the page size and ends
+    only at `totalCount` or an empty page;
   - `sync()` now applies reads that ended without an error but are not
     complete (range windows, undocumented short pages), adding and
     updating records only, listed in `SyncResult.incomplete`;
@@ -1778,7 +1791,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     space, tab, CR and LF are trimmed, an integer above 2^53 − 1 does not
     parse (before, a long `Retry-After` outside `x-throttling` was capped
     at `retry.maxRetryAfterMs`), and an HTTP-date parses only in RFC 9110's
-    exact forms, not through `Date.parse`;
+    exact forms, not through `Date.parse` (a leap second reads as the next
+    second, a 4-digit year below 100 keeps its value, and the RFC 850
+    50-year rule compares full dates);
   - an `x-runtime-schema` the client cannot use fails that resource's
     collections;
   - a create, update or delete whose operation declares
@@ -1837,7 +1852,18 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     `MissingRecordFailure` names the three values; reports carry `record`.
   - Reads and pagination: Pagination Schemes 0.6.0 zero-based page
     numbers (`start`) and `shortPage` ends (`PageReadError`,
-    `ShortPageObject`, validator rules 19–22); the page size capped at the
+    `ShortPageObject`, validator rules 19–22); Pagination Schemes 0.7.0
+    `emptyWhenAbsent` on an Envelope Object (a body without the
+    `itemsField` is a page with no items; `paginate` and
+    `ApiClient.paginate` take it), `advance` on an `offset` field
+    (`itemCount`, the default, or `pageSize`; a reported page size counts
+    as an integer of at least 1, a `totalCount` of at least 0; with neither
+    page size known the read ends with an error), the offset repeat check,
+    an `itemCount` read without `totalCount` to the first empty page (#495),
+    validator rules 23–25. Known limit: a scheme with both an offset and a
+    `nextLink` field follows the link and does not advance the offset
+    meanwhile, so under `advance: pageSize` the read ends with an error
+    where the link ends rather than short. The page size capped at the
     parameter's `maximum`; `paginate` takes `idField` for windowed reads;
     `walkPages` takes `windowValue`; incomplete reads applied by `sync()`
     (`SyncResult.incomplete`, `IncompleteRead`, `ApiClientOptions.ranges`);

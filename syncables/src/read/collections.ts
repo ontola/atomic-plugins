@@ -361,6 +361,7 @@ export async function readCollections(
             ...(collection.itemsField !== undefined
               ? { itemsField: collection.itemsField }
               : {}),
+            ...(collection.emptyWhenAbsent ? { emptyWhenAbsent: true } : {}),
             ...(range ? { range } : {}),
             ...(windowValue ? { windowValue } : {}),
             identity: (value) => asText(value[collection.idField]),
