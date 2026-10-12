@@ -310,7 +310,7 @@ class BodyFieldFollowUpTests(unittest.TestCase):
 
     def test_whitespace_and_large_integers(self):
         for value, expected in (("\t3\r\n", NOW + 3), ("\u00a03", None), ("3\u3000", None),
-                                (float(2 ** 53 - 1), NOW + 2 ** 53 - 1), (1e300, None),
+                                (float(2 ** 53 - 1), NOW + 2 ** 53 - 1), (1e21, None), (1e300, None),
                                 (2 ** 53 - 1, NOW + 2 ** 53 - 1), (2 ** 53, None), (10 ** 400, None),
                                 ("9" * 400, None), ("9" * 5000, None)):
             body = {"error_extra": {"retry_after": value}}
@@ -328,6 +328,13 @@ class BodyFieldFollowUpTests(unittest.TestCase):
         body = {"error_extra": {"retry_after": 0}}
         self.assertEqual(classify(d, 429, {"Retry-After": "0"}, body, NOW)["retryAt"], NOW)
         self.assertEqual(classify(d, 429, {}, body, NOW)["retryAt"], NOW + 30)
+        # The #472 review's case: the same value and unit on both sides.
+        d = {"x-throttling": {"headers": {"Retry-After": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}},
+                              "bodyFields": {"w": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}},
+                              "signals": [{"status": [429], "meaning": "throttled", "minDelaySeconds": 30}]}}
+        validate(d)
+        self.assertEqual(classify(d, 429, {"Retry-After": "0"}, {"w": 0}, NOW)["retryAt"], NOW)
+        self.assertEqual(classify(d, 429, {}, {"w": 0}, NOW)["retryAt"], NOW + 30)
 
     def test_a_zero_body_wait_does_not_suppress_the_fallback(self):
         body = {"error_extra": {"retry_after": 0}}

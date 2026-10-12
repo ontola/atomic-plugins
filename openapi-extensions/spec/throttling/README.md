@@ -235,7 +235,10 @@ with no fractional part (`3.0`) reads the same; any other number (`3.5`), a
 boolean, `null`, an array or an object does not parse. An integer above
 2^53 − 1 (9007199254740991), written with or without a fractional part, does
 not parse either: beyond it a JSON number is not held exactly by every parser
-(RFC 8259 §6), and `1e300` would otherwise read as a 301-digit delay.
+(RFC 8259 §6), and `1e300` would otherwise read as a 301-digit delay. The
+bound is fixed so that consumers agree: before it, "too large to parse" was
+left to each one, and `1e21` read as a 22-digit integer in Python but did not
+parse in TypeScript, whose `String(1e21)` is `"1e+21"`.
 
 A role read from both a header and a body field counts once: for `reset` and
 `retryAfter`, the later of the two times; for `limit` and `used`, the
