@@ -1,6 +1,8 @@
 # Atomic plugins product requirements for ELFA and TUBS
 
-Draft for product review — 12 October 2026. This PRD owns portable view plugins, provider integrations, transformations and sync. The companion [database apps PRD](https://git.elfaconsortium.eu/ELFA/database-apps/src/branch/docs/elfa-tubs-prd/docs/PRD.md) owns Resource View, editable schemas and forms. Links target review branches until both documents merge.
+> **Living document:** These requirements are subject to change. Contact Michiel de Jong via Matrix or Discord, as applicable, to learn the latest thinking on these topics.
+
+Draft for product review — 12 October 2026. This PRD owns portable view plugins, provider integrations, transformations and sync. The companion [database apps PRD](https://git.elfaconsortium.eu/ELFA/database-apps/src/branch/main/docs/PRD.md) owns Resource View, editable schemas and forms.
 
 ## TUBS vision and confirmed direction
 
