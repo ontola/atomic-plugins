@@ -70,7 +70,8 @@ node integrations/tooling/link-atomic-server.mjs --no-fetch
 - **Always write the stamp.** `serve.mjs` (#412) refuses a binary whose stamp
   names another commit than its checkout, and prints the build lines. A
   binary without a stamp is trusted, so a build that skips the stamp is never
-  caught when its checkout moves. On 2026-10-12 the `e922179` (candidate21)
+  caught when its checkout moves; `serve.mjs` warns about it and prints the
+  line that writes the stamp. On 2026-10-12 the `e922179` (candidate21)
   build had none; it was given its own SHA under the heavy lock after
   checking that the binary embeds that commit.
 
