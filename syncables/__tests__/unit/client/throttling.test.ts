@@ -20,6 +20,7 @@ import {
   moneybirdThrottling,
   responseSignals,
   throttledPets,
+  todoistThrottling,
 } from '../../fixtures/throttling.js';
 import { petsDocument } from '../../fixtures/pets.js';
 import { fixedReads } from '../../fixtures/fixed-reads.js';
@@ -808,6 +809,52 @@ describe('without signals, the 403 heuristic stays', () => {
     await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
     expect(fake.writes).toHaveLength(2);
     expect(c.authBlocked()).toBeUndefined();
+  });
+});
+
+describe("Todoist's error_extra.retry_after (bodyFields, Throttling 0.3.0)", () => {
+  const todoist429 = (retryAfter: unknown): TransportResponse =>
+    json(
+      {
+        error: 'Too many requests',
+        error_tag: 'TOO_MANY_REQUESTS',
+        http_code: 429,
+        error_extra: { retry_after: retryAfter, event_id: 'x' },
+      },
+      429,
+    );
+
+  it('retries a write no earlier than the body says', async () => {
+    const times: number[] = [];
+    const fake = provider((_r, n) => {
+      times.push(Date.now());
+      return n === 1 ? todoist429(1) : undefined;
+    });
+    const c = await client(doc(todoistThrottling), fake);
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 3000,
+    });
+    expect(fake.writes).toHaveLength(2);
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(990);
+  });
+
+  it('waits the body time on a read, through the injected sleep', async () => {
+    const slept: number[] = [];
+    const fake = provider(() => undefined, {
+      list: (_r, n) => (n === 1 ? todoist429(2) : undefined),
+    });
+    const result = await readCollections(doc(todoistThrottling), {
+      transport: fake.transport,
+      legacy: {},
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect(result.collections[0]).toMatchObject({ complete: true });
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThan(1900);
+    expect(slept[0]).toBeLessThanOrEqual(2000);
   });
 });
 
