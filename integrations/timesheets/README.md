@@ -63,9 +63,40 @@ Live account data must never be checked into fixtures.
 
 ## Drive-plugin app (`app/`)
 
+### The catalog lens (0.8.0)
+
+From 0.8.0 an entry's name, start, end and billable flag go both ways
+through the shared lens catalog's `clockify-time-entry-v2`
+([`ontology-kit/LENSES.md`](../../ontology-kit/LENSES.md)), run by
+`ontology-kit/lens.mjs` and bundled at build time like the terms
+(`app/catalogLens.ts`, imported by the sync, the write-back and the
+import). Reading is the lens's `get`; its guards refuse a running timer and
+a non-REGULAR entry, which have no row, as before. Writing is its forward
+`put` of the changed fields onto the fresh full record, so unchanged values
+keep Clockify's exact strings. The review gate, the three-way check where
+Clockify wins a field changed on both sides, the outbox, the verification
+read, minute snapping and the range planner are unchanged.
+
+- **The Name is the description exactly**: not trimmed, and an empty one is
+  an empty Name. "Time entry" and "(no description)" are display only, in
+  the views. A row whose Name nobody edited never sends a description
+  change; the drawer sends typed text as typed. A range edit keeps each
+  row's Name, and a filled gap is created with no description.
+  Until 0.7.1 the app trimmed descriptions and stored "Time entry" for
+  none; a row from then is brought to the description at its next sync, as
+  a change taken over from Clockify, and nothing is sent for it.
+- **Still code in `app/catalogLens.ts`**, waiting on catalog features
+  (LENSES.md, "What the format cannot express yet"): an entry that ends
+  before it starts has no row (gap 1, a relation between two places); the
+  project id and name are read from the entry (gap 3, a link to another
+  row); a changed project drops the entry's task (gap 4, coupled writes).
+  `blockers` (locked entries, custom fields, project rules) and minute
+  snapping stay in the code lens, which also remains the conformance
+  reference for the catalog entry (`devonian/clockify/lens/catalog.test.ts`).
+
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 178 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 193 KB for 0.8.0, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -311,9 +342,10 @@ into the view root.
     re-read (changed since the list: not sent); a fresh `GET` by id, the
     only concurrency check Clockify allows (no ETag or If-Match); the
     three-way check against it (a conflict sends nothing); the outbox
-    marker; one full-replacement `PUT` that the lens
-    (`devonian/clockify/lens/writeBack.ts` `putBody`) builds from the fresh
-    full record, replacing only changed fields and always sending `start`,
+    marker; one full-replacement `PUT` that `app/catalogLens.ts` `putBody`
+    builds from the fresh full record with the catalog lens (0.8.0; until
+    0.7.1 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
+    replacing only changed fields and always sending `start`,
     `end`, `billable`, `description`, `tagIds` and `type` (a project change
     drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and
     row advance only after that read, to what Clockify then holds

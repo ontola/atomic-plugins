@@ -17,7 +17,9 @@ describe('drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 179,861 bytes minified on 2026-10-06 (0.7.1; JS by esbuild,
+    // Measured 192,726 bytes minified on 2026-10-12 (0.8.0, at the
+    // e922179e2e16 pin: 0.7.1's 179,861 plus ontology-kit's lens interpreter
+    // and the clockify-time-entry-v2 mapping; JS by esbuild,
     // the stylesheets ui/theme.css and the shared sync-status card's
     // card.css by esbuild's CSS minifier); limit is that plus ~10%. It was
     // 178,822 bytes at 0.7.0, before the card's `written` and lease-until
@@ -32,7 +34,7 @@ describe('drive-plugin bundle', async () => {
     // inlined, project and person links, the first-open move and the
     // read-only view of another table), and 161 KB before #177 item 14's
     // "Sync this table to Clockify" (binding, row grant, kept rows).
-    expect(bytes).toBeLessThan(198_000);
+    expect(bytes).toBeLessThan(212_000);
   });
 
   it('carries no credential handling of its own', () => {
