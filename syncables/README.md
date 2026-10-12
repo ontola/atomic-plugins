@@ -412,7 +412,15 @@ is JSON: its dot-path's names are matched literally (a name holding a `.`
 cannot be addressed; `a..b`, `.a` and `a.` are left out of the
 declaration), a string is trimmed, a number counts only when it has no
 fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
-an object does not parse. A role read from both a header and a body field
+an object does not parse. For headers and body fields alike, only space,
+tab, CR and LF are trimmed (a value carrying U+00A0 or another Unicode
+space does not parse), an integer above 2^53 − 1 does not parse
+(`1e21` in a body, a 400-digit `Retry-After`), and an HTTP-date parses only
+in one of RFC 9110's three exact forms (IMF-fixdate, the obsolete RFC 850
+form, asctime), never through a lenient date parser (so no ISO date, no
+`UTC` for `GMT`, nothing with another whitespace character or a
+byte-order mark); the client's own `Retry-After` reading for other
+retryable answers, and the `Date` header, follow the same rules. A role read from both a header and a body field
 counts once: the later time for `retryAfter` and `reset`, and the bucket is
 exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
 that gives no wait (`0`, or a time not after the response) counts as
@@ -1677,7 +1685,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   - `sync()` now applies reads that ended without an error but are not
     complete (range windows, undocumented short pages), adding and
     updating records only, listed in `SyncResult.incomplete`;
-  - throttling roles are also read from `bodyFields`;
+  - throttling roles are also read from `bodyFields`; throttling values,
+    and the `Retry-After` of any retryable answer, are read strictly: only
+    space, tab, CR and LF are trimmed, an integer above 2^53 − 1 does not
+    parse (before, a long `Retry-After` outside `x-throttling` was capped
+    at `retry.maxRetryAfterMs`), and an HTTP-date parses only in RFC 9110's
+    exact forms, not through `Date.parse`;
   - an `x-runtime-schema` the client cannot use fails that resource's
     collections;
   - a record a complete `sync()` removes is told to the new `onPresence`
@@ -1737,9 +1750,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     when a read last returned the record.
   - Throttling 0.3.0: `bodyFields` (roles read from a throttling response's
     JSON body by literal dot-path; a body wait of no time counts as absent;
-    `ThrottlingDeclaration.bodyFields`). A read waiting out an exhausted
-    bucket no longer sleeps twice for one pause when the clock ticks
-    between two readings.
+    `ThrottlingDeclaration.bodyFields`); the 2^53 − 1 bound, stripping only
+    SP/HT/CR/LF, and HTTP-dates only in RFC 9110's three exact forms (also
+    for the client's own `Retry-After` and `Date` readings). A read waiting
+    out an exhausted bucket no longer sleeps twice for one pause when the
+    clock ticks between two readings.
   - Runtime Schemas 0.1.0: `readCollections` reads each describer once (at
     most once more for an unmatched member) and returns the derived
     classes (`describers`) and each item's members (`runtimeMembers`:

@@ -237,6 +237,94 @@ describe('classifyThrottling, after the spec tests', () => {
   });
 });
 
+describe('header values: number bounds and stripped characters (Throttling follow-up)', () => {
+  it('a 400-digit Retry-After does not parse: the backoff applies', () => {
+    expect(classify(429, { 'Retry-After': '9'.repeat(400) })).toEqual({
+      meaning: 'throttled',
+    });
+  });
+
+  it('a reset of 2^53 seconds does not parse; 2^53 − 1 does', () => {
+    const headers = (reset: string): Record<string, string> => ({
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': reset,
+    });
+    // Without a parsing reset, the bucket window is the fallback.
+    expect(classify(403, headers(String(2 ** 53)))!.retryAt).toBe(s(3600));
+    expect(
+      classify(403, headers(String(Number.MAX_SAFE_INTEGER)))!.retryAt,
+    ).toBe(Number.MAX_SAFE_INTEGER * 1000);
+  });
+
+  it('strips only space, tab, CR and LF from a header value', () => {
+    expect(classify(429, { 'Retry-After': ' \t30\r\n' })!.retryAt).toBe(s(30));
+    for (const value of ['\u00a030', '30\u00a0', '30\u2003', '\ufeff30'])
+      expect(classify(429, { 'Retry-After': value })!.retryAt).toBeUndefined();
+  });
+
+  it('matches a header predicate after the same stripping only', () => {
+    const doc = withSignals([
+      {
+        status: [403],
+        header: { name: 'X-Reason', equals: 'rate' },
+        meaning: 'throttled',
+      },
+    ]);
+    expect(classify(403, { 'X-Reason': ' rate\t' }, undefined, doc)).toEqual({
+      meaning: 'throttled',
+    });
+    expect(
+      classify(403, { 'X-Reason': 'rate\u00a0' }, undefined, doc),
+    ).toBeUndefined();
+  });
+});
+
+describe('HTTP-dates: only the exact RFC 9110 forms (#491 review)', () => {
+  const DATE = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+
+  it.each([
+    ['IMF-fixdate', 'Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['the RFC 850 form', 'Wednesday, 21-Oct-15 07:28:00 GMT'],
+    ['asctime', 'Wed Oct 21 07:28:00 2015'],
+  ])('reads %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBe(DATE);
+  });
+
+  it('reads a header IMF-fixdate after stripping space and tab', () => {
+    expect(
+      classify(429, { 'Retry-After': ' Wed, 21 Oct 2015 07:28:00 GMT\t' })!
+        .retryAt,
+    ).toBe(DATE);
+  });
+
+  it.each([
+    ['a leading U+00A0', '\u00a0Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['a leading byte-order mark', '\ufeffWed, 21 Oct 2015 07:28:00 GMT'],
+    ['an em space inside', 'Wed,\u200321 Oct 2015 07:28:00 GMT'],
+    ['an ISO date', '2015-10-21T07:28:00Z'],
+    ['UTC instead of GMT', 'Wed, 21 Oct 2015 07:28:00 UTC'],
+    ['a day the month lacks', 'Sat, 31 Feb 2015 07:28:00 GMT'],
+    ['a free-form date', 'October 21, 2015 07:28'],
+  ])('refuses %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBeUndefined();
+    expect(
+      classify(429, { 'Retry-After': value }, undefined)!.retryAt,
+    ).toBeUndefined();
+  });
+
+  it('refuses a Date header with a U+00A0: the consumer clock alone counts', () => {
+    const at = String(NOW / 1000 + 60);
+    expect(
+      headerTime(
+        at,
+        'epochSeconds',
+        NOW,
+        '\u00a0Fri, 15 Jan 2027 07:00:00 GMT',
+      ),
+    ).toBe(NOW + 60_000);
+  });
+});
+
 describe('headerTime', () => {
   it('reads each unit, and refuses the others', () => {
     expect(headerTime('120', 'deltaSeconds', NOW)).toBe(s(120));

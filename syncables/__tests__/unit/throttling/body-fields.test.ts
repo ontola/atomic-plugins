@@ -273,3 +273,64 @@ describe('the held Todoist overlay (test_todoist_throttling.py)', () => {
     expect(verdict?.retryAt).toBeUndefined();
   });
 });
+
+describe('number bounds and stripped characters (Throttling follow-up)', () => {
+  const MAX = Number.MAX_SAFE_INTEGER; // 2^53 − 1
+
+  // Raw JSON text, as a provider sends it: a literal above 2^53 − 1 loses
+  // precision when parsed and must not be read as a nearby integer.
+  it.each([
+    ['1e21', '1e21'],
+    ['1e21 written out', '1000000000000000000000'],
+    ['2^53', '9007199254740992'],
+    ['an integral float above 2^53 − 1', '9007199254740993.0'],
+  ])('a body integer above 2^53 − 1 does not parse: %s', (_label, text) => {
+    const verdict = classifyThrottling(declaredThrottling(example()), {
+      status: 429,
+      headers: {},
+      body: `{"error_extra":{"retry_after":${text}}}`,
+      receivedAt: NOW,
+    });
+    expect(verdict!.retryAt).toBeUndefined();
+  });
+
+  it('2^53 − 1 in the body parses', () => {
+    const body = { error_extra: { retry_after: MAX } };
+    expect(classify(example(), 429, {}, body)!.retryAt).toBe(NOW + MAX * 1000);
+  });
+
+  it.each([
+    ['a space, tab, CR and LF', ' \t3\r\n', s(3)],
+    ['a no-break space (U+00A0)', ' 3', undefined],
+    ['a trailing U+00A0', '3 ', undefined],
+    ['an em space (U+2003)', '3 ', undefined],
+    ['a byte-order mark (U+FEFF)', '﻿3', undefined],
+  ] as [string, string, number | undefined][])(
+    'strips only space, tab, CR and LF from a body string: %s',
+    (_label, value, expected) => {
+      const body = { error_extra: { retry_after: value } };
+      expect(classify(example(), 429, {}, body)!.retryAt).toBe(expected);
+    },
+  );
+});
+
+describe('body HTTP-dates (#491 review)', () => {
+  const doc = withThrottling({
+    bodyFields: { 'error.retry_at': { role: 'retryAfter', unit: 'httpDate' } },
+  });
+
+  it('reads an IMF-fixdate body string and refuses one with other whitespace', () => {
+    const at = new Date(NOW + 60_000).toUTCString();
+    expect(classify(doc, 429, {}, { error: { retry_at: at } })!.retryAt).toBe(
+      NOW + 60_000,
+    );
+    for (const value of [
+      `\u00a0${at}`,
+      `\ufeff${at}`,
+      at.replace(' ', '\u2003'),
+    ])
+      expect(
+        classify(doc, 429, {}, { error: { retry_at: value } })!.retryAt,
+      ).toBeUndefined();
+  });
+});
