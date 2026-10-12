@@ -222,13 +222,27 @@ responses"; [Todoist API v1](https://developer.todoist.com/api/v1/), Errors).
 `bodyFields` maps a dot-path into the parsed JSON response body to a Header
 Role Object (above): the same `role`, `unit` and `description`, the same
 roles at most once in the map, and the same rule that a value which does not
-parse in its declared encoding is ignored. A field value is used as text: a
-JSON number is its decimal representation, so `3` reads as `deltaSeconds`
-`3`; any other non-string value does not parse.
+parse in its declared encoding is ignored.
+
+A dot-path is one or more property names joined by `.`, read from the body's
+root object; each name is nonempty and is matched literally, so a name that
+contains a `.` cannot be addressed, and `a..b`, `.a` and `a.` are invalid.
+
+A field value is used as text. A string has its leading and trailing
+whitespace removed, as a header value does. A JSON integer is its decimal
+representation, so `3` reads as `deltaSeconds` `3`; a JSON number with no
+fractional part (`3.0`) reads the same; any other number (`3.5`), a boolean,
+`null`, an array or an object does not parse.
 
 A role read from both a header and a body field counts once: for `reset` and
-`retryAfter`, the later of the two times; for `limit`, `remaining` and
-`used`, the header's value when it parses, else the body field's. A body
+`retryAfter`, the later of the two times; for `limit` and `used`, the
+header's value when it parses, else the body field's; for `remaining`, the
+bucket is exhausted when either value is `0`.
+
+A body-field `retryAfter` or `reset` that gives no wait (a delay of `0`, or a
+time not after the response) counts as absent, so that the fallbacks of the
+earliest retry time still apply: a provider that sends the field on other
+errors too (Todoist does) may send `0` where it has no advice. A body
 field is read only from a response that is JSON and is classified as
 throttling (below); a role on another response says nothing.
 
@@ -303,7 +317,9 @@ Header values are compared after removing leading and trailing whitespace.
 3. the later of T1 and T2. When neither exists: the response time plus
    `minDelaySeconds` when the signal gives it; else, for `quotaExhausted` with
    a `bucket` whose window is known, the response time plus that window's
-   `seconds`; otherwise the consumer's own backoff.
+   `seconds`; otherwise the consumer's own backoff. These are fallbacks, not
+   floors: a later time from T1 or T2 replaces them, and an earlier one is
+   used as it is.
 
 An absolute time (`epochSeconds`, `httpDate`) is measured twice: against the
 consumer's own clock, and, when the response has a `Date` header, as the same
@@ -445,7 +461,9 @@ that includes them, a `429` does not say which bucket is exhausted, and the
 signal should leave `bucket` out.
 
 [examples/response-signals.yaml](examples/response-signals.yaml) is a
-complete synthetic document with headers and signals.
+complete synthetic document with headers and signals, and
+[examples/body-fields.yaml](examples/body-fields.yaml) one shaped like
+Todoist's error body (`bodyFields`).
 
 ## Overlay publication and validation
 
@@ -500,6 +518,10 @@ API throttling.
 
 ## Changes
 
+- **0.3.0-draft** (2026-10-12 follow-up): the dot-path syntax, whitespace
+  and integral numbers in body values, `remaining` exhausted by either value,
+  a body `retryAfter`/`reset` of no wait counting as absent, and fallbacks
+  that are not floors; a `bodyFields` example.
 - **0.3.0-draft** (2026-10-09): adds `bodyFields`, the Header Role Object's
   roles read from a JSON body field (Todoist's `error_extra.retry_after`). A
   0.2.0 document stays valid and means the same.
