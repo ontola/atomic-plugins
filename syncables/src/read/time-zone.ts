@@ -76,7 +76,11 @@ export interface ReadCoverage {
    * wall-clock digits plus `suffix`, not instants.
    */
   parameters: Record<string, string>;
-  /** The instants those values were written from, as given (ISO 8601 UTC). */
+  /**
+   * The instants those values were written from, as given (ISO 8601 UTC);
+   * for a zoned `windowRange` parameter of a read by range windows, the
+   * outer range's two as an ISO 8601 interval (`start/end`).
+   */
   instants: Record<string, string>;
   /**
    * Per parameter, the zone its value was written in; null when the zone
@@ -95,8 +99,12 @@ export interface ReadCoverage {
    * parameter with a value narrows the read in a way no span describes (an
    * equality or other `x-filter`, an undeclared predicate, a range bound
    * that is not an instant); paging parameters and the collection's own
-   * fixed `listQuery` values do not count. `incomplete`: the read did not
-   * finish.
+   * fixed `listQuery` values do not count. `incomplete`: the read failed,
+   * or finished without being complete (a short page whose end is not
+   * documented as the last), and `spans` is null; or it is a read by range
+   * windows over `x-time-zone` window parameters that finished, which is
+   * never complete (Pagination Schemes 0.5.0 §4.6.4), and `spans` is kept:
+   * what the windows asked for over the whole range.
    */
   reason?:
     | 'empty'
@@ -707,4 +715,125 @@ export async function wallClockQuery(
             })),
           };
   return { query: sent, coverage, keys };
+}
+
+/**
+ * Pagination Schemes 0.5.0 range windows over `x-time-zone` parameters: the
+ * window bounds are instants, split as such, and each bound sent to such a
+ * parameter is written as wall-clock digits in its zone (the
+ * `PageWalk.windowValue` hook this returns). `windowParameters` are the
+ * scheme's window fields in the query. Undefined when none of them has
+ * `x-time-zone`. Throws when one has and the window `format` is not
+ * `dateTime`: only instants convert to wall-clock time (the Filtering
+ * validator requires `format: date-time` on such a parameter, so this is a
+ * document error).
+ *
+ * The coverage is `wallClockQuery`'s for the outer range: the query with
+ * the range's start in each `windowStart` parameter and its end in each
+ * `windowEnd` one. Adjacent windows share their bounds, so what the windows
+ * ask for together is what the outer range asks for, and with an unknown
+ * zone only the outer ends narrow by 14 hours. A window parameter without
+ * `x-time-zone` counts as the rest of the query does: a `windowStart` or
+ * `windowEnd` one with a range `x-filter` bounds its field by the outer end
+ * as given; one without such an `x-filter`, or a `windowRange` one (its
+ * value is not an instant), narrows the read in a way no span describes, so
+ * the coverage is `otherFilters`. A zoned `windowRange` parameter holds both
+ * ends in one value, so no `x-filter` range predicate describes it: the
+ * coverage is `noRangePredicate`, with the outer range's value (its
+ * template over the two wall-clock ends) in `parameters` and the two
+ * instants as an ISO 8601 interval (`start/end`) in `instants`. The query
+ * returned is `wallClockQuery`'s without the window parameters, which each
+ * window sets.
+ */
+export async function wallClockWindows(
+  parameters: TimeZoneParameter[],
+  windowParameters: {
+    name: string;
+    role: 'windowStart' | 'windowEnd' | 'windowRange';
+    template?: string;
+  }[],
+  window: { format: string },
+  range: { start: string; end: string },
+  query: Record<string, string>,
+  path: Record<string, string>,
+  read: ReturnType<typeof zoneReader>['read'],
+  others?: OtherQuery,
+): Promise<
+  | {
+      windowValue: (parameter: string, bound: string) => string | undefined;
+      query: Record<string, string>;
+      coverage?: ReadCoverage;
+      keys: Set<string>;
+    }
+  | undefined
+> {
+  const windowNames = new Set(windowParameters.map((field) => field.name));
+  const zoned = parameters.filter((p) => windowNames.has(p.name));
+  if (!zoned.length) return undefined;
+  if (window.format !== 'dateTime')
+    throw new Error(
+      `The window format ${window.format} cannot be sent as wall-clock time to the x-time-zone parameter ${zoned.map((p) => p.name).join(', ')}; such a window needs format dateTime`,
+    );
+  const zonedNames = new Set(zoned.map((p) => p.name));
+  const outer = { ...query };
+  const zonedRanges: { name: string; template: string }[] = [];
+  for (const field of windowParameters) {
+    const template = field.template ?? '{start}..{end}';
+    if (field.role === 'windowStart') outer[field.name] = range.start;
+    else if (field.role === 'windowEnd') outer[field.name] = range.end;
+    else if (zonedNames.has(field.name))
+      zonedRanges.push({ name: field.name, template });
+    // Without a zone the value is not an instant: another filter.
+    else
+      outer[field.name] = template
+        .replace('{start}', range.start)
+        .replace('{end}', range.end);
+  }
+  const written = await wallClockQuery(parameters, outer, path, read, others);
+  const sent = { ...written.query };
+  for (const name of windowNames) delete sent[name];
+  // Each zone source is read once per read: these come from the cache.
+  const byName = new Map<string, { zone: string | null; suffix: string }>();
+  for (const parameter of zoned) {
+    const { zone, key } = await read(parameter.declaration.zone, path);
+    if (zone !== null) written.keys.add(key);
+    byName.set(parameter.name, {
+      zone,
+      suffix: parameter.declaration.suffix,
+    });
+  }
+  const windowValue = (name: string, bound: string): string | undefined => {
+    const found = byName.get(name);
+    return found ? wallClockParam(bound, found.zone, found.suffix) : undefined;
+  };
+  let coverage = written.coverage;
+  if (zonedRanges.length) {
+    // wallClockQuery never saw these (no single instant to write), so the
+    // coverage may not exist yet: it is noRangePredicate either way.
+    const values = { ...coverage?.parameters };
+    const instants = { ...coverage?.instants };
+    const zones = { ...coverage?.zones };
+    const interval = `${new Date(Date.parse(range.start)).toISOString()}/${new Date(Date.parse(range.end)).toISOString()}`;
+    for (const { name, template } of zonedRanges) {
+      const found = byName.get(name) as { zone: string | null };
+      values[name] = template
+        .replace('{start}', windowValue(name, range.start) as string)
+        .replace('{end}', windowValue(name, range.end) as string);
+      instants[name] = interval;
+      zones[name] = found.zone;
+    }
+    coverage = {
+      parameters: values,
+      instants,
+      zones,
+      spans: null,
+      reason: 'noRangePredicate',
+    };
+  }
+  return {
+    windowValue,
+    query: sent,
+    ...(coverage ? { coverage } : {}),
+    keys: written.keys,
+  };
 }
