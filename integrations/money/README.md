@@ -228,6 +228,9 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   `now` feeds; an import that
   stopped midway is a problem ("The import stopped before every row was
   written.", the rows written so far are kept, check the same file again).
+  Both error texts end in a period only when the message doesn't already
+  end in `.`, `?` or `!` (load errors since 0.4.2, the stopped import since
+  0.4.3).
   Incomplete rows are ignored groups by what they miss, named, with "Open
   row" when the host can show a row and the group has one. The card is a
   region, not a live region: the header's pill stays the one `role="status"`.
@@ -366,6 +369,15 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.3 (`plugin.js` sha256
+`fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.3/ui.js`, 120,397 bytes; the only change from 0.4.2 is the
+stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
+the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
+passed on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build).
+The stopped-import state is still not reached end to end.
 
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
