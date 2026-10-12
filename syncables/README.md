@@ -1748,8 +1748,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
   `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
   `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
-  reports a reconciliation only on the step after the writes landed;
-  `reconcile` may answer `'pending'`. `InboxClient` now refuses a base URL
+  reports a reconciliation only on the step after the writes landed.
+  `InboxClient` now refuses a base URL
   that is not canonical (a lower-case host, no default port, no query,
   fragment, user info, escape or dot segment) and strips every trailing
   `/` from it, not only one. `InboxError.backoff()` also covers a `409
