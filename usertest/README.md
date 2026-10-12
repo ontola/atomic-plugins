@@ -393,6 +393,17 @@ includes the collector's error, warning, feedback and sync lines since the
 previous turn. Measured on 2026-09-28: about 3 seconds per turn, and the
 script served from the prompt cache after the first turn.
 
+A turn with `[END]` ends the session once the page has spoken it, so
+`[END]` belongs only in the thank-you. An `[END]` in a turn whose spoken
+text ends with a question is refused, at most twice per session, and the
+session goes on so the tester can answer (`moderator/turn.mjs`,
+ontola/usertest-findings#21; the transcript marks such a turn
+`endRefused`). Its test needs only Node:
+
+```sh
+node --test usertest/moderator/turn.test.mjs
+```
+
 A turn only includes its own tester's log lines. The collector tags each
 line with `client`, a salted hash (`/etc/usertest-salt.env`) of the sender's
 address; the moderator keeps the hashes its tester's page came from. So
