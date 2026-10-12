@@ -1650,8 +1650,6 @@ describe('gone (Collection Completeness 0.3.0 §4.3)', () => {
     expect(resourceNotFound(doc, collections, 'taskList', 'gone')).toBe(
       'deleted',
     );
-    expect(resourceNotFound(doc, collections, 'taskList')).toBe(
-      'unavailable',
-    );
+    expect(resourceNotFound(doc, collections, 'taskList')).toBe('unavailable');
   });
 });

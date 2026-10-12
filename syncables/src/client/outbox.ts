@@ -53,6 +53,10 @@ export interface StoredWrite {
    * be determined (CRUD Causality §4.3.2); never sent again.
    */
   unbound?: true;
+  /** Added within version 1: what a declared write precondition did. */
+  precondition?: string;
+  /** Added within version 1: an `ifMatch` write's version as sent. */
+  sentVersion?: string;
   /**
    * Added within version 1: an update made as a JSON Merge Patch (absent:
    * the full record, as every update before). A client from before this
@@ -197,6 +201,10 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       value['missingRecord'] === 'unavailable' ||
       value['missingRecord'] === 'unknown') &&
     (value['unbound'] === undefined || value['unbound'] === true) &&
+    (value['precondition'] === undefined ||
+      typeof value['precondition'] === 'string') &&
+    (value['sentVersion'] === undefined ||
+      typeof value['sentVersion'] === 'string') &&
     (value['updateBody'] === undefined ||
       value['updateBody'] === 'mergePatch') &&
     (value['notBefore'] === undefined ||
