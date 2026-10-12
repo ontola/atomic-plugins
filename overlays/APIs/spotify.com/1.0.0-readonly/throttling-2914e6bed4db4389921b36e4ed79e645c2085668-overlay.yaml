@@ -6,11 +6,14 @@
 #   app exceeds the rate limit for your app then you'll begin to see 429 error responses";
 #   "The header of the 429 response will normally include a Retry-After header with a value
 #   in seconds"; Spotify "does sometimes implement other limits outside of the API-wide rate
-#   limit".
+#   limit", with one example: "A few API endpoints, like the playlist image upload endpoint,
+#   have a custom rate limit". That endpoint is not in the pinned read-only document (it
+#   has no operation on /playlists/{playlist_id}/images).
 # The pinned OAD answers 429 with "Rate limit exceeded." on its operations.
 # Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, headers, signals).
 # Not declared: a request count (none is published, and it depends on the app's mode) and
-# the unnamed endpoint-specific limits.
+# the endpoint-specific limits, which have no published numbers, and whose one example
+# is outside this document.
 overlay: 1.0.0
 info:
   title: Spotify Web API throttling
@@ -45,6 +48,7 @@ actions:
               "If your app exceeds the rate limit for your app then you'll
               begin to see 429 error responses". Not declared quotaExhausted
               for perApp: a 429 can also come from one of the "other limits
-              outside of the API-wide rate limit", which the page does not
-              name, so it does not establish that the app-wide bucket is
-              exhausted.
+              outside of the API-wide rate limit", of which the page names
+              only "the playlist image upload endpoint" ("A few API
+              endpoints ... have a custom rate limit"), so a 429 does not
+              establish that the app-wide bucket is exhausted.
