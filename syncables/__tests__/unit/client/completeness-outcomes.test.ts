@@ -1580,3 +1580,76 @@ describe('resourceNotFound (route.notFound, resource-wide)', () => {
     }
   });
 });
+
+// --- Collection Completeness 0.3.0 §4.3, `gone`: what a 410 means, apart
+// from a 404 (examples/gone-410.yaml's shape).
+
+describe('gone (Collection Completeness 0.3.0 §4.3)', () => {
+  for (const [label, completeness, status, evidence] of [
+    [
+      'gone: deleted makes a 410 deleted',
+      { absent: 'removed', notFound: 'unavailable', gone: 'deleted' },
+      410,
+      'deleted',
+    ],
+    [
+      'gone: deleted leaves a 404 to notFound: unavailable',
+      { absent: 'removed', notFound: 'unavailable', gone: 'deleted' },
+      404,
+      'unavailable',
+    ],
+    [
+      'gone: unavailable makes a 410 unavailable under notFound: deleted',
+      { absent: 'removed', notFound: 'deleted', gone: 'unavailable' },
+      410,
+      'unavailable',
+    ],
+    [
+      'without gone, a 410 follows notFound',
+      { absent: 'removed', notFound: 'unavailable' },
+      410,
+      'unavailable',
+    ],
+    [
+      'an unrecognised gone value is unavailable',
+      { absent: 'removed', notFound: 'deleted', gone: 'vanished' },
+      410,
+      'unavailable',
+    ],
+  ] as const)
+    it(`${label}`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([{ evidence, source: 'read', status }]);
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'failed', missingRecord: evidence },
+      ]);
+    });
+
+  it('is resource-wide, like notFound', () => {
+    const doc = nestedDocument((resources, paths) => {
+      resources['taskList']!['collections'] = {
+        taskLists: { urlTemplate: '/users/me/lists' },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': {
+            absent: 'removed',
+            notFound: 'unavailable',
+            gone: 'deleted',
+          },
+        },
+      };
+      paths['/users/me/starred'] = {
+        get: { responses: { '200': { description: 'Starred lists' } } },
+      };
+    });
+    const collections = discoverReadModel(doc).collections;
+    expect(resourceNotFound(doc, collections, 'taskList', 'gone')).toBe(
+      'deleted',
+    );
+    expect(resourceNotFound(doc, collections, 'taskList')).toBe('unavailable');
+  });
+});

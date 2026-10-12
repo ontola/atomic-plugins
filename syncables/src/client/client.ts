@@ -771,6 +771,12 @@ interface ClientRoute {
    */
   notFound?: 'deleted' | 'unavailable';
   /**
+   * The `gone` the route's resource states (Collection Completeness
+   * 0.3.0 §4.3), resource-wide like `notFound`: what a 410 means. Undefined:
+   * not stated, so a 410 means what `notFound` says.
+   */
+  gone?: 'deleted' | 'unavailable';
+  /**
    * `x-completeness: { parentAbsent }` on a nested collection, any value:
    * its members are unavailable once the parent object that supplies one
    * of its path variables is concluded deleted or unavailable (Collection
@@ -1091,7 +1097,8 @@ function declaredCompleteness(
 }
 
 /**
- * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * Internal, exported for tests: §4.3: the `notFound` (or, with `field`,
+ * the 0.3.0 `gone`) a resource states, through any of its collections
  * (after the reference `resource_not_found`): the one value they state,
  * `unavailable` when they state different ones or one this client does not
  * recognise, undefined when none states it. A `notFound` stated beside an
@@ -1101,6 +1108,7 @@ export function resourceNotFound(
   document: OpenApiDocument,
   collections: ReadCollection[],
   resource: string,
+  field: 'notFound' | 'gone' = 'notFound',
 ): 'deleted' | 'unavailable' | undefined {
   const stated = new Set<string>();
   for (const collection of collections) {
@@ -1109,10 +1117,8 @@ export function resourceNotFound(
     // fixed reads: it says what the resource's read means, and counting it
     // can only make a 404 `unavailable`, the safe reading.
     const raw = rawCompleteness(document, collection, true);
-    if (raw && raw.declared['notFound'] !== undefined)
-      stated.add(
-        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
-      );
+    if (raw && raw.declared[field] !== undefined)
+      stated.add(raw.declared[field] === 'deleted' ? 'deleted' : 'unavailable');
   }
   if (!stated.size) return undefined;
   return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
@@ -1300,6 +1306,13 @@ function clientRoutes(
       collection.resource,
     );
     if (notFound) route.notFound = notFound;
+    const gone = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+      'gone',
+    );
+    if (gone) route.gone = gone;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -3477,14 +3490,17 @@ export function createApiClient(
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
     // the resource's stated `notFound`, through any collection, `deleted`
-    // by default.
+    // by default; since 0.3.0 a 410 means its stated `gone`, else the same.
+    const meaning =
+      status === 410 ? (route.gone ?? route.notFound) : route.notFound;
+    const named = status === 410 && route.gone ? 'gone' : 'notFound';
     if (status === 404 || status === 410)
-      return route.notFound === 'unavailable'
+      return meaning === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
             status,
-            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness ${named}: unavailable), not that it was deleted`,
           }
         : {
             evidence: 'deleted',
