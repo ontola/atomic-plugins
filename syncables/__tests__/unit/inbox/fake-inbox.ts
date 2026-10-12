@@ -217,7 +217,11 @@ export class FakeInbox {
         sub.renewAfter = this.now + DAY / 2;
         return json(200, this.view(sub));
       case 'GET /events': {
-        const after = request.url.searchParams.get('after');
+        // From `search`, not `searchParams`: in a sandbox without `URL` the
+        // client hands over a stand-in that has only `href`, `origin`,
+        // `pathname` and `search`.
+        const raw = /[?&]after=([^&]*)/.exec(request.url.search)?.[1];
+        const after = raw === undefined ? null : decodeURIComponent(raw);
         const start = after ? Number(after.split(':')[1]) : sub.ack;
         const pending = sub.refs.filter((ref) => ref.seq > start);
         const generation = pending[0]?.generation ?? sub.generation;

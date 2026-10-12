@@ -461,8 +461,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 ### Webhook inbox consumer (`src/inbox/`)
 
 The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
-`openapi-extensions/spec/webhook-subscriptions`), exported from the Node
-entry only (it uses `node:crypto`). `sign.ts` signs requests with Atomic v2
+`openapi-extensions/spec/webhook-subscriptions`). `sign.ts` uses
+`node:crypto` and is exported from the Node entry only; `client.ts`,
+`consumer.ts` and `reads.ts` are in `syncables/browser` too, and must run in
+atomic-server's QuickJS sandbox, which has no `URL`, `URLSearchParams`,
+`Buffer`, `TextDecoder` or `atob`: `url.ts` builds request URLs as strings
+(a stand-in object where `URL` is missing), `reads.ts` decodes base64 UTF-8
+itself, and `unit/inbox/sandbox.test.ts` runs the bundle in a bare `vm`
+context. `acknowledge: 'next-step'` is for hosts whose writes become
+durable only after the step (a scheduled sandbox run's intents): the cursor
+to acknowledge and a finished reconciliation are stored with the step's
+writes (`StoredSubscription.unacknowledged`, `.unconfirmedReconciliation`)
+and sent at the start of the next step (`unit/inbox/deferred.test.ts`).
+`sign.ts` signs requests with Atomic v2
 signatures (`signedTransport`; tested against atomic-server's golden vectors
 in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
 `integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer

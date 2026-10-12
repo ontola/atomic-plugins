@@ -50,6 +50,18 @@ export interface StoredSubscription {
   id: string;
   /** When to renew next (ISO time), from the last lease. */
   renewAfter?: string;
+  /**
+   * `acknowledge: 'next-step'` only: the end of the events the last step
+   * appended, acknowledged at the start of the next step. Stored with them,
+   * so it is durable exactly when they are.
+   */
+  unacknowledged?: { generation: string; cursor: string };
+  /**
+   * `acknowledge: 'next-step'` only: a reconciliation the last step ran,
+   * reported with `reconciled` at the start of the next step, once its
+   * writes are durable.
+   */
+  unconfirmedReconciliation?: { generation: string; barrier: string };
 }
 
 export interface InboxJournal {
@@ -91,6 +103,23 @@ export interface InboxConsumerOptions {
   wait?: number;
   limit?: number;
   now?: () => number;
+  /**
+   * When an appended event is acknowledged.
+   *
+   * - `'immediately'` (the default): in the same step, right after `append`
+   *   resolves. The journal's `append` must be durable when it resolves.
+   * - `'next-step'`: at the start of the next step. For a host whose writes
+   *   become durable only after the step returns, such as an atomic-server
+   *   scheduled sandbox run: its writes are intents applied after the run,
+   *   and the next run sees them only if they were applied. The step stores
+   *   the cursor to acknowledge (`unacknowledged`) through
+   *   `setSubscription`, with the events, and `reconciled` is deferred the
+   *   same way (`unconfirmedReconciliation`). If the writes are lost, so is
+   *   the cursor: nothing is acknowledged, and the receiver delivers the
+   *   events again. `append` must then find duplicates among the writes
+   *   that did land.
+   */
+  acknowledge?: 'immediately' | 'next-step';
 }
 
 export type StepResult =
@@ -142,9 +171,13 @@ export class InboxConsumer {
     }
   }
 
+  private get deferred(): boolean {
+    return this.options.acknowledge === 'next-step';
+  }
+
   private async work(): Promise<StepResult> {
     const { client, journal } = this.options;
-    const stored = await journal.subscription();
+    let stored = await journal.subscription();
     if (!stored) {
       // A crash between `subscribe` and `remember` leaves a subscription at
       // the receiver that this journal does not know, and the next step
@@ -157,6 +190,9 @@ export class InboxConsumer {
         await this.reconcile(subscription.reconciliationRequired);
       }
       return { kind: 'subscribed', subscription: subscription.id };
+    }
+    if (this.deferred) {
+      stored = await this.confirmPrevious(stored);
     }
     if (stored.renewAfter && Date.parse(stored.renewAfter) <= this.now()) {
       await this.remember(await client.renew(stored.id));
@@ -178,7 +214,13 @@ export class InboxConsumer {
     }
     // Only what is journaled is acknowledged.
     if (page.next !== null && page.events.length > 0) {
-      await client.ack(stored.id, page.generation, page.next);
+      if (this.deferred) {
+        await this.patch({
+          unacknowledged: { generation: page.generation, cursor: page.next },
+        });
+      } else {
+        await client.ack(stored.id, page.generation, page.next);
+      }
     }
     if (page.reconciliationRequired) {
       // After this page is safely journaled: the events it holds are recent
@@ -191,11 +233,93 @@ export class InboxConsumer {
     return { kind: 'idle' };
   }
 
+  /**
+   * `'next-step'`: acknowledges what the last step appended and reports the
+   * reconciliation it ran. Both were stored with that step's writes, so
+   * finding them here means those writes are durable.
+   */
+  private async confirmPrevious(
+    stored: StoredSubscription,
+  ): Promise<StoredSubscription> {
+    const { client } = this.options;
+    let current = stored;
+    if (current.unacknowledged) {
+      const { generation, cursor } = current.unacknowledged;
+      try {
+        await client.ack(current.id, generation, cursor);
+      } catch (error) {
+        // A gap since then ended that generation; its events are stored,
+        // and the next fetch reports the gap.
+        if (
+          !(
+            error instanceof InboxError &&
+            error.status === 409 &&
+            error.code === 'obsolete-generation'
+          )
+        ) {
+          throw error;
+        }
+      }
+      current = await this.patch({ unacknowledged: undefined });
+    }
+    if (current.unconfirmedReconciliation) {
+      const { generation, barrier } = current.unconfirmedReconciliation;
+      try {
+        await this.remember(
+          await client.reconciled(current.id, generation, barrier),
+        );
+      } catch (error) {
+        // The barrier moved (a newer gap): that reconciliation no longer
+        // counts, and the next fetch asks for another one.
+        if (
+          !(
+            error instanceof InboxError &&
+            error.status === 409 &&
+            error.code === 'barrier-mismatch'
+          )
+        ) {
+          throw error;
+        }
+      }
+      current = await this.patch({ unconfirmedReconciliation: undefined });
+    }
+    return current;
+  }
+
+  /** Changes some stored fields, keeping the others. */
+  private async patch(changes: {
+    [K in Exclude<keyof StoredSubscription, 'id'>]?:
+      | StoredSubscription[K]
+      | undefined;
+  }): Promise<StoredSubscription> {
+    const { journal } = this.options;
+    const current = await journal.subscription();
+    if (!current) throw new Error('webhook inbox: no stored subscription');
+    const next: StoredSubscription = { ...current };
+    for (const [name, value] of Object.entries(changes)) {
+      if (value === undefined) {
+        delete (next as unknown as Record<string, unknown>)[name];
+      } else {
+        (next as unknown as Record<string, unknown>)[name] = value;
+      }
+    }
+    await journal.setSubscription(next);
+    return next;
+  }
+
+  /** Stores the receiver's view of the subscription, keeping what is pending. */
   private async remember(subscription: InboxSubscription): Promise<void> {
-    await this.options.journal.setSubscription({
+    const { journal } = this.options;
+    const current = await journal.subscription();
+    const same = current?.id === subscription.id ? current : undefined;
+    await journal.setSubscription({
       id: subscription.id,
       ...(subscription.lease
         ? { renewAfter: subscription.lease.renewAfter }
+        : {}),
+      ...(same?.unacknowledged ? { unacknowledged: same.unacknowledged } : {}),
+      ...(same?.unconfirmedReconciliation
+        ? { unconfirmedReconciliation: same.unconfirmedReconciliation }
         : {}),
     });
   }
@@ -216,13 +340,24 @@ export class InboxConsumer {
     await this.options.reconcile(required.gap.reason);
     // Events captured since the barrier stay pending: they are journaled on
     // the next steps, after this full read.
-    await this.remember(
-      await client.reconciled(
-        required.subscription,
-        required.generation,
-        required.barrier,
-      ),
-    );
+    if (this.deferred) {
+      // Reported at the start of the next step, once this read's writes are
+      // known to be durable.
+      await this.patch({
+        unconfirmedReconciliation: {
+          generation: required.generation,
+          barrier: required.barrier,
+        },
+      });
+    } else {
+      await this.remember(
+        await client.reconciled(
+          required.subscription,
+          required.generation,
+          required.barrier,
+        ),
+      );
+    }
     return { kind: 'reconciled', reason: required.gap.reason };
   }
 }

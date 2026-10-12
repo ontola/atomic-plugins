@@ -5,6 +5,7 @@
  * parses answers; signing is the transport's job (`signedTransport`).
  */
 import type { Transport } from '../read/transport.js';
+import { queryString, requestUrl, trimBase } from './url.js';
 
 export interface GapMarker {
   generation: string | null;
@@ -144,14 +145,14 @@ export interface SubscribeRequest {
 }
 
 export class InboxClient {
-  private readonly base: URL;
+  private readonly base: string;
 
   /** `baseUrl`: the receiver's public URL, e.g. `https://proxy.example`. */
   constructor(
     baseUrl: string,
     private readonly transport: Transport,
   ) {
-    this.base = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
+    this.base = trimBase(baseUrl);
   }
 
   private async call<T>(
@@ -159,7 +160,7 @@ export class InboxClient {
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const url = new URL(path.replace(/^\//, ''), this.base);
+    const url = requestUrl(`${this.base}/${path.replace(/^\//, '')}`);
     const response = await this.transport({
       url,
       method,
@@ -236,11 +237,11 @@ export class InboxClient {
     id: string,
     options: { after?: string; limit?: number; wait?: number } = {},
   ): Promise<InboxEventPage> {
-    const query = new URLSearchParams();
-    if (options.after !== undefined) query.set('after', options.after);
-    if (options.limit !== undefined) query.set('limit', String(options.limit));
-    if (options.wait !== undefined) query.set('wait', String(options.wait));
-    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    const suffix = queryString({
+      after: options.after,
+      limit: options.limit,
+      wait: options.wait,
+    });
     return this.call(
       'GET',
       `/subscriptions/${encodeURIComponent(id)}/events${suffix}`,
