@@ -109,13 +109,25 @@ const restoredLens = atomicOrderLens(restored, restoredIdentities, connector);
 
 Construct the schema and identity map before loading, to register the mapping properties. `loadJSONAD` validates the entire document and rejects duplicate subjects before replacing current state. The snapshot includes identity mappings, so publishing restored resources uses their original platform IDs. The property catalog is supplied by application code, not serialized into the snapshot. Snapshot writing and scheduling are the caller's responsibility; the in-memory store is not itself durable.
 
+### Recovering from a crash
+
+`__tests__/atomic/recovery.test.ts` exercises the recipe, with a crash modelled as restoring the last checkpoint into a fresh store, identity map and lens while the platform keeps what it was sent:
+
+- **Checkpoint after awaited work.** A snapshot taken while a `publish` is still pending does not hold the identity it binds; await the lens calls first.
+- **A crash after a successful remote create, before the checkpoint.** The restored host has no identity for the resource and publishes it again with the same idempotency key. A connector that honours the key returns the record it already made, and the identity is bound again: one record.
+- **The same crash where the platform ignores keys** creates a duplicate. Devonian cannot prevent that by itself, and does not claim exactly-once creation for such connectors.
+- **Connector-side reconciliation.** If the platform stores a field the connector controls (a custom field, a label, a hidden marker in the body) and can look it up completely, the connector writes the idempotency key there on `create` and looks it up before creating again, which turns the crash above into one record. The marker lives in the connector, never in the native resource.
+- **Explicit uncertain creates**, where no such lookup exists. Keep an intent log next to the checkpoint: add a subject before publishing it for the first time, remove it after the checkpoint that holds its identity. After a restart, an intent without an identity is a create that may or may not have happened. Don't publish it again on your own: show it to the person, and `bind` the platform record they find (or publish when they confirm there is none).
+
+Whether Devonian should ship this as an adapter is still open (#259).
+
 ## Concurrency and next milestones
 
 The queue serializes calls to one lens instance. It is not a distributed lock and does not serialize direct store edits or other lens instances. Coordinate writes to shared resources at the application level. Transformations should return projections rather than mutate the store while awaiting work. A connector write and local identity persistence are not a distributed transaction; stable idempotency keys are necessary for retry recovery.
 
 There are no revision clocks, stale-event rejection, cross-system conflict resolution, signed Atomic Commits, Atomic Server transport, permissions, or Automerge integration in the resource API yet. Ingest applies events in call order; it can restore an earlier-deleted resource, so the application must order or filter delayed webhooks. Native data alone does not supply distributed convergence.
 
-The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses and deletion failures.
+The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the crash recovery recipe above.
 
 Specification references: [JSON-AD](https://docs.atomicdata.dev/core/json-ad.html), [Atomic Schema](https://docs.atomicdata.dev/schema/intro.html), [Atomic Commits](https://docs.atomicdata.dev/commits/intro.html), [TypeScript SDK](https://atomicdata-dev.github.io/atomic-data-browser/docs/modules/_tomic_lib.html).
 
