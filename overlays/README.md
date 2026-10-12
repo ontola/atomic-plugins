@@ -124,8 +124,10 @@ window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
 [error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
 documents, with no bucket named. Not declared: `Retry-After` (not
 documented), `quotaExceeded` (Calendar usage limits against abuse, not a
-rate to wait out), and the per-calendar and operational limits, which have
-no numbers. A project's own quota may differ from the defaults. No dated
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
 catalog selects it yet. `tests/test_calendar_throttling.py` composes it
 alone and after the catalog's Calendar overlays, and classifies synthetic
 errors in the guide's shape. No provider was called.

@@ -15,7 +15,10 @@
 # as Google recommends); 403 quotaExceeded ("Calendar usage limits exceeded", limits "in
 # place to protect Google users and infrastructure from abusive behavior", which the guide
 # answers by reviewing the Workspace usage limits, not by retrying); the per-calendar and
-# "operational" limits, which have no published numbers. The per-minute numbers are the
+# "operational" limits, which have no published numbers; the quota page's 1,000,000
+# requests per day per project, a billing threshold ("Usage under this threshold doesn't
+# incur extra charges"; exceeding it "is planned to incur charges to your Google Cloud
+# billing account later in 2026"), not a limit at which requests are refused. The per-minute numbers are the
 # defaults the quota page states; a project's own quota in the Google Cloud console may
 # differ, and this document cannot know it.
 overlay: 1.0.0
