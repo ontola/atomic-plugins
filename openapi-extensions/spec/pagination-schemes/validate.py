@@ -556,7 +556,7 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         number += 1
 
 
-def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None, follow=None):
     """An offset read with the offset field's `advance` (§4.3.2).
 
     `request(values)` sends one page, with `values` mapping (location, name)
@@ -568,7 +568,12 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
     else `page_size`, and ends once the next offset reaches `totalCount`, or
     at an empty page when the response has no `totalCount` field.
 
-    Returns {"items", "pages", "offsets"}. Raises PageReadError when, under
+    When the scheme declares a `nextLink` body field (0.7.1), the link
+    leads under either rule: `follow(link)` requests the page a link names
+    and returns its body, and a response whose link is absent, None or ""
+    ends the read; the offset is not used after the first request.
+
+    Returns {"items", "pages", "offsets", "links"}. Raises PageReadError when, under
     `pageSize`, neither page size is known, for a page holding an item an
     earlier page returned, or after `max_pages` pages without reaching the
     end.
@@ -580,21 +585,38 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
     location, name = offset_field
     advance = scheme["request"][location][name].get("advance", "itemCount")
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
-    items, seen, offsets = [], set(), []
+    links_lead = any(isinstance(field, dict) and field.get("role") == "nextLink"
+                     for field in scheme.get("response", {}).get("bodyFields", {}).values())
+    if links_lead and follow is None:
+        raise ValueError("a scheme that declares a nextLink needs follow")
+    items, seen, offsets, links = [], set(), [], []
     offset = 0
+    link = None
     while True:
-        if max_pages is not None and len(offsets) >= max_pages:
+        if max_pages is not None and len(offsets) + len(links) >= max_pages:
             raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
-        values = {offset_field: offset}
-        values.update({field: page_size for field in size_fields})
-        body = request(values)
-        offsets.append(offset)
+        if link is not None:
+            body = follow(link)
+            links.append(link)
+            where = f"the page at {link}"
+        else:
+            values = {offset_field: offset}
+            values.update({field: page_size for field in size_fields})
+            body = request(values)
+            offsets.append(offset)
+            where = f"the page at offset {offset}"
         page = page_items(body, scheme)
         ids = [identity(item) for item in page]
         if any(i in seen for i in ids):
-            raise PageReadError(f"the page at offset {offset} holds an item an earlier page returned")
+            raise PageReadError(f"{where} holds an item an earlier page returned")
         seen.update(ids)
         items.extend(page)
+        if links_lead:
+            # 0.7.1: the link leads under either rule; none ends the read.
+            link = _role_value(body, scheme, "nextLink")
+            if link is None or link == "":
+                return {"items": items, "pages": len(offsets) + len(links), "offsets": offsets, "links": links}
+            continue
         total_count = _count(_role_value(body, scheme, "totalCount"))
         if advance == "pageSize":
             # A reported page size counts only as an integer of at least 1 (§4.3.2).
@@ -605,13 +627,13 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             following = offset + step
             if total_count is not None:
                 if following >= total_count:
-                    return {"items": items, "pages": len(offsets), "offsets": offsets}
+                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
             elif not page:
-                return {"items": items, "pages": len(offsets), "offsets": offsets}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
         else:
             following = offset + len(page)
             if not page or (total_count is not None and following >= total_count):
-                return {"items": items, "pages": len(offsets), "offsets": offsets}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links}
         offset = following
 
 

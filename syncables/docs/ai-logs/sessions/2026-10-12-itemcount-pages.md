@@ -28,3 +28,21 @@ short capped page, the `totalCount` end, and the `nextLink` cases. Under
 `pageSize` with a `nextLink`, a `null` link makes the read step from the
 stale offset and fail on a repeat; pinned in a test and noted in the
 README.
+
+## Turn 2
+
+**Human (via the coordinator session):** Agreed: in a scheme with both an
+offset and a `nextLink`, the link leads under either advance. Add one
+sentence to Pagination Schemes §4.3.2, update the reference `read_offsets`
+with a test, and give syncables the same guard for `pageSize`.
+
+**Assistant:** Spec 0.7.1: §4.3.2 says the link leads under either rule
+and an absent, `null` or empty link ends the read; history entry added.
+`read_offsets` takes `follow(link)` for such schemes (a `ValueError`
+without it), uses the offset for the first request only, and returns
+`links`; a new test runs both advances with and without `total_count`.
+In syncables the `pageSize` branch is skipped for such a scheme, and an
+absent link ends an offset read before `hasNextPage` (which a
+`totalCount` would keep true). The pinned test is replaced by tests for
+the new behaviour under both advances and for an absent link with a
+larger `total_count`.

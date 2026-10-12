@@ -246,20 +246,30 @@ describe('an offset scheme that also declares a next link', () => {
     expect(offsets).toEqual([0, 2, 4]);
   });
 
-  it('pinned: under pageSize the link leads, then the stale offset fails the read at a null link', async () => {
-    // Current behaviour, pinned on purpose (see the README): the offset
-    // cursor is not advanced while links are followed, so at the last page
-    // (next: null) the pageSize advance steps from the first offset again,
-    // asks for a page the read already has, and the read ends with an
-    // error rather than short. With total_count it does the same.
+  it('follows the link while there is one, and ends at a null link, under pageSize (0.7.1)', async () => {
     for (const withTotal of [false, true]) {
       const { transport, offsets } = linkingProvider(6);
       const s = linked('pageSize');
       if (!withTotal) delete s.response!.bodyFields!['total_count'];
-      await expect(read(s, transport, 2)).rejects.toThrow(
-        /repeated a page|holds an item an earlier page returned/,
-      );
-      expect(offsets.slice(0, 3)).toEqual([0, 2, 4]);
+      expect(await read(s, transport, 2)).toHaveLength(6);
+      expect(offsets).toEqual([0, 2, 4]);
+    }
+  });
+
+  it('ends at an absent link even when total_count says more items exist (0.7.1)', async () => {
+    for (const advance of ['itemCount', 'pageSize'] as const) {
+      const { transport, offsets } = linkingProvider(4);
+      const s = linked(advance);
+      const more: Transport = async (request) => {
+        const response = await transport(request);
+        const body = JSON.parse(response.body) as Record<string, unknown>;
+        return {
+          ...response,
+          body: JSON.stringify({ ...body, total_count: 10 }),
+        };
+      };
+      expect(await read(s, more, 2)).toHaveLength(4);
+      expect(offsets).toEqual([0, 2]);
     }
   });
 });

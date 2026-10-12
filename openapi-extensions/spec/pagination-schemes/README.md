@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.7.0
+**Spec version:** 0.7.1
 
 ---
 
@@ -147,6 +147,11 @@ item an earlier page of the same read returned ends the read with an error,
 as in §4.4.5: a list that changes during the read can shift items between
 offsets, and a server that ignores the `offset` field answers the same page
 again, which a client would otherwise request without end.
+
+When the scheme also declares a `nextLink` response field, the link leads,
+under either rule: while a response carries a link, the client follows it,
+and a response whose link is absent, `null` or empty ends the read; the
+offset rules above then decide nothing (added in 0.7.1).
 
 ### 4.4 Response Pagination Fields Object
 
@@ -924,6 +929,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
+- **0.7.1** (2026-10-12): clarifies §4.3.2: in a scheme that declares both an `offset` field and a `nextLink` response field, the link leads under either `advance`, and an absent, `null` or empty link ends the read. 0.7.0 did not say; a client that stepped by the offset after following links could ask again for a page it had. `read_offsets` takes `follow` for such schemes. No document changes meaning.
 - **0.7.0** (2026-10-12): adds `emptyWhenAbsent` to the Envelope Object (§4.4.2): `true` makes a response without the `itemsField` field a page with no items, for providers that leave an empty array out (the Protocol Buffers JSON mapping does), such as Google's Tasks API. Adds `advance` to an `offset` request field (§4.3.2): `itemCount` (the default, what clients did) adds the items a page held, `pageSize` adds the page size and ends only at `totalCount`, for providers such as Box that document the next offset as the previous offset plus the previous limit. Validation rules 23–25, `page_items` and `read_offsets` in the validator, examples and tests. A document valid under 0.6.0 stays valid and means the same, with one new consumer requirement: an offset read, under `itemCount` (the default) as under `pageSize`, ends with an error at a page holding an item an earlier page of the same read returned (§4.3.2); 0.6.0 required that only of a read with a Short Page Object. A 0.6.0 consumer ignores both fields: it fails a read whose items field is absent, as before, and advances an offset by the items held, which under a provider that needs `pageSize` can read items twice or stop early.
 - **0.6.0** (2026-10-08): adds `start` on a `page` request field (the first page number, default 1, so zero-based pages are described), and the Short Page Object (`shortPage` on a `pageNumber` scheme's response, §4.4.5): a page with fewer than `size` items ends the list, with an `assurance` (`documented`, `observed` or `assumed`) that decides whether such a read is complete for Collection Completeness; validation rules 19–22, `read_pages` in the validator, an example and tests. For pondersource/openapi-extensions#25 and ontola/atomic-plugins#385 (ClickUp). A document valid under 0.5.0 stays valid and means the same. A 0.5.0 consumer ignores `start` and `shortPage`: it asks a zero-based list for page 1 first, skipping page 0, and stops after a page without a continuation signal, so a document that needs either should not be used with such a consumer.
 - **0.5.0** (2026-10-08): adds the `rangeWindow` scheme type for operations that answer at most a fixed number of items and have no page parameter, read one range of an item field at a time (§4.6): the Range Window Object (`window`: unit, bound format, closed or half-open bounds, cap, minimum width, the selected field and the day's time zone), the request roles `windowStart`, `windowEnd` and `windowRange`, the Request Field Object's `template`, the splitting procedure (halving by default), when a windowed read is complete, validation rules 12–18, and `read_range` in the validator. For ontola/atomic-plugins pieces.md K1 (Moneybird's financial mutations). A document valid under 0.4.0 stays valid.

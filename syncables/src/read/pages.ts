@@ -741,10 +741,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     // Pagination Schemes 0.7.0 §4.3.2: an offset that advances by the page
     // size (a reported pageSize field, else the size sent) ends only at
     // totalCount; a short or empty page before that does not end the list.
+    // A scheme that also declares a next link is led by it (0.7.1): an
+    // absent or null link ends the read below, never a step from an offset
+    // that was not advanced while links were followed.
     if (
       scheme.type === 'pageNumber' &&
       !linkPresent &&
-      offsetAdvance(scheme) === 'pageSize'
+      offsetAdvance(scheme) === 'pageSize' &&
+      !declaresRole(scheme, 'nextLink')
     ) {
       // §4.3.2: a reported page size counts as an integer of at least 1,
       // a totalCount as an integer of at least 0; read per response, as
@@ -779,7 +783,7 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     // such a read used to stop after one page, short and unreported); the
     // repeat check above ends a read whose server ignores the offset. A
     // scheme that also declares a next link (Spotify's `next`) is led by
-    // it: a link that is absent or `null` is the last page (§4.4.3).
+    // it: a link that is absent or `null` is the last page (0.7.1 §4.3.2).
     if (
       scheme.type === 'pageNumber' &&
       !linkPresent &&
@@ -797,6 +801,17 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       cursor = { offset: following };
       next = undefined;
       continue;
+    }
+    // 0.7.1 §4.3.2: in an offset scheme that declares a next link, an
+    // absent, null or empty link ends the read under either advance, even
+    // when a totalCount says more items exist.
+    if (
+      !linkPresent &&
+      scheme.type === 'pageNumber' &&
+      offsetAdvance(scheme) !== undefined &&
+      declaresRole(scheme, 'nextLink')
+    ) {
+      return;
     }
     if (!state.hasNextPage && !linkPresent) {
       return;
