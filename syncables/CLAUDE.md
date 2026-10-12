@@ -607,6 +607,13 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   read, a restart, an unresolved bind, a refused declaration, a confirmed
   uncertain create, and no `followUps`; `compound-create-core.test.ts`
   the pure parts.
+- `unit/client/list-tombstones.test.ts` covers Deletion Feeds 0.3.0-draft
+  `x-list-tombstone` (`read/list-tombstones.ts`, after the reference
+  `list_tombstone`; parsed into `ReadCollection.listTombstone`, filtered in
+  `readCollections` into `CollectionSnapshot.tombstones`, and in `sync()`
+  the `listTombstoned` ids of the sync's reads are `findEvidence`'s first
+  evidence, `source: 'list'`) on the spec's §7.5 example
+  (`__tests__/fixtures/list-tombstones.ts`).
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,

@@ -1,6 +1,7 @@
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
 import { discoverResources } from '../resources/discover.js';
+import { parseListTombstone, type ListTombstone } from './list-tombstones.js';
 
 /**
  * The collection model the read path walks, built from the OpenAPI CRUD
@@ -53,6 +54,13 @@ export interface ReadCollection {
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
   itemParam?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the marker of deleted objects this
+   * collection's reads return among the members (`x-list-tombstone`, on the
+   * Collection Object, else on its list operation). Absent when not
+   * declared, or when the declaration does not parse.
+   */
+  listTombstone?: ListTombstone;
 }
 
 /** Enumerate `collection` and read `field` off each item to fill a path variable. */
@@ -214,6 +222,14 @@ export function discoverReadModel(
         }
       }
       const body = listField(col, 'listBody').value;
+      const method = listMethodOf(col);
+      const listTombstone = parseListTombstone(
+        col['x-list-tombstone'] !== undefined
+          ? col['x-list-tombstone']
+          : document.paths[col['urlTemplate']]?.[
+              method === 'POST' ? 'post' : 'get'
+            ]?.['x-list-tombstone'],
+      );
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;
@@ -224,7 +240,7 @@ export function discoverReadModel(
         idField,
         contextParams: pathVariables(col['urlTemplate']),
         listQuery,
-        method: listMethodOf(col),
+        method,
         listBody: isRecord(body) ? structuredClone(body) : {},
         // A string is the dot-path; null or "" is the body root (Pagination
         // Schemes §4.4.2); omitted or another type leaves the array to be
@@ -234,6 +250,7 @@ export function discoverReadModel(
           : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
+        ...(listTombstone ? { listTombstone } : {}),
       });
     }
   }

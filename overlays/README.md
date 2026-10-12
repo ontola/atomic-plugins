@@ -110,6 +110,30 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## List tombstones
+
+[Google Calendar v3 list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#45-list-tombstones)
+`x-list-tombstone: { field: status, values: [cancelled], except: [{ field:
+recurringEventId, present: true }] }` on the event list
+(`GET /calendars/{calendarId}/events`). The pinned document's
+`Event.status` says "cancelled" is "The event is cancelled (deleted)",
+that the list returns cancelled events with `showDeleted=true` or on
+incremental sync, that "Cancelled exceptions of an uncancelled recurring
+event indicate that this instance should no longer be presented to the
+user. Clients should store these events", and that "All other cancelled
+events represent deleted events". The `except` condition keeps every item
+with `recurringEventId` a member, as the document asks of cancelled
+exceptions; a cancelled exception of a deleted series is kept too (the
+item does not say its series' state), and the series' own item reports the
+series. Cancelled events "can be restored (undeleted)"; a later list
+returning the event with another status brings it back. Declared on the
+list operation, so it applies to every collection that lists events, and no
+dated catalog selects it yet. syncables reads it.
+`tests/test_calendar_list_tombstone.py` composes it after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:

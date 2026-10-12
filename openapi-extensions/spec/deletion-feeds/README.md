@@ -683,7 +683,15 @@ of the record reads it again. When the resource's declaration does not
 parse, it uses the operation's. A record
 found deleted this way is handled as for any deletion: the held updates at
 the head of its queue fail, and are sent only if the caller retries them.
-It does not look for the marker in write responses, and does not yet read
-`x-list-tombstone` (§4.5).
+It does not look for the marker in write responses.
+
+It reads `x-list-tombstone` (§4.5; on the Collection Object, else on the
+list operation; a declaration that does not parse is ignored): a list
+tombstone is left out of the collection's members and its id reported with
+the read, so a record the read returned only as one is removed like any
+record a complete read no longer returns, and a held update of it fails as
+deleted without a read of the record (the list tombstones of every read in
+the sync count, complete or not). A later read that returns the record as a
+member brings it back.
 
 Not verified against a real provider.

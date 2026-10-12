@@ -278,9 +278,11 @@ export interface MissingRecord {
    * object, which supplies a path variable of its nested collection, was
    * concluded deleted or unavailable, and the collection declares
    * `x-completeness: { parentAbsent }`; the record itself was not read;
-   * Collection Completeness 0.2.0 §4.4) or `none` (no GET made).
+   * Collection Completeness 0.2.0 §4.4), `list` (a list tombstone in this
+   * sync's read of the collection, Deletion Feeds 0.3.0-draft §4.5; no GET
+   * made) or `none` (no GET made).
    */
-  source: 'declaration' | 'feed' | 'read' | 'parent' | 'none';
+  source: 'declaration' | 'feed' | 'read' | 'parent' | 'list' | 'none';
   /** The status the GET answered, when one answered. */
   status?: number;
   /**
@@ -1552,6 +1554,8 @@ export function createApiClient(
   const confirmed = new Map<string, Map<string, Record<string, unknown>>>();
   const lastSyncedItems = new Map<string, Record<string, unknown>[]>();
   const conditionalCache = new Map<string, TransportResponse>();
+  /** Per scope, the ids this sync's reads returned as list tombstones (§4.5); replaced each sync. */
+  let listTombstoned = new Map<string, Set<string>>();
   /** Per scope, the user-defined members of the latest complete read's records, by id. */
   const runtimeMembersByScope = new Map<string, Map<string, RuntimeMembers>>();
   const writeQueues = new Map<string, QueuedWrite[]>();
@@ -3683,6 +3687,15 @@ export function createApiClient(
     id: string,
     budget: Budget,
   ): Promise<Evidence | undefined> {
+    // A list tombstone in this sync's read of the collection: deleted when
+    // that read was made (Deletion Feeds 0.3.0-draft §4.5), before any
+    // declaration or request.
+    if (listTombstoned.get(scopeFor(route, context))?.has(id))
+      return {
+        evidence: 'deleted',
+        source: 'list',
+        detail: `this sync's read of ${route.collection.name} returned the record as a list tombstone (x-list-tombstone)`,
+      };
     if (route.absentMeansDeleted)
       return {
         evidence: 'deleted',
@@ -4345,9 +4358,17 @@ export function createApiClient(
       returned: new Map(),
     };
     let keptSettled = false;
+    listTombstoned = new Map();
     for (const snapshot of result.collections) {
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const scope = scopeFor(route, contextFor(route, snapshot.pathParams));
+      // The list tombstones of every read, complete or not: what the
+      // provider answered about those objects (§4.5).
+      if (snapshot.tombstones?.length) {
+        const deleted = listTombstoned.get(scope) ?? new Set<string>();
+        for (const id of snapshot.tombstones) deleted.add(id);
+        listTombstoned.set(scope, deleted);
+      }
       const idField = snapshot.collection.idField;
       const ids = round.returned.get(scope) ?? new Set();
       for (const item of snapshot.items) {

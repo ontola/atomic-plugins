@@ -43,6 +43,7 @@ import {
   type RuntimeMembers,
 } from './runtime-schemas.js';
 import type { Transport } from './transport.js';
+import { isListTombstone } from './list-tombstones.js';
 
 export interface CollectionReadOptions {
   transport: Transport;
@@ -99,6 +100,13 @@ export interface CollectionSnapshot {
   coverage?: ReadCoverage;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the ids of the list tombstones this
+   * read returned (deleted when it was read), in the order read; they are
+   * not in `items`. Present when the collection declares
+   * `x-list-tombstone`.
+   */
+  tombstones?: string[];
   /**
    * For a resource that declares `x-runtime-schema` (Runtime Schemas
    * 0.1.0-draft): each item's user-defined members, interpreted against its
@@ -260,6 +268,7 @@ export async function readCollections(
           pathParams: path,
           items: [],
           complete: false,
+          ...(collection.listTombstone ? { tombstones: [] } : {}),
         };
         collections.push(snapshot);
         try {
@@ -368,6 +377,16 @@ export async function readCollections(
           })) {
             if (options.probe) throw new ProbeDone();
             for (const value of page.items) {
+              // A list tombstone reports a deletion and is not a member
+              // (§4.5); one without an identity names no object.
+              if (
+                collection.listTombstone &&
+                isListTombstone(collection.listTombstone, value)
+              ) {
+                const deleted = asText(value[collection.idField]);
+                if (deleted) (snapshot.tombstones ??= []).push(deleted);
+                continue;
+              }
               const id = asText(value[collection.idField]);
               const key = JSON.stringify([
                 collection.resource,
