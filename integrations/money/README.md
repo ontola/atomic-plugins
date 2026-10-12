@@ -376,7 +376,8 @@ At 0.4.3 (`plugin.js` sha256
 `apps/money/0.4.3/ui.js`, 120,397 bytes; the only change from 0.4.2 is the
 stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
 the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
-passed on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build).
+exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
+its log was lost, so there are no per-test counts for that run.
 The stopped-import state is still not reached end to end.
 
 At 0.4.2 (`plugin.js` sha256

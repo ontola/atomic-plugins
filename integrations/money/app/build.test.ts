@@ -22,8 +22,8 @@ describe('money drive-app bundle', async () => {
     // at the 7dab1ce pin, for 0.4.3 (0.4.2's card with the stopped-import
     // punctuation fix); the limit is that plus about 10%, rounded up.
     // 0.4.2 measured 120,413 bytes at e922179 (the shared sync-status card,
-    // Q-084, with its minified card.css and the app's status mapping). 0.4.1 measured 111,239 bytes on
-    // 2026-10-02 (the incomplete-rows list, #177 rule). It includes both
+    // Q-084, with its minified card.css and the app's status mapping).
+    // 0.4.1 measured 111,239 bytes on 2026-10-02 (the incomplete-rows list, #177 rule). It includes both
     // statement readers (MT940 and camt.053), which the in-app check runs,
     // and since 0.4.0 the shared ontology's subject constants and resolver
     // (`ontology-kit/terms.mjs`, `resolver.mjs`; terms.mjs carries every v1
