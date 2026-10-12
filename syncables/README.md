@@ -995,6 +995,62 @@ When the create operation declares an `x-crud` `create` for the resource
 
 Without a declaration, creates behave as described above.
 
+### Write preconditions (`x-write-precondition`)
+
+A create, update or delete operation may declare `x-write-precondition`
+(the draft Write Preconditions extension 0.1.0-draft,
+[`openapi-extensions/spec/write-preconditions/`](../openapi-extensions/spec/write-preconditions/README.md)).
+The client then checks it before each send, and handles the write's own
+answers as the extension says. An operation without one is unchanged.
+
+- **`kind: ifMatch`**: the write carries the object's version in `header`
+  (`If-Match` by default). A version `in: body` comes from the record as last
+  read, with no extra request; a version `in: header` (an `ETag`), or a record
+  that has no version field, is read with the item GET first. An answer in
+  `conflictStatus` (default `[412]`) stops the write with
+  `precondition: 'conflict'` in `pendingWrites()` (state `failed`). It is not
+  sent again.
+- **`kind: readVerify`**: the item GET is read before every send. If a field
+  the update writes changed since it was last read (for a delete, any field
+  the client holds), the write is not sent. It stops as a `conflict`, and each
+  field becomes a `WriteConflict` (`onConflict`). Otherwise a full-record PUT
+  is built on that read, so a field changed elsewhere is not reverted.
+- **`refuseWhen`**: a Refusal Object that matches the object as last read (or
+  read for the check) stops the write with `precondition: 'refused'`. Its
+  `description` goes into `lastError`. A Refusal Object with a `source` reads
+  that resource's object through its item GET, with path variables taken from
+  the write's context. The source is read once per sync pass. While it cannot
+  be read, the write stays `pending` with `precondition: 'source-unknown'` and
+  is retried (fail closed). Nothing is sent.
+- **The write's own 404 or 410**: an update stops with
+  `precondition: 'gone'` and is not sent again, since that could recreate
+  the object. A delete settles when the deletion is confirmed, by any of:
+  - a stored feed tombstone for the record;
+  - `absent: deleted` on the collection it was read in;
+  - `notFound: deleted` on the resource;
+  - for a 410, the resource's stated `gone`, which then decides alone.
+
+  Otherwise the record is kept with its last known values and reported to
+  `onMissingRecord` as `unavailable`, with `source: 'write'`.
+- **Unknown outcomes** (no answer, or a 5xx): an update or delete that may
+  not be resent blind (`readVerify`, or `idempotent: false`, or a PATCH
+  without `idempotent: true`) gets `precondition: 'resolving'`. The next
+  attempt first reads the object, then does one of these:
+  - settles the write, if it was applied;
+  - sends it again, if it was not applied;
+  - stops as `conflict`, `refused` or `gone`;
+  - waits, while the read cannot tell.
+
+  The same holds for such a write found in flight at a restart. The version
+  an `ifMatch` write sent is stored (`sentVersion`) for this comparison.
+
+A declaration this client cannot use (an unknown `kind`, an `ifMatch` without
+a usable `version`, a Refusal Object it cannot read) makes `create()`,
+`update()` or `remove()` of that type throw, rather than send the write
+unconditionally. `resolveWrite` `retry` clears the verdict, so the
+precondition is checked again when the write is sent. Not verified against a
+live provider; the tests use invented transports.
+
 ### Durable outbox and restarts
 
 When a `storage` adapter is passed, the client keeps every unsettled write in
@@ -1481,6 +1537,20 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
+  on create, update and delete operations: `ifMatch` sends the version
+  (from the record, or an item GET when it is a header) and stops on a
+  `conflictStatus`; `readVerify` reads first, stops on a changed written
+  field and builds a full-record PUT on that read; `refuseWhen` (and its
+  `source` objects, fail closed) stops a write the object refuses; an
+  update's 404/410 stops as `gone`, a delete's settles only when the
+  deletion is confirmed and is otherwise reported `unavailable` with the
+  new `source: 'write'`; an unknown outcome is resolved by a read before
+  anything is sent again (`precondition: 'resolving'`, also after a
+  restart). `PendingWriteInfo.precondition` (`WritePreconditionState`) and
+  the outbox's `precondition` and `sentVersion` (within version `1`) are
+  new; an unusable declaration makes the write call throw. Behaviour
+  change only for documents that declare `x-write-precondition`.
 - **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
   of a missing record means the resource's stated `gone` (resource-wide,
   like `notFound`; `route.gone`), else what `notFound` says.

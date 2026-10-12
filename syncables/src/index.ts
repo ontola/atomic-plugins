@@ -33,6 +33,7 @@ export type {
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
+  WritePreconditionState,
   WriteConflict,
   WriteResolution,
   WriteFailure,

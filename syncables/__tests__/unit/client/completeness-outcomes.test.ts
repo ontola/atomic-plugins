@@ -1652,4 +1652,26 @@ describe('gone (Collection Completeness 0.3.0 §4.3)', () => {
     );
     expect(resourceNotFound(doc, collections, 'taskList')).toBe('unavailable');
   });
+
+  it('is unavailable when two collections state conflicting values', () => {
+    const doc = nestedDocument((resources, paths) => {
+      resources['taskList']!['collections'] = {
+        taskLists: {
+          urlTemplate: '/users/me/lists',
+          'x-completeness': { absent: 'removed', gone: 'deleted' },
+        },
+        starredLists: {
+          urlTemplate: '/users/me/starred',
+          'x-completeness': { absent: 'removed', gone: 'unavailable' },
+        },
+      };
+      paths['/users/me/starred'] = {
+        get: { responses: { '200': { description: 'Starred lists' } } },
+      };
+    });
+    const collections = discoverReadModel(doc).collections;
+    expect(resourceNotFound(doc, collections, 'taskList', 'gone')).toBe(
+      'unavailable',
+    );
+  });
 });

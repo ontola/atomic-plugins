@@ -269,7 +269,9 @@ export interface MissingRecord {
    * object, which supplies a path variable of its nested collection, was
    * concluded deleted or unavailable, and the collection declares
    * `x-completeness: { parentAbsent }`; the record itself was not read;
-   * Collection Completeness 0.2.0 §4.4) or `none` (no GET made).
+   * Collection Completeness 0.2.0 §4.4), `none` (no GET made) or `write`
+   * (the write's own 404 or 410 under `x-write-precondition`, with no
+   * confirmed deletion; Write Preconditions §4.5).
    */
   source: 'declaration' | 'feed' | 'read' | 'parent' | 'none' | 'write';
   /** The status the GET answered, when one answered. */
@@ -591,6 +593,14 @@ export type WritePreconditionState =
   | 'gone'
   | 'source-unknown'
   | 'resolving';
+
+const preconditionStates: ReadonlySet<string> = new Set<WritePreconditionState>(
+  ['conflict', 'refused', 'gone', 'source-unknown', 'resolving'],
+);
+
+function isPreconditionState(value: unknown): value is WritePreconditionState {
+  return typeof value === 'string' && preconditionStates.has(value);
+}
 
 export interface ApiClient {
   resources: string[];
@@ -1875,8 +1885,10 @@ export function createApiClient(
       ...(stored.seq !== undefined ? { seq: stored.seq } : {}),
       ...(stored.missingRecord ? { missingRecord: stored.missingRecord } : {}),
       ...(stored.unbound ? { unbound: true } : {}),
-      ...(stored.precondition
-        ? { precondition: stored.precondition as WritePreconditionState }
+      // A state this client does not know (a later client's) is dropped:
+      // the precondition is checked again when the write is sent.
+      ...(isPreconditionState(stored.precondition)
+        ? { precondition: stored.precondition }
         : {}),
       ...(stored.sentVersion !== undefined
         ? { sentVersion: stored.sentVersion }
@@ -2332,9 +2344,7 @@ export function createApiClient(
   }
 
   /** A GET of the write's object: its status, body and headers. */
-  async function readObject(
-    write: QueuedWrite,
-  ): Promise<{
+  async function readObject(write: QueuedWrite): Promise<{
     status: number;
     body: unknown;
     headers: Record<string, string>;

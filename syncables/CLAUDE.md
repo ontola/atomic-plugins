@@ -179,7 +179,22 @@ Data flows through four stages, each its own directory under `src/`:
    `versionOf`, `refusalOf`, `maySend`, `writeAnswer` and `resolveUnknown`,
    ports of the spec's `validate.py` functions of the same names; keep them
    in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`).
-   Not wired into the client yet.
+   The client reads each write operation's declaration into
+   `route.preconditions` (or `route.preconditionRefused`, which makes the
+   write call throw). `attemptWrite` first runs `resolveByRead` for a write
+   with `precondition: 'resolving'`, then `precheck`. `precheck` reads the
+   object when the declaration needs it (`readObject`) and reads the source
+   objects (`sourceObject`, cached per sync pass in `sourceCache`). It then
+   calls `maySend` and gives the headers, plus the read under `readVerify`,
+   which the full-record body is built on. In the catch, a `conflictStatus`
+   answer or a `writeAnswer` 404/410 stops the write (`stopWrite`, gaveUp
+   with `QueuedWrite.precondition`, stored). Otherwise
+   `goneUnconfirmed` keeps the record and reports it `unavailable` with
+   `source: 'write'`. `deletionConfirmed` takes a feed tombstone,
+   `absentMeansDeleted` or `notFound: deleted`, and `route.gone` decides a
+   410. An unknown outcome sets `resolving`, also on restore of an in-flight
+   update or delete. `sentVersion` is stored for its rule 5, and
+   `resolveWrite` `retry` clears the state.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -558,6 +573,15 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   under an unavailable parent concluded at once and sent again after the
   parent returns, `record` on unavailable reports, and an unrecognised
   `notFound` read as `unavailable`.
+- `unit/client/write-preconditions.test.ts` covers the client side of
+  Write Preconditions: `ifMatch` (body version without a read, header
+  version with one, `conflictStatus` and `header`), `refuseWhen`,
+  `readVerify` (conflict, the body built on the read, a delete),
+  unknown outcomes (applied, not applied, another change, an idempotent
+  PUT resent, a restart), a write's own 404/410 (unconfirmed, confirmed
+  three ways, `gone` over `notFound`, an update stopped), source objects
+  (refused, unreadable then sent), `kind: none`, an unusable declaration
+  and an unknown stored state.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
