@@ -200,7 +200,15 @@
     "envelope": {
       "type": "object",
       "properties": {
-        "itemsField": { "type": ["string", "null"] }
+        "itemsField": { "type": ["string", "null"] },
+        "emptyWhenAbsent": { "type": "boolean" }
+      },
+      "dependentSchemas": {
+        "emptyWhenAbsent": {
+          "description": "Rule 23.",
+          "required": ["itemsField"],
+          "properties": { "itemsField": { "type": "string", "minLength": 1 } }
+        }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false

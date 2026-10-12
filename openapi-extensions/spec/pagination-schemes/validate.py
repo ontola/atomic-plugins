@@ -425,15 +425,32 @@ class PageReadError(RuntimeError):
     """A page-number read that ended with an error (§4.4.5 step 3)."""
 
 
-def _items(body, scheme):
-    path = scheme.get("response", {}).get("envelope", {}).get("itemsField")
+def page_items(body, scheme):
+    """The items of one response body, located by the scheme's Envelope Object (§4.4.2).
+
+    Under `emptyWhenAbsent: true` a body in which the `itemsField` field is
+    absent (an object along the path lacks the next segment) has no items. A
+    present value that is not an array, a present `null` included, and a
+    path through a value that is not an object are errors either way.
+    """
+    envelope = scheme.get("response", {}).get("envelope", {})
+    path = envelope.get("itemsField")
     value = body
     if path:
         for segment in path.split("."):
-            value = value.get(segment) if isinstance(value, dict) else None
+            if not isinstance(value, dict):
+                raise PageReadError("the response holds no item array")
+            if segment not in value:
+                if envelope.get("emptyWhenAbsent") is True:
+                    return []
+                raise PageReadError("the response holds no item array")
+            value = value[segment]
     if not isinstance(value, list):
         raise PageReadError("the response holds no item array")
     return value
+
+
+_items = page_items
 
 
 def _role_value(body, scheme, role):
@@ -494,7 +511,7 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         values = {page_field: number}
         values.update({field: page_size for field in size_fields})
         body = request(values)
-        page = _items(body, scheme)
+        page = page_items(body, scheme)
         pages += 1
         reported = _count(_role_value(body, scheme, "pageSize"))
         full = reported if reported else size

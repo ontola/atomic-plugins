@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.6.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.7.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, PageReadError, WindowReadError, halves, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml")
 
 
 def example(name):
@@ -748,3 +748,68 @@ class ReadPagesSmallerPageSizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyWhenAbsentTests(unittest.TestCase):
+    """0.7.0: emptyWhenAbsent on the Envelope Object (§4.4.2, rule 23)."""
+
+    def document(self):
+        return example("empty-when-absent.yaml")
+
+    def scheme(self, document):
+        return document["components"]["paginationSchemes"]["googleTasks"]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_only_a_boolean_with_a_non_empty_items_field(self):
+        for mutate in (lambda e: e.update(emptyWhenAbsent="true"), lambda e: e.pop("itemsField"),
+                       lambda e: e.update(itemsField=None), lambda e: e.update(itemsField="")):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["envelope"])
+            self.assertInvalid(document, "googleTasks")
+        document = self.document()
+        self.scheme(document)["response"]["envelope"]["emptyWhenAbsent"] = False
+        validate(document)
+
+    def test_0_6_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml"):
+            validate(example(name))
+
+    def test_an_absent_field_is_a_page_with_no_items_only_when_declared(self):
+        scheme = self.scheme(self.document())
+        self.assertEqual(page_items({"kind": "tasks#tasks", "etag": "e1"}, scheme), [])
+        self.assertEqual(page_items({"items": [{"id": "t1"}]}, scheme), [{"id": "t1"}])
+        del scheme["response"]["envelope"]["emptyWhenAbsent"]
+        with self.assertRaises(PageReadError):
+            page_items({"kind": "tasks#tasks"}, scheme)
+
+    def test_a_present_value_that_is_not_an_array_is_an_error_either_way(self):
+        scheme = self.scheme(self.document())
+        for body in ({"items": None}, {"items": {}}, {"items": "t1"}, ["t1"], None):
+            with self.subTest(body=body):
+                with self.assertRaises(PageReadError):
+                    page_items(body, scheme)
+
+    def test_a_dot_path_is_absent_where_an_object_lacks_the_next_segment(self):
+        scheme = {"response": {"envelope": {"itemsField": "data.items", "emptyWhenAbsent": True}}}
+        self.assertEqual(page_items({}, scheme), [])
+        self.assertEqual(page_items({"data": {}}, scheme), [])
+        for body in ({"data": None}, {"data": []}, {"data": "x"}):
+            with self.subTest(body=body):
+                with self.assertRaises(PageReadError):
+                    page_items(body, scheme)
+
+    def test_read_pages_ends_on_an_absent_items_field(self):
+        scheme = {
+            "type": "pageNumber",
+            "request": {"queryParameters": {"page": {"role": "page"}}},
+            "response": {"envelope": {"itemsField": "items", "emptyWhenAbsent": True},
+                         "shortPage": {"size": 2, "assurance": "documented"}},
+        }
+        pages = {1: {"items": [{"id": "a"}, {"id": "b"}]}, 2: {"kind": "list"}}
+        result = read_pages(scheme, lambda values: pages[values[("queryParameters", "page")]])
+        self.assertEqual([item["id"] for item in result["items"]], ["a", "b"])
+        self.assertTrue(result["complete"])

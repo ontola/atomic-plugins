@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.6.0
+**Spec version:** 0.7.0
 
 ---
 
@@ -146,7 +146,29 @@ Some APIs return the paginated array as the response body itself (`[ {...}, {...
 | Field | Type | Description |
 |-------|------|-------------|
 | `itemsField` | string | Dot-path to the field holding the array of items (e.g. `results`, `data.items`). Omit, or set to `null`, when the response body root **is** the array. |
+| `emptyWhenAbsent` | boolean | Added in 0.7.0, and allowed only with an `itemsField` that is a non-empty string. `true`: a response body in which the field `itemsField` names is absent is a page with no items. Default: `false`, under which such a body is an error. See below. |
 | `x-*` | any | Extension fields. |
+
+The field `itemsField` names is *absent* when the body is an object and,
+following the dot-path segment by segment, some object along the way lacks
+the next segment as a member (`{ "kind": "tasks#tasks" }` for `items`, or
+`{}` for `data.items`). A present `null`, or a value along the path that is
+not an object, is not absent. Under either value of `emptyWhenAbsent`, a
+field that is present and is not an array is an error, and so is a body
+that is not an object when `itemsField` is a non-empty string.
+
+Some providers leave an empty array out of the response instead of sending
+`[]`. JSON serialized with the Protocol Buffers JSON mapping does this by
+default: "If the field doesn't support field presence and has the default
+value (for example any empty repeated field) serializers should omit it from
+the output" ([ProtoJSON format](https://protobuf.dev/programming-guides/json/)).
+A document declares `emptyWhenAbsent: true` only for such a provider: where
+its documentation says so, or where it serializes with that mapping. It
+never follows from the response schema alone, which lists the array either
+way. The default is `false` because a consumer that read every absent field
+as an empty page would read a mistyped `itemsField` as an empty and complete
+list, and a client that prunes its local copy by a complete list would then
+remove every record.
 
 #### 4.4.3 Link Resolution Object
 
@@ -563,6 +585,18 @@ Matches a response body shaped like:
 }
 ```
 
+An envelope whose array is left out when empty (Google Tasks-style, `examples/empty-when-absent.yaml`):
+
+```yaml
+    response:
+      envelope:
+        itemsField: items
+        emptyWhenAbsent: true
+```
+
+`{ "kind": "tasks#tasks", "etag": "\"e1\"" }` is then a page with no items,
+and the list ends there if it carries no `nextPageToken`.
+
 ### 8.6 Incremental sync (Google Calendar-style)
 
 ```yaml
@@ -837,6 +871,7 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 20. `shortPage` MAY appear only in the `response` of a `pageNumber` scheme. Its `size` is an integer of at least 1 or `"request"`, and its `assurance` one of `documented`, `observed` or `assumed`.
 21. When `size` is `"request"`, the scheme, after overrides are merged, has a request field whose `role` is `pageSize`. A component scheme on its own is not checked: an application's overrides may add the field.
 22. When a scheme with `shortPage` is applied to an operation, after its overrides are merged, it has exactly one request field whose `role` is `page`.
+23. `emptyWhenAbsent` MAY appear only in an Envelope Object whose `itemsField` is a non-empty string, and is a boolean.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -844,18 +879,19 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19 and 20. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21 and 22 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20 and 23. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21 and 22 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
 /tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml
 ```
 
 ## Changes
 
+- **0.7.0** (2026-10-12): adds `emptyWhenAbsent` to the Envelope Object (§4.4.2): `true` makes a response without the `itemsField` field a page with no items, for providers that leave an empty array out (the Protocol Buffers JSON mapping does), such as Google's Tasks API; validation rule 23, `page_items` in the validator, an example and tests. A document valid under 0.6.0 stays valid and means the same: without the field, an absent `itemsField` is still an error. A 0.6.0 consumer ignores the field and fails such a read, as it did before; it never reads a list as shorter than it is.
 - **0.6.0** (2026-10-08): adds `start` on a `page` request field (the first page number, default 1, so zero-based pages are described), and the Short Page Object (`shortPage` on a `pageNumber` scheme's response, §4.4.5): a page with fewer than `size` items ends the list, with an `assurance` (`documented`, `observed` or `assumed`) that decides whether such a read is complete for Collection Completeness; validation rules 19–22, `read_pages` in the validator, an example and tests. For pondersource/openapi-extensions#25 and ontola/atomic-plugins#385 (ClickUp). A document valid under 0.5.0 stays valid and means the same. A 0.5.0 consumer ignores `start` and `shortPage`: it asks a zero-based list for page 1 first, skipping page 0, and stops after a page without a continuation signal, so a document that needs either should not be used with such a consumer.
 - **0.5.0** (2026-10-08): adds the `rangeWindow` scheme type for operations that answer at most a fixed number of items and have no page parameter, read one range of an item field at a time (§4.6): the Range Window Object (`window`: unit, bound format, closed or half-open bounds, cap, minimum width, the selected field and the day's time zone), the request roles `windowStart`, `windowEnd` and `windowRange`, the Request Field Object's `template`, the splitting procedure (halving by default), when a windowed read is complete, validation rules 12–18, and `read_range` in the validator. For ontola/atomic-plugins pieces.md K1 (Moneybird's financial mutations). A document valid under 0.4.0 stays valid.
 - **0.4.0** (2026-10-08): `nextLink` and `previousLink` values may be relative references. Adds the Link Resolution Object (`linkResolution` on a Response Field Object, §4.4.3), the link-following rules (§4.4.4: the server's origin only, no userinfo or fragment, an unfollowable link ends the read with an error, the checked URL is the one requested, and loops are detected), the refusal of values parsers disagree on (§4.4.3 rule 2), validation rules 8–11, and the schema, validator and examples. A document valid under 0.3.0 stays valid. A consumer that followed links to another origin may no longer do so.
