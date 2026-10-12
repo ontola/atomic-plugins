@@ -63,3 +63,28 @@ HTTP-date form through `parseHttpDate`, the same rules as the client's
 write retries; tests cover the bound, the stripping (a no-break space or a
 byte-order mark is not stripped) and loose dates that `Date.parse` would
 have read.
+
+## Turn 3
+
+**Human (relayed by the coordinator, #481 review):** Blocker: in deferred
+mode a stored `unconfirmedReconciliation` is dropped only on
+`barrier-mismatch`, but integration-proxy usually answers a stale one with
+`obsolete-generation` (a gap bumps the generation, which
+`complete_reconciliation` checks first), so every step resends the same
+`reconciled` and the consumer is wedged. Nits: validate or document the
+base URL's canonical form; note in the changelog that every trailing `/`
+is stripped; document that deferred mode needs read-your-writes within a
+step; drop a stored ack answered `cursor-not-issued` too; soften the
+`decodeBase64Utf8` doc about trailing bits.
+
+**Assistant:** A stored reconciliation is now dropped on
+`obsolete-generation` as well as `barrier-mismatch`, and a stored ack on
+`cursor-not-issued` as well as `obsolete-generation`; the fake receiver
+answers a stale `reconciled` the way the proxy does (generation first), and
+tests reproduce both cases (a gap between the steps; a refused cursor).
+`InboxClient` refuses a base URL that `URL` would rewrite (an upper-case
+host, a default port, a query, fragment, user info, escape or dot
+segment), with tests; the changelog has an Unreleased bullet for the inbox
+consumer, including the trailing-`/` change; the `acknowledge` doc states
+the read-your-writes requirement; the decoder's doc says it ignores
+trailing bits.

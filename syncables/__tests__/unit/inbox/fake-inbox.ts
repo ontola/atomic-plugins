@@ -252,10 +252,12 @@ export class FakeInbox {
         return json(200, { generation: body.generation, cursor: body.cursor });
       }
       case 'POST /reconciled': {
-        if (
-          body.generation !== `g${sub.generation}` ||
-          body.barrier !== `${sub.generation}:${sub.barrier}`
-        ) {
+        // As integration-proxy's `complete_reconciliation`: the generation
+        // first (a newer gap started another one), then the barrier.
+        if (body.generation !== `g${sub.generation}`) {
+          return json(409, { status: 'error', code: 'obsolete-generation' });
+        }
+        if (body.barrier !== `${sub.generation}:${sub.barrier}`) {
           return json(409, { status: 'error', code: 'barrier-mismatch' });
         }
         sub.needsReconciliation = false;

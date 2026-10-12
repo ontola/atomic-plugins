@@ -1744,6 +1744,17 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
+  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
+  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
+  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
+  reports a reconciliation only on the step after the writes landed;
+  `reconcile` may answer `'pending'`. `InboxClient` now refuses a base URL
+  that is not canonical (a lower-case host, no default port, no query,
+  fragment, user info, escape or dot segment) and strips every trailing
+  `/` from it, not only one. `InboxError.backoff()` also covers a `409
+  obsolete-generation`, and `parseRetryAfter` follows the client's
+  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
 - **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
   on create, update and delete operations: `ifMatch` sends the version
   (from the record, or an item GET when it is a header) and stops on a

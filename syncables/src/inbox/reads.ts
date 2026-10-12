@@ -34,8 +34,12 @@ const BASE64 =
 /**
  * A payload's base64 body as UTF-8 text, with no `Buffer`, `atob` or
  * `TextDecoder`: none of them is certain in atomic-server's QuickJS
- * sandbox. `undefined` for anything that is not padded standard base64 of
- * well-formed UTF-8 (a payload that is not JSON text asks for no reads).
+ * sandbox. `undefined` for malformed UTF-8, and for base64 that is not
+ * padded to a multiple of four in the standard alphabet with at most two
+ * `=` at the end (a payload that is not JSON text asks for no reads). Not a
+ * strict base64 check: non-zero bits in the last character before the
+ * padding are ignored, as most decoders do, so two encodings can decode to
+ * the same text. The receiver's own encoding never sets them.
  */
 export function decodeBase64Utf8(base64: string): string | undefined {
   if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {

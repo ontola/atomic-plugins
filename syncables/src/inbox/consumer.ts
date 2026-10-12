@@ -118,6 +118,11 @@ export interface InboxConsumerOptions {
    *   the cursor: nothing is acknowledged, and the receiver delivers the
    *   events again. `append` must then find duplicates among the writes
    *   that did land.
+   *
+   *   The journal must also read its own writes within one step, before any
+   *   of them is durable: `subscription()` returns what `setSubscription`
+   *   set earlier in the step, and `append` reports an event appended
+   *   earlier in the step as a duplicate.
    */
   acknowledge?: 'immediately' | 'next-step';
 }
@@ -130,6 +135,16 @@ export type StepResult =
   | { kind: 'ended'; reason: string }
   /** A refusal that passes: wait `seconds` before the next step. */
   | { kind: 'backoff'; seconds: number; reason: string };
+
+/** Whether `error` is a `409` refusal with one of `codes`. */
+function stale(error: unknown, ...codes: string[]): boolean {
+  return (
+    error instanceof InboxError &&
+    error.status === 409 &&
+    error.code !== undefined &&
+    codes.includes(error.code)
+  );
+}
 
 export class InboxConsumer {
   constructor(private readonly options: InboxConsumerOptions) {}
@@ -248,15 +263,13 @@ export class InboxConsumer {
       try {
         await client.ack(current.id, generation, cursor);
       } catch (error) {
-        // A gap since then ended that generation; its events are stored,
-        // and the next fetch reports the gap.
-        if (
-          !(
-            error instanceof InboxError &&
-            error.status === 409 &&
-            error.code === 'obsolete-generation'
-          )
-        ) {
+        // The stored cursor can never be acknowledged any more: a gap since
+        // then ended its generation (`obsolete-generation`), or the receiver
+        // no longer recognises the cursor (`cursor-not-issued`, after it
+        // rotated the key it authenticates cursors with). Its events are
+        // stored; dropping the marker lets the next fetch report the current
+        // state instead of resending the same ack forever.
+        if (!stale(error, 'obsolete-generation', 'cursor-not-issued')) {
           throw error;
         }
       }
@@ -269,15 +282,12 @@ export class InboxConsumer {
           await client.reconciled(current.id, generation, barrier),
         );
       } catch (error) {
-        // The barrier moved (a newer gap): that reconciliation no longer
-        // counts, and the next fetch asks for another one.
-        if (
-          !(
-            error instanceof InboxError &&
-            error.status === 409 &&
-            error.code === 'barrier-mismatch'
-          )
-        ) {
+        // A newer gap since then: it moved the barrier (`barrier-mismatch`)
+        // or, as integration-proxy usually answers, started a new generation
+        // (`obsolete-generation`). That reconciliation no longer counts;
+        // dropping the marker lets the next fetch ask for another one
+        // instead of resending the same `reconciled` forever.
+        if (!stale(error, 'barrier-mismatch', 'obsolete-generation')) {
           throw error;
         }
       }

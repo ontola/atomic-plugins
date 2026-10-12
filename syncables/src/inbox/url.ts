@@ -4,13 +4,46 @@
  * 4b). Where `URL` exists the transport gets a real one; elsewhere it gets
  * an object with the fields a transport reads (`href`, `origin`,
  * `pathname`, `search`, `toString()`), built from the same string. Either
- * way `href` is exactly the string built here: the base URL as given, plus
- * the path and query, which is what a v2 signature covers.
+ * way `href` is exactly the string built here: the base URL, plus the path
+ * and query, which is what a v2 signature covers. That holds only for a base
+ * `URL` would not rewrite, so `trimBase` refuses any other.
  */
 
-/** The base URL as given, without a trailing `/`. */
+/**
+ * A canonical base: `http` or `https`, a lower-case host name or IPv4 or
+ * bracketed IPv6 address, a port only when it is not the scheme's default,
+ * and an optional path of plain segments; no user info, query, fragment,
+ * percent-escape, space or other character `URL` would encode.
+ */
+const CANONICAL_BASE =
+  /^(https?):\/\/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::([0-9]{1,5}))?((?:\/[A-Za-z0-9._~!$&'()*+,;=:@-]+)*)$/;
+
+/**
+ * The receiver's base URL without its trailing `/` (all of them), refused
+ * unless canonical (`CANONICAL_BASE`): only then is the URL a request is
+ * signed for exactly the one `URL` hands to the transport, and the one the
+ * receiver rebuilds from its own `BASE_URL`.
+ */
 export function trimBase(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '');
+  const base = baseUrl.replace(/\/+$/, '');
+  const match = CANONICAL_BASE.exec(base);
+  const port = match?.[2];
+  const defaultPort =
+    (match?.[1] === 'https' && port === '443') ||
+    (match?.[1] === 'http' && port === '80');
+  // `URL` resolves dot segments, so they would change the signed path too.
+  const dotSegment = /\/\.\.?(?=\/|$)/.test(match?.[3] ?? '');
+  if (
+    !match ||
+    defaultPort ||
+    dotSegment ||
+    (port !== undefined && (/^0/.test(port) || Number(port) > 65535))
+  ) {
+    throw new TypeError(
+      `webhook inbox: ${JSON.stringify(baseUrl)} is not a canonical base URL (lower-case host, no default port, no query, fragment, user info or escapes)`,
+    );
+  }
+  return base;
 }
 
 /** `?a=1&b=2` from defined values, each `encodeURIComponent`-encoded. */

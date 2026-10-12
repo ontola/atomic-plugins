@@ -238,4 +238,76 @@ describe("InboxConsumer with acknowledge: 'next-step'", () => {
     await consumer.step();
     expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
   });
+
+  it('drops a reconciliation a newer gap made obsolete, and reconciles again (#481 review)', async () => {
+    const inbox = new FakeInbox();
+    inbox.maxPending = 2;
+    const { journal, consumer, reconciles, since } = setup(inbox);
+    // The initial reconciliation runs; `reconciled` waits for its writes.
+    await consumer.step();
+    await journal.commit();
+    expect(journal.durable.stored?.unconfirmedReconciliation).toEqual({
+      generation: 'g1',
+      barrier: '1:0',
+    });
+    // Before the next step, a gap starts generation 2.
+    for (const id of ['d-1', 'd-2', 'd-3']) inbox.deliver(id);
+    since();
+    // The stored `reconciled` is refused as obsolete-generation: the marker
+    // is dropped and the step goes on to fetch, which reports the new gap.
+    expect(await consumer.step()).toEqual({
+      kind: 'reconciled',
+      reason: 'subscription-events-limit',
+    });
+    expect(since()).toEqual([
+      'POST /subscriptions/sub-1/reconciled',
+      'GET /subscriptions/sub-1/events',
+    ]);
+    expect(reconciles).toEqual(['initial', 'subscription-events-limit']);
+    await journal.commit();
+    expect(journal.durable.stored?.unconfirmedReconciliation).toEqual({
+      generation: 'g2',
+      barrier: expect.stringMatching(/^2:/),
+    });
+    // The next step reports the new one, and nothing is resent after it.
+    await consumer.step();
+    await journal.commit();
+    expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
+    since();
+    await consumer.step();
+    expect(since().some((r) => r.endsWith('/reconciled'))).toBe(false);
+    expect(journal.durable.stored?.unconfirmedReconciliation).toBeUndefined();
+  });
+
+  it('drops a stored ack whose cursor the receiver no longer recognises (#481 review)', async () => {
+    const { inbox, journal, consumer, since } = setup();
+    await consumer.step();
+    await journal.commit();
+    await consumer.step();
+    await journal.commit();
+    inbox.deliver('d-1');
+    await consumer.step();
+    await journal.commit();
+    expect(journal.durable.stored?.unacknowledged).toBeDefined();
+    // The receiver rotated its cursor key: the stored cursor is refused.
+    inbox.answerOnce.set(
+      'POST /ack',
+      json(409, { status: 'error', code: 'cursor-not-issued' }),
+    );
+    since();
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 0,
+      duplicates: 1,
+    });
+    expect(since()).toEqual([
+      'POST /subscriptions/sub-1/ack',
+      'GET /subscriptions/sub-1/events',
+    ]);
+    await journal.commit();
+    // The redelivered event's cursor is stored instead, and acknowledged.
+    expect(journal.durable.stored?.unacknowledged).toBeDefined();
+    await consumer.step();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+  });
 });
