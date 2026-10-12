@@ -45,6 +45,15 @@ ssh root@178.62.223.35 sh /opt/usertest/moderator/run.sh
 ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh 178-62-223-35.sslip.io [<sha>]
 ```
 
+- **On the build VPS** (`usertest.michielbdejong.com`, since 2026-10-02) the
+  catalog is served from `/srv/catalog` on the same host, so there is no
+  `ssh`: build the catalog, then copy `usertest/out/apps` and `samples`
+  in with `tar` (older versions stay). `/srv/catalog` itself is owned by
+  root, so `tar` cannot replace `catalog.json` there; the file belongs to
+  `claude`, so write it in place instead:
+  `cat usertest/out/catalog.json > /srv/catalog/catalog.json`. A moderator
+  change is copied into `/opt/usertest/moderator/` and started with
+  `sudo sh /opt/usertest/moderator/run.sh`. Done this way on 2026-10-12.
 - **Env files are read when a container is created.** `moderator/run.sh`
   passes `/etc/anthropic.env`, `/etc/usertest-moderator.env`,
   `/etc/usertest-salt.env` and `/etc/github-findings.env` with `--env-file`,
