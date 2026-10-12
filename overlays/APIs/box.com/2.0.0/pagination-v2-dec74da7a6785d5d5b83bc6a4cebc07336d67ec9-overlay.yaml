@@ -1,0 +1,264 @@
+# Reviewed 2026-10-12 against the pinned OAD and Box's documentation; no live calls.
+# Source: https://developer.box.com/guides/api-calls/pagination/offset-based
+# Source: https://developer.box.com/guides/api-calls/pagination/marker-based
+# Source: https://developer.box.com/reference/get-files-id-collaborations (marker-based)
+# Replaces pagination-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml, which stays published: that
+# revision declares `type: offset` and the roles `currentOffset` and
+# `pageTokenMode`, which Pagination Schemes does not define, and applies them
+# by auto-detection only; a consumer that leaves invalid schemes out of
+# auto-detection (syncables does) reads each Box list as one page.
+#
+# Every GET whose pinned parameters include `offset` or `marker` and whose
+# 200 response has `entries` is applied explicitly; nothing is auto-detected.
+# Offset lists (`offset`, `limit`, `total_count` in the pinned response):
+# pageNumber with the `offset` role. Box: "The maximum `offset` for
+# offset-based pagination is `9999`", so a list of more than 10,000 entries
+# read this way fails at the request past that offset (Box answers 400)
+# rather than ending early. `total_count` is "One greater than the offset of
+# the last item in the entire collection", and the collection "may be less
+# than `total_count`". Box says the next offset is
+# `previous_offset + previous_limit`: "the `offset` should be increased by
+# the previous `limit` and not by the size of the entries in the response
+# array, as this may be less than the limit". Pagination Schemes 0.6.0 does
+# not say how an offset advances, and syncables (0.21.0, 0.22.0) advances by
+# the number of entries returned and stops at the first empty page. Known
+# risk with such a reader: after a page with fewer entries than the limit
+# that is not the last, it asks again from inside that page, so entries
+# repeat (a syncables collection read then fails on the repeated identity); an
+# empty page before `total_count` is reached ends the read, which then looks
+# complete, so entries after it are missed without an error. The three lists that take both (`usemarker`:
+# folder items, trash items, users) are read by offset too: marker paging
+# there needs `usemarker=true`, a fixed value no scheme field carries.
+# Marker lists: pageToken, `marker` sent back from `next_marker`; "The
+# final page of items has been requested when the next `next_marker` value
+# is `null`". GET /files/{file_id}/collaborations is marker-based per Box's
+# reference, although the pinned response schema shows offset fields.
+# Not applied: GET /events (stream positions) and GET /search.
+overlay: 1.0.0
+info:
+  title: Box API pagination (offset and marker lists, explicit)
+  version: 2.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/box.com/2.0.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      boxOffset:
+        type: pageNumber
+        autoDetect: false
+        description: Offset lists. Box documents the next offset as the previous offset plus the previous
+          limit, not plus the entries returned, which can be fewer. This scheme does not say how a reader
+          advances (Pagination Schemes 0.6.0 has no rule); a reader that advances by the entries returned
+          can repeat entries, and one that stops at an empty page before total_count can miss entries
+          without an error. Box refuses an offset above 9999.
+        request:
+          queryParameters:
+            offset:
+              role: offset
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: entries
+          bodyFields:
+            total_count:
+              role: totalCount
+            offset:
+              role: offset
+            limit:
+              role: pageSize
+      boxMarker:
+        type: pageToken
+        autoDetect: false
+        description: Marker lists. Send next_marker back as marker; a null or absent next_marker ends
+          the list.
+        request:
+          queryParameters:
+            marker:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: entries
+          bodyFields:
+            next_marker:
+              role: nextCursor
+      boxMarkerNoLimit:
+        type: pageToken
+        autoDetect: false
+        description: Marker lists without a limit parameter in the pinned OAD.
+        request:
+          queryParameters:
+            marker:
+              role: cursor
+        response:
+          envelope:
+            itemsField: entries
+          bodyFields:
+            next_marker:
+              role: nextCursor
+- target: $.paths['/collaborations'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/collections'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/collections/{collection_id}/items'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/files/upload_sessions/{upload_session_id}/parts'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/files/{file_id}/comments'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/files/{file_id}/versions'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/folders/trash/items'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/folders/{folder_id}/items'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/groups'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/groups/{group_id}/collaborations'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/groups/{group_id}/memberships'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/users'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/users/{user_id}/memberships'].get
+  update:
+    x-pagination:
+    - scheme: boxOffset
+- target: $.paths['/collaboration_whitelist_entries'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/collaboration_whitelist_exempt_targets'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/enterprises/{enterprise_id}/device_pinners'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/file_version_legal_holds'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/file_version_retentions'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/files/{file_id}/collaborations'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/legal_hold_policies'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/legal_hold_policy_assignments'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/legal_hold_policy_assignments/{legal_hold_policy_assignment_id}/file_versions_on_hold'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/legal_hold_policy_assignments/{legal_hold_policy_assignment_id}/files_on_hold'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/metadata_templates/enterprise'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/metadata_templates/global'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/recent_items'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/retention_policies'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/retention_policies/{retention_policy_id}/assignments'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/retention_policy_assignments/{retention_policy_assignment_id}/file_versions_under_retention'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/retention_policy_assignments/{retention_policy_assignment_id}/files_under_retention'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/shield_information_barrier_reports'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/shield_information_barrier_segment_members'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/shield_information_barrier_segment_restrictions'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/shield_information_barrier_segments'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/shield_information_barriers'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/sign_requests'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/storage_policies'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/webhooks'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/workflows'].get
+  update:
+    x-pagination:
+    - scheme: boxMarker
+- target: $.paths['/metadata_cascade_policies'].get
+  update:
+    x-pagination:
+    - scheme: boxMarkerNoLimit
+- target: $.paths['/storage_policy_assignments'].get
+  update:
+    x-pagination:
+    - scheme: boxMarkerNoLimit

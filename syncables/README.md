@@ -29,7 +29,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
@@ -411,7 +411,15 @@ is JSON: its dot-path's names are matched literally (a name holding a `.`
 cannot be addressed; `a..b`, `.a` and `a.` are left out of the
 declaration), a string is trimmed, a number counts only when it has no
 fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
-an object does not parse. A role read from both a header and a body field
+an object does not parse. For headers and body fields alike, only space,
+tab, CR and LF are trimmed (a value carrying U+00A0 or another Unicode
+space does not parse), an integer above 2^53 − 1 does not parse
+(`1e21` in a body, a 400-digit `Retry-After`), and an HTTP-date parses only
+in one of RFC 9110's three exact forms (IMF-fixdate, the obsolete RFC 850
+form, asctime), never through a lenient date parser (so no ISO date, no
+`UTC` for `GMT`, nothing with another whitespace character or a
+byte-order mark); the client's own `Retry-After` reading for other
+retryable answers, and the `Date` header, follow the same rules. A role read from both a header and a body field
 counts once: the later time for `retryAfter` and `reset`, and the bucket is
 exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
 that gives no wait (`0`, or a time not after the response) counts as
@@ -569,6 +577,80 @@ that no longer returns the record at all is handled below.
 
 ### Records a refresh no longer returns
 
+**Presence: tell before prune, and marks.** When a complete `sync()` no
+longer returns a record that has no unsettled writes, the client either
+removes it from the local copy or keeps it with a presence mark, by the
+collection's declaration:
+
+| Collection | The record is |
+|---|---|
+| `x-completeness: { absent: deleted }` | `deleted` (`source: 'declaration'`): removed, or kept marked `deleted` under `retainDeleted: true` |
+| `x-completeness: { absent: removed }`, or wherever a check will be made (`missingRecordChecks: 'all'`, a parent whose nested collection declares `parentAbsent`) | kept, marked `unconfirmed`, until a check (a GET of the record) settles it |
+| no declaration, default checks | `removed` (no longer returned; whether it still exists is not known): removed |
+
+A check settles an `unconfirmed` record: a 404/410 under `notFound:
+unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
+default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
+it marked `deleted` under `retainDeleted`; the record found but not in the
+list (`filtered`) removes it from this collection (`removed`, with the
+record as that check read it); an error or no check leaves it
+`unconfirmed`. The marks persist in the outbox. A retained `deleted` mark
+stays until a read returns the record again or the app removes it (a
+`remove()` is held and checked like any write to a marked record); the
+client does not expire or cap them. A read
+that returns a marked record again drops the mark (`present`). Checks of
+records without writes are capped at `maxMissingRecordChecks` per sync
+(default 50), one limit shared by all collections, spent in the order the
+sync reads them (and within a collection, records left `unconfirmed` by an
+earlier sync before newly vanished ones); the rest stay `unconfirmed`, and
+the next sync checks `unconfirmed` records first, even when the list did
+not change. Only a check that makes a request counts. Records with writes
+are always checked. Under `missingRecordChecks: 'none'`, or without an item
+GET, nothing is checked, reported or counted, and an `absent: removed`
+record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
+`record`, and `lastSeen`: when a read last returned the record, the start
+of that sync, absent when no read of this client returned it, such as a
+record kept from storage written before a restart); a record without a mark
+is present as far as the client knows. The read times are kept in memory
+for every record read; only a mark stores its `lastSeen` (in the outbox).
+A new `update()` or `remove()` of a marked record is held for the next
+refresh, which checks it.
+
+**The app is told before anything is removed.** `onPresence(changes)` is
+called, and awaited, before a record is removed from the local copy, with
+one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
+`source`, `record`, `pruned: true`). Marks set or cleared on kept records
+(`pruned: false`; `present` when a mark is dropped) are held and told at
+the end of the sync. Each record is told once per sync, with its latest
+change (a record marked `unconfirmed` and settled in the same sync is told
+only as settled; a removal replaces a held mark change of the same
+record). Held changes that are not told (the sync throws, the handler
+throws at the end, or it threw earlier in the sync, which skips the end
+call) are kept, the latest per record, and told at the end of a later
+sync; they are kept in memory only, so a restart loses them though not the
+marks. A removal the handler refused keeps the record and its mark; an
+`unconfirmed` one is checked again by a later sync. A mark dropped because
+a read returned the record, a write to the record settled, or a check
+found the record while a write or confirmed copy keeps it, drops its held
+change too; if the app had
+been told a mark of the record (or the mark was restored from storage), it
+is told `present` instead (not after a delete the app made). The same changes are on
+`SyncResult.presence` (absent when there are none). If the handler throws
+or rejects, the records are not removed (for the read's own removals, that
+collection's read is not applied: its records do not replace the confirmed
+copy, though marks the read settles still clear), its held writes do not
+count a refresh miss, `sync()` rejects with the error, and a later sync
+tells again. A write that settles while the handler runs makes the read
+older than it: its records are then only added or updated and nothing is
+removed. A record that has a write when the handler returns (queued during
+the handler, or still being stored) is not removed: its change is listed
+with `pruned: false`, although the handler was told `pruned: true`. A
+removal after a check, for a record kept earlier (`unconfirmed`,
+`unavailable`) that a check, the deletion feed or its parent now settles,
+is told the same way, with that `source` (`read`, `feed`, `parent`). A
+read that fails or is incomplete removes nothing and tells nothing.
+
 A complete `sync()` of a collection (every page read, within the read budget)
 can lack a record that has queued updates. The provider may have deleted it,
 or the list may just not return it (a default filter, a view that depends on
@@ -623,7 +705,11 @@ Since Collection Completeness 0.3.0, a `410` follows the resource's `gone`
 instead, when one is stated (`notFound: unavailable, gone: deleted` for a
 provider whose 410 means deletion and nothing else), read the same way:
 resource-wide, conflicting or unrecognised values `unavailable`; without
-`gone`, a 410 means what `notFound` says.
+`gone`, a 410 means what `notFound` says. Under an `absent` the client does
+not recognise on the record's own collection (§7), the order is the same: a
+`410` by a stated `gone`, else a stated `notFound`; a `404` by a stated
+`notFound`; and what neither classifies is `unavailable`, never the
+`deleted` default.
 `unavailable` means the
 record is kept with its last known values and its queued writes fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
@@ -1008,6 +1094,159 @@ When the create operation declares an `x-crud` `create` for the resource
 
 Without a declaration, creates behave as described above.
 
+#### Compound creates (CRUD Causality 0.5.0 §4.7)
+
+A create whose `x-crud` lists `followUps` is a compound create: the create
+operation and, after it, one follow-up update per field it may not have
+applied (GitHub's issue `labels`, which the create silently drops without
+push access and `POST …/issues/{issue_number}/labels` then adds).
+
+- The create body leaves out every `create: omit` field (and keeps the
+  `include` ones).
+- Once the create is answered 2xx and bound (above), it is settled and
+  never sent again, and one queued `update` per follow-up whose field the
+  created record was given goes to the head of the record's queue, before
+  writes the app queued after the create. Each shows in `pendingWrites()`
+  with `followUp: { operation, field }`.
+- What a follow-up sends is worked out when it is sent: the planned value
+  minus what the confirmed record shows at `field` (for an array, the
+  planned items not among its items, compared through `itemKey`), filled
+  into the follow-up request by `bind` (path parameters default to the
+  create's). Nothing missing: it settles without a request. A bound value
+  that resolves to nothing: it fails with `reason: 'notSent'`. The
+  follow-up's answer is not merged into the record; the next refresh shows
+  the field.
+- A refused follow-up (a `permanent` answer) fails with
+  `reason: 'refused'`, and the later follow-ups of the same create fail
+  with `reason: 'notSent'`: the create is partly applied. Writes the app
+  queued after the create go on; one that sets a follow-up's field (or
+  deletes the record), settled or still queued, supersedes the failed
+  follow-up, so a retry never sends it over the app's own edit (the field's
+  first path segment is compared, the cautious direction for a nested
+  field). `resolveWrite` `retry` sends the failed follow-ups again, the
+  `notSent` ones included and in order, each with what is still missing;
+  `discard` drops them.
+- A follow-up answered `403` is such a refusal under the default failure
+  classes (`WriteFailure.followUp` is set, and `method` is the follow-up's):
+  the create just succeeded with the same credentials, so the `403` refuses
+  that field (GitHub's labels without push access), not the credentials,
+  and the client is not blocked. That reasoning is weaker for a follow-up
+  sent long after its create (after a restart, a read-back or a retry days
+  later), when the credentials may have changed meanwhile; an app that
+  cares passes a `classifyWriteFailure`. A rate-limit `403` is still
+  retried, a `401` still blocks, and a `classifyWriteFailure` still
+  decides.
+- A follow-up whose outcome is unknown (no answer, a 5xx other than 503)
+  stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
+  sent before a complete read of its collection, and then only if the
+  field is still missing; `resolveWrite` `retry` refuses it (it would skip
+  the read), `discard` drops it. If it fails meanwhile (the refresh-miss
+  limit, a missing record), `retry` queues it again still waiting for that
+  read. A throttled answer is waited out as for
+  any write.
+- An uncertain create settled with `resolveWrite` `confirm` queues its
+  follow-ups with `awaitingRefresh`, so the object is read before any is
+  sent. An unbound create sends none.
+- A `followUps` the client cannot use (a follow-up operation that is not
+  exactly one `update` of the same resource, a bind key or source it cannot
+  fill, a `path.`/`query.`/`header.` key naming a parameter the operation
+  and its path item do not declare, a `body` bind without a JSON request
+  body, a path parameter neither bound nor carried from the create, a
+  required query or header parameter not bound, a resource without a
+  usable identity) makes `create()` throw, rather than create the record
+  without the field.
+- When the create's record moves to the server's id, its follow-ups go
+  first, ahead of writes already queued under that id.
+
+Write Preconditions on a follow-up operation are not read. Not verified
+against a live provider.
+
+### Write preconditions (`x-write-precondition`)
+
+A create, update or delete operation may declare `x-write-precondition`
+(the draft Write Preconditions extension 0.1.0-draft,
+[`openapi-extensions/spec/write-preconditions/`](../openapi-extensions/spec/write-preconditions/README.md)).
+The client then checks it before each send, and handles the write's own
+answers as the extension says. An operation without one is unchanged.
+
+- **`kind: ifMatch`**: the write carries the object's version in `header`
+  (`If-Match` by default). A version `in: body` comes from the record as last
+  read, with no extra request; a version `in: header` (an `ETag`), or a record
+  that has no version field, is read with the item GET first. An answer in
+  `conflictStatus` (default `[412]`) stops the write with
+  `precondition: 'conflict'` in `pendingWrites()` (state `failed`). It is not
+  sent again. A version that is neither a string nor a number (an object,
+  say) is never sent as text: the write fails with a `lastError` saying so.
+- **`kind: readVerify`**: the item GET is read before every send. If a field
+  the update writes changed since it was last read (for a delete, any field
+  the client holds), the write is not sent. It stops as a `conflict`, and each
+  field becomes a `WriteConflict` (`onConflict`). Otherwise a full-record PUT
+  is built on that read, so a field changed elsewhere is not reverted.
+- **`refuseWhen`**: a Refusal Object that matches the object as last read (or
+  read for the check) stops the write with `precondition: 'refused'`. Its
+  `description` goes into `lastError`. A Refusal Object with a `source` reads
+  that resource's object through its item GET, with path variables taken from
+  the write's context. The source is read once per sync pass. While it cannot
+  be read, the write stays `pending` with `precondition: 'source-unknown'` and
+  is retried (fail closed). Nothing is sent. A DELETE has no body, so a
+  `when` cannot be ruled out for it: the Refusal Object applies on its own
+  field (fail closed).
+- **The write's own 404 or 410**: an update stops with
+  `precondition: 'gone'` and is not sent again, since that could recreate
+  the object. A delete settles when the deletion is confirmed, by any of:
+  - a stored feed tombstone for the record;
+  - `absent: deleted` on the collection it was read in;
+  - `notFound: deleted` on the resource;
+  - for a 410, the resource's stated `gone`, which then decides alone.
+
+  Otherwise the record is kept with its last known values and reported to
+  `onMissingRecord` as `unavailable`, with `source: 'write'`.
+- **Unknown outcomes** (no answer, or a 5xx): an update or delete that may
+  not be resent blind (`readVerify`, or `idempotent: false`, or a PATCH
+  without `idempotent: true`) gets `precondition: 'resolving'`. The next
+  attempt first reads the object, then does one of these:
+  - settles the write, if it was applied;
+  - sends it again, if it was not applied;
+  - stops as `conflict`, `refused` or `gone`;
+  - waits, while the read cannot tell.
+
+  The same holds for such a write found in flight at a restart. The version
+  an `ifMatch` write sent is stored (`sentVersion`) for this comparison.
+
+A declaration this client cannot use makes `create()`, `update()` or
+`remove()` of that type throw, rather than send the write unconditionally.
+That is anything the spec's `validate()` refuses, for example:
+
+- an unknown `kind` or an unknown field;
+- an `ifMatch` without a usable `version`;
+- a `header`, `conflictStatus` or `idempotent` that is not well-formed, or
+  that sits where the kind does not allow it;
+- a Refusal Object or `when` it cannot read;
+- a create with anything but `kind: none` and source refusals;
+- a source that is not a `crudResources` key, or whose identity variables
+  are not path parameters of the operation.
+
+Nothing falls back to a default.
+
+`resolveWrite` `retry` clears a `conflict`, `refused`, `gone` or
+`source-unknown` verdict, so the precondition is checked again when the
+write is sent. It keeps `resolving`, so the object is still read before
+anything is sent again. A stored state this client does not know (a later
+client's) is read as `resolving`.
+
+The reads a precondition needs (the object, a source object) are handled
+like the write's own answers:
+
+- a throttling answer holds the write until its time, and pauses an
+  exhausted bucket;
+- refused credentials (a `401`, say) block the client until
+  `authRenewed()`.
+
+A follow-up of a compound create is not checked against the update
+operation's declaration: compound writes are outside the extension's
+scope. Not verified against a live provider; the tests use invented
+transports.
+
 ### Durable outbox and restarts
 
 When a `storage` adapter is passed, the client keeps every unsettled write in
@@ -1168,7 +1407,11 @@ tombstones of such a collection. The write fields `lastStatus`,
 retry time) and `unbound` (a create that cannot be sent again) and the
 top-level `throttlingPauses` (exhausted buckets) and `unavailable` (kept
 unavailable records); a stored `authBlock` that does not parse still blocks
-the client (`status` 0) until `authRenewed()`.
+the client (`status` 0) until `authRenewed()`. A compound create's
+follow-up is stored with the write type `followUp` (added within version
+`1`), which an older client does not know: it keeps the record's writes as
+unrestorable and writes them back unchanged, so they are neither sent nor
+lost.
 Downgrading: an older syncables that reads this outbox does not know
 `notBefore` and `throttlingPauses` and drops them, so it may send a held
 write before the time the API asked for, though never a second time. A
@@ -1181,7 +1424,14 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). The version stays `1` because an older client can
+from its local copy). A client from before the presence marks, which already
+keeps unavailable records, keeps the kept records but not their `presence`
+or `source`: once it
+stores the outbox again, `unconfirmed` and retained `deleted` marks come
+back after an upgrade as `unavailable` for good (kept, not checked again by
+themselves). A `presence` value this client does not know is read as
+`unavailable` in the same way. A client from before `lastSeen` drops it
+the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1494,6 +1744,79 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
+  on create, update and delete operations: `ifMatch` sends the version
+  (from the record, or an item GET when it is a header) and stops on a
+  `conflictStatus`; `readVerify` reads first, stops on a changed written
+  field and builds a full-record PUT on that read; `refuseWhen` (and its
+  `source` objects, fail closed) stops a write the object refuses; an
+  update's 404/410 stops as `gone`, a delete's settles only when the
+  deletion is confirmed and is otherwise reported `unavailable` with the
+  new `source: 'write'`; an unknown outcome is resolved by a read before
+  anything is sent again (`precondition: 'resolving'`, also after a
+  restart). `PendingWriteInfo.precondition` (`WritePreconditionState`) and
+  the outbox's `precondition` and `sentVersion` (within version `1`) are
+  new; an unusable declaration makes the write call throw. Behaviour
+  change only for documents that declare `x-write-precondition`.
+- **Unreleased**: Throttling values are read more strictly, as the spec
+  follow-up says: only space, tab, CR and LF are trimmed from a header or
+  body value (U+00A0 and other Unicode spaces are kept, so the value does
+  not parse), an integer above 2^53 − 1 does not parse, integral floats
+  included, and an HTTP-date parses only in RFC 9110's exact forms
+  (`parseHttpDate`), not through `Date.parse`. The same applies to the `Retry-After` of a retryable
+  answer outside `x-throttling`, which before took any long digit string
+  and capped the wait at `retry.maxRetryAfterMs`.
+- **Unreleased**: `parseHttpDate` fixes: a leap second (`23:59:60`) reads
+  as the next second instead of failing the day check, a 4-digit year below
+  100 keeps its value (`0050` was read as 1950), and the RFC 850
+  "more than 50 years ahead" rule compares full dates, not only years.
+- **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
+  record (the start of that sync), stored with the mark in the outbox
+  (within version 1; an older client drops it); absent for a record no read
+  of this client returned.
+- **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
+  wherever a check will be made) a record a complete read lacks is kept,
+  marked `unconfirmed`, before its check, then marked `unavailable`,
+  removed (`deleted`, `removed`) or left `unconfirmed`; `retainDeleted`
+  keeps deleted records marked; checks of records without writes are capped
+  at `maxMissingRecordChecks` (default 50) and unconfirmed records are
+  checked first next sync; a parent whose nested collection declares
+  `parentAbsent` is checked without writes under it; `client.presence()`
+  lists the marks; `PresenceChange` gains `present`, `unconfirmed`,
+  `unavailable` and `pruned: false`, told once per record per sync. The
+  outbox's `unavailable` entries gain `presence` and `source` (within
+  version 1; an older client reads every kept record as unavailable).
+  Behaviour changes: under `missingRecordChecks: 'all'` a vanished record
+  is kept until its check instead of removed first; a vanished parent
+  without writes under it is now checked by default.
+- **Unreleased**: Tell before prune: a record a complete `sync()` removes
+  from the local copy (no longer returned, no unsettled writes) is told to
+  the new `onPresence` handler, awaited, before it is removed, and listed on
+  the new `SyncResult.presence` (`PresenceChange`: `deleted` under
+  `absent: deleted`, else `removed`, with the last values). A failing
+  handler applies nothing of that read and the next sync tells again.
+  Before, under the default `missingRecordChecks: 'pending'`, the app was
+  never told.
+- **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
+  create's `followUps` leave `omit` fields out of the create body and, once
+  the create is bound, queue one follow-up update per field, sent in order
+  with only what the created record does not show (`bind`, `itemKey`). A
+  refused follow-up leaves the create partly applied (`followUp.reason`
+  `refused`, later ones `notSent`), an unknown outcome waits for a read of
+  the record, and the create is never sent again. A follow-up's `403` is a
+  refusal of that follow-up by default, not an auth block
+  (`WriteFailure.followUp`). A `followUps` the client cannot use makes
+  `create()` throw. `PendingWriteInfo.followUp` is new;
+  the outbox stores follow-ups as the write type `followUp` within version
+  `1`. Behaviour change only for documents whose create declares
+  `followUps`. Also: a read waiting out an exhausted bucket no longer
+  sleeps twice for one pause when the clock ticks between two readings
+  (`waitOutPauses` compares the pause's own end).
+- **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
+  whose collection declares an `absent` the client does not recognise is
+  classified by the resource's stated `gone` (a 410), then its stated
+  `notFound`, and otherwise `unavailable` (fail closed), as the reference
+  `classify_read` reads it, not the `deleted` default.
 - **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
   of a missing record means the resource's stated `gone` (resource-wide,
   like `notFound`; `route.gone`), else what `notFound` says.
