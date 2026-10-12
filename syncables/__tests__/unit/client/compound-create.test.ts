@@ -738,3 +738,22 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
   });
 });
+
+describe('compound creates and Write Preconditions (#490 review)', () => {
+  it("does not apply the update operation's x-write-precondition to a follow-up", async () => {
+    const document = compoundDocument();
+    const patch = document.paths['/repos/{owner}/{repo}/issues/{issue_number}']!
+      .patch as Record<string, unknown>;
+    patch['x-write-precondition'] = { kind: 'readVerify' };
+    const fake = github({ pushAccess: false });
+    const c = client(fake, document);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    // No read of the issue before the follow-up: readVerify is the
+    // update's, and a follow-up is outside Write Preconditions' scope.
+    expect(fake.requests.map((r) => r.line)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+  });
+});

@@ -211,7 +211,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
     problems.push({
       tone: 'neg',
       lead: IMPORT_STOPPED_LEAD,
-      text: `${sheet.failure.replace(/\.?$/, '.')} ${IMPORT_STOPPED_TEXT}`,
+      text: `${sentence(sheet.failure)} ${IMPORT_STOPPED_TEXT}`,
     });
   if (problems.length) status.problems = problems;
 
