@@ -5,9 +5,10 @@ document rules of §9 that the document alone can show; it returns None when
 there is none. It cannot check the evidence rules (that the provider
 documents a marked state as deletion, that a feed is oldest first).
 
-`list_tombstone(declaration, item)` is §4.5's test of one item of a
-collection's read: True when it is a list tombstone, False when it is a
-member.
+`tombstone(declaration, item)` is §4.3's test of an item under a Tombstone
+Object, `except` conditions included; `list_tombstone` (§4.5) and
+`read_tombstone` (§4.4, which also checks the body is about the object read)
+apply it.
 """
 import json
 import pathlib
@@ -15,7 +16,7 @@ import sys
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 MISSING = object()
-TOMBSTONE_FIELDS = {"field", "values"}
+TOMBSTONE_FIELDS = {"field", "values", "except"}
 LIST_TOMBSTONE_FIELDS = {"field", "values", "except", "description"}
 FEED_FIELDS = {"operationId", "envelope", "cursor", "tombstone", "idField", "description"}
 
@@ -54,6 +55,16 @@ def _tombstone(value, where, errors):
     if not _dot_path(value.get("field")):
         errors.append(f"{where}.field: expected a dot-path")
     _values(value.get("values"), f"{where}.values", errors)
+    _except(value, where, errors)
+
+
+def _except(value, where, errors):
+    if "except" in value:
+        if not isinstance(value["except"], list) or not value["except"]:
+            errors.append(f"{where}.except: expected a nonempty array")
+        else:
+            for index, condition in enumerate(value["except"]):
+                _condition(condition, f"{where}.except[{index}]", errors)
 
 
 def _condition(value, where, errors):
@@ -82,12 +93,7 @@ def _list_tombstone(value, where, errors):
     if not _dot_path(value.get("field")):
         errors.append(f"{where}.field: expected a dot-path")
     _values(value.get("values"), f"{where}.values", errors)
-    if "except" in value:
-        if not isinstance(value["except"], list) or not value["except"]:
-            errors.append(f"{where}.except: expected a nonempty array")
-        else:
-            for index, condition in enumerate(value["except"]):
-                _condition(condition, f"{where}.except[{index}]", errors)
+    _except(value, where, errors)
     if "description" in value and not isinstance(value["description"], str):
         errors.append(f"{where}.description: expected a string")
 
@@ -181,14 +187,29 @@ def _matches(condition, item):
     return any(_same(value, v) for v in condition["values"])
 
 
-def list_tombstone(declaration, item):
-    """§4.5: whether one item of a collection's read is a list tombstone."""
+def tombstone(declaration, item):
+    """§4.3: whether an item (a feed item, a read's body or a list item) is a tombstone under a Tombstone Object."""
     if not isinstance(item, dict):
         return False
     value = get_path(item, declaration["field"])
     if value is MISSING or not any(_same(value, v) for v in declaration["values"]):
         return False
     return not any(_matches(condition, item) for condition in declaration.get("except", []))
+
+
+def list_tombstone(declaration, item):
+    """§4.5: whether one item of a collection's read is a list tombstone."""
+    return tombstone(declaration, item)
+
+
+def read_tombstone(declaration, body, id_field, object_id):
+    """§4.4: whether a 2xx read body is a read tombstone of the object read."""
+    if not isinstance(body, dict):
+        return False
+    identifier = get_path(body, id_field)
+    if identifier is MISSING or identifier is None or str(identifier) != str(object_id):
+        return False
+    return tombstone(declaration, body)
 
 
 def _load(path):

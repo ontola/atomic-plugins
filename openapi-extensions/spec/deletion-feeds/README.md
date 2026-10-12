@@ -45,11 +45,14 @@ The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs. No overlay declares `x-deletion-feed`; one declares
-`x-read-tombstone`, Google Calendar's
-[`read-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-(`status: cancelled` on the event read, from the document's own
-description), which no dated catalog selects yet.
+APIs. No overlay declares `x-deletion-feed`. Google Calendar's
+`x-read-tombstone` is declared by
+[`read-tombstone-v2-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`status: cancelled` on the event read, except items with
+`recurringEventId`, from the document's own description; it supersedes the
+earlier revision without the exception) and its `x-list-tombstone` by
+[`list-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+on the event list; no dated catalog selects them yet.
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
@@ -71,9 +74,11 @@ nor verified, as for Box below. The others do not fit (yet):
   fit §4.3 only when the event resource declares that marker in
   `x-read-tombstone` (§4.4). Its event list read with `showDeleted=true`
   returns them among the other events; that fits `x-list-tombstone` (§4.5,
-  §7.5), with an `except` condition for its cancelled exceptions of
-  recurring events, which the document says clients should store rather
-  than remove. Whether the event list also fits `x-deletion-feed` is not
+  §7.5). Both declarations need the same `except` condition (§4.3): the
+  document gives "cancelled" to deleted events and to cancelled exceptions
+  of a recurring event, which "should no longer be presented" and which
+  clients "should store"; an exception carries `recurringEventId`, so it is
+  excluded and is not a deletion, whether a read or a list answers it. Whether the event list also fits `x-deletion-feed` is not
   settled here (§8), and none of these declarations has live evidence.
 * Asana's `GET /events` needs the required query parameter `resource`; fixed
   query parameters of a feed are not covered (§8), so a consumer that sends
@@ -196,8 +201,26 @@ cursor; otherwise the consumer discards its cursor and the next read has none.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path to a field of the item. |
-| `values` | array of string, number or boolean | **Yes** | The item is a tombstone when the value at `field` equals one of these (same JSON type and value). |
+| `values` | array of string, number or boolean | **Yes** | The item is a tombstone when the value at `field` equals one of these (same JSON type and value), unless `except` says otherwise. |
+| `except` | array of Condition Object | No | Since 0.3.0. Items that have the marker but are not deletions: an item that matches any of these conditions is not a tombstone. |
 | `x-*` | any | No | Extension fields. |
+
+A **Condition Object** has a `field` (a dot-path into the item) and exactly
+one of: `values` (a nonempty array of strings, numbers or booleans; the
+value at `field` must equal one of them, same JSON type and value) or
+`present: true` (`field` resolves to any value, `null` included).
+
+The `except` conditions are for a provider that gives one marker to several
+documented states, only some of them deletion. Every marked state that no
+`except` condition excludes MUST be one the provider documents as the
+object's deletion; a state it documents as something else is excluded by a
+condition on the item, or the marker is not declared. When the item does
+not carry what tells the states apart, no tombstone can be declared
+soundly for that marker. A condition on an object other than the item (a
+parent's state, say) cannot be used. The same Tombstone Object, and so the
+same rule, serves a feed (§4.1), a read tombstone (§4.4) and a list
+tombstone (§4.5), so one provider state has one reading wherever it is
+answered.
 
 A tombstone has the meaning `absent: deleted` has in Collection Completeness
 §4.2: the object no longer exists, and the resource's `read` operation, if it
@@ -226,9 +249,10 @@ the resource shares it.
 A _read tombstone_ is a 2xx response to the resource's `read` operation
 whose body is a JSON object about the object read (its identity field, the
 one `identity.bindings` binds to the template variable of the object's own
-identity, holds the value that was read) and whose value at the Tombstone
+identity, holds the value that was read), whose value at the Tombstone
 Object's `field` (a dot-path into that body) equals one of its `values`
-(same JSON type and value). A 2xx response about the object without that
+(same JSON type and value), and that matches none of its `except`
+conditions. A 2xx response about the object without that
 value is the object, as for any read.
 
 By declaring `x-read-tombstone`, the document states:
@@ -279,15 +303,13 @@ included.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path to a field of the item, as in a Tombstone Object (§4.3). |
-| `values` | array of string, number or boolean | **Yes** | The item is a list tombstone when the value at `field` equals one of these (same JSON type and value), unless `except` says otherwise. |
-| `except` | array of Condition Object | No | Items that have the marker but are not deletions: an item that matches any of these conditions is not a list tombstone. |
+| `values` | array of string, number or boolean | **Yes** | As in a Tombstone Object. |
+| `except` | array of Condition Object (§4.3) | No | As in a Tombstone Object: items with the marker that are not deletions. |
 | `description` | string | No | Human-readable description. |
 | `x-*` | any | No | Extension fields. |
 
-A **Condition Object** has a `field` (a dot-path into the item) and exactly
-one of: `values` (a nonempty array of strings, numbers or booleans; the
-value at `field` must equal one of them, same JSON type and value) or
-`present: true` (`field` resolves to any value, `null` included).
+A List Tombstone Object is a Tombstone Object (§4.3) with a `description`;
+its `except` conditions follow §4.3's rule.
 
 A _list tombstone_ is an item of a successful page of a read of the
 collection whose value at `field` equals one of `values`, and that matches
@@ -303,18 +325,8 @@ By declaring `x-list-tombstone`, the document states:
   list tombstones; an object that the read returns only as a list
   tombstone is absent from it as a member;
 * the provider documents every marked state that no `except` condition
-  excludes as the object's deletion. A state it documents as something
-  else (archived, hidden, completed, an instance not to present) MUST NOT
-  be left to the declaration: either the marker does not cover it, or an
-  `except` condition excludes it. An item excluded by `except` is an
-  ordinary member, with the marker as one of its values.
-
-The `except` conditions are for a provider that gives one marker to
-several documented states, only some of them deletion. When the item does
-not carry what tells the states apart, no list tombstone can be declared
-soundly for that marker. A consumer cannot test a condition on an object
-other than the item (a parent's state, say); a document MUST NOT need one
-to tell a deletion apart.
+  excludes as the object's deletion (§4.3). An item excluded by `except` is
+  an ordinary member, with the marker as one of its values.
 
 A list tombstone, like a read tombstone (§4.4), is the object's state at
 that read, and the object may be restorable:
@@ -596,13 +608,14 @@ A conforming document:
 * MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
   NOT declare in it a state that the provider does not document as the
   object's deletion (§4.4);
+* since 0.3.0: MUST give each `except` condition of a Tombstone Object (a
+  feed's, a read tombstone's or a list tombstone's) a `field` and exactly
+  one of a nonempty `values` or `present: true`, and MUST exclude with one a
+  marked state the provider documents as something other than deletion, or
+  not declare the marker (§4.3);
 * since 0.3.0: MUST place `x-list-tombstone` only on a CRUD Causality
   Collection Object or the Operation Object of a `GET` or `POST` operation,
-  MUST give its `values` at least one value and each `except` condition a
-  `field` and exactly one of a nonempty `values` or `present: true`, and
-  MUST NOT leave to it a marked state that the provider does not document
-  as the object's deletion: such a state is excluded by an `except`
-  condition on the item, or the marker is not declared (§4.5).
+  and MUST give its `values` at least one value (§4.5).
 
 A conforming consumer:
 
@@ -619,9 +632,9 @@ A conforming consumer:
   the object read;
 * SHOULD NOT keep a read tombstone in place of reading the object again
   (§4.4);
-* since 0.3.0: MUST NOT store a list tombstone as a member, and MUST NOT
-  count an item that matches an `except` condition as a list tombstone
-  (§4.5); MAY treat its object as deleted when the read was made; MUST
+* since 0.3.0: MUST NOT count an item, a read's body or a list item that
+  matches an `except` condition as a tombstone (§4.3); MUST NOT store a list
+  tombstone as a member (§4.5); MAY treat its object as deleted when the read was made; MUST
   treat a later read that returns the object as a member as superseding it.
 
 ## Validator, tests and example
@@ -642,13 +655,15 @@ python3 validate.py examples/list-tombstones.yaml
 
 ## Changes
 
-- **0.3.0-draft** (2026-10-12): adds `x-list-tombstone` (§4.5): items of a
-  collection's read that carry a deletion marker, with `except` conditions
-  for marked states the provider documents as something else (Google
-  Calendar's cancelled exceptions of a recurring event), not members and
-  possibly restorable; a validator, tests and an example (§7.5). For
-  ontola/atomic-plugins pieces.md K18. A 0.2.0 document stays valid and
-  means the same.
+- **0.3.0-draft** (2026-10-12): adds `except` conditions to the Tombstone
+  Object (§4.3), so a feed tombstone, a read tombstone and a list tombstone
+  share one rule for a marker the provider gives to several states, only
+  some of them deletion (Google Calendar's cancelled exceptions of a
+  recurring event, which clients store, are not deletions wherever they are
+  answered); adds `x-list-tombstone` (§4.5): items of a collection's read
+  that carry a deletion marker, not members and possibly restorable; a
+  validator, tests and an example (§7.5). For ontola/atomic-plugins
+  pieces.md K18. A 0.2.0 document stays valid and means the same.
 - **0.2.0-draft**: `x-read-tombstone` (§4.4).
 - **0.1.0-draft**: `x-deletion-feed`.
 
