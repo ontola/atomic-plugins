@@ -7,13 +7,16 @@
  *
  *   node integrations/tooling/run-lane.mjs ontology --tier e2e
  *
- * Needs atomic-server candidate21 (`e922179`, atomic-server 28da8f0d2) or
- * later: behind the split-pieces flag (localStorage
- * `atomic.experimental.split-pieces`), it loads the catalog release named by
- * localStorage `lens-catalog-url` (by default the published
- * https://ontola.github.io/atomic-plugins/ontology/lenses/v1), and trusts its
- * lenses on every drive. The spec seeds that key before the first script
- * runs, the way the host's playwright config seeds `plugin-catalog-url`.
+ * Needs atomic-server candidate22 (`7dab1ce`) or later: behind the
+ * split-pieces flag (localStorage `atomic.experimental.split-pieces`), it
+ * loads the catalog release named by localStorage `lens-catalog-url` (by
+ * default the published
+ * https://ontola.github.io/atomic-plugins/ontology/lenses/v2), trusts its
+ * lenses on every drive, and lets an App's `renders` hold a lens endpoint
+ * key (atomic-server 54b181996). The spec seeds `lens-catalog-url` before
+ * the first script runs, the way the host's playwright config seeds
+ * `plugin-catalog-url`, with the dev-server's release 2: the release
+ * candidate22 pins, whose Todoist lens uses mapping version 3.
  *
  * - The tester entry of the split-pieces demo (`/app/pieces-demo?tester`)
  *   mints the pieces vocabulary (`piece-kind`) on a fresh drive.
@@ -28,18 +31,10 @@
  *   `lensPath`: the catalog subject, walked backward (issue-v1 to the
  *   Todoist record), with the mapping as the catalog file has it.
  *
- * Found on the way, at candidate21: a drive App cannot declare a `record:`
- * endpoint in `renders` through the client's validation (a ResourceArray
- * entry must be a subject or a slug-like relative subject; "Not a valid
- * Relative Subject: record:APIs/todoist.com/1#task"). The probe sets it
- * unvalidated, which atomic-server accepts. Until an App can declare it,
- * every lens in release 1 (each has a `record:` or `rdf:` endpoint) offers
- * only integrations made that way.
- *
  * Not checked here: the real Todoist drive app (it renders `issue-v1`
  * natively, so it needs no lens), syncing through the lens, a lens the host
- * skips (an unknown mapping version, a file not at its own subject), and the
- * published github.io release. The catalog is fetched by the browser only,
+ * skips (an unknown mapping version, a file not at its own subject),
+ * release 1, and the published github.io release. The catalog is fetched by the browser only,
  * so unlike ontology.spec.ts this spec uses `localhost` with
  * ATOMIC_SERVER_IMAGE set too: the host accepts a lens catalog URL only on
  * HTTPS or loopback, and `host.docker.internal` is neither.
@@ -62,7 +57,7 @@ const DEV_PORT = new URL(
   process.env.PLUGIN_CATALOG_URL ?? 'http://localhost:19271/x',
 ).port;
 const BASE = `http://localhost:${DEV_PORT}/ontology`;
-const RELEASE = `${BASE}/lenses/v1`;
+const RELEASE = `${BASE}/lenses/v2`;
 
 /** A committed ontology file, as the dev-server serves it. */
 const served = (path: string) =>
@@ -73,7 +68,7 @@ const served = (path: string) =>
     ),
   ) as Record<string, unknown>;
 
-const LENS = served('lenses/todoist-task-issue-v1') as {
+const LENS = served('lenses/todoist-task-issue-v2') as {
   '@id': string;
   name: string;
   mapping: unknown;
@@ -124,7 +119,7 @@ test.describe('shared lens catalog', () => {
     page,
   }) => {
     test.setTimeout(180_000);
-    expect(LENS['@id']).toBe(`${BASE}/lenses/todoist-task-issue-v1`);
+    expect(LENS['@id']).toBe(`${BASE}/lenses/todoist-task-issue-v2`);
 
     // The catalog the host will load is the dev-server's, served as Pages
     // serves it, and lists the Todoist lens at its own subject.
@@ -185,13 +180,9 @@ test.describe('shared lens catalog', () => {
           propVals: {
             [p.name]: probe,
             [app.props['piece-kind']]: 'integration',
+            [app.props.renders]: [task],
           },
         });
-        // `renders` is a ResourceArray, and the client refuses a `record:`
-        // key as a subject (it takes relative subjects for slugs), so the
-        // value is set unvalidated. No drive App can declare it otherwise
-        // at candidate21; see the spec's header.
-        await probeApp.set(app.props.renders, [task], false);
         await probeApp.save();
         const probeEntry = await store.newResource({
           parent: probeApp.subject,
