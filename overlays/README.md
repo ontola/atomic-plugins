@@ -234,6 +234,22 @@ mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
 composes it alone and after the catalog's Airtable overlays and classifies
 a synthetic 429. No provider was called.
 
+## Asana throttling
+
+[Asana API throttling](APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Asana's [rate-limits page](https://developers.asana.com/docs/rate-limits):
+a standard per-token bucket over minute-long windows with no request count
+(150 per minute on a free domain, 1,500 on a paid one, which a document
+cannot select), a search bucket of 60 per minute per token on the task
+search, `Retry-After` in seconds, and a 429 as `throttled` with no bucket
+named, since the standard, search, concurrency and cost-based limits all
+answer 429. Not declared: the concurrency and cost-based limits, which this
+version of the extension does not describe. No dated catalog selects it
+yet. `tests/test_asana_throttling.py` composes it alone and after the
+catalog's Asana overlays and classifies a synthetic 429. No provider was
+called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
