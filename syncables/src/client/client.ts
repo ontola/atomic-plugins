@@ -1373,6 +1373,10 @@ function clientRoutes(
     // §7: under an unrecognised `absent`, a 410 is classified by a
     // recognised `gone`, then a recognised `notFound`, a 404 by a recognised
     // `notFound`, else either is `unavailable`, never the `deleted` default.
+    // A declaration with no `absent` counts as unrecognised too. Unlike the
+    // reference `declarations_of`, the list operation's declaration counts
+    // even for a collection with fixed reads (as in resourceNotFound): it
+    // can only make a 404 `unavailable`, the safe reading.
     const rawOwn = rawCompleteness(document, collection, true);
     const ownAbsent = rawOwn?.declared['absent'];
     if (rawOwn && ownAbsent !== 'deleted' && ownAbsent !== 'removed')
@@ -3744,7 +3748,7 @@ export function createApiClient(
             status,
             detail:
               stated === undefined
-                ? `GET ${path} answered ${status}; the collection's x-completeness has an absent value this client does not recognise and the resource states no ${status === 410 ? 'gone or notFound' : 'notFound'}, so the record is unavailable, not deleted`
+                ? `GET ${path} answered ${status}; the collection's x-completeness has no recognised absent value and the resource states no ${status === 410 ? 'gone or notFound' : 'notFound'}, so the record is unavailable, not deleted`
                 : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness ${named}: unavailable), not that it was deleted`,
           }
         : {
