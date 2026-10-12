@@ -66,7 +66,14 @@ Data flows through four stages, each its own directory under `src/`:
    the collection read passes to `walkPages`; without it `pageItems`
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
-   completion/error status. `read/read.ts` adds ontology/type projection.
+   completion/error status. `read/time-zone.ts` implements Filtering
+   0.2.0-draft `x-time-zone` on list query parameters (the spec's
+   `validate.py` client steps, with `Intl`): `zoneReader` reads each zone
+   source once per `readCollections` through its budget and re-checks it at
+   the end, `wallClockQuery` rewrites the query and computes the
+   `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
+   `SyncResult.coverage`).
+   `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its
@@ -412,7 +419,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
   first, throws `WindowReadError` for a full window it cannot split, keeps an
   item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
-  complete: `readCollections` turns that into `complete: false` with
+  complete. `PageWalk.windowValue(parameter, bound)` converts each query
+  window bound before it is sent (for a parameter read as wall-clock time,
+  `x-time-zone`; the caller supplies it), each bound separately before a
+  template is filled; converted bounds on one clock that end up out of
+  order (a window inside a repeated hour) throw `WindowReadError`.
+  `readCollections` turns a windowed read into `complete: false` with
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
