@@ -443,6 +443,67 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     ]);
   });
 
+  it('a retry of another failed write of the record leaves a queued unknown follow-up waiting for its read (#480 S1, queued branch)', async () => {
+    let labelsCalls = 0;
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () => {
+        labelsCalls += 1;
+        return 502;
+      },
+    });
+    const storage = new InMemoryStorageAdapter();
+    const first = client(fake, compoundDocument(), storage);
+    const created = await first.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+    });
+    await first.update('issues', String(created['number']), {
+      title: 'Retitled',
+    });
+    await vi.waitFor(() =>
+      expect(first.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+        { type: 'update', state: 'pending' },
+      ]),
+    );
+    // A stored state where the record has a failed write and the unknown
+    // follow-up queued: the app's edit is moved to the failed writes.
+    const outbox = structuredClone(
+      (await storage.get('syncables:outbox', 'outbox')) as {
+        records: {
+          failed: Record<string, unknown>[];
+          queue: Record<string, unknown>[];
+        }[];
+      },
+    );
+    const entry = outbox.records[0]!;
+    const edit = entry.queue.pop()!;
+    entry.failed.push({
+      ...edit,
+      state: 'failed',
+      lastStatus: 422,
+      lastError: 'refused',
+      seq: -1,
+    });
+    const copy = new InMemoryStorageAdapter();
+    await copy.put('syncables:outbox', 'outbox', outbox);
+    const second = client(fake, compoundDocument(), copy);
+    await second.ready();
+    expect(second.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed' },
+      { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+    ]);
+    // Retrying the failed edit must not release the follow-up unread.
+    await second.resolveWrite('issues', '7', { action: 'retry' });
+    await settle(30);
+    expect(second.pendingWrites().find((w) => w.followUp)).toMatchObject({
+      followUp: { reason: 'unknown' },
+      awaitingRefresh: true,
+    });
+    expect(labelsCalls).toBe(1);
+  });
+
   it('a 401 on a follow-up still goes through the auth handling', async () => {
     const fake = github({ pushAccess: false, labelsAnswer: () => 401 });
     const c = client(fake);
