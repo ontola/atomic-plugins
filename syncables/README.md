@@ -559,7 +559,11 @@ with writes are always checked. Under `missingRecordChecks: 'none'`, or
 without an item GET, nothing is checked and an `absent: removed` record
 stays `unconfirmed` until a read returns it. `client.presence(resource?)`
 lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
-`record`); a record without a mark is present as far as the client knows.
+`record`, and `lastSeen`: when a read last returned the record, the start
+of that sync, absent when no read of this client returned it, such as a
+record kept from storage written before a restart); a record without a mark
+is present as far as the client knows. The read times are kept in memory
+for every record read; only a mark stores its `lastSeen` (in the outbox).
 A new `update()` or `remove()` of a marked record is held for the next
 refresh, which checks it.
 
@@ -1193,7 +1197,10 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). The version stays `1` because an older client can
+from its local copy). A client from before the presence marks reads every
+kept record as unavailable and drops its `presence`, `source` and
+`lastSeen`; once it stores the outbox again they are lost, and a later
+client's marks start without them. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1506,6 +1513,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
+  record (the start of that sync), stored with the mark in the outbox
+  (within version 1; an older client drops it); absent for a record no read
+  of this client returned.
 - **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
   wherever a check will be made) a record a complete read lacks is kept,
   marked `unconfirmed`, before its check, then marked `unavailable`,

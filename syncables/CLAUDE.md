@@ -158,7 +158,10 @@ Data flows through four stages, each its own directory under `src/`:
    `tell()` sends untold mark changes with each removal, or at the end of
    the sync, one per record (the latest); after it, records that gained a
    write or a confirmed copy get `pruned: false`. `currentRound` is the
-   running sync. `client.presence()` lists `keptMarks`. GET validators reuse raw cached response bodies.
+   running sync. `client.presence()` lists `keptMarks`. `seenAt` (in
+   memory, set for every record a sync's reads return to that sync's start,
+   dropped when `rebuild` removes the record) gives a new mark its
+   `lastSeen`, which the mark keeps and stores. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected

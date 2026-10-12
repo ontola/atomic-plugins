@@ -420,6 +420,12 @@ export interface PresenceMark {
   detail: string;
   /** The values the local copy keeps. */
   record: Record<string, unknown>;
+  /**
+   * When a read last returned the record (ISO 8601, the start of that
+   * sync), as far as this client knows: absent when no read of this client
+   * returned it (a record from storage written before a restart).
+   */
+  lastSeen?: string;
 }
 
 /**
@@ -1632,8 +1638,14 @@ export function createApiClient(
       detail: string;
       source?: MissingRecord['source'];
       presence: PresenceMarkValue;
+      lastSeen?: string;
     }
   >();
+  /**
+   * When a read last returned each record (the start of that sync), in
+   * memory; a mark takes it as `lastSeen` when it is set.
+   */
+  const seenAt = new Map<string, string>();
   /** The sync running now, whose presence changes marks are recorded on. */
   let currentRound: SyncRound | undefined;
   /** Order in which writes were queued; stored, so it survives a restart. */
@@ -1722,6 +1734,7 @@ export function createApiClient(
         detail: kept.detail,
         ...(kept.presence !== 'unavailable' ? { presence: kept.presence } : {}),
         ...(kept.source ? { source: kept.source } : {}),
+        ...(kept.lastSeen ? { lastSeen: kept.lastSeen } : {}),
       };
     }
     return byScope.size ? { unavailable: [...byScope.values()] } : {};
@@ -1943,6 +1956,7 @@ export function createApiClient(
           ...(mark.source
             ? { source: mark.source as MissingRecord['source'] }
             : {}),
+          ...(mark.lastSeen ? { lastSeen: mark.lastSeen } : {}),
         });
     }
     for (const entry of outbox.feedTombstones) {
@@ -2181,7 +2195,10 @@ export function createApiClient(
       else value = undefined;
     }
     if (value) await storage.put(scope, id, value);
-    else await storage.delete(scope, id);
+    else {
+      await storage.delete(scope, id);
+      seenAt.delete(key);
+    }
   }
 
   function target(path: string, context: Record<string, string>): URL {
@@ -3295,6 +3312,7 @@ export function createApiClient(
     const scope = scopeFor(route, context);
     const key = keyFor(scope, id);
     const before = keptMarks.get(key);
+    const lastSeen = before?.lastSeen ?? seenAt.get(key);
     keptMarks.set(key, {
       scope,
       resource: route.collection.name,
@@ -3304,6 +3322,7 @@ export function createApiClient(
       detail,
       source,
       presence,
+      ...(lastSeen ? { lastSeen } : {}),
     });
     if (before?.presence !== presence)
       currentRound?.untold.push(
@@ -4389,6 +4408,8 @@ export function createApiClient(
 
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
+    // The records this sync's reads return were seen at its start.
+    const readAt = new Date().toISOString();
     const started = new Map(revisions);
     const startedRecords = new Map(recordRevisions);
     const released = new Set<QueuedWrite>();
@@ -4435,6 +4456,7 @@ export function createApiClient(
       for (const item of snapshot.items) {
         const id = String(item[idField]);
         ids.add(id);
+        seenAt.set(keyFor(scope, id), readAt);
         // A read that returns a marked record settles its mark: present.
         const mark = keptMarks.get(keyFor(scope, id));
         if (mark) {
@@ -4943,6 +4965,7 @@ export function createApiClient(
           ...(mark.source ? { source: mark.source } : {}),
           detail: mark.detail,
           record: structuredClone(mark.record),
+          ...(mark.lastSeen ? { lastSeen: mark.lastSeen } : {}),
         }));
     },
     pendingWrites(resource): PendingWriteInfo[] {
