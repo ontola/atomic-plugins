@@ -1,8 +1,9 @@
 """The dated catalog for syncables 0.22.0 (catalog/2026-10-12-syncables-0.22.json).
 
-It is catalog/2026-10-11-gitlab-box.json, the newest dated catalog before it
-and a superset of the others, with the overlays that a syncables 0.22.0 reader
-uses:
+It is catalog/2026-10-12-tasks-box-pages.json, the newest dated catalog
+before it and a superset of the others (it already has Google Tasks
+pagination v2 and Box pagination v3, Pagination Schemes 0.7.0), with the
+overlays that a syncables 0.22.0 reader uses:
 
 * Moneybird: financial mutations as a Pagination Schemes 0.5.0 rangeWindow
   (after the pagination overlay), and throttling v2 (Throttling 0.2.0-draft
@@ -13,7 +14,11 @@ uses:
   after crud-causality;
 * GitHub Issues and Google Tasks: Throttling 0.2.0-draft signals, last;
 * Google Tasks and Google Calendar: crud-causality v2 (CRUD Causality 0.4.0
-  listQuery) in place of v1.
+  listQuery) in place of v1; Google Tasks' v2 envelopes declare
+  emptyWhenAbsent, as its pagination v2 does;
+* Google Calendar: cancelled events as read tombstones (Deletion Feeds
+  0.2.0-draft x-read-tombstone) and Throttling 0.2.0-draft limits and
+  signals, last.
 
 The tests check the catalog against its base entry by entry, compose every
 platform of both catalogs (the pinned OADs are downloaded by their full-SHA
@@ -35,7 +40,7 @@ import yaml
 from generate_identity_catalog_fixtures import PAGES_BASE, ROOT, apply, fetch
 
 CATALOG = "2026-10-12-syncables-0.22.json"
-BASE = "2026-10-11-gitlab-box.json"
+BASE = "2026-10-12-tasks-box-pages.json"
 APIS = PAGES_BASE + "APIs/"
 
 GITHUB = "github.com/github-issues/1.1.4/{}-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"
@@ -54,7 +59,11 @@ def url(template, kind):
 # ("after", anchor, new) or ("append", new), applied in this order.
 CHANGES = {
     "github-issues": [("append", url(GITHUB, "throttling"))],
-    "google-calendar": [("replace", url(CALENDAR, "app-crud-causality"), url(CALENDAR, "app-crud-causality-v2"))],
+    "google-calendar": [
+        ("replace", url(CALENDAR, "app-crud-causality"), url(CALENDAR, "app-crud-causality-v2")),
+        ("append", url(CALENDAR, "read-tombstone")),
+        ("append", url(CALENDAR, "throttling")),
+    ],
     "moneybird": [
         ("after", url(MONEYBIRD, "pagination"), url(MONEYBIRD, "pagination-range-window")),
         ("replace", url(MONEYBIRD, "throttling"), url(MONEYBIRD, "throttling-v2")),
@@ -74,6 +83,8 @@ ADDED = {
     "google-calendar": {
         ("components", "crudResources", "event", "collections"),
         ("paths", "/calendars/{calendarId}/events/{eventId}", "patch", "x-crud"),
+        ("paths", "/calendars/{calendarId}/events/{eventId}", "get", "x-read-tombstone"),
+        ("x-throttling",),
     },
     "moneybird": {
         ("components", "paginationSchemes", "periodWindows"),
@@ -229,10 +240,9 @@ class CatalogCompositionTests(unittest.TestCase):
                     self.assertEqual(problems(spec, self.composed[name]), [])
 
     def test_no_composition_fails_a_validator_its_base_composition_passes(self):
-        # The base catalog's box entry already fails the Pagination Schemes
-        # validator (its pagination overlay uses type offset and the roles
-        # currentOffset and pageTokenMode, which the spec does not define).
-        # This catalog keeps that entry as it is; it must add no new failure.
+        # Every platform this catalog does not change must fail no validator
+        # it did not fail in the base catalog (Box, with pagination v3 since
+        # 2026-10-12-box-pagination-v2, now passes them all).
         for name, document in self.composed.items():
             for spec in VALIDATORS:
                 with self.subTest(platform=name, spec=spec):
@@ -259,6 +269,15 @@ class CatalogCompositionTests(unittest.TestCase):
 
     def test_notion_pages_carry_a_runtime_schema(self):
         self.assertIn("x-runtime-schema", self.composed["notion"]["components"]["crudResources"]["page"])
+
+    def test_google_tasks_collection_envelopes_keep_empty_when_absent(self):
+        # The Collection Object's envelope wins over the scheme's in a reader,
+        # so crud-causality v2 must say what pagination v2 says.
+        collections = self.composed["google-tasks"]["components"]["crudResources"]
+        for resource, collection in (("taskList", "taskLists"), ("task", "tasks")):
+            with self.subTest(collection=collection):
+                self.assertEqual(collections[resource]["collections"][collection]["envelope"],
+                                 {"itemsField": "items", "emptyWhenAbsent": True})
 
     def test_the_fixed_reads_are_standard_list_queries(self):
         tasks = self.composed["google-tasks"]["components"]["crudResources"]["task"]["collections"]["tasks"]

@@ -98,11 +98,18 @@ class CalendarThrottlingTests(unittest.TestCase):
         # A 403 with no JSON body is not throttling either.
         self.assertIsNone(throttling.classify(self.composed, 403, {}, None, NOW))
 
-    def test_no_dated_catalog_selects_the_overlay(self):
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # catalog/2026-10-12-syncables-0.22.json selects it last for
+        # google-calendar; no earlier catalog does.
         name = OVERLAY.rsplit("/", 1)[1]
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(name, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-12-syncables-0.22.json":
+                    self.assertNotIn(name, text)
+                    continue
+                calendar = next(p for p in json.loads(text)["platforms"] if p["name"] == "google-calendar")
+                self.assertEqual(calendar["overlays"][-1].rsplit("/", 1)[1], name)
 
 
 if __name__ == "__main__":

@@ -71,4 +71,14 @@ describe("Google Tasks empty lists through the catalogs", () => {
       result.records.map((record) => [record.resource, record.id]),
     ).toEqual([["tasklist", "empty"]]);
   });
+  it("reads an empty list through the syncables 0.22.0 catalog, whose collection envelopes say the same", async () => {
+    const result = await readPlatform(
+      compose("2026-10-12-syncables-0.22.json"),
+      { platform: "google-tasks", constants: {}, transport },
+    );
+    expect(result.errors).toEqual([]);
+    expect(
+      result.records.map((record) => [record.resource, record.id]),
+    ).toEqual([["tasklist", "empty"]]);
+  });
 });

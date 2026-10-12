@@ -103,8 +103,10 @@ class GoogleTasksEmptyListTests(unittest.TestCase):
                                  {k: v for k, v in before.items() if k != "overlays"})
 
     def test_no_other_catalog_selects_v2(self):
+        # catalog/2026-10-12-syncables-0.22.json is built on this catalog and
+        # keeps v2.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            if catalog.name != CATALOG:
+            if catalog.name not in (CATALOG, "2026-10-12-syncables-0.22.json"):
                 with self.subTest(catalog=catalog.name):
                     self.assertNotIn(V2, catalog.read_text(encoding="utf-8"))
 

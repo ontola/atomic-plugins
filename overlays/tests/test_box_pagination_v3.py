@@ -94,8 +94,10 @@ class BoxPaginationV3Tests(unittest.TestCase):
         box = next(p for p in json.loads((ROOT / "catalog" / CATALOG).read_text(encoding="utf-8"))["platforms"]
                    if p["name"] == "box")
         self.assertEqual(box["overlays"], [PAGES + V3])
+        # catalog/2026-10-12-syncables-0.22.json is built on this catalog and
+        # keeps v3.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            if catalog.name != CATALOG:
+            if catalog.name not in (CATALOG, "2026-10-12-syncables-0.22.json"):
                 with self.subTest(catalog=catalog.name):
                     self.assertNotIn(V3, catalog.read_text(encoding="utf-8"))
 

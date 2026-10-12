@@ -8,7 +8,10 @@
 # v2 of crud-causality-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml (#378), which
 # stays published: the same resources, collections and operations, plus the tasks
 # collection's fixed read, both collections' envelopes, the task-list read operation
-# and descriptions.
+# and descriptions. The envelopes declare Pagination Schemes 0.7.0 emptyWhenAbsent, as
+# pagination-v2-7ca47c73...-overlay.yaml does: a consumer takes a Collection Object's
+# envelope over the scheme's, so without it an empty list (answered without `items`)
+# would fail the read again.
 overlay: 1.0.0
 info:
   title: Google Tasks v1 CRUD Causality (read)
@@ -32,6 +35,7 @@ actions:
               urlTemplate: /tasks/v1/users/@me/lists
               envelope:
                 itemsField: items
+                emptyWhenAbsent: true
         task:
           schema:
             $ref: '#/components/schemas/Task'
@@ -46,6 +50,7 @@ actions:
               urlTemplate: /tasks/v1/lists/{tasklist}/tasks
               envelope:
                 itemsField: items
+                emptyWhenAbsent: true
               description: >-
                 Every task of the list that is not deleted, including completed
                 and hidden ones. tasks.list hides hidden tasks by default

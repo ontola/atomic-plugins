@@ -143,17 +143,19 @@ provider was called.
 
 ## Syncables 0.22.0 catalog
 
-`catalog/2026-10-12-syncables-0.22.json` is `catalog/2026-10-11-gitlab-box.json`
-(the 14 platforms, entries, pins and selections unchanged) with the overlays a
-syncables 0.22.0 reader uses. It adds no platform. Per entry:
+`catalog/2026-10-12-syncables-0.22.json` is `catalog/2026-10-12-tasks-box-pages.json`
+(the 14 platforms, entries, pins and selections unchanged, so Google Tasks
+pagination v2 and Box pagination v3 of Pagination Schemes 0.7.0 included)
+with the overlays a syncables 0.22.0 reader uses. It adds no platform. Per
+entry:
 
 | Platform | Change to the base entry | Read by |
 | --- | --- | --- |
 | `moneybird` | [`pagination-range-window`](APIs/moneybird.com/v2-readonly/pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) after `pagination`; `throttling-v2` in place of `throttling` | Pagination Schemes 0.5.0 `rangeWindow` (syncables 0.21.0; `sync()` applies such a read from 0.22.0); Throttling 0.2.0-draft (0.21.0) |
 | `clockify` | [`time-zone`](APIs/clockify.me/1.0.0-readonly/time-zone-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) last | Filtering 0.2.0-draft `x-time-zone` (0.22.0) |
 | `notion` | [`runtime-schema`](APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) after `crud-causality` | Runtime Schemas 0.1.0-draft (0.22.0) |
-| `google-tasks` | `crud-causality-v2` in place of `crud-causality`; `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0) |
-| `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality` | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` once a release reads them (#419) |
+| `google-tasks` | `crud-causality-v2` in place of `crud-causality`, its collection envelopes with `emptyWhenAbsent` as pagination v2's (a reader takes a Collection Object's envelope over the scheme's); `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0); `emptyWhenAbsent` (0.22.0) |
+| `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality`; [`read-tombstone`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) and [`throttling`](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) last | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` (#419); `x-read-tombstone` (since #330); Throttling 0.2.0-draft (0.21.0) |
 | `github-issues` | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
 
 Each v2 file keeps every key its v1 file sets (checked on 2026-10-09: no
@@ -171,10 +173,8 @@ Pagination Schemes, CRUD Causality, Throttling, Filtering and Runtime
 Schemas validators on each changed composition, checks that no composition
 fails a validator its base composition passes, and checks that the
 compositions differ from the base ones only by the listed additions. No
-provider was called. The `box` entry, unchanged here, already fails the
-Pagination Schemes validator in its base catalog: its pagination overlay
-uses `type: offset` and the roles `currentOffset` and `pageTokenMode`, which
-the spec does not define.
+provider was called. `tests/google_tasks_empty_lists_syncables.test.ts` also
+reads an empty task list through this catalog with syncables.
 
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
