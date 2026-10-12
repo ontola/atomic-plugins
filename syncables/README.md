@@ -1233,7 +1233,8 @@ or `source`: once it
 stores the outbox again, `unconfirmed` and retained `deleted` marks come
 back after an upgrade as `unavailable` for good (kept, not checked again by
 themselves). A `presence` value this client does not know is read as
-`unavailable` in the same way. The version stays `1` because an older client can
+`unavailable` in the same way. A client from before `lastSeen` drops it
+the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
