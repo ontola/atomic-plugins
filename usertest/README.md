@@ -65,12 +65,13 @@ Docker publishes the server on `127.0.0.1` only, so ufw's rules are not
 bypassed.
 
 From a checkout of this repo, with the layout from `AGENTS.md`
-(`node integrations/tooling/link-atomic-server.mjs`) and each app's
-dependencies installed:
+(`node integrations/tooling/link-atomic-server.mjs`). `catalog.mjs` first
+installs each app's plugin dependencies that have a lockfile and no
+`node_modules` yet (`pnpm install --frozen-lockfile`, as `run-lane.mjs`
+does; `--no-install` skips it). It does not notice a `node_modules` that is
+present but stale: run `pnpm install --frozen-lockfile` there by hand.
 
 ```sh
-for a in calendar money notion timesheets; do (cd integrations/$a && pnpm install); done
-(cd integrations/issue-tracker/app && pnpm install --frozen-lockfile)
 USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
 sh usertest/deploy.sh root@178.62.223.35
 ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
