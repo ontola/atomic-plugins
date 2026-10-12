@@ -172,6 +172,14 @@ Data flows through four stages, each its own directory under `src/`:
    writes, `detectConflicts` compares with the field after the patches
    (`patchedField`, in order) and `supersede`/`retry` strip nested members
    (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
+   `preconditions.ts` is the pure logic of the draft Write Preconditions
+   extension (`x-write-precondition`,
+   `openapi-extensions/spec/write-preconditions/`): `parsePrecondition`
+   (defaults, or `{ refused }` for a declaration it cannot read),
+   `versionOf`, `refusalOf`, `maySend`, `writeAnswer` and `resolveUnknown`,
+   ports of the spec's `validate.py` functions of the same names; keep them
+   in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`).
+   Not wired into the client yet.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
