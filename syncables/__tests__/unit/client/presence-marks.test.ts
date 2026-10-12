@@ -437,3 +437,124 @@ describe('presence marks: writes queued while the app is told, and parents', () 
     ).toEqual({ id: 't2', title: 'Write report' });
   });
 });
+
+describe('presence marks: #466 review', () => {
+  it('does not check, report or count a record that cannot be checked (missingRecordChecks none), sync after sync', async () => {
+    const reports: unknown[] = [];
+    const { client, fake } = await setup(document(), {
+      missingRecordChecks: 'none',
+      onMissingRecord: (r) => reports.push(r),
+    });
+    fake.hidden.add('2');
+    for (let i = 0; i < 3; i++) await client.sync();
+    // A changed list too.
+    fake.pets.set('3', { id: '3', name: 'Jo' });
+    await client.sync();
+    expect(fake.gets).toEqual([]);
+    expect(reports).toEqual([]);
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unconfirmed' },
+    ]);
+  });
+
+  it('checks old unconfirmed records before newly vanished ones, within the limit', async () => {
+    const { client, fake } = await setup(
+      document(),
+      { maxMissingRecordChecks: 1 },
+      [rex, tom, { id: '3', name: 'Jo' }],
+    );
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    fake.hidden.add('2');
+    await client.sync();
+    expect(fake.gets).toEqual(['2']);
+    fake.gets.length = 0;
+    fake.hidden.add('3');
+    await client.sync();
+    // The old unconfirmed record first; the new one waits.
+    expect(fake.gets).toEqual(['2']);
+    expect(client.presence().map((m) => [m.id, m.presence])).toEqual([
+      ['2', 'unconfirmed'],
+      ['3', 'unconfirmed'],
+    ]);
+  });
+
+  it('tells each record once per sync, even when another removal is told before its mark settles', async () => {
+    const doc = document();
+    const resources = doc.components!['crudResources'] as Record<
+      string,
+      { collections: Record<string, Record<string, unknown>> }
+    >;
+    resources['pet']!.collections['pets']!['x-deletion-feed'] = {
+      operationId: 'listDeletions',
+    };
+    doc.paths['/pet-deletions'] = {
+      get: {
+        operationId: 'listDeletions',
+        responses: { '200': { description: 'Deleted pet ids' } },
+      },
+    };
+    const jo = { id: '3', name: 'Jo' };
+    const fake = provider([rex, tom, jo]);
+    const transport: Transport = async (r) =>
+      r.url.pathname.endsWith('/pet-deletions')
+        ? response([{ id: '3', deleted: true }])
+        : fake.transport(r);
+    const told: PresenceChange[][] = [];
+    const client = createApiClient(doc, {
+      transport,
+      onPresence: (changes) => {
+        told.push(changes);
+      },
+    });
+    await client.sync();
+    fake.hidden.add('2');
+    fake.hidden.add('3');
+    // Tom is found (filtered: removed at once); Jo answers 404 and is
+    // settled by the feed tombstone at the end of the sync.
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response(tom) : undefined;
+    await client.sync();
+    expect(told.flat().map((c) => [c.id, c.presence, c.pruned])).toEqual([
+      ['2', 'removed', true],
+      ['3', 'deleted', true],
+    ]);
+  });
+
+  it('carries the record as just read on a filtered removal', async () => {
+    const { client, fake, told } = await setup();
+    fake.hidden.add('2');
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response({ ...tom, name: 'Tom (moved)' }) : undefined;
+    await client.sync();
+    expect(told.flat()).toEqual([
+      change('removed', 'read', { ...tom, name: 'Tom (moved)' }, true),
+    ]);
+  });
+
+  it('reads an unknown stored presence value as unavailable', async () => {
+    const storage = new InMemoryStorageAdapter();
+    await storage.put('syncables:outbox', 'outbox', {
+      version: 1,
+      records: [],
+      rebuild: [],
+      unrestorable: [],
+      unavailable: [
+        {
+          resource: 'pets',
+          context: {},
+          unavailable: {
+            '2': { record: tom, detail: 'later', presence: 'archived' },
+          },
+        },
+      ],
+    });
+    const client = createApiClient(document(), {
+      storage,
+      transport: provider([rex]).transport,
+    });
+    await client.ready();
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unavailable', record: tom },
+    ]);
+  });
+});

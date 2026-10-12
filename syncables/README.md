@@ -549,15 +549,22 @@ A check settles an `unconfirmed` record: a 404/410 under `notFound:
 unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
 default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
 it marked `deleted` under `retainDeleted`; the record found but not in the
-list (`filtered`) removes it from this collection (`removed`); an error or
-no check leaves it `unconfirmed`. The marks persist in the outbox. A read
+list (`filtered`) removes it from this collection (`removed`, with the
+record as that check read it); an error or no check leaves it
+`unconfirmed`. The marks persist in the outbox. A retained `deleted` mark
+stays until a read returns the record again or the app removes it (a
+`remove()` is held and checked like any write to a marked record); the
+client does not expire or cap them. A read
 that returns a marked record again drops the mark (`present`). Checks of
 records without writes are capped at `maxMissingRecordChecks` per sync
-(default 50); the rest stay `unconfirmed`, and the next sync checks
-`unconfirmed` records first, even when the list did not change. Records
-with writes are always checked. Under `missingRecordChecks: 'none'`, or
-without an item GET, nothing is checked and an `absent: removed` record
-stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+(default 50), one limit shared by all collections, spent in the order the
+sync reads them (and within a collection, records left `unconfirmed` by an
+earlier sync before newly vanished ones); the rest stay `unconfirmed`, and
+the next sync checks `unconfirmed` records first, even when the list did
+not change. Only a check that makes a request counts. Records with writes
+are always checked. Under `missingRecordChecks: 'none'`, or without an item
+GET, nothing is checked, reported or counted, and an `absent: removed`
+record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
 lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
 `record`); a record without a mark is present as far as the client knows.
 A new `update()` or `remove()` of a marked record is held for the next
@@ -567,10 +574,11 @@ refresh, which checks it.
 called, and awaited, before a record is removed from the local copy, with
 one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
 `source`, `record`, `pruned: true`). Marks set or cleared on kept records
-(`pruned: false`; `present` when a mark is dropped) are told with the next
-removal or at the end of the sync. Each record is told once per sync, with
-its latest change (a record marked `unconfirmed` and settled in the same
-sync is told only as settled). The same changes are on
+(`pruned: false`; `present` when a mark is dropped) are held and told at
+the end of the sync. Each record is told once per sync, with its latest
+change (a record marked `unconfirmed` and settled in the same sync is told
+only as settled; a removal replaces a held mark change of the same
+record). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
 or rejects, the records are not removed (for the read's own removals, that
 collection's read is not applied: its records do not replace the confirmed
@@ -1193,7 +1201,12 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). The version stays `1` because an older client can
+from its local copy). A client from the first presence-mark version keeps
+the kept records but not their `presence`, `source` or `lastSeen`: once it
+stores the outbox again, `unconfirmed` and retained `deleted` marks come
+back after an upgrade as `unavailable` for good (kept, not checked again by
+themselves). A `presence` value this client does not know is read as
+`unavailable` in the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
