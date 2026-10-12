@@ -32,6 +32,10 @@ class Platform {
   records = new Map<ExternalId, FlatOrder>();
   private byKey = new Map<string, FlatOrder>();
   private next = 0;
+  /** Set to hold the next create open until the test resolves it. */
+  hold: Promise<void> | undefined;
+  /** Called as each create request arrives, before it is applied. */
+  onCreate: (() => void) | undefined;
   constructor(readonly honoursKey: boolean) {}
 
   /** The platform's own API, as a connector sees it. */
@@ -44,7 +48,12 @@ class Platform {
         return structuredClone(record);
       },
       create: async (record, key): Promise<FlatOrder> => {
-        if (this.honoursKey && this.byKey.has(key)) return this.byKey.get(key)!;
+        this.onCreate?.();
+        const wait = this.hold;
+        this.hold = undefined;
+        await wait;
+        if (this.honoursKey && this.byKey.has(key))
+          return structuredClone(this.byKey.get(key)!);
         const created = { ...record, id: `server-${this.next++}` };
         this.byKey.set(key, created);
         this.records.set(created.id, structuredClone(created));
@@ -101,10 +110,12 @@ function host(
  * Connector-side reconciliation for a platform that ignores idempotency
  * keys: write the key into a field the platform stores (here the order's
  * free `platformNote`; on a real platform a custom field, a label or a
- * hidden marker in the body), and look it up before creating. Specific to
- * the platform, so it lives in the connector, not the library; it needs a
- * lookup the platform answers completely (a search that can lag behind a
- * create is not enough).
+ * marker in the body, which people may see), and look it up before
+ * creating. Specific to the platform, so it lives in the connector, not the
+ * library. The lookup below reads `platform.records` directly: the ideal
+ * case, complete and current. A real platform's search may lag behind a
+ * create, and then this is not enough; nor is lookup-then-create atomic
+ * against a second host (docs/atomic-data.md, "Recovering from a crash").
  */
 function markerIdempotent(
   inner: AtomicConnector<FlatOrder>,
@@ -127,8 +138,15 @@ describe('restart and recovery recipe (#259)', () => {
   it('checkpoint after awaited work: one taken during a publish misses the new identity', async () => {
     const platform = new Platform(true);
     const first = host(platform.connector());
+    let release!: () => void;
+    platform.hold = new Promise<void>((resolve) => (release = resolve));
+    let creating!: () => void;
+    const created = new Promise<void>((resolve) => (creating = resolve));
+    platform.onCreate = creating;
     const publishing = first.lens.publish(ORDER);
-    const during = first.store.toJSONAD(); // not awaited: too early
+    await created; // the publish is now awaiting the platform's create
+    const during = first.store.toJSONAD(); // too early
+    release();
     await publishing;
     const after = first.store.toJSONAD();
 
@@ -181,37 +199,107 @@ describe('restart and recovery recipe (#259)', () => {
     );
   });
 
-  it('explicit uncertain creates: an intent log names what a restart cannot tell, so nothing is resent blind', async () => {
-    const platform = new Platform(false);
-    // Durable next to the checkpoint: subjects whose create was asked for and
-    // not yet checkpointed. Written before publish, cleared after the checkpoint.
-    let intents: string[] = [];
-    let checkpoint = '';
-    const first = host(platform.connector());
-    const publishNew = async (h: Host, subject: string): Promise<void> => {
-      if (h.ids.externalId(ORDERS, subject) === undefined)
-        intents = [...intents, subject];
-      await h.lens.publish(subject);
-      checkpoint = h.store.toJSONAD();
-      intents = intents.filter((s) => s !== subject);
+  /**
+   * The intent log of docs/atomic-data.md: (1) write the subject to the log
+   * before the create is sent, (2) publish, (3) write the checkpoint,
+   * (4) then remove the subject. `crash` stops the host after a step; the
+   * log and the checkpoint are what survives.
+   */
+  function withIntentLog(): {
+    durable: { intents: string[]; checkpoint: string };
+    publishNew(
+      h: Host,
+      subject: string,
+      crash?: 'after-publish' | 'after-checkpoint',
+    ): Promise<void>;
+    recover(h: Host): { uncertain: string[]; stale: string[] };
+  } {
+    const durable = { intents: [] as string[], checkpoint: '' };
+    return {
+      durable,
+      async publishNew(h, subject, crash): Promise<void> {
+        const first = h.ids.externalId(ORDERS, subject) === undefined;
+        if (first) durable.intents = [...durable.intents, subject]; // 1
+        await h.lens.publish(subject); // 2
+        if (crash === 'after-publish') return;
+        durable.checkpoint = h.store.toJSONAD(); // 3
+        if (crash === 'after-checkpoint') return;
+        durable.intents = durable.intents.filter((s) => s !== subject); // 4
+      },
+      recover(h): { uncertain: string[]; stale: string[] } {
+        const bound = (s: string): boolean =>
+          h.ids.externalId(ORDERS, s) !== undefined;
+        const stale = durable.intents.filter(bound);
+        const uncertain = durable.intents.filter((s) => !bound(s));
+        durable.intents = uncertain; // a stale intent is cleared, not published
+        return { uncertain, stale };
+      },
     };
-    checkpoint = first.store.toJSONAD();
-    intents = [ORDER];
-    await first.lens.publish(ORDER); // the host dies here: intent kept
+  }
 
-    const second = host(platform.connector(), checkpoint);
-    const uncertain = intents.filter(
-      (s) => second.ids.externalId(ORDERS, s) === undefined,
-    );
-    expect(uncertain).toEqual([ORDER]);
+  it('the intent log is written before the create request is sent', async () => {
+    const platform = new Platform(false);
+    const log = withIntentLog();
+    const first = host(platform.connector());
+    log.durable.checkpoint = first.store.toJSONAD();
+    let seen: string[] | undefined;
+    platform.onCreate = (): void => {
+      seen = [...log.durable.intents];
+    };
+    await log.publishNew(first, ORDER);
+
+    expect(seen).toEqual([ORDER]);
+    expect(log.durable.intents).toEqual([]);
+  });
+
+  it('a crash after the create names it as uncertain, so nothing is resent blind', async () => {
+    const platform = new Platform(false);
+    const log = withIntentLog();
+    const first = host(platform.connector());
+    log.durable.checkpoint = first.store.toJSONAD();
+    await log.publishNew(first, ORDER, 'after-publish');
+
+    const second = host(platform.connector(), log.durable.checkpoint);
+    expect(log.recover(second)).toEqual({ uncertain: [ORDER], stale: [] });
     // The host asks the person; here they find server-0 on the platform and
     // bind it, and the next publish updates it instead of creating another.
     second.ids.bind(ORDERS, 'server-0', ORDER);
-    await publishNew(second, ORDER);
+    await log.publishNew(second, ORDER);
     expect(platform.records.size).toBe(1);
-    expect(intents).toEqual([]);
+    expect(log.durable.intents).toEqual([]);
     expect(
-      host(platform.connector(), checkpoint).ids.externalId(ORDERS, ORDER),
+      host(platform.connector(), log.durable.checkpoint).ids.externalId(
+        ORDERS,
+        ORDER,
+      ),
     ).toBe('server-0');
+  });
+
+  it('a crash after the checkpoint leaves a stale intent: cleared, not published', async () => {
+    const platform = new Platform(false);
+    const log = withIntentLog();
+    const first = host(platform.connector());
+    log.durable.checkpoint = first.store.toJSONAD();
+    await log.publishNew(first, ORDER, 'after-checkpoint');
+    expect(log.durable.intents).toEqual([ORDER]);
+
+    const second = host(platform.connector(), log.durable.checkpoint);
+    expect(log.recover(second)).toEqual({ uncertain: [], stale: [ORDER] });
+    expect(log.durable.intents).toEqual([]);
+    expect(platform.records.size).toBe(1);
+  });
+
+  it('a lost intent log reports nothing, and a blind re-publish duplicates', async () => {
+    const platform = new Platform(false);
+    const log = withIntentLog();
+    const first = host(platform.connector());
+    log.durable.checkpoint = first.store.toJSONAD();
+    await log.publishNew(first, ORDER, 'after-publish');
+    log.durable.intents = []; // lost, or older than the checkpoint
+
+    const second = host(platform.connector(), log.durable.checkpoint);
+    expect(log.recover(second)).toEqual({ uncertain: [], stale: [] });
+    await second.lens.publish(ORDER);
+    expect(platform.records.size).toBe(2);
   });
 });
