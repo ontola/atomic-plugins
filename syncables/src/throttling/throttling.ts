@@ -215,11 +215,21 @@ function roleMap(
 }
 
 /**
+ * Removes leading and trailing space, tab, CR and LF only: other
+ * characters (U+00A0 among them, which `String.prototype.trim` would strip)
+ * are kept, so a value carrying them does not parse.
+ */
+function strip(value: string): string {
+  return value.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+}
+
+/**
  * A body field's value as text (§"Response body fields"): a string with
- * its surrounding whitespace removed; a number with no fractional part as
- * its decimal form (`3.0` reads as `3`); undefined for any other number, a
- * boolean, `null`, an array, an object, or a path that does not resolve.
- * The path's names are read literally, own properties only.
+ * surrounding space, tab, CR and LF removed; a number with no fractional
+ * part, up to 2^53 − 1, as its decimal form (`3.0` reads as `3`; `1e21` and
+ * other larger integral numbers do not parse); undefined for any other
+ * number, a boolean, `null`, an array, an object, or a path that does not
+ * resolve. The path's names are read literally, own properties only.
  */
 function bodyText(body: unknown, path: string): string | undefined {
   let node = body;
@@ -227,8 +237,9 @@ function bodyText(body: unknown, path: string): string | undefined {
     if (!isRecord(node) || !Object.hasOwn(node, name)) return undefined;
     node = node[name];
   }
-  if (typeof node === 'string') return node.trim();
-  if (typeof node === 'number' && Number.isInteger(node)) return String(node);
+  if (typeof node === 'string') return strip(node);
+  if (typeof node === 'number' && Number.isSafeInteger(node))
+    return String(node);
   return undefined;
 }
 
@@ -404,7 +415,7 @@ function bodyMatches(predicate: BodyPredicate, body: unknown): boolean {
   );
 }
 
-/** The stripped value of one header, by case-insensitive name. */
+/** The value of one header, by case-insensitive name, with surrounding space, tab, CR and LF removed. */
 function headerValue(
   headers: Record<string, string>,
   name: string,
@@ -412,7 +423,7 @@ function headerValue(
   const key = name.toLowerCase();
   for (const [k, v] of Object.entries(headers))
     if (k.toLowerCase() === key)
-      return typeof v === 'string' ? v.trim() : undefined;
+      return typeof v === 'string' ? strip(v) : undefined;
   return undefined;
 }
 
@@ -427,7 +438,10 @@ function headerMatches(
   return predicate.in.includes(value);
 }
 
-/** A non-negative decimal integer the consumer can represent exactly; else undefined. */
+/**
+ * A non-negative decimal integer up to 2^53 − 1; else undefined (a longer
+ * one, such as a 400-digit `Retry-After`, does not parse).
+ */
 function integer(value: string): number | undefined {
   if (!/^[0-9]+$/.test(value)) return undefined;
   const n = Number(value);

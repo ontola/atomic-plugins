@@ -237,6 +237,48 @@ describe('classifyThrottling, after the spec tests', () => {
   });
 });
 
+describe('header values: number bounds and stripped characters (Throttling follow-up)', () => {
+  it('a 400-digit Retry-After does not parse: the backoff applies', () => {
+    expect(classify(429, { 'Retry-After': '9'.repeat(400) })).toEqual({
+      meaning: 'throttled',
+    });
+  });
+
+  it('a reset of 2^53 seconds does not parse; 2^53 − 1 does', () => {
+    const headers = (reset: string): Record<string, string> => ({
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': reset,
+    });
+    // Without a parsing reset, the bucket window is the fallback.
+    expect(classify(403, headers(String(2 ** 53)))!.retryAt).toBe(s(3600));
+    expect(
+      classify(403, headers(String(Number.MAX_SAFE_INTEGER)))!.retryAt,
+    ).toBe(Number.MAX_SAFE_INTEGER * 1000);
+  });
+
+  it('strips only space, tab, CR and LF from a header value', () => {
+    expect(classify(429, { 'Retry-After': ' \t30\r\n' })!.retryAt).toBe(s(30));
+    for (const value of ['\u00a030', '30\u00a0', '30\u2003', '\ufeff30'])
+      expect(classify(429, { 'Retry-After': value })!.retryAt).toBeUndefined();
+  });
+
+  it('matches a header predicate after the same stripping only', () => {
+    const doc = withSignals([
+      {
+        status: [403],
+        header: { name: 'X-Reason', equals: 'rate' },
+        meaning: 'throttled',
+      },
+    ]);
+    expect(classify(403, { 'X-Reason': ' rate\t' }, undefined, doc)).toEqual({
+      meaning: 'throttled',
+    });
+    expect(
+      classify(403, { 'X-Reason': 'rate\u00a0' }, undefined, doc),
+    ).toBeUndefined();
+  });
+});
+
 describe('headerTime', () => {
   it('reads each unit, and refuses the others', () => {
     expect(headerTime('120', 'deltaSeconds', NOW)).toBe(s(120));

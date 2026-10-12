@@ -411,7 +411,12 @@ is JSON: its dot-path's names are matched literally (a name holding a `.`
 cannot be addressed; `a..b`, `.a` and `a.` are left out of the
 declaration), a string is trimmed, a number counts only when it has no
 fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
-an object does not parse. A role read from both a header and a body field
+an object does not parse. For headers and body fields alike, only space,
+tab, CR and LF are trimmed (a value carrying U+00A0 or another Unicode
+space does not parse), and an integer above 2^53 − 1 does not parse
+(`1e21` in a body, a 400-digit `Retry-After`); the client's own
+`Retry-After` reading for other retryable answers follows the same two
+rules. A role read from both a header and a body field
 counts once: the later time for `retryAfter` and `reset`, and the bucket is
 exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
 that gives no wait (`0`, or a time not after the response) counts as
@@ -1569,6 +1574,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Throttling values are read more strictly, as the spec
+  follow-up says: only space, tab, CR and LF are trimmed from a header or
+  body value (U+00A0 and other Unicode spaces are kept, so the value does
+  not parse), and an integer above 2^53 − 1 does not parse, integral
+  floats included. The same applies to the `Retry-After` of a retryable
+  answer outside `x-throttling`, which before took any long digit string
+  and capped the wait at `retry.maxRetryAfterMs`.
 - **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
   create's `followUps` leave `omit` fields out of the create body and, once
   the create is bound, queue one follow-up update per field, sent in order

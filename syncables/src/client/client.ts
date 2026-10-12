@@ -972,12 +972,15 @@ function excerpt(body: string): string {
  * in milliseconds; undefined when absent or unparseable.
  */
 function retryAfterMs(headers: Record<string, string>): number | undefined {
-  const value = headers['retry-after']?.trim();
+  // Only space, tab, CR and LF are stripped, as for the Throttling roles.
+  const value = headers['retry-after']?.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
   if (!value) return undefined;
   // An HTTP date has letters (a day or month name); anything else that is
-  // not delay-seconds, such as "1.5", is unusable.
+  // not delay-seconds up to 2^53 − 1, such as "1.5", is unusable.
   const ms = /^\d+$/.test(value)
-    ? Number(value) * 1000
+    ? Number.isSafeInteger(Number(value))
+      ? Number(value) * 1000
+      : NaN
     : /[a-z]/i.test(value)
       ? Date.parse(value) - Date.now()
       : NaN;

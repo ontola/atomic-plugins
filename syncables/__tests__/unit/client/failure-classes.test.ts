@@ -385,6 +385,27 @@ describe('retryable failures', () => {
     expect((times[1] as number) - (times[0] as number)).toBeLessThan(500);
   });
 
+  it.each([
+    ['above 2^53 − 1', String(2 ** 53)],
+    ['with a no-break space', '\u00a02'],
+  ])(
+    'ignores a 503 Retry-After %s: the backoff applies, not the cap',
+    async (_label, value) => {
+      const { times, transport } = provider([rex], (_r, n) =>
+        n === 1 ? response({}, 503, { 'retry-after': value }) : undefined,
+      );
+      const client = createApiClient(document(), {
+        transport,
+        retry: { baseDelayMs: 1, maxRetryAfterMs: 400 },
+      });
+      await client.sync();
+      await client.update('/pets', '1', { name: 'Rex II' });
+      await idle(client);
+      expect(times).toHaveLength(2);
+      expect((times[1] as number) - (times[0] as number)).toBeLessThan(300);
+    },
+  );
+
   it('counts retryable failures against retry.maxAttempts', async () => {
     const { writes, transport } = provider([rex], () => response({}, 503));
     const client = createApiClient(document(), {
