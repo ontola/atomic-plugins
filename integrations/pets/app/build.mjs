@@ -35,6 +35,9 @@ export async function build({ outfile } = {}) {
     target: 'es2022',
     splitting: false,
     legalComments: 'none',
+    // Every drive app is minified (AGENTS.md, "Bundle size"). Pets embeds no
+    // CSS of its own, so there is no stylesheet to minify separately.
+    minify: true,
     write: false,
     outfile: outfile ?? path('dist/ui.js'),
     logLevel: 'silent',

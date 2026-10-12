@@ -374,7 +374,7 @@
     "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
     "https://atomicdata.dev/integrations/properties/version": "0.1.4",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.4/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-zQwr0EdlAA3PiyBUQp6qfy9nzQQfoUx7na7fOl2P5d/iBT5sj0Qokg/fH9hOfPCv",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-OysbzZTZN+h82H36VfiFdAefsm3azZcuv++cj3w3X6dUEgcdQyjLmg8AoVkZkBoM",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Pet",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pets"
   },
