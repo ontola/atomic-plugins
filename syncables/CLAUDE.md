@@ -462,8 +462,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
   and throws `PageReadError` with neither (`integerRole`: a reported
   `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
-  from the body per response); `itemCount` (default) keeps `nextCursor`'s
-  items-returned step. The repeat check (`seenIds` by `PageWalk.identity`,
+  from the body per response); `itemCount` (default) steps by the items
+  the page held and ends at an empty page or `totalCount` (#495: before,
+  without a `totalCount`, `hasNextPage` ended it after one page), unless
+  the scheme declares a `nextLink` (`declaresRole`), which then leads. Under
+  `pageSize` with a `nextLink` the offset cursor is stale after links, and
+  a `null` link makes the read fail on a repeat (pinned in the tests). The repeat check (`seenIds` by `PageWalk.identity`,
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.

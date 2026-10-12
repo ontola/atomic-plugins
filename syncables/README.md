@@ -1459,6 +1459,20 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: An `itemCount` offset read (the default `advance`)
+  without a `totalCount` no longer stops after its first page (#495). It
+  read short, with no error and without being reported incomplete. It now
+  reads on, adding the items each page held, to the first empty page, as
+  Pagination Schemes 0.7.0 §4.3.2 says. With a `totalCount` it ends once
+  the next offset reaches it, as before. The repeat check ends a read
+  whose server ignores the offset.
+
+  Known limit, kept as it is: a scheme that declares both an offset and a
+  `nextLink` field follows the link while there is one, and the offset is
+  not advanced meanwhile. Under `itemCount` an absent or `null` link then
+  ends the read. Under `advance: pageSize` the read steps from the stale
+  offset at that point, asks for a page it already has, and ends with an
+  error rather than short.
 - **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
   Envelope Object (a scheme's `response.envelope` or a Collection Object's
   `envelope`): with a non-empty `itemsField`, a body in which that field is
