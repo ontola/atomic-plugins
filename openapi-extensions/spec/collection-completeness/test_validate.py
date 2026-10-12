@@ -196,14 +196,39 @@ class GoneTests(unittest.TestCase):
         self.assertEqual(classify_read({"absent": "removed"}, None, "id", "t1", 410, None), "deleted")
         self.assertEqual(classify_read(dict(declaration, gone="purged"), None, "id", "t1", 410, None), "unavailable")
 
-    def test_not_found_deleted_with_gone_unavailable_is_forbidden(self):
-        document = example()
-        for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
-            completeness(document, resource, collection)["notFound"] = "deleted"
+    def test_gone_unavailable_needs_an_explicit_not_found_unavailable(self):
+        # notFound: deleted written out, or defaulted (the round-9 probe): both forbidden.
+        for not_found in ("deleted", None):
+            document = example()
+            for resource, collection in (("task", "listTasks"), ("taskList", "taskLists")):
+                declaration = completeness(document, resource, collection)
+                declaration.pop("notFound")
+                if not_found:
+                    declaration["notFound"] = not_found
+            completeness(document)["gone"] = "unavailable"
+            with self.subTest(not_found=not_found), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn("gone: unavailable needs an explicit notFound: unavailable", str(raised.exception))
+        document = example()  # notFound: unavailable stated explicitly
         completeness(document)["gone"] = "unavailable"
-        with self.assertRaises(ValueError) as raised:
-            validate(document)
-        self.assertIn("notFound: deleted with gone: unavailable", str(raised.exception))
+        validate(document)
+
+    def test_malformed_read_values_classify_as_unavailable(self):
+        for field in ("notFound", "gone"):
+            for value in (["deleted"], {"a": 1}):
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(classify_read({"absent": "removed", field: value}, None, "id", "t1", 410, None), "unavailable")
+        self.assertEqual(classify_read({"absent": "removed"}, None, "id", "t1", 410, None, ["x"], {"y": 1}), "unavailable")
+
+    def test_gone_example(self):
+        document = yaml.safe_load((ROOT / "examples" / "gone-410.yaml").read_text(encoding="utf-8"))
+        validate(document)
+        declaration = document["components"]["crudResources"]["note"]["collections"]["notes"]["x-completeness"]
+        self.assertEqual(classify_read(declaration, None, "id", "n1", 410, None), "deleted")
+        self.assertEqual(classify_read(declaration, None, "id", "n1", 404, None), "unavailable")
+        stripped = copy.deepcopy(document)
+        stripped.pop("components")
+        validate_openapi(stripped)
 
     def test_unrecognised_absent_still_honours_gone(self):
         declaration = {"absent": "archived", "notFound": "unavailable", "gone": "deleted"}

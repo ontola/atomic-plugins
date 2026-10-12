@@ -192,8 +192,11 @@ when the object was deleted. A `410` that also covers another state is not
 such evidence. GitHub is the counter-example: it documents a `410` for a
 deleted issue, but it also answers `410` for every issue of a repository whose
 issues are turned off ("Issues are disabled for this repo"), a state the owner
-can switch back. GitHub therefore declares no `gone`, or `gone: unavailable`,
-never `gone: deleted`. `gone` follows the same rules as `notFound`: it
+can switch back. GitHub therefore declares `notFound: unavailable` and no
+`gone`, or `gone: unavailable` beside it, never `gone: deleted`.
+[`examples/gone-410.yaml`](examples/gone-410.yaml) shows the
+`notFound: unavailable, gone: deleted` shape for a provider whose `410` means
+deletion and nothing else. `gone` follows the same rules as `notFound`: it
 describes the resource's `read`, so once any collection of a resource states
 it, it applies to every read of that resource's objects and every
 `absent: removed` collection of the resource states the same value; it is
@@ -377,9 +380,12 @@ A conforming document:
   a resource states `gone`, MUST state it, with the same value, on every
   collection of that resource declared `absent: removed`; MUST NOT declare
   `gone: deleted` without provider documentation that a `410` is sent for
-  that resource's objects only when the object was deleted; MUST NOT declare
-  `notFound: deleted` together with `gone: unavailable` (a 0.2.0 consumer,
-  which ignores `gone`, would read that `410` as a deletion).
+  that resource's objects only when the object was deleted; MUST declare
+  `gone: unavailable` only when the resource also states
+  `notFound: unavailable` explicitly: a 0.2.0 consumer ignores `gone` and
+  reads a `410` by `notFound`, so with `notFound: deleted`, or with
+  `notFound` left to its `deleted` default, it would read that `410` as a
+  deletion.
 
 A conforming consumer:
 

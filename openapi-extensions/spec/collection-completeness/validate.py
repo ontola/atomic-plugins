@@ -96,10 +96,10 @@ def validate(document):
         if not isinstance(resource, dict):
             continue
         declared = declarations_of(document, resource_name)
-        if resource_read_value(document, resource_name, "notFound") == "deleted" \
-                and resource_read_value(document, resource_name, "gone") == "unavailable":
-            errors.append(f"crudResources.{resource_name}: notFound: deleted with gone: unavailable "
-                          "(a 0.2.0 consumer would read the 410 as a deletion)")
+        if resource_read_value(document, resource_name, "gone") == "unavailable" \
+                and resource_read_value(document, resource_name, "notFound") != "unavailable":
+            errors.append(f"crudResources.{resource_name}: gone: unavailable needs an explicit notFound: unavailable "
+                          "(a 0.2.0 consumer reads the 410 by notFound, default deleted)")
         for field in READ_FIELDS:
             explicit = {d[field] for d in declared.values()
                         if d and field in d and isinstance(d[field], (str, int, float, bool, type(None)))}
@@ -171,7 +171,7 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
     if status == 410:
         gone = resource_gone if resource_gone is not None else (declaration or {}).get("gone")
         if gone is not None:
-            return gone if gone in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
+            return gone if isinstance(gone, str) and gone in OUTCOMES else "unavailable"  # §7: unrecognised → unavailable
     if status in (404, 410):
         stated = (declaration or {}).get("notFound")
         if resource_not_found is not None:
@@ -182,7 +182,7 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
             value = "unavailable"  # §7: an unrecognised absent never yields the deleted default
         else:
             value = "deleted"
-        return value if value in OUTCOMES else "unavailable"  # §7: an unrecognised value counts as unavailable
+        return value if isinstance(value, str) and value in OUTCOMES else "unavailable"  # §7: unrecognised → unavailable
     if not isinstance(status, int) or not 200 <= status < 300:
         return "unknown"
     identifier, found = _field(body, id_field)
@@ -198,7 +198,7 @@ def classify_read(declaration, tombstone, id_field, object_id, status, body, res
 def resource_read_value(document, resource_name, field):
     """The notFound or gone any collection of the resource states, or None; it covers every read of its objects (§4.3)."""
     declared = declarations_of(document, resource_name).values()
-    values = {d[field] if d[field] in OUTCOMES else "unavailable"
+    values = {d[field] if isinstance(d[field], str) and d[field] in OUTCOMES else "unavailable"
               for d in declared if d and field in d and isinstance(d[field], (str, type(None)))}
     if any(d and field in d and not isinstance(d[field], (str, type(None))) for d in declared):
         values.add("unavailable")
