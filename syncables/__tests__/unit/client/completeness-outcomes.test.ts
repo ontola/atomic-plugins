@@ -1068,8 +1068,25 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     );
   });
 
-  it('does not read a vanished list that has no writes under it by default', async () => {
+  it('reads a vanished list without writes under it by default, and marks its tasks unavailable (K5)', async () => {
     const { client, fake, reports } = await listsThenGone();
+    await client.sync();
+    expect(fake.requests).toEqual([
+      'GET /users/me/lists',
+      'GET /lists/L1/tasks',
+      'GET /users/me/lists/L2',
+    ]);
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['L2', 'unavailable', 'read'],
+      ['t2', 'unavailable', 'parent'],
+      ['t3', 'unavailable', 'parent'],
+    ]);
+  });
+
+  it('does not read a vanished list under missingRecordChecks none', async () => {
+    const { client, fake, reports } = await listsThenGone({
+      client: { missingRecordChecks: 'none' },
+    });
     await client.sync();
     expect(fake.requests).toEqual([
       'GET /users/me/lists',

@@ -130,7 +130,13 @@ export interface StoredUnavailable {
   context: Record<string, string>;
   unavailable: Record<
     string,
-    { record: Record<string, unknown>; detail: string }
+    {
+      record: Record<string, unknown>;
+      detail: string;
+      /** Added later within version 1; absent: `unavailable`. */
+      presence?: 'unconfirmed' | 'deleted';
+      source?: string;
+    }
   >;
 }
 
@@ -258,7 +264,11 @@ export function isStoredUnavailable(
       (entry) =>
         isRecord(entry) &&
         isRecord(entry['record']) &&
-        typeof entry['detail'] === 'string',
+        typeof entry['detail'] === 'string' &&
+        (entry['presence'] === undefined ||
+          entry['presence'] === 'unconfirmed' ||
+          entry['presence'] === 'deleted') &&
+        (entry['source'] === undefined || typeof entry['source'] === 'string'),
     ) &&
     value['id'] === undefined
   );

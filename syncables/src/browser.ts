@@ -59,6 +59,8 @@ export type {
   MissingRecord,
   MissingRecordEvidence,
   PresenceChange,
+  PresenceMark,
+  PresenceMarkValue,
   MissingRecordFailure,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,

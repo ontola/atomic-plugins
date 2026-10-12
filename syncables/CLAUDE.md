@@ -141,7 +141,24 @@ Data flows through four stages, each its own directory under `src/`:
    (`releaseRefreshed`, `finishFeeds`, parent members) go through
    `rebuildTelling`, which tells each record the rebuild would remove (no
    confirmed copy, no kept mark, no durable write, stored now) first. The
-   changes go on `SyncResult.presence` (`SyncRound.presence`). GET validators reuse raw cached response bodies.
+   changes go on `SyncResult.presence` (`SyncRound.presence`). Presence
+   marks (K4/K5): `keptMarks` (was `unavailableKept`; `presence`
+   `unconfirmed`/`unavailable`/`deleted`, stored as the outbox's
+   `unavailable` entries with `presence`/`source`) is the one map `rebuild`
+   falls back to. In the candidate loop a vanished write-less record is
+   `deleted` under `absent: deleted` (removed, or `setMark` under
+   `retainDeleted`), `unconfirmed` (kept) when `lookupPlanned` or
+   `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
+   (not `'none'`, an item GET or a declaration, and `absent: removed`,
+   `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
+   lookups (previously unconfirmed first, also when `!differs`) run in
+   `releaseRefreshed`'s vanished loop, counted against
+   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   the evidence into marks (`setMark`: changes go to `SyncRound.untold`).
+   `tell()` sends untold mark changes with each removal, or at the end of
+   the sync, one per record (the latest); after it, records that gained a
+   write or a confirmed copy get `pruned: false`. `currentRound` is the
+   running sync. `client.presence()` lists `keptMarks`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected

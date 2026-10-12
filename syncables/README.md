@@ -534,33 +534,57 @@ that no longer returns the record at all is handled below.
 
 ### Records a refresh no longer returns
 
-**Tell before prune.** A complete `sync()` removes from the local copy a
-record it no longer returns, when the record has no unsettled writes (and,
-under `notFound: unavailable`, is not kept as unavailable; see below). The
-app is told first: `onPresence(changes)` is called, and awaited, before
-anything is removed, with one `PresenceChange` per record (`collection`,
-`context`, `id`, `presence`, `source`, `record`: its last values, and
-`pruned: true`). `presence` is `deleted` when the collection declares
-`x-completeness: { absent: deleted }` (`source: 'declaration'`), else
-`removed`: no longer returned by a complete read, whether or not it still
-exists (`source: 'read'`). If the handler throws or rejects, that
-collection's read is not applied (nothing is removed, and its records do not
-replace the confirmed copy; marks the read settles, such as a kept
-unavailable record it returns, still clear), its held writes do not count a
-refresh miss, `sync()` rejects with the error, and the next sync tells
-again. A write that settles while the handler runs makes the read older
-than it: the read's records are then only added or updated, nothing is
-removed, and a record told but not removed is told again by a later read
-that still lacks it. A record whose only writes are still being stored is
-neither told nor removed. A removal after a check is told the same way: a
-record kept as unavailable that a later check finds deleted (`source:
-'feed'` or `'read'`) or present but filtered (`removed`) is told before it
-is removed. The same changes are on `SyncResult.presence` (absent
-when there are none). This applies under every `missingRecordChecks`; a
-lookup of the record, when one is made, comes after it and is reported to
-`onMissingRecord` as before (so a record later found `unavailable` is
-removed, told, and then kept again; keeping it before the lookup is a later
-step). A read that fails or is incomplete removes nothing and tells nothing.
+**Presence: tell before prune, and marks.** When a complete `sync()` no
+longer returns a record that has no unsettled writes, the client either
+removes it from the local copy or keeps it with a presence mark, by the
+collection's declaration:
+
+| Collection | The record is |
+|---|---|
+| `x-completeness: { absent: deleted }` | `deleted` (`source: 'declaration'`): removed, or kept marked `deleted` under `retainDeleted: true` |
+| `x-completeness: { absent: removed }`, or wherever a check will be made (`missingRecordChecks: 'all'`, a parent whose nested collection declares `parentAbsent`) | kept, marked `unconfirmed`, until a check (a GET of the record) settles it |
+| no declaration, default checks | `removed` (no longer returned; whether it still exists is not known): removed |
+
+A check settles an `unconfirmed` record: a 404/410 under `notFound:
+unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
+default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
+it marked `deleted` under `retainDeleted`; the record found but not in the
+list (`filtered`) removes it from this collection (`removed`); an error or
+no check leaves it `unconfirmed`. The marks persist in the outbox. A read
+that returns a marked record again drops the mark (`present`). Checks of
+records without writes are capped at `maxMissingRecordChecks` per sync
+(default 50); the rest stay `unconfirmed`, and the next sync checks
+`unconfirmed` records first, even when the list did not change. Records
+with writes are always checked. Under `missingRecordChecks: 'none'`, or
+without an item GET, nothing is checked and an `absent: removed` record
+stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
+`record`); a record without a mark is present as far as the client knows.
+A new `update()` or `remove()` of a marked record is held for the next
+refresh, which checks it.
+
+**The app is told before anything is removed.** `onPresence(changes)` is
+called, and awaited, before a record is removed from the local copy, with
+one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
+`source`, `record`, `pruned: true`). Marks set or cleared on kept records
+(`pruned: false`; `present` when a mark is dropped) are told with the next
+removal or at the end of the sync. Each record is told once per sync, with
+its latest change (a record marked `unconfirmed` and settled in the same
+sync is told only as settled). The same changes are on
+`SyncResult.presence` (absent when there are none). If the handler throws
+or rejects, the records are not removed (for the read's own removals, that
+collection's read is not applied: its records do not replace the confirmed
+copy, though marks the read settles still clear), its held writes do not
+count a refresh miss, `sync()` rejects with the error, and a later sync
+tells again. A write that settles while the handler runs makes the read
+older than it: its records are then only added or updated and nothing is
+removed. A record that has a write when the handler returns (queued during
+the handler, or still being stored) is not removed: its change is listed
+with `pruned: false`, although the handler was told `pruned: true`. A
+removal after a check, for a record kept earlier (`unconfirmed`,
+`unavailable`) that a check, the deletion feed or its parent now settles,
+is told the same way, with that `source` (`read`, `feed`, `parent`). A
+read that fails or is incomplete removes nothing and tells nothing.
 
 A complete `sync()` of a collection (every page read, within the read budget)
 can lack a record that has queued updates. The provider may have deleted it,
@@ -1443,6 +1467,21 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
+  wherever a check will be made) a record a complete read lacks is kept,
+  marked `unconfirmed`, before its check, then marked `unavailable`,
+  removed (`deleted`, `removed`) or left `unconfirmed`; `retainDeleted`
+  keeps deleted records marked; checks of records without writes are capped
+  at `maxMissingRecordChecks` (default 50) and unconfirmed records are
+  checked first next sync; a parent whose nested collection declares
+  `parentAbsent` is checked without writes under it; `client.presence()`
+  lists the marks; `PresenceChange` gains `present`, `unconfirmed`,
+  `unavailable` and `pruned: false`, told once per record per sync. The
+  outbox's `unavailable` entries gain `presence` and `source` (within
+  version 1; an older client reads every kept record as unavailable).
+  Behaviour changes: under `missingRecordChecks: 'all'` a vanished record
+  is kept until its check instead of removed first; a vanished parent
+  without writes under it is now checked by default.
 - **Unreleased**: Tell before prune: a record a complete `sync()` removes
   from the local copy (no longer returned, no unsettled writes) is told to
   the new `onPresence` handler, awaited, before it is removed, and listed on

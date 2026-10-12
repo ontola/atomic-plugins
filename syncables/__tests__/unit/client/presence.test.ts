@@ -95,12 +95,6 @@ describe('tell before prune', () => {
   for (const [label, doc, presence, source] of [
     ['an undeclared collection', document(), 'removed', 'read'],
     [
-      'absent: removed',
-      document({ absent: 'removed' }),
-      'removed',
-      'read',
-    ],
-    [
       'absent: deleted',
       document({ absent: 'deleted' }),
       'deleted',
@@ -351,8 +345,10 @@ describe('tell before prune: removals after a check', () => {
       await client.sync();
       fake.hidden.add('2');
       await client.sync();
-      // Kept as unavailable (told as removed before the lookup kept it;
-      // keeping it before the lookup is the next step).
+      // Kept before the lookup, which found it unavailable: told once.
+      expect(told.flat().map((c) => [c.id, c.presence, c.pruned])).toEqual([
+        ['2', 'unavailable', false],
+      ]);
       expect(await client.get('/pets', '2')).toEqual(tom);
       told.length = 0;
       // A held update seeds the confirmed copy; discarding it leaves the
