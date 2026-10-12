@@ -1,0 +1,50 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://developer.spotify.com/documentation/web-api/concepts/rate-limits
+#   "Spotify's API rate limit is calculated based on the number of calls that your app makes
+#   to Spotify in a rolling 30 second window"; the limit "varies depending on whether your
+#   app is in development mode or extended quota mode" and no number is published; "If your
+#   app exceeds the rate limit for your app then you'll begin to see 429 error responses";
+#   "The header of the 429 response will normally include a Retry-After header with a value
+#   in seconds"; Spotify "does sometimes implement other limits outside of the API-wide rate
+#   limit".
+# The pinned OAD answers 429 with "Rate limit exceeded." on its operations.
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, headers, signals).
+# Not declared: a request count (none is published, and it depends on the app's mode) and
+# the unnamed endpoint-specific limits.
+overlay: 1.0.0
+info:
+  title: Spotify Web API throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/2914e6bed4db4389921b36e4ed79e645c2085668/APIs/spotify.com/1.0.0-readonly/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perApp:
+            window: { seconds: 30, kind: sliding }
+            partitionBy: [application]
+            description: >-
+              "the number of calls that your app makes to Spotify in a rolling
+              30 second window": one counter per registered app (its client
+              id), shared by every user of it. The number of calls allowed is
+              not published and differs between development mode and
+              extended quota mode, so it is left out.
+        applies: [perApp]
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429 "normally", "with a value in seconds". Spotify
+              documents no other rate-limit headers.
+        signals:
+          - status: [429]
+            meaning: throttled
+            description: >-
+              "If your app exceeds the rate limit for your app then you'll
+              begin to see 429 error responses". Not declared quotaExhausted
+              for perApp: a 429 can also come from one of the "other limits
+              outside of the API-wide rate limit", which the page does not
+              name, so it does not establish that the app-wide bucket is
+              exhausted.
