@@ -1634,10 +1634,20 @@ export function createApiClient(
       detail: string;
       source?: MissingRecord['source'];
       presence: PresenceMarkValue;
+      /**
+       * A check concluded the record deleted or present elsewhere: the mark
+       * goes once the removal is told (`rebuildTelling`), and stays if the
+       * handler throws, so the record is checked again.
+       */
+      clearing?: true;
     }
   >();
-  /** The sync running now, whose presence changes marks are recorded on. */
-  let currentRound: SyncRound | undefined;
+  /**
+   * Mark changes not told yet, the latest per record (`changeKey`): told at
+   * the end of a sync, and kept for the next one when that does not happen
+   * (the sync throws, or the handler does), so none is lost.
+   */
+  const untoldMarks = new Map<string, PresenceChange>();
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
   /** Set while no write is sent because the credentials were refused; stored. */
@@ -3204,8 +3214,6 @@ export function createApiClient(
     returned: Map<string, Set<string>>;
     /** Presence changes this sync told (`onPresence`). */
     presence: PresenceChange[];
-    /** Mark changes not told yet: told with the next removal, or at the end. */
-    untold: PresenceChange[];
     /** Records without writes looked up so far (`maxMissingRecordChecks`). */
     lookups: number;
     /** The first error a presence handler threw; `sync()` rejects with it. */
@@ -3240,21 +3248,11 @@ export function createApiClient(
     round: SyncRound,
     removing: PresenceChange[],
   ): Promise<boolean> {
-    let changes: PresenceChange[];
-    if (removing.length) {
-      const removed = new Set(removing.map(changeKey));
-      round.untold = round.untold.filter((c) => !removed.has(changeKey(c)));
-      changes = removing;
-    } else {
-      // One change per record: its latest (a record marked unconfirmed and
-      // then settled in the same sync is told only as settled).
-      const latest = new Map<string, PresenceChange>();
-      for (const change of round.untold) {
-        latest.delete(changeKey(change));
-        latest.set(changeKey(change), change);
-      }
-      changes = [...latest.values()];
-    }
+    // Removals are told at once and replace a held change of the same
+    // record; held mark changes (one per record, the latest: a record marked
+    // unconfirmed and settled in the same sync is told only as settled) are
+    // told at the end of the sync.
+    const changes = removing.length ? removing : [...untoldMarks.values()];
     if (!changes.length) return true;
     try {
       await options.onPresence?.(changes.map((c) => structuredClone(c)));
@@ -3262,7 +3260,9 @@ export function createApiClient(
       round.presenceError ??= error;
       return false;
     }
-    if (!removing.length) round.untold = [];
+    if (removing.length)
+      for (const change of removing) untoldMarks.delete(changeKey(change));
+    else untoldMarks.clear();
     round.presence.push(...changes);
     return true;
   }
@@ -3314,10 +3314,19 @@ export function createApiClient(
       source,
       presence,
     });
-    if (before?.presence !== presence)
-      currentRound?.untold.push(
-        presenceChange(route, context, id, presence, source, record, false),
+    if (before?.presence !== presence) {
+      const change = presenceChange(
+        route,
+        context,
+        id,
+        presence,
+        source,
+        record,
+        false,
       );
+      untoldMarks.delete(changeKey(change));
+      untoldMarks.set(changeKey(change), change);
+    }
   }
 
   /**
@@ -3337,9 +3346,20 @@ export function createApiClient(
     const held = new Set<string>();
     for (const target of targets) {
       const key = keyFor(target.scope, target.id);
-      if (
+      const mark = keptMarks.get(key);
+      const stays =
         remote(target.scope).has(target.id) ||
-        keptMarks.has(key) ||
+        allWrites().some(
+          (w) =>
+            w.scope === target.scope &&
+            w.id === target.id &&
+            w.durable !== false,
+        );
+      // A clearing mark on a record that stays is simply settled.
+      if (mark?.clearing && stays) keptMarks.delete(key);
+      if (
+        stays ||
+        (mark && !mark.clearing) ||
         allWrites().some(
           (w) =>
             w.scope === target.scope &&
@@ -3367,6 +3387,15 @@ export function createApiClient(
       removingScopes.push(target.scope);
     }
     const told = removing.length ? await tell(round, removing) : true;
+    // Told: the clearing marks of the removed records go. Not told: they
+    // stay (not clearing any more), so the records are checked again.
+    for (const target of targets) {
+      const key = keyFor(target.scope, target.id);
+      const mark = keptMarks.get(key);
+      if (!mark?.clearing || !held.has(key)) continue;
+      if (told) keptMarks.delete(key);
+      else delete mark.clearing;
+    }
     // A write queued, or a confirmed copy set, while the app was told keeps
     // the record: told, but not removed after all.
     if (told)
@@ -3858,9 +3887,9 @@ export function createApiClient(
         found.detail,
         found.source,
       );
-    else if (found.evidence === 'deleted' || found.evidence === 'filtered')
-      keptMarks.delete(key);
-    else if (kept && kept.presence === 'unconfirmed')
+    else if (found.evidence === 'deleted' || found.evidence === 'filtered') {
+      if (kept) kept.clearing = true;
+    } else if (kept && kept.presence === 'unconfirmed')
       kept.detail = found.detail;
     try {
       options.onMissingRecord?.({
@@ -4439,11 +4468,9 @@ export function createApiClient(
       startedRecords,
       returned: new Map(),
       presence: [],
-      untold: [],
       lookups: 0,
       skipped: new Set(),
     };
-    currentRound = round;
     let keptSettled = false;
     for (const snapshot of result.collections) {
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
@@ -4458,17 +4485,17 @@ export function createApiClient(
         if (mark) {
           keptMarks.delete(keyFor(scope, id));
           keptSettled = true;
-          round.untold.push(
-            presenceChange(
-              route,
-              mark.context,
-              id,
-              'present',
-              'read',
-              item,
-              false,
-            ),
+          const change = presenceChange(
+            route,
+            mark.context,
+            id,
+            'present',
+            'read',
+            item,
+            false,
           );
+          untoldMarks.delete(changeKey(change));
+          untoldMarks.set(changeKey(change), change);
         }
       }
       round.returned.set(scope, ids);
@@ -4722,9 +4749,10 @@ export function createApiClient(
     }
     await finishFeeds(round, budget, released);
     await countRefreshMisses(released, round.skipped);
-    // The marks set or cleared on records the sync keeps, told at its end.
-    await tell(round, []);
-    currentRound = undefined;
+    // The marks set or cleared on records the sync keeps, told at its end;
+    // not after the handler already threw in this sync (they wait, with any
+    // held from a sync that threw, for the next one).
+    if (round.presenceError === undefined) await tell(round, []);
     if (keptMarks.size || round.presence.length) await persistLater();
     if (round.presenceError !== undefined) throw round.presenceError;
     // A describer that could not be read (whatever the status: a 401 or
@@ -4766,7 +4794,6 @@ export function createApiClient(
   function sync(): Promise<SyncResult> {
     syncing ??= performSync().finally(() => {
       syncing = undefined;
-      currentRound = undefined;
     });
     return syncing;
   }

@@ -162,11 +162,16 @@ Data flows through four stages, each its own directory under `src/`:
    lookups (previously unconfirmed first, also when `!differs`) run in
    `releaseRefreshed`'s vanished loop, counted against
    `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
-   the evidence into marks (`setMark`: changes go to `SyncRound.untold`).
-   `tell()` sends untold mark changes with each removal, or at the end of
-   the sync, one per record (the latest); after it, records that gained a
-   write or a confirmed copy get `pruned: false`. `currentRound` is the
-   running sync. `client.presence()` lists `keptMarks`. GET validators reuse raw cached response bodies.
+   the evidence into marks (`setMark`: changes go to the client-level
+   `untoldMarks`, the latest per record, kept across syncs until told).
+   `tell()` sends removals at once (dropping a held change of the same
+   record) and the held mark changes at the end of a sync (skipped when the
+   handler already threw in it); after a removal, records that gained a
+   write or a confirmed copy get `pruned: false`. A `deleted` or `filtered`
+   conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
+   the removal is told, or keeps the mark (not clearing) when the handler
+   throws, so the record is checked again. `client.presence()` lists
+   `keptMarks`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected

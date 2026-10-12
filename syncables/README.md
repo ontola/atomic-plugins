@@ -600,7 +600,12 @@ one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
 the end of the sync. Each record is told once per sync, with its latest
 change (a record marked `unconfirmed` and settled in the same sync is told
 only as settled; a removal replaces a held mark change of the same
-record). The same changes are on
+record). Held changes that are not told (the sync throws, the handler
+throws at the end, or it threw earlier in the sync, which skips the end
+call) are kept, the latest per record, and told at the end of a later
+sync; they are kept in memory only, so a restart loses them though not the
+marks. A removal the handler refused keeps the record and its mark, so a
+later sync checks it again. The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
 or rejects, the records are not removed (for the read's own removals, that
 collection's read is not applied: its records do not replace the confirmed

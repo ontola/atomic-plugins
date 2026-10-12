@@ -63,3 +63,23 @@ and puts the freshly read record on a `filtered` removal. An unknown stored
 `'none'` repro, the check order, told once with a feed settling a record
 after another removal, the fresh record, an unknown stored value; four of
 them fail on the code before.
+
+## Turn 3
+
+**Human (via the coordinator session):** Blocker: held mark changes were
+lost when the sync threw or the handler threw at the end, since they lived
+on the round; keep them at client level, latest per record, and carry them
+into the next sync. Nits: stale comments; the handler called again at the
+end after it threw; a `filtered`/`deleted` check result deleting the mark
+before the removal was told, so a refused removal lost it; tests for the
+no-item-GET case and the same id in two contexts.
+
+**Assistant:** `untoldMarks` (client level, latest per record) replaces
+`SyncRound.untold`; the end tell is skipped when the handler threw in the
+sync, and what is not told waits for a later sync. A `deleted` or
+`filtered` conclusion sets `clearing` on the mark; `rebuildTelling` drops
+it once the removal is told, or keeps the mark when the handler throws.
+Tests: the two probes (the handler throwing at the end, storage failing
+mid-sync), a refused removal checked again, no item GET, and the same id
+under two lists in one `rebuildTelling` call (a feed settling both, an
+update queued in the handler for one); four fail before the fix.
