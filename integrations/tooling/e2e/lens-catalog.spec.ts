@@ -15,8 +15,9 @@
  * lenses on every drive, and lets an App's `renders` hold a lens endpoint
  * key (atomic-server 54b181996). The spec seeds `lens-catalog-url` before
  * the first script runs, the way the host's playwright config seeds
- * `plugin-catalog-url`, with the dev-server's release 2: the release
- * candidate22 pins, whose Todoist lens uses mapping version 3.
+ * `plugin-catalog-url`, once per release, with the dev-server's release 2
+ * (the one candidate22 pins; its Todoist lens uses mapping version 3) and
+ * release 1 (mapping version 2, which candidate22 still runs).
  *
  * - The tester entry of the split-pieces demo (`/app/pieces-demo?tester`)
  *   mints the pieces vocabulary (`piece-kind`) on a fresh drive.
@@ -33,9 +34,9 @@
  *
  * Not checked here: the real Todoist drive app (it renders `issue-v1`
  * natively, so it needs no lens), syncing through the lens, a lens the host
- * skips (an unknown mapping version, a file not at its own subject),
- * release 1, and the published github.io release. The catalog is fetched by the browser only,
- * so unlike ontology.spec.ts this spec uses `localhost` with
+ * skips (an unknown mapping version, a file not at its own subject), and
+ * the published github.io releases. The catalog is fetched by the browser
+ * only, so unlike ontology.spec.ts this spec uses `localhost` with
  * ATOMIC_SERVER_IMAGE set too: the host accepts a lens catalog URL only on
  * HTTPS or loopback, and `host.docker.internal` is neither.
  */
@@ -57,7 +58,6 @@ const DEV_PORT = new URL(
   process.env.PLUGIN_CATALOG_URL ?? 'http://localhost:19271/x',
 ).port;
 const BASE = `http://localhost:${DEV_PORT}/ontology`;
-const RELEASE = `${BASE}/lenses/v2`;
 
 /** A committed ontology file, as the dev-server serves it. */
 const served = (path: string) =>
@@ -68,11 +68,15 @@ const served = (path: string) =>
     ),
   ) as Record<string, unknown>;
 
-const LENS = served('lenses/todoist-task-issue-v2') as {
-  '@id': string;
-  name: string;
-  mapping: unknown;
-};
+/**
+ * The releases checked, each with its Todoist lens: release 2 is the one
+ * candidate22 pins (mapping version 3); release 1 (mapping version 2) is what
+ * a host pinned to it, or a lane that seeds it, still gets.
+ */
+const RELEASES = [
+  { release: 'v1', lens: 'todoist-task-issue-v1', mappingVersion: 2 },
+  { release: 'v2', lens: 'todoist-task-issue-v2', mappingVersion: 3 },
+];
 const ISSUE = `${BASE}/classes/issue-v1`;
 /** The lens's provider-shaped endpoint, as the host keys it (`endpointKey`). */
 const TODOIST_TASK = 'record:APIs/todoist.com/1#task';
@@ -103,141 +107,159 @@ const PROBE_SOURCE = `export async function view({ root, store }) {
 }
 `;
 
-test.describe('shared lens catalog', () => {
-  test.beforeEach(async ({ page }, testInfo) => {
-    await page.addInitScript(
-      ([url]) => {
-        localStorage.setItem('atomic.experimental.split-pieces', 'true');
-        localStorage.setItem('lens-catalog-url', url);
-      },
-      [RELEASE],
-    );
-    await before({ page }, testInfo);
+for (const r of RELEASES) {
+  const RELEASE = `${BASE}/lenses/${r.release}`;
+  const LENS = served(`lenses/${r.lens}`) as {
+    '@id': string;
+    name: string;
+    mapping: unknown;
+  };
+
+  test.describe(`shared lens catalog, release ${r.release.slice(1)}`, () => {
+    test.beforeEach(async ({ page }, testInfo) => {
+      await page.addInitScript(
+        ([url]) => {
+          localStorage.setItem('atomic.experimental.split-pieces', 'true');
+          localStorage.setItem('lens-catalog-url', url);
+        },
+        [RELEASE],
+      );
+      await before({ page }, testInfo);
+    });
+
+    test('Connect offers an integration through a catalog lens, and its frame gets the lens', async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      expect(LENS['@id']).toBe(`${BASE}/lenses/${r.lens}`);
+      expect((LENS.mapping as { version: number }).version).toBe(
+        r.mappingVersion,
+      );
+
+      // The catalog the host will load is the dev-server's, served as Pages
+      // serves it, and lists the Todoist lens at its own subject.
+      const release = await page.evaluate(async url => {
+        const res = await fetch(url, {
+          headers: { Accept: 'application/json' },
+        });
+
+        return { status: res.status, body: JSON.parse(await res.text()) };
+      }, RELEASE);
+      expect(release.status).toBe(200);
+      expect(release.body.lenses).toContain(LENS['@id']);
+
+      // The tester entry seeds the demo, which mints `piece-kind`, and lands
+      // on its Hours table.
+      await page.goto(`${FRONTEND_URL}/app/pieces-demo?tester`);
+      await expect(
+        page.getByRole('button', { name: 'Connect', exact: true }),
+      ).toBeVisible({ timeout: 60_000 });
+
+      const made = await page.evaluate(
+        async ({ p, issue, task, source, probe }) => {
+          const store = window.store!;
+          const drive = store.getDrive()!;
+          const seeded = JSON.parse(
+            localStorage.getItem(
+              `atomic.experimental.split-pieces.seeded:${drive}`,
+            ) ?? 'null',
+          ) as { clockify: string } | null;
+          if (!seeded)
+            throw new Error('the demo did not record what it seeded');
+
+          // The property subjects by shortname, read off the demo's Clockify
+          // integration and its entry point, so this spec names no drive-local
+          // subject.
+          const byShortname = async (subject: string) => {
+            const resource = await store.getResource(subject);
+            const out: Record<string, string> = {};
+
+            const propVals = resource.getPropVals() as unknown;
+            const keys =
+              propVals instanceof Map
+                ? [...propVals.keys()]
+                : Object.keys(propVals as object);
+
+            for (const prop of keys) {
+              const short = (await store.getResource(prop)).get(p.shortname);
+              if (typeof short === 'string') out[short] = prop;
+            }
+
+            return { resource, props: out };
+          };
+
+          const app = await byShortname(seeded.clockify);
+          const entry = app.resource.get(app.props.entrypoint) as string;
+          const script = await byShortname(entry);
+
+          const probeApp = await store.newResource({
+            parent: drive,
+            isA: app.resource.get(p.isA) as string[],
+            propVals: {
+              [p.name]: probe,
+              [app.props['piece-kind']]: 'integration',
+              [app.props.renders]: [task],
+            },
+          });
+          await probeApp.save();
+          const probeEntry = await store.newResource({
+            parent: probeApp.subject,
+            isA: script.resource.get(p.isA) as string[],
+            propVals: {
+              [p.name]: `${probe} view`,
+              [script.props['plugin-source']]: source,
+            },
+          });
+          await probeEntry.save();
+          await probeApp.set(app.props.entrypoint, probeEntry.subject);
+          await probeApp.save();
+
+          const table = await store.newResource({
+            parent: drive,
+            isA: [p.table],
+            propVals: { [p.name]: 'Catalog lens issues', [p.classtype]: issue },
+          });
+          await table.save();
+
+          return { app: probeApp.subject, table: table.subject };
+        },
+        {
+          p: P,
+          issue: ISSUE,
+          task: TODOIST_TASK,
+          source: PROBE_SOURCE,
+          probe: PROBE,
+        },
+      );
+
+      await openSubject(page, made.table);
+      const connect = page.getByRole('button', {
+        name: 'Connect',
+        exact: true,
+      });
+      await expect(connect).toBeVisible({ timeout: 30_000 });
+      await connect.click();
+      const item = page.getByRole('menuitem', { name: new RegExp(PROBE) });
+      await expect(item).toBeVisible();
+      await expect(item).toContainText('via lens');
+      await expect(item).toHaveAttribute('title', `Through ${LENS.name}`);
+      await expect(item).toBeEnabled();
+      await item.click();
+
+      const frame = page.frameLocator('iframe[title="App"]');
+      const probe = frame.locator('#lens-probe');
+      await expect(probe).toHaveText(/lensPath/, { timeout: 30_000 });
+      const got = JSON.parse((await probe.textContent()) ?? 'null');
+      expect(got.rowClass).toBe(ISSUE);
+      expect(got.pendingReview).toEqual([]);
+      expect(got.lensPath).toEqual([
+        {
+          subject: LENS['@id'],
+          name: LENS.name,
+          direction: 'backward',
+          mapping: LENS.mapping,
+        },
+      ]);
+    });
   });
-
-  test('Connect offers an integration through a catalog lens, and its frame gets the lens', async ({
-    page,
-  }) => {
-    test.setTimeout(180_000);
-    expect(LENS['@id']).toBe(`${BASE}/lenses/todoist-task-issue-v2`);
-
-    // The catalog the host will load is the dev-server's, served as Pages
-    // serves it, and lists the Todoist lens at its own subject.
-    const release = await page.evaluate(async url => {
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-
-      return { status: res.status, body: JSON.parse(await res.text()) };
-    }, RELEASE);
-    expect(release.status).toBe(200);
-    expect(release.body.lenses).toContain(LENS['@id']);
-
-    // The tester entry seeds the demo, which mints `piece-kind`, and lands
-    // on its Hours table.
-    await page.goto(`${FRONTEND_URL}/app/pieces-demo?tester`);
-    await expect(
-      page.getByRole('button', { name: 'Connect', exact: true }),
-    ).toBeVisible({ timeout: 60_000 });
-
-    const made = await page.evaluate(
-      async ({ p, issue, task, source, probe }) => {
-        const store = window.store!;
-        const drive = store.getDrive()!;
-        const seeded = JSON.parse(
-          localStorage.getItem(
-            `atomic.experimental.split-pieces.seeded:${drive}`,
-          ) ?? 'null',
-        ) as { clockify: string } | null;
-        if (!seeded) throw new Error('the demo did not record what it seeded');
-
-        // The property subjects by shortname, read off the demo's Clockify
-        // integration and its entry point, so this spec names no drive-local
-        // subject.
-        const byShortname = async (subject: string) => {
-          const resource = await store.getResource(subject);
-          const out: Record<string, string> = {};
-
-          const propVals = resource.getPropVals() as unknown;
-          const keys =
-            propVals instanceof Map
-              ? [...propVals.keys()]
-              : Object.keys(propVals as object);
-
-          for (const prop of keys) {
-            const short = (await store.getResource(prop)).get(p.shortname);
-            if (typeof short === 'string') out[short] = prop;
-          }
-
-          return { resource, props: out };
-        };
-
-        const app = await byShortname(seeded.clockify);
-        const entry = app.resource.get(app.props.entrypoint) as string;
-        const script = await byShortname(entry);
-
-        const probeApp = await store.newResource({
-          parent: drive,
-          isA: app.resource.get(p.isA) as string[],
-          propVals: {
-            [p.name]: probe,
-            [app.props['piece-kind']]: 'integration',
-            [app.props.renders]: [task],
-          },
-        });
-        await probeApp.save();
-        const probeEntry = await store.newResource({
-          parent: probeApp.subject,
-          isA: script.resource.get(p.isA) as string[],
-          propVals: {
-            [p.name]: `${probe} view`,
-            [script.props['plugin-source']]: source,
-          },
-        });
-        await probeEntry.save();
-        await probeApp.set(app.props.entrypoint, probeEntry.subject);
-        await probeApp.save();
-
-        const table = await store.newResource({
-          parent: drive,
-          isA: [p.table],
-          propVals: { [p.name]: 'Catalog lens issues', [p.classtype]: issue },
-        });
-        await table.save();
-
-        return { app: probeApp.subject, table: table.subject };
-      },
-      {
-        p: P,
-        issue: ISSUE,
-        task: TODOIST_TASK,
-        source: PROBE_SOURCE,
-        probe: PROBE,
-      },
-    );
-
-    await openSubject(page, made.table);
-    const connect = page.getByRole('button', { name: 'Connect', exact: true });
-    await expect(connect).toBeVisible({ timeout: 30_000 });
-    await connect.click();
-    const item = page.getByRole('menuitem', { name: new RegExp(PROBE) });
-    await expect(item).toBeVisible();
-    await expect(item).toContainText('via lens');
-    await expect(item).toHaveAttribute('title', `Through ${LENS.name}`);
-    await expect(item).toBeEnabled();
-    await item.click();
-
-    const frame = page.frameLocator('iframe[title="App"]');
-    const probe = frame.locator('#lens-probe');
-    await expect(probe).toHaveText(/lensPath/, { timeout: 30_000 });
-    const got = JSON.parse((await probe.textContent()) ?? 'null');
-    expect(got.rowClass).toBe(ISSUE);
-    expect(got.pendingReview).toEqual([]);
-    expect(got.lensPath).toEqual([
-      {
-        subject: LENS['@id'],
-        name: LENS.name,
-        direction: 'backward',
-        mapping: LENS.mapping,
-      },
-    ]);
-  });
-});
+}
