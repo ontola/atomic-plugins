@@ -152,6 +152,17 @@ Data flows through four stages, each its own directory under `src/`:
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
+   after the reference `missing_value`/`follow_up_request`, parsed into
+   `CreateDeclaration.followUps`; one it cannot use sets
+   `route.createRefused`) drop `omit` fields from the body, and once the
+   create settles bound `drainQueue` puts `followUpWrites` (updates with
+   `QueuedWrite.followUp`, stored as type `followUp`) at the head of the
+   record's queue; `attemptWrite` computes the missing value against the
+   confirmed record at send time (nothing missing: settled without a
+   request), a refusal fails it `refused` and the following follow-ups
+   `notSent`, an unknown outcome sets `awaitingRefresh` (read back first),
+   and a `confirm`ed uncertain create queues them `awaitingRefresh`;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
@@ -568,6 +579,14 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/compound-create.test.ts` covers compound creates on a
+  GitHub-issues-shaped document after the held overlay
+  (`__tests__/fixtures/compound-create.ts`): labels applied, dropped and
+  added, an `omit` field, a refused follow-up (partly applied, the next
+  `notSent`) and its retry, an unknown outcome skipped or resent after the
+  read, a restart, an unresolved bind, a refused declaration, a confirmed
+  uncertain create, and no `followUps`; `compound-create-core.test.ts`
+  the pure parts.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,

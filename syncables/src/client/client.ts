@@ -4,6 +4,13 @@ import {
   createdIdentity,
   type CreateDeclaration,
 } from './created-identity.js';
+import {
+  followUpRequest,
+  missingValue,
+  NOTHING_MISSING,
+  parseFollowUps,
+  type FollowUp,
+} from './compound-create.js';
 import type { ReadCoverage } from '../read/time-zone.js';
 import { discoverResources } from '../resources/discover.js';
 import type {
@@ -91,6 +98,7 @@ import {
   type StoredRebuild,
   type StoredRecordWrites,
   type StoredThrottlingPause,
+  type StoredFollowUp,
   type StoredWrite,
 } from './outbox.js';
 
@@ -562,6 +570,21 @@ export interface PendingWriteInfo {
    * `discard` settles it, and `retry` throws.
    */
   unbound?: true;
+  /**
+   * Set on an update that is a follow-up of a compound create (CRUD
+   * Causality 0.5.0 §4.7): the follow-up `operation`, the `field` it sets,
+   * and, once it did not apply, why: `refused` (its answer refused it; the
+   * create is partly applied), `unknown` (no usable answer; it waits for a
+   * read of the record, `awaitingRefresh`, before it is sent again) or
+   * `notSent` (an earlier follow-up of the same create did not apply, or
+   * its request could not be filled). The create itself is settled and is
+   * never sent again.
+   */
+  followUp?: {
+    operation: string;
+    field: string;
+    reason?: 'refused' | 'unknown' | 'notSent';
+  };
 }
 
 export interface ApiClient {
@@ -751,6 +774,8 @@ interface ClientRoute {
   updateContentType?: string;
   /** Why `update()` refuses: a `patchFormat` this client does not send. */
   updateRefused?: string;
+  /** Why `create()` refuses: a compound create's `followUps` this client cannot use. */
+  createRefused?: string;
   deletePath?: string;
   /**
    * The resource's declared `create` (`x-crud`, not in legacy documents):
@@ -878,6 +903,8 @@ interface QueuedWrite {
    * another format does not reinterpret its changes.
    */
   updateBody?: 'mergePatch';
+  /** A compound create's follow-up update (§4.7); stored. */
+  followUp?: StoredFollowUp;
   /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
@@ -1258,6 +1285,20 @@ function clientRoutes(
             ? undefined
             : createDeclaration(document, crud);
           if (declared) route.create = declared;
+          // A compound create (CRUD Causality 0.5.0 §4.7): fail closed when
+          // its follow-ups cannot be made, rather than create without them.
+          if (!legacy && crud['followUps'] !== undefined) {
+            try {
+              const followUps = parseFollowUps(document, crud, path);
+              if (!declared)
+                throw new Error(
+                  'declares followUps on a create whose resource has no usable identity',
+                );
+              if (followUps) declared.followUps = followUps;
+            } catch (error) {
+              route.createRefused = `declares a compound create this client cannot make: ${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
         }
         if (method === 'delete' && crud['action'] === 'delete')
           route.deletePath = path;
@@ -1615,6 +1656,7 @@ export function createApiClient(
       ...(write.unbound ? { unbound: true as const } : {}),
       ...(write.updateBody ? { updateBody: write.updateBody } : {}),
       ...(write.notBefore !== undefined ? { notBefore: write.notBefore } : {}),
+      ...(write.followUp ? { type: 'followUp', followUp: write.followUp } : {}),
     };
   }
 
@@ -1768,7 +1810,8 @@ export function createApiClient(
       scope,
       context,
       id,
-      type: stored.type,
+      type: stored.type === 'followUp' ? 'update' : stored.type,
+      ...(stored.followUp ? { followUp: stored.followUp } : {}),
       attempts: stored.attempts,
       state: stored.state,
       durable: true,
@@ -2186,6 +2229,70 @@ export function createApiClient(
       if (resolvedId !== write.id) records.delete(write.id);
       return settled(write, resolvedId);
     }
+    // A compound create's follow-up (§4.7.2 steps 4-6): what is still
+    // missing is worked out now, against the confirmed record (the create's
+    // answer, or what a later read showed), so one that already applied is
+    // settled without a request.
+    let followUp:
+      | { declared: FollowUp; url: URL; init: TransportRequest }
+      | undefined;
+    if (write.followUp) {
+      const declared = route.create?.followUps?.find(
+        (f) =>
+          f.operation === write.followUp!.operation &&
+          f.field === write.followUp!.field,
+      );
+      if (!declared) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `The document no longer declares follow-up ${write.followUp.operation} for ${write.followUp.field}; not sent`;
+        return { status: 'gaveUp' };
+      }
+      const created =
+        remote(write.scope).get(write.id) ??
+        write.lastKnown ??
+        lastKnownFor(write.scope, write.id);
+      const missing = missingValue(declared, write.followUp.planned, created);
+      if (missing === NOTHING_MISSING) return settled(write, write.id);
+      const request = followUpRequest(
+        declared,
+        write.followUp.planned,
+        created,
+        missing,
+        write.context,
+      );
+      if (!request) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `Follow-up ${declared.operation} for ${declared.field} could not be filled: a bound value resolves to nothing (CRUD Causality §4.7.2); not sent`;
+        return { status: 'gaveUp' };
+      }
+      let url: URL;
+      try {
+        url = target(declared.path, request.path);
+      } catch (error) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `Follow-up ${declared.operation} for ${declared.field} could not be filled: ${error instanceof Error ? error.message : String(error)}; not sent`;
+        return { status: 'gaveUp' };
+      }
+      for (const [name, value] of Object.entries(request.query))
+        url.searchParams.set(name, value);
+      followUp = {
+        declared,
+        url,
+        init: {
+          url,
+          method: declared.method,
+          headers: {
+            ...(request.body !== undefined
+              ? { 'content-type': 'application/json' }
+              : {}),
+            ...request.header,
+          },
+          ...(request.body !== undefined
+            ? { body: JSON.stringify(request.body) }
+            : {}),
+        },
+      };
+    }
     // Taken when the request leaves, after the store below.
     let epoch = authEpoch;
     let sentAfterRenewal = false;
@@ -2213,7 +2320,12 @@ export function createApiClient(
       }
       epoch = authEpoch;
       sentAfterRenewal = afterRenewal;
-      if (write.type === 'delete') {
+      if (followUp) {
+        // The answer is not the record (GitHub's lists the issue's labels):
+        // nothing is merged; the next read shows the field.
+        await requestJson(followUp.init, { lenient: true });
+        delete write.followUp!.reason;
+      } else if (write.type === 'delete') {
         await requestJson({
           url: target(route.deletePath as string, {
             ...write.context,
@@ -2402,7 +2514,20 @@ export function createApiClient(
       write.lastError = message;
       if (status === undefined) delete write.lastStatus;
       else write.lastStatus = status;
-      if (failureClass === 'permanent') return { status: 'gaveUp' };
+      if (failureClass === 'permanent') {
+        // A refused follow-up leaves its create partly applied (§4.7.2 step 6).
+        if (write.followUp) write.followUp.reason = 'refused';
+        return { status: 'gaveUp' };
+      }
+      // A follow-up whose outcome is unknown is not sent again before the
+      // record is read back (§4.7.2 step 6): it waits for a complete read of
+      // its collection, and is sent then only if the field is still missing.
+      // A throttled answer is a refusal to wait out, not an unknown outcome.
+      if (write.followUp && !throttled && mayHaveApplied(error)) {
+        write.followUp.reason = 'unknown';
+        write.awaitingRefresh = true;
+        return { status: 'retry', delayMs: 0 };
+      }
       // An idempotency key makes a resend safe, except after a 2xx: the
       // create happened, and a replay would return the same unusable body.
       if (
@@ -2573,6 +2698,26 @@ export function createApiClient(
     return defaultWriteFailureClass(failure);
   }
 
+  /** The follow-up writes of a settled compound create, in order (§4.7.2 step 4). */
+  function followUpWrites(create: QueuedWrite, id: string): QueuedWrite[] {
+    const planned = create.data ?? {};
+    return (create.route.create?.followUps ?? [])
+      .filter((f) => missingValue(f, planned, undefined) !== NOTHING_MISSING)
+      .map((f) => ({
+        route: create.route,
+        scope: create.scope,
+        context: create.context,
+        id,
+        type: 'update' as const,
+        changes: {},
+        attempts: 0,
+        state: 'pending' as const,
+        seq: nextSeq++,
+        followUp: { operation: f.operation, field: f.field, planned },
+        ...(create.confirmedId !== undefined ? { awaitingRefresh: true } : {}),
+      }));
+  }
+
   async function drainQueue(initialKey: string): Promise<void> {
     let key = initialKey;
     let ownsQueue = true;
@@ -2687,9 +2832,27 @@ export function createApiClient(
         if (outcome.status === 'gaveUp') {
           write.state = 'failed';
           gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), write]);
+          // §4.7.2 step 6: the create is partly applied; the later
+          // follow-ups of the same create are not sent in this attempt (they
+          // may depend on this one). Writes the app queued after the create
+          // go on as usual.
+          if (write.followUp)
+            while (queue[0]?.followUp && queue[0].state === 'pending') {
+              const next = queue.shift() as QueuedWrite;
+              next.state = 'failed';
+              next.followUp!.reason = 'notSent';
+              next.lastError = `Not sent: follow-up ${write.followUp.operation} for ${write.followUp.field} of the same create did not apply`;
+              gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), next]);
+            }
         } else {
           supersede(key, write);
           rebase(queue, write, outcome.resolvedId);
+          // A compound create that is bound (§4.7.2 step 3): its follow-ups go
+          // first, before writes the app queued after the create. After a
+          // resolveWrite confirm the created object is not known, so they
+          // wait for it to be read back.
+          if (write.type === 'create' && write.route.create?.followUps)
+            queue.unshift(...followUpWrites(write, outcome.resolvedId));
         }
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
           const oldId = write.id;
@@ -4314,6 +4477,8 @@ export function createApiClient(
       const route = resolveRoute(resource);
       if (!route.createPath)
         throw new Error(`Resource ${resource} declares no create operation`);
+      if (route.createRefused)
+        throw new Error(`Resource ${resource} ${route.createRefused}`);
       const context = contextFor(route, supplied);
       const scope = scopeFor(route, context);
       target(route.createPath, context);
@@ -4467,6 +4632,17 @@ export function createApiClient(
           ...(write.unbound && write.state === 'uncertain'
             ? { unbound: true as const }
             : {}),
+          ...(write.followUp
+            ? {
+                followUp: {
+                  operation: write.followUp.operation,
+                  field: write.followUp.field,
+                  ...(write.followUp.reason
+                    ? { reason: write.followUp.reason }
+                    : {}),
+                },
+              }
+            : {}),
           ...(write.conflicts?.size
             ? {
                 conflicts: [...write.conflicts.values()].map((c) => ({
@@ -4573,7 +4749,13 @@ export function createApiClient(
           let changes = { ...write.changes };
           for (const later of newer)
             changes = withoutSetBy({ ...write, changes }, later);
-          if (write.type === 'update' && !Object.keys(changes).length)
+          // A follow-up has no changes of its own: what it sends is worked
+          // out again when it is sent (§4.7.2 step 4).
+          if (
+            write.type === 'update' &&
+            !write.followUp &&
+            !Object.keys(changes).length
+          )
             return [];
           const again: QueuedWrite = {
             ...write,
@@ -4585,6 +4767,10 @@ export function createApiClient(
           };
           // Describes the failure, which this retry leaves behind.
           delete again.missingRecord;
+          if (again.followUp) {
+            again.followUp = { ...again.followUp };
+            delete again.followUp.reason;
+          }
           return [again];
         });
         if (!retried.length)

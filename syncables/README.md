@@ -29,7 +29,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
@@ -968,6 +968,54 @@ When the create operation declares an `x-crud` `create` for the resource
 
 Without a declaration, creates behave as described above.
 
+#### Compound creates (CRUD Causality 0.5.0 §4.7)
+
+A create whose `x-crud` lists `followUps` is a compound create: the create
+operation and, after it, one follow-up update per field it may not have
+applied (GitHub's issue `labels`, which the create silently drops without
+push access and `POST …/issues/{issue_number}/labels` then adds).
+
+- The create body leaves out every `create: omit` field (and keeps the
+  `include` ones).
+- Once the create is answered 2xx and bound (above), it is settled and
+  never sent again, and one queued `update` per follow-up whose field the
+  created record was given goes to the head of the record's queue, before
+  writes the app queued after the create. Each shows in `pendingWrites()`
+  with `followUp: { operation, field }`.
+- What a follow-up sends is worked out when it is sent: the planned value
+  minus what the confirmed record shows at `field` (for an array, the
+  planned items not among its items, compared through `itemKey`), filled
+  into the follow-up request by `bind` (path parameters default to the
+  create's). Nothing missing: it settles without a request. A bound value
+  that resolves to nothing: it fails with `reason: 'notSent'`. The
+  follow-up's answer is not merged into the record; the next refresh shows
+  the field.
+- A refused follow-up (a `permanent` answer) fails with
+  `reason: 'refused'`, and the later follow-ups of the same create fail
+  with `reason: 'notSent'`: the create is partly applied. Writes the app
+  queued after the create go on. `resolveWrite` `retry` sends the
+  follow-ups again, each with what is still missing; `discard` drops them.
+- A follow-up whose outcome is unknown (no answer, a 5xx other than 503)
+  stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
+  sent before a complete read of its collection, and then only if the
+  field is still missing. A throttled answer is waited out as for any
+  write.
+- An uncertain create settled with `resolveWrite` `confirm` queues its
+  follow-ups with `awaitingRefresh`, so the object is read before any is
+  sent. An unbound create sends none.
+- A `followUps` the client cannot use (a follow-up operation that is not
+  exactly one `update` of the same resource, a bind key or source it cannot
+  fill, a path parameter neither bound nor carried from the create, a
+  resource without a usable identity) makes `create()` throw, rather than
+  create the record without the field.
+
+A follow-up answered `403` is an authentication refusal under the default
+failure classes, as any write's `403` is, so it blocks the client until
+`authRenewed()`; an app whose provider answers a refused follow-up with
+`403` (GitHub without push access does) passes a `classifyWriteFailure`
+that calls it `permanent`. Write Preconditions on a follow-up operation are
+not read. Not verified against a live provider.
+
 ### Durable outbox and restarts
 
 When a `storage` adapter is passed, the client keeps every unsettled write in
@@ -1128,7 +1176,11 @@ tombstones of such a collection. The write fields `lastStatus`,
 retry time) and `unbound` (a create that cannot be sent again) and the
 top-level `throttlingPauses` (exhausted buckets) and `unavailable` (kept
 unavailable records); a stored `authBlock` that does not parse still blocks
-the client (`status` 0) until `authRenewed()`.
+the client (`status` 0) until `authRenewed()`. A compound create's
+follow-up is stored with the write type `followUp` (added within version
+`1`), which an older client does not know: it keeps the record's writes as
+unrestorable and writes them back unchanged, so they are neither sent nor
+lost.
 Downgrading: an older syncables that reads this outbox does not know
 `notBefore` and `throttlingPauses` and drops them, so it may send a held
 write before the time the API asked for, though never a second time. A
@@ -1454,6 +1506,17 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
+  create's `followUps` leave `omit` fields out of the create body and, once
+  the create is bound, queue one follow-up update per field, sent in order
+  with only what the created record does not show (`bind`, `itemKey`). A
+  refused follow-up leaves the create partly applied (`followUp.reason`
+  `refused`, later ones `notSent`), an unknown outcome waits for a read of
+  the record, and the create is never sent again. A `followUps` the client
+  cannot use makes `create()` throw. `PendingWriteInfo.followUp` is new;
+  the outbox stores follow-ups as the write type `followUp` within version
+  `1`. Behaviour change only for documents whose create declares
+  `followUps`.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as
