@@ -377,9 +377,16 @@ run adds over 0.4.1: after the MT940 import into the app's own table, the
 sync-status card reads "Synced just now", "2 transactions from 1
 statement; 2 arrived at the last sync", no "Last sync:" counts line, and
 "Read-only: edits here stay in Atomic. There is no bank connection". Not
-verified end to end: the card on the importer's table, on a table without
-import dates, after a stopped import, and with incomplete rows
-(`app/status.test.ts` and `app/view.test.ts` only). After a load error it
+verified end to end: the card on a table without import dates and after a
+stopped import (`app/status.test.ts` and `app/view.test.ts` only). With
+incomplete rows it is: the installed-app test checks the card's ignored
+group for the hand-typed row ("1 transaction is incomplete (missing
+Amount): …", the row under Which, Open row). On the importer's table too:
+the third test checks the card read-only with "Saving a category or note
+asks you to allow editing first.", dated "Synced just now" with "2 arrived
+at the last sync" after the importer's import, and without that sentence
+once editing is allowed. Both passed on 2026-10-12 at the pin `7dab1ce`
+(the five money e2e tests, 5.5 minutes). After a load error it
 is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
 app's `getData` until the host recovers, by failing the page store's read
 of the app's table,
