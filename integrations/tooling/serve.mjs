@@ -303,7 +303,7 @@ export function binaryWarning({
   return (
     `${binary} has no stamp (${stampFile}), so serve.mjs cannot tell which commit it was built from` +
     `${head ? ` (the checkout is at ${head.slice(0, 12)})` : ''}. ` +
-    `If it was built from that commit, write the stamp: git -C ${checkout} rev-parse HEAD > ${stampFile}`
+    `If you built it from that commit, write the stamp: git -C "${checkout}" rev-parse HEAD > "${stampFile}"; otherwise tell whoever built it`
   );
 }
 
