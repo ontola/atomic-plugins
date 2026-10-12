@@ -631,8 +631,9 @@ call) are kept, the latest per record, and told at the end of a later
 sync; they are kept in memory only, so a restart loses them though not the
 marks. A removal the handler refused keeps the record and its mark; an
 `unconfirmed` one is checked again by a later sync. A mark dropped because
-a write to the record settled, or because a check found the record while a
-write or confirmed copy keeps it, drops its held change too; if the app had
+a read returned the record, a write to the record settled, or a check
+found the record while a write or confirmed copy keeps it, drops its held
+change too; if the app had
 been told a mark of the record (or the mark was restored from storage), it
 is told `present` instead (not after a delete the app made). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
@@ -1606,7 +1607,12 @@ const { records, ontology, errors } = await readPlatform(document, {
   Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
-  collection's read with "No items array at <path>", never an empty read.
+  collection's read with "No items array at <path>", never an empty read,
+  unless the envelope (the Collection Object's or the scheme's) declares
+  `emptyWhenAbsent: true` (Pagination Schemes 0.7.0): then a body in which
+  the field is absent (an object along the path lacks the next segment) is
+  a page with no items, for providers that leave an empty array out. A
+  present `null` or other non-array still fails the read.
   `itemsField: null` (or `""`) says the body root is the array, and an item
   that is not an object fails the read ("Item <n> at <path> is not an
   object") instead of being dropped. Without an envelope, the pagination
@@ -1743,6 +1749,40 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: An `itemCount` offset read (the default `advance`)
+  without a `totalCount` no longer stops after its first page (#495). It
+  read short, with no error and without being reported incomplete. It now
+  reads on, adding the items each page held, to the first empty page, as
+  Pagination Schemes 0.7.0 §4.3.2 says. With a `totalCount` it ends once
+  the next offset reaches it, as before. The repeat check ends a read
+  whose server ignores the offset.
+
+  Known limit, kept as it is: a scheme that declares both an offset and a
+  `nextLink` field follows the link while there is one, and the offset is
+  not advanced meanwhile. Under `itemCount` an absent or `null` link then
+  ends the read. Under `advance: pageSize` the read steps from the stale
+  offset at that point, asks for a page it already has, and ends with an
+  error rather than short.
+- **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
+  Envelope Object (a scheme's `response.envelope` or a Collection Object's
+  `envelope`): with a non-empty `itemsField`, a body in which that field is
+  absent is a page with no items instead of an error. `paginate` takes
+  `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
+  the collection envelope it uses. The scheme validator checks rule 23.
+- **Unreleased**: Pagination Schemes 0.7.0 `advance` on an `offset` field:
+  `pageSize` makes the next offset add the page size (a reported
+  `pageSize` field, else the size sent) instead of the items the page held,
+  and ends the read only once it reaches `totalCount` (without one, at an
+  empty page); a short or empty page before that no longer ends it. With
+  neither page size known the read ends with an error. A reported page size
+  counts only as an integer of at least 1 and a `totalCount` as an integer
+  of at least 0, read per response. `itemCount`, the default, steps as
+  before. Every offset read (`paginate` and `ApiClient.paginate` too, not
+  only a collection read) now ends with `PageReadError` at a page holding an
+  item an earlier page returned (by identity, else a page identical to the
+  one before), so a server that ignores the offset is not asked again
+  without end. The scheme validator checks rule 24 and
+  `resolveEffectiveScheme` rule 25.
 - **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
   on create, update and delete operations: `ifMatch` sends the version
   (from the record, or an item GET when it is a header) and stops on a
@@ -1765,6 +1805,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   (`parseHttpDate`), not through `Date.parse`. The same applies to the `Retry-After` of a retryable
   answer outside `x-throttling`, which before took any long digit string
   and capped the wait at `retry.maxRetryAfterMs`.
+- **Unreleased**: `parseHttpDate` fixes: a leap second (`23:59:60`) reads
+  as the next second instead of failing the day check, a 4-digit year below
+  100 keeps its value (`0050` was read as 1950), and the RFC 850
+  "more than 50 years ahead" rule compares full dates, not only years.
 - **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
   record (the start of that sync), stored with the mark in the outbox
   (within version 1; an older client drops it); absent for a record no read
