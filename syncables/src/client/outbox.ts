@@ -49,6 +49,11 @@ export interface StoredWrite {
    */
   missingRecord?: MissingRecordFailure;
   /**
+   * Added within version 1: a create answered 2xx whose identity could not
+   * be determined (CRUD Causality §4.3.2); never sent again.
+   */
+  unbound?: true;
+  /**
    * Added within version 1: an update made as a JSON Merge Patch (absent:
    * the full record, as every update before). A client from before this
    * field ignores it and would send such an update as a full record.
@@ -191,6 +196,7 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unavailable' ||
       value['missingRecord'] === 'unknown') &&
+    (value['unbound'] === undefined || value['unbound'] === true) &&
     (value['updateBody'] === undefined ||
       value['updateBody'] === 'mergePatch') &&
     (value['notBefore'] === undefined ||
