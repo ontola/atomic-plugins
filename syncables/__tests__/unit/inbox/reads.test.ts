@@ -3,7 +3,7 @@ import yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import type { InboxEvent } from '../../../src/inbox/client.js';
-import { scopedReads } from '../../../src/inbox/reads.js';
+import { pathSegment, scopedReads } from '../../../src/inbox/reads.js';
 
 // The Webhook Deliveries spec's synthetic GitHub fixture and one of its
 // signed deliveries (openapi-extensions/spec/webhook-deliveries/examples):
@@ -62,6 +62,22 @@ describe('scopedReads', () => {
     body.repository.name = 'a/b?c';
     const reads = scopedReads(document, event('issues', JSON.stringify(body)));
     expect(reads[0].path).toBe('/repos/fixture-owner/a%2Fb%3Fc/issues/7');
+  });
+
+  it("encodes everything outside unreserved, !'()* too, and refuses . and ..", () => {
+    expect(pathSegment("it's(a)*b!")).toBe('it%27s%28a%29%2Ab%21');
+    expect(pathSegment('A-z_0.9~')).toBe('A-z_0.9~');
+    expect(pathSegment('.')).toBeUndefined();
+    expect(pathSegment('..')).toBeUndefined();
+    expect(pathSegment('...')).toBe('...');
+    for (const name of ['.', '..']) {
+      const body = JSON.parse(delivery.body);
+      body.repository.name = name;
+      // Neither read can be named without leaving the repository.
+      expect(
+        scopedReads(document, event('issues', JSON.stringify(body))),
+      ).toEqual([]);
+    }
   });
 
   it('asks nothing for undeclared events, missing values or unreadable bodies', () => {

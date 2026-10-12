@@ -18,6 +18,22 @@
  *   reconciled; history inside the gap is not recovered, only current state;
  * - events captured during that reconciliation stay pending and are
  *   journaled on the next steps.
+ *
+ * The caller's loop: call `step()` again at once after any result except
+ * `backoff`, which says how many seconds to wait first. An `idle` step has
+ * already waited: each fetch long-polls for up to `wait` seconds (default
+ * 25, the receiver's cap), so the loop sends at most about one signed
+ * request per `wait` while nothing arrives. Anything `step()` throws is
+ * not a refusal a retry fixes (a transport error, a `4xx` other than those
+ * above, a journal failure): wait (with backoff of your own) before the
+ * next step, and report it.
+ *
+ * ```ts
+ * for (;;) {
+ *   const result = await consumer.step();
+ *   if (result.kind === 'backoff') await sleep(result.seconds * 1000);
+ * }
+ * ```
  */
 import {
   InboxError,
@@ -46,9 +62,17 @@ export interface InboxJournal {
    * this resolves.
    */
   append(event: InboxEvent): Promise<boolean>;
-  /** Records a gap in history, as the receiver described it. */
+  /**
+   * Records a gap in history, as the receiver described it. Must be
+   * idempotent: after a crash, or a step that failed before `reconciled`,
+   * the receiver reports the same gap again and it is passed here again.
+   * Keep one record per subscription, generation, `detectedAt` and reason.
+   */
   recordGap(subscription: string, gap: GapMarker): Promise<void>;
 }
+
+/** The receiver's cap on `wait`, and the consumer's default. */
+export const DEFAULT_WAIT_SECONDS = 25;
 
 export interface InboxConsumerOptions {
   client: InboxClient;
@@ -60,7 +84,10 @@ export interface InboxConsumerOptions {
    * keep pending local edits and conflicts rather than overwrite them.
    */
   reconcile: (reason: string) => Promise<void>;
-  /** Seconds a fetch may wait for an event (the receiver caps it at 25). */
+  /**
+   * Seconds a fetch may wait for an event (default 25, the receiver's cap).
+   * `0` answers at once; a loop then has to pace itself.
+   */
   wait?: number;
   limit?: number;
   now?: () => number;
@@ -71,7 +98,9 @@ export type StepResult =
   | { kind: 'reconciled'; reason: string }
   | { kind: 'events'; stored: number; duplicates: number }
   | { kind: 'idle' }
-  | { kind: 'ended'; reason: string };
+  | { kind: 'ended'; reason: string }
+  /** A refusal that passes: wait `seconds` before the next step. */
+  | { kind: 'backoff'; seconds: number; reason: string };
 
 export class InboxConsumer {
   constructor(private readonly options: InboxConsumerOptions) {}
@@ -80,11 +109,48 @@ export class InboxConsumer {
     return (this.options.now ?? Date.now)();
   }
 
-  /** One unit of work; call it in a loop. */
+  /** One unit of work; call it in a loop (see the module comment). */
   async step(): Promise<StepResult> {
+    const { journal } = this.options;
+    try {
+      return await this.work();
+    } catch (error) {
+      if (!(error instanceof InboxError)) throw error;
+      if (error.status === 410 && error.ended) {
+        // Expired or closed (for example after a long sleep), from any call:
+        // the gap is recorded, and the next step subscribes again and
+        // reconciles.
+        await journal.recordGap(error.ended.subscription, error.ended.gap);
+        await journal.setSubscription(undefined);
+        return { kind: 'ended', reason: error.ended.gap.reason };
+      }
+      if (error.status === 404 && error.code === 'unknown-subscription') {
+        // Only the receiver's own answer: a 404 from something in between
+        // (a proxy, a route that is not mounted) must not drop it.
+        await journal.setSubscription(undefined);
+        return { kind: 'ended', reason: 'unknown-subscription' };
+      }
+      const seconds = error.backoff();
+      if (seconds !== undefined) {
+        return {
+          kind: 'backoff',
+          seconds,
+          reason: error.code ?? String(error.status),
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async work(): Promise<StepResult> {
     const { client, journal } = this.options;
     const stored = await journal.subscription();
     if (!stored) {
+      // A crash between `subscribe` and `remember` leaves a subscription at
+      // the receiver that this journal does not know, and the next step
+      // subscribes again. The orphan is never acknowledged, so its progress
+      // deadline closes it and its retention ends; until then it counts
+      // against the owner's quota.
       const subscription = await client.subscribe(this.options.subscription);
       await this.remember(subscription);
       if (subscription.reconciliationRequired) {
@@ -92,52 +158,37 @@ export class InboxConsumer {
       }
       return { kind: 'subscribed', subscription: subscription.id };
     }
-    try {
-      if (stored.renewAfter && Date.parse(stored.renewAfter) <= this.now()) {
-        await this.remember(await client.renew(stored.id));
-      }
-      const page = await client.events(stored.id, {
-        ...(this.options.wait === undefined ? {} : { wait: this.options.wait }),
-        ...(this.options.limit === undefined
-          ? {}
-          : { limit: this.options.limit }),
-      });
-      let added = 0;
-      let duplicates = 0;
-      for (const event of page.events) {
-        if (await journal.append(event)) {
-          added += 1;
-        } else {
-          duplicates += 1;
-        }
-      }
-      // Only what is journaled is acknowledged.
-      if (page.next !== null && page.events.length > 0) {
-        await client.ack(stored.id, page.generation, page.next);
-      }
-      if (page.reconciliationRequired) {
-        // After this page is safely journaled: the events it holds are recent
-        // hints from before the gap, not complete history.
-        return await this.reconcile(page.reconciliationRequired);
-      }
-      if (page.events.length > 0) {
-        return { kind: 'events', stored: added, duplicates };
-      }
-      return { kind: 'idle' };
-    } catch (error) {
-      if (error instanceof InboxError && error.status === 410 && error.ended) {
-        // Expired or closed (for example after a long sleep): the gap is
-        // recorded, and the next step subscribes again and reconciles.
-        await journal.recordGap(stored.id, error.ended.gap);
-        await journal.setSubscription(undefined);
-        return { kind: 'ended', reason: error.ended.gap.reason };
-      }
-      if (error instanceof InboxError && error.status === 404) {
-        await journal.setSubscription(undefined);
-        return { kind: 'ended', reason: 'unknown-subscription' };
-      }
-      throw error;
+    if (stored.renewAfter && Date.parse(stored.renewAfter) <= this.now()) {
+      await this.remember(await client.renew(stored.id));
     }
+    const page = await client.events(stored.id, {
+      wait: this.options.wait ?? DEFAULT_WAIT_SECONDS,
+      ...(this.options.limit === undefined
+        ? {}
+        : { limit: this.options.limit }),
+    });
+    let added = 0;
+    let duplicates = 0;
+    for (const event of page.events) {
+      if (await journal.append(event)) {
+        added += 1;
+      } else {
+        duplicates += 1;
+      }
+    }
+    // Only what is journaled is acknowledged.
+    if (page.next !== null && page.events.length > 0) {
+      await client.ack(stored.id, page.generation, page.next);
+    }
+    if (page.reconciliationRequired) {
+      // After this page is safely journaled: the events it holds are recent
+      // hints from before the gap, not complete history.
+      return await this.reconcile(page.reconciliationRequired);
+    }
+    if (page.events.length > 0) {
+      return { kind: 'events', stored: added, duplicates };
+    }
+    return { kind: 'idle' };
   }
 
   private async remember(subscription: InboxSubscription): Promise<void> {
@@ -182,6 +233,7 @@ export class InMemoryInboxJournal implements InboxJournal {
   readonly events: InboxEvent[] = [];
   readonly gaps: { subscription: string; gap: GapMarker }[] = [];
   private readonly deliveries = new Set<string>();
+  private readonly gapKeys = new Set<string>();
 
   async subscription(): Promise<StoredSubscription | undefined> {
     return this.stored;
@@ -203,6 +255,14 @@ export class InMemoryInboxJournal implements InboxJournal {
   }
 
   async recordGap(subscription: string, gap: GapMarker): Promise<void> {
+    const key = JSON.stringify([
+      subscription,
+      gap.generation,
+      gap.detectedAt,
+      gap.reason,
+    ]);
+    if (this.gapKeys.has(key)) return;
+    this.gapKeys.add(key);
     this.gaps.push({ subscription, gap });
   }
 }

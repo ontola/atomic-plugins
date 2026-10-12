@@ -70,6 +70,38 @@ export interface InboxEventPage {
   reconciliationRequired?: ReconciliationRequired;
 }
 
+/**
+ * Seconds until a passing refusal may be retried, when the receiver did not
+ * say (`Retry-After`).
+ */
+export const DEFAULT_BACKOFF_SECONDS = {
+  /** `429`: a limit, or the receiver's capacity. */
+  tooMany: 5,
+  /** `503`: the receiver's database or an access check is unavailable. */
+  unavailable: 5,
+  /**
+   * `409 barrier-mismatch` from `reconciled`: a newer gap moved the
+   * barrier, and the next fetch reports it.
+   */
+  conflict: 1,
+} as const;
+
+/** `Retry-After` in seconds (delta seconds or an HTTP date), if usable. */
+export function parseRetryAfter(
+  value: string | undefined,
+  now: number = Date.now(),
+): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (/^[0-9]+$/.test(trimmed)) return Number(trimmed);
+  // An HTTP date names its weekday and month; `Date.parse` would also take
+  // `-1` as a year.
+  if (!/[A-Za-z]/.test(trimmed)) return undefined;
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, Math.ceil((date - now) / 1000));
+}
+
 /** A refused request: the spec's error `code`, or the HTTP status alone. */
 export class InboxError extends Error {
   constructor(
@@ -77,8 +109,30 @@ export class InboxError extends Error {
     readonly code: string | undefined,
     /** For `410`: the `resubscribe` result. */
     readonly ended?: ReconciliationRequired,
+    /** The response's `Retry-After`, in seconds. */
+    readonly retryAfter?: number,
   ) {
     super(`webhook inbox: ${status}${code ? ` ${code}` : ''}`);
+  }
+
+  /**
+   * Seconds to wait before trying again, for a refusal that passes: a `429`
+   * (`capacity-unavailable`, `rate-limited`, `quota-exceeded`), a `503`, or
+   * a `409 barrier-mismatch` (the receiver's answer to `reconciled` when the
+   * subscription is no longer reconciling at that barrier). `Retry-After`
+   * wins when present. `undefined` for anything a retry would not fix.
+   */
+  backoff(): number | undefined {
+    if (this.status === 429) {
+      return this.retryAfter ?? DEFAULT_BACKOFF_SECONDS.tooMany;
+    }
+    if (this.status === 503) {
+      return this.retryAfter ?? DEFAULT_BACKOFF_SECONDS.unavailable;
+    }
+    if (this.status === 409 && this.code === 'barrier-mismatch') {
+      return this.retryAfter ?? DEFAULT_BACKOFF_SECONDS.conflict;
+    }
+    return undefined;
   }
 }
 
@@ -134,7 +188,15 @@ export class InboxClient {
         : typeof record.error === 'string'
           ? record.error
           : undefined;
-    throw new InboxError(response.status, code);
+    const retryAfter = Object.entries(response.headers).find(
+      ([name]) => name.toLowerCase() === 'retry-after',
+    )?.[1];
+    throw new InboxError(
+      response.status,
+      code,
+      undefined,
+      parseRetryAfter(retryAfter),
+    );
   }
 
   subscribe(request: SubscribeRequest): Promise<InboxSubscription> {
@@ -165,7 +227,11 @@ export class InboxClient {
     );
   }
 
-  /** Up to `limit` events after `after`; waits up to `wait` seconds for one. */
+  /**
+   * Up to `limit` events after `after`; waits up to `wait` seconds for one
+   * (the receiver caps it at 25). Without `wait` the receiver answers at
+   * once, so a loop of such calls would poll as fast as it can.
+   */
   events(
     id: string,
     options: { after?: string; limit?: number; wait?: number } = {},

@@ -51,3 +51,28 @@ the ack, a failing journal never acknowledged, sleeping past the lease
 replayed history), a gap at the retention limit with the barrier, an event
 arriving during the reconciliation scan, renewal timing, an unknown
 subscription; and `scopedReads` on the spec's synthetic GitHub fixture.
+
+## Review of #439 (same session)
+
+**Human (relayed by the coordinator):** One blocker: with no `wait`
+default, `events()` sends `wait=0`, so `step()` returns `idle` at once and a
+loop sends signed requests as fast as it can. Default `wait` to 25, keep
+`Retry-After` in `InboxError`, expose a backoff hint for a 429
+`capacity-unavailable` and a 409 `not-reconciling`, and document the
+caller's loop. Nits: `reads.ts` must refuse `.` and `..` and encode
+everything outside `unreserved`; drop the stored subscription only on
+`unknown-subscription`; make `recordGap` idempotent or document it; comment
+the crash between subscribe and `remember`, the per-instance `last` in
+`signedTransport` and the URL-normalisation requirement; test a 410 during
+`renew` and `reconciled` and real-shaped 429 and 409 bodies.
+
+**Assistant:** `wait` defaults to 25 (`DEFAULT_WAIT_SECONDS`). `InboxError`
+keeps `retryAfter` (delta seconds or an HTTP date, `parseRetryAfter`), and
+`backoff()` gives seconds for a 429, a 503 and a 409 `barrier-mismatch`
+(the code integration-proxy sends when the subscription is no longer
+reconciling at that barrier); `step()` returns `{kind: 'backoff'}` for
+those. A 410 from any call, including `reconciled` right after subscribing,
+now records the gap and ends the subscription. Only `unknown-subscription`
+drops it. `recordGap` must be idempotent (documented; the in-memory journal
+is). `pathSegment` encodes `!'()*` and refuses `.` and `..`. The comments
+were added as asked, and tests cover each point.

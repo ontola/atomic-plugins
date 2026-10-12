@@ -111,6 +111,19 @@ export function v2Headers(
  * signature once, so a retried request is signed again. Timestamps are kept
  * strictly increasing, so two identical requests in one millisecond still
  * differ.
+ *
+ * That ordering (`last`) is per transport instance. Two instances, or two
+ * processes, signing with the same key can produce the same timestamp for
+ * an identical request, and the receiver then refuses the second as a
+ * replay. Share one transport per key in a process; give each process its
+ * own key, or treat such a refusal as retryable (a retry is signed anew).
+ *
+ * The signature covers `request.url.href`, and the receiver rebuilds the
+ * URL from its own public base URL plus the path and query it received. So
+ * the base URL given to `InboxClient` must be that public URL exactly (the
+ * same scheme and host, no default port, no extra path), and whatever
+ * sends the request must not re-encode the path or query: `href` is what
+ * must arrive.
  */
 export function signedTransport(
   key: AtomicAgentKey,

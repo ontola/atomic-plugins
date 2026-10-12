@@ -48,21 +48,36 @@ function select(body: Json, expression: string): string | undefined {
   return key(current);
 }
 
-/** Fills `{name}` variables with values, each percent-encoded as one segment. */
+/**
+ * One path segment (Webhook Deliveries §4.4.1, RFC 3986 §3.3): every
+ * character outside `unreserved` (`A-Z a-z 0-9 - . _ ~`) percent-encoded,
+ * `!'()*` included, which `encodeURIComponent` leaves alone. `.` and `..`
+ * are refused: encoded or not, they would reach another path.
+ */
+export function pathSegment(value: string): string | undefined {
+  if (value === '.' || value === '..') return undefined;
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+/** Fills `{name}` variables with values, each encoded as one segment. */
 function fill(
   template: string,
   values: Record<string, string>,
 ): string | undefined {
-  let missing = false;
+  let refused = false;
   const path = template.replace(/\{([^{}]+)\}/g, (_, name: string) => {
     const value = values[name];
-    if (value === undefined) {
-      missing = true;
+    const segment = value === undefined ? undefined : pathSegment(value);
+    if (segment === undefined) {
+      refused = true;
       return '';
     }
-    return encodeURIComponent(value);
+    return segment;
   });
-  return missing ? undefined : path;
+  return refused ? undefined : path;
 }
 
 interface Binding {

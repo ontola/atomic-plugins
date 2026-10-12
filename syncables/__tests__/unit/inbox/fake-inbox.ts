@@ -43,7 +43,11 @@ export class FakeInbox {
   maxPending = 100;
   /** Requests to fail once, by `METHOD path-suffix`, e.g. `POST /ack`. */
   failOnce = new Set<string>();
+  /** Canned answers, once each, by `METHOD path-suffix`. */
+  readonly answerOnce = new Map<string, TransportResponse>();
   readonly requests: string[] = [];
+  /** The query string of each request, in order. */
+  readonly queries: string[] = [];
   readonly subs = new Map<string, Sub>();
   private count = 0;
 
@@ -156,11 +160,19 @@ export class FakeInbox {
   readonly transport: Transport = async (request: TransportRequest) => {
     const path = request.url.pathname;
     this.requests.push(`${request.method} ${path}`);
+    this.queries.push(request.url.search);
     for (const failure of this.failOnce) {
       const [method, suffix] = failure.split(' ');
       if (request.method === method && path.endsWith(suffix)) {
         this.failOnce.delete(failure);
         throw new Error(`connection lost on ${failure}`);
+      }
+    }
+    for (const [key, response] of this.answerOnce) {
+      const [method, suffix] = key.split(' ');
+      if (request.method === method && path.endsWith(suffix)) {
+        this.answerOnce.delete(key);
+        return response;
       }
     }
     if (
@@ -251,10 +263,14 @@ export class FakeInbox {
   };
 }
 
-function json(status: number, body: unknown): TransportResponse {
+export function json(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): TransportResponse {
   return {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   };
 }
