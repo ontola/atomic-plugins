@@ -512,7 +512,9 @@ describe('x-time-zone in a collection read', () => {
     expect(listed(requests)!.searchParams.get('start')).toBe(
       '2026-10-25T02:30:00Z',
     );
-    expect(snapshot.coverage?.spans?.[0]?.from).toBe(iso('2026-10-25T00:30:00'));
+    expect(snapshot.coverage?.spans?.[0]?.from).toBe(
+      iso('2026-10-25T00:30:00'),
+    );
     // unspecified: the later instant for a lower bound.
     const plain = await read(
       [],
@@ -606,18 +608,22 @@ describe('x-time-zone in a collection read', () => {
     (
       doc.paths[ENTRIES]!.get!.parameters as unknown as Record<string, string>[]
     ).push({ $ref: '#/components/parameters/Until' });
-    const { snapshot } = await read([AMS], {
-      query_overrides: [
-        {
-          path: ENTRIES,
-          values: {
-            start: '2026-01-01T00:00:00Z',
-            end: '2025-06-01T00:00:00Z',
-            until: '2026-02-01T00:00:00Z',
+    const { snapshot } = await read(
+      [AMS],
+      {
+        query_overrides: [
+          {
+            path: ENTRIES,
+            values: {
+              start: '2026-01-01T00:00:00Z',
+              end: '2025-06-01T00:00:00Z',
+              until: '2026-02-01T00:00:00Z',
+            },
           },
-        },
-      ],
-    }, doc);
+        ],
+      },
+      doc,
+    );
     // `end` is before `start`, but bounds another field: not empty.
     expect(snapshot.coverage?.spans).toEqual([
       {
@@ -925,4 +931,3 @@ describe('pagingFields (#428 re-review)', () => {
     expect(pagingFields(undefined)).toEqual(new Set());
   });
 });
-

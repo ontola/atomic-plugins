@@ -2,7 +2,10 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadOpenApiDocument } from '../../../src/openapi/load.js';
 import { discoverResources } from '../../../src/resources/discover.js';
-import { createMockServer, type MockServer } from '../../../src/mock-server/server.js';
+import {
+  createMockServer,
+  type MockServer,
+} from '../../../src/mock-server/server.js';
 import { createApiClient, type ApiClient } from '../../../src/client/client.js';
 import type { OpenApiDocument } from '../../../src/openapi/types.js';
 

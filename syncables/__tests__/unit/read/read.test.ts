@@ -107,12 +107,12 @@ describe('readPlatform', () => {
       weight: 'https://atomicdata.dev/datatypes/float',
       'updated-at': 'https://atomicdata.dev/datatypes/timestamp',
     });
-    expect(fetched.ontology.terms.find((t) => t.kind === 'class')).toMatchObject(
-      {
-        path: 'pets/class/pet',
-        requires: ['pets/property/id', 'pets/property/name'],
-      },
-    );
+    expect(
+      fetched.ontology.terms.find((t) => t.kind === 'class'),
+    ).toMatchObject({
+      path: 'pets/class/pet',
+      requires: ['pets/property/id', 'pets/property/name'],
+    });
   });
 
   it('probes access with one request and reads nothing', async () => {
@@ -201,7 +201,9 @@ describe('readPlatform', () => {
     const path = '/workspaces/{workspaceId}/entries';
     const selection = mergeQuerySelections(
       { query_overrides: [{ path, values: { start: 'old' } }] },
-      { query_overrides: [{ path, values: { start: '2026-01-01T00:00:00Z' } }] },
+      {
+        query_overrides: [{ path, values: { start: '2026-01-01T00:00:00Z' } }],
+      },
     );
     const fetched = await readPlatform(workspace, {
       ...options,
@@ -398,7 +400,9 @@ describe('POST-body pagination (Notion-shaped)', () => {
         { start_cursor: 'db2-cursor' },
       ],
     ]);
-    expect(requests.every((r) => r.headers['content-type'] === 'application/json')).toBe(true);
+    expect(
+      requests.every((r) => r.headers['content-type'] === 'application/json'),
+    ).toBe(true);
     expect(requests.every((r) => r.url.search === '')).toBe(true);
     expect(fetched.errors).toEqual([]);
     expect(fetched.records.map((r) => [r.resource, r.namespace, r.id])).toEqual(
@@ -464,7 +468,11 @@ describe('paginate (GET)', () => {
 
   it('refuses a path the document does not declare for that method', async () => {
     await expect(
-      paginate(pets, { transport: petsTransport(), path: '/pets', method: 'POST' }),
+      paginate(pets, {
+        transport: petsTransport(),
+        path: '/pets',
+        method: 'POST',
+      }),
     ).rejects.toThrow('/pets declares no POST operation');
   });
 });
