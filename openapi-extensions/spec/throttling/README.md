@@ -1,6 +1,6 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.2.0-draft
+**Spec version:** 0.3.0-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
@@ -65,9 +65,11 @@ The capitalized requirements below are normative in the sense of
 | `limits` | map of bucket identifier to Limit Object | Nonempty bucket definitions. Required with `applies`. |
 | `applies` | array of bucket identifiers | Default selection; entries must be unique and defined. May be empty. Required with `limits`. |
 | `headers` | map of response header name to Header Role Object | Since 0.2.0. What each rate-limit response header reports, and its unit. See [Response headers](#response-headers). |
+| `bodyFields` | map of JSON body dot-path to Header Role Object | Since 0.3.0. The same roles read from the JSON response body instead of a header. See [Response body fields](#response-body-fields). |
 | `signals` | array of Signal Objects | Since 0.2.0. The responses that mean the request was throttled. See [Throttling signals](#throttling-signals). |
 
-The root object holds at least one of `limits`, `headers` and `signals`;
+The root object holds at least one of `limits`, `headers`, `bodyFields` and
+`signals`;
 `limits` and `applies` appear together or not at all. A document can therefore
 describe its rate-limit headers and throttling responses without announcing a
 numeric quota.
@@ -210,6 +212,26 @@ The headers of the IETF `RateLimit` and `RateLimit-Policy` structured fields
 (draft-ietf-httpapi-ratelimit-headers) carry several values in one header. A
 Header Role Object cannot describe them; this version does not cover them.
 
+## Response body fields
+
+Added in 0.3.0. Some APIs report rate-limit values in the JSON error body
+rather than, or as well as, in headers. Todoist's API v1 documents an
+`error_extra.retry_after` field ("Seconds to wait before retrying. May be
+returned on rate-limited requests and other API errors, not just 429
+responses"; [Todoist API v1](https://developer.todoist.com/api/v1/), Errors).
+`bodyFields` maps a dot-path into the parsed JSON response body to a Header
+Role Object (above): the same `role`, `unit` and `description`, the same
+roles at most once in the map, and the same rule that a value which does not
+parse in its declared encoding is ignored. A field value is used as text: a
+JSON number is its decimal representation, so `3` reads as `deltaSeconds`
+`3`; any other non-string value does not parse.
+
+A role read from both a header and a body field counts once: for `reset` and
+`retryAfter`, the later of the two times; for `limit`, `remaining` and
+`used`, the header's value when it parses, else the body field's. A body
+field is read only from a response that is JSON and is classified as
+throttling (below); a role on another response says nothing.
+
 ## Throttling signals
 
 Added in 0.2.0. `signals` is a nonempty array of Signal Objects. A response
@@ -274,9 +296,10 @@ Header values are compared after removing leading and trailing whitespace.
 
 **Earliest retry time.** For a matching response, a consumer computes:
 
-1. T1, from the `retryAfter` header, when it is declared, present and parses;
-2. T2, from the `reset` header, when it is declared, present and parses, and
-   the meaning is `quotaExhausted` or the `remaining` header is `0`;
+1. T1, from the `retryAfter` header or body field, when it is declared,
+   present and parses (the later of the two when both do);
+2. T2, from the `reset` header or body field, when it is declared, present and
+   parses, and the meaning is `quotaExhausted` or the `remaining` value is `0`;
 3. the later of T1 and T2. When neither exists: the response time plus
    `minDelaySeconds` when the signal gives it; else, for `quotaExhausted` with
    a `bucket` whose window is known, the response time plus that window's
@@ -477,6 +500,9 @@ API throttling.
 
 ## Changes
 
+- **0.3.0-draft** (2026-10-09): adds `bodyFields`, the Header Role Object's
+  roles read from a JSON body field (Todoist's `error_extra.retry_after`). A
+  0.2.0 document stays valid and means the same.
 - **0.2.0-draft** (2026-10-08): adds `headers` (Header Role Objects: `limit`,
   `remaining`, `used`, `reset`, `retryAfter`, with Time Units) and `signals`
   (Signal Objects with status, header and body predicates, `throttled` or
