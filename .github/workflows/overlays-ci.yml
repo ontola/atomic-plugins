@@ -57,6 +57,7 @@ jobs:
           filters: |
             overlays:
               - 'overlays/**'
+              - 'openapi-extensions/spec/pagination-schemes/**'
               - '.github/workflows/overlays-ci.yml'
 
   validate:
