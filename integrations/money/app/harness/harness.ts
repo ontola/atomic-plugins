@@ -233,7 +233,11 @@ async function perf(root: HTMLElement): Promise<void> {
     rows,
   });
   const t0 = performance.now();
-  await mount(root, store, { today: () => '2026-09-24', locale: 'en-GB' });
+  await mount(root, store, {
+    today: () => '2026-09-24',
+    now: () => Date.UTC(2026, 8, 24, 12, 0, 0),
+    locale: 'en-GB',
+  });
   const first = performance.now() - t0;
   const chip = byText(root, '.pl-chip', 'Out')!;
   const t1 = performance.now();
@@ -275,6 +279,7 @@ export async function run(): Promise<void> {
   let ticks = 0;
   await mount(root, store, {
     today: () => '2026-09-24',
+    now: () => Date.UTC(2026, 8, 24, 12, 0, 0),
     locale: 'en-GB',
     // "checking": let the first step finish, then hold.
     tick: scenario.pause

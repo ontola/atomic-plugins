@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -170,6 +170,24 @@ client steps say, when a `selection` gives it a value:
   differs or cannot be read, the spans are discarded (`zoneChanged`). The
   items are kept. syncables does not read again by itself: the caller
   decides.
+- A `rangeWindow` read with a range (`ranges`) whose window fields include
+  `x-time-zone` query parameters splits the range as instants and sends
+  each window bound to such a parameter as wall-clock digits in its zone
+  (`PageWalk.windowValue`); the other window fields get the bound as it is.
+  Its coverage is that of the outer range (the range's start in each
+  `windowStart` parameter, its end in each `windowEnd` one, with the rest
+  of the query as above): adjacent windows share their bounds, so with an
+  unknown zone only the outer ends narrow by 14 hours. A window field
+  without `x-time-zone` counts like the rest of the query: with a range
+  `x-filter` its outer end adds to its field's span, and without one (or
+  as a `windowRange` field, whose value is not an instant) it gives
+  `otherFilters`. A windowed read is never complete, so a finished one
+  keeps its spans with `reason: 'incomplete'`. A window `format` other
+  than `dateTime` on such a parameter fails the read. A zoned
+  `windowRange` parameter (both ends in one value) gives
+  `noRangePredicate`, with the outer range's value in `parameters` (the
+  template over both wall-clock ends) and its two instants as an ISO 8601
+  interval (`start/end`) in `instants`.
 
 The result is on `CollectionSnapshot.coverage` (from `readCollections`) and
 on `SyncResult.coverage` (per collection and bound context):
@@ -193,7 +211,11 @@ copy (an incomplete or failed read, a record the caller dropped). `spans` is
 null when the request covers nothing known; `reason` is then `empty` (some
 field's lower end is not before its upper end), `zoneChanged`,
 `noRangePredicate` (an `x-time-zone` parameter with a value but no range
-`x-filter`), `otherFilters` (above) or `incomplete`. An open end is left out. A `probe` read reads no zone and
+`x-filter`), `otherFilters` (above) or `incomplete` (the read failed, or
+finished without being complete, as one ended by a short page whose end
+is `observed` or `assumed`). Only a finished read by range windows over
+`x-time-zone` window fields keeps its `spans`, with `reason:
+'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
 `readPlatform` does not report coverage. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
@@ -363,10 +385,12 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.2.0-draft) lets a document say, at the root `x-throttling`, which
+(0.3.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
-unit) and which responses are rate-limit refusals (`signals`: a status
+unit), which JSON body fields report the same roles (`bodyFields`, since
+0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
+which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
 `quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
@@ -380,8 +404,19 @@ declared, plus that window; else the client's own backoff. An absolute time
 is measured against both the client's clock and the response's `Date`
 header, taking the later, so neither a wrong clock nor a wrong `Date` makes
 it earlier; a header value that does not parse in its declared unit is
-ignored. When no `retryAfter` role is declared, the standard `Retry-After`
-header is read as RFC 9110 defines it, as before the extension.
+ignored. When no `retryAfter` header role is declared, the standard
+`Retry-After` header is read as RFC 9110 defines it, as before the
+extension. A body field is read only from a throttling response whose body
+is JSON: its dot-path's names are matched literally (a name holding a `.`
+cannot be addressed; `a..b`, `.a` and `a.` are left out of the
+declaration), a string is trimmed, a number counts only when it has no
+fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
+an object does not parse. A role read from both a header and a body field
+counts once: the later time for `retryAfter` and `reset`, and the bucket is
+exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
+that gives no wait (`0`, or a time not after the response) counts as
+absent, so `minDelaySeconds`, the bucket window or the backoff still
+applies; those are fallbacks, not floors.
 
 For a write, a throttling verdict means `retry`, sent again no earlier than
 that time and never below the backoff. The time is stored with the queued
@@ -1454,6 +1489,23 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Throttling 0.3.0-draft `bodyFields` (#454, with #463's
+  follow-up rules): the header roles read from the JSON body of a throttling
+  response, by literal dot-path. A string is trimmed and an integral number
+  (`3.0`) reads as an integer; a body wait of `0`, or a time not after the
+  response, counts as absent; a role from both a header and a body field
+  takes the later time, and `remaining` is exhausted when either is `0`.
+  `ThrottlingDeclaration` gains `bodyFields`. Tested on the spec's cases and
+  the held Todoist overlay's `error_extra.retry_after`.
+- **Unreleased**: `readCollections` (and so `sync()`) sends a
+  `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
+  time in their zone, read once before and once after the read; a window
+  format other than `dateTime` on such a parameter fails the read; the
+  coverage is the outer range's, per `x-filter` field (14 hours off the
+  outer ends for an unknown zone), kept with `reason: 'incomplete'` when
+  the read finishes; a zoned `windowRange` parameter gives
+  `noRangePredicate`. Other reads that are not complete still get
+  `spans: null`.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as
