@@ -6,6 +6,11 @@
  *   node usertest/catalog.mjs [out]            # default out: usertest/out
  *   node usertest/catalog.mjs --record [out]   # after a version bump
  *
+ * It first installs each app's plugin dependencies that have a lockfile and
+ * no node_modules yet (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
+ * that. On CI, where every lockfile is installed first, it does nothing.
+ *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
  * marked `report: true` start with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
@@ -44,7 +49,7 @@
  * tests. A version not recorded yet is a warning here and a failure there.
  *
  * Needs the layout AGENTS.md describes (browser/ from the pinned
- * atomic-server) and each app's dependencies installed (see README.md).
+ * atomic-server); the apps' own dependencies it installs as above.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -59,6 +64,12 @@ import {
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  installMissing,
+  pluginDependencyDirs,
+  sharedDependencyDirs,
+} from '../integrations/tooling/deps.mjs';
+import { loadLanes } from '../integrations/tooling/lanes.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
@@ -73,8 +84,8 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 export const VERSIONS = {
   calendar: 'usertest-12',
   'issue-tracker': 'usertest-10',
-  money: 'usertest-4',
-  notion: 'usertest-10',
+  money: 'usertest-6',
+  notion: 'usertest-11',
   timesheets: 'usertest-11',
 };
 const APPS = {
@@ -103,7 +114,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-export const SAMPLE_VERSION = 'sample-2';
+export const SAMPLE_VERSION = 'sample-3';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
@@ -196,6 +207,49 @@ function entryFor(source, id, version, bytes, fields) {
   return entry;
 }
 
+/**
+ * The folders whose lockfiles the apps built here need, relative to the
+ * repository root: each app's plugin folders (deps.mjs
+ * `pluginDependencyDirs`) and the shared packages its lane's `paths` import
+ * from source (`sharedDependencyDirs`).
+ */
+export function dependencyDirs(lanes = loadLanes().lanes) {
+  return [
+    ...new Set(
+      Object.keys(APPS).flatMap(id => [
+        ...pluginDependencyDirs(id),
+        ...sharedDependencyDirs(lanes.find(l => l.id === id)?.paths),
+      ]),
+    ),
+  ];
+}
+
+/** The install loop CI runs for every plugin's own dependencies. */
+const INSTALL =
+  'for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+
+/**
+ * `run()`, with a build that fails on a missing package (esbuild's "Could
+ * not resolve", Node's ERR_MODULE_NOT_FOUND) explained: the plugin's
+ * dependencies are most likely not installed in this checkout.
+ */
+export async function explained(what, run) {
+  try {
+    return await run();
+  } catch (error) {
+    const text = String(error?.message ?? error);
+    if (
+      error?.code === 'ERR_MODULE_NOT_FOUND' ||
+      /Could not resolve|Cannot find (module|package)/.test(text)
+    )
+      throw new Error(
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here. From the repository root: ${INSTALL}\n${text}`,
+        { cause: error },
+      );
+    throw error;
+  }
+}
+
 /** What builds.json records for a module's text. */
 export const sha256 = text =>
   'sha256-' + createHash('sha256').update(text).digest('base64');
@@ -216,13 +270,17 @@ export async function buildCatalog(out, { logUrl } = {}) {
 
   for (const [id, app] of Object.entries(APPS)) {
     const version = VERSIONS[id];
-    const { build } = await import(
-      pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+    const { build } = await explained(
+      id,
+      () =>
+        import(
+          pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+        ),
     );
     const file = resolve(out, 'apps', id, version, 'ui.js');
     mkdirSync(dirname(file), { recursive: true });
     // The app alone, before the prelude: what a sample entry wraps.
-    await build({ outfile: file });
+    await explained(id, () => build({ outfile: file }));
     const plain = readFileSync(file, 'utf8');
     modules.push({ key: `${id}/${version}`, sha256: sha256(plain) });
     const own = app.report ? prelude : '';
@@ -250,7 +308,9 @@ export async function buildCatalog(out, { logUrl } = {}) {
     const sampleFile = resolve(out, 'apps', sampleId, sampleVersion, 'ui.js');
     const appFile = resolve(out, 'apps', id, version, 'plain.js');
     writeFileSync(appFile, plain);
-    const sampleText = await buildSample(id, appFile);
+    const sampleText = await explained(sampleId, () =>
+      buildSample(id, appFile),
+    );
     rmSync(appFile);
     modules.push({
       key: `${sampleId}/${sampleVersion}`,
@@ -347,6 +407,7 @@ async function main() {
   const out = resolve(
     argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
   );
+  if (!argv.includes('--no-install')) installMissing(dependencyDirs());
   const { catalog, modules } = await buildCatalog(out, {
     logUrl: process.env.USERTEST_LOG_URL,
   });

@@ -25,15 +25,19 @@ import { root } from './lanes.mjs';
 
 /**
  * The folders, relative to `base`, that hold one plugin's own lockfiles: the
- * plugin folder itself, its drive app, and its e2e specs' test-only
- * dependencies (an independent protocol client, for instance), the same
- * three globs CI installs (`integrations/*\/pnpm-lock.yaml`,
- * `integrations/*\/app/pnpm-lock.yaml`, `integrations/*\/e2e/pnpm-lock.yaml`).
+ * plugin folder itself, its drive app, its e2e specs' test-only
+ * dependencies (an independent protocol client, for instance), and its
+ * Devonian lens folder's (`integrations/<id>/devonian/`, the npm `devonian`
+ * its lens prototypes test against, for a plugin with no drive app to hold
+ * it): the same four globs CI installs (`integrations/*\/pnpm-lock.yaml`,
+ * `integrations/*\/app/pnpm-lock.yaml`, `integrations/*\/e2e/pnpm-lock.yaml`,
+ * `integrations/*\/devonian/pnpm-lock.yaml`).
  */
 export const pluginDependencyDirs = id => [
   `integrations/${id}`,
   `integrations/${id}/app`,
   `integrations/${id}/e2e`,
+  `integrations/${id}/devonian`,
 ];
 
 /**

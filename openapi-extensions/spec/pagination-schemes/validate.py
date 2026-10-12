@@ -1,14 +1,18 @@
-"""Validate Pagination Schemes 0.5.0 in an OpenAPI document, resolve links and read range windows.
+"""Validate Pagination Schemes 0.6.0 in an OpenAPI document, resolve links, read short-page lists and range windows.
 
 `validate(document)` checks every scheme in `components.paginationSchemes`
 (or the provisional Swagger 2.0 root `x-paginationSchemes`) and every
-operation's `x-pagination` against schema.json (rules 1-4, 8-10 and 12-16),
+operation's `x-pagination` against schema.json (rules 1-4, 8-10, 12-16, 19 and 20),
 that each application names a defined scheme (rule 5), that a `declared` link
 base has the origin of one of each explicitly applying operation's servers
 (rule 11), that a `rangeWindow` scheme has exactly one way of carrying its
 window (rule 14), is applied alone (rule 17) and names parameters the
-operation has (rule 18). Rules 6 and 7 need the response schemas and are not
-checked. Ordinary OpenAPI validation is separate.
+operation has (rule 18), and that a Short Page Object has the request fields
+it needs (rules 21 and 22). Rules 6 and 7 need the response schemas and are
+not checked. Ordinary OpenAPI validation is separate.
+
+`read_pages(...)` is a reference implementation of a page-number read with
+`start` and a Short Page Object (§4.4.5).
 
 `read_range(...)` is a reference implementation of §4.6.3 and §4.6.4: it reads
 one range through a caller-supplied request function, halving full windows,
@@ -259,6 +263,8 @@ def validate(document):
             errors += found
             if found:
                 continue
+            errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
+            errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
             if merged.get("type") == "rangeWindow":
                 problem = _window_carrier_problem(merged)
                 if problem:
@@ -391,6 +397,222 @@ def halves(start, end, window):
     middle = first + (width + 1) // 2  # the first unit of the second window
     head_end = middle - 1 if window["bounds"] == "closed" else middle
     return (start, _to_bound(head_end, window)), (_to_bound(middle, window), end)
+
+
+def _role_fields(scheme, role):
+    """[(location, name)] of a scheme's request fields with this role."""
+    return [
+        (location, name)
+        for location in FIELD_LOCATIONS
+        for name, field in scheme.get("request", {}).get(location, {}).items()
+        if isinstance(field, dict) and field.get("role") == role
+    ]
+
+
+def _short_page_problems(scheme, applied):
+    """Rules 21 and 22 (22 only for a scheme applied to an operation)."""
+    short = scheme.get("response", {}).get("shortPage")
+    if not isinstance(short, dict):
+        return []
+    problems = []
+    if short.get("size") == "request" and not _role_fields(scheme, "pageSize"):
+        problems.append("response.shortPage.size: 'request' needs a request field with role pageSize (rule 21)")
+    if applied and len(_role_fields(scheme, "page")) != 1:
+        problems.append("response.shortPage: needs exactly one request field with role page (rule 22)")
+    return problems
+
+
+def _advance_problems(scheme):
+    """Rule 25, for a scheme applied to an operation."""
+    advances = [
+        scheme["request"][location][name].get("advance", "itemCount")
+        for location, name in _role_fields(scheme, "offset")
+    ]
+    if "pageSize" not in advances:
+        return []
+    responds = any(
+        isinstance(field, dict) and field.get("role") == "pageSize"
+        for field in scheme.get("response", {}).get("bodyFields", {}).values()
+    )
+    if _role_fields(scheme, "pageSize") or responds:
+        return []
+    return ["request: advance 'pageSize' needs a request or response field with role pageSize (rule 25)"]
+
+
+class PageReadError(RuntimeError):
+    """A page-number read that ended with an error (§4.4.5 step 3)."""
+
+
+def page_items(body, scheme):
+    """The items of one response body, located by the scheme's Envelope Object (§4.4.2).
+
+    Under `emptyWhenAbsent: true` a body in which the `itemsField` field is
+    absent (an object along the path lacks the next segment) has no items. A
+    present value that is not an array, a present `null` included, and a
+    path through a value that is not an object are errors either way.
+    """
+    envelope = scheme.get("response", {}).get("envelope", {})
+    path = envelope.get("itemsField")
+    value = body
+    if path:
+        for segment in path.split("."):
+            if not isinstance(value, dict):
+                raise PageReadError("the response holds no item array")
+            if segment not in value:
+                if envelope.get("emptyWhenAbsent") is True:
+                    return []
+                raise PageReadError("the response holds no item array")
+            value = value[segment]
+    if not isinstance(value, list):
+        raise PageReadError("the response holds no item array")
+    return value
+
+
+_items = page_items
+
+
+def _role_value(body, scheme, role):
+    """The value of the response body field with this role, or None (top-level and dot-paths)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                value = value.get(segment) if isinstance(value, dict) else None
+            return value
+    return None
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda item: item["id"], max_pages=None):
+    """A page-number read with `start` and a Short Page Object (§4.3.1, §4.4.5).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `page` field (and the `pageSize` field, when `page_size` is given)
+    to their values, and returns the response body. `maximum` is the
+    documented maximum of the pageSize parameter; a `page_size` above it is
+    refused. A body field with the `totalPages` role (a count: the last page
+    is `start + totalPages - 1`) or the `totalCount` role ends the read on a
+    full page, and a `pageSize` role field reports the size applied.
+
+    Returns {"items", "pages", "complete"}. "complete" is True for a read
+    ended by `totalPages` or `totalCount`, and for one ended by a short page
+    only when the assurance is `documented`. Raises PageReadError for a page
+    with more than the full size, a page holding an item an earlier page
+    returned, a short page that `totalPages` or `totalCount` contradicts
+    under `documented`, or `max_pages` pages requested without reaching the
+    end; such a read is not complete.
+    """
+    short = scheme["response"]["shortPage"]
+    page_fields = _role_fields(scheme, "page")
+    if len(page_fields) != 1:
+        raise ValueError("a shortPage scheme has exactly one page field (rule 22)")
+    [page_field] = page_fields
+    location, name = page_field
+    first = scheme["request"][location][name].get("start", 1)
+    if short["size"] == "request" and page_size is None:
+        raise ValueError("size 'request' needs the page size the client sends")
+    if page_size is not None and maximum is not None and page_size > maximum:
+        raise ValueError(f"page size {page_size} is above the documented maximum {maximum}")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    # The full size: size, or the page size sent when it is smaller. A page
+    # size is only sent through a pageSize field; without one it changes nothing.
+    size = page_size if short["size"] == "request" else (
+        min(short["size"], page_size) if size_fields else short["size"])
+    items, seen, pages = [], set(), 0
+    number = first
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {page_field: number}
+        values.update({field: page_size for field in size_fields})
+        body = request(values)
+        page = page_items(body, scheme)
+        pages += 1
+        reported = _count(_role_value(body, scheme, "pageSize"))
+        full = reported if reported else size
+        if len(page) > full:
+            raise PageReadError(f"page {number} holds {len(page)} items, more than the declared {full}")
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"page {number} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        total_pages = _count(_role_value(body, scheme, "totalPages"))
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        last = first + total_pages - 1 if total_pages is not None else None
+        ended = (last is not None and number >= last) or (total_count is not None and len(items) >= total_count)
+        more = (last is not None and number < last) or (total_count is not None and len(items) < total_count)
+        if len(page) < full:
+            if more:
+                if short["assurance"] == "documented":
+                    raise PageReadError(f"page {number} is short, but the response says more pages follow")
+                return {"items": items, "pages": pages, "complete": False}
+            return {"items": items, "pages": pages, "complete": ended or short["assurance"] == "documented"}
+        if ended:
+            return {"items": items, "pages": pages, "complete": True}
+        number += 1
+
+
+def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+    """An offset read with the offset field's `advance` (§4.3.2).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `offset` field (and the `pageSize` field, when `page_size` is
+    given) to their values, and returns the response body. Under
+    `itemCount` the next offset adds the items the page held, and the read
+    ends at an empty page or once the next offset reaches a `totalCount`
+    field. Under `pageSize` it adds a reported `pageSize` field (at least 1),
+    else `page_size`, and ends once the next offset reaches `totalCount`, or
+    at an empty page when the response has no `totalCount` field.
+
+    Returns {"items", "pages", "offsets"}. Raises PageReadError when, under
+    `pageSize`, neither page size is known, for a page holding an item an
+    earlier page returned, or after `max_pages` pages without reaching the
+    end.
+    """
+    offset_fields = _role_fields(scheme, "offset")
+    if len(offset_fields) != 1:
+        raise ValueError("an offset read has exactly one offset field")
+    [offset_field] = offset_fields
+    location, name = offset_field
+    advance = scheme["request"][location][name].get("advance", "itemCount")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    items, seen, offsets = [], set(), []
+    offset = 0
+    while True:
+        if max_pages is not None and len(offsets) >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {offset_field: offset}
+        values.update({field: page_size for field in size_fields})
+        body = request(values)
+        offsets.append(offset)
+        page = page_items(body, scheme)
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"the page at offset {offset} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        if advance == "pageSize":
+            # A reported page size counts only as an integer of at least 1 (§4.3.2).
+            reported = _count(_role_value(body, scheme, "pageSize"))
+            step = reported if reported and reported >= 1 else (page_size if size_fields else None)
+            if not step:
+                raise PageReadError(f"the page at offset {offset} gives no page size to advance by")
+            following = offset + step
+            if total_count is not None:
+                if following >= total_count:
+                    return {"items": items, "pages": len(offsets), "offsets": offsets}
+            elif not page:
+                return {"items": items, "pages": len(offsets), "offsets": offsets}
+        else:
+            following = offset + len(page)
+            if not page or (total_count is not None and following >= total_count):
+                return {"items": items, "pages": len(offsets), "offsets": offsets}
+        offset = following
 
 
 def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):

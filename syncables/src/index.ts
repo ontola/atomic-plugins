@@ -28,9 +28,12 @@ export type {
   PollingHandle,
   PollOptions,
   SyncResult,
+  CollectionCoverage,
+  IncompleteRead,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
+  WritePreconditionState,
   WriteConflict,
   WriteResolution,
   WriteFailure,
@@ -38,9 +41,14 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  PresenceChange,
+  PresenceMark,
+  PresenceMarkValue,
+  MissingRecordFailure,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
+export { mergePatch } from './client/merge-patch.js';
 
 // The read path (also available without Node built-ins as `syncables/browser`).
 export {
@@ -63,6 +71,8 @@ export {
   ontologyShortname,
 } from './read/ontology.js';
 export type { Datatype, Ontology, Term } from './read/ontology.js';
+export { coveredSpan, instantsOf, wallClockParam } from './read/time-zone.js';
+export type { CoveredSpan, FieldSpan, ReadCoverage } from './read/time-zone.js';
 export { DEFAULT_READ_LIMITS } from './read/pages.js';
 export type { ReadLimits } from './read/pages.js';
 export { fetchTransport } from './read/transport.js';
@@ -87,6 +97,12 @@ export type {
   CollectionSnapshot,
 } from './read/collections.js';
 export type { RawReadResponse, StoreReadResponse } from './read/responses.js';
+export type {
+  RuntimeClass,
+  RuntimeDescriber,
+  RuntimeMembers,
+  RuntimeProperty,
+} from './read/runtime-schemas.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';
@@ -118,7 +134,9 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
+export { PageReadError } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
+export type { ShortPageObject } from './pagination/types.js';
 
 export {
   PaginationSchemeError,
@@ -136,3 +154,33 @@ export type {
   ResponseRole,
   SchemeType,
 } from './pagination/types.js';
+
+// The daemon side of a webhook inbox (ontola/atomic-plugins#369): signed
+// requests to the receiver, its consumer routes, and the journal-before-ack
+// consumer. Node only: not in `syncables/browser`.
+export {
+  agentKeyFromSeed,
+  sha256Hex,
+  signedTransport,
+  v2Headers,
+  v2Message,
+} from './inbox/sign.js';
+export type { AtomicAgentKey } from './inbox/sign.js';
+export { InboxClient, InboxError } from './inbox/client.js';
+export type {
+  GapMarker,
+  InboxEvent,
+  InboxEventPage,
+  InboxSubscription,
+  ReconciliationRequired,
+  SubscribeRequest,
+} from './inbox/client.js';
+export { InboxConsumer, InMemoryInboxJournal } from './inbox/consumer.js';
+export type {
+  InboxConsumerOptions,
+  InboxJournal,
+  StepResult,
+  StoredSubscription,
+} from './inbox/consumer.js';
+export { scopedReads } from './inbox/reads.js';
+export type { ScopedRead } from './inbox/reads.js';
