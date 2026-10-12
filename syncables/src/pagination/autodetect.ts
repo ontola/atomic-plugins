@@ -195,6 +195,28 @@ export function resolveEffectiveScheme(
         `x-pagination applies the pagination scheme "${name}", whose shortPage needs exactly one request field with role page`,
       );
     }
+    // Rule 25 (0.7.0): an offset that advances by the page size needs one.
+    const advancesByPageSize = (
+      ['queryParameters', 'bodyFields'] as const
+    ).some((location) =>
+      Object.values(scheme.request?.[location] ?? {}).some(
+        (field) => field.role === 'offset' && field.advance === 'pageSize',
+      ),
+    );
+    const hasPageSize =
+      (['queryParameters', 'bodyFields'] as const).some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.role === 'pageSize',
+        ),
+      ) ||
+      Object.values(scheme.response?.bodyFields ?? {}).some(
+        (field) => field.role === 'pageSize',
+      );
+    if (advancesByPageSize && !hasPageSize) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose offset advances by the page size but which has no request or response field with role pageSize`,
+      );
+    }
     return { schemeName: name, scheme };
   }
 

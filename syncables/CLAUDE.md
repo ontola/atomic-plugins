@@ -171,9 +171,12 @@ Data flows through four stages, each its own directory under `src/`:
    conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
    the removal is told, or keeps the mark (not clearing) when the handler
    throws, so the record is checked again. `dropMark` drops a mark outside
-   `tell`/`setMark` (`settled`, a clearing mark on a record that stays) and
+   `tell`/`setMark` (a read returning the record, `settled`, a clearing
+   mark on a record that stays) and
    its held change, replaced by `present` when the mark is `told` (set by
-   a successful end tell, kept by `setMark`, and set on restored marks).
+   a successful end tell and on restored marks; `setMark` keeps it from
+   the mark before, or sets it when the change it replaces is a held
+   `present`, the only trace of a told mark once that mark is dropped).
    `client.presence()` lists
    `keptMarks`. `seenAt` (in
    memory, set for every record a sync's reads return to that sync's start,
@@ -554,6 +557,24 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) keeps `nextCursor`'s
+  items-returned step. The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
