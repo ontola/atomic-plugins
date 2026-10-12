@@ -1,10 +1,11 @@
 // @wc-ignore-file
 /**
- * The consumer side of the OpenAPI Throttling Extension 0.3.0-draft
+ * The consumer side of the OpenAPI Throttling Extension 0.4.0-draft
  * (`openapi-extensions/spec/throttling/README.md`): the root `x-throttling`
  * object's `headers` (header roles), `bodyFields` (the same roles read from
  * the JSON response body, since 0.3.0), `signals` (which responses mean
- * throttling) and the earliest retry time, after `classify()` in that
+ * throttling, or, since 0.4.0, a `blocked` refusal not worth retrying) and
+ * the earliest retry time, after `classify()` in that
  * folder's `validate.py`. `limits` and `applies` are read only for the
  * bucket a `quotaExhausted` signal names (its window is the fallback when no
  * time is given) and for which buckets an operation selects. Pacing against
@@ -51,7 +52,12 @@ export type BodyPredicate = { pointer: string } & (
   | { item: BodyPredicate }
 );
 
-export type ThrottlingMeaning = 'throttled' | 'quotaExhausted';
+/**
+ * `blocked` (0.4.0): a refusal the API documents as not worth retrying. It
+ * is not throttling: no retry time, never resent automatically. A signal
+ * whose meaning this consumer does not recognise is read as `blocked`.
+ */
+export type ThrottlingMeaning = 'throttled' | 'quotaExhausted' | 'blocked';
 
 /** Signal Object: a response the API documents as a rate-limit refusal. */
 export interface SignalObject {
@@ -128,7 +134,7 @@ const UNITS = new Set<string>([
   'httpDate',
   'deltaSecondsOrHttpDate',
 ]);
-const MEANINGS = new Set<string>(['throttled', 'quotaExhausted']);
+const MEANINGS = new Set<string>(['throttled', 'quotaExhausted', 'blocked']);
 
 const isScalar = (value: unknown): value is JsonScalar =>
   value === null ||
@@ -263,10 +269,12 @@ function parseSignal(value: unknown): SignalObject | undefined {
     )
   )
     return undefined;
-  if (typeof meaning !== 'string' || !MEANINGS.has(meaning)) return undefined;
+  // 0.4.0: a meaning this consumer does not recognise is read as blocked,
+  // so it never resends on a meaning it cannot read.
+  if (typeof meaning !== 'string' || meaning === '') return undefined;
   const signal: SignalObject = {
     status: [...(status as number[])],
-    meaning: meaning as ThrottlingMeaning,
+    meaning: MEANINGS.has(meaning) ? (meaning as ThrottlingMeaning) : 'blocked',
   };
   if (header !== undefined) {
     const parsed = parseHeaderPredicate(header);
@@ -287,6 +295,12 @@ function parseSignal(value: unknown): SignalObject | undefined {
     signal.minDelaySeconds = minDelaySeconds;
   }
   if (typeof description === 'string') signal.description = description;
+  // blocked takes no bucket and no delay: it is not counted.
+  if (
+    signal.meaning === 'blocked' &&
+    (signal.bucket !== undefined || signal.minDelaySeconds !== undefined)
+  )
+    return undefined;
   return signal;
 }
 
@@ -636,6 +650,9 @@ export function classifyThrottling(
     break;
   }
   if (!signal && response.status !== 429) return undefined;
+  // 0.4.0: a blocked refusal is not throttling, even as a 429: no retry
+  // time, and the caller must not resend it by itself.
+  if (signal?.meaning === 'blocked') return { meaning: 'blocked', signal };
   const meaning: ThrottlingMeaning = signal?.meaning ?? 'throttled';
   // Each role's values: from its header, then from its body field (0.3.0).
   // A role read from both counts once: the later time for retryAfter and

@@ -169,6 +169,9 @@ export interface WriteFailure {
    * Set when the response is throttling under the document's `x-throttling`
    * (draft Throttling extension: a matching Signal Object, or a 429), with
    * the earliest retry time when one is known. See `classifyThrottling`.
+   * Its `meaning` is `blocked` (Throttling 0.4.0) for a refusal the API
+   * documents as not worth retrying: not throttling, and `permanent` by
+   * default.
    */
   throttling?: ThrottlingVerdict;
   /**
@@ -191,7 +194,9 @@ export interface WriteFailure {
  * The default classification:
  * - a delete answered 404 or 410: `satisfied` (the record is already gone);
  * - a response that is throttling under the document's `x-throttling`
- *   (`failure.throttling`: a matching signal, or any 429): `retry`;
+ *   (`failure.throttling`: a matching signal, or any 429): `retry`; but a
+ *   `blocked` one (Throttling 0.4.0: the API documents that retrying won't
+ *   help), `permanent`, whatever its status;
  * - 401: `auth`;
  * - 403, when the document declares no signals: `retry` when the response
  *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
@@ -212,7 +217,8 @@ export function defaultWriteFailureClass(
   const { status, type, headers } = failure;
   if (type === 'delete' && (status === 404 || status === 410))
     return 'satisfied';
-  if (failure.throttling) return 'retry';
+  if (failure.throttling)
+    return failure.throttling.meaning === 'blocked' ? 'permanent' : 'retry';
   if (status === 401) return 'auth';
   if (status === 403) {
     if (
@@ -2653,6 +2659,13 @@ export function createApiClient(
       body: error.body,
       receivedAt: error.receivedAt,
     });
+    // A blocked answer (Throttling 0.4.0) ends the write: not resent.
+    if (throttled?.meaning === 'blocked') {
+      write.attempts += 1;
+      write.lastError = `The read the write precondition needs was refused, and the API documents that retrying won't help: ${error.message}`;
+      write.lastStatus = error.status;
+      return { status: 'gaveUp' };
+    }
     if (throttled) {
       if (throttled.retryAt !== undefined)
         write.notBefore = Math.max(write.notBefore ?? 0, throttled.retryAt);
@@ -3259,7 +3272,7 @@ export function createApiClient(
     } catch (error) {
       // Throttling under the document's x-throttling (a matching signal, or
       // a 429), with the earliest retry time; decided once per response.
-      const throttled =
+      const verdict =
         error instanceof HttpStatusError
           ? classifyThrottling(throttling, {
               status: error.status,
@@ -3268,6 +3281,10 @@ export function createApiClient(
               receivedAt: error.receivedAt,
             })
           : undefined;
+      // A blocked answer (Throttling 0.4.0) is not throttling: no retry
+      // time, no bucket pause. The classifier still sees it, and calls it
+      // permanent by default.
+      const throttled = verdict?.meaning === 'blocked' ? undefined : verdict;
       // The earliest retry time holds the write whatever path its class
       // takes below (uncertain, blocked, failed, retried): set it here, so
       // that a resolveWrite retry or authRenewed() never sends it earlier.
@@ -3340,7 +3357,7 @@ export function createApiClient(
       }
       const classified =
         error instanceof HttpStatusError
-          ? classify(write, error, sentAfterRenewal, throttled)
+          ? classify(write, error, sentAfterRenewal, verdict)
           : undefined;
       let failureClass: WriteFailureClass = classified?.result ?? 'retry';
       // Any answer but a refusal shows the credentials were accepted; a 403
