@@ -163,22 +163,23 @@ function provider(initial: Pet[]): {
       }
       const current = fake.pets.get(id);
       if (!current) return response({ error: 'not found' }, 404);
-      if (ifMatch !== undefined && ifMatch !== current['version'])
+      if (ifMatch !== undefined && ifMatch !== String(current['version']))
         return response({ error: 'precondition failed' }, 412);
       let answer: TransportResponse;
       if (r.method === 'DELETE') {
         fake.pets.delete(id);
         answer = response(undefined, 204);
       } else {
-        const n = Number(String(current['version']).slice(1)) + 1;
+        // A numeric version counts up as a number, `vN` as text.
+        const old = current['version'];
+        const version =
+          typeof old === 'number'
+            ? old + 1
+            : `v${Number(String(old).slice(1)) + 1}`;
         const updated =
           r.method === 'PATCH'
-            ? {
-                ...(mergePatch(current, body) as Pet),
-                id,
-                version: `v${n}`,
-              }
-            : { ...(body as Pet), id, version: `v${n}` };
+            ? { ...(mergePatch(current, body) as Pet), id, version }
+            : { ...(body as Pet), id, version };
         fake.pets.set(id, updated);
         answer = response(updated);
       }
@@ -706,11 +707,12 @@ describe('write preconditions: declarations', () => {
     expect(fake.log).toEqual([]);
   });
 
-  it('drops an unknown stored precondition state on restore', async () => {
+  it('reads an unknown stored precondition state as resolving: the object is read first', async () => {
     const storage = new InMemoryStorageAdapter();
-    const doc = document({ put: { kind: 'none' } });
+    const doc = document({ put: { ...IF_MATCH_BODY, idempotent: false } });
     const fake = provider([rex]);
-    fake.script.push(500, 500, 500);
+    // The PUT's outcome is unknown: the write is resolving, stored so.
+    fake.script.push(502);
     const client = createApiClient(doc, {
       storage,
       transport: fake.transport,
@@ -718,20 +720,35 @@ describe('write preconditions: declarations', () => {
     });
     await client.sync();
     await client.update('/pets', '1', { name: 'Rex II' });
-    await vi.waitFor(() => expect(fake.bodies).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { precondition: 'resolving' },
+      ]),
+    );
     await settle();
+    // A later client stored a state this one does not know.
     const outbox = (await storage.get('syncables:outbox', 'outbox')) as {
       records: { queue: Record<string, unknown>[] }[];
     };
+    expect(outbox.records[0]!.queue[0]!['precondition']).toBe('resolving');
     outbox.records[0]!.queue[0]!['precondition'] = 'pondering';
     await storage.put('syncables:outbox', 'outbox', outbox);
+    fake.log.length = 0;
     const again = createApiClient(doc, {
       storage,
       transport: fake.transport,
+      retry: { baseDelayMs: 1 },
     });
     await again.ready();
-    expect(again.pendingWrites()).toHaveLength(1);
-    expect(again.pendingWrites()[0]).not.toHaveProperty('precondition');
+    expect(again.pendingWrites()).toMatchObject([
+      { precondition: 'resolving' },
+    ]);
+    await again.sync();
+    await idle(again);
+    expect(fake.log.filter((l) => l !== 'GET /pets')).toEqual([
+      'GET 1',
+      'PUT 1 if-match v1',
+    ]);
   });
 });
 
@@ -800,5 +817,74 @@ describe('write preconditions: review cases', () => {
     await expect(client.create('/pets', { name: 'Kit' })).rejects.toThrow(
       /not a crudResources key/,
     );
+  });
+});
+
+describe('write preconditions: #490 review', () => {
+  it('keeps resolving across a resolveWrite retry: the object is read before anything is sent', async () => {
+    const doc = document({
+      patch: {
+        kind: 'none',
+        refuseWhen: [{ field: 'archived', values: [true] }],
+      },
+    });
+    const fake = provider([rex]);
+    const client = createApiClient(doc, {
+      storage: new InMemoryStorageAdapter(),
+      transport: fake.transport,
+      retry: { baseDelayMs: 1, maxAttempts: 1 },
+    });
+    await client.sync();
+    fake.log.length = 0;
+    fake.applyThenFail = true;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', precondition: 'resolving' },
+    ]);
+    await client.resolveWrite('/pets', '1', { action: 'retry' });
+    await idle(client);
+    // Applied the first time: the read settles it, no second PATCH.
+    expect(fake.log).toEqual(['PATCH 1', 'GET 1']);
+  });
+
+  it('compares a numeric version as sent with the version read', async () => {
+    const { client, fake } = await synced(
+      document({ put: { ...IF_MATCH_BODY, idempotent: false } }),
+      { retryMs: 1, pets: [{ ...rex, version: 5 }] },
+    );
+    fake.script.push(502);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    // The read shows version 5 still: not applied, sent again.
+    expect(fake.log).toEqual(['PUT 1 if-match 5', 'GET 1', 'PUT 1 if-match 5']);
+    expect(fake.pets.get('1')).toMatchObject({ name: 'Rex II', version: 6 });
+  });
+
+  it('holds a write whose precondition read is throttled until its time, without failing it', async () => {
+    const { client, fake } = await synced(
+      document({ put: { kind: 'readVerify' } }),
+    );
+    fake.itemStatus = 429;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending', lastStatus: 429 },
+      ]),
+    );
+    expect(fake.log).toEqual(['GET 1']);
+  });
+
+  it('blocks the client when the precondition read is refused for the credentials', async () => {
+    const { client, fake } = await synced(
+      document({ put: { kind: 'readVerify' } }),
+    );
+    fake.itemStatus = 401;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([{ state: 'blocked' }]),
+    );
+    expect(client.authBlocked()).toMatchObject({ status: 401 });
+    expect(fake.log).toEqual(['GET 1']);
   });
 });

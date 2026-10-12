@@ -244,12 +244,11 @@ with a row in [`openapi-extensions/README.md`](openapi-extensions/README.md);
 an overlay or the proxy then implements it, ideally in a later commit of the
 same PR. Spec versions are the `**Spec version:**` line of each README. The
 old repo is not archived from here; that, and pointing it at this folder,
-is Michiel's call. Its CI workflow (Python 3.11, the validators' own tests
-plus the example documents) waits at
-[`openapi-extensions/.github/workflows/openapi-extensions-ci.yml`](openapi-extensions/.github/workflows/openapi-extensions-ci.yml),
-where GitHub doesn't run it: moving it to the root `.github/workflows/`
-needs a push with the token's `workflow` scope, which agent sessions lack
-(`git mv openapi-extensions/.github/workflows/openapi-extensions-ci.yml .github/workflows/`). Like
+is Michiel's call. Its CI workflow,
+[`.github/workflows/openapi-extensions-ci.yml`](.github/workflows/openapi-extensions-ci.yml)
+(Python 3.11), runs every spec folder's `test_*.py` and each `validate.py`
+over its examples, discovered rather than listed, so a new spec needs no
+workflow change. Like
 the rest of the repository, Pages serves the folder as-is at
 `https://ontola.github.io/atomic-plugins/openapi-extensions/<path>`, but no
 catalog or overlay refers to those URLs; link the specs by repository path.

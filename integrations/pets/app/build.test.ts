@@ -16,10 +16,12 @@ describe('pets drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource, so the size is capped at
-    // the measured size plus about 10%: 52 630 bytes on 2026-10-05 for 0.1.3
-    // (syncables 0.19.0's read path; 48 273 for 0.1.2 with syncables 0.18.0).
-    // A change that needs more should say why and re-measure.
-    expect(bytes).toBeLessThan(57_900);
+    // the measured size plus about 10%: 43 982 bytes on 2026-10-12 for 0.1.4,
+    // minified by esbuild (syncables 0.21.0's read path; 85 203 for the same
+    // code unminified). 52 630 for 0.1.3 unminified with syncables 0.19.0,
+    // 48 273 for 0.1.2 with syncables 0.18.0. A change that needs more
+    // should say why and re-measure.
+    expect(bytes).toBeLessThan(48_400);
   });
 
   it('carries no credential handling or network access of its own', () => {

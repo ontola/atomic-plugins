@@ -20,7 +20,12 @@ export const OUTBOX_RECORD_ID = 'outbox';
 
 /** One queued or failed write, as stored. */
 export interface StoredWrite {
-  type: PendingWriteType;
+  /**
+   * `followUp` (added within version 1) for a compound create's follow-up
+   * update: a client from before it does not know the type and keeps the
+   * record's writes as unrestorable, never sending them.
+   */
+  type: PendingWriteType | 'followUp';
   data?: Record<string, unknown>;
   changes?: Record<string, unknown>;
   attempts: number;
@@ -56,7 +61,7 @@ export interface StoredWrite {
   /** Added within version 1: what a declared write precondition did. */
   precondition?: string;
   /** Added within version 1: an `ifMatch` write's version as sent. */
-  sentVersion?: string;
+  sentVersion?: string | number;
   /**
    * Added within version 1: an update made as a JSON Merge Patch (absent:
    * the full record, as every update before). A client from before this
@@ -69,6 +74,34 @@ export interface StoredWrite {
    * `resolveWrite` retry, so the write is never sent before it.
    */
   notBefore?: number;
+  /**
+   * Added within version 1, with `type: 'followUp'`: a follow-up update of
+   * a compound create (CRUD Causality 0.5.0 §4.7): its operation, the field
+   * it sets, the object the create planned, and why it was not applied
+   * (`refused`, `unknown`, `notSent`).
+   */
+  followUp?: StoredFollowUp;
+}
+
+/** A compound create's follow-up, as the outbox stores it. */
+export interface StoredFollowUp {
+  operation: string;
+  field: string;
+  planned: Record<string, unknown>;
+  reason?: 'refused' | 'unknown' | 'notSent';
+}
+
+function isFollowUp(value: unknown): value is StoredFollowUp {
+  return (
+    isRecord(value) &&
+    typeof value['operation'] === 'string' &&
+    typeof value['field'] === 'string' &&
+    isRecord(value['planned']) &&
+    (value['reason'] === undefined ||
+      value['reason'] === 'refused' ||
+      value['reason'] === 'unknown' ||
+      value['reason'] === 'notSent')
+  );
 }
 
 /** A bucket a `quotaExhausted` answer declared exhausted (`null`: every write) until `until` (ms since the epoch). */
@@ -168,7 +201,7 @@ export interface OutboxDocument {
   authBlock?: AuthBlock;
 }
 
-const TYPES = new Set(['create', 'update', 'delete']);
+const TYPES = new Set(['create', 'update', 'delete', 'followUp']);
 const STATES = new Set(['pending', 'uncertain', 'failed', 'blocked']);
 
 function isStringMap(value: unknown): value is Record<string, string> {
@@ -204,11 +237,16 @@ function isStoredWrite(value: unknown): value is StoredWrite {
     (value['precondition'] === undefined ||
       typeof value['precondition'] === 'string') &&
     (value['sentVersion'] === undefined ||
-      typeof value['sentVersion'] === 'string') &&
+      typeof value['sentVersion'] === 'string' ||
+      (typeof value['sentVersion'] === 'number' &&
+        Number.isFinite(value['sentVersion']))) &&
     (value['updateBody'] === undefined ||
       value['updateBody'] === 'mergePatch') &&
     (value['notBefore'] === undefined ||
       typeof value['notBefore'] === 'number') &&
+    (value['type'] === 'followUp'
+      ? isFollowUp(value['followUp'])
+      : value['followUp'] === undefined) &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
     // has no usable base, so it is kept as unrestorable rather than sent.
     value['lastKnown'] === undefined

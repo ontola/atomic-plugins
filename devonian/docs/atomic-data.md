@@ -65,7 +65,7 @@ subscription, identity resolution or durable synchronization protocol.
 - `read(external, subject)` returns a patch of managed native properties. It can return `related` resource patches and `identities` bindings for entity extraction; the complete projection and primary mapping are applied together.
 - `write(resource, previous)` produces the platform object. Merge into `previous` to preserve platform-only fields; explicitly remove managed optional fields when absent natively. For creates, `previous` is undefined.
 
-The connector implements `id`, `get`, `create`, `update`, and `delete`. It must keep the ID stable during updates. `get` must return the latest complete object needed by `write`. `create` receives a stable idempotency key and **must deduplicate repeated requests with that key**, including after a restart. `delete` must tolerate a record already being absent. Platforms without idempotent creation need connector-specific recovery/reconciliation; Devonian cannot guarantee exactly-once creation across a lost response by itself.
+The connector implements `id`, `get`, `create`, `update`, and `delete`. It must keep the ID stable during updates. `get` must return the latest complete object needed by `write`. `create` receives a stable idempotency key and **must honour it: deduplicate repeated requests with that key**, across retries and after a restart (as `AtomicConnector.create` says). `delete` must tolerate a record already being absent. Platforms without idempotent creation need connector-specific recovery/reconciliation; Devonian cannot guarantee exactly-once creation across a lost response by itself.
 
 Call `await lens.ingest(record)` on fetched records or webhooks. This creates or patches native resources and records identity without writing back to the source. Call `await lens.publish(subject)` after a native edit to create or update the external record. Operations on a lens are queued, complete only after their work finishes, and propagate errors to the caller. A failed operation does not poison subsequent calls. Retry `publish` after transient errors.
 
@@ -109,6 +109,29 @@ const restoredLens = atomicOrderLens(restored, restoredIdentities, connector);
 
 Construct the schema and identity map before loading, to register the mapping properties. `loadJSONAD` validates the entire document and rejects duplicate subjects before replacing current state. The snapshot includes identity mappings, so publishing restored resources uses their original platform IDs. The property catalog is supplied by application code, not serialized into the snapshot. Snapshot writing and scheduling are the caller's responsibility; the in-memory store is not itself durable.
 
+### Recovering from a crash
+
+`__tests__/atomic/recovery.test.ts` exercises the recipe, with a crash modelled as restoring the last checkpoint into a fresh store, identity map and lens while the platform keeps what it was sent:
+
+- **Checkpoint after awaited work.** A snapshot taken while a `publish` is still waiting on the platform does not hold the identity it binds; await the lens calls first.
+- **A crash after a successful remote create, before the checkpoint.** The restored host has no identity for the resource and publishes it again with the same idempotency key. A connector that honours the key, as `create` must, returns the record it already made, and the identity is bound again: one record.
+- **The same crash with a connector that does not honour the key** (its platform ignores keys and it does no reconciliation of its own) creates a duplicate. Devonian cannot prevent that by itself, and does not claim exactly-once creation for such connectors.
+- **Connector-side reconciliation**, which is how a connector for such a platform honours the key. If the platform stores a field the connector controls (a custom field, a label, a marker in the body; it may well be visible to people, like the example's note) the connector writes the key there on `create` and looks it up before creating again, which turns the crash above into one record. The marker lives in the connector, never in the native resource. Limits:
+  - the lookup must be complete and current: a search that can lag behind a create is not enough, since it misses the record the crash left behind;
+  - lookup-then-create is not atomic, so two hosts (or processes) creating the same resource at once can still both create; coordinate them (see "Concurrency" below) or accept the risk.
+- **Explicit uncertain creates**, where no such lookup exists. Keep an intent log next to the checkpoint, and keep the order of writes:
+  1. write the subject to the log, durably, before the create request is sent;
+  2. publish;
+  3. write the checkpoint that holds the new identity, durably;
+  4. only then remove the subject from the log.
+
+  After a restart, compare the log with the checkpoint:
+  - an intent whose identity is already in the checkpoint is stale (the host died between steps 3 and 4): clear it, and don't publish for it;
+  - an intent without an identity is a create that may or may not have happened. Don't publish it again on your own: show it to the person, and `bind` the platform record they find, or publish when they confirm there is none. Their "there is none" rests on what the platform shows them, which may lag behind a create too;
+  - if the log is lost, or older than the checkpoint, uncertain creates go unreported and the duplicate risk above returns. Write both to the same storage, with the same durability.
+
+Whether Devonian should ship this as an adapter is still open (#259).
+
 ## Concurrency and next milestones
 
 The queue serializes calls to one lens instance. It is not a distributed lock and does not serialize direct store edits or other lens instances. Coordinate writes to shared resources at the application level. Transformations should return projections rather than mutate the store while awaiting work. A connector write and local identity persistence are not a distributed transaction; stable idempotency keys are necessary for retry recovery.
@@ -138,7 +161,41 @@ await Promise.all([
 
 There are no revision clocks, stale-event rejection, cross-system conflict resolution, signed Atomic Commits, Atomic Server transport, permissions, or Automerge integration in the resource API yet. Ingest applies events in call order; it can restore an earlier-deleted resource, so the application must order or filter delayed webhooks. Native data alone does not supply distributed convergence.
 
-The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the concurrency contract above.
+### Event ordering
+
+`__tests__/atomic/ordering.test.ts` pins the default: a lens keeps no revisions. A delayed update ingested after `ingestDelete` brings the resource back under its old subject; an older update that arrives after a newer one overwrites it; replaying the same record is a no-op (same subject, same state).
+
+A platform's ordering information is connector-specific (an `updated_at`, a version, a webhook sequence number), so it stays with the host. The recipe the same test file exercises: keep the newest revision applied per external id, deletions included as tombstones; drop any event whose revision is not newer; record the revision only after the lens call succeeded, so a failed event can be retried; and run the check and the lens call in one promise chain, so two events for one id cannot interleave.
+
+```ts
+const revisions = new Map<ExternalId, number>(); // persist with the snapshot
+let tail: Promise<unknown> = Promise.resolve();
+const run = <T>(operation: () => Promise<T>): Promise<T> => {
+  const result = tail.then(operation);
+  tail = result.catch(() => undefined);
+  return result;
+};
+const stale = (id: ExternalId, revision: number) =>
+  (revisions.get(id) ?? -Infinity) >= revision;
+
+const onUpdate = (record: Platform, revision: number) =>
+  run(async () => {
+    if (stale(record.id, revision)) return undefined;
+    const subject = await lens.ingest(record);
+    revisions.set(record.id, revision);
+    return subject;
+  });
+const onDelete = (id: ExternalId, revision: number) =>
+  run(async () => {
+    if (stale(id, revision)) return;
+    await lens.ingestDelete(id);
+    revisions.set(id, revision); // the tombstone
+  });
+```
+
+Write `revisions` atomically with the store snapshot, in the same file or the same transaction. If they diverge after a crash, neither direction is safe: with `revisions` ahead of the store, events the store never applied are dropped as stale and their data is lost; with `revisions` behind it, a redelivered event older than the store's real state passes the check and rolls the record back. Every ingest path for the lens, full re-fetches and backfills included, must go through the same host chain; a direct `lens.ingest` call skips the revision check. The recipe does not resolve competing edits made on both sides (that needs `reconcileRecord` or connector logic), and whether the library should offer this as an opt-in hook is still open (#259).
+
+The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, the crash recovery recipe, the concurrency contract, and the default event ordering with the host ordering recipe above.
 
 Specification references: [JSON-AD](https://docs.atomicdata.dev/core/json-ad.html), [Atomic Schema](https://docs.atomicdata.dev/schema/intro.html), [Atomic Commits](https://docs.atomicdata.dev/commits/intro.html), [TypeScript SDK](https://atomicdata-dev.github.io/atomic-data-browser/docs/modules/_tomic_lib.html).
 

@@ -50,3 +50,22 @@ object version, a bodiless DELETE refused through `when`, an unknown
 merge-patch update settled by the values after the patch (`writtenOf`
 through `patchedField`), a source that is not a resource, and `null`
 passed to `maySend`; README updated.
+
+## Turn 3
+
+**Human (via the coordinator session):** #490 blockers: `resolveWrite`
+`retry` cleared `resolving`, so a write of unknown outcome was resent with
+no read (§4.5); `sentVersion` was stored as text and compared with
+`sameJson`, so a numeric version made a false conflict; merge main (#480)
+and skip preconditions for compound-create follow-ups. Nits: route the
+precondition reads through throttling and the auth block; read an unknown
+stored state as `resolving`; fix the restore test.
+
+**Assistant:** Merged #486's fix and main (README, `completeness-outcomes`
+test and five `client.ts` hunks; follow-ups skip the declaration, also on
+restore). `retry` keeps `resolving`. `sentVersion` is the raw version.
+`readRefused` handles a throttled or credential-refused object or source
+read as the write's own answer would. An unknown stored state is read as
+`resolving` (dropped on a create). Tests: the retry repro, a numeric
+version, a throttled and a 401 read, the follow-up under a `readVerify`
+update, and a restore test that starts from a real resolving write.

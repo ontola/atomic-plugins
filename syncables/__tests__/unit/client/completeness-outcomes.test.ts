@@ -344,6 +344,135 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     ]);
   });
 
+  for (const status of [404, 410])
+    it(`reads a ${status} under an unrecognised absent with no notFound as unavailable, never the deleted default (§7)`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness: { absent: 'archived' } }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([
+        {
+          evidence: 'unavailable',
+          source: 'read',
+          status,
+        },
+      ]);
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'failed', missingRecord: 'unavailable' },
+      ]);
+    });
+
+  // §7: under an unrecognised `absent`, a 410 by a recognised `gone`, then
+  // a recognised `notFound`; a 404 by a recognised `notFound`; else
+  // `unavailable`.
+  for (const [label, completeness, status, evidence] of [
+    [
+      'a 410 by a recognised gone first',
+      { absent: 'archived', notFound: 'unavailable', gone: 'deleted' },
+      410,
+      'deleted',
+    ],
+    [
+      'a 404 by notFound, not by gone',
+      { absent: 'archived', notFound: 'unavailable', gone: 'deleted' },
+      404,
+      'unavailable',
+    ],
+    [
+      'a 410 without gone by a recognised notFound',
+      { absent: 'archived', notFound: 'deleted' },
+      410,
+      'deleted',
+    ],
+    [
+      'a 404 by a recognised notFound',
+      { absent: 'archived', notFound: 'deleted' },
+      404,
+      'deleted',
+    ],
+    [
+      'a 404 without notFound as unavailable, whatever gone says',
+      { absent: 'archived', gone: 'deleted' },
+      404,
+      'unavailable',
+    ],
+  ] as const)
+    it(`under an unrecognised absent, classifies ${label} (§7)`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([{ evidence, source: 'read', status }]);
+    });
+
+  it('reads a 404 under a declaration with no absent as unavailable (§7)', async () => {
+    const { client, reports } = await editedThenMissing({
+      doc: document({ completeness: {} }),
+      item: gone(404),
+    });
+    await client.sync();
+    expect(reports).toMatchObject([
+      { evidence: 'unavailable', source: 'read', status: 404 },
+    ]);
+    expect(client.pendingWrites()[0]!.lastError).toMatch(
+      /no recognised absent value/,
+    );
+  });
+
+  it('keeps the deleted default when only a sibling collection has an unrecognised absent', async () => {
+    const doc = document();
+    const collections = (
+      doc.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, Record<string, unknown>>>
+      >
+    )['pet']!['collections']!;
+    // A sibling collection of the same resource, empty here.
+    collections['archived'] = {
+      urlTemplate: '/pet-deletions',
+      'x-completeness': { absent: 'archived' },
+    };
+    doc.paths['/pet-deletions'] = {
+      get: { responses: { '200': { description: 'Archived pets' } } },
+    };
+    const { client, reports } = await editedThenMissing({
+      doc,
+      item: gone(404),
+    });
+    await client.sync();
+    expect(reports.filter((r) => r.resource === 'pets')).toMatchObject([
+      { evidence: 'deleted', source: 'read', status: 404 },
+    ]);
+  });
+
+  it('counts an unrecognised absent on the list operation for a fixed-read collection, the safe reading', async () => {
+    // The reference declarations_of ignores the list operation's
+    // declaration for a fixed read (and would keep the deleted default);
+    // syncables counts it, as for notFound, which can only make a 404
+    // unavailable.
+    const doc = document({
+      completeness: { absent: 'archived' },
+      onOperation: true,
+    });
+    const collections = (
+      doc.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, Record<string, unknown>>>
+      >
+    )['pet']!['collections']!;
+    collections['pets']!['listQuery'] = { status: 'any' };
+    const { client, reports } = await editedThenMissing({
+      doc,
+      item: gone(404),
+    });
+    await client.sync();
+    expect(reports).toMatchObject([
+      { evidence: 'unavailable', source: 'read', status: 404 },
+    ]);
+  });
+
   for (const [label, completeness] of [
     ['no notFound', { absent: 'removed' }],
     ['notFound: deleted', { absent: 'removed', notFound: 'deleted' }],

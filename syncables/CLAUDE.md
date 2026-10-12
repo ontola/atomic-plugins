@@ -160,6 +160,21 @@ Data flows through four stages, each its own directory under `src/`:
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
+   after the reference `missing_value`/`follow_up_request`, parsed into
+   `CreateDeclaration.followUps`; one it cannot use sets
+   `route.createRefused`) drop `omit` fields from the body, and once the
+   create settles bound `drainQueue` puts `followUpWrites` (updates with
+   `QueuedWrite.followUp`, stored as type `followUp`) at the head of the
+   record's queue; `attemptWrite` computes the missing value against the
+   confirmed record at send time (nothing missing: settled without a
+   request), a refusal fails it `refused` and the following follow-ups
+   `notSent` (a 403 is `permanent` by default for a follow-up,
+   `WriteFailure.followUp`; `supersedesFollowUp` drops a failed follow-up
+   once a settled write, in `supersede`, or a newer queued one, in
+   `resolveWrite` `retry`, sets its field's first segment or deletes the
+   record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
+   and a `confirm`ed uncertain create queues them `awaitingRefresh`;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
@@ -196,8 +211,13 @@ Data flows through four stages, each its own directory under `src/`:
    `source: 'write'`. `deletionConfirmed` takes a feed tombstone,
    `absentMeansDeleted` or `notFound: deleted`, and `route.gone` decides a
    410. An unknown outcome sets `resolving`, also on restore of an in-flight
-   update or delete. `sentVersion` is stored for its rule 5, and
-   `resolveWrite` `retry` clears the state.
+   update or delete (not a follow-up, which preconditions skip). An unknown
+   stored state reads as `resolving`. `sentVersion` is the raw version
+   (string or number), stored for its rule 5. `resolveWrite` `retry` clears
+   every state but `resolving`. A refused precondition read goes through
+   `readRefused`: throttling sets `notBefore` and pauses buckets, and
+   `auth` blocks. A source read's refusal is kept in `sourceErrors`, not
+   cached.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -221,7 +241,9 @@ Data flows through four stages, each its own directory under `src/`:
    `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
    throttling under the document's root `x-throttling`, draft Throttling
    extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
-   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   `headers` (roles and time units), `bodyFields` (0.3.0: the same roles by
+   literal JSON dot-path, read from a throttling JSON body; a body wait of
+   no time counts as absent) and `signals`, `classifyThrottling`
    gives the verdict the client attaches as `WriteFailure.throttling`, a
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
@@ -298,7 +320,10 @@ Data flows through four stages, each its own directory under `src/`:
    `resource_not_found`; conflicting or unrecognised values are
    `unavailable`, a value beside an unrecognised `absent` counts; undefined
    when not stated, which the Write Preconditions consumer must not take as
-   a confirmed deletion; 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   a confirmed deletion; a route whose own Completeness Object has an
+   unrecognised `absent` has `unrecognisedAbsent`, and what neither `gone`
+   (a 410) nor `notFound` classifies is then `unavailable` (§7, after
+   `classify_read`); 0.2.0 §4.3; `declaredCompleteness` parses `absent`
    and `parentAbsent`, and ignores a declaration with an unrecognised
    `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
@@ -612,6 +637,16 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/compound-create.test.ts` covers compound creates on a
+  GitHub-issues-shaped document after the held overlay
+  (`__tests__/fixtures/compound-create.ts`): labels applied, dropped and
+  added, an `omit` field, a refused follow-up (403 and 422: partly
+  applied, the next `notSent`, no auth block, later writes going on, a
+  401 still blocking, a custom classifier deciding, superseded by an update
+  of its field) and its retry, an unknown outcome skipped or resent after the
+  read, a restart, an unresolved bind, a refused declaration, a confirmed
+  uncertain create, and no `followUps`; `compound-create-core.test.ts`
+  the pure parts.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
@@ -639,6 +674,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
   userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
   dot-paths).
+- `unit/throttling/body-fields.test.ts` mirrors the Throttling spec's
+  `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
+  rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
+  `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus
@@ -667,6 +706,22 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   isn't a valid scheme type — which was fixed upstream in
   https://github.com/localthought/overlays/pull/139; the vendored copy
   reflects that fix.)
+
+### Webhook inbox consumer (`src/inbox/`)
+
+The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
+`openapi-extensions/spec/webhook-subscriptions`), exported from the Node
+entry only (it uses `node:crypto`). `sign.ts` signs requests with Atomic v2
+signatures (`signedTransport`; tested against atomic-server's golden vectors
+in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
+`integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer
+routes. `consumer.ts` is `InboxConsumer.step()`: an event is appended to the
+caller's durable `InboxJournal` before it is acknowledged; a gap, a new
+subscription or an expiry (410) is recorded and followed by the caller's full
+`reconcile()` before `reconciled`. `reads.ts` (`scopedReads`) lists the paths
+an event names in `x-webhook-deliveries`. Tests in `unit/inbox/` run against
+`fake-inbox.ts`, an in-memory receiver with generations, barriers, a
+retention limit and leases on a simulated clock.
 
 ## Conventions
 

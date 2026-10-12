@@ -29,8 +29,8 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.4.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes. Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -385,10 +385,12 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.2.0-draft) lets a document say, at the root `x-throttling`, which
+(0.3.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
-unit) and which responses are rate-limit refusals (`signals`: a status
+unit), which JSON body fields report the same roles (`bodyFields`, since
+0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
+which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
 `quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
@@ -402,8 +404,19 @@ declared, plus that window; else the client's own backoff. An absolute time
 is measured against both the client's clock and the response's `Date`
 header, taking the later, so neither a wrong clock nor a wrong `Date` makes
 it earlier; a header value that does not parse in its declared unit is
-ignored. When no `retryAfter` role is declared, the standard `Retry-After`
-header is read as RFC 9110 defines it, as before the extension.
+ignored. When no `retryAfter` header role is declared, the standard
+`Retry-After` header is read as RFC 9110 defines it, as before the
+extension. A body field is read only from a throttling response whose body
+is JSON: its dot-path's names are matched literally (a name holding a `.`
+cannot be addressed; `a..b`, `.a` and `a.` are left out of the
+declaration), a string is trimmed, a number counts only when it has no
+fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
+an object does not parse. A role read from both a header and a body field
+counts once: the later time for `retryAfter` and `reset`, and the bucket is
+exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
+that gives no wait (`0`, or a time not after the response) counts as
+absent, so `minDelaySeconds`, the bucket window or the backoff still
+applies; those are fallbacks, not floors.
 
 For a write, a throttling verdict means `retry`, sent again no earlier than
 that time and never below the backoff. The time is stored with the queued
@@ -610,7 +623,11 @@ Since Collection Completeness 0.3.0, a `410` follows the resource's `gone`
 instead, when one is stated (`notFound: unavailable, gone: deleted` for a
 provider whose 410 means deletion and nothing else), read the same way:
 resource-wide, conflicting or unrecognised values `unavailable`; without
-`gone`, a 410 means what `notFound` says.
+`gone`, a 410 means what `notFound` says. Under an `absent` the client does
+not recognise on the record's own collection (§7), the order is the same: a
+`410` by a stated `gone`, else a stated `notFound`; a `404` by a stated
+`notFound`; and what neither classifies is `unavailable`, never the
+`deleted` default.
 `unavailable` means the
 record is kept with its last known values and its queued writes fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
@@ -995,6 +1012,73 @@ When the create operation declares an `x-crud` `create` for the resource
 
 Without a declaration, creates behave as described above.
 
+#### Compound creates (CRUD Causality 0.5.0 §4.7)
+
+A create whose `x-crud` lists `followUps` is a compound create: the create
+operation and, after it, one follow-up update per field it may not have
+applied (GitHub's issue `labels`, which the create silently drops without
+push access and `POST …/issues/{issue_number}/labels` then adds).
+
+- The create body leaves out every `create: omit` field (and keeps the
+  `include` ones).
+- Once the create is answered 2xx and bound (above), it is settled and
+  never sent again, and one queued `update` per follow-up whose field the
+  created record was given goes to the head of the record's queue, before
+  writes the app queued after the create. Each shows in `pendingWrites()`
+  with `followUp: { operation, field }`.
+- What a follow-up sends is worked out when it is sent: the planned value
+  minus what the confirmed record shows at `field` (for an array, the
+  planned items not among its items, compared through `itemKey`), filled
+  into the follow-up request by `bind` (path parameters default to the
+  create's). Nothing missing: it settles without a request. A bound value
+  that resolves to nothing: it fails with `reason: 'notSent'`. The
+  follow-up's answer is not merged into the record; the next refresh shows
+  the field.
+- A refused follow-up (a `permanent` answer) fails with
+  `reason: 'refused'`, and the later follow-ups of the same create fail
+  with `reason: 'notSent'`: the create is partly applied. Writes the app
+  queued after the create go on; one that sets a follow-up's field (or
+  deletes the record), settled or still queued, supersedes the failed
+  follow-up, so a retry never sends it over the app's own edit (the field's
+  first path segment is compared, the cautious direction for a nested
+  field). `resolveWrite` `retry` sends the failed follow-ups again, the
+  `notSent` ones included and in order, each with what is still missing;
+  `discard` drops them.
+- A follow-up answered `403` is such a refusal under the default failure
+  classes (`WriteFailure.followUp` is set, and `method` is the follow-up's):
+  the create just succeeded with the same credentials, so the `403` refuses
+  that field (GitHub's labels without push access), not the credentials,
+  and the client is not blocked. That reasoning is weaker for a follow-up
+  sent long after its create (after a restart, a read-back or a retry days
+  later), when the credentials may have changed meanwhile; an app that
+  cares passes a `classifyWriteFailure`. A rate-limit `403` is still
+  retried, a `401` still blocks, and a `classifyWriteFailure` still
+  decides.
+- A follow-up whose outcome is unknown (no answer, a 5xx other than 503)
+  stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
+  sent before a complete read of its collection, and then only if the
+  field is still missing; `resolveWrite` `retry` refuses it (it would skip
+  the read), `discard` drops it. If it fails meanwhile (the refresh-miss
+  limit, a missing record), `retry` queues it again still waiting for that
+  read. A throttled answer is waited out as for
+  any write.
+- An uncertain create settled with `resolveWrite` `confirm` queues its
+  follow-ups with `awaitingRefresh`, so the object is read before any is
+  sent. An unbound create sends none.
+- A `followUps` the client cannot use (a follow-up operation that is not
+  exactly one `update` of the same resource, a bind key or source it cannot
+  fill, a `path.`/`query.`/`header.` key naming a parameter the operation
+  and its path item do not declare, a `body` bind without a JSON request
+  body, a path parameter neither bound nor carried from the create, a
+  required query or header parameter not bound, a resource without a
+  usable identity) makes `create()` throw, rather than create the record
+  without the field.
+- When the create's record moves to the server's id, its follow-ups go
+  first, ahead of writes already queued under that id.
+
+Write Preconditions on a follow-up operation are not read. Not verified
+against a live provider.
+
 ### Write preconditions (`x-write-precondition`)
 
 A create, update or delete operation may declare `x-write-precondition`
@@ -1060,9 +1144,26 @@ That is anything the spec's `validate()` refuses, for example:
 - a source that is not a `crudResources` key, or whose identity variables
   are not path parameters of the operation.
 
-Nothing falls back to a default. `resolveWrite` `retry` clears the verdict, so the
-precondition is checked again when the write is sent. Not verified against a
-live provider; the tests use invented transports.
+Nothing falls back to a default.
+
+`resolveWrite` `retry` clears a `conflict`, `refused`, `gone` or
+`source-unknown` verdict, so the precondition is checked again when the
+write is sent. It keeps `resolving`, so the object is still read before
+anything is sent again. A stored state this client does not know (a later
+client's) is read as `resolving`.
+
+The reads a precondition needs (the object, a source object) are handled
+like the write's own answers:
+
+- a throttling answer holds the write until its time, and pauses an
+  exhausted bucket;
+- refused credentials (a `401`, say) block the client until
+  `authRenewed()`.
+
+A follow-up of a compound create is not checked against the update
+operation's declaration: compound writes are outside the extension's
+scope. Not verified against a live provider; the tests use invented
+transports.
 
 ### Durable outbox and restarts
 
@@ -1224,7 +1325,11 @@ tombstones of such a collection. The write fields `lastStatus`,
 retry time) and `unbound` (a create that cannot be sent again) and the
 top-level `throttlingPauses` (exhausted buckets) and `unavailable` (kept
 unavailable records); a stored `authBlock` that does not parse still blocks
-the client (`status` 0) until `authRenewed()`.
+the client (`status` 0) until `authRenewed()`. A compound create's
+follow-up is stored with the write type `followUp` (added within version
+`1`), which an older client does not know: it keeps the record's writes as
+unrestorable and writes them back unchanged, so they are neither sent nor
+lost.
 Downgrading: an older syncables that reads this outbox does not know
 `notBefore` and `throttlingPauses` and drops them, so it may send a held
 write before the time the API asked for, though never a second time. A
@@ -1567,6 +1672,37 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 - **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
   of a missing record means the resource's stated `gone` (resource-wide,
   like `notFound`; `route.gone`), else what `notFound` says.
+- **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
+  create's `followUps` leave `omit` fields out of the create body and, once
+  the create is bound, queue one follow-up update per field, sent in order
+  with only what the created record does not show (`bind`, `itemKey`). A
+  refused follow-up leaves the create partly applied (`followUp.reason`
+  `refused`, later ones `notSent`), an unknown outcome waits for a read of
+  the record, and the create is never sent again. A follow-up's `403` is a
+  refusal of that follow-up by default, not an auth block
+  (`WriteFailure.followUp`). A `followUps` the client cannot use makes
+  `create()` throw. `PendingWriteInfo.followUp` is new;
+  the outbox stores follow-ups as the write type `followUp` within version
+  `1`. Behaviour change only for documents whose create declares
+  `followUps`. Also: a read waiting out an exhausted bucket no longer
+  sleeps twice for one pause when the clock ticks between two readings
+  (`waitOutPauses` compares the pause's own end).
+- **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
+  whose collection declares an `absent` the client does not recognise is
+  classified by the resource's stated `gone` (a 410), then its stated
+  `notFound`, and otherwise `unavailable` (fail closed), as the reference
+  `classify_read` reads it, not the `deleted` default.
+- **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
+  of a missing record means the resource's stated `gone` (resource-wide,
+  like `notFound`; `route.gone`), else what `notFound` says.
+- **Unreleased**: Throttling 0.3.0-draft `bodyFields` (#454, with #463's
+  follow-up rules): the header roles read from the JSON body of a throttling
+  response, by literal dot-path. A string is trimmed and an integral number
+  (`3.0`) reads as an integer; a body wait of `0`, or a time not after the
+  response, counts as absent; a role from both a header and a body field
+  takes the later time, and `remaining` is exhausted when either is `0`.
+  `ThrottlingDeclaration` gains `bodyFields`. Tested on the spec's cases and
+  the held Todoist overlay's `error_extra.retry_after`.
 - **Unreleased**: `readCollections` (and so `sync()`) sends a
   `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
   time in their zone, read once before and once after the read; a window
