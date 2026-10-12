@@ -5,6 +5,7 @@
  * parses answers; signing is the transport's job (`signedTransport`).
  */
 import type { Transport } from '../read/transport.js';
+import { parseHttpDate } from '../throttling/throttling.js';
 import { queryString, requestUrl, trimBase } from './url.js';
 
 export interface GapMarker {
@@ -81,25 +82,33 @@ export const DEFAULT_BACKOFF_SECONDS = {
   /** `503`: the receiver's database or an access check is unavailable. */
   unavailable: 5,
   /**
-   * `409 barrier-mismatch` from `reconciled`: a newer gap moved the
-   * barrier, and the next fetch reports it.
+   * `409 barrier-mismatch` (a newer gap moved the barrier, or the
+   * subscription is still provisioning) or `409 obsolete-generation` (a gap
+   * ended the generation an ack or `reconciled` named): the next fetch
+   * reports the current state.
    */
   conflict: 1,
 } as const;
 
-/** `Retry-After` in seconds (delta seconds or an HTTP date), if usable. */
+/**
+ * `Retry-After` in seconds, if usable, by the same rules as the client's
+ * write retries (`client.ts` `retryAfterMs`): only space, tab, CR and LF are
+ * stripped; delay-seconds up to 2^53 − 1; or an HTTP-date in one of its
+ * exact forms (RFC 9110 §5.6.7, `parseHttpDate`). Anything else, such as
+ * `1.5`, `-1`, a 400-digit number or a date with a no-break space, is not.
+ */
 export function parseRetryAfter(
   value: string | undefined,
   now: number = Date.now(),
 ): number | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (/^[0-9]+$/.test(trimmed)) return Number(trimmed);
-  // An HTTP date names its weekday and month; `Date.parse` would also take
-  // `-1` as a year.
-  if (!/[A-Za-z]/.test(trimmed)) return undefined;
-  const date = Date.parse(trimmed);
-  if (Number.isNaN(date)) return undefined;
+  const stripped = value?.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+  if (!stripped) return undefined;
+  if (/^[0-9]+$/.test(stripped)) {
+    const seconds = Number(stripped);
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
+  const date = parseHttpDate(stripped);
+  if (date === undefined) return undefined;
   return Math.max(0, Math.ceil((date - now) / 1000));
 }
 
@@ -118,10 +127,12 @@ export class InboxError extends Error {
 
   /**
    * Seconds to wait before trying again, for a refusal that passes: a `429`
-   * (`capacity-unavailable`, `rate-limited`, `quota-exceeded`), a `503`, or
-   * a `409 barrier-mismatch` (the receiver's answer to `reconciled` when the
-   * subscription is no longer reconciling at that barrier). `Retry-After`
-   * wins when present. `undefined` for anything a retry would not fix.
+   * (`capacity-unavailable`, `rate-limited`, `quota-exceeded`), a `503`, a
+   * `409 barrier-mismatch` (the receiver's answer to `reconciled` when the
+   * subscription is no longer reconciling at that barrier, and to a fetch
+   * while it is still provisioning), or a `409 obsolete-generation` (an ack
+   * or `reconciled` for a generation a gap has ended). `Retry-After` wins
+   * when present. `undefined` for anything a retry would not fix.
    */
   backoff(): number | undefined {
     if (this.status === 429) {
@@ -130,7 +141,10 @@ export class InboxError extends Error {
     if (this.status === 503) {
       return this.retryAfter ?? DEFAULT_BACKOFF_SECONDS.unavailable;
     }
-    if (this.status === 409 && this.code === 'barrier-mismatch') {
+    if (
+      this.status === 409 &&
+      (this.code === 'barrier-mismatch' || this.code === 'obsolete-generation')
+    ) {
       return this.retryAfter ?? DEFAULT_BACKOFF_SECONDS.conflict;
     }
     return undefined;

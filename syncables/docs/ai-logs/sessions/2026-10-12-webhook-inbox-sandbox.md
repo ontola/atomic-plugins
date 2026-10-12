@@ -45,3 +45,21 @@ In syncables:
   journal whose writes are applied (or lost) after each step: no ack before
   the writes are durable, lost writes redelivered, a lost reconciliation
   run again, a moved barrier.
+
+## Turn 2
+
+**Human (relayed by the coordinator):** Nits from the #439 review for this
+PR: a 409 `obsolete-generation` from ack or `reconciled` should be a short
+backoff, not a hard error; add tests for a 503 backoff and for `events`
+answering 409 `barrier-mismatch` while provisioning. And now that #491 has
+merged, switch `parseRetryAfter` to its exported `parseHttpDate`, with the
+same strip and bound rules, and add tests.
+
+**Assistant:** Merged main. `InboxError.backoff()` now also covers a 409
+`obsolete-generation` (1 s by default), with the 503 and both 409 cases
+tested through the consumer. `parseRetryAfter` strips only space, tab, CR
+and LF, takes delay-seconds up to 2^53 − 1 and otherwise only an exact
+HTTP-date form through `parseHttpDate`, the same rules as the client's
+write retries; tests cover the bound, the stripping (a no-break space or a
+byte-order mark is not stripped) and loose dates that `Date.parse` would
+have read.
