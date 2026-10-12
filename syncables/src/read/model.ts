@@ -57,8 +57,8 @@ export interface ReadCollection {
   /**
    * Deletion Feeds 0.3.0-draft §4.5: the marker of deleted objects this
    * collection's reads return among the members (`x-list-tombstone`, on the
-   * Collection Object, else on its list operation). Absent when not
-   * declared, or when the declaration does not parse.
+   * Collection Object, else, or when that one does not parse, on its list
+   * operation). Absent when neither is declared or parses.
    */
   listTombstone?: ListTombstone;
 }
@@ -223,13 +223,15 @@ export function discoverReadModel(
       }
       const body = listField(col, 'listBody').value;
       const method = listMethodOf(col);
-      const listTombstone = parseListTombstone(
-        col['x-list-tombstone'] !== undefined
-          ? col['x-list-tombstone']
-          : document.paths[col['urlTemplate']]?.[
-              method === 'POST' ? 'post' : 'get'
-            ]?.['x-list-tombstone'],
-      );
+      // The Collection Object's, else (absent, or not parsing) the list
+      // operation's, as for read tombstones (§4.4, §4.5).
+      const listTombstone =
+        parseListTombstone(col['x-list-tombstone']) ??
+        parseListTombstone(
+          document.paths[col['urlTemplate']]?.[
+            method === 'POST' ? 'post' : 'get'
+          ]?.['x-list-tombstone'],
+        );
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;

@@ -1024,15 +1024,25 @@ answered; a Tombstone Object whose `except` does not parse is ignored.
 
 An item that is a list tombstone is not a member: `readCollections` leaves
 it out of `items` and lists its id in the snapshot's `tombstones`, and
-`readPlatform` makes no record of it. In `sync()`, a record whose collection
-read returned it as a list tombstone is absent from that read as a member,
-so it is removed like any record a complete read no longer returns, and a
-held update of it fails as `missingRecord: 'deleted'` with
-`source: 'list'`, before any declaration or GET (the evidence of every
-read of the sync, complete or not). A later read that returns the record
-as a member (a restore) brings it back. A declaration that does not parse
-is ignored: every item stays a member. Not verified against a real
-provider.
+`readPlatform` makes no record of it. In `sync()`, a complete read that
+returns a record only as a list tombstone concludes it deleted without a
+request (`source: 'list'`): a record without writes is told to `onPresence`
+as `deleted` and removed, or kept marked `deleted` under `retainDeleted`
+(`client.presence()`); a kept `unconfirmed` or `unavailable` mark is
+settled the same way; no check is counted against
+`maxMissingRecordChecks`; a held update or delete fails as
+`missingRecord: 'deleted'`, before any declaration or GET; and the
+members of a nested collection declaring `parentAbsent` are concluded as
+for any deleted parent. A read that ends without an error but is not
+complete (range windows, an undocumented short page) removes nothing, but
+its list tombstones still fail a held update or delete as deleted. A read
+that ends with an error reports no list tombstones (`tombstones` is
+empty); an object returned twice in one read, as a member or as a list
+tombstone, fails it as a repeated identity (a restore between pages, say),
+so neither copy is evidence. A later read that returns the record, not as
+a tombstone, brings it back. A Collection Object's declaration that does
+not parse is ignored, and the list operation's, if any, applies; with
+neither, every item stays a member. Not verified against a real provider.
 
 ### Uncertain creates
 
@@ -1780,8 +1790,19 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   declared marker, and match no `except` condition, are not members:
   `CollectionSnapshot.tombstones` lists their ids, `readPlatform` makes no
   record of them, and `sync()` takes them as `deleted` evidence
-  (`source: 'list'`, no GET) for a held update of the record. Behaviour
-  change only for documents that declare `x-list-tombstone`.
+  (`source: 'list'`, no GET): a record without writes is told `deleted`
+  and removed (kept marked under `retainDeleted`, uncounted against
+  `maxMissingRecordChecks`), and a held update or delete fails as deleted,
+  also from a read that ends without an error but is not complete. An
+  object one read returns twice, as a member or a list tombstone, fails the
+  read as a repeated identity. Behaviour change only for documents that
+  declare `x-list-tombstone`, apart from the next bullet.
+- **Unreleased**: A Tombstone Object's `field` (a feed's or a read
+  tombstone's, as a list tombstone's) must be a dot-path without an empty
+  segment: `a..b`, `.a` and `a.` no longer parse, so such a declaration is
+  ignored, and each name is read from the item's own fields only. Before, any
+  nonempty string was read as a path. A stored presence mark with
+  `source: 'list'` is restored; an older client drops that mark's source.
 - **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
   on create, update and delete operations: `ifMatch` sends the version
   (from the record, or an item GET when it is a header) and stops on a

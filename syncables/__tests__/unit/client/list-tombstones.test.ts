@@ -114,14 +114,15 @@ describe('isListTombstone (list_tombstone)', () => {
 
 describe('readCollections and readPlatform with list tombstones', () => {
   it('keeps list tombstones out of the members and reports their ids', async () => {
-    const fake = calendar(() => [meeting, cancelled, exception]);
+    const other = { id: 'e3', status: 'confirmed', summary: 'Other' };
+    const fake = calendar(() => [other, cancelled, exception]);
     const result = await readCollections(listTombstones, {
       transport: fake.transport,
       constants: { calendarId: 'c1' },
     });
     const [snapshot] = result.collections;
     expect(snapshot!.complete).toBe(true);
-    expect(snapshot!.items.map((i) => i['id'])).toEqual(['e1', 'e2_20261012']);
+    expect(snapshot!.items.map((i) => i['id'])).toEqual(['e3', 'e2_20261012']);
     expect(snapshot!.tombstones).toEqual(['e1']);
     // The fixed read sends showDeleted=true.
     expect(fake.requests[0]).toContain('showDeleted=true');
@@ -154,6 +155,28 @@ describe('readCollections and readPlatform with list tombstones', () => {
       constants: { calendarId: 'c1' },
     });
     expect(result.collections[0]!.tombstones).toEqual(['e1']);
+  });
+
+  it("uses the list operation's declaration when the Collection Object's does not parse", async () => {
+    const doc = structuredClone(listTombstones);
+    const collections = (
+      doc.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, Record<string, unknown>>>
+      >
+    )['event']!['collections']!;
+    doc.paths['/calendars/{calendarId}/events']!.get!['x-list-tombstone'] =
+      collections['eventsWithDeleted']!['x-list-tombstone'];
+    collections['eventsWithDeleted']!['x-list-tombstone'] = {
+      field: 'status',
+      values: [],
+    };
+    const result = await readCollections(doc, {
+      transport: calendar(() => [cancelled, exception]).transport,
+      constants: { calendarId: 'c1' },
+    });
+    expect(result.collections[0]!.tombstones).toEqual(['e1']);
+    expect(result.collections[0]!.items).toEqual([exception]);
   });
 
   it('keeps every item a member when the declaration does not parse', async () => {

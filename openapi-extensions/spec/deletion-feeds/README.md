@@ -202,7 +202,7 @@ cursor; otherwise the consumer discards its cursor and the next read has none.
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path to a field of the item. |
 | `values` | array of string, number or boolean | **Yes** | The item is a tombstone when the value at `field` equals one of these (same JSON type and value), unless `except` says otherwise. |
-| `except` | array of Condition Object | No | Since 0.3.0. Items that have the marker but are not deletions: an item that matches any of these conditions is not a tombstone. |
+| `except` | array of Condition Object | No | Since 0.3.0. A nonempty array. Items that have the marker but are not deletions: an item that matches any of these conditions is not a tombstone. |
 | `x-*` | any | No | Extension fields. |
 
 A **Condition Object** has a `field` (a dot-path into the item) and exactly
@@ -227,8 +227,10 @@ A tombstone has the meaning `absent: deleted` has in Collection Completeness
 has one, answers 404 or 410 for it, or a read tombstone (§4.4) when the
 resource declares `x-read-tombstone`. A state in which the object's read
 still answers 2xx without a read tombstone (archived, in a trash it can be
-restored from) is not a deletion, and its marker MUST NOT be declared as a
-tombstone value.
+restored from) is not a deletion: its marker MUST NOT be declared as a
+tombstone value for items that no `except` condition excludes. Where the
+marker also means deletion for other items, the value is declared and
+`except` excludes those in the other state.
 
 The converse does not hold everywhere: where a collection of a resource
 states `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
@@ -242,7 +244,10 @@ or its default is.
 A Tombstone Object (§4.3) placed under `x-read-tombstone` on a CRUD
 Causality Resource Object (§4.1 there), or on the Operation Object of the
 resource's `read` operation (the `GET` of its `identity.urlTemplate`). When
-both are present, the Resource Object's applies. It is not placed on a
+both are present, the Resource Object's applies. A declaration that does not
+parse (its fields not as this section and §4.3 give them) is ignored, and
+the other placement's, if any, applies; this rule also places list
+tombstones (§4.5). It is not placed on a
 Collection Object: the read belongs to the resource, and every collection of
 the resource shares it.
 
@@ -259,9 +264,10 @@ By declaring `x-read-tombstone`, the document states:
 
 * a read tombstone reports that the object was deleted when the read was
   made: it has the meaning of a tombstone (§4.3), as a 404 or 410 would;
-* the provider documents the marked state as the object's deletion. A state
-  it documents as something else (archived, hidden, completed, moved to a
-  trash) MUST NOT be declared, even when the collection's list leaves the
+* the provider documents the marked state as the object's deletion, for
+  every item that no `except` condition excludes. A state it documents as
+  something else (archived, hidden, completed, moved to a trash) MUST NOT be
+  declared for such items, even when the collection's list leaves the
   object out.
 
 The declaration does not say whether a deleted object can be restored.
@@ -269,10 +275,10 @@ Providers that keep a deleted object readable often allow it (Google
 Calendar's organizers can restore a cancelled event, §1.1), so a consumer
 treats every read tombstone as possibly restorable:
 
-* A read tombstone is the object's state at that read only. A later read of
-  the object that answers 2xx without the marker, or a later complete read
-  of the collection that returns the object without the marker, supersedes
-  it. A consumer MAY
+* A read tombstone is the object's state at that read only. A later 2xx
+  read of the object, not as a read tombstone, or a later read of the
+  collection that returns the object, not as a tombstone, supersedes it. A
+  consumer MAY
   also take a feed read made after it, whose last item about the object is
   not a tombstone, as superseding it.
 * A consumer SHOULD NOT keep a read tombstone in place of reading the object
@@ -296,7 +302,8 @@ with `showDeleted=true` returns cancelled events, §1.1). A List Tombstone
 Object placed under `x-list-tombstone` on a CRUD Causality Collection
 Object, or on the Operation Object of an operation that lists the
 collection, declares that marker for the collection's reads. When both are
-present, the Collection Object's applies. An operation's declaration covers
+present, the Collection Object's applies, and one that does not parse is
+ignored as §4.4 says. An operation's declaration covers
 every collection it lists, those with fixed reads (CRUD Causality §4.2.1)
 included.
 
@@ -331,8 +338,8 @@ By declaring `x-list-tombstone`, the document states:
 A list tombstone, like a read tombstone (§4.4), is the object's state at
 that read, and the object may be restorable:
 
-* A later read of the collection that returns the object as a member, or a
-  later 2xx read of the object without a read tombstone's marker,
+* A later read of the collection that returns the object, not as a
+  tombstone, or a later 2xx read of the object, not as a read tombstone,
   supersedes it.
 * A consumer SHOULD NOT send a write it queued before the list tombstone to
   the object without its user's or application's decision, as §4.4 says.
@@ -344,6 +351,13 @@ Items of a read that is not complete (a page failed, a budget stopped it)
 are still what the provider answered: a list tombstone among them is
 evidence about its object. Only the absence of an object from such a read
 says nothing (Collection Completeness §3).
+
+One read returns an object at most once. An object that one read returns
+twice, as a member and as a list tombstone or as two list tombstones (an
+object restored or deleted between two pages, say), is a repeated item: the
+read is not complete, and neither item is evidence about that object. A
+consumer that cannot tell which items of the read are repeated takes none
+of its list tombstones as evidence.
 
 ## 5. Relation to CRUD Causality and Collection Completeness
 
@@ -593,10 +607,11 @@ document in full. This example is not a declaration for Google Calendar.
 * Tombstones in a write answered 2xx; `x-read-tombstone` (§4.4) is about
   the `read` operation, `x-list-tombstone` (§4.5) about list reads.
 * Conditions on objects other than the item (a parent's state) to tell a
-  deletion apart (§4.5).
+  deletion apart (§4.3).
 * Whether a deleted object can be restored, and how (§4.4).
-* Restores: an item after a tombstone that is not one is only "not a
-  tombstone"; this version does not say the object exists again.
+* Restores in a feed: a feed item after a tombstone that is not one is only
+  "not a tombstone"; this version does not say the object exists again. What
+  supersedes a read tombstone or a list tombstone is in §4.4 and §4.5.
 
 ## 9. Validation
 
@@ -605,13 +620,15 @@ A conforming document:
 * MUST name, in `operationId`, a `GET` operation of the document;
 * MUST give `tombstone.values` at least one value;
 * MUST NOT declare a tombstone value for a state in which the object's read
-  still answers 2xx without a read tombstone (§4.3, §4.4);
+  still answers 2xx without a read tombstone, for items that no `except`
+  condition excludes (§4.3, §4.4);
 * MUST NOT declare a feed whose items about one object are not oldest first
   (§4.1);
 * MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
   NOT declare in it a state that the provider does not document as the
-  object's deletion (§4.4);
-* since 0.3.0: MUST give each `except` condition of a Tombstone Object (a
+  object's deletion, for items that no `except` condition excludes (§4.4);
+* since 0.3.0: MUST give a Tombstone Object's `except`, when present, at
+  least one condition, and each `except` condition of a Tombstone Object (a
   feed's, a read tombstone's or a list tombstone's) a `field` and exactly
   one of a nonempty `values` or `present: true`, and MUST exclude with one a
   marked state the provider documents as something other than deletion, or
@@ -637,8 +654,10 @@ A conforming consumer:
   (§4.4);
 * since 0.3.0: MUST NOT count an item, a read's body or a list item that
   matches an `except` condition as a tombstone (§4.3); MUST NOT store a list
-  tombstone as a member (§4.5); MAY treat its object as deleted when the read was made; MUST
-  treat a later read that returns the object as a member as superseding it.
+  tombstone as a member (§4.5); MAY treat its object as deleted when the
+  read was made; MUST treat a later read that returns the object, not as a
+  tombstone, as superseding it; MUST NOT take a list tombstone of an object
+  the same read returns twice as evidence (§4.5).
 
 ## Validator, tests and example
 
@@ -665,8 +684,11 @@ python3 validate.py examples/list-tombstones.yaml
   recurring event, which clients store, are not deletions wherever they are
   answered); adds `x-list-tombstone` (§4.5): items of a collection's read
   that carry a deletion marker, not members and possibly restorable; a
-  validator, tests and an example (§7.5). For ontola/atomic-plugins
-  pieces.md K18. A 0.2.0 document stays valid and means the same.
+  validator, tests and an example (§7.5). States one placement rule for
+  read and list tombstones (a declaration that does not parse is ignored,
+  §4.4) and what an object returned twice in one read means (§4.5). For
+  ontola/atomic-plugins pieces.md K18. A 0.2.0 document stays valid and
+  means the same.
 - **0.2.0-draft**: `x-read-tombstone` (§4.4).
 - **0.1.0-draft**: `x-deletion-feed`.
 
@@ -710,13 +732,17 @@ Object's `except` conditions (§4.3) wherever it reads one: a feed item, a
 read's body and a list item that match one are not tombstones, and a
 Tombstone Object whose `except` does not parse is ignored as a whole.
 
-It reads `x-list-tombstone` (§4.5; on the Collection Object, else on the
-list operation; a declaration that does not parse is ignored): a list
-tombstone is left out of the collection's members and its id reported with
-the read, so a record the read returned only as one is removed like any
-record a complete read no longer returns, and a held update of it fails as
-deleted without a read of the record (the list tombstones of every read in
-the sync count, complete or not). A later read that returns the record as a
-member brings it back.
+It reads `x-list-tombstone` (§4.5; on the Collection Object, else, or when
+that one does not parse, on the list operation): a list tombstone is left
+out of the collection's members and its id reported with the read. In a
+complete read, a record the read returns only as one is concluded deleted
+without a request (`source: 'list'`): removed, or kept marked deleted under
+its `retainDeleted` option, with no check counted against its limit, and a
+held update or delete of it fails as deleted. A read that ends without an
+error but is not complete removes nothing; its list tombstones still fail a
+held update or delete as deleted. A read that ends with an error reports no
+list tombstones; one that returns an object twice, as a member or a list
+tombstone, is such a read (its repeated-identity check). A later read that
+returns the record, not as a tombstone, brings it back.
 
 Not verified against a real provider.

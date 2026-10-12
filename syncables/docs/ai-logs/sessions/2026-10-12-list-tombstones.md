@@ -51,3 +51,39 @@ marks nothing). `read-tombstone-v2-32237fa5…` declares the read tombstone
 with the exception; its test checks it equals the list declaration and
 reads both cases. The overlays README section is one section for both,
 superseding #489's reading. Merged main.
+
+## Turn 3
+
+**Human (via the coordinator session):** #504 review. Blockers: merge
+main (conflicts in both READMEs and `client.ts`); the 0.2.0 rule is still
+stated unqualified in §4.3, §4.4 and §9 and contradicts `except`; a list
+tombstone of a record without writes is told `removed`, not `deleted`, and
+pruned even under `retainDeleted`, and it counts against
+`maxMissingRecordChecks`. Should fix: tombstones of incomplete reads are
+said to count but `findEvidence` runs only for complete reads; say what a
+list tombstone and a member with the same id in one read mean. Nits: a
+duplicated line in the overlays README, a nonempty `except`, one fallback
+rule for an unparseable declaration, one supersede wording, §8 scoped to
+feeds, the `singleEvents=true` caveat, the stricter dot-path in the
+changelog, and missing tests.
+
+**Assistant:** Merged main (`source` gains both `list` and `write`).
+The spec qualifies each statement of the rule with "for items that no
+`except` condition excludes", states that `except` is nonempty, places read
+and list tombstones by one rule (a declaration that does not parse is
+ignored and the other placement's applies), words superseding the same way
+in §4.4 and §4.5 ("not as a tombstone"), scopes §8's restores bullet to
+feeds, and adds to §4.5 that an object one read returns twice is a repeated
+item: the read is not complete and neither copy is evidence. In syncables:
+a write-less record returned only as a list tombstone is concluded
+`deleted` with `source: 'list'` (removed, or marked under
+`retainDeleted`), a kept mark is settled the same way, and no check is
+counted; a read that ends without an error but is not complete fails held
+updates or deletes of its list tombstones and removes nothing; a list
+tombstone's identity joins the repeated-identity check, and a read that
+ends with an error reports no tombstones; the list operation's declaration
+applies when the Collection Object's does not parse; `list` was missing
+from the sources a stored mark is restored with, and is added. Tests for
+each, which fail on the code before (one restart test checked separately).
+The Calendar overlay comment, the spec example and the overlays README say
+that with `singleEvents=true` nothing in the list reports a deleted series.
