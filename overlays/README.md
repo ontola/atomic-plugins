@@ -805,7 +805,19 @@ reader reads each Box list as one page and takes it as the whole list; v2
 applies its schemes explicitly and uses `pageNumber` with the `offset` role and
 `pageToken` with `cursor`/`nextCursor`. Box documents a maximum `offset` of
 9999, so an offset list longer than 10,000 entries ends with an error
-rather than early. `tests/test_box_pagination_v2.py` checks the catalog
+rather than early. Box also documents the next offset as
+`previous_offset + previous_limit`, "and not by the size of the entries in
+the response array, as this may be less than the limit", while syncables
+(0.21.0 and 0.22.0) advances by the entries returned and stops at the
+first empty page. So with syncables, an offset list whose page holds fewer
+entries than the limit before its end is read again from inside that page
+(the repeated entries fail a collection read), and an empty page before
+`total_count` ends the read as if complete, missing the entries after it
+without an error. Whether Box answers such pages is not verified. The
+marker lists do not have this risk. `GET /files/{file_id}/collaborations`
+is read by marker, as Box's reference says, although the pinned response
+schema shows offset fields; if Box answered it with offset fields and no
+`next_marker`, the read would end after one page and look complete. `tests/test_box_pagination_v2.py` checks the catalog
 against its base, and validates v2 and the Box platform composed from the
 catalog. Declared from Box's documentation and the pinned OAD; no Box
 request was made.
