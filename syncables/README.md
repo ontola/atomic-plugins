@@ -1749,6 +1749,17 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
+  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
+  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
+  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
+  reports a reconciliation only on the step after the writes landed.
+  `InboxClient` now refuses a base URL
+  that is not canonical (a lower-case host, no default port, no query,
+  fragment, user info, escape or dot segment) and strips every trailing
+  `/` from it, not only one. `InboxError.backoff()` also covers a `409
+  obsolete-generation`, and `parseRetryAfter` follows the client's
+  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
 - **Unreleased**: An `itemCount` offset read (the default `advance`)
   without a `totalCount` no longer stops after its first page (#495). It
   read short, with no error and without being reported incomplete. It now
