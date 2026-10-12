@@ -183,6 +183,18 @@ export function resolveEffectiveScheme(
         'x-pagination applies a rangeWindow scheme together with another scheme',
       );
     }
+    // Rule 22: a scheme with a Short Page Object pages by exactly one page field.
+    const pageFields = (['queryParameters', 'bodyFields'] as const).flatMap(
+      (location) =>
+        Object.values(scheme.request?.[location] ?? {}).filter(
+          (field) => field.role === 'page',
+        ),
+    );
+    if (scheme.response?.shortPage !== undefined && pageFields.length !== 1) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose shortPage needs exactly one request field with role page`,
+      );
+    }
     return { schemeName: name, scheme };
   }
 

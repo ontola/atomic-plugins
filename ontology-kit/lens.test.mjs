@@ -820,3 +820,58 @@ test('v3 storedMapping keeps guards, absent and default', () => {
   };
   assert.deepEqual(storedMapping(m), m);
 });
+
+test('law follow-ups: an out-of-domain backward view still gets PutGet and stable put', () => {
+  const m = {
+    version: 3,
+    fields: [{ source: '/title', target: NAME }],
+    guards: [{ at: '/id', is: 'present' }],
+  };
+  const targetRow = { [NAME]: 'A' };
+  // No GetPut verdict (the targetRow-built view has no id), but a desired view
+  // that is in the domain is still checked.
+  assert.deepEqual(
+    lawProblems(m, targetRow, { id: 1, title: 'B' }, 'backward'),
+    [],
+  );
+  // A desired view outside the domain is refused by put, as before.
+  code(
+    () => lawProblems(m, targetRow, { title: 'B' }, 'backward'),
+    'out-of-domain',
+  );
+});
+
+test('law follow-ups: "-" is an array place, refused with unset or default', () => {
+  for (const field of [
+    { source: '/t/-', target: NAME, absent: 'unset' },
+    { source: '/t', target: '/n/-', absent: 'default', default: 'x' },
+  ])
+    code(() => parseMapping({ version: 3, fields: [field] }), 'bad-mapping');
+});
+
+test('law follow-ups: backward PutGet checks one-way fields against get', () => {
+  const m = {
+    version: 3,
+    fields: [
+      { source: '/content', target: NAME },
+      {
+        source: '/due/date',
+        target: DUE,
+        convert: 'day-of',
+        readOnly: true,
+        absent: 'unset',
+      },
+    ],
+  };
+  const targetRow = { [NAME]: 'c', [DUE]: '2026-10-08' };
+  assert.deepEqual(
+    lawProblems(
+      m,
+      targetRow,
+      { content: 'c', due: { date: '2026-10-09T10:00' } },
+      'backward',
+    ),
+    [],
+  );
+  assert.deepEqual(lawProblems(m, targetRow, { content: 'c' }, 'backward'), []);
+});

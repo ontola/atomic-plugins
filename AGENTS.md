@@ -128,9 +128,13 @@ buildable and publishable TypeScript package (own `package.json`,
 `pnpm-lock.yaml`, `tsconfig.json`) migrated in from the standalone
 `localthought/devonian` repo, full commit history included via `git
 subtree`. It publishes to npm as `devonian`. Two plugins use it:
-`integrations/notion/` depends on the published npm version (exact version
-in its `package.json`), and `integrations/issue-tracker/devonian/github-issues/`
-imports this folder's source through a Vitest alias. A plugin's own lens lives in
+`integrations/notion/` and `integrations/issue-tracker/app/` depend on the
+published npm version (exact versions in their `package.json`), and the lens
+prototypes in `integrations/issue-tracker/devonian/` and
+`integrations/timesheets/devonian/` test against the npm version their
+plugin's `app/package.json` pins; those in `integrations/bookmarks/` and
+`integrations/solid/` still import this folder's source through a Vitest
+alias. A plugin's own lens lives in
 its plugin folder, at `integrations/<plugin>/devonian/<platform>/`, and
 imports `devonian` as a package, never by relative path into `devonian/src`;
 no lens is left inside the package. See [`devonian/AGENTS.md`](devonian/AGENTS.md)
@@ -412,7 +416,8 @@ if [ ! -x "$DIR/target/e2e/atomic-server" ]; then
     && cargo bin wasm-pack build --target web --out-dir pkg --no-opt \
     && cp pkg/atomic_wasm.js pkg/atomic_wasm_bg.wasm ../browser/data-browser/public/wasm/)
   (cd "$DIR" && SKIP_WASM_BUILD=1 VITE_E2E=true cargo build --profile e2e \
-    -p atomic-server --no-default-features --features wasm-plugins)
+    -p atomic-server --no-default-features --features wasm-plugins \
+    && git rev-parse HEAD > target/e2e/.built-for-atomic-plugins)
 fi
 export ATOMIC_SERVER_CHECKOUT=$DIR
 node integrations/tooling/link-atomic-server.mjs
@@ -431,6 +436,10 @@ lanes.
   unchanged (`0.0.0.0` inside, published on `127.0.0.1`).
 - Treat `$DIR` as read-only once it's built. Never commit in it or change
   its checkout, because other sessions may be using it at the same moment.
+  A branch with another pin uses that SHA's own `$DIR`, never this one.
+- The last line writes the stamp `serve.mjs` checks: it refuses a binary
+  whose stamp names another commit than its checkout. A binary without a
+  stamp is trusted, so always write it.
 - If you need atomic-server changes, make them in a separate worktree on a
   branch.
 - Delete old SHAs with `git -C ~/gh/ontola/atomic-server worktree remove`

@@ -47,7 +47,32 @@ neither are converted. The `convertWindowQuery` JSDoc sits above its own
 function again, and `walkWindows` keeps its own. Test: the London window is
 refused.
 
-## Turn 3
+## Turn 4
+
+**Human (via the coordinator session):** When neither bound is converted,
+don't compare the raw bounds as strings: integer and unixSeconds windows fail
+falsely. Compare only when both bounds are converted, and only for date and
+dateTime formats. Document the mixed-clock repeated-hour case as a known
+limit. The two lint warnings in `time-zone.ts` come from #428's base.
+
+**Assistant:** Bounds are compared only when both were converted and the
+window format is `dateTime`, `date` or `basicDate` (fixed-width digits that
+order as strings). The `convertWindowQuery` JSDoc states the mixed-clock
+case as a known limit. Tests: an integer window with no conversion and a
+unixSeconds window with both bounds passed through are sent without an
+error. The latest #428 head is merged in, which fixes the two lint
+warnings.
+
+**User:** Convert the start even when the end field isn't in the query. Add
+a JSDoc note that the comparison assumes offset-free digits.
+
+**Assistant:** `convertWindowQuery` now converts each bound whose field is
+in the query, and returns early only when neither is. The JSDoc says the
+comparison assumes wall-clock digits with one fixed suffix, not each
+bound's own offset. Test: a query `start` with a header `x-end` sends the
+converted start and the end unchanged.
+
+## Turn 5
 
 **Human (via the coordinator session):** Wire `windowValue` in
 `readCollections`, stacked on the window-zone branch over #428: call the
@@ -68,3 +93,19 @@ failed read gets `span: null, reason: 'incomplete'`, a changed zone
 `zoneChanged`, and a finished windowed read keeps its span with `reason:
 'incomplete'` (no `windowed` marker). `TimeZoneParameter` carries the
 `x-filter` field. Tests in `window-zone-read.test.ts`.
+
+## Turn 6
+
+**Human (via the coordinator session):** When #428 lands, update the
+wiring branch with the #433 fixes and #428's per-field coverage.
+
+**Assistant:** Merged main (with #428 and #433). `wallClockWindows` now
+builds on `wallClockQuery`: the query with the range's start in each
+`windowStart` parameter and its end in each `windowEnd` one gives the
+outer range's coverage in the per-field shape (`instants`, `spans`,
+`otherFilters`), and the hook writes each window bound in its
+parameter's zone from the same cached zone reads. A zoned `windowRange`
+parameter gives `noRangePredicate`. At the end a failed read gets
+`spans: null`, a changed zone `zoneChanged`, and a finished windowed read
+keeps its spans with `reason: incomplete`. Tests updated to the new shape,
+plus a failed windowed read and another narrowing query value.

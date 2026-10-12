@@ -153,13 +153,27 @@ describe('range windows over x-time-zone parameters', () => {
     ]);
     const [snapshot] = result.collections;
     expect(snapshot!.complete).toBe(false);
+    // What the windows asked for together: the outer range, per x-filter
+    // field, kept but marked incomplete (a windowed read is never complete).
     expect(snapshot!.coverage).toEqual({
       parameters: {
-        start: '2026-01-01T01:00:00Z..2026-01-01T01:00:10Z',
-        end: '2026-01-01T01:00:00Z..2026-01-01T01:00:10Z',
+        start: '2026-01-01T01:00:00Z',
+        end: '2026-01-01T01:00:10Z',
+      },
+      instants: {
+        start: '2026-01-01T00:00:00.000Z',
+        end: '2026-01-01T00:00:10.000Z',
       },
       zones: { start: 'Europe/Amsterdam', end: 'Europe/Amsterdam' },
-      span: { from: '2026-01-01T00:00:00.000Z', to: '2026-01-01T00:00:10.000Z' },
+      spans: [
+        {
+          field: '/start',
+          from: '2026-01-01T00:00:00.000Z',
+          fromInclusive: true,
+          to: '2026-01-01T00:00:10.000Z',
+          toInclusive: false,
+        },
+      ],
       reason: 'incomplete',
     });
   });
@@ -177,7 +191,13 @@ describe('range windows over x-time-zone parameters', () => {
     expect(log[1]).toBe('entries 2026-01-01T00:00:00Z 2026-01-03T00:00:00Z');
     expect(result.collections[0]!.coverage).toMatchObject({
       zones: { start: null, end: null },
-      span: { from: '2026-01-01T14:00:00.000Z', to: '2026-01-02T10:00:00.000Z' },
+      spans: [
+        {
+          field: '/start',
+          from: '2026-01-01T14:00:00.000Z',
+          to: '2026-01-02T10:00:00.000Z',
+        },
+      ],
       reason: 'incomplete',
     });
   });
@@ -197,7 +217,7 @@ describe('range windows over x-time-zone parameters', () => {
     const { transport } = server(['Europe/Amsterdam', 'Europe/London'], () => []);
     const result = await read(document(), transport);
     expect(result.collections[0]!.coverage).toMatchObject({
-      span: null,
+      spans: null,
       reason: 'zoneChanged',
     });
   });
@@ -206,5 +226,41 @@ describe('range windows over x-time-zone parameters', () => {
     const { transport, log } = server(['Europe/Amsterdam'], () => []);
     await read(document({ zonedEnd: false }), transport);
     expect(log[1]).toBe('entries 2026-01-01T01:00:00Z 2026-01-01T00:00:10Z');
+  });
+
+  it('gives a windowed read that failed no spans', async () => {
+    // Every answer is full (cap 2): the one-second windows cannot be split.
+    const { transport } = server(['Europe/Amsterdam'], (call) => [
+      { id: `a${call}` },
+      { id: `b${call}` },
+    ]);
+    const result = await read(document(), transport);
+    expect(result.errors[0]).toMatch(/cannot be split|too narrow|split/i);
+    expect(result.collections[0]!.coverage).toMatchObject({
+      spans: null,
+      reason: 'incomplete',
+    });
+  });
+
+  it('counts another narrowing query value against the windows too', async () => {
+    const doc = document();
+    const entries = doc.paths['/entries']!.get!;
+    entries.parameters = [
+      ...(entries.parameters ?? []),
+      { name: 'project', in: 'query', schema: { type: 'string' } },
+    ];
+    const { transport } = server(['Europe/Amsterdam'], () => []);
+    const result = await readCollections(doc, {
+      transport,
+      constants: {},
+      ranges: () => RANGE,
+      selection: {
+        query_overrides: [{ path: '/entries', values: { project: 'p1' } }],
+      },
+    });
+    expect(result.collections[0]!.coverage).toMatchObject({
+      spans: null,
+      reason: 'otherFilters',
+    });
   });
 });

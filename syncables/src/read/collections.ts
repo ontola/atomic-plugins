@@ -1,7 +1,6 @@
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
-import { resolveEffectiveScheme } from '../pagination/autodetect.js';
-import { windowFields } from '../pagination/window.js';
+import { declaredThrottling } from '../throttling/throttling.js';
 import {
   applySelection,
   asText,
@@ -23,14 +22,26 @@ import {
   type WalkOutcome,
   type WindowRange,
 } from './pages.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import type { PaginationSchemeObject } from '../pagination/types.js';
+import { windowFields } from '../pagination/window.js';
 import {
+  pagingFields,
+  rangeParameters,
   timeZoneParameters,
-  wallClockQuery,
   wallClockWindows,
+  wallClockQuery,
   zoneReader,
   type ReadCoverage,
 } from './time-zone.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import {
+  interpretRuntimeItems,
+  runtimeSchemasOf,
+  type RuntimeDescriber,
+  type RuntimeItem,
+  type RuntimeMembers,
+} from './runtime-schemas.js';
 import type { Transport } from './transport.js';
 
 export interface CollectionReadOptions {
@@ -88,11 +99,31 @@ export interface CollectionSnapshot {
   coverage?: ReadCoverage;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
+  /**
+   * For a resource that declares `x-runtime-schema` (Runtime Schemas
+   * 0.1.0-draft): each item's user-defined members, interpreted against its
+   * describer's class, in the order of `items`.
+   */
+  runtimeMembers?: RuntimeMembers[];
 }
 
 export interface CollectionReadResult {
   collections: CollectionSnapshot[];
   errors: string[];
+  /**
+   * Present when a read resource declares `x-runtime-schema`: every
+   * describer the items named, read once (twice after an unmatched member),
+   * with the class derived from it or the error that left its items without
+   * one.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read: they
+   * leave items without a class, not a collection incomplete. They are the
+   * last entries of `errors`, after every collection's. Present with
+   * `describers`.
+   */
+  describerErrors?: string[];
 }
 
 interface Origin {
@@ -161,6 +192,11 @@ export async function readCollections(
 ): Promise<CollectionReadResult> {
   const doc = resolveRefs(document);
   const model = discoverReadModel(doc, options.legacy);
+  // The collections' own fixed query values, before a selection narrows
+  // them: they define a collection rather than narrow it (coverage).
+  const fixedQueries = new Map(
+    model.collections.map((c) => [c.name, { ...c.listQuery }]),
+  );
   applySelection(doc, model, options.selection);
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
@@ -172,6 +208,7 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
+      declaredThrottling(doc),
     );
   const upstream = upstreamOf(doc);
   // Zones are read once per read and again after it (Filtering 0.2.0-draft).
@@ -183,6 +220,10 @@ export async function readCollections(
       error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
   );
   const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
+  // A resource whose x-runtime-schema cannot be used fails its collections
+  // before any request: its items' members could not be interpreted.
+  const runtimeFailures = new Map<string, string>();
+  const schemas = runtimeSchemasOf(doc, runtimeFailures);
   const collections: CollectionSnapshot[] = [];
   const errors: string[] = [];
   const origins = new Map<string, Origin[]>();
@@ -217,6 +258,8 @@ export async function readCollections(
         };
         collections.push(snapshot);
         try {
+          const failure = runtimeFailures.get(collection.resource);
+          if (failure !== undefined) throw new Error(failure);
           const operation = listOperation(
             doc,
             collection.url,
@@ -232,19 +275,63 @@ export async function readCollections(
             );
           }
           let query = collection.listQuery;
-          const timeZoned = operation
-            ? timeZoneParameters(
-                doc.paths[collection.url]?.['parameters'],
-                operation,
-              )
-            : [];
+          // A probe makes one request and reads nothing: no zone reads.
+          const timeZoned =
+            operation && !options.probe
+              ? timeZoneParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation,
+                )
+              : [];
+          const range = options.ranges?.(collection, path);
+          // A range read by windows sends wall-clock bounds to x-time-zone
+          // window parameters (Pagination Schemes 0.5.0 x Filtering 0.2.0).
+          let windowValue:
+            | ((parameter: string, bound: string) => string | undefined)
+            | undefined;
           if (timeZoned.length) {
-            const written = await wallClockQuery(
-              timeZoned,
-              query,
-              path,
-              zones.read,
-            );
+            let scheme: PaginationSchemeObject | undefined;
+            try {
+              scheme = resolveEffectiveScheme(
+                doc,
+                operation as OperationObject,
+              )?.scheme;
+            } catch {
+              // An unusable scheme fails the read in walkPages below.
+            }
+            const others = {
+              ranges: rangeParameters(
+                doc.paths[collection.url]?.['parameters'],
+                operation as OperationObject,
+              ),
+              paging: pagingFields(scheme),
+              fixed: fixedQueries.get(collection.name) ?? {},
+            };
+            const windows =
+              range && scheme?.type === 'rangeWindow' && scheme.window
+                ? await wallClockWindows(
+                    timeZoned,
+                    windowFields(scheme).filter(
+                      (field) => field.location === 'queryParameters',
+                    ),
+                    scheme.window,
+                    range,
+                    query,
+                    path,
+                    zones.read,
+                    others,
+                  )
+                : undefined;
+            const written =
+              windows ??
+              (await wallClockQuery(
+                timeZoned,
+                query,
+                path,
+                zones.read,
+                others,
+              ));
+            if (windows) windowValue = windows.windowValue;
             query = written.query;
             if (written.coverage) {
               snapshot.coverage = written.coverage;
@@ -252,40 +339,6 @@ export async function readCollections(
             }
           }
           const outcome: WalkOutcome = { complete: true };
-          const range = options.ranges?.(collection, path);
-          // A range read by windows sends wall-clock bounds to x-time-zone
-          // parameters (Pagination Schemes 0.5.0 x Filtering 0.2.0-draft).
-          let windowValue:
-            | ((parameter: string, bound: string) => string | undefined)
-            | undefined;
-          const scheme =
-            operation && range
-              ? resolveEffectiveScheme(doc, operation)?.scheme
-              : undefined;
-          if (
-            range &&
-            scheme?.type === 'rangeWindow' &&
-            scheme.window &&
-            timeZoned.length
-          ) {
-            const windows = await wallClockWindows(
-              timeZoned,
-              windowFields(scheme)
-                .filter((field) => field.location === 'queryParameters')
-                .map((field) => field.name),
-              scheme.window,
-              range,
-              path,
-              zones.read,
-            );
-            if (windows) {
-              windowValue = windows.windowValue;
-              snapshot.coverage = windows.coverage;
-              const entry = zoned.find((z) => z.snapshot === snapshot);
-              if (entry) for (const key of windows.keys) entry.keys.add(key);
-              else zoned.push({ snapshot, keys: windows.keys });
-            }
-          }
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -371,16 +424,45 @@ export async function readCollections(
       const coverage = snapshot.coverage as ReadCoverage;
       if (
         snapshot.error !== undefined ||
-        (!snapshot.complete && !snapshot.notComplete)
+        (!snapshot.complete && snapshot.notComplete === undefined)
       )
-        snapshot.coverage = { ...coverage, span: null, reason: 'incomplete' };
+        snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
-        snapshot.coverage = { ...coverage, span: null, reason: 'zoneChanged' };
-      else if (!snapshot.complete)
-        // Finished but never complete (range windows): the span asked for
-        // stays, marked incomplete.
+        snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
+      else if (!snapshot.complete && coverage.spans)
+        // Finished but never complete (range windows): the spans asked for
+        // stay, marked incomplete.
         snapshot.coverage = { ...coverage, reason: 'incomplete' };
     }
   }
-  return { collections, errors };
+  if (!schemas.size) return { collections, errors };
+  // Runtime Schemas §5.2: the describers are read in the same read as the
+  // items, after them, through the same budget.
+  const items: RuntimeItem[] = [];
+  for (const snapshot of collections) {
+    if (!schemas.has(snapshot.collection.resource)) continue;
+    const members: RuntimeMembers[] = [];
+    snapshot.runtimeMembers = members;
+    snapshot.items.forEach((item, index) =>
+      items.push({
+        resource: snapshot.collection.resource,
+        item,
+        context: snapshot.pathParams,
+        set: (interpreted) => {
+          members[index] = interpreted;
+        },
+      }),
+    );
+  }
+  const describerErrors: string[] = [];
+  const describers = await interpretRuntimeItems(
+    schemas,
+    items,
+    budget,
+    upstream,
+    describerErrors,
+  );
+  // Last, after every collection error: callers split `errors` by count.
+  errors.push(...describerErrors);
+  return { collections, errors, describers, describerErrors };
 }

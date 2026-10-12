@@ -4,6 +4,7 @@ import type {
   OperationObject,
   ParameterObject,
 } from '../openapi/types.js';
+import type { PaginationSchemeObject } from '../pagination/types.js';
 import { isRecord } from './model.js';
 
 /**
@@ -34,7 +35,9 @@ export interface TimeZoneParameter {
    * `upper` for `lte`/`lt`, else undefined (no range predicate declared).
    */
   bound?: 'lower' | 'upper';
-  /** The parameter's `x-filter` field (a JSON Pointer), when it declares one. */
+  /** `gte`/`lte`: the bound itself is included. */
+  inclusive?: boolean;
+  /** The `x-filter` field (a JSON Pointer into an item) the bound compares. */
   field?: string;
 }
 
@@ -47,32 +50,62 @@ export interface CoveredSpan {
 }
 
 /**
- * What a read whose query has `x-time-zone` parameters with values is known
- * to have covered. `span` is null when it covers nothing known; `reason`
- * then says why.
+ * The UTC span one item field is bounded to by a read's `x-time-zone`
+ * parameters: their `x-filter` field, the ends, and whether each end is
+ * included (`gte`/`lte`) or not (`gt`/`lt`). An absent end is open.
+ */
+export interface FieldSpan {
+  field: string;
+  from?: string;
+  fromInclusive?: boolean;
+  to?: string;
+  toInclusive?: boolean;
+}
+
+/**
+ * What one request with `x-time-zone` query parameters asked for: the
+ * provider was asked for the collection's items whose fields are in every
+ * span of `spans` at once (one per `x-filter` field). This describes the
+ * query, not the local copy: an item in a span is local only if the read
+ * returned it and the caller kept it. `spans` is null when the request covers nothing
+ * known; `reason` then says why.
  */
 export interface ReadCoverage {
-  /** The `x-time-zone` query parameters and the values sent for them. */
+  /**
+   * The `x-time-zone` query parameters and the values sent for them: the
+   * wall-clock digits plus `suffix`, not instants.
+   */
   parameters: Record<string, string>;
+  /** The instants those values were written from, as given (ISO 8601 UTC). */
+  instants: Record<string, string>;
   /**
    * Per parameter, the zone its value was written in; null when the zone
    * could not be read, so the UTC digits were sent and the bound narrowed
    * by 14 hours.
    */
   zones: Record<string, string | null>;
-  span: CoveredSpan | null;
+  spans: FieldSpan[] | null;
   /**
    * `empty`: the lower end is not before the upper end (with an unknown
    * zone, any window of 28 hours or less). `zoneChanged`: a zone read again
    * after the read differs from the one a value was written in, or could
    * not be read again; read again for a known span. `noRangePredicate`: a
    * parameter declares no `x-filter` with `gte`, `gt`, `lte` or `lt`, so
-   * its value bounds nothing known. `incomplete`: the read did not finish
-   * (`span` null), or finished but is never complete, as a read by range
-   * windows (`span` is then what the windows asked for over the whole
-   * range, `x-filter` field by field).
+   * its value bounds nothing known. `otherFilters`: another query
+   * parameter with a value narrows the read in a way no span describes (an
+   * equality or other `x-filter`, an undeclared predicate, a range bound
+   * that is not an instant); paging parameters and the collection's own
+   * fixed `listQuery` values do not count. `incomplete`: the read did not
+   * finish (`spans` null), or it finished but is never complete, as a read
+   * by range windows (Pagination Schemes 0.5.0 §4.6.4), whose `spans` are
+   * then what the windows asked for over the whole range.
    */
-  reason?: 'empty' | 'zoneChanged' | 'noRangePredicate' | 'incomplete';
+  reason?:
+    | 'empty'
+    | 'zoneChanged'
+    | 'noRangePredicate'
+    | 'otherFilters'
+    | 'incomplete';
 }
 
 /** Current offsets run from UTC−12 to UTC+14; the fallback narrows by 14 hours. */
@@ -282,23 +315,83 @@ export function timeZoneParameters(
     if (!declaration) continue;
     const filter = parameter['x-filter'];
     const operator = isRecord(filter) ? filter['operator'] : undefined;
-    const field =
-      isRecord(filter) && typeof filter['field'] === 'string'
-        ? filter['field']
-        : undefined;
     const bound =
       operator === 'gte' || operator === 'gt'
         ? 'lower'
         : operator === 'lte' || operator === 'lt'
           ? 'upper'
           : undefined;
+    const field = isRecord(filter) ? filter['field'] : undefined;
     found.push({
       name,
       declaration,
-      ...(bound ? { bound } : {}),
-      ...(field !== undefined ? { field } : {}),
+      ...(bound && typeof field === 'string'
+        ? { bound, inclusive: operator === 'gte' || operator === 'lte', field }
+        : {}),
     });
   }
+  return found;
+}
+
+/**
+ * The query parameters of a pagination scheme that coverage leaves out:
+ * those `walkPages` overwrites or that only size the pages (roles
+ * `pageSize`, `offset`, `page`). None under a `rangeWindow` scheme, which
+ * sets its window fields instead, so a value a selection gives such a
+ * field narrows the read. A `pageToken` or `cursor` is never left out.
+ */
+export function pagingFields(
+  scheme: PaginationSchemeObject | undefined,
+): Set<string> {
+  if (!scheme || scheme.type === 'rangeWindow') return new Set();
+  return new Set(
+    Object.entries(scheme.request?.queryParameters ?? {})
+      .filter(([, field]) =>
+        ['pageSize', 'offset', 'page'].includes(String(field.role)),
+      )
+      .map(([name]) => name),
+  );
+}
+
+/** A query parameter's `x-filter` range role, when it declares one. */
+export interface RangeParameter {
+  bound: 'lower' | 'upper';
+  inclusive: boolean;
+  field: string;
+}
+
+/**
+ * Every query parameter of a list operation (its path item's and its own,
+ * its own winning by name) that declares an `x-filter` with `gte`, `gt`,
+ * `lte` or `lt`, by name, with its range role.
+ */
+export function rangeParameters(
+  pathItemParameters: unknown,
+  operation: OperationObject,
+): Map<string, RangeParameter> {
+  const found = new Map<string, RangeParameter>();
+  for (const list of [pathItemParameters, operation.parameters])
+    for (const parameter of Array.isArray(list) ? list : []) {
+      if (!isRecord(parameter) || parameter['in'] !== 'query') continue;
+      const name = String(parameter['name']);
+      found.delete(name);
+      const filter = parameter['x-filter'];
+      const operator = isRecord(filter) ? filter['operator'] : undefined;
+      const field = isRecord(filter) ? filter['field'] : undefined;
+      if (typeof field !== 'string') continue;
+      if (operator === 'gte' || operator === 'gt')
+        found.set(name, {
+          bound: 'lower',
+          inclusive: operator === 'gte',
+          field,
+        });
+      else if (operator === 'lte' || operator === 'lt')
+        found.set(name, {
+          bound: 'upper',
+          inclusive: operator === 'lte',
+          field,
+        });
+    }
   return found;
 }
 
@@ -427,7 +520,10 @@ export function zoneReader(
   }
 
   return {
-    async read(zone, path) {
+    async read(
+      zone: TimeZoneDeclaration['zone'],
+      path: Record<string, string>,
+    ): Promise<{ zone: string | null; key: string }> {
       if ('name' in zone)
         return {
           zone: isTimeZoneName(zone.name) ? zone.name : null,
@@ -443,7 +539,7 @@ export function zoneReader(
       }
       return { zone: await found, key };
     },
-    async recheck() {
+    async recheck(): Promise<Set<string>> {
       const changed = new Set<string>();
       for (const [key, source] of sources) {
         const before = await cache.get(key);
@@ -457,16 +553,37 @@ export function zoneReader(
 }
 
 /**
+ * The rest of a request's query, for its coverage: the range parameters
+ * without `x-time-zone` (`ranges`), the paging parameters `walkPages`
+ * overwrites or that only size the pages (`paging`: roles `pageSize`,
+ * `offset`, `page`) and the collection's own fixed `listQuery` values
+ * (`fixed`), which define the collection rather than narrow it, though a
+ * fixed range bound still bounds its field's span.
+ */
+export interface OtherQuery {
+  ranges: Map<string, RangeParameter>;
+  paging: Set<string>;
+  fixed: Record<string, string>;
+}
+
+/**
  * Steps 2 and 3 for one request: the query with each `x-time-zone`
  * parameter's instant written as wall-clock digits plus `suffix`, and what
- * the request covers, or no coverage when none of them has a value. The
- * keys are the zone sources the coverage depends on.
+ * the request covers, or no coverage when none of them has a value. Range
+ * parameters without `x-time-zone` add their instants to the spans of their
+ * fields; any other narrowing value (`others`) makes the coverage unknown.
+ * The keys are the zone sources the coverage depends on.
  */
 export async function wallClockQuery(
   parameters: TimeZoneParameter[],
   query: Record<string, string>,
   path: Record<string, string>,
   read: ReturnType<typeof zoneReader>['read'],
+  others: OtherQuery = {
+    ranges: new Map(),
+    paging: new Set(),
+    fixed: {},
+  },
 ): Promise<{
   query: Record<string, string>;
   coverage?: ReadCoverage;
@@ -475,10 +592,46 @@ export async function wallClockQuery(
   const sent = { ...query };
   const keys = new Set<string>();
   const values: Record<string, string> = {};
+  const instants: Record<string, string> = {};
   const zones: Record<string, string | null> = {};
-  let from: number | undefined;
-  let to: number | undefined;
+  // Per x-filter field: the tightest lower and upper end, in milliseconds.
+  const ends = new Map<
+    string,
+    {
+      from?: number;
+      fromInclusive?: boolean;
+      to?: number;
+      toInclusive?: boolean;
+    }
+  >();
   let noRange = false;
+  /** The tighter end wins; at the same instant, an excluded one. */
+  const addEnd = (
+    field: string,
+    bound: 'lower' | 'upper',
+    at: number,
+    inclusive: boolean,
+  ): void => {
+    const end = ends.get(field) ?? {};
+    ends.set(field, end);
+    if (bound === 'lower') {
+      if (
+        end.from === undefined ||
+        at > end.from ||
+        (at === end.from && !inclusive)
+      ) {
+        end.from = at;
+        end.fromInclusive = inclusive;
+      }
+    } else if (
+      end.to === undefined ||
+      at < end.to ||
+      (at === end.to && !inclusive)
+    ) {
+      end.to = at;
+      end.toInclusive = inclusive;
+    }
+  };
   for (const parameter of parameters) {
     const value = query[parameter.name];
     if (value === undefined || value === '') continue;
@@ -487,8 +640,9 @@ export async function wallClockQuery(
     const written = wallClockParam(value, zone, parameter.declaration.suffix);
     sent[parameter.name] = written;
     values[parameter.name] = written;
+    instants[parameter.name] = new Date(Date.parse(value)).toISOString();
     zones[parameter.name] = zone;
-    if (!parameter.bound) {
+    if (!parameter.bound || parameter.field === undefined) {
       noRange = true;
       continue;
     }
@@ -499,106 +653,141 @@ export async function wallClockQuery(
       zone,
       parameter.declaration.ambiguous,
     );
+    const inclusive = parameter.inclusive === true;
     if (one?.from !== undefined)
-      from = Math.max(from ?? -Infinity, Date.parse(one.from));
+      addEnd(parameter.field, 'lower', Date.parse(one.from), inclusive);
     if (one?.to !== undefined)
-      to = Math.min(to ?? Infinity, Date.parse(one.to));
+      addEnd(parameter.field, 'upper', Date.parse(one.to), inclusive);
+  }
+  // The rest of the query: range bounds without a zone are instants as
+  // given; any other narrowing value leaves the coverage unknown.
+  const zonedNames = new Set(parameters.map((p) => p.name));
+  let otherFilters = false;
+  for (const [name, value] of Object.entries(query)) {
+    if (zonedNames.has(name) || value === undefined || value === '') continue;
+    if (others.paging.has(name)) continue;
+    const range = others.ranges.get(name);
+    const at = /(Z|[+-]\d{2}:\d{2})$/i.test(value) ? Date.parse(value) : NaN;
+    // A fixed value defines the collection; a fixed range bound still
+    // bounds its field's span.
+    const fixed = others.fixed[name] === value;
+    if (!range || Number.isNaN(at)) {
+      if (!fixed) otherFilters = true;
+      continue;
+    }
+    instants[name] = new Date(at).toISOString();
+    addEnd(range.field, range.bound, at, range.inclusive);
   }
   if (!Object.keys(values).length) return { query: sent, keys };
-  const base = { parameters: values, zones };
+  const base = { parameters: values, instants, zones };
+  const empty = [...ends.values()].some(
+    (end) =>
+      end.from !== undefined && end.to !== undefined && end.from >= end.to,
+  );
   const coverage: ReadCoverage = noRange
-    ? { ...base, span: null, reason: 'noRangePredicate' }
-    : from !== undefined && to !== undefined && from >= to
-      ? { ...base, span: null, reason: 'empty' }
-      : {
-          ...base,
-          span: {
-            ...(from === undefined
-              ? {}
-              : { from: new Date(from).toISOString() }),
-            ...(to === undefined ? {} : { to: new Date(to).toISOString() }),
-          },
-        };
+    ? { ...base, spans: null, reason: 'noRangePredicate' }
+    : otherFilters
+      ? { ...base, spans: null, reason: 'otherFilters' }
+      : empty
+        ? { ...base, spans: null, reason: 'empty' }
+        : {
+            ...base,
+            spans: [...ends].map(([field, end]) => ({
+              field,
+              ...(end.from === undefined
+                ? {}
+                : {
+                    from: new Date(end.from).toISOString(),
+                    fromInclusive: end.fromInclusive === true,
+                  }),
+              ...(end.to === undefined
+                ? {}
+                : {
+                    to: new Date(end.to).toISOString(),
+                    toInclusive: end.toInclusive === true,
+                  }),
+            })),
+          };
   return { query: sent, coverage, keys };
 }
 
 /**
  * Pagination Schemes 0.5.0 range windows over `x-time-zone` parameters: the
- * window bounds are instants, split as such, and each one sent to such a
- * parameter is written as wall-clock digits in its zone
- * (`PageWalk.windowValue`). `windowParameters` are the query parameters the
- * scheme's window fields name. Throws when a window field targets an
- * `x-time-zone` parameter and the window `format` is not `dateTime`: only
- * instants convert to wall-clock time (the Filtering validator requires
- * `format: date-time` on such a parameter, so this is a document error).
+ * window bounds are instants, split as such, and each bound sent to such a
+ * parameter is written as wall-clock digits in its zone (the
+ * `PageWalk.windowValue` hook this returns). `windowParameters` are the
+ * scheme's window fields in the query. Undefined when none of them has
+ * `x-time-zone`. Throws when one has and the window `format` is not
+ * `dateTime`: only instants convert to wall-clock time (the Filtering
+ * validator requires `format: date-time` on such a parameter, so this is a
+ * document error).
  *
- * The coverage is what the read asked for over the whole range: per
- * `x-filter` field, the outer bounds written as wall-clock digits and read
- * back with `coveredSpan`; the fields' spans are intersected. Adjacent
- * windows share their bounds, so with an unknown zone (UTC digits sent)
- * every window shifts by the same offset and only the outer ends narrow by
- * 14 hours.
+ * The coverage is `wallClockQuery`'s for the outer range: the query with
+ * the range's start in each `windowStart` parameter and its end in each
+ * `windowEnd` one. Adjacent windows share their bounds, so what the windows
+ * ask for together is what the outer range asks for, and with an unknown
+ * zone only the outer ends narrow by 14 hours. A zoned `windowRange`
+ * parameter holds both ends in one value, so no `x-filter` range predicate
+ * describes it: `noRangePredicate`. The query returned is `wallClockQuery`'s
+ * without the window parameters, which each window sets.
  */
 export async function wallClockWindows(
   parameters: TimeZoneParameter[],
-  windowParameters: string[],
+  windowParameters: {
+    name: string;
+    role: 'windowStart' | 'windowEnd' | 'windowRange';
+  }[],
   window: { format: string },
   range: { start: string; end: string },
+  query: Record<string, string>,
   path: Record<string, string>,
   read: ReturnType<typeof zoneReader>['read'],
+  others?: OtherQuery,
 ): Promise<
   | {
       windowValue: (parameter: string, bound: string) => string | undefined;
-      coverage: ReadCoverage;
+      query: Record<string, string>;
+      coverage?: ReadCoverage;
       keys: Set<string>;
     }
   | undefined
 > {
-  const zoned = parameters.filter((p) => windowParameters.includes(p.name));
+  const windowNames = new Set(windowParameters.map((field) => field.name));
+  const zoned = parameters.filter((p) => windowNames.has(p.name));
   if (!zoned.length) return undefined;
   if (window.format !== 'dateTime')
     throw new Error(
       `The window format ${window.format} cannot be sent as wall-clock time to the x-time-zone parameter ${zoned.map((p) => p.name).join(', ')}; such a window needs format dateTime`,
     );
-  const keys = new Set<string>();
-  const zones: Record<string, string | null> = {};
-  const written: Record<string, string> = {};
+  const outer = { ...query };
+  for (const field of windowParameters) {
+    if (field.role === 'windowStart') outer[field.name] = range.start;
+    else if (field.role === 'windowEnd') outer[field.name] = range.end;
+  }
+  const written = await wallClockQuery(parameters, outer, path, read, others);
+  const sent = { ...written.query };
+  for (const name of windowNames) delete sent[name];
+  // Each zone source is read once per read: these come from the cache.
   const byName = new Map<string, { zone: string | null; suffix: string }>();
-  // Per x-filter field: the parameters that bound one field share a span.
-  const spans = new Map<string, CoveredSpan | null>();
   for (const parameter of zoned) {
     const { zone, key } = await read(parameter.declaration.zone, path);
-    if (zone !== null) keys.add(key);
-    zones[parameter.name] = zone;
-    const { suffix, ambiguous } = parameter.declaration;
-    byName.set(parameter.name, { zone, suffix });
-    const lower = wallClockParam(range.start, zone, suffix);
-    const upper = wallClockParam(range.end, zone, suffix);
-    written[parameter.name] = `${lower}..${upper}`;
-    const field = parameter.field ?? parameter.name;
-    const span = coveredSpan(
-      lower.slice(0, 19),
-      upper.slice(0, 19),
+    if (zone !== null) written.keys.add(key);
+    byName.set(parameter.name, {
       zone,
-      ambiguous,
-    );
-    const before = spans.get(field);
-    spans.set(
-      field,
-      before === undefined
-        ? span
-        : before && span
-          ? intersectSpans(before, span)
-          : null,
-    );
+      suffix: parameter.declaration.suffix,
+    });
   }
-  let span: CoveredSpan | null = {};
-  for (const one of spans.values())
-    span = span && one ? intersectSpans(span, one) : null;
-  const base = { parameters: written, zones };
-  const coverage: ReadCoverage = span
-    ? { ...base, span }
-    : { ...base, span: null, reason: 'empty' };
+  const rangeField = windowParameters.some(
+    (field) => field.role === 'windowRange' && byName.has(field.name),
+  );
+  const coverage =
+    written.coverage && rangeField
+      ? {
+          ...written.coverage,
+          spans: null,
+          reason: 'noRangePredicate' as const,
+        }
+      : written.coverage;
   return {
     windowValue: (name, bound) => {
       const found = byName.get(name);
@@ -606,24 +795,8 @@ export async function wallClockWindows(
         ? wallClockParam(bound, found.zone, found.suffix)
         : undefined;
     },
-    coverage,
-    keys,
-  };
-}
-
-/** The overlap of two spans, or null when it is empty; an absent end is open. */
-function intersectSpans(a: CoveredSpan, b: CoveredSpan): CoveredSpan | null {
-  const froms = [a.from, b.from].filter((v): v is string => v !== undefined);
-  const tos = [a.to, b.to].filter((v): v is string => v !== undefined);
-  const from = froms.length
-    ? Math.max(...froms.map((v) => Date.parse(v)))
-    : undefined;
-  const to = tos.length
-    ? Math.min(...tos.map((v) => Date.parse(v)))
-    : undefined;
-  if (from !== undefined && to !== undefined && from >= to) return null;
-  return {
-    ...(from === undefined ? {} : { from: new Date(from).toISOString() }),
-    ...(to === undefined ? {} : { to: new Date(to).toISOString() }),
+    query: sent,
+    ...(coverage ? { coverage } : {}),
+    keys: written.keys,
   };
 }

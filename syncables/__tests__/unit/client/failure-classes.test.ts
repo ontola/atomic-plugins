@@ -924,6 +924,8 @@ describe('classifyWriteFailure', () => {
       resource: '/pets',
       id: '1',
       afterRenewal: false,
+      // No x-throttling in the document: no signals, and a 422 is not throttling.
+      signalsDeclared: false,
     });
   });
 

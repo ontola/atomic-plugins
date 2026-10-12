@@ -222,3 +222,75 @@ describe('PageWalk.windowValue', () => {
     ).rejects.toThrow(WindowReadError);
   });
 });
+
+describe('PageWalk.windowValue and number formats (second review of #433)', () => {
+  const numbers = (format: 'integer' | 'unixSeconds'): PaginationSchemeObject => ({
+    type: 'rangeWindow',
+    autoDetect: false,
+    window: {
+      unit: format === 'integer' ? 'integer' : 'second',
+      format,
+      bounds: 'halfOpen',
+      cap: 10,
+    },
+    request: {
+      queryParameters: {
+        start: { role: 'windowStart' },
+        end: { role: 'windowEnd' },
+      },
+    },
+  });
+
+  it('does not compare integer bounds as strings when neither is converted', async () => {
+    const { queries } = await walk(
+      numbers('integer'),
+      { start: '9', end: '12' },
+      () => [],
+      () => undefined,
+    );
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['9', '12']);
+  });
+
+  it('does not compare unixSeconds bounds as strings even when converted', async () => {
+    const { queries } = await walk(
+      numbers('unixSeconds'),
+      { start: '999', end: '1001' },
+      () => [],
+      (_, bound) => bound,
+    );
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['999', '1001']);
+  });
+});
+
+describe('PageWalk.windowValue with one bound outside the query (third review of #433)', () => {
+  it('converts a query start even when the end is sent as a header', async () => {
+    const scheme: PaginationSchemeObject = {
+      ...pair(10),
+      request: {
+        queryParameters: { start: { role: 'windowStart' } },
+        headerFields: { 'x-end': { role: 'windowEnd' } },
+      },
+    };
+    const sent: [string | null, string | undefined][] = [];
+    const transport: Transport = (request) => {
+      sent.push([request.url.searchParams.get('start'), request.headers['x-end']]);
+      return Promise.resolve({ status: 200, headers: {}, body: '[]' });
+    };
+    const doc = document(scheme);
+    for await (const page of walkPages({
+      document: doc,
+      operation: doc.paths['/entries']!.get!,
+      budget: new Budget(transport),
+      upstream: new URL('https://api.example.com/v1'),
+      path: '/entries',
+      method: 'GET',
+      query: {},
+      body: {},
+      range: JANUARY,
+      windowValue: (_, bound) => wallClock(bound),
+    }))
+      expect(page.items).toEqual([]);
+    // The start is converted; the header is not a query field and is sent as it is.
+    expect(sent).toEqual([['2026-01-01T01:00:00Z', JANUARY.end]]);
+  });
+});
