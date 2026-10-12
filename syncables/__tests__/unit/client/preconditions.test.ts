@@ -199,6 +199,7 @@ describe('the spec ValidationTests', () => {
       decl(d, '/pages/{pageId}', 'patch');
     const refusals = (d: Doc): unknown[] => page(d)['refuseWhen'] as unknown[];
     invalid((d) => (page(d)['refuseWhen'] = { field: 'x' }), 'not an array');
+    invalid((d) => (page(d)['refuseWhen'] = null), 'not an array');
     invalid((d) => refusals(d).push({ field: '', values: [1] }), 'field');
     invalid((d) => refusals(d).push({ field: 'x', values: [] }), 'values');
     invalid(

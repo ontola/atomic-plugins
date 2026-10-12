@@ -156,7 +156,8 @@ export function parsePrecondition(
   const crud = place.operation?.['x-crud'];
   const action = isRecord(crud) ? crud['action'] : undefined;
   const kind = declared['kind'];
-  const rawRefusals = declared['refuseWhen'] ?? [];
+  // Absent means no refusals; a present `null` is not an array (as `_check`).
+  const rawRefusals = 'refuseWhen' in declared ? declared['refuseWhen'] : [];
   if (action === 'create') {
     if (
       kind !== 'none' ||
