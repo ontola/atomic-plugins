@@ -60,9 +60,7 @@ describe('projectEntries (through the devonian Clockify lens)', () => {
       [],
     );
 
-    expect(rows.map(r => [r.entryId, r.name])).toEqual([
-      ['blank', ''],
-    ]);
+    expect(rows.map(r => [r.entryId, r.name])).toEqual([['blank', '']]);
   });
 
   it('rejects an entry that ends before it starts', () => {

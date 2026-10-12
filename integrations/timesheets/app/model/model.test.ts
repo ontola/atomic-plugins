@@ -202,6 +202,17 @@ describe('the mockup numbers', () => {
     ]);
     expect(formatDuration(grid.billable)).toBe('21:15');
     expect(formatDuration(grid.notBillable)).toBe('5:35');
+    // Per day too (usertest-findings#13), adding up to the week's.
+    expect(grid.dayBillable.map(formatDuration)).toEqual([
+      '5:00',
+      '5:30',
+      '6:00',
+      '4:45',
+      '0:00',
+      '0:00',
+      '0:00',
+    ]);
+    expect(grid.dayBillable.reduce((a, b) => a + b, 0)).toBe(grid.billable);
     expect(grid.days.map(d => [d.isToday, d.isFuture])).toEqual([
       [false, false],
       [false, false],

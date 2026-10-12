@@ -34,7 +34,7 @@ specifies:
 
 Which app uses which class today: Google Calendar (`calendar` 0.3.2) writes
 `event-v1`; GitHub issues (`issue-tracker` 0.3.1), Todoist (`todoist` 0.2.0)
-and Google Tasks (`google-tasks` 0.1.0) write `issue-v1`; Clockify (`timesheets` 0.7.1) writes `time-entry-v1`, linked
+and Google Tasks (`google-tasks` 0.1.0) write `issue-v1`; Clockify (`timesheets` 0.7.2) writes `time-entry-v1`, linked
 to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
 writes `bank-transaction-v1`; Moneybird (`moneybird` 0.3.0, in
 `integrations/money/moneybird/`) writes `time-entry-v1` (with

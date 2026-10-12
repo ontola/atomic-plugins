@@ -217,7 +217,11 @@ export class FakeInbox {
         sub.renewAfter = this.now + DAY / 2;
         return json(200, this.view(sub));
       case 'GET /events': {
-        const after = request.url.searchParams.get('after');
+        // From `search`, not `searchParams`: in a sandbox without `URL` the
+        // client hands over a stand-in that has only `href`, `origin`,
+        // `pathname` and `search`.
+        const raw = /[?&]after=([^&]*)/.exec(request.url.search)?.[1];
+        const after = raw === undefined ? null : decodeURIComponent(raw);
         const start = after ? Number(after.split(':')[1]) : sub.ack;
         const pending = sub.refs.filter((ref) => ref.seq > start);
         const generation = pending[0]?.generation ?? sub.generation;
@@ -248,10 +252,12 @@ export class FakeInbox {
         return json(200, { generation: body.generation, cursor: body.cursor });
       }
       case 'POST /reconciled': {
-        if (
-          body.generation !== `g${sub.generation}` ||
-          body.barrier !== `${sub.generation}:${sub.barrier}`
-        ) {
+        // As integration-proxy's `complete_reconciliation`: the generation
+        // first (a newer gap started another one), then the barrier.
+        if (body.generation !== `g${sub.generation}`) {
+          return json(409, { status: 'error', code: 'obsolete-generation' });
+        }
+        if (body.barrier !== `${sub.generation}:${sub.barrier}`) {
           return json(409, { status: 'error', code: 'barrier-mismatch' });
         }
         sub.needsReconciliation = false;
