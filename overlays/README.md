@@ -876,3 +876,18 @@ schema shows offset fields; if Box answered it with offset fields and no
 against its base, and validates v2 and the Box platform composed from the
 catalog. Declared from Box's documentation and the pinned OAD; no Box
 request was made.
+
+A standalone [throttling overlay](APIs/box.com/2.0.0/throttling-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares Box's documented [rate limits](https://developer.box.com/guides/api-calls/permissions-and-errors/rate-limits)
+(Throttling 0.2.0-draft or later, `limits` and `headers`): 1000 requests per
+minute per user on every operation, plus 240 per minute per user on the two
+direct uploads, 6 per second and 60 per minute per user and 12 per second per
+enterprise on search, and Box Sign's 100 (create, resend) and 1000 (get, and
+also the list) per minute per user; and the `retry-after` header in seconds.
+Box does not say whether upload, search and Sign requests also count against
+the general 1000 per minute; keeping that bucket on them is the conservative
+choice, not a documented one, and makes the Sign read bucket duplicate it.
+No dated catalog selects the overlay. `tests/test_box_throttling.py` composes
+it with its pinned OAD, in either order with the pagination overlay of the
+newest catalog (v2), checks the buckets and their operations, and classifies
+a synthetic `429`. No provider was called.
