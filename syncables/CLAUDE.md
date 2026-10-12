@@ -169,7 +169,9 @@ Data flows through four stages, each its own directory under `src/`:
    record's queue; `attemptWrite` computes the missing value against the
    confirmed record at send time (nothing missing: settled without a
    request), a refusal fails it `refused` and the following follow-ups
-   `notSent`, an unknown outcome sets `awaitingRefresh` (read back first),
+   `notSent` (a 403 is `permanent` by default for a follow-up,
+   `WriteFailure.followUp`; `supersede` keeps a failed follow-up until a
+   settled write sets its field or deletes the record), an unknown outcome sets `awaitingRefresh` (read back first),
    and a `confirm`ed uncertain create queues them `awaitingRefresh`;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
@@ -590,8 +592,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 - `unit/client/compound-create.test.ts` covers compound creates on a
   GitHub-issues-shaped document after the held overlay
   (`__tests__/fixtures/compound-create.ts`): labels applied, dropped and
-  added, an `omit` field, a refused follow-up (partly applied, the next
-  `notSent`) and its retry, an unknown outcome skipped or resent after the
+  added, an `omit` field, a refused follow-up (403 and 422: partly
+  applied, the next `notSent`, no auth block, later writes going on, a
+  401 still blocking, a custom classifier deciding, superseded by an update
+  of its field) and its retry, an unknown outcome skipped or resent after the
   read, a restart, an unresolved bind, a refused declaration, a confirmed
   uncertain create, and no `followUps`; `compound-create-core.test.ts`
   the pure parts.

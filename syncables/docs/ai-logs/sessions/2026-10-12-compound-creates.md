@@ -27,3 +27,22 @@ reports them; the outbox stores them as type `followUp`, which an older
 client keeps unrestorable. Tests on a GitHub-shaped fixture and on the
 pure parts. Noted: a follow-up answered 403 blocks the client under the
 default classes, as any 403 does.
+
+## Turn 2
+
+**Human (via the coordinator session):** By default, treat a follow-up
+answered 403 as a refusal of that follow-up (`refused`, later ones
+`notSent`), not a client-wide block: the create just succeeded with the
+same credentials. A 401 still goes through auth handling, and an app's
+`classifyWriteFailure` can still override. Tests with 403 for the refused
+case, one 422 case kept; README and the PR caveat updated.
+
+**Assistant:** `WriteFailure` gains `followUp` (and `method` is the
+follow-up operation's); `defaultWriteFailureClass` makes a follow-up's 403
+`permanent` after the rate-limit heuristic, so a rate-limit 403 is still
+retried. Tests: the refused case with 403 (the 422 retry case kept), no
+auth block with a write queued after the create still sent, a 401 still
+blocking, a custom classifier seeing `followUp` and deciding. Fixed along
+the way: a settled later write dropped the failed follow-up (it has no
+changes of its own); `supersede` now keeps it until a settled write sets
+its field or deletes the record (tested). README and CLAUDE.md updated.

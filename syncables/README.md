@@ -1015,8 +1015,16 @@ push access and `POST …/issues/{issue_number}/labels` then adds).
 - A refused follow-up (a `permanent` answer) fails with
   `reason: 'refused'`, and the later follow-ups of the same create fail
   with `reason: 'notSent'`: the create is partly applied. Writes the app
-  queued after the create go on. `resolveWrite` `retry` sends the
-  follow-ups again, each with what is still missing; `discard` drops them.
+  queued after the create go on; one that sets a follow-up's field (or
+  deletes the record) supersedes the failed follow-up. `resolveWrite`
+  `retry` sends the follow-ups again, each with what is still missing;
+  `discard` drops them.
+- A follow-up answered `403` is such a refusal under the default failure
+  classes (`WriteFailure.followUp` is set, and `method` is the follow-up's):
+  the create just succeeded with the same credentials, so the `403` refuses
+  that field (GitHub's labels without push access), not the credentials,
+  and the client is not blocked. A rate-limit `403` is still retried, a
+  `401` still blocks, and a `classifyWriteFailure` still decides.
 - A follow-up whose outcome is unknown (no answer, a 5xx other than 503)
   stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
   sent before a complete read of its collection, and then only if the
@@ -1031,12 +1039,8 @@ push access and `POST …/issues/{issue_number}/labels` then adds).
   resource without a usable identity) makes `create()` throw, rather than
   create the record without the field.
 
-A follow-up answered `403` is an authentication refusal under the default
-failure classes, as any write's `403` is, so it blocks the client until
-`authRenewed()`; an app whose provider answers a refused follow-up with
-`403` (GitHub without push access does) passes a `classifyWriteFailure`
-that calls it `permanent`. Write Preconditions on a follow-up operation are
-not read. Not verified against a live provider.
+Write Preconditions on a follow-up operation are not read. Not verified
+against a live provider.
 
 ### Durable outbox and restarts
 
@@ -1534,8 +1538,10 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   with only what the created record does not show (`bind`, `itemKey`). A
   refused follow-up leaves the create partly applied (`followUp.reason`
   `refused`, later ones `notSent`), an unknown outcome waits for a read of
-  the record, and the create is never sent again. A `followUps` the client
-  cannot use makes `create()` throw. `PendingWriteInfo.followUp` is new;
+  the record, and the create is never sent again. A follow-up's `403` is a
+  refusal of that follow-up by default, not an auth block
+  (`WriteFailure.followUp`). A `followUps` the client cannot use makes
+  `create()` throw. `PendingWriteInfo.followUp` is new;
   the outbox stores follow-ups as the write type `followUp` within version
   `1`. Behaviour change only for documents whose create declares
   `followUps`.

@@ -68,6 +68,12 @@ function github(
         issues.set(issue.number, issue);
         return json(issue, 201);
       }
+      const item = /^\/repos\/o\/r\/issues\/(\d+)$/.exec(path);
+      if (r.method === 'PATCH' && item) {
+        const issue = issues.get(Number(item[1]))!;
+        issue.title = String(body.title);
+        return json(issue);
+      }
       const labels = /^\/repos\/o\/r\/issues\/(\d+)\/labels$/.exec(path);
       if (r.method === 'POST' && labels) {
         const status = options.labelsAnswer?.() ?? 200;
@@ -154,7 +160,7 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
   });
 
   it('a refused follow-up leaves the create partly applied: never sent again, later follow-ups not sent (§4.7.2 step 6)', async () => {
-    const fake = github({ pushAccess: false, labelsAnswer: () => 422 });
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
     const c = client(fake);
     await c.create('issues', {
       title: 'Bug',
@@ -175,7 +181,7 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
       {
         id: '7',
         type: 'update',
-        lastStatus: 422,
+        lastStatus: 403,
         followUp: {
           operation: 'issues-add-labels',
           field: 'labels',
@@ -197,6 +203,74 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     await c.sync();
     await settle();
     expect(lines(fake)).toHaveLength(2);
+  });
+
+  it('a 403 on a follow-up refuses that follow-up, not the credentials: no auth block, writes queued after the create go on', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const c = client(fake);
+    const created = await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    // Queued behind the create, so after its follow-ups.
+    await c.update('issues', String(created['number']), {
+      title: 'Bug, retitled',
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { id: '7', state: 'failed', followUp: { reason: 'refused' } },
+      ]),
+    );
+    expect(c.authBlocked()).toBeUndefined();
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'PATCH /repos/o/r/issues/7',
+    ]);
+  });
+
+  it('a later settled update that sets the field supersedes the refused follow-up', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+      ]),
+    );
+    await c.update('issues', '7', { labels: [] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+  });
+
+  it('a 401 on a follow-up still goes through the auth handling', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 401 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.authBlocked()).toMatchObject({ status: 401 }),
+    );
+    expect(c.pendingWrites()).toMatchObject([
+      { state: 'blocked', followUp: { field: 'labels' } },
+    ]);
+  });
+
+  it("an app's classifyWriteFailure still decides a follow-up's 403", async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const seen: unknown[] = [];
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 5, maxDelayMs: 10 },
+      classifyWriteFailure: (failure) => {
+        seen.push({ method: failure.method, followUp: failure.followUp });
+        return 'auth';
+      },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.authBlocked()).toMatchObject({ status: 403 }),
+    );
+    expect(seen).toContainEqual({
+      method: 'POST',
+      followUp: { operation: 'issues-add-labels', field: 'labels' },
+    });
   });
 
   it('retrying a refused follow-up sends only what is still missing', async () => {

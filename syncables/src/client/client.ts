@@ -169,6 +169,12 @@ export interface WriteFailure {
    * 403. The client sets it on every failure it classifies.
    */
   signalsDeclared?: boolean;
+  /**
+   * Set when the write is a follow-up of a compound create (CRUD Causality
+   * 0.5.0 §4.7): its operation and the field it sets. `method` is then the
+   * follow-up operation's.
+   */
+  followUp?: { operation: string; field: string };
 }
 
 /**
@@ -181,7 +187,10 @@ export interface WriteFailure {
  *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
  *   GitHub sends); otherwise, and with signals declared, `permanent` when
  *   `afterRenewal` (a refusal that renewed credentials did not fix is a
- *   missing permission), and `auth` before that;
+ *   missing permission) or for a compound create's follow-up (the create
+ *   just succeeded with the same credentials, so the 403 refuses that
+ *   field, as GitHub does for labels without push access), and `auth`
+ *   otherwise;
  * - 408 and 425: `retry`;
  * - every other 4xx (400, 404 and 410 on a create or update, 405, 409, 413,
  *   415, 422, ...): `permanent`;
@@ -202,7 +211,7 @@ export function defaultWriteFailureClass(
         headers['x-ratelimit-remaining'] === '0')
     )
       return 'retry';
-    return failure.afterRenewal ? 'permanent' : 'auth';
+    return failure.afterRenewal || failure.followUp ? 'permanent' : 'auth';
   }
   if (status === 408 || status === 425 || status === 429) return 'retry';
   if (status >= 400 && status < 500) return 'permanent';
@@ -2656,14 +2665,20 @@ export function createApiClient(
     sentAfterRenewal: boolean,
     throttled: ThrottlingVerdict | undefined,
   ): { result: WriteFailureClass; refused: boolean } {
+    const followUpMethod = write.followUp
+      ? write.route.create?.followUps?.find(
+          (f) => f.operation === write.followUp!.operation,
+        )?.method
+      : undefined;
     const failure: WriteFailure = {
       type: write.type,
       method:
-        write.type === 'create'
+        followUpMethod ??
+        (write.type === 'create'
           ? 'POST'
           : write.type === 'delete'
             ? 'DELETE'
-            : (write.route.updateMethod as 'PUT' | 'PATCH'),
+            : (write.route.updateMethod as 'PUT' | 'PATCH')),
       status: error.status,
       headers: { ...error.headers },
       body: error.body,
@@ -2672,6 +2687,14 @@ export function createApiClient(
       afterRenewal: sentAfterRenewal,
       ...(throttled ? { throttling: throttled } : {}),
       signalsDeclared: throttling?.signals !== undefined,
+      ...(write.followUp
+        ? {
+            followUp: {
+              operation: write.followUp.operation,
+              field: write.followUp.field,
+            },
+          }
+        : {}),
     };
     let result = classOf(failure);
     if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
@@ -2914,6 +2937,17 @@ export function createApiClient(
     if (!failed) return;
     const left = failed.filter((write) => {
       if (write.type !== 'update') return false;
+      // A failed follow-up has no changes of its own: it stays until a
+      // settled write sets its field (or deletes the record).
+      if (write.followUp) {
+        const top = write.followUp.field.split('.')[0] as string;
+        return !(
+          settled.type === 'delete' ||
+          (settled.type === 'update' &&
+            !settled.followUp &&
+            Object.hasOwn(settled.changes ?? {}, top))
+        );
+      }
       write.changes = withoutSetBy(write, settled);
       return Object.keys(write.changes).length > 0;
     });
