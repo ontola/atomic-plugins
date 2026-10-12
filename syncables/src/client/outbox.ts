@@ -49,6 +49,12 @@ export interface StoredWrite {
    */
   missingRecord?: MissingRecordFailure;
   /**
+   * Added within version 1: an update made as a JSON Merge Patch (absent:
+   * the full record, as every update before). A client from before this
+   * field ignores it and would send such an update as a full record.
+   */
+  updateBody?: 'mergePatch';
+  /**
    * The earliest time the write may be sent again (ms since the epoch), from
    * a throttling answer's earliest retry time. Kept across a restart and a
    * `resolveWrite` retry, so the write is never sent before it.
@@ -185,6 +191,8 @@ function isStoredWrite(value: unknown): value is StoredWrite {
       value['missingRecord'] === 'deleted' ||
       value['missingRecord'] === 'unavailable' ||
       value['missingRecord'] === 'unknown') &&
+    (value['updateBody'] === undefined ||
+      value['updateBody'] === 'mergePatch') &&
     (value['notBefore'] === undefined ||
       typeof value['notBefore'] === 'number') &&
     // A per-write lastKnown came from unreleased commits of #312; such an entry
