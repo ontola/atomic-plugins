@@ -434,6 +434,34 @@ describe('reads and the exhausted buckets they share with writes', () => {
     expect(fake.reads).toBe(2);
   });
 
+  it('sleeps once for a pause however the clock ticks between readings (#480: was timing-sensitive)', async () => {
+    const slept: number[] = [];
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
+    );
+    const c = await client(doc(moneybirdThrottling), fake, {
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    // Every reading of the clock is later than the last, by a growing step,
+    // as under load: the pause's end must not look as if it moved.
+    const real = Date.now.bind(Date);
+    let tick = 0;
+    let step = 0;
+    const spy = vi
+      .spyOn(Date, 'now')
+      .mockImplementation(() => real() + (tick += ++step));
+    try {
+      await c.sync();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(slept).toHaveLength(1);
+  });
+
   it("a read's quotaExhausted answer pauses writes on the bucket, and a pause past the read's time stops the read", async () => {
     let listAnswer: TransportResponse | undefined = json(
       { error: 'Too many requests' },
