@@ -97,6 +97,16 @@ function checkShortPage(
       field,
     })),
   );
+  // Spec 0.7.0 §9 rule 24: `advance` only on an offset field.
+  for (const { at, field } of fields) {
+    const advance = (field as { advance?: unknown }).advance;
+    if (advance === undefined) continue;
+    if (field.role !== 'offset') {
+      errors.push(`${at}.advance is allowed only on an offset field`);
+    } else if (advance !== 'itemCount' && advance !== 'pageSize') {
+      errors.push(`${at}.advance must be itemCount or pageSize`);
+    }
+  }
   for (const { at, field } of fields) {
     if (field.start === undefined) continue;
     if (field.role !== 'page') {

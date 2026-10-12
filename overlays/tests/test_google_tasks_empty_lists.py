@@ -4,10 +4,11 @@ v2 of the Tasks pagination overlay adds Pagination Schemes 0.7.0
 `emptyWhenAbsent: true` to both envelopes, so a list answered without
 `items` (an empty list, as the Protocol Buffers JSON mapping serializes it)
 is a page with no items. Checks the v2 file against v1, the Tasks platform
-composed from catalog/2026-10-12-tasks-empty-lists.json with the Pagination
+composed from catalog/2026-10-12-tasks-box-pages.json with the Pagination
 Schemes reference validator and its `page_items`, and the catalog against
-catalog/2026-10-11-gitlab-box.json (only the Tasks pagination overlay
-differs). The pinned OAD is downloaded by its full-SHA URL; no provider is
+catalog/2026-10-12-box-pagination-v2.json: only the Tasks pagination overlay
+(v1 to v2) and the Box one (v2 to v3, tests/test_box_pagination_v3.py)
+differ. The pinned OAD is downloaded by its full-SHA URL; no provider is
 called.
 """
 import importlib.util
@@ -25,8 +26,9 @@ FOLDER = ROOT / "APIs/googleapis.com/tasks/v1"
 V1 = f"pagination-{PIN}-overlay.yaml"
 V2 = f"pagination-v2-{PIN}-overlay.yaml"
 URL = PAGES_BASE + "APIs/googleapis.com/tasks/v1/"
-CATALOG = "2026-10-12-tasks-empty-lists.json"
-BASE = "2026-10-11-gitlab-box.json"
+CATALOG = "2026-10-12-tasks-box-pages.json"
+BASE = "2026-10-12-box-pagination-v2.json"
+BOX = PAGES_BASE + "APIs/box.com/2.0.0/pagination-{}-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml"
 LISTS = ("/tasks/v1/lists/{tasklist}/tasks", "/tasks/v1/users/@me/lists")
 
 spec = importlib.util.spec_from_file_location(
@@ -85,16 +87,18 @@ class GoogleTasksEmptyListTests(unittest.TestCase):
                 with self.assertRaises(pagination.PageReadError):
                     pagination.page_items({"items": None}, scheme)
 
-    def test_the_catalog_switches_only_the_tasks_pagination_overlay(self):
+    def test_the_catalog_switches_only_the_tasks_and_box_pagination_overlays(self):
         base, new = platforms(BASE), platforms(CATALOG)
         self.assertEqual([p["name"] for p in new], [p["name"] for p in base])
+        swaps = {"google-tasks": (URL + V1, URL + V2), "box": (BOX.format("v2"), BOX.format("v3"))}
         for before, after in zip(base, new):
             with self.subTest(platform=before["name"]):
-                if before["name"] != "google-tasks":
+                if before["name"] not in swaps:
                     self.assertEqual(after, before)
                     continue
-                self.assertEqual(after["overlays"], [URL + V2 if url == URL + V1 else url for url in before["overlays"]])
-                self.assertIn(URL + V1, before["overlays"])
+                old, replacement = swaps[before["name"]]
+                self.assertIn(old, before["overlays"])
+                self.assertEqual(after["overlays"], [replacement if url == old else url for url in before["overlays"]])
                 self.assertEqual({k: v for k, v in after.items() if k != "overlays"},
                                  {k: v for k, v in before.items() if k != "overlays"})
 

@@ -11,7 +11,7 @@ import type { OpenApiDocument } from "../../syncables/src/openapi/types.js";
 
 // An empty Google Tasks list answered without `items`, read through the
 // actual catalogs, pinned OAD and local overlay bytes: the 2026-10-11
-// catalog (pagination v1) fails the read, the 2026-10-12 one (v2,
+// catalog (pagination v1) fails the read, the 2026-10-12 tasks-box-pages one (v2,
 // Pagination Schemes 0.7.0 emptyWhenAbsent) reads it as empty. Synthetic
 // responses; no provider is called. Run from syncables/ with
 // `npx vitest run --root .. overlays/tests/google_tasks_empty_lists_syncables.test.ts`.
@@ -60,7 +60,7 @@ describe("Google Tasks empty lists through the catalogs", () => {
 
   it("reads an empty list under pagination v2", async () => {
     const result = await readPlatform(
-      compose("2026-10-12-tasks-empty-lists.json"),
+      compose("2026-10-12-tasks-box-pages.json"),
       { platform: "google-tasks", constants: {}, transport },
     );
     expect(result.errors).toEqual([]);

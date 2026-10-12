@@ -208,6 +208,17 @@ function declaredEnvelope(
     : { path: '', emptyWhenAbsent: false };
 }
 
+/** The `advance` of the scheme's offset field (spec 0.7.0 §4.3.2), if any. */
+function offsetAdvance(
+  scheme: PaginationSchemeObject,
+): 'itemCount' | 'pageSize' | undefined {
+  for (const location of ['queryParameters', 'bodyFields'] as const)
+    for (const field of Object.values(scheme.request?.[location] ?? {}))
+      if (field.role === 'offset')
+        return field.advance === 'pageSize' ? 'pageSize' : 'itemCount';
+  return undefined;
+}
+
 /**
  * Whether the field at a dot-path is absent (Pagination Schemes 0.7.0
  * §4.4.2): the body is an object and some object along the path lacks the
@@ -679,6 +690,38 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         next = undefined;
         continue;
       }
+    }
+    // Pagination Schemes 0.7.0 §4.3.2: an offset that advances by the page
+    // size (a reported pageSize field, else the size sent) ends only at
+    // totalCount; a short or empty page before that does not end the list.
+    if (
+      scheme.type === 'pageNumber' &&
+      !linkPresent &&
+      offsetAdvance(scheme) === 'pageSize'
+    ) {
+      const step =
+        state.pageSize !== null && state.pageSize >= 1
+          ? state.pageSize
+          : sendsPageSize
+            ? pageSize
+            : undefined;
+      const offset = cursor.offset ?? 0;
+      if (step === undefined || step < 1) {
+        throw new PageReadError(
+          `The page at offset ${offset} gives no page size to advance by; the read is not complete`,
+        );
+      }
+      const following = offset + step;
+      if (
+        state.totalCount !== null
+          ? following >= state.totalCount
+          : items.length === 0
+      ) {
+        return;
+      }
+      cursor = { offset: following };
+      next = undefined;
+      continue;
     }
     if (!state.hasNextPage && !linkPresent) {
       return;

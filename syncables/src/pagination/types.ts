@@ -95,6 +95,12 @@ export interface RequestFieldObject {
   template?: string;
   /** `page` only: the number of the first page (spec 0.6.0 §4.3.1). Default 1. */
   start?: number;
+  /**
+   * `offset` only: how the next offset is worked out (spec 0.7.0 §4.3.2).
+   * `itemCount` (default) adds the items the page held; `pageSize` adds the
+   * page size and ends only at `totalCount`.
+   */
+  advance?: 'itemCount' | 'pageSize';
   [key: `x-${string}`]: unknown;
 }
 

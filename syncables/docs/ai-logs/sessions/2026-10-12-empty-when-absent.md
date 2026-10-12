@@ -37,3 +37,21 @@ non-array still an error, and the scheme validator checks rule 23. Tests in
 `unit/read/empty-when-absent.test.ts`. No Calendar overlay changed: no
 Calendar documentation says it omits `items`, and the Calendar drive app
 requires the array.
+
+## Turn 3
+
+**Human (via the coordinator session):** Box's offset guide says to advance
+by the previous limit, not by the entries returned, but syncables advances
+by the entries returned and stops at an empty page. Fold an offset advance
+rule into Pagination Schemes 0.7.0 (`advance: pageSize | itemCount`, the
+default unchanged), add a Box overlay revision that declares `pageSize`,
+and the syncables support.
+
+**Assistant:** syncables reads an `offset` field's `advance`: under
+`pageSize` the next offset adds the reported `pageSize` field (at least 1),
+else the page size sent, the read ends once it reaches `totalCount`
+(without one, at an empty page), and with neither page size known it ends
+with `PageReadError`; `itemCount` is unchanged. The validator checks rule
+24 and `resolveEffectiveScheme` rule 25. Tests in
+`unit/read/offset-advance.test.ts`, including the default re-reading a
+short page and stopping at an empty one.

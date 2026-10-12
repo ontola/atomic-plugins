@@ -1465,6 +1465,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   absent is a page with no items instead of an error. `paginate` takes
   `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
   the collection envelope it uses. The scheme validator checks rule 23.
+- **Unreleased**: Pagination Schemes 0.7.0 `advance` on an `offset` field:
+  `pageSize` makes the next offset add the page size (a reported
+  `pageSize` field, else the size sent) instead of the items the page held,
+  and ends the read only once it reaches `totalCount` (without one, at an
+  empty page); a short or empty page before that no longer ends it. With
+  neither page size known the read ends with an error. `itemCount`, the
+  default, is unchanged. The scheme validator checks rule 24 and
+  `resolveEffectiveScheme` rule 25.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as

@@ -110,27 +110,43 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
-## Google Tasks empty lists
+## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
-`catalog/2026-10-12-tasks-empty-lists.json` is `catalog/2026-10-11-gitlab-box.json`
-with Google Tasks' pagination overlay replaced by
-[v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml);
-every other entry is unchanged. v1 declares `envelope.itemsField: items`, and
-a syncables reader from 0.21.0 on fails a body without that array ("No
-items array at items"). An empty task list is expected to come back without
-`items`: the Protocol Buffers JSON mapping leaves an empty repeated field
-out, and the google-tasks drive app reads an absent `items` as empty. The
-Tasks reference does not say what an empty list returns, and no live empty
-list was read. v2 declares `emptyWhenAbsent: true` (Pagination Schemes
-0.7.0), which a reader that does not know the field ignores, failing such a
-read as before. No Google Calendar overlay is changed: Calendar's reference
-does not say it leaves `items` out, and the Calendar drive app
-(`integrations/calendar/app/relay.ts`) requires the array.
-`tests/test_google_tasks_empty_lists.py` checks v2 against v1, the composed
-Tasks platform with the reference validator, and the catalog against its
-base; `tests/google_tasks_empty_lists_syncables.test.ts` reads an empty
-list through both catalogs with syncables (run from `syncables/` with
-`npx vitest run --root .. overlays/tests/google_tasks_empty_lists_syncables.test.ts`).
+`catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
+with two pagination overlays replaced; every other entry is unchanged.
+
+Google Tasks:
+[v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml)
+in place of v1. v1 declares `envelope.itemsField: items`, and a syncables
+reader from 0.21.0 on fails a body without that array ("No items array at
+items"). An empty task list is expected to come back without `items`: the
+Protocol Buffers JSON mapping leaves an empty repeated field out, and the
+google-tasks drive app reads an absent `items` as empty. The Tasks
+reference does not say what an empty list returns, and no live empty list
+was read. v2 declares `emptyWhenAbsent: true`, which a reader that does not
+know the field ignores, failing such a read as before. No Google Calendar
+overlay is changed: Calendar's reference does not say it leaves `items`
+out, and the Calendar drive app (`integrations/calendar/app/relay.ts`)
+requires the array.
+
+Box:
+[v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+in place of v2: `advance: pageSize` on the offset lists' `offset` field, so
+a 0.7.0 reader steps by the `limit` Box reports and ends at `total_count`,
+as Box documents, instead of advancing by the entries returned (see the v2
+note above for what that does). A reader without 0.7.0 ignores `advance`
+and reads as with v2.
+
+`tests/test_google_tasks_empty_lists.py` checks Tasks v2 against v1, the
+composed Tasks platform with the reference validator, and the catalog
+against its base; `tests/test_box_pagination_v3.py` checks Box v3 against
+v2, validates it and reads a synthetic offset list with the reference
+`read_offsets`. Two syncables tests read through the catalogs
+(`tests/google_tasks_empty_lists_syncables.test.ts`: an empty task list
+fails through 2026-10-11 and reads as empty through this catalog;
+`tests/box_offsets_syncables.test.ts`: a short page is read again under v2
+and stepped over under v3); run them from `syncables/` with
+`npx vitest run --root .. overlays/tests/<file>`.
 
 ## Directory layout and OAD revisions
 
@@ -321,6 +337,7 @@ directly.
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
 | [Box 2.0.0 v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 41 GET lists, each applied explicitly: 13 offset lists (`offset`, `limit`, `total_count`; folder items, trash and users too, whose marker paging needs `usemarker=true`) and 28 marker lists (`marker`, `next_marker`), all with the `entries` envelope. Replaces v1, whose `type: offset` and roles `currentOffset` and `pageTokenMode` the spec does not define. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based), [Marker-based](https://developer.box.com/guides/api-calls/pagination/marker-based) |
+| [Box 2.0.0 v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | v2 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#432-offset-advance) `advance: pageSize` on the offset lists: the next offset adds the reported `limit`, and the list ends at `total_count`. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
 | [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |

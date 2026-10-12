@@ -456,7 +456,13 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   makes `itemsAt` return no items when the field is absent (`isAbsent`: an
   object along the path lacks the next segment); a present non-array is
   still an error. The validator checks rule 23. Tests:
-  `unit/read/empty-when-absent.test.ts`.
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither; `itemCount` (default) keeps
+  `nextCursor`'s items-returned step. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

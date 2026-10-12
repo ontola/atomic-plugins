@@ -42,7 +42,8 @@ def main(platform="gitlab"):
         document, errors = apply_overlay(document, overlay, str(overlay_path))
         if errors:
             raise RuntimeError("\n".join(errors))
-    print(json.dumps(document, separators=(",", ":")))
+    # YAML dates and times (unquoted examples, as in Box's OAD) as their ISO text.
+    print(json.dumps(document, separators=(",", ":"), default=str))
 
 
 if __name__ == "__main__":
