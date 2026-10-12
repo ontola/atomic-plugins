@@ -219,17 +219,22 @@ duplicate the object.
   the meantime.
 * Under `ifMatch` or `none`, when `idempotent` is `true`, a client MAY send
   the same request again (under `ifMatch` with the same version) without
-  reading; that resend is a new send, to which §4.2 and §4.4 apply again. When
-  it is `false`, it MUST read the object first.
+  reading; that resend is a new send, to which §4.2 and §4.4 apply again. Like
+  any send it may recreate an object deleted in the meantime (a `PUT` that
+  creates), no worse than the first send would have. When it is `false`, it
+  MUST read the object first.
 
-**Resolving by a read.** The client reads the object (§3) and compares:
-
-Which rule applies follows the write's action, as above.
+**Resolving by a read.** The client reads the object (§3) and compares, by the
+write's action as above.
 
 _Deletion confirmed_ means the document says that a missing object of this
 resource was deleted, for this object: a [Deletion Feeds](../deletion-feeds/README.md)
 tombstone for this object; a collection of the resource that declares
-`notFound: deleted` explicitly; or a collection declared `absent: deleted` that
+`notFound: deleted` explicitly (for a `404`, and for a `410` without `gone`);
+for a `410`, a collection of the resource that declares `gone: deleted`
+(Collection Completeness 0.3.0-draft §4.3; a stated `gone` decides every
+`410`, so `gone: unavailable` never confirms one); or a collection declared
+`absent: deleted` that
 the object was a member of when the client last read it, which rests on
 [Collection Completeness](../collection-completeness/README.md) §4.2's rule
 that objects do not leave the caller's reach while they exist. An
