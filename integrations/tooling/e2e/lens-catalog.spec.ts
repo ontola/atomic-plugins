@@ -11,11 +11,11 @@
  * split-pieces flag (localStorage `atomic.experimental.split-pieces`), it
  * loads the catalog release named by localStorage `lens-catalog-url` (by
  * default the published
- * https://ontola.github.io/atomic-plugins/ontology/lenses/v2), trusts its
+ * `<base>/lenses/v2`, with the base from ontology-kit/base.json), trusts its
  * lenses on every drive, and lets an App's `renders` hold a lens endpoint
  * key (atomic-server 54b181996). The spec seeds `lens-catalog-url` before
- * the first script runs, the way the host's playwright config seeds
- * `plugin-catalog-url`, once per release, with the dev-server's release 2
+ * the first script runs (with `addInitScript`; the host's playwright config
+ * seeds `plugin-catalog-url` through `storageState`), once per release, with the dev-server's release 2
  * (the one candidate22 pins; its Todoist lens uses mapping version 3) and
  * release 1 (mapping version 2, which candidate22 still runs).
  *
