@@ -215,11 +215,21 @@ function roleMap(
 }
 
 /**
+ * Removes leading and trailing space, tab, CR and LF only: other
+ * characters (U+00A0 among them, which `String.prototype.trim` would strip)
+ * are kept, so a value carrying them does not parse.
+ */
+function strip(value: string): string {
+  return value.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+}
+
+/**
  * A body field's value as text (§"Response body fields"): a string with
- * its surrounding whitespace removed; a number with no fractional part as
- * its decimal form (`3.0` reads as `3`); undefined for any other number, a
- * boolean, `null`, an array, an object, or a path that does not resolve.
- * The path's names are read literally, own properties only.
+ * surrounding space, tab, CR and LF removed; a number with no fractional
+ * part, up to 2^53 − 1, as its decimal form (`3.0` reads as `3`; `1e21` and
+ * other larger integral numbers do not parse); undefined for any other
+ * number, a boolean, `null`, an array, an object, or a path that does not
+ * resolve. The path's names are read literally, own properties only.
  */
 function bodyText(body: unknown, path: string): string | undefined {
   let node = body;
@@ -227,8 +237,9 @@ function bodyText(body: unknown, path: string): string | undefined {
     if (!isRecord(node) || !Object.hasOwn(node, name)) return undefined;
     node = node[name];
   }
-  if (typeof node === 'string') return node.trim();
-  if (typeof node === 'number' && Number.isInteger(node)) return String(node);
+  if (typeof node === 'string') return strip(node);
+  if (typeof node === 'number' && Number.isSafeInteger(node))
+    return String(node);
   return undefined;
 }
 
@@ -404,7 +415,7 @@ function bodyMatches(predicate: BodyPredicate, body: unknown): boolean {
   );
 }
 
-/** The stripped value of one header, by case-insensitive name. */
+/** The value of one header, by case-insensitive name, with surrounding space, tab, CR and LF removed. */
 function headerValue(
   headers: Record<string, string>,
   name: string,
@@ -412,7 +423,7 @@ function headerValue(
   const key = name.toLowerCase();
   for (const [k, v] of Object.entries(headers))
     if (k.toLowerCase() === key)
-      return typeof v === 'string' ? v.trim() : undefined;
+      return typeof v === 'string' ? strip(v) : undefined;
   return undefined;
 }
 
@@ -427,24 +438,77 @@ function headerMatches(
   return predicate.in.includes(value);
 }
 
-/** A non-negative decimal integer the consumer can represent exactly; else undefined. */
+/**
+ * A non-negative decimal integer up to 2^53 − 1; else undefined (a longer
+ * one, such as a 400-digit `Retry-After`, does not parse).
+ */
 function integer(value: string): number | undefined {
   if (!/^[0-9]+$/.test(value)) return undefined;
   const n = Number(value);
   return Number.isSafeInteger(n) ? n : undefined;
 }
 
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+const MONTH = MONTHS.join('|');
+const DAY = 'Mon|Tue|Wed|Thu|Fri|Sat|Sun';
+const LONG_DAY = 'Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday';
+const IMF_FIXDATE = new RegExp(
+  `^(?:${DAY}), (\\d{2}) (${MONTH}) (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const RFC850_DATE = new RegExp(
+  `^(?:${LONG_DAY}), (\\d{2})-(${MONTH})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$`,
+);
+const ASCTIME_DATE = new RegExp(
+  `^(?:${DAY}) (${MONTH}) ( \\d|\\d{2}) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$`,
+);
+
 /**
- * An HTTP-date (RFC 9110 §5.6.7) in milliseconds since the epoch. The
- * obsolete asctime form has no zone and is read as GMT. A value without a
- * letter is not a date (`Date.parse('120')` would be a year).
+ * An HTTP-date (RFC 9110 §5.6.7) in milliseconds since the epoch, in one of
+ * its three exact forms: IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`), the
+ * obsolete RFC 850 form (a two-digit year more than 50 years ahead is read
+ * as the previous century) or asctime (no zone: GMT). Anything else, a
+ * value carrying U+00A0, a byte-order mark or another character the form
+ * does not have included, does not parse; no lenient `Date.parse` reading.
  */
-function httpDate(value: string): number | undefined {
-  if (!/[a-zA-Z]/.test(value)) return undefined;
-  const zoned = /(GMT|UTC|UT|[+-][0-9]{2}:?[0-9]{2})\s*$/i.test(value);
-  const ms = Date.parse(zoned ? value : `${value} GMT`);
-  return Number.isFinite(ms) ? ms : undefined;
+export function parseHttpDate(value: string): number | undefined {
+  let day: string, month: string, year: number;
+  let hour: string, minute: string, second: string;
+  let match = IMF_FIXDATE.exec(value);
+  if (match) {
+    [, day, month, , hour, minute, second] = match as unknown as string[];
+    year = Number(match[3]);
+  } else if ((match = RFC850_DATE.exec(value))) {
+    [, day, month, , hour, minute, second] = match as unknown as string[];
+    year = 2000 + Number(match[3]);
+    if (year > new Date().getUTCFullYear() + 50) year -= 100;
+  } else if ((match = ASCTIME_DATE.exec(value))) {
+    [, month, day, hour, minute, second] = match as unknown as string[];
+    year = Number(match[6]);
+  } else return undefined;
+  const m = MONTHS.indexOf(month!);
+  const d = Number(day!.trim());
+  const [h, min, sec] = [Number(hour!), Number(minute!), Number(second!)];
+  if (h > 23 || min > 59 || sec > 60) return undefined;
+  const ms = Date.UTC(year, m, d, h, min, sec);
+  // A day the month does not have (31 Feb) does not parse.
+  if (new Date(ms).getUTCDate() !== d) return undefined;
+  return ms;
 }
+
+const httpDate = parseHttpDate;
 
 /**
  * The time a header's value names, in milliseconds since the epoch, under
