@@ -27,3 +27,25 @@ and `resolveUnknown` (rules 1–7; only known updates and deletes, never a
 possible create). `__tests__/unit/client/preconditions.test.ts` mirrors the
 spec's `ClientTests` case by case, plus the parser's defaults and refusals.
 Not wired into the client yet.
+
+## Turn 2
+
+**Human (via the coordinator session):** #486 review: `parsePrecondition`
+fails open on bad input (a non-boolean `idempotent` ignored, a malformed
+`conflictStatus` read as `[412]`, a bad `header` read as `If-Match`);
+refuse them, an empty `when.field` and unknown `when` fields too, and port
+the missing `ValidationTests` and the `validate()` halves of three
+`ClientTests`. Nits: note that `sameJson` treats `{a: null}` and `{}` as
+equal at any depth; refuse an object `ifMatch` version.
+
+**Assistant:** `parsePrecondition` now refuses everything the spec's
+`_check` refuses (unknown fields, kind-specific fields under another kind,
+`conflictStatus` other than unique integers 400-499, a non-boolean
+`idempotent`, a predicate, `when` or source it cannot read), and with an
+optional `PreconditionPlace` the placement rules (write methods, `x-crud`
+action, creates with only source refusals, a source's `crudResources` key
+and identity variables). `maySend` answers `unusable-version` for an
+`ifMatch` version that is not a string or finite number. Tests: the four
+`ValidationTests` and the validate halves of the present-refusal,
+source-and-when and creates cases, on the example document, plus the
+object version.
