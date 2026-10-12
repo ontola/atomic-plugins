@@ -117,3 +117,20 @@ the change), a told one tells `present`, and the `settled()` path,
 reached by a `resolveWrite` `retry` of an update held on an `unavailable`
 record: the mark goes at once and `present` is told at the end of the
 next sync that lists the record.
+
+## Turn 6
+
+**Human (via the coordinator session):** #503 blocker: `told` lived on
+the mark and went with it, so after a told mark was dropped (a held
+`present`), marked again and settled while the handler threw, nothing was
+told and the app kept believing `unconfirmed`. Keep `told` in `setMark`
+when the mark before had it or a held `present` is being replaced; test
+the four-sync sequence and the `settled()` variant. Nits: test that a
+removal replaces a held `present`; list "a read returned it" in the
+`dropMark` comment.
+
+**Assistant:** `setMark` sets `told` from the mark before or from a held
+`present` change of the record. Tests: the four-sync sequence, the
+`settled()` variant (both fail before the fix), and a removal that
+replaces a held `present` (told `unconfirmed`, then `deleted`, never
+`present`). The `dropMark` comment lists the read path.

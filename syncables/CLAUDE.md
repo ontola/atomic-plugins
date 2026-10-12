@@ -174,7 +174,9 @@ Data flows through four stages, each its own directory under `src/`:
    `tell`/`setMark` (a read returning the record, `settled`, a clearing
    mark on a record that stays) and
    its held change, replaced by `present` when the mark is `told` (set by
-   a successful end tell, kept by `setMark`, and set on restored marks).
+   a successful end tell and on restored marks; `setMark` keeps it from
+   the mark before, or sets it when the change it replaces is a held
+   `present`, the only trace of a told mark once that mark is dropped).
    `client.presence()` lists
    `keptMarks`. `seenAt` (in
    memory, set for every record a sync's reads return to that sync's start,

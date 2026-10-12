@@ -912,3 +912,94 @@ describe('presence marks: #466 nits', () => {
     ]);
   });
 });
+
+describe('presence marks: #503 review', () => {
+  /** A setup whose handler throws while `fail.now` is set. */
+  async function failing(doc = document()): Promise<{
+    client: ApiClient;
+    fake: ReturnType<typeof provider>;
+    told: PresenceChange[][];
+    fail: { now: boolean };
+  }> {
+    const fail = { now: false };
+    const told: PresenceChange[][] = [];
+    const { client, fake } = await setup(doc, {
+      onPresence: (changes) => {
+        if (fail.now && changes.length) throw new Error('app busy');
+        told.push(changes);
+      },
+    });
+    return { client, fake, told, fail };
+  }
+
+  const said = (told: PresenceChange[][]): string[] =>
+    told
+      .flat()
+      .filter((c) => c.id === '2')
+      .map((c) => c.presence);
+
+  it('tells present after a told mark was dropped, marked again and settled while the handler threw', async () => {
+    const { client, fake, told, fail } = await failing();
+    const unreadable = (): TransportResponse => response({ error: 'x' }, 500);
+    // Sync 1: told unconfirmed.
+    fake.hidden.add('2');
+    fake.item = unreadable;
+    await client.sync();
+    // Sync 2: read back; the held present is not told.
+    fake.hidden.delete('2');
+    fail.now = true;
+    await expect(client.sync()).rejects.toThrow('app busy');
+    // Sync 3: missing again; unconfirmed replaces the held present.
+    fake.hidden.add('2');
+    await expect(client.sync()).rejects.toThrow('app busy');
+    // Sync 4: read back; the app still believes unconfirmed.
+    fail.now = false;
+    fake.hidden.delete('2');
+    await client.sync();
+    expect(said(told)).toEqual(['unconfirmed', 'present']);
+    expect(client.presence()).toEqual([]);
+  });
+
+  it('tells present after a write settled on a told mark and the record was marked again while the handler threw', async () => {
+    const { client, fake, told, fail } = await failing();
+    // Told unavailable (404 under notFound: unavailable).
+    fake.hidden.add('2');
+    await client.sync();
+    await client.update('/pets', '2', { name: 'Tom II' });
+    const accepting = (id: string): TransportResponse | undefined =>
+      id === '2' ? response({ ...tom, name: 'Tom II' }) : undefined;
+    fake.item = accepting;
+    await client.resolveWrite('/pets', '2', { action: 'retry' });
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    // settled() held a present; the record goes missing again (404) and
+    // its unavailable mark replaces that present, untold.
+    fake.item = (): TransportResponse | undefined => undefined;
+    fail.now = true;
+    await expect(client.sync()).rejects.toThrow('app busy');
+    fail.now = false;
+    fake.hidden.delete('2');
+    await client.sync();
+    expect(said(told)).toEqual(['unavailable', 'present']);
+  });
+
+  it('a removal replaces a held present change of the same record', async () => {
+    const { client, fake, told, fail } = await failing(
+      document({ absent: 'removed' }),
+    );
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await client.sync();
+    // Read back: present is held, not told.
+    fake.hidden.delete('2');
+    fail.now = true;
+    await expect(client.sync()).rejects.toThrow('app busy');
+    // Gone for good (404 means deleted here): the removal is told, and the
+    // held present goes with it.
+    fail.now = false;
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse | undefined => undefined;
+    await client.sync();
+    expect(said(told)).toEqual(['unconfirmed', 'deleted']);
+    expect(await client.get('/pets', '2')).toBeUndefined();
+  });
+});
