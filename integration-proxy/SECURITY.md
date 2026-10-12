@@ -340,6 +340,73 @@ values, and that a request body's presence and content type match the
 operation's declared `requestBody`. It does not validate full JSON Schema
 for bodies or non-enum query parameter values.
 
+Headers cross the proxy only by exact name (`proxy::upstream_request`,
+`proxy::upstream_response_headers`); no prefix or pattern is matched, so a
+provider's `Set-Cookie`, `WWW-Authenticate`, `X-OAuth-Scopes` or an
+`x-ratelimit-*`-looking name outside the list never reaches the caller, and
+the caller's `Cookie`, `Authorization`, `Host` and forwarding headers never
+reach the provider. Both lists are single constants: the response list is
+also exactly what CORS exposes (`proxy::forwarded_response_headers`), the
+request list exactly what CORS allows besides `Authorization`,
+`Idempotency-Key` and the signature headers (`proxy::CALLER_HEADERS`). Where
+the catalog fixes a value for one of the caller's headers, the catalog's
+value is sent and the caller's is dropped, so no header is sent twice.
+
+Every response from `/proxy/…`, forwarded or refused, carries
+`Cache-Control: no-store`, whatever the provider sent: a forwarded
+`Last-Modified` would otherwise let a browser cache a proxied `GET`
+heuristically.
+
+- **Rate-limit response headers** (`X-RateLimit-Limit`, `-Remaining`,
+  `-Used`, `-Reset`, `-Resource`, `RateLimit`, `RateLimit-Policy`,
+  `RateLimit-Limit`, `-Remaining`, `-Reset`). They are numbers, times and
+  bucket names describing the quota that the forwarded request itself was
+  counted against. With a user credential that is the caller's own
+  connection's quota, which the person could read by calling the provider
+  with the same credential. They carry no credential, no account id and no
+  other tenant's data. One exception is worth knowing: where the provider
+  counts by source address (a no-credential connection, or a quota
+  partitioned by `sourceIp` in Throttling), the address is the proxy's,
+  shared by every tenant, and `remaining`/`used` then show how much all
+  tenants together used in the window. That is an aggregate count with no
+  identity attached, and a caller could already infer exhaustion from a
+  forwarded `429` with `Retry-After`. Forwarding it lets a client pace
+  itself instead of hammering the shared bucket (pieces.md P4 would pace it
+  at the proxy).
+- **`Last-Modified`** is representation metadata, like `ETag`.
+- **`If-None-Match` and `If-Modified-Since`** only make the provider answer
+  `304` with no body. The proxy keeps no response cache, so a conditional
+  request cannot make one tenant's response serve another's.
+- **`Idempotency-Key`** goes only to an operation whose composed document
+  declares a header parameter of that name (on the operation or its path
+  item, `$ref`s resolved), and never next to a fixed value the catalog sets.
+  A fixed value is any header parameter with a `schema.default` or a
+  one-value `schema.enum`, required or optional (`Catalog::required_headers`),
+  and it replaces a caller's header of the same name.
+  A provider scopes keys to the account that sends them. With a credential,
+  that is the connection's own account, and the key goes unchanged. A
+  no-credential connection sends no account, so every tenant would share one
+  key space and tenant B, sending tenant A's key, could be answered with A's
+  stored response. There the proxy sends
+  `base64url(HMAC-SHA256(subkey, connection_id ‖ 0x00 ‖ key))` instead, under
+  a subkey derived from `ENCRYPTION_KEY`
+  (`HMAC-SHA256(ENCRYPTION_KEY, "integration-proxy-idempotency-key-v1")`):
+  stable for one connection and key, so a retry still matches; different for
+  every other connection; and not reversible to the caller's key. Rotating
+  `ENCRYPTION_KEY` changes every namespaced key: a create retried across
+  the rotation reaches the provider with a new key and may be applied twice.
+- **Outside the signature.** The v2 request signature covers the method,
+  the full URL, the timestamp and a hash of the body, not these request
+  headers (nor `Content-Type` and `If-Match` before them). That is acceptable
+  because (1) TLS keeps anyone on the path from changing them; (2) a signed
+  request is accepted once, so a captured request cannot be resent with
+  other headers; (3) only the signer's own environment could set different
+  ones, and it can sign whatever it likes anyway; and (4) the most a changed
+  value can do is turn a read into a `304`, a write into a `412`, or make a
+  create match one of the same connection's earlier keys (on a no-credential
+  connection the key is namespaced per connection, above). None of them
+  widens what the catalog allows or which credential is sent.
+
 ## Pacing under provider quotas (P4, unreleased)
 
 The proxy paces its own requests under `x-throttling` buckets partitioned by
@@ -351,9 +418,17 @@ provider. What it changes for safety:
 - **Only authenticated requests count.** The log is taken after
   authentication, delegation, the access policy and the catalog checks, so
   nobody without a connection can fill a bucket. A tenant with a connection
-  still can, by sending up to the bucket's limit itself: the pacing makes
-  the proxy a fair citizen towards the provider, not fair between tenants.
-  The per-owner limit on proxied requests, where deployed, bounds that.
+  still can, by sending up to the bucket's limit itself: the pacing keeps
+  the proxy's traffic under the provider's limit; it is not fair between
+  tenants, and nothing on this release bounds one tenant's share. (A
+  per-owner limit on proxied requests is proposed separately, and would not
+  bound this either: an owner is any agent key, and anyone can make more.)
+- **No-credential platforms.** A platform whose document needs no
+  credential (`security: []`) lets almost anyone create a connection: the
+  consent page asks for nothing and the owner is whichever agent signs. So
+  on such a platform anyone can spend its `sourceIp` bucket and keep other
+  tenants' requests refused with `429 provider_quota` for as long as they
+  keep sending; `AccessPolicy` (an allowlist of owners) is the only bound.
 - **Bounded memory.** One log per declared bucket, keyed by platform and
   bucket id from the server-owned catalog, never by anything a caller
   sends; each log holds at most `requests` timestamps, and buckets above

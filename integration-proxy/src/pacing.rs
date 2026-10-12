@@ -92,19 +92,25 @@ pub struct Pacer {
 }
 
 impl Pacer {
-    /// Takes one request in every bucket at `now`, or none: when any bucket
-    /// is full, nothing is recorded and the answer is how long until a slot
-    /// frees in every full bucket (at least one second).
-    pub fn take(
+    /// Takes one request in every bucket now, or none: when any bucket is
+    /// full, nothing is recorded and the answer is how long until a slot
+    /// frees in every full bucket, in whole seconds rounded up. The clock is
+    /// read inside the lock, so entries are appended in time order.
+    pub fn take(&self, platform: &str, buckets: &[PacedBucket]) -> Result<(), Duration> {
+        self.take_with(platform, buckets, Instant::now)
+    }
+
+    fn take_with(
         &self,
         platform: &str,
         buckets: &[PacedBucket],
-        now: Instant,
+        clock: impl FnOnce() -> Instant,
     ) -> Result<(), Duration> {
         if buckets.is_empty() {
             return Ok(());
         }
         let mut logs = self.logs.lock().unwrap_or_else(|e| e.into_inner());
+        let now = clock();
         let mut wait = Duration::ZERO;
         for bucket in buckets {
             let log = logs
@@ -123,9 +129,8 @@ impl Pacer {
             }
         }
         if wait > Duration::ZERO {
-            return Err(
-                Duration::from_secs(wait.as_secs_f64().ceil() as u64).max(Duration::from_secs(1))
-            );
+            // `wait` is positive, so rounding up gives at least one second.
+            return Err(Duration::from_secs(wait.as_secs_f64().ceil() as u64));
         }
         for bucket in buckets {
             logs.get_mut(&(platform.to_owned(), bucket.id.clone()))
@@ -141,6 +146,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    impl Pacer {
+        fn take_at(
+            &self,
+            platform: &str,
+            buckets: &[PacedBucket],
+            now: Instant,
+        ) -> Result<(), Duration> {
+            self.take_with(platform, buckets, || now)
+        }
+    }
+
     fn bucket(id: &str, requests: usize, seconds: u64) -> PacedBucket {
         PacedBucket {
             id: id.into(),
@@ -155,23 +171,23 @@ mod tests {
         let b = [bucket("source", 3, 60)];
         let start = Instant::now();
         let at = |s: u64| start + Duration::from_secs(s);
-        pacer.take("p", &b, at(0)).unwrap();
-        pacer.take("p", &b, at(10)).unwrap();
-        pacer.take("p", &b, at(20)).unwrap();
+        pacer.take_at("p", &b, at(0)).unwrap();
+        pacer.take_at("p", &b, at(10)).unwrap();
+        pacer.take_at("p", &b, at(20)).unwrap();
         // Full until the first entry leaves the window at 60 s.
-        assert_eq!(pacer.take("p", &b, at(30)), Err(Duration::from_secs(30)));
-        assert_eq!(pacer.take("p", &b, at(59)), Err(Duration::from_secs(1)));
-        pacer.take("p", &b, at(60)).unwrap();
+        assert_eq!(pacer.take_at("p", &b, at(30)), Err(Duration::from_secs(30)));
+        assert_eq!(pacer.take_at("p", &b, at(59)), Err(Duration::from_secs(1)));
+        pacer.take_at("p", &b, at(60)).unwrap();
         // Unlike a fixed window, no burst at a boundary: 10 s and 20 s are
         // still inside the window ending at 61 s.
-        assert_eq!(pacer.take("p", &b, at(61)), Err(Duration::from_secs(9)));
+        assert_eq!(pacer.take_at("p", &b, at(61)), Err(Duration::from_secs(9)));
         // Fractions round up, so a retry never comes too early.
         let err = pacer
-            .take("p", &b, at(61) + Duration::from_millis(500))
+            .take_at("p", &b, at(61) + Duration::from_millis(500))
             .unwrap_err();
         assert_eq!(err, Duration::from_secs(9));
         // Another platform's bucket of the same name is separate.
-        pacer.take("q", &b, at(61)).unwrap();
+        pacer.take_at("q", &b, at(61)).unwrap();
     }
 
     #[test]
@@ -181,25 +197,29 @@ mod tests {
         let small = bucket("small", 1, 60);
         let big = bucket("big", 5, 60);
         pacer
-            .take("p", &[small.clone(), big.clone()], start)
+            .take_at("p", &[small.clone(), big.clone()], start)
             .unwrap();
         // `small` is full: refused, and `big` is not charged for it.
         for _ in 0..3 {
             assert!(pacer
-                .take("p", &[small.clone(), big.clone()], start)
+                .take_at("p", &[small.clone(), big.clone()], start)
                 .is_err());
         }
         for _ in 0..4 {
-            pacer.take("p", std::slice::from_ref(&big), start).unwrap();
+            pacer
+                .take_at("p", std::slice::from_ref(&big), start)
+                .unwrap();
         }
-        assert!(pacer.take("p", std::slice::from_ref(&big), start).is_err());
+        assert!(pacer
+            .take_at("p", std::slice::from_ref(&big), start)
+            .is_err());
         // The longest wait of the full buckets.
         let later = start + Duration::from_secs(20);
         assert_eq!(
-            pacer.take("p", &[small, big, bucket("free", 9, 60)], later),
+            pacer.take_at("p", &[small, big, bucket("free", 9, 60)], later),
             Err(Duration::from_secs(40))
         );
-        assert_eq!(pacer.take("p", &[], later), Ok(()));
+        assert_eq!(pacer.take_at("p", &[], later), Ok(()));
     }
 
     #[test]

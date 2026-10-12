@@ -310,6 +310,41 @@ class ReadingTests(unittest.TestCase):
         result = read_members(runtime, derived, {"properties": {"Points": {"number": 3}}})
         self.assertEqual((result["unmatched"], result["values"]), (["Points"], {}))
 
+    def test_repeated_id_with_another_name_is_undescribed_under_key_matching(self):
+        runtime = dict(self.runtime, match="key")
+        del runtime["memberId"]
+        del runtime["memberType"]
+        runtime["describedBy"] = dict(runtime["describedBy"], shape="array")
+        table = {"properties": [{"id": "x1", "name": "Points", "type": "number"},
+                                {"id": "x1", "name": "Score", "type": "number"}]}
+        derived = derive_class(runtime, table)
+        self.assertEqual(derived["duplicates"], ["x1"])
+        result = read_members(runtime, derived, {"properties": {"Points": {"number": 1}, "Score": {"number": 2}}})
+        self.assertEqual(sorted(result["undescribed"]), ["Points", "Score"])
+        self.assertEqual(result["unmatched"], [])
+
+    def test_a_name_that_is_not_a_string_does_not_crash(self):
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Estimate"]["name"] = {"text": "Estimate"}
+        derived = derive_class(self.runtime, table)
+        self.assertEqual(derived["properties"]["a%3Ab"]["name"], "Estimate")  # the map key
+        self.assertEqual(read_members(self.runtime, derived, ROW)["values"]["a%3Ab"], 3)
+
+    def test_member_id_that_is_not_a_string_is_invalid(self):
+        derived = derive_class(self.runtime, TABLE)
+        for value in ({"nested": "a%3Ab"}, ["a%3Ab"], 7):
+            row = copy.deepcopy(ROW)
+            row["properties"]["Estimate"]["id"] = value
+            with self.subTest(value=value):
+                result = read_members(self.runtime, derived, row)
+                self.assertEqual(result["invalid"], ["Estimate"])
+                self.assertNotIn("a%3Ab", result["values"])
+
+    def test_option_name_that_is_not_a_string_is_no_name(self):
+        table = copy.deepcopy(TABLE)
+        table["properties"]["Stage"]["select"]["options"].append({"id": "opt-3", "name": {"text": "Later"}})
+        self.assertIsNone(derive_class(self.runtime, table)["properties"]["c%3Ad"]["options"]["opt-3"])
+
     def test_array_definitions_and_key_matching(self):
         runtime = {
             "field": "fields", "keyedBy": "id", "match": "key",

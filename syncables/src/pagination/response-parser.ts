@@ -6,13 +6,42 @@ import type {
   SchemeType,
 } from './types.js';
 
+/**
+ * The segments of a dot-path (spec §4.4): each is a literal property name,
+ * and one that holds a `.` is bracket-escaped as `["a.b"]` (a `"` or `\`
+ * inside it escaped with `\`). `pagination.total_count` gives two segments,
+ * `meta["page.info"].next` three.
+ */
+export function splitPath(path: string): string[] {
+  const segments: string[] = [];
+  const pattern = /\[\s*"((?:[^"\\]|\\.)*)"\s*\]|([^.[]+)|(\.)|(\[)/g;
+  let expectDot = false;
+  for (const match of path.matchAll(pattern)) {
+    const [, quoted, plain, dot, bracket] = match;
+    if (quoted !== undefined) {
+      segments.push(quoted.replace(/\\(.)/g, '$1'));
+      expectDot = true;
+    } else if (plain !== undefined) {
+      segments.push(plain);
+      expectDot = true;
+    } else if (dot !== undefined) {
+      if (!expectDot) segments.push('');
+      expectDot = false;
+    } else if (bracket !== undefined) {
+      throw new Error(`Malformed dot-path ${JSON.stringify(path)}`);
+    }
+  }
+  if (!expectDot) segments.push('');
+  return segments;
+}
+
 /** Reads a dot-separated path out of a plain object, e.g. "pagination.total_count". */
 export function readNestedField(
   body: Record<string, unknown>,
   path: string,
 ): unknown {
   let node: unknown = body;
-  for (const segment of path.split('.')) {
+  for (const segment of splitPath(path)) {
     if (typeof node !== 'object' || node === null) {
       return undefined;
     }
@@ -27,7 +56,7 @@ export function setNestedField(
   path: string,
   value: unknown,
 ): void {
-  const segments = path.split('.');
+  const segments = splitPath(path);
   let node = body;
   for (let i = 0; i < segments.length - 1; i += 1) {
     const segment = segments[i] as string;
@@ -160,6 +189,7 @@ function deriveHasNextPage(
   type: SchemeType,
   state: PaginationResponseState,
   itemsFetchedSoFar?: number,
+  firstPage = 1,
 ): boolean {
   if (state.nextLink !== null || state.nextPageToken !== null) {
     return true;
@@ -168,18 +198,33 @@ function deriveHasNextPage(
     return itemsFetchedSoFar < state.totalCount;
   }
   if (type === 'pageNumber') {
-    if (state.currentPage !== null && state.totalPages !== null) {
-      return state.currentPage < state.totalPages;
+    // currentPage is numbered like the request's page field (from its
+    // start); totalPages is a count (spec 0.6.0 §4.5).
+    const ordinal =
+      state.currentPage !== null ? state.currentPage - firstPage + 1 : null;
+    if (ordinal !== null && state.totalPages !== null) {
+      return ordinal < state.totalPages;
     }
     if (
-      state.currentPage !== null &&
+      ordinal !== null &&
       state.totalCount !== null &&
       state.pageSize !== null
     ) {
-      return state.currentPage * state.pageSize < state.totalCount;
+      return ordinal * state.pageSize < state.totalCount;
     }
   }
   return false;
+}
+
+/** The `start` of the scheme's `page` field (spec 0.6.0 §4.3.1), else 1. */
+export function pageStart(scheme: PaginationSchemeObject): number {
+  for (const location of ['queryParameters', 'bodyFields'] as const) {
+    for (const field of Object.values(scheme.request?.[location] ?? {})) {
+      if (field.role === 'page' && typeof field.start === 'number')
+        return field.start;
+    }
+  }
+  return 1;
 }
 
 /**
@@ -216,6 +261,11 @@ export function parsePaginationState(
     pageSize: toNumberOrNull(roles.get('pageSize') ?? null),
     hasNextPage: false,
   };
-  state.hasNextPage = deriveHasNextPage(scheme.type, state, itemsFetchedSoFar);
+  state.hasNextPage = deriveHasNextPage(
+    scheme.type,
+    state,
+    itemsFetchedSoFar,
+    pageStart(scheme),
+  );
   return state;
 }

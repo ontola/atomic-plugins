@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - an **API client** (`createApiClient`) that talks to any server implementing
   that document and keeps a local copy of each resource collection in sync.
 
-Both understand the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Both understand the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 when a document declares `components.paginationSchemes` (see below) —
 the mock server paginates list responses accordingly, and the client walks
 every page automatically.
@@ -67,6 +67,30 @@ Data flows through four stages, each its own directory under `src/`:
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
    completion/error status. `read/read.ts` adds ontology/type projection.
+   `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
+   extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
+   #398; the spec's `validate.py` `derive_class`/`read_members` are its
+   reference; keep `deriveRuntimeClass`/`readRuntimeMembers` in step with
+   them): after the collections, `readCollections` reads each
+   describer the items' reference binds (`describerPath`), keyed per
+   resource and path, through the read's `Budget`, plus at most one re-read
+   when a member is unmatched (then, under `match: id` only, the items with
+   an unmatched member are interpreted again), and returns `describers` and
+   per-snapshot `runtimeMembers` (aligned with `items`). Under `match: key`
+   the lookup covers every definition's name or id (`names`), skipping
+   `duplicateNames`, so undescribed and duplicate-id members are not
+   unmatched. Absent values stay absent (`MISSING`, never `null`); two
+   members of one definition are `conflicting`; a describer that fails keeps
+   its `error`, no class, and an entry in `errors`. `runtimeSchemasOf`
+   checks the declaration (dot-paths through the spec's `SEGMENT` grammar,
+   non-empty `types`, a `schema` per type) and a failure fails the
+   resource's collections before any request. Describer errors are also
+   in `describerErrors`; `sync()` subtracts them from `errors` before its
+   "Read incomplete" check and returns them as `SyncResult.warnings`, with
+   `describers`, and keeps each complete snapshot's members per scope
+   (`runtimeMembersByScope`, in memory) for `runtimeMembers()`. An item
+   without a class gets `noClass: true`. `readPlatform` maps snapshot items
+   to records by object identity to set `ReadRecord.runtime`.
 
    For compatibility, the client opts into `resources/discover.ts` path-pair
    discovery when CRUD metadata is absent. The mock server still uses that
@@ -88,8 +112,15 @@ Data flows through four stages, each its own directory under `src/`:
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
    the same `walkPages` as the reader, including POST-body cursors, next-link
-   checks and budgets. Failed/incomplete collections do not replace or prune
-   stored records. GET validators reuse raw cached response bodies.
+   checks and budgets. Failed collections do not replace or prune stored
+   records. A snapshot that ended without an error but is not complete
+   (`notComplete`: range windows, an undocumented short-page end) goes to
+   `upsertIncomplete`: its records are merged into the confirmed copy and
+   rebuilt (per record, skipped when a write settled on it during the read;
+   whole scope skipped when one settled on the scope), `lastSyncedItems` is
+   dropped for the scope so a later complete read still prunes, and nothing
+   is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
+   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
@@ -108,8 +139,18 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   updates select declared PUT, otherwise PATCH, and currently send JSON
-   records rather than JSON Patch. Read-only operations fail before local edits.
+   updates select declared PUT, otherwise PATCH; the chosen operation's
+   `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
+   `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
+   RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
+   legacy documents) sends the full JSON record. Each update keeps its
+   format (`QueuedWrite.updateBody`, stored); `rebuild` and sending use the
+   write's, not the route's, and `restore` fails a mismatched update with
+   the writes before it (`bodyMismatch`; behind a create the entry is
+   unrestorable), and `resolveWrite` `retry` refuses it. On merge-patch
+   writes, `detectConflicts` compares with the field after the patches
+   (`patchedField`, in order) and `supersede`/`retry` strip nested members
+   (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -130,9 +171,27 @@ Data flows through four stages, each its own directory under `src/`:
    raised before the request reaches the transport (an `authenticate`
    adapter throwing) keep the backoff retry. Non-2xx responses are
    classified (`classify`, `defaultWriteFailureClass`, overridable with
-   `classifyWriteFailure`): `retry` (408/425/429/5xx, rate-limited 403;
-   delay is max(backoff, `Retry-After` capped at `retry.maxRetryAfterMs`),
-   never below the backoff), `permanent` (other 4xx: failed
+   `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
+   throttling under the document's root `x-throttling`, draft Throttling
+   extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
+   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   gives the verdict the client attaches as `WriteFailure.throttling`, a
+   matching signal or any 429; with `signalsDeclared` the old 403 header
+   heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
+   the later of `retryAfter` and `reset` measured against both clocks, else
+   `minDelaySeconds`, else the bucket window), stored on the write as
+   `notBefore` (outbox) so a restart or `resolveWrite` retry keeps it; a
+   hold (`notBefore` or a bucket pause) further away than
+   `retry.maxRetryAfterMs` makes the write `gaveUp` with a `lastError`
+   instead of retrying early; a `quotaExhausted` verdict, from a write or a
+   read, pauses every request whose operation selects the bucket
+   (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
+   `pauseForOperation`, `operationBuckets`; the read transport waits within
+   `limits.timeoutMs`), until the answer's time or else the write's backoff;
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
+   retryable answer the delay is max(backoff, `Retry-After` capped at
+   `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
+   uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
    at once, through the same path as `retry.maxAttempts`), `satisfied` (a
    delete's 404/410 settles it) and `auth` (401; 403 unless sent after a
    renewal before an accepted response, then `permanent`; `afterRenewal`
@@ -255,7 +314,7 @@ rather than relying on the generated value to differ per item.
 
 ### Pagination (`src/pagination/`)
 
-Implements the [OpenAPI Pagination Schemes Extension](https://github.com/pondersource/openapi-pagination-schemes-extension)
+Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec/pagination-schemes/README.md)
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
@@ -313,6 +372,21 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
+- Pagination Schemes 0.6.0: `request-builder.ts`'s `pageStart` is the
+  `page` field's `start` (default 1), used for the first page, the next
+  page and by the mock server. `walkPages` reads a `pageNumber` scheme's
+  `shortPage`: before a page is handed on it throws `PageReadError` for
+  more than the full size (`size`, or a reported `pageSize` field) or an
+  item identity an earlier page of the read returned; after it, a page
+  with fewer items ends the walk (`PageWalk.outcome` not complete unless
+  `assurance: documented`; an error under `documented` when `totalPages` or
+  `totalCount` says more follow, not complete otherwise), and a full page
+  goes on to the next page number unless `totalPages` (a count: the last
+  page is `start + totalPages − 1`) or `totalCount` ends it, which is
+  complete whatever the assurance. `currentPage` is numbered like the
+  `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
+  capped at the parameter's `maximum`. The validator checks §9 rules
+  19–21, `resolveEffectiveScheme` rule 22.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -405,12 +479,44 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/runtime-classes.test.ts` covers the classes in
+  `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
+  `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
+  a failed collection still throwing).
+- `unit/read/runtime-schemas-reference.test.ts` mirrors the spec's
+  `ReadingTests` (same TABLE and ROW) against `deriveRuntimeClass` and
+  `readRuntimeMembers`, plus the declarations `runtimeSchemasOf` refuses.
+- `unit/read/runtime-schemas.test.ts` runs Runtime Schemas on the spec's
+  §7.1 example (`__tests__/fixtures/runtime-schemas.ts`): the derived class
+  and values, a rename, one describer read per read and the one re-read,
+  absent values, kept unknown options, invalid option shapes, undescribed
+  types, duplicate ids, `memberType`, unreadable or unbound describers, and
+  an unusable declaration.
 - `unit/read/collections.test.ts` covers the Collection Object's
   `envelope.itemsField` in the collection read (#373): the model field, a
   nested dot-path, a missing or non-array path (an incomplete read with
   "No items array at <path>", never an empty one), no heuristic once an
   envelope is declared, and the unchanged heuristic without a declaration,
-  with `itemsField: null`, or with one that is not a string.
+  or with one that is not a string (`null` and `""` mean the body root since
+  #384). `unit/read/envelope.test.ts` covers #384 items 6, 7, 9 and 10a (a
+  non-object item fails the read; `null`/`""` as the root; the body-root
+  error text; the scheme's own `response.envelope`),
+  `unit/client/envelope.test.ts` items 7 and 10b (a feed with
+  `itemsField: null`; `ApiClient.paginate` through the Collection envelope),
+  and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
+  userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
+  dot-paths).
+- `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
+  `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
+  which also holds the GitHub, Google and Moneybird snippets), plus
+  `headerTime`, `declaredThrottling`'s leniency and `operationBuckets`;
+  `unit/client/throttling.test.ts` runs those snippets through writes (the
+  reset wait, the minimum delay, a non-matching 403 blocks, Retry-After,
+  giving up past `maxRetryAfterMs`, a signalled 500 create staying
+  uncertain, the stored `notBefore` across a restart, the backoff floor, the
+  held-write cap, reads sharing the paused buckets, the bucket
+  pause) and reads (the injected sleep, the deadline, the spec example
+  through `sync()`), and the 403 heuristic without signals.
 - `__tests__/fixtures/pets.ts`, a shared hand-written OpenAPI fixture used
   across multiple test files for CRUD-resource-shaped scenarios.
 - `__tests__/fixtures/real-world/`, real OpenAPI documents and pagination

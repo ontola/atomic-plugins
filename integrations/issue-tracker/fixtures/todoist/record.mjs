@@ -47,6 +47,12 @@
  *                      warns: the recording then leaves #46's completed-task
  *                      question open and scenario.mjs keeps its assumption.
  *                      The id is the one Todoist shows in the task's URL.
+ *                      Given without a value (last, or before another
+ *                      --option) it is ignored, with a warning.
+ *
+ * --proxy, --limit and --max-pages without a value (last, or before another
+ * --option), a --limit or --max-pages that is not an integer of at least 1,
+ * and the --name=value form stop the script before anything is fetched.
  *
  * Use an account with at least limit+1 active tasks, so the recording has a
  * second page (next_cursor) to exercise pagination; the script warns if not.
@@ -225,24 +231,58 @@ export function redactor() {
   };
 }
 
-const arg = (name, fallback) => {
-  const i = process.argv.indexOf(`--${name}`);
+/** Whether `argv[i + 1]` is no value for the option at `argv[i]`. */
+const noValue = (argv, i) =>
+  argv[i + 1] === undefined || argv[i + 1].startsWith('--');
 
-  return i === -1 ? fallback : process.argv[i + 1];
+/**
+ * Refuses the `--<name>=<value>` form, which `arg` and `args` would not see
+ * (the option would silently keep its default).
+ */
+export function checkArgv(argv = process.argv) {
+  const joined = argv.find(a => /^--[^=]+=/.test(a));
+  if (joined)
+    throw new Error(
+      `write ${joined.replace('=', ' ')} instead of ${joined}: options take their value as the next argument`,
+    );
+}
+
+/** `value` of option `--<name>` as an integer of at least 1, or a throw. */
+export function positiveInteger(name, value) {
+  const n = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(n) || n < 1)
+    throw new Error(`--${name} must be an integer of at least 1, not ${value}`);
+
+  return n;
+}
+
+/**
+ * The value of a single `--<name> <value>` option, or `fallback` when it is
+ * not given. A flag right after the option (`--limit --proxy x`), or
+ * nothing at all, is no value: that throws, rather than recording with
+ * `limit` "--proxy".
+ */
+export const arg = (name, fallback, argv = process.argv) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i === -1) return fallback;
+  if (noValue(argv, i)) throw new Error(`--${name} needs a value`);
+
+  return argv[i + 1];
 };
 
 /**
  * Every value of a repeatable `--<name> <value>` option, in order. A flag
- * right after the option (`--completed-task --limit 3`) is not its value.
+ * right after the option (`--completed-task --limit 3`) is not its value,
+ * and neither is the end of the line; `valueless` counts those.
  */
 export const args = (name, argv = process.argv) =>
-  argv.flatMap((a, i) => {
-    const next = argv[i + 1];
+  argv.flatMap((a, i) =>
+    a === `--${name}` && !noValue(argv, i) ? [argv[i + 1]] : [],
+  );
 
-    return a === `--${name}` && next !== undefined && !next.startsWith('--')
-      ? [next]
-      : [];
-  });
+/** How many times a `--<name>` option is given without a value. */
+export const valueless = (name, argv = process.argv) =>
+  argv.filter((a, i) => a === `--${name}` && noValue(argv, i)).length;
 
 /**
  * Every string in `body` replaced with "redacted", numbers, booleans and
@@ -398,7 +438,12 @@ function format(dir) {
 
 async function main() {
   const dir = new URL('./', import.meta.url);
+  // Every option is read before anything is fetched, so one without a
+  // value stops the script first.
+  checkArgv();
   const proxy = arg('proxy', 'https://localthought.io');
+  const limit = positiveInteger('limit', arg('limit', '3'));
+  const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
   await recordDocument(dir, proxy);
   console.info(`record: wrote document.yaml from ${proxy}`);
   if (process.argv.includes('--document-only')) return format(dir);
@@ -406,8 +451,6 @@ async function main() {
   const token = process.env.TODOIST_TOKEN;
   if (!token)
     throw new Error('TODOIST_TOKEN must be set (or pass --document-only)');
-  const limit = Number(arg('limit', '3'));
-  const maxPages = Number(arg('max-pages', '3'));
   const api = new URL('api/', dir);
   rmSync(api, { recursive: true, force: true });
   mkdirSync(api);
@@ -429,6 +472,11 @@ async function main() {
     });
 
   const completedIds = args('completed-task');
+  const skipped = valueless('completed-task');
+  if (skipped)
+    console.warn(
+      `record: ${skipped} --completed-task option(s) without a value (at the end, or followed by another --option) ignored.`,
+    );
   const completed = [];
   for (const [i, id] of completedIds.entries())
     completed.push(await recordCompleted({ dir, token, redact, id, n: i + 1 }));
