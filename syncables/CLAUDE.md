@@ -145,8 +145,18 @@ Data flows through four stages, each its own directory under `src/`:
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
-   updates select declared PUT, otherwise PATCH, and currently send JSON
-   records rather than JSON Patch. Read-only operations fail before local edits.
+   updates select declared PUT, otherwise PATCH; the chosen operation's
+   `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
+   `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
+   RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
+   legacy documents) sends the full JSON record. Each update keeps its
+   format (`QueuedWrite.updateBody`, stored); `rebuild` and sending use the
+   write's, not the route's, and `restore` fails a mismatched update with
+   the writes before it (`bodyMismatch`; behind a create the entry is
+   unrestorable), and `resolveWrite` `retry` refuses it. On merge-patch
+   writes, `detectConflicts` compares with the field after the patches
+   (`patchedField`, in order) and `supersede`/`retry` strip nested members
+   (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
