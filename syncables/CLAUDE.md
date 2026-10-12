@@ -557,6 +557,28 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) steps by the items
+  the page held and ends at an empty page or `totalCount` (#495: before,
+  without a `totalCount`, `hasNextPage` ended it after one page), unless
+  the scheme declares a `nextLink` (`declaresRole`), which then leads. Under
+  `pageSize` with a `nextLink` the offset cursor is stale after links, and
+  a `null` link makes the read fail on a repeat (pinned in the tests). The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
