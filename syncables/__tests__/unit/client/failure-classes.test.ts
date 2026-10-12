@@ -385,6 +385,68 @@ describe('retryable failures', () => {
     expect((times[1] as number) - (times[0] as number)).toBeLessThan(500);
   });
 
+  it.each([
+    ['above 2^53 − 1', String(2 ** 53)],
+    ['with a no-break space', '\u00a02'],
+  ])(
+    'ignores a 503 Retry-After %s: the backoff applies, not the cap',
+    async (_label, value) => {
+      const { times, transport } = provider([rex], (_r, n) =>
+        n === 1 ? response({}, 503, { 'retry-after': value }) : undefined,
+      );
+      const client = createApiClient(document(), {
+        transport,
+        retry: { baseDelayMs: 1, maxRetryAfterMs: 400 },
+      });
+      await client.sync();
+      await client.update('/pets', '1', { name: 'Rex II' });
+      await idle(client);
+      expect(times).toHaveLength(2);
+      expect((times[1] as number) - (times[0] as number)).toBeLessThan(300);
+    },
+  );
+
+  it.each([
+    ['a leading U+00A0', '\u00a0'],
+    ['a leading byte-order mark', '\ufeff'],
+  ])(
+    'ignores a 503 Retry-After HTTP-date with %s (#491 review)',
+    async (_label, prefix) => {
+      const later = new Date(Date.now() + 60_000).toUTCString();
+      const { times, transport } = provider([rex], (_r, n) =>
+        n === 1
+          ? response({}, 503, { 'retry-after': `${prefix}${later}` })
+          : undefined,
+      );
+      const client = createApiClient(document(), {
+        transport,
+        retry: { baseDelayMs: 1, maxRetryAfterMs: 400 },
+      });
+      await client.sync();
+      await client.update('/pets', '1', { name: 'Rex II' });
+      await idle(client);
+      expect(times).toHaveLength(2);
+      expect((times[1] as number) - (times[0] as number)).toBeLessThan(300);
+    },
+  );
+
+  it('still waits a 503 Retry-After IMF-fixdate (up to the cap)', async () => {
+    const later = new Date(Date.now() + 60_000).toUTCString();
+    const { times, transport } = provider([rex], (_r, n) =>
+      n === 1 ? response({}, 503, { 'retry-after': later }) : undefined,
+    );
+    const client = createApiClient(document(), {
+      transport,
+      retry: { baseDelayMs: 1, maxRetryAfterMs: 400 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect((times[1] as number) - (times[0] as number)).toBeGreaterThanOrEqual(
+      350,
+    );
+  });
+
   it('counts retryable failures against retry.maxAttempts', async () => {
     const { writes, transport } = provider([rex], () => response({}, 503));
     const client = createApiClient(document(), {
