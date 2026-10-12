@@ -17,7 +17,7 @@
  * `bad-value`) changes no issue-v1 value: the row keeps what it last had,
  * and the pass reports the task (`SyncSummary.unmapped`).
  */
-import { LensError, lensPut } from '../../../ontology-kit/lens.mjs';
+import { LensError, lensGet, lensPut } from '../../../ontology-kit/lens.mjs';
 import { todoistTaskIssueV2 } from '../../../ontology-kit/lenses.mjs';
 import {
   ISSUE_V1,
@@ -72,4 +72,25 @@ export function issueFromTask(
     } else set[property] = next[property] as JSONValue;
 
   return { set, unset };
+}
+
+/**
+ * The task as a row last had it: every field the lens reads, from the
+ * row's issue-v1 values. Its backward `get` gives `content`, `description`
+ * and `checked`; the due day has no inverse (`day-of` is one-way), so it is
+ * carried over as `due.date`, which the lens reads back as the same day.
+ * For a row whose stored Todoist source is unreadable, so that a pass that
+ * cannot read the task keeps every value instead of removing some.
+ */
+export function taskFromRow(
+  previous: Record<string, JSONValue>,
+): Record<string, JSONValue> {
+  const task = lensGet(TODOIST_LENS.mapping, previous, 'backward') as Record<
+    string,
+    JSONValue
+  >;
+  const due = previous[TASK_DUE_DATE];
+  if (typeof due === 'string' && due) task.due = { date: due };
+
+  return task;
 }

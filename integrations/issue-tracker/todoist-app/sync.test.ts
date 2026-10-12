@@ -131,10 +131,13 @@ describe('import through the catalog lens', () => {
     });
 
     const summary = await sync(T2);
-    expect(summary.unmapped.map(u => u.id).sort()).toEqual(
+    const unmapped = [...summary.unmapped].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+    expect(unmapped.map(u => u.id)).toEqual(
       ['synthetic-task-1', fresh.id].sort(),
     );
-    expect(summary.unmapped[0].reason).toMatch(/without a time zone/);
+    for (const u of unmapped) expect(u.reason).toMatch(/without a time zone/);
     expect(describeSummary(summary)).toContain(
       '2 tasks could not be read through the catalog lens',
     );
@@ -145,6 +148,29 @@ describe('import through the catalog lens', () => {
     const added = rowOf(fresh.id);
     expect(added).not.toHaveProperty(NAME);
     expect(added[p.presence]).toBe('active');
+  });
+});
+
+describe('a row whose stored Todoist source is unreadable', () => {
+  it('keeps its due date when Todoist no longer lists the task', async () => {
+    const { store, sync, rowOf, p } = await setUp();
+    await sync(T1);
+    const withDue = store.todoist
+      .snapshot()
+      .tasks.find(t => t.due && typeof t.due.date === 'string')!;
+    const before = rowOf(withDue.id);
+    expect(before[TASK_DUE_DATE]).toBeTruthy();
+    // The source is not JSON, and the task is deleted in Todoist.
+    store.resources.get(before.subject)![p.source] = 'not json';
+    store.todoist.deleteTask(withDue.id);
+
+    const summary = await sync(T2);
+    const after = rowOf(withDue.id);
+    expect(after[TASK_DUE_DATE]).toBe(before[TASK_DUE_DATE]);
+    expect(after[NAME]).toBe(before[NAME]);
+    expect(after[TASK_BODY]).toBe(before[TASK_BODY]);
+    expect(after[TASK_STATUS]).toEqual(before[TASK_STATUS]);
+    expect(summary.unmapped).toEqual([]);
   });
 });
 

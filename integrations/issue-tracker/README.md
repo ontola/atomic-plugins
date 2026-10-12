@@ -96,7 +96,7 @@ tests prove the mechanism against an invented `api/` only.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 52,055
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 52,134
 bytes for 0.3.0, 38,912 for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
@@ -140,9 +140,11 @@ its shared values. A **new** refused task still gets a row, with the app's
 bookkeeping (`todoist-task-id`, presence, priority, project, source) but no
 shared values, so the view and the host table show it as "Incomplete:
 missing Name" until a later pass can read it. A row whose `todoist-source`
-is unreadable (not JSON) falls back to its stored Name as the task's
-`content` when Todoist no longer lists the task, so it is not refused on
-every pass; the next pass that reads the task rewrites the source.
+is unreadable (not JSON) takes every field the lens reads from the row
+itself (name, body, status and due day, `taskFromRow` in
+`todoist-app/lens.ts`) when Todoist no longer lists the task, so it is not
+refused on every pass and loses no value; the next pass that reads the task
+rewrites the source.
 
 Changes from 0.2.0, which mapped tasks itself:
 

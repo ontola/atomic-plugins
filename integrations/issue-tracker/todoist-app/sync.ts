@@ -49,7 +49,7 @@ import {
   TASK_DUE_DATE,
   TASK_STATUS,
 } from './drive.js';
-import { issueFromTask, LENS_FIELDS } from './lens.js';
+import { issueFromTask, LENS_FIELDS, taskFromRow } from './lens.js';
 import {
   lookupTasks,
   rateLimited,
@@ -156,12 +156,12 @@ async function previousTasks(
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
         values = parsed as Record<string, AtomicJSON>;
     } catch {
-      // Unreadable source: the row is treated as an active task whose only
-      // provider value is its stored Name as `content`, so the catalog lens
-      // can still read it (instead of refusing it on every pass while
-      // Todoist no longer lists it); the next read replaces it.
-      const name = text(row.get(NAME));
-      if (name) values = { content: name };
+      // Unreadable source: the row is treated as an active task with every
+      // field the catalog lens reads taken from the row itself (`taskFromRow`:
+      // name, body, status, due day), so a pass that cannot read the task
+      // keeps all of them, instead of refusing the row on every pass or
+      // removing what the source no longer says; the next read replaces it.
+      values = taskFromRow(lensValues(row)) as Record<string, AtomicJSON>;
     }
 
     const presence = values[todoistFields.presence];
