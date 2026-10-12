@@ -28,7 +28,10 @@ const json = (value: unknown, status = 200): TransportResponse => ({
 type Event = Record<string, unknown>;
 
 /** A calendar whose list returns `listed()`; every request is recorded. */
-function calendar(listed: () => Event[]): {
+function calendar(
+  listed: () => Event[],
+  item: (id: string) => Event | undefined = () => undefined,
+): {
   requests: string[];
   transport: (r: TransportRequest) => Promise<TransportResponse>;
 } {
@@ -40,6 +43,11 @@ function calendar(listed: () => Event[]): {
       if (r.method === 'GET' && r.url.pathname === '/calendars/c1/events')
         return json({ items: listed() });
       if (r.method === 'PATCH') return json({ message: 'busy' }, 503);
+      const read = /^\/calendars\/c1\/events\/([^/]+)$/.exec(r.url.pathname);
+      if (r.method === 'GET' && read) {
+        const found = item(decodeURIComponent(read[1]!));
+        if (found) return json(found);
+      }
       return json({ message: 'not found' }, 404);
     },
   };
@@ -220,5 +228,79 @@ describe('sync() with list tombstones', () => {
     expect(
       fake.requests.filter((r) => r.startsWith('GET /calendars/c1/events/')),
     ).toEqual([]);
+  });
+});
+
+describe('read tombstones with except conditions (one reading with lists, §4.3)', () => {
+  /** The example plus the read-tombstone-v2 declaration on the event read. */
+  function withReadTombstone(): OpenApiDocument {
+    const doc = writable();
+    doc.paths['/calendars/{calendarId}/events/{eventId}']!.get![
+      'x-read-tombstone'
+    ] = {
+      field: 'status',
+      values: ['cancelled'],
+      except: [{ field: 'recurringEventId', present: true }],
+    };
+    return doc;
+  }
+
+  for (const [label, answer, evidence] of [
+    ['a deleted event', { id: 'e1', status: 'cancelled' }, 'deleted'],
+    [
+      'a cancelled exception, which is not a deletion',
+      { id: 'e1', status: 'cancelled', recurringEventId: 'e0' },
+      'filtered',
+    ],
+  ] as const)
+    it(`reads ${label} by GET as ${evidence}`, async () => {
+      let items: Event[] = [meeting];
+      const reports: MissingRecord[] = [];
+      const fake = calendar(
+        () => items,
+        (id) => (id === 'e1' ? answer : undefined),
+      );
+      const c = createApiClient(withReadTombstone(), {
+        transport: fake.transport,
+        constants: { calendarId: 'c1' },
+        retry: { baseDelayMs: 60_000 },
+        onMissingRecord: (r) => reports.push(r),
+      });
+      await c.sync();
+      await c.update('eventsWithDeleted', 'e1', { summary: 'Moved' });
+      await vi.waitFor(() => expect(c.pendingWrites()[0]?.attempts).toBe(1));
+      // The list leaves it out entirely: its read decides.
+      items = [];
+      await c.sync();
+      expect(reports).toMatchObject([
+        { id: 'e1', evidence, source: 'read', status: 200 },
+      ]);
+    });
+
+  it('ignores a read tombstone whose except does not parse: no deletion on a guess', async () => {
+    const doc = withReadTombstone();
+    (
+      doc.paths['/calendars/{calendarId}/events/{eventId}']!.get![
+        'x-read-tombstone'
+      ] as Record<string, unknown>
+    )['except'] = [{ field: 'recurringEventId' }];
+    let items: Event[] = [meeting];
+    const reports: MissingRecord[] = [];
+    const fake = calendar(
+      () => items,
+      () => ({ id: 'e1', status: 'cancelled' }),
+    );
+    const c = createApiClient(doc, {
+      transport: fake.transport,
+      constants: { calendarId: 'c1' },
+      retry: { baseDelayMs: 60_000 },
+      onMissingRecord: (r) => reports.push(r),
+    });
+    await c.sync();
+    await c.update('eventsWithDeleted', 'e1', { summary: 'Moved' });
+    await vi.waitFor(() => expect(c.pendingWrites()[0]?.attempts).toBe(1));
+    items = [];
+    await c.sync();
+    expect(reports).toMatchObject([{ id: 'e1', evidence: 'filtered' }]);
   });
 });

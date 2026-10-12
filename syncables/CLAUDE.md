@@ -656,7 +656,9 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `readCollections` into `CollectionSnapshot.tombstones`, and in `sync()`
   the `listTombstoned` ids of the sync's reads are `findEvidence`'s first
   evidence, `source: 'list'`) on the spec's §7.5 example
-  (`__tests__/fixtures/list-tombstones.ts`).
+  (`__tests__/fixtures/list-tombstones.ts`); the client's `Tombstone`
+  (feeds, read tombstones) is the same parsed object, so `except` applies
+  everywhere, tested with read tombstones there too.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,

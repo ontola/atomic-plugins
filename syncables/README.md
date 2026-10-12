@@ -1009,7 +1009,10 @@ Collection Object, else on its list operation: a Tombstone Object's
 `field` and `values`, plus `except` conditions (`{ field, values }` or
 `{ field, present: true }`) for marked items the provider documents as
 something else (a cancelled exception of a recurring event, an item with
-`recurringEventId`, which is kept).
+`recurringEventId`, which is kept). Since 0.3.0 every Tombstone Object takes
+the same `except` conditions, and the client applies them to feed items and
+read tombstones too, so a provider state has one reading wherever it is
+answered; a Tombstone Object whose `except` does not parse is ignored.
 
 An item that is a list tombstone is not a member: `readCollections` leaves
 it out of `items` and lists its id in the snapshot's `tombstones`, and
@@ -1673,6 +1676,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Deletion Feeds 0.3.0-draft `except` conditions on every
+  Tombstone Object: a feed item or a read tombstone that matches one is not
+  a tombstone (a cancelled exception of a recurring event read by GET is
+  `filtered`, not `deleted`). Behaviour change only for documents that
+  declare `except`.
 - **Unreleased**: Deletion Feeds 0.3.0-draft list tombstones
   (`x-list-tombstone`, K18): items of a collection's read that carry the
   declared marker, and match no `except` condition, are not members:

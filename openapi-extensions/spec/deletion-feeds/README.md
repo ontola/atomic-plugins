@@ -702,7 +702,10 @@ of the record reads it again. When the resource's declaration does not
 parse, it uses the operation's. A record
 found deleted this way is handled as for any deletion: the held updates at
 the head of its queue fail, and are sent only if the caller retries them.
-It does not look for the marker in write responses.
+It does not look for the marker in write responses. It applies a Tombstone
+Object's `except` conditions (§4.3) wherever it reads one: a feed item, a
+read's body and a list item that match one are not tombstones, and a
+Tombstone Object whose `except` does not parse is ignored as a whole.
 
 It reads `x-list-tombstone` (§4.5; on the Collection Object, else on the
 list operation; a declaration that does not parse is ignored): a list

@@ -26,6 +26,11 @@ import {
   type CollectionReadOptions,
   type CollectionSnapshot,
 } from '../read/collections.js';
+import {
+  isListTombstone,
+  parseListTombstone,
+  type ListTombstone,
+} from '../read/list-tombstones.js';
 import type {
   RuntimeDescriber,
   RuntimeMembers,
@@ -923,37 +928,32 @@ interface ClientRoute {
   readTombstone?: Tombstone;
 }
 
-/** A parsed Tombstone Object (draft Deletion Feeds extension, §4.3). */
-interface Tombstone {
-  field: string;
-  values: (string | number | boolean)[];
+/**
+ * A parsed Tombstone Object (draft Deletion Feeds extension, §4.3): `field`,
+ * `values` and, since 0.3.0, `except` conditions on the item, shared by
+ * feeds, read tombstones and list tombstones (`read/list-tombstones.ts`).
+ */
+type Tombstone = ListTombstone;
+
+/**
+ * Parses a Tombstone Object: `field` a non-empty dot-path, `values` a
+ * non-empty list of strings, numbers and booleans, `except` well formed when
+ * present. Undefined otherwise (a declaration that does not parse marks
+ * nothing).
+ */
+function parseTombstone(value: unknown): Tombstone | undefined {
+  return parseListTombstone(value);
 }
 
 /**
- * Parses a Tombstone Object: `field` a non-empty string, `values` a
- * non-empty list of strings, numbers and booleans. Undefined otherwise.
+ * Whether the value at the marker's field equals one of its values (same
+ * JSON type), and the item matches none of its `except` conditions.
  */
-function parseTombstone(value: unknown): Tombstone | undefined {
-  if (!isRecord(value)) return undefined;
-  const { field, values } = value;
-  if (
-    typeof field !== 'string' ||
-    field === '' ||
-    !Array.isArray(values) ||
-    !values.length ||
-    !values.every((v) => ['string', 'number', 'boolean'].includes(typeof v))
-  )
-    return undefined;
-  return { field, values: values as (string | number | boolean)[] };
-}
-
-/** Whether the value at the marker's field equals one of its values (same JSON type). */
 function isTombstone(
   item: Record<string, unknown>,
   tombstone: Tombstone,
 ): boolean {
-  const marker = readNestedField(item, tombstone.field);
-  return tombstone.values.some((v) => v === marker);
+  return isListTombstone(tombstone, item);
 }
 
 /** A parsed Deletion Feed Object (draft Deletion Feeds extension). */

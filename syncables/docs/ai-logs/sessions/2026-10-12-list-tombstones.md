@@ -30,3 +30,24 @@ Tests on the spec's example. A Calendar overlay declares it on the event
 list operation, with a test that composes it after the catalog's Calendar
 overlays and checks the pinned document's wording. README, CLAUDE.md, the
 spec's reference-implementation note and the overlays README updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** #489 merged and declares
+Calendar's read tombstone with no exception, so a cancelled recurring
+exception read by GET counts as deleted, while the list rule keeps it.
+Give every Tombstone Object the same `except`, add a Calendar read-tombstone
+revision with the exception (keeping #489's immutable file), give #489's
+README section and §1.1 the one reading, and merge main.
+
+**Assistant:** In the spec branch, `except` moved to the Tombstone Object
+(§4.3), with the rule there; §4.4's read tombstone and §4.5 use it; §1.1
+gives Calendar one reading; the validator checks `except` on every Tombstone
+Object and gains `tombstone()` and `read_tombstone()`. Here: the client's
+Tombstone is the same parsed object as the list tombstone, so feed items
+and read tombstones honour `except` (tests: a cancelled exception read by
+GET is `filtered`, a deleted event `deleted`, an unparseable `except`
+marks nothing). `read-tombstone-v2-32237fa5…` declares the read tombstone
+with the exception; its test checks it equals the list declaration and
+reads both cases. The overlays README section is one section for both,
+superseding #489's reading. Merged main.
