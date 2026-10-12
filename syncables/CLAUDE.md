@@ -573,9 +573,11 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   from the body per response); `itemCount` (default) steps by the items
   the page held and ends at an empty page or `totalCount` (#495: before,
   without a `totalCount`, `hasNextPage` ended it after one page), unless
-  the scheme declares a `nextLink` (`declaresRole`), which then leads. Under
-  `pageSize` with a `nextLink` the offset cursor is stale after links, and
-  a `null` link makes the read fail on a repeat (pinned in the tests). The repeat check (`seenIds` by `PageWalk.identity`,
+  the scheme declares a `nextLink` (`declaresRole`), which then leads under
+  either advance (0.7.1): the offset cursor is not advanced while links
+  are followed, so neither advance branch runs for such a scheme, and an
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
