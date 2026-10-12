@@ -229,10 +229,13 @@ root object; each name is nonempty and is matched literally, so a name that
 contains a `.` cannot be addressed, and `a..b`, `.a` and `a.` are invalid.
 
 A field value is used as text. A string has its leading and trailing
-whitespace removed, as a header value does. A JSON integer is its decimal
-representation, so `3` reads as `deltaSeconds` `3`; a JSON number with no
-fractional part (`3.0`) reads the same; any other number (`3.5`), a boolean,
-`null`, an array or an object does not parse.
+whitespace removed, as a header value does (below). A JSON integer is its
+decimal representation, so `3` reads as `deltaSeconds` `3`; a JSON number
+with no fractional part (`3.0`) reads the same; any other number (`3.5`), a
+boolean, `null`, an array or an object does not parse. An integer above
+2^53 − 1 (9007199254740991), written with or without a fractional part, does
+not parse either: beyond it a JSON number is not held exactly by every parser
+(RFC 8259 §6), and `1e300` would otherwise read as a 301-digit delay.
 
 A role read from both a header and a body field counts once: for `reset` and
 `retryAfter`, the later of the two times; for `limit` and `used`, the
@@ -307,6 +310,11 @@ like throttling, or the reverse.
 A header field that appears more than once in a response has no single value:
 a role ignores it, and `equals` and `in` do not match it (`present` does).
 Header values are compared after removing leading and trailing whitespace.
+Whitespace here, and in a body field's string, means exactly space (U+0020),
+horizontal tab (U+0009), carriage return (U+000D) and line feed (U+000A):
+JSON's whitespace (RFC 8259 §2), which includes a header's optional
+whitespace (RFC 9110 §5.6.3). Other characters, such as U+00A0 or U+3000,
+are kept, so a value that holds them does not parse.
 
 **Earliest retry time.** For a matching response, a consumer computes:
 
@@ -326,7 +334,8 @@ consumer's own clock, and, when the response has a `Date` header, as the same
 offset from `Date` applied to the time the response was received. The later of
 the two counts, so neither a wrong local clock nor a wrong `Date` header can
 make the time earlier. A delay (`deltaSeconds`) counts from the time the
-response was received. A decimal integer too large to parse does not parse.
+response was received. A decimal integer above 2^53 − 1 (9007199254740991)
+does not parse, in a header or a body field alike.
 
 A consumer MUST NOT send the request again, or another request counted against
 an exhausted bucket, before this time. It MAY wait longer, cap how long it is
@@ -518,6 +527,11 @@ API throttling.
 
 ## Changes
 
+- **0.3.0-draft** (2026-10-12, second follow-up): the whitespace that is
+  removed is exactly SP, HTAB, CR and LF; an integer above 2^53 − 1 does not
+  parse, in a header or a body field, integral float included; a body field
+  that gives no wait is ignored by its source, so a header with the same value
+  (`Retry-After: 0`) still counts.
 - **0.3.0-draft** (2026-10-12 follow-up): the dot-path syntax, whitespace
   and integral numbers in body values, `remaining` exhausted by either value,
   a body `retryAfter`/`reset` of no wait counting as absent, and fallbacks
