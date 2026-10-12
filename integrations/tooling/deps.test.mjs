@@ -48,7 +48,7 @@ function recorder(base, status = 0) {
   };
 }
 
-test('a plugin\'s lockfile folders match the four globs ci.yml installs', () => {
+test("a plugin's lockfile folders match the four globs ci.yml installs", () => {
   assert.deepEqual(pluginDependencyDirs('notion'), [
     'integrations/notion',
     'integrations/notion/app',
