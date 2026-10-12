@@ -254,7 +254,11 @@ export function parseFollowUps(
       if (
         (parameter.in === 'query' || parameter.in === 'header') &&
         parameter.required &&
-        !Object.hasOwn(parsed, `${parameter.in}.${parameter.name}`)
+        !Object.keys(parsed).some((key) =>
+          parameter.in === 'header'
+            ? key.toLowerCase() === `header.${parameter.name.toLowerCase()}`
+            : key === `query.${parameter.name}`,
+        )
       )
         throw new Error(
           `${where}.bind: required ${parameter.in} parameter ${parameter.name} is not bound`,

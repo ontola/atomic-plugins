@@ -38,6 +38,10 @@ function github(
     pushAccess?: boolean;
     labelsAnswer?: () => number | TransportResponse;
     assigneesAnswer?: () => number;
+    /** Whether the list read returns the issues (default true). */
+    listed?: () => boolean;
+    /** The status of an item GET (default: the issue, or 404). */
+    itemStatus?: () => number;
   } = {},
 ): {
   issues: Map<number, Issue>;
@@ -55,7 +59,14 @@ function github(
       const body = r.body ? JSON.parse(r.body) : undefined;
       requests.push({ line: `${r.method} ${path}`, body });
       if (r.method === 'GET' && path === '/repos/o/r/issues')
-        return json([...issues.values()]);
+        return json(options.listed?.() === false ? [] : [...issues.values()]);
+      const read = /^\/repos\/o\/r\/issues\/(\d+)$/.exec(path);
+      if (r.method === 'GET' && read) {
+        const status = options.itemStatus?.();
+        if (status !== undefined) return json({ message: 'x' }, status);
+        const issue = issues.get(Number(read[1]));
+        return issue ? json(issue) : json({ message: 'not found' }, 404);
+      }
       if (r.method === 'POST' && path === '/repos/o/r/issues') {
         const issue: Issue = {
           number: next++,
@@ -333,6 +344,102 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
       'POST /repos/o/r/issues/7/labels',
       'POST /repos/o/r/issues/7/labels',
       'POST /repos/o/r/issues/7/assignees',
+    ]);
+  });
+
+  it('an unknown follow-up failed by a missing record is still read back before a retry sends it (#480 re-review S1)', async () => {
+    let listed = true;
+    let itemStatus: number | undefined;
+    let labelsCalls = 0;
+    const fake = github({
+      pushAccess: false,
+      listed: () => listed,
+      itemStatus: () => itemStatus as number,
+      labelsAnswer: () => {
+        labelsCalls += 1;
+        // Applied, then the answer was lost.
+        fake.issues.get(7)!.labels.push({ name: 'bug' });
+        return 502;
+      },
+    });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+      ]),
+    );
+    // The list no longer returns the issue and its read fails: the
+    // follow-up fails as a missing record, keeping reason unknown.
+    listed = false;
+    itemStatus = 500;
+    await c.sync().catch(() => {});
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { state: 'failed', followUp: { reason: 'unknown' } },
+      ]),
+    );
+    await c.resolveWrite('issues', '7', { action: 'retry' });
+    await settle(30);
+    expect(c.pendingWrites()).toMatchObject([
+      {
+        state: 'pending',
+        awaitingRefresh: true,
+        followUp: { reason: 'unknown' },
+      },
+    ]);
+    expect(labelsCalls).toBe(1);
+    // The read shows the label: settled, never applied twice.
+    listed = true;
+    itemStatus = undefined;
+    await c.sync();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(labelsCalls).toBe(1);
+    expect(fake.issues.get(7)!.labels).toEqual([{ name: 'bug' }]);
+  });
+
+  it('puts the follow-ups ahead of writes already queued under the server id (#480 re-review)', async () => {
+    let releaseCreate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (releaseCreate = resolve));
+    let patches = 0;
+    const fake = github({ pushAccess: false });
+    const inner = fake.transport;
+    fake.transport = async (r): Promise<TransportResponse> => {
+      if (r.method === 'POST' && r.url.pathname === '/repos/o/r/issues') {
+        const answer = await inner(r); // the issue exists now...
+        await gate; // ...but the answer is held
+        return answer;
+      }
+      if (r.method === 'PATCH' && ++patches === 1) {
+        fake.requests.push({ line: 'PATCH /repos/o/r/issues/7 (503)' });
+        return json({ message: 'busy' }, 503);
+      }
+      return inner(r);
+    };
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 200, maxDelayMs: 200 },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(fake.issues.size).toBe(1));
+    // A read shows issue 7 before the create's answer; the app edits it
+    // twice, and the first PATCH waits between retries.
+    await c.sync();
+    await c.update('issues', '7', { title: 'First' });
+    await vi.waitFor(() => expect(patches).toBe(1));
+    await c.update('issues', '7', { title: 'Second' });
+    releaseCreate();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 3000,
+    });
+    const sent = lines(fake).filter((l) => !l.includes('(503)'));
+    // The head that was between retries goes first, then the follow-up,
+    // then the edit queued behind it.
+    expect(sent.slice(1)).toEqual([
+      'PATCH /repos/o/r/issues/7',
+      'POST /repos/o/r/issues/7/labels',
+      'PATCH /repos/o/r/issues/7',
     ]);
   });
 

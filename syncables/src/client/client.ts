@@ -4885,7 +4885,13 @@ export function createApiClient(
           delete again.missingRecord;
           if (again.followUp) {
             again.followUp = { ...again.followUp };
-            delete again.followUp.reason;
+            // One whose outcome is unknown (failed later by the refresh-miss
+            // limit or a missing record) is still read back before it is
+            // sent again (§4.7.2 step 6).
+            if (again.followUp.reason === 'unknown') {
+              again.awaitingRefresh = true;
+              delete again.refreshMisses;
+            } else delete again.followUp.reason;
           }
           return [again];
         });
@@ -4894,8 +4900,10 @@ export function createApiClient(
             `The failed writes for record ${id} of ${resource} are superseded by queued writes; discard them or wait for those to settle`,
           );
         const pending = queue ?? [];
-        // Retrying sends now: updates waiting for a refresh stop waiting.
+        // Retrying sends now: updates waiting for a refresh stop waiting,
+        // except a follow-up whose outcome is unknown, which is read back.
         for (const write of pending) {
+          if (write.followUp?.reason === 'unknown') continue;
           delete write.awaitingRefresh;
           delete write.refreshMisses;
           delete write.holdIfQueued;

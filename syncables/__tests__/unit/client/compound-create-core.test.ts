@@ -160,6 +160,30 @@ describe('parseFollowUps, rules 23 and 24 against declared parameters (#480)', (
     ).toThrow(/declares no query parameter per_page/);
   });
 
+  it('matches a required header parameter to its bind key case-insensitively', () => {
+    const withHeader = (doc: OpenApiDocument): void => {
+      const op = doc.paths[LABELS]!.post as Record<string, unknown>;
+      op['parameters'] = [
+        ...(op['parameters'] as unknown[]),
+        { name: 'X-Api-Version', in: 'header', required: true },
+      ];
+    };
+    expect(
+      parse(withHeader, [
+        {
+          ...bound,
+          bind: {
+            ...bound.bind,
+            'header.x-api-version': { from: 'planned', field: 'labels' },
+          },
+        },
+      ]),
+    ).toHaveLength(1);
+    expect(() => parse(withHeader)).toThrow(
+      /required header parameter X-Api-Version is not bound/,
+    );
+  });
+
   it('refuses a body bind without a JSON request body', () => {
     expect(() =>
       parse((doc) => {

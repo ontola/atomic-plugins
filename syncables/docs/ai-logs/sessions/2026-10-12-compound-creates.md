@@ -72,3 +72,21 @@ made the same pause look later and slept twice; it now compares the
 pause's own end (`pausedUntil`), and a test with an irregularly ticking
 `Date.now` fails before the fix. Tests for B1, S1, the rate-limit 403, the
 siblings, and the parse rules; README and CLAUDE.md updated.
+
+## Turn 4
+
+**Human (via the coordinator session):** #480 re-review: an `unknown`
+follow-up that ends `failed` (refresh-miss limit, missing record) loses
+its read-back on `retry`, applying twice; the queue-move ordering has no
+test; a required header bind key is matched case-sensitively; mention the
+`waitOutPauses` fix in the changelog.
+
+**Assistant:** `retry` re-queues a failed follow-up whose reason is
+`unknown` with `awaitingRefresh` (and no longer clears `awaitingRefresh`
+on a queued unknown follow-up); the reviewer's probe is a test (list read
+`[]`, the item read failing, `retry`, then a read showing the label: one
+labels POST, `[bug]`). A test has two edits queued under the server id
+before the create's answer, the first between retries: the follow-up goes
+right after that head, before the second edit. Required header parameters
+match their bind key case-insensitively (test). Changelog notes the pause
+fix. Each new client test fails with its fix reverted.

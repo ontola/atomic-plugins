@@ -1058,7 +1058,9 @@ push access and `POST …/issues/{issue_number}/labels` then adds).
   stays pending with `reason: 'unknown'` and `awaitingRefresh`: it is not
   sent before a complete read of its collection, and then only if the
   field is still missing; `resolveWrite` `retry` refuses it (it would skip
-  the read), `discard` drops it. A throttled answer is waited out as for
+  the read), `discard` drops it. If it fails meanwhile (the refresh-miss
+  limit, a missing record), `retry` queues it again still waiting for that
+  read. A throttled answer is waited out as for
   any write.
 - An uncertain create settled with `resolveWrite` `confirm` queues its
   follow-ups with `awaitingRefresh`, so the object is read before any is
@@ -1579,7 +1581,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   `create()` throw. `PendingWriteInfo.followUp` is new;
   the outbox stores follow-ups as the write type `followUp` within version
   `1`. Behaviour change only for documents whose create declares
-  `followUps`.
+  `followUps`. Also: a read waiting out an exhausted bucket no longer
+  sleeps twice for one pause when the clock ticks between two readings
+  (`waitOutPauses` compares the pause's own end).
 - **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
   whose collection declares an `absent` the client does not recognise is
   classified by the resource's stated `gone` (a 410), then its stated
