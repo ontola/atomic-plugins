@@ -70,20 +70,44 @@ class WritePreconditionOverlayTests(unittest.TestCase):
             self.assertEqual(wp.may_send(declaration, {"summary": "Old"}, ["summary"], event),
                              ("send", {"If-Match": '"3181161784712000"'}))
         self.assertNotIn("x-write-precondition", composed["paths"][EVENT]["get"])
-        # K18: recurring series and their occurrences are not written.
+        # K18 part 2: a recurring series' master event is not written; an
+        # exception of a series (recurringEventId, no recurrence) is.
         event_schema = original["components"]["schemas"]["Event"]["properties"]
-        self.assertIn("omitted for single events", event_schema["recurrence"]["description"])
+        self.assertIn("omitted for single events or instances of recurring events",
+                      " ".join(event_schema["recurrence"]["description"].split()))
         self.assertIn("instance of a recurring event", event_schema["recurringEventId"]["description"])
         for method in ("patch", "put", "delete"):
             declaration = composed["paths"][EVENT][method]["x-write-precondition"]
+            self.assertEqual([{k: v for k, v in r.items() if k != "description"}
+                              for r in declaration["refuseWhen"]],
+                             [{"field": "recurrence", "present": True}])
             single = {"id": "e1", "etag": '"v"', "summary": "Old"}
             master = dict(single, recurrence=["RRULE:FREQ=WEEKLY;BYDAY=MO"])
-            occurrence = dict(single, recurringEventId="series1")
+            exception = dict(single, recurringEventId="series1")
+            cancelled = dict(exception, status="cancelled")
+            no_rule = dict(single, recurrence=None)
             self.assertEqual(wp.may_send(declaration, {}, ["summary"], single)[0], "send")
             self.assertEqual(wp.may_send(declaration, {}, ["summary"], master)[0], "refused")
-            self.assertEqual(wp.may_send(declaration, {}, ["summary"], occurrence)[0], "refused")
+            self.assertEqual(wp.may_send(declaration, {}, ["summary"], exception)[0], "send")
+            self.assertEqual(wp.may_send(declaration, {}, ["summary"], cancelled)[0], "send")
+            self.assertEqual(wp.may_send(declaration, {}, ["summary"], no_rule)[0], "send")
         app = (ROOT.parent / "integrations/calendar/app/operations.ts").read_text()
         self.assertIn("Refusing a Calendar write without If-Match", app)
+
+    def test_calendar_composes_after_each_crud_causality_overlay(self):
+        # Placement (§4.1): on the event PATCH and DELETE, x-crud says update
+        # and delete once a CRUD Causality overlay has been applied.
+        original, _ = self.documents["google_calendar"]
+        for kind in ("app-crud-causality", "crud-causality"):
+            with self.subTest(crud=kind):
+                composed = copy.deepcopy(original)
+                for relative in (OVERLAYS["google_calendar"].replace("write-preconditions", kind),
+                                 OVERLAYS["google_calendar"]):
+                    apply(composed, yaml.safe_load((ROOT / relative).read_text()))
+                wp.validate(composed)
+                event = composed["paths"][EVENT]
+                self.assertEqual(event["patch"]["x-crud"]["action"], "update")
+                self.assertIn("x-write-precondition", event["patch"])
 
     def test_notion_pages_are_read_verified_and_trash_is_refused(self):
         _, composed = self.documents["notion"]

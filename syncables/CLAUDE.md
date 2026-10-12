@@ -655,6 +655,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   three ways, `gone` over `notFound`, an update stopped), source objects
   (refused, unreadable then sent), `kind: none`, an unusable declaration
   and an unknown stored state.
+- `unit/client/calendar-recurring-refuse.test.ts` reads the repository's
+  Calendar write-preconditions overlay from `../overlays/` and applies its
+  operation updates to a Calendar-shaped document (K18 part 2): the
+  declarations parse under the placement rules, a series' master event
+  (`recurrence`) is refused for update and delete without a request, and a
+  single event and an exception are sent with `If-Match`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
