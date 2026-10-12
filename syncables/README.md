@@ -617,11 +617,17 @@ record that vanished from a collection with no declaration still follows a
 `notFound` another collection of its resource states. When collections state
 different values, or one the client does not recognise, it is
 `unavailable`; when none states it, `deleted` (the default, as 0.1.0
-consumers read it), except under an `absent` the client does not recognise
-on the record's own collection, where it is `unavailable`, never the
-`deleted` default (§7). A `notFound` stated beside an `absent` the client
-does not recognise still counts, though the rest of that declaration is
-ignored.
+consumers read it). A `notFound` stated beside an `absent` the client does
+not recognise still counts, though the rest of that declaration is ignored.
+Since Collection Completeness 0.3.0, a `410` follows the resource's `gone`
+instead, when one is stated (`notFound: unavailable, gone: deleted` for a
+provider whose 410 means deletion and nothing else), read the same way:
+resource-wide, conflicting or unrecognised values `unavailable`; without
+`gone`, a 410 means what `notFound` says. Under an `absent` the client does
+not recognise on the record's own collection (§7), the order is the same: a
+`410` by a stated `gone`, else a stated `notFound`; a `404` by a stated
+`notFound`; and what neither classifies is `unavailable`, never the
+`deleted` default.
 `unavailable` means the
 record is kept with its last known values and its queued writes fail with
 `missingRecord: 'unavailable'`, so that nothing is sent, and nothing is
@@ -1493,9 +1499,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 ## Changelog
 
 - **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
-  whose collection declares an `absent` the client does not recognise, when
-  the resource states no `notFound`, is now `unavailable` (fail closed), as
-  the reference `classify_read` reads it, not the `deleted` default.
+  whose collection declares an `absent` the client does not recognise is
+  classified by the resource's stated `gone` (a 410), then its stated
+  `notFound`, and otherwise `unavailable` (fail closed), as the reference
+  `classify_read` reads it, not the `deleted` default.
+- **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
+  of a missing record means the resource's stated `gone` (resource-wide,
+  like `notFound`; `route.gone`), else what `notFound` says.
 - **Unreleased**: Throttling 0.3.0-draft `bodyFields` (#454, with #463's
   follow-up rules): the header roles read from the JSON body of a throttling
   response, by literal dot-path. A string is trimmed and an integral number

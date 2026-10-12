@@ -268,14 +268,16 @@ Data flows through four stages, each its own directory under `src/`:
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
    the record's resource states `notFound: unavailable` through any
-   collection (`route.notFound`, resource-wide, from `resourceNotFound`
+   collection (a 410: its `gone`, `route.gone`, Collection Completeness
+   0.3.0, when stated; `route.notFound`, resource-wide, from `resourceNotFound`
    over every collection's `rawCompleteness`, after the reference
    `resource_not_found`; conflicting or unrecognised values are
    `unavailable`, a value beside an unrecognised `absent` counts; undefined
    when not stated, which the Write Preconditions consumer must not take as
    a confirmed deletion; a route whose own Completeness Object has an
-   unrecognised `absent` gets `unavailable` instead, with
-   `unrecognisedAbsent`, §7 after `classify_read`; 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   unrecognised `absent` has `unrecognisedAbsent`, and what neither `gone`
+   (a 410) nor `notFound` classifies is then `unavailable` (§7, after
+   `classify_read`); 0.2.0 §4.3; `declaredCompleteness` parses `absent`
    and `parentAbsent`, and ignores a declaration with an unrecognised
    `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,

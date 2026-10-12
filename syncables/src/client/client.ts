@@ -771,10 +771,16 @@ interface ClientRoute {
    */
   notFound?: 'deleted' | 'unavailable';
   /**
+   * The `gone` the route's resource states (Collection Completeness
+   * 0.3.0 §4.3), resource-wide like `notFound`: what a 410 means. Undefined:
+   * not stated, so a 410 means what `notFound` says.
+   */
+  gone?: 'deleted' | 'unavailable';
+  /**
    * The route's own Completeness Object has an `absent` this client does
-   * not recognise and the resource states no `notFound`: a 404 or 410 then
-   * means `unavailable`, never the `deleted` default (Collection
-   * Completeness §7; the reference `classify_read`).
+   * not recognise: a 404, or a 410 that neither `gone` nor `notFound`
+   * classifies, then means `unavailable`, never the `deleted` default
+   * (Collection Completeness §7; the reference `classify_read`).
    */
   unrecognisedAbsent?: true;
   /**
@@ -1098,7 +1104,8 @@ function declaredCompleteness(
 }
 
 /**
- * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * Internal, exported for tests: §4.3: the `notFound` (or, with `field`,
+ * the 0.3.0 `gone`) a resource states, through any of its collections
  * (after the reference `resource_not_found`): the one value they state,
  * `unavailable` when they state different ones or one this client does not
  * recognise, undefined when none states it. A `notFound` stated beside an
@@ -1108,6 +1115,7 @@ export function resourceNotFound(
   document: OpenApiDocument,
   collections: ReadCollection[],
   resource: string,
+  field: 'notFound' | 'gone' = 'notFound',
 ): 'deleted' | 'unavailable' | undefined {
   const stated = new Set<string>();
   for (const collection of collections) {
@@ -1116,10 +1124,8 @@ export function resourceNotFound(
     // fixed reads: it says what the resource's read means, and counting it
     // can only make a 404 `unavailable`, the safe reading.
     const raw = rawCompleteness(document, collection, true);
-    if (raw && raw.declared['notFound'] !== undefined)
-      stated.add(
-        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
-      );
+    if (raw && raw.declared[field] !== undefined)
+      stated.add(raw.declared[field] === 'deleted' ? 'deleted' : 'unavailable');
   }
   if (!stated.size) return undefined;
   return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
@@ -1307,17 +1313,20 @@ function clientRoutes(
       collection.resource,
     );
     if (notFound) route.notFound = notFound;
-    else {
-      // §7: under an unrecognised `absent`, a 404 (or 410) is classified by
-      // a recognised `notFound`, else as `unavailable`, never by the
-      // `deleted` default.
-      const raw = rawCompleteness(document, collection, true);
-      const absent = raw?.declared['absent'];
-      if (raw && absent !== 'deleted' && absent !== 'removed') {
-        route.notFound = 'unavailable';
-        route.unrecognisedAbsent = true;
-      }
-    }
+    const gone = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+      'gone',
+    );
+    if (gone) route.gone = gone;
+    // §7: under an unrecognised `absent`, a 410 is classified by a
+    // recognised `gone`, then a recognised `notFound`, a 404 by a recognised
+    // `notFound`, else either is `unavailable`, never the `deleted` default.
+    const rawOwn = rawCompleteness(document, collection, true);
+    const ownAbsent = rawOwn?.declared['absent'];
+    if (rawOwn && ownAbsent !== 'deleted' && ownAbsent !== 'removed')
+      route.unrecognisedAbsent = true;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -3495,17 +3504,24 @@ export function createApiClient(
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
     // the resource's stated `notFound`, through any collection, `deleted`
-    // by default, but `unavailable` under the route's own unrecognised
-    // `absent` (§7).
+    // by default; since 0.3.0 a 410 means its stated `gone`, else the same.
+    // Under the route's own unrecognised `absent` (§7), what neither
+    // classifies is `unavailable`, not the `deleted` default.
+    const stated =
+      status === 410 ? (route.gone ?? route.notFound) : route.notFound;
+    const meaning =
+      stated ?? (route.unrecognisedAbsent ? 'unavailable' : undefined);
+    const named = status === 410 && route.gone ? 'gone' : 'notFound';
     if (status === 404 || status === 410)
-      return route.notFound === 'unavailable'
+      return meaning === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
             status,
-            detail: route.unrecognisedAbsent
-              ? `GET ${path} answered ${status}; the collection's x-completeness has an absent value this client does not recognise and states no notFound, so the record is unavailable, not deleted`
-              : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+            detail:
+              stated === undefined
+                ? `GET ${path} answered ${status}; the collection's x-completeness has an absent value this client does not recognise and the resource states no ${status === 410 ? 'gone or notFound' : 'notFound'}, so the record is unavailable, not deleted`
+                : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness ${named}: unavailable), not that it was deleted`,
           }
         : {
             evidence: 'deleted',
