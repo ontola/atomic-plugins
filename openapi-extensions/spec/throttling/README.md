@@ -1,11 +1,12 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.3.0-draft
+**Spec version:** 0.4.0-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
 them (`headers`, since 0.2.0), and the responses that mean a request was
-throttled (`signals`, since 0.2.0). It does not describe a client's
+throttled (`signals`, since 0.2.0) or, since 0.4.0, refused in a way that
+repeating it will not change (`blocked`). It does not describe a client's
 scheduler, retry count, import budget, or chosen delay between requests.
 
 An API can also throttle because of load, abuse detection, or unpublished rules.
@@ -258,9 +259,9 @@ that matches determines the response's meaning.
 | `status` | array of integer HTTP status codes, required | Nonempty, unique, each 100–599. |
 | `header` | Header Predicate, optional | A condition on one response header. |
 | `body` | Body Predicate, optional | A condition on the JSON response body. |
-| `meaning` | `throttled` or `quotaExhausted`, required | What a matching response means; see below. |
-| `bucket` | bucket identifier, optional | The `limits` bucket the response reports exhausted, when the API's documentation establishes it. Requires `limits`. |
-| `minDelaySeconds` | positive integer, optional | A delay the API's documentation asks for when the response carries no `retryAfter` or `reset` time. |
+| `meaning` | `throttled`, `quotaExhausted` or, since 0.4.0, `blocked`, required | What a matching response means; see below. |
+| `bucket` | bucket identifier, optional | The `limits` bucket the response reports exhausted, when the API's documentation establishes it. Requires `limits`. Not allowed with `blocked`. |
+| `minDelaySeconds` | positive integer, optional | A delay the API's documentation asks for when the response carries no `retryAfter` or `reset` time. Not allowed with `blocked`. |
 | `description` | string, optional | API-specific notes. |
 
 A **Header Predicate** has a `name` (case-insensitive) and exactly one of:
@@ -288,6 +289,35 @@ A body that is not JSON, or a `pointer` that does not resolve, does not match.
 | --- | --- |
 | `throttled` | Treats the request as refused because of rate limiting. It retries no earlier than the earliest retry time below. |
 | `quotaExhausted` | Treats the request as refused and the bucket as exhausted until it resets: every request counted against the same bucket will be refused until then, so it pauses them all, not only this one. When `bucket` is given, those are the requests to operations that select it. |
+| `blocked` | Since 0.4.0. Treats the request as refused, and as one the API documents will not succeed if it is repeated: the caller's access is blocked or restricted, not counted. It does not send the request again by itself, after any delay, whatever a `retryAfter` or `reset` value says, and reports it as a failure that needs a person's or the application's action. It does not pause other requests on that account. |
+
+Declare `blocked` only when the provider documents that retrying the response
+will not help. Notion is the example: its `429` with the code `rate_limited`
+carries `additional_data.rate_limit_reason`, and for the reason
+`public_api_request_blocked` it says "API access restricted; retrying won't
+help" ([request limits](https://developers.notion.com/reference/request-limits)).
+Such a response usually also matches a broader signal (Notion's other reasons
+share the code), so the `blocked` signal comes first:
+
+```yaml
+x-throttling:
+  headers:
+    Retry-After: { role: retryAfter, unit: deltaSeconds }
+  signals:
+    - status: [429]
+      body: { pointer: /additional_data/rate_limit_reason, equals: public_api_request_blocked }
+      meaning: blocked
+    - status: [429]
+      body: { pointer: /code, equals: rate_limited }
+      meaning: throttled
+```
+
+A `blocked` response is not throttling, even with status `429`: the default
+below does not apply once the signal matches, and the earliest retry time is
+not computed. A consumer that does not recognise a signal's `meaning` treats
+a response that matches it as `blocked`: it never resends automatically on a
+meaning it cannot read. A 0.3.0 validator rejects a document that declares
+`blocked`, so a document that uses it needs a 0.4.0 consumer.
 
 A signal declares a response the API documents as a rate-limit refusal. That
 the refused request was not applied is an inference, as for any refusal before
@@ -485,7 +515,8 @@ unique case-insensitively; known roles, each at most once; `unit` present
 exactly for `reset` and `retryAfter`, with a known Time Unit; for each Signal
 Object, a nonempty array of unique integer statuses within 100–599, a known
 `meaning`, a positive integer `minDelaySeconds`, a `bucket` defined in
-`limits`; for each predicate, exactly one operator, a nonempty `in`, a string
+`limits`; since 0.4.0, neither `bucket` nor `minDelaySeconds` with `blocked`;
+for each predicate, exactly one operator, a nonempty `in`, a string
 `equals` and a nonempty `name` in a Header Predicate, a valid RFC 6901
 `pointer` (empty, or `/`-separated with only `~0` and `~1` escapes), JSON
 scalar operands in a Body Predicate, and a nested `item` checked by the same
@@ -504,7 +535,7 @@ repository root:
 cd openapi-extensions/spec/throttling
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/windowed.yaml examples/response-signals.yaml
+python3 validate.py examples/windowed.yaml examples/response-signals.yaml examples/blocked.yaml
 ```
 
 The tests need PyYAML ([requirements.txt](requirements.txt)); they also check
@@ -518,6 +549,11 @@ API throttling.
 
 ## Changes
 
+- **0.4.0-draft** (2026-10-12): adds the signal meaning `blocked`, for a
+  refusal the API documents as not worth retrying (Notion's
+  `public_api_request_blocked`): not throttling, never resent automatically,
+  no bucket and no `minDelaySeconds`; an unrecognised meaning is treated the
+  same way. A 0.3.0 document stays valid and means the same.
 - **0.3.0-draft** (2026-10-12 follow-up): the dot-path syntax, whitespace
   and integral numbers in body values, `remaining` exhausted by either value,
   a body `retryAfter`/`reset` of no wait counting as absent, and fallbacks
