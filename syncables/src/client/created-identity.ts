@@ -2,6 +2,7 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { readNestedField } from '../pagination/response-parser.js';
 import { isRecord } from '../read/model.js';
+import { withoutOmitted, type FollowUp } from './compound-create.js';
 
 /**
  * CRUD Causality create results (§4.3.2 Url Source Object, §4.4–4.5 Added
@@ -20,6 +21,8 @@ export interface CreateDeclaration {
   bindings: Record<string, string>;
   /** `addedFields` whose `source` is `generated`: never sent in the create body. */
   generated: string[];
+  /** `followUps` (CRUD Causality 0.5.0 §4.7): a compound create. */
+  followUps?: FollowUp[];
 }
 
 /** The create declaration of `resource` from an operation's `x-crud`, if usable. */
@@ -67,8 +70,9 @@ export function createBody(
   declaration: CreateDeclaration | undefined,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!declaration?.generated.length) return data;
-  const body = { ...data };
+  const sent = withoutOmitted(declaration?.followUps, data);
+  if (!declaration?.generated.length) return sent;
+  const body = { ...sent };
   for (const field of declaration.generated) delete body[field];
   return body;
 }

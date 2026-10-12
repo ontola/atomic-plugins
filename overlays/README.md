@@ -237,12 +237,14 @@ place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
+- `.github/workflows/overlays-ci.yml` (PRs and pushes to main): all overlay paths, revision
   filenames and `extends` commits pass the full-history check, and every
   action target exists in its pinned OAD or in the catalog composition up to
   it; every catalog overlay URL, and
-  every OAD URL under the Pages base, maps to a file in this folder, and the
-  tests below pass (`tests/test_identity_overlays.py` also checks the pets
+  every OAD URL under the Pages base, maps to a file in this folder, and
+  every `tests/test_*.py` passes, discovered rather than listed; a test whose
+  source declares a `"--directory"` option gets the openapi-directory clone
+  (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
   Pages serves it.
