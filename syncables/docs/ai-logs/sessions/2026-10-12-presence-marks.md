@@ -40,3 +40,26 @@ the other declarations, a restart, a write queued in the handler, parent
 members told `source: 'parent'`); existing tests updated for the two
 behaviour changes (a vanished parent is now checked by default; `'all'`
 keeps before checking).
+
+## Turn 2
+
+**Human (via the coordinator session):** Review blocker: records that
+cannot be checked were queued for a check every sync (`recheck` and the
+unchanged-read branch skipped `lookupPlanned`), used up the limit and were
+reported to `onMissingRecord` each time. Nits: hold mark changes to the end
+of the sync so each record is told once; a check-order test and the shared
+limit documented; the stale `SyncResult.presence` JSDoc; two misplaced
+JSDoc blocks; `rebuildTelling` matched a change's scope without its
+context; a `filtered` change carried the stored values; document that
+retained `deleted` marks are never cleaned up; accept an unknown stored
+`presence`; the README on an older client rewriting the outbox.
+
+**Assistant:** Both recheck paths filter by `lookupPlanned`, and the limit
+counts only checks that make a request. `tell()` sends removals at once and
+holds mark changes to the end of the sync (a removal drops a held change of
+the same record). `rebuildTelling` keeps each change's scope by position
+and puts the freshly read record on a `filtered` removal. An unknown stored
+`presence` is read as `unavailable`. JSDoc and README fixed. Tests: the
+`'none'` repro, the check order, told once with a feed settling a record
+after another removal, the fresh record, an unknown stored value; four of
+them fail on the code before.

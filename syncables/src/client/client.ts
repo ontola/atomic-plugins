@@ -468,8 +468,10 @@ export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
   /**
-   * Records this sync removed from the local copy, each told to
-   * `onPresence` before it was removed. Absent when there were none.
+   * The presence changes of this sync, as told to `onPresence`: records
+   * removed from the local copy (`pruned: true`, told before removal) and
+   * marks set or dropped on records it keeps (`pruned: false`, told at the
+   * end of the sync), one per record. Absent when there were none.
    */
   presence?: PresenceChange[];
   /**
@@ -1952,7 +1954,12 @@ export function createApiClient(
           id,
           record: mark.record,
           detail: mark.detail,
-          presence: mark.presence ?? 'unavailable',
+          // An unknown value (a later client's) is read as unavailable, the
+          // safe reading: kept, writes held, not checked again by itself.
+          presence:
+            mark.presence === 'unconfirmed' || mark.presence === 'deleted'
+              ? mark.presence
+              : 'unavailable',
           ...(mark.source
             ? { source: mark.source as MissingRecord['source'] }
             : {}),
@@ -3233,36 +3240,38 @@ export function createApiClient(
     found?: Evidence;
   }
 
+  /** A presence change's record identity, for keeping one per record. */
+  function changeKey(change: PresenceChange): string {
+    return JSON.stringify([change.collection, change.context, change.id]);
+  }
+
   /**
-   * Rebuilds records, telling the app first about each one the rebuild
-   * removes from the local copy (no confirmed copy, no kept mark, no stored
-   * write, but a stored record now). If the handler throws, those records
-   * are left as they are (the next complete read tells again) and the error
-   * is kept for `sync()`.
-   */
-  /**
-   * Tells the app `removing` (records about to be removed) after the mark
-   * changes not told yet, in one call. True when told: the caller may then
-   * remove them. On an error the changes stay untold and the error is kept
-   * for `sync()`.
+   * Tells the app `removing` (records about to be removed), or, called with
+   * none at the end of the sync, the mark changes held until then. Mark
+   * changes are held to the end so each record is told once per sync, with
+   * its latest change; a removal drops a held change of the same record. True
+   * when told: the caller may then remove them. On an error the changes are
+   * not recorded and the error is kept for `sync()`.
    */
   async function tell(
     round: SyncRound,
     removing: PresenceChange[],
   ): Promise<boolean> {
-    // One change per record: its latest (a record marked unconfirmed and
-    // then settled in the same sync is told only as settled).
-    const latest = new Map<string, PresenceChange>();
-    for (const change of [...round.untold, ...removing]) {
-      const key = JSON.stringify([
-        change.collection,
-        change.context,
-        change.id,
-      ]);
-      latest.delete(key);
-      latest.set(key, change);
+    let changes: PresenceChange[];
+    if (removing.length) {
+      const removed = new Set(removing.map(changeKey));
+      round.untold = round.untold.filter((c) => !removed.has(changeKey(c)));
+      changes = removing;
+    } else {
+      // One change per record: its latest (a record marked unconfirmed and
+      // then settled in the same sync is told only as settled).
+      const latest = new Map<string, PresenceChange>();
+      for (const change of round.untold) {
+        latest.delete(changeKey(change));
+        latest.set(changeKey(change), change);
+      }
+      changes = [...latest.values()];
     }
-    const changes = [...latest.values()];
     if (!changes.length) return true;
     try {
       await options.onPresence?.(changes.map((c) => structuredClone(c)));
@@ -3270,7 +3279,7 @@ export function createApiClient(
       round.presenceError ??= error;
       return false;
     }
-    round.untold = [];
+    if (!removing.length) round.untold = [];
     round.presence.push(...changes);
     return true;
   }
@@ -3330,11 +3339,20 @@ export function createApiClient(
       );
   }
 
+  /**
+   * Rebuilds records, telling the app first about each one the rebuild
+   * removes from the local copy (no confirmed copy, no kept mark, no stored
+   * write, but a stored record now). If the handler throws, those records
+   * are left as they are (the next complete read tells again) and the error
+   * is kept for `sync()`.
+   */
   async function rebuildTelling(
     targets: RebuildTarget[],
     round: SyncRound,
   ): Promise<void> {
     const removing: PresenceChange[] = [];
+    // The scope of each change in `removing`, by position.
+    const removingScopes: string[] = [];
     const held = new Set<string>();
     for (const target of targets) {
       const key = keyFor(target.scope, target.id);
@@ -3360,26 +3378,25 @@ export function createApiClient(
         id: target.id,
         presence: target.found?.evidence === 'deleted' ? 'deleted' : 'removed',
         source: target.found?.source ?? 'read',
-        record: stored,
+        // A `filtered` check carries the record as just read; else the
+        // values the local copy held.
+        record: target.found?.record ?? stored,
         pruned: true,
       });
+      removingScopes.push(target.scope);
     }
     const told = removing.length ? await tell(round, removing) : true;
     // A write queued, or a confirmed copy set, while the app was told keeps
     // the record: told, but not removed after all.
     if (told)
-      for (const change of removing) {
-        const scope = targets.find(
-          (t) =>
-            t.id === change.id && t.route.collection.name === change.collection,
-        )?.scope;
+      removing.forEach((change, at) => {
+        const scope = removingScopes[at] as string;
         if (
-          scope !== undefined &&
-          (remote(scope).has(change.id) ||
-            allWrites().some((w) => w.scope === scope && w.id === change.id))
+          remote(scope).has(change.id) ||
+          allWrites().some((w) => w.scope === scope && w.id === change.id)
         )
           change.pruned = false;
-      }
+      });
     for (const target of targets)
       if (told || !held.has(keyFor(target.scope, target.id)))
         await rebuild(target.scope, target.id);
@@ -3920,11 +3937,6 @@ export function createApiClient(
   }
 
   /**
-   * Whether a nested collection declaring `parentAbsent` has unsettled
-   * writes under record `id` of `route`: then the record's fate decides
-   * theirs, so it is checked even without writes of its own.
-   */
-  /**
    * Whether this sync checks record `id` of `route`, which a complete read
    * lacks and which has no writes: never under `missingRecordChecks:
    * 'none'` or without a way to check (no item GET, unless the declaration
@@ -3946,6 +3958,11 @@ export function createApiClient(
     );
   }
 
+  /**
+   * Whether a nested collection declaring `parentAbsent` has unsettled
+   * writes under record `id` of `route`: then the record's fate decides
+   * theirs, so it is checked even without writes of its own.
+   */
   function nestedWritesUnder(route: ClientRoute, id: string): boolean {
     return (nestedUnder.get(route.collection.name) ?? []).some(
       ({ route: nested, param }) =>
@@ -4185,8 +4202,9 @@ export function createApiClient(
     for (const id of vanished) {
       if (writeQueues.has(keyFor(scope, id))) continue;
       // Over this sync's limit: the record stays unconfirmed and is checked
-      // first by the next sync. A declaration decides without a request.
-      if (!route.absentMeansDeleted) {
+      // first by the next sync. A declaration decides without a request,
+      // and only a check that makes a request counts.
+      if (!route.absentMeansDeleted && lookupPlanned(route, id)) {
         if (sync.lookups >= limit) {
           const mark = keptMarks.get(keyFor(scope, id));
           if (mark?.presence === 'unconfirmed')
@@ -4580,7 +4598,8 @@ export function createApiClient(
           if (records.has(id) || written.has(id)) continue;
           const mark = keptMarks.get(keyFor(scope, id));
           if (mark) {
-            if (mark.presence === 'unconfirmed') recheck.push(id);
+            if (mark.presence === 'unconfirmed' && lookupPlanned(route, id))
+              recheck.push(id);
             else if (remote(scope).has(id) && lookupPlanned(route, id))
               lookups.push(id);
             continue;
@@ -4707,7 +4726,8 @@ export function createApiClient(
             mark.scope === scope &&
             mark.presence === 'unconfirmed' &&
             !records.has(mark.id) &&
-            !writeQueues.has(keyFor(scope, mark.id))
+            !writeQueues.has(keyFor(scope, mark.id)) &&
+            lookupPlanned(route, mark.id)
           )
             vanished.push(mark.id);
       // isFresh: a write that settled on a record during the rebuild above

@@ -145,8 +145,11 @@ describe('PageWalk.windowValue', () => {
   });
 
   it('leaves a parameter the hook does not convert as it is', async () => {
-    const { queries } = await walk(pair(10), JANUARY, () => [], (name, bound) =>
-      name === 'start' ? wallClock(bound) : undefined,
+    const { queries } = await walk(
+      pair(10),
+      JANUARY,
+      () => [],
+      (name, bound) => (name === 'start' ? wallClock(bound) : undefined),
     );
     expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual([
       '2026-01-01T01:00:00Z',
@@ -163,8 +166,11 @@ describe('PageWalk.windowValue', () => {
         },
       },
     };
-    const { queries } = await walk(scheme, JANUARY, () => [], (_, bound) =>
-      wallClock(bound),
+    const { queries } = await walk(
+      scheme,
+      JANUARY,
+      () => [],
+      (_, bound) => wallClock(bound),
     );
     expect(queries[0]!.get('span')).toBe(
       '2026-01-01T01:00:00Z/2026-01-01T01:00:10Z',
@@ -224,7 +230,9 @@ describe('PageWalk.windowValue', () => {
 });
 
 describe('PageWalk.windowValue and number formats (second review of #433)', () => {
-  const numbers = (format: 'integer' | 'unixSeconds'): PaginationSchemeObject => ({
+  const numbers = (
+    format: 'integer' | 'unixSeconds',
+  ): PaginationSchemeObject => ({
     type: 'rangeWindow',
     autoDetect: false,
     window: {
@@ -248,7 +256,10 @@ describe('PageWalk.windowValue and number formats (second review of #433)', () =
       () => [],
       () => undefined,
     );
-    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['9', '12']);
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual([
+      '9',
+      '12',
+    ]);
   });
 
   it('does not compare unixSeconds bounds as strings even when converted', async () => {
@@ -258,7 +269,10 @@ describe('PageWalk.windowValue and number formats (second review of #433)', () =
       () => [],
       (_, bound) => bound,
     );
-    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual(['999', '1001']);
+    expect([queries[0]!.get('start'), queries[0]!.get('end')]).toEqual([
+      '999',
+      '1001',
+    ]);
   });
 });
 
@@ -273,7 +287,10 @@ describe('PageWalk.windowValue with one bound outside the query (third review of
     };
     const sent: [string | null, string | undefined][] = [];
     const transport: Transport = (request) => {
-      sent.push([request.url.searchParams.get('start'), request.headers['x-end']]);
+      sent.push([
+        request.url.searchParams.get('start'),
+        request.headers['x-end'],
+      ]);
       return Promise.resolve({ status: 200, headers: {}, body: '[]' });
     };
     const doc = document(scheme);

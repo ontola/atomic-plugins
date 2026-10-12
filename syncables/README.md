@@ -170,6 +170,24 @@ client steps say, when a `selection` gives it a value:
   differs or cannot be read, the spans are discarded (`zoneChanged`). The
   items are kept. syncables does not read again by itself: the caller
   decides.
+- A `rangeWindow` read with a range (`ranges`) whose window fields include
+  `x-time-zone` query parameters splits the range as instants and sends
+  each window bound to such a parameter as wall-clock digits in its zone
+  (`PageWalk.windowValue`); the other window fields get the bound as it is.
+  Its coverage is that of the outer range (the range's start in each
+  `windowStart` parameter, its end in each `windowEnd` one, with the rest
+  of the query as above): adjacent windows share their bounds, so with an
+  unknown zone only the outer ends narrow by 14 hours. A window field
+  without `x-time-zone` counts like the rest of the query: with a range
+  `x-filter` its outer end adds to its field's span, and without one (or
+  as a `windowRange` field, whose value is not an instant) it gives
+  `otherFilters`. A windowed read is never complete, so a finished one
+  keeps its spans with `reason: 'incomplete'`. A window `format` other
+  than `dateTime` on such a parameter fails the read. A zoned
+  `windowRange` parameter (both ends in one value) gives
+  `noRangePredicate`, with the outer range's value in `parameters` (the
+  template over both wall-clock ends) and its two instants as an ISO 8601
+  interval (`start/end`) in `instants`.
 
 The result is on `CollectionSnapshot.coverage` (from `readCollections`) and
 on `SyncResult.coverage` (per collection and bound context):
@@ -193,7 +211,11 @@ copy (an incomplete or failed read, a record the caller dropped). `spans` is
 null when the request covers nothing known; `reason` is then `empty` (some
 field's lower end is not before its upper end), `zoneChanged`,
 `noRangePredicate` (an `x-time-zone` parameter with a value but no range
-`x-filter`), `otherFilters` (above) or `incomplete`. An open end is left out. A `probe` read reads no zone and
+`x-filter`), `otherFilters` (above) or `incomplete` (the read failed, or
+finished without being complete, as one ended by a short page whose end
+is `observed` or `assumed`). Only a finished read by range windows over
+`x-time-zone` window fields keeps its `spans`, with `reason:
+'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
 `readPlatform` does not report coverage. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
@@ -549,15 +571,22 @@ A check settles an `unconfirmed` record: a 404/410 under `notFound:
 unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
 default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
 it marked `deleted` under `retainDeleted`; the record found but not in the
-list (`filtered`) removes it from this collection (`removed`); an error or
-no check leaves it `unconfirmed`. The marks persist in the outbox. A read
+list (`filtered`) removes it from this collection (`removed`, with the
+record as that check read it); an error or no check leaves it
+`unconfirmed`. The marks persist in the outbox. A retained `deleted` mark
+stays until a read returns the record again or the app removes it (a
+`remove()` is held and checked like any write to a marked record); the
+client does not expire or cap them. A read
 that returns a marked record again drops the mark (`present`). Checks of
 records without writes are capped at `maxMissingRecordChecks` per sync
-(default 50); the rest stay `unconfirmed`, and the next sync checks
-`unconfirmed` records first, even when the list did not change. Records
-with writes are always checked. Under `missingRecordChecks: 'none'`, or
-without an item GET, nothing is checked and an `absent: removed` record
-stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+(default 50), one limit shared by all collections, spent in the order the
+sync reads them (and within a collection, records left `unconfirmed` by an
+earlier sync before newly vanished ones); the rest stay `unconfirmed`, and
+the next sync checks `unconfirmed` records first, even when the list did
+not change. Only a check that makes a request counts. Records with writes
+are always checked. Under `missingRecordChecks: 'none'`, or without an item
+GET, nothing is checked, reported or counted, and an `absent: removed`
+record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
 lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
 `record`, and `lastSeen`: when a read last returned the record, the start
 of that sync, absent when no read of this client returned it, such as a
@@ -571,10 +600,11 @@ refresh, which checks it.
 called, and awaited, before a record is removed from the local copy, with
 one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
 `source`, `record`, `pruned: true`). Marks set or cleared on kept records
-(`pruned: false`; `present` when a mark is dropped) are told with the next
-removal or at the end of the sync. Each record is told once per sync, with
-its latest change (a record marked `unconfirmed` and settled in the same
-sync is told only as settled). The same changes are on
+(`pruned: false`; `present` when a mark is dropped) are held and told at
+the end of the sync. Each record is told once per sync, with its latest
+change (a record marked `unconfirmed` and settled in the same sync is told
+only as settled; a removal replaces a held mark change of the same
+record). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
 or rejects, the records are not removed (for the read's own removals, that
 collection's read is not applied: its records do not replace the confirmed
@@ -1197,10 +1227,12 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). A client from before the presence marks reads every
-kept record as unavailable and drops its `presence`, `source` and
-`lastSeen`; once it stores the outbox again they are lost, and a later
-client's marks start without them. The version stays `1` because an older client can
+from its local copy). A client from the first presence-mark version keeps
+the kept records but not their `presence`, `source` or `lastSeen`: once it
+stores the outbox again, `unconfirmed` and retained `deleted` marks come
+back after an upgrade as `unavailable` for good (kept, not checked again by
+themselves). A `presence` value this client does not know is read as
+`unavailable` in the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1540,6 +1572,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   handler applies nothing of that read and the next sync tells again.
   Before, under the default `missingRecordChecks: 'pending'`, the app was
   never told.
+- **Unreleased**: `readCollections` (and so `sync()`) sends a
+  `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
+  time in their zone, read once before and once after the read; a window
+  format other than `dateTime` on such a parameter fails the read; the
+  coverage is the outer range's, per `x-filter` field (14 hours off the
+  outer ends for an unknown zone), kept with `reason: 'incomplete'` when
+  the read finishes; a zoned `windowRange` parameter gives
+  `noRangePredicate`. Other reads that are not complete still get
+  `spans: null`.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as

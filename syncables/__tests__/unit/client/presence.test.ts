@@ -103,13 +103,10 @@ describe('tell before prune', () => {
   ] as const)
     it(`tells a record a complete read no longer returns before removing it (${label})`, async () => {
       const seen: unknown[] = [];
-      const { client, told } = await syncedThenTomGone(
-        doc,
-        async (_, c) => {
-          // Still in the local copy while the app is told.
-          seen.push(await c.get('/pets', '2'));
-        },
-      );
+      const { client, told } = await syncedThenTomGone(doc, async (_, c) => {
+        // Still in the local copy while the app is told.
+        seen.push(await c.get('/pets', '2'));
+      });
       const result = await client.sync();
       const change = {
         collection: 'pets',
@@ -433,9 +430,7 @@ describe('tell before prune: writes still being stored, and a failing handler', 
     await first.sync();
     fake.blocked = true;
     await first.update('/pets', '1', { name: 'Rexy' });
-    await vi.waitFor(() =>
-      expect(first.pendingWrites()[0]?.attempts).toBe(1),
-    );
+    await vi.waitFor(() => expect(first.pendingWrites()[0]?.attempts).toBe(1));
     // A restarted client holds the update until a complete read.
     fake.hidden.add('2');
     const again = createApiClient(document(), {
