@@ -271,13 +271,13 @@ describe('validation (§9 rules 19–22)', () => {
       { size: 100, assurance: 'assumed', extra: true },
       { size: 'request', assurance: 'assumed' },
     ]) {
-      expect(
-        errors({ ...zeroBased(), response: { shortPage } }),
-      ).not.toEqual([]);
+      expect(errors({ ...zeroBased(), response: { shortPage } })).not.toEqual(
+        [],
+      );
     }
-    expect(
-      errors({ ...zeroBased(), type: 'pageToken' }).join(),
-    ).toMatch(/only on a pageNumber scheme/);
+    expect(errors({ ...zeroBased(), type: 'pageToken' }).join()).toMatch(
+      /only on a pageNumber scheme/,
+    );
   });
 
   it('needs a page field where it is applied (rule 22)', () => {
@@ -371,32 +371,34 @@ describe('end signals and numbering (review of #415)', () => {
     );
     return scheme;
   };
-  const answering =
-    (
-      total: number,
-      size: number,
-      extra: (page: number) => Record<string, unknown>,
-    ): { transport: Transport; pages: number[] } => {
-      const pages: number[] = [];
-      const transport: Transport = (request) => {
-        const page = Number(request.url.searchParams.get('page'));
-        pages.push(page);
-        const items = Array.from(
-          { length: Math.max(0, Math.min(size, total - page * size)) },
-          (_, i) => ({ id: `t${page * size + i}` }),
-        );
-        return Promise.resolve({
-          status: 200,
-          headers: {},
-          body: JSON.stringify({ items, ...extra(page) }),
-        });
-      };
-      return { transport, pages };
+  const answering = (
+    total: number,
+    size: number,
+    extra: (page: number) => Record<string, unknown>,
+  ): { transport: Transport; pages: number[] } => {
+    const pages: number[] = [];
+    const transport: Transport = (request) => {
+      const page = Number(request.url.searchParams.get('page'));
+      pages.push(page);
+      const items = Array.from(
+        { length: Math.max(0, Math.min(size, total - page * size)) },
+        (_, i) => ({ id: `t${page * size + i}` }),
+      );
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ items, ...extra(page) }),
+      });
     };
+    return { transport, pages };
+  };
 
   it('counts totalPages from start: pages 0, 1 and 2 of 3, complete whatever the assurance', async () => {
     const { transport, pages } = answering(300, 100, () => ({ pages: 3 }));
-    const result = await read(withFields('assumed', { pages: 'totalPages' }), transport);
+    const result = await read(
+      withFields('assumed', { pages: 'totalPages' }),
+      transport,
+    );
     expect(pages).toEqual([0, 1, 2]);
     expect(result).toMatchObject({ items: 300, complete: true });
   });

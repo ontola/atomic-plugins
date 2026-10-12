@@ -193,7 +193,8 @@ describe('presence marks under absent: removed (the Google Tasks table)', () => 
   it('the record itself (2xx, not in the list): removed from this collection, told first', async () => {
     const { client, fake, told } = await setup();
     fake.hidden.add('2');
-    fake.item = (id): TransportResponse | undefined => (id === '2' ? response(tom) : undefined);
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response(tom) : undefined;
     await client.sync();
     // The GET answers the pet (it exists, but left the list).
     expect(fake.gets).toEqual(['2']);
@@ -277,9 +278,13 @@ describe('presence marks: the per-sync check limit', () => {
   });
 
   it('takes maxMissingRecordChecks', async () => {
-    const { client, fake } = await setup(document(), {
-      maxMissingRecordChecks: 1,
-    }, [rex, tom, { id: '3', name: 'Jo' }]);
+    const { client, fake } = await setup(
+      document(),
+      {
+        maxMissingRecordChecks: 1,
+      },
+      [rex, tom, { id: '3', name: 'Jo' }],
+    );
     fake.hidden.add('2');
     fake.hidden.add('3');
     await client.sync();
@@ -311,7 +316,8 @@ describe('presence marks under other declarations', () => {
       missingRecordChecks: 'all',
     });
     fake.hidden.add('2');
-    fake.item = (id): TransportResponse | undefined => (id === '2' ? response({ error: 'x' }, 404) : undefined);
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response({ error: 'x' }, 404) : undefined;
     await client.sync();
     // The default notFound: deleted; told once, then removed.
     expect(told).toEqual([[change('deleted', 'read', tom, true)]]);
@@ -404,12 +410,15 @@ describe('presence marks: writes queued while the app is told, and parents', () 
       return response({ error: 'gone' }, 404);
     };
     const told: PresenceChange[][] = [];
-    const client = createApiClient(prepareDocument(structuredClone(nestedTaskLists)), {
-      transport,
-      onPresence: (changes) => {
-        told.push(changes);
+    const client = createApiClient(
+      prepareDocument(structuredClone(nestedTaskLists)),
+      {
+        transport,
+        onPresence: (changes) => {
+          told.push(changes);
+        },
       },
-    });
+    );
     await client.sync();
     lists.delete('L2');
     await client.sync();
@@ -432,9 +441,10 @@ describe('presence marks: writes queued while the app is told, and parents', () 
         pruned: false,
       },
     ]);
-    expect(
-      await client.get('listTasks', 't2', { listId: 'L2' }),
-    ).toEqual({ id: 't2', title: 'Write report' });
+    expect(await client.get('listTasks', 't2', { listId: 'L2' })).toEqual({
+      id: 't2',
+      title: 'Write report',
+    });
   });
 });
 

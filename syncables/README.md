@@ -170,6 +170,24 @@ client steps say, when a `selection` gives it a value:
   differs or cannot be read, the spans are discarded (`zoneChanged`). The
   items are kept. syncables does not read again by itself: the caller
   decides.
+- A `rangeWindow` read with a range (`ranges`) whose window fields include
+  `x-time-zone` query parameters splits the range as instants and sends
+  each window bound to such a parameter as wall-clock digits in its zone
+  (`PageWalk.windowValue`); the other window fields get the bound as it is.
+  Its coverage is that of the outer range (the range's start in each
+  `windowStart` parameter, its end in each `windowEnd` one, with the rest
+  of the query as above): adjacent windows share their bounds, so with an
+  unknown zone only the outer ends narrow by 14 hours. A window field
+  without `x-time-zone` counts like the rest of the query: with a range
+  `x-filter` its outer end adds to its field's span, and without one (or
+  as a `windowRange` field, whose value is not an instant) it gives
+  `otherFilters`. A windowed read is never complete, so a finished one
+  keeps its spans with `reason: 'incomplete'`. A window `format` other
+  than `dateTime` on such a parameter fails the read. A zoned
+  `windowRange` parameter (both ends in one value) gives
+  `noRangePredicate`, with the outer range's value in `parameters` (the
+  template over both wall-clock ends) and its two instants as an ISO 8601
+  interval (`start/end`) in `instants`.
 
 The result is on `CollectionSnapshot.coverage` (from `readCollections`) and
 on `SyncResult.coverage` (per collection and bound context):
@@ -193,7 +211,11 @@ copy (an incomplete or failed read, a record the caller dropped). `spans` is
 null when the request covers nothing known; `reason` is then `empty` (some
 field's lower end is not before its upper end), `zoneChanged`,
 `noRangePredicate` (an `x-time-zone` parameter with a value but no range
-`x-filter`), `otherFilters` (above) or `incomplete`. An open end is left out. A `probe` read reads no zone and
+`x-filter`), `otherFilters` (above) or `incomplete` (the read failed, or
+finished without being complete, as one ended by a short page whose end
+is `observed` or `assumed`). Only a finished read by range windows over
+`x-time-zone` window fields keeps its `spans`, with `reason:
+'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
 `readPlatform` does not report coverage. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
@@ -1542,6 +1564,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   handler applies nothing of that read and the next sync tells again.
   Before, under the default `missingRecordChecks: 'pending'`, the app was
   never told.
+- **Unreleased**: `readCollections` (and so `sync()`) sends a
+  `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
+  time in their zone, read once before and once after the read; a window
+  format other than `dateTime` on such a parameter fails the read; the
+  coverage is the outer range's, per `x-filter` field (14 hours off the
+  outer ends for an unknown zone), kept with `reason: 'incomplete'` when
+  the read finishes; a zoned `windowRange` parameter gives
+  `noRangePredicate`. Other reads that are not complete still get
+  `spans: null`.
 - **Unreleased**: Declared create results (CRUD Causality §4.3.2,
   §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
   created identity is read from the declared `url` source (a header such as

@@ -641,7 +641,9 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
       const fake = provider([rex, tom], {
         listed: (pet) => listTom || pet['id'] !== '2',
         item: (id) =>
-          id === '2' && read !== 200 ? response({ error: 'x' }, read) : undefined,
+          id === '2' && read !== 200
+            ? response({ error: 'x' }, read)
+            : undefined,
         deletions: () => feedIds.map((id) => ({ id, deleted: true })),
       });
       const doc = document({ completeness: UNAVAILABLE, feed });
@@ -1365,7 +1367,8 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
         paths['/users/me/starred'] = {
           get: { responses: { '200': { description: 'Starred lists' } } },
         };
-        if (operation) paths['/v2/starred'] = { get: structuredClone(operation) };
+        if (operation)
+          paths['/v2/starred'] = { get: structuredClone(operation) };
       });
       const { client, fake, reports } = await listsThenGone({
         doc,
@@ -1552,9 +1555,7 @@ describe('resourceNotFound (route.notFound, resource-wide)', () => {
         'x-completeness': { absent: 'removed', notFound: 'deleted' },
       },
     });
-    expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe(
-      'deleted',
-    );
+    expect(resourceNotFound(doc, collections(doc), 'taskList')).toBe('deleted');
   });
 
   it('counts a notFound on the list operation even for a collection with fixed reads', () => {
