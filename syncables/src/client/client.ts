@@ -860,6 +860,19 @@ interface ClientRoute {
    */
   notFound?: 'deleted' | 'unavailable';
   /**
+   * The `gone` the route's resource states (Collection Completeness
+   * 0.3.0 §4.3), resource-wide like `notFound`: what a 410 means. Undefined:
+   * not stated, so a 410 means what `notFound` says.
+   */
+  gone?: 'deleted' | 'unavailable';
+  /**
+   * The route's own Completeness Object has an `absent` this client does
+   * not recognise: a 404, or a 410 that neither `gone` nor `notFound`
+   * classifies, then means `unavailable`, never the `deleted` default
+   * (Collection Completeness §7; the reference `classify_read`).
+   */
+  unrecognisedAbsent?: true;
+  /**
    * `x-completeness: { parentAbsent }` on a nested collection, any value:
    * its members are unavailable once the parent object that supplies one
    * of its path variables is concluded deleted or unavailable (Collection
@@ -1180,7 +1193,8 @@ function declaredCompleteness(
 }
 
 /**
- * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * Internal, exported for tests: §4.3: the `notFound` (or, with `field`,
+ * the 0.3.0 `gone`) a resource states, through any of its collections
  * (after the reference `resource_not_found`): the one value they state,
  * `unavailable` when they state different ones or one this client does not
  * recognise, undefined when none states it. A `notFound` stated beside an
@@ -1190,6 +1204,7 @@ export function resourceNotFound(
   document: OpenApiDocument,
   collections: ReadCollection[],
   resource: string,
+  field: 'notFound' | 'gone' = 'notFound',
 ): 'deleted' | 'unavailable' | undefined {
   const stated = new Set<string>();
   for (const collection of collections) {
@@ -1198,10 +1213,8 @@ export function resourceNotFound(
     // fixed reads: it says what the resource's read means, and counting it
     // can only make a 404 `unavailable`, the safe reading.
     const raw = rawCompleteness(document, collection, true);
-    if (raw && raw.declared['notFound'] !== undefined)
-      stated.add(
-        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
-      );
+    if (raw && raw.declared[field] !== undefined)
+      stated.add(raw.declared[field] === 'deleted' ? 'deleted' : 'unavailable');
   }
   if (!stated.size) return undefined;
   return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
@@ -1390,6 +1403,20 @@ function clientRoutes(
       collection.resource,
     );
     if (notFound) route.notFound = notFound;
+    const gone = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+      'gone',
+    );
+    if (gone) route.gone = gone;
+    // §7: under an unrecognised `absent`, a 410 is classified by a
+    // recognised `gone`, then a recognised `notFound`, a 404 by a recognised
+    // `notFound`, else either is `unavailable`, never the `deleted` default.
+    const rawOwn = rawCompleteness(document, collection, true);
+    const ownAbsent = rawOwn?.declared['absent'];
+    if (rawOwn && ownAbsent !== 'deleted' && ownAbsent !== 'removed')
+      route.unrecognisedAbsent = true;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -1660,6 +1687,12 @@ export function createApiClient(
        * handler throws, so the record is checked again.
        */
       clearing?: true;
+      /**
+       * The app has been told a mark of this record (or the mark was
+       * restored from storage, whose changes were told or lost with the
+       * process): dropping it is then told as `present` (`dropMark`).
+       */
+      told?: true;
     }
   >();
   /**
@@ -1987,6 +2020,7 @@ export function createApiClient(
           // dropped rather than passed on as one of ours.
           ...(isMissingSource(mark.source) ? { source: mark.source } : {}),
           ...(mark.lastSeen ? { lastSeen: mark.lastSeen } : {}),
+          told: true,
         });
     }
     for (const entry of outbox.feedTombstones) {
@@ -2307,7 +2341,8 @@ export function createApiClient(
       // is no longer kept as unavailable (a delete removed it; any other
       // 2xx showed it readable).
       feedTombstones.get(write.scope)?.ids.delete(id);
-      keptMarks.delete(key);
+      // A delete the app made itself is not told back as `present`.
+      dropMark(key, remote(write.scope).get(id), write.type !== 'delete');
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -3292,7 +3327,18 @@ export function createApiClient(
     }
     if (removing.length)
       for (const change of removing) untoldMarks.delete(changeKey(change));
-    else untoldMarks.clear();
+    else {
+      untoldMarks.clear();
+      for (const change of changes) {
+        const route = byResource.get(change.collection);
+        const mark =
+          route &&
+          keptMarks.get(
+            keyFor(scopeFor(route, change.context ?? {}), change.id),
+          );
+        if (mark && change.presence !== 'present') mark.told = true;
+      }
+    }
     round.presence.push(...changes);
     return true;
   }
@@ -3345,6 +3391,7 @@ export function createApiClient(
       source,
       presence,
       ...(lastSeen ? { lastSeen } : {}),
+      ...(before?.told ? { told: true as const } : {}),
     });
     if (before?.presence !== presence) {
       const change = presenceChange(
@@ -3359,6 +3406,35 @@ export function createApiClient(
       untoldMarks.delete(changeKey(change));
       untoldMarks.set(changeKey(change), change);
     }
+  }
+
+  /**
+   * Drops a record's mark outside `tell` and `setMark` (a write settled on
+   * it, or a check settled a clearing mark): a held change of it is dropped
+   * too, and, when the app has been told a mark of the record and
+   * `tellPresent` holds, replaced by a `present` change with `record`.
+   */
+  function dropMark(
+    key: string,
+    record: Record<string, unknown> | undefined,
+    tellPresent = true,
+  ): void {
+    const mark = keptMarks.get(key);
+    if (!mark) return;
+    keptMarks.delete(key);
+    const route = byResource.get(mark.resource);
+    if (!route) return;
+    const change = presenceChange(
+      route,
+      mark.context,
+      mark.id,
+      'present',
+      'read',
+      record ?? mark.record,
+      false,
+    );
+    untoldMarks.delete(changeKey(change));
+    if (mark.told && tellPresent) untoldMarks.set(changeKey(change), change);
   }
 
   /**
@@ -3387,19 +3463,13 @@ export function createApiClient(
             w.id === target.id &&
             w.durable !== false,
         );
-      // A clearing mark on a record that stays is simply settled.
-      if (mark?.clearing && stays) keptMarks.delete(key);
-      if (
-        stays ||
-        (mark && !mark.clearing) ||
-        allWrites().some(
-          (w) =>
-            w.scope === target.scope &&
-            w.id === target.id &&
-            w.durable !== false,
-        )
-      )
-        continue;
+      // A clearing mark on a record that stays is settled.
+      if (mark?.clearing && stays)
+        dropMark(
+          key,
+          target.found?.record ?? remote(target.scope).get(target.id),
+        );
+      if (stays || (mark && !mark.clearing)) continue;
       const stored = await storage.get(target.scope, target.id);
       if (!stored) continue;
       held.add(key);
@@ -3420,7 +3490,9 @@ export function createApiClient(
     }
     const told = removing.length ? await tell(round, removing) : true;
     // Told: the clearing marks of the removed records go. Not told: they
-    // stay (not clearing any more), so the records are checked again.
+    // stay, not clearing any more: an `unconfirmed` mark is checked again
+    // by a later sync; an `unavailable` or `deleted` one stays until a read
+    // settles it.
     for (const target of targets) {
       const key = keyFor(target.scope, target.id);
       const mark = keptMarks.get(key);
@@ -3818,14 +3890,24 @@ export function createApiClient(
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
     // the resource's stated `notFound`, through any collection, `deleted`
-    // by default.
+    // by default; since 0.3.0 a 410 means its stated `gone`, else the same.
+    // Under the route's own unrecognised `absent` (§7), what neither
+    // classifies is `unavailable`, not the `deleted` default.
+    const stated =
+      status === 410 ? (route.gone ?? route.notFound) : route.notFound;
+    const meaning =
+      stated ?? (route.unrecognisedAbsent ? 'unavailable' : undefined);
+    const named = status === 410 && route.gone ? 'gone' : 'notFound';
     if (status === 404 || status === 410)
-      return route.notFound === 'unavailable'
+      return meaning === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
             status,
-            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+            detail:
+              stated === undefined
+                ? `GET ${path} answered ${status}; the collection's x-completeness has an absent value this client does not recognise and the resource states no ${status === 410 ? 'gone or notFound' : 'notFound'}, so the record is unavailable, not deleted`
+                : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness ${named}: unavailable), not that it was deleted`,
           }
         : {
             evidence: 'deleted',

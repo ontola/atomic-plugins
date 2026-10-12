@@ -83,3 +83,21 @@ Tests: the two probes (the handler throwing at the end, storage failing
 mid-sync), a refused removal checked again, no item GET, and the same id
 under two lists in one `rebuildTelling` call (a feed settling both, an
 update queued in the handler for one); four fail before the fix.
+
+## Turn 4
+
+**Human (via the coordinator session):** Blocker: a held change is told
+after its mark was dropped without telling (`settled()`, and a clearing
+mark on a record that stays in `rebuildTelling`). Drop the held entry
+wherever a mark is dropped outside `tell`/`setMark`, or replace it with
+`present` when the app had been told the mark; add the reviewer's repro.
+Nits: reuse `stays`; the "checked again" comment holds only for
+`unconfirmed`. Merge main (README changelog conflict, keep both).
+
+**Assistant:** `dropMark` does this for both places. A mark carries `told`
+(set when the end tell succeeds, kept across `setMark`, set on restore);
+a delete the app made is not told back as `present`. Tests: the repro (an
+untold `unconfirmed` mark, an update, the check finding the record: nothing
+told for it, `presence()` empty) and its told counterpart (`present`
+told); both fail before the fix. `rebuildTelling` reuses `stays`, and the
+comment names the `unconfirmed` case.
