@@ -18,7 +18,8 @@ import {
  * The concurrency contract of `AtomicLens` (docs/atomic-data.md,
  * "Concurrency"), pinned as it is today (#259): one lens instance queues its
  * own operations; nothing coordinates two instances or direct store edits.
- * Deterministic fakes only, no timers.
+ * Deterministic fakes only; the one `vi.waitFor` polls, but a gate holds
+ * the awaited call open, so its timing cannot change the outcome.
  */
 
 const SCOPE = 'https://example.com/accounts/acme';
