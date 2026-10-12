@@ -344,6 +344,36 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     ]);
   });
 
+  for (const status of [404, 410])
+    it(`reads a ${status} under an unrecognised absent with no notFound as unavailable, never the deleted default (§7)`, async () => {
+      const { client, reports } = await editedThenMissing({
+        doc: document({ completeness: { absent: 'archived' } }),
+        item: gone(status),
+      });
+      await client.sync();
+      expect(reports).toMatchObject([
+        {
+          evidence: 'unavailable',
+          source: 'read',
+          status,
+        },
+      ]);
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'failed', missingRecord: 'unavailable' },
+      ]);
+    });
+
+  it('classifies a 404 under an unrecognised absent by a recognised notFound beside it (§4.3, §7)', async () => {
+    const { client, reports } = await editedThenMissing({
+      doc: document({
+        completeness: { absent: 'archived', notFound: 'deleted' },
+      }),
+      item: gone(404),
+    });
+    await client.sync();
+    expect(reports).toMatchObject([{ evidence: 'deleted', source: 'read' }]);
+  });
+
   for (const [label, completeness] of [
     ['no notFound', { absent: 'removed' }],
     ['notFound: deleted', { absent: 'removed', notFound: 'deleted' }],

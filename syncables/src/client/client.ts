@@ -771,6 +771,13 @@ interface ClientRoute {
    */
   notFound?: 'deleted' | 'unavailable';
   /**
+   * The route's own Completeness Object has an `absent` this client does
+   * not recognise and the resource states no `notFound`: a 404 or 410 then
+   * means `unavailable`, never the `deleted` default (Collection
+   * Completeness §7; the reference `classify_read`).
+   */
+  unrecognisedAbsent?: true;
+  /**
    * `x-completeness: { parentAbsent }` on a nested collection, any value:
    * its members are unavailable once the parent object that supplies one
    * of its path variables is concluded deleted or unavailable (Collection
@@ -1300,6 +1307,17 @@ function clientRoutes(
       collection.resource,
     );
     if (notFound) route.notFound = notFound;
+    else {
+      // §7: under an unrecognised `absent`, a 404 (or 410) is classified by
+      // a recognised `notFound`, else as `unavailable`, never by the
+      // `deleted` default.
+      const raw = rawCompleteness(document, collection, true);
+      const absent = raw?.declared['absent'];
+      if (raw && absent !== 'deleted' && absent !== 'removed') {
+        route.notFound = 'unavailable';
+        route.unrecognisedAbsent = true;
+      }
+    }
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -3477,14 +3495,17 @@ export function createApiClient(
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
     // the resource's stated `notFound`, through any collection, `deleted`
-    // by default.
+    // by default, but `unavailable` under the route's own unrecognised
+    // `absent` (§7).
     if (status === 404 || status === 410)
       return route.notFound === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
             status,
-            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+            detail: route.unrecognisedAbsent
+              ? `GET ${path} answered ${status}; the collection's x-completeness has an absent value this client does not recognise and states no notFound, so the record is unavailable, not deleted`
+              : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
           }
         : {
             evidence: 'deleted',
