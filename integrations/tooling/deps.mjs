@@ -29,11 +29,9 @@ import { root } from './lanes.mjs';
  * dependencies (an independent protocol client, for instance), and its
  * Devonian lens folder's (`integrations/<id>/devonian/`, the npm `devonian`
  * its lens prototypes test against, for a plugin with no drive app to hold
- * it). CI installs the first three globs (`integrations/*\/pnpm-lock.yaml`,
- * `integrations/*\/app/pnpm-lock.yaml`, `integrations/*\/e2e/pnpm-lock.yaml`);
- * the fourth, `integrations/*\/devonian/pnpm-lock.yaml`, waits for the same
- * line in .github/workflows/ci.yml, which needs a push with the `workflow`
- * scope. Until then no plugin has a lockfile there, so this changes nothing.
+ * it): the same four globs CI installs (`integrations/*\/pnpm-lock.yaml`,
+ * `integrations/*\/app/pnpm-lock.yaml`, `integrations/*\/e2e/pnpm-lock.yaml`,
+ * `integrations/*\/devonian/pnpm-lock.yaml`).
  */
 export const pluginDependencyDirs = id => [
   `integrations/${id}`,
