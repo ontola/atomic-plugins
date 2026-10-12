@@ -4294,6 +4294,21 @@ export function createApiClient(
     const key = keyFor(scope, id);
     const before = keptMarks.get(key);
     const lastSeen = before?.lastSeen ?? seenAt.get(key);
+    const change = presenceChange(
+      route,
+      context,
+      id,
+      presence,
+      source,
+      record,
+      false,
+    );
+    // The app was told a mark of the record: this one's, or an earlier
+    // one's whose drop is still held as `present` (the mark that was told
+    // is gone, and this change replaces that `present`).
+    const told =
+      before?.told ||
+      untoldMarks.get(changeKey(change))?.presence === 'present';
     keptMarks.set(key, {
       scope,
       resource: route.collection.name,
@@ -4304,26 +4319,18 @@ export function createApiClient(
       source,
       presence,
       ...(lastSeen ? { lastSeen } : {}),
-      ...(before?.told ? { told: true as const } : {}),
+      ...(told ? { told: true as const } : {}),
     });
     if (before?.presence !== presence) {
-      const change = presenceChange(
-        route,
-        context,
-        id,
-        presence,
-        source,
-        record,
-        false,
-      );
       untoldMarks.delete(changeKey(change));
       untoldMarks.set(changeKey(change), change);
     }
   }
 
   /**
-   * Drops a record's mark outside `tell` and `setMark` (a write settled on
-   * it, or a check settled a clearing mark): a held change of it is dropped
+   * Drops a record's mark outside `tell` and `setMark` (a read returned it,
+   * a write settled on it, or a check settled a clearing mark on a record
+   * that stays): a held change of it is dropped
    * too, and, when the app has been told a mark of the record and
    * `tellPresent` holds, replaced by a `present` change with `record`.
    */
@@ -5512,22 +5519,12 @@ export function createApiClient(
         const id = String(item[idField]);
         ids.add(id);
         seenAt.set(keyFor(scope, id), readAt);
-        // A read that returns a marked record settles its mark: present.
-        const mark = keptMarks.get(keyFor(scope, id));
-        if (mark) {
-          keptMarks.delete(keyFor(scope, id));
+        // A read that returns a marked record settles its mark: told as
+        // `present` if the app was told a mark of it, else its held change
+        // is just dropped (`dropMark`).
+        if (keptMarks.has(keyFor(scope, id))) {
+          dropMark(keyFor(scope, id), item);
           keptSettled = true;
-          const change = presenceChange(
-            route,
-            mark.context,
-            id,
-            'present',
-            'read',
-            item,
-            false,
-          );
-          untoldMarks.delete(changeKey(change));
-          untoldMarks.set(changeKey(change), change);
         }
       }
       round.returned.set(scope, ids);
