@@ -840,9 +840,9 @@ describe('update modes: conflicts after a failed merge patch', () => {
     });
     await client.sync();
     expect(conflicts).toEqual([]);
-    expect(
-      client.pendingWrites().flatMap((w) => w.conflicts ?? []),
-    ).toEqual([]);
+    expect(client.pendingWrites().flatMap((w) => w.conflicts ?? [])).toEqual(
+      [],
+    );
     release();
     await vi.waitFor(() => expect(client.pendingWrites()).toHaveLength(1));
     expect(conflicts).toEqual([]);

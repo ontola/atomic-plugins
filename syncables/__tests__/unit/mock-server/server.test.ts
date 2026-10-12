@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadOpenApiDocument } from '../../../src/openapi/load.js';
-import { createMockServer, type MockServer } from '../../../src/mock-server/server.js';
+import {
+  createMockServer,
+  type MockServer,
+} from '../../../src/mock-server/server.js';
 import { petsDocument } from '../../fixtures/pets.js';
 
 describe('createMockServer', () => {
@@ -37,26 +40,34 @@ describe('createMockServer', () => {
     expect(created['name']).toBe('Rex');
     expect(created['id']).toEqual(expect.any(String));
 
-    const fetched = await fetch(`${baseUrl}/pets/${created['id'] as string}`).then((r) =>
-      r.json(),
-    );
+    const fetched = await fetch(
+      `${baseUrl}/pets/${created['id'] as string}`,
+    ).then((r) => r.json());
     expect(fetched).toEqual(created);
 
-    const updateResponse = await fetch(`${baseUrl}/pets/${created['id'] as string}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Rex Updated', tag: 'dog' }),
-    });
+    const updateResponse = await fetch(
+      `${baseUrl}/pets/${created['id'] as string}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Rex Updated', tag: 'dog' }),
+      },
+    );
     const updated = (await updateResponse.json()) as Record<string, unknown>;
     expect(updated['name']).toBe('Rex Updated');
     expect(updated['id']).toBe(created['id']);
 
-    const deleteResponse = await fetch(`${baseUrl}/pets/${created['id'] as string}`, {
-      method: 'DELETE',
-    });
+    const deleteResponse = await fetch(
+      `${baseUrl}/pets/${created['id'] as string}`,
+      {
+        method: 'DELETE',
+      },
+    );
     expect(deleteResponse.status).toBe(204);
 
-    const afterDelete = await fetch(`${baseUrl}/pets/${created['id'] as string}`);
+    const afterDelete = await fetch(
+      `${baseUrl}/pets/${created['id'] as string}`,
+    );
     expect(afterDelete.status).toBe(404);
   });
 

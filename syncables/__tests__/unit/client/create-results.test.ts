@@ -106,8 +106,7 @@ function provider(answer: Answer): {
   return {
     posts,
     transport: async (r: TransportRequest): Promise<TransportResponse> => {
-      if (r.method === 'GET')
-        return { status: 200, headers: {}, body: '[]' };
+      if (r.method === 'GET') return { status: 200, headers: {}, body: '[]' };
       const body = JSON.parse(r.body ?? '{}') as Record<string, unknown>;
       posts.push(body);
       return answer(body);
@@ -154,9 +153,7 @@ async function created(
 }
 
 describe('createdIdentity (the reference created_identity)', () => {
-  const declaration = (
-    url?: Record<string, unknown>,
-  ): CreateDeclaration =>
+  const declaration = (url?: Record<string, unknown>): CreateDeclaration =>
     createDeclaration(document(), {
       action: 'create',
       resource: 'pet',
@@ -243,7 +240,8 @@ describe('the identity from the declared url source', () => {
   it('binds a create answered with an empty body and a Location header', async () => {
     const { client, posts, local } = await created(
       { ...GENERATED, url: { source: 'header', name: 'Location' } },
-      () => json(undefined, { Location: 'https://provider.example/api/pets/42' }),
+      () =>
+        json(undefined, { Location: 'https://provider.example/api/pets/42' }),
     );
     await idle(client);
     expect(posts).toHaveLength(1);
