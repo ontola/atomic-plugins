@@ -148,6 +148,59 @@ fails through 2026-10-11 and reads as empty through this catalog;
 and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>`.
 
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
+## Read tombstones
+
+[Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
+`x-read-tombstone: { field: status, values: [cancelled] }` on the event read
+(`GET /calendars/{calendarId}/events/{eventId}`). The pinned document's
+`Event.status` says "cancelled" is "The event is cancelled (deleted)", that
+"The get method always returns them", and that on the organizer's calendar
+cancelled events "can be restored (undeleted)"; a consumer treats every
+read tombstone as restorable. The document sets cancelled exceptions of a
+recurring event apart: "Cancelled exceptions of an uncancelled recurring
+event indicate that this instance should no longer be presented to the
+user. Clients should store these events for the lifetime of the parent
+recurring event." They are declared too: the object is that one instance
+(its own event id), its status is the same "cancelled" defined as
+"(deleted)", and an instance that should no longer be presented is that
+occurrence's deletion, not an archived state of a live object; a consumer
+concludes about the instance it read, never about the series, and a read
+tombstone does not remove a stored exception. A consumer that lists events
+with `showDeleted=true`, or with `syncToken` or `updatedMin`, never hits
+this, because cancelled events then appear in the list itself; the Calendar
+drive app lists with `showDeleted=true`. It is declared on the operation, so it
+applies with either crud-causality overlay, and no dated catalog selects
+it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
+edit's event is missing from a complete read and its GET answers
+`status: cancelled`, the edit fails as `deleted` rather than `filtered`. No
+deletion feed over the event list is declared (Deletion Feeds §8).
+`tests/test_calendar_read_tombstone.py` composes it after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
@@ -275,12 +328,14 @@ place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
+- `.github/workflows/overlays-ci.yml` (PRs and pushes to main): all overlay paths, revision
   filenames and `extends` commits pass the full-history check, and every
   action target exists in its pinned OAD or in the catalog composition up to
   it; every catalog overlay URL, and
-  every OAD URL under the Pages base, maps to a file in this folder, and the
-  tests below pass (`tests/test_identity_overlays.py` also checks the pets
+  every OAD URL under the Pages base, maps to a file in this folder, and
+  every `tests/test_*.py` passes, discovered rather than listed; a test whose
+  source declares a `"--directory"` option gets the openapi-directory clone
+  (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
   Pages serves it.

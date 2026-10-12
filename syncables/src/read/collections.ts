@@ -23,10 +23,13 @@ import {
   type WindowRange,
 } from './pages.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import type { PaginationSchemeObject } from '../pagination/types.js';
+import { windowFields } from '../pagination/window.js';
 import {
   pagingFields,
   rangeParameters,
   timeZoneParameters,
+  wallClockWindows,
   wallClockQuery,
   zoneReader,
   type ReadCoverage,
@@ -216,7 +219,12 @@ export async function readCollections(
     (error) =>
       error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
   );
-  const zoned: { snapshot: CollectionSnapshot; keys: Set<string> }[] = [];
+  const zoned: {
+    snapshot: CollectionSnapshot;
+    keys: Set<string>;
+    /** Read by range windows whose bounds went to x-time-zone parameters. */
+    windowed: boolean;
+  }[] = [];
   // A resource whose x-runtime-schema cannot be used fails its collections
   // before any request: its items' members could not be interpreted.
   const runtimeFailures = new Map<string, string>();
@@ -280,38 +288,66 @@ export async function readCollections(
                   operation,
                 )
               : [];
+          const range = options.ranges?.(collection, path);
+          // A range read by windows sends wall-clock bounds to x-time-zone
+          // window parameters (Pagination Schemes 0.5.0 x Filtering 0.2.0).
+          let windowValue:
+            | ((parameter: string, bound: string) => string | undefined)
+            | undefined;
           if (timeZoned.length) {
-            let paging = new Set<string>();
+            let scheme: PaginationSchemeObject | undefined;
             try {
-              paging = pagingFields(
-                resolveEffectiveScheme(doc, operation as OperationObject)
-                  ?.scheme,
-              );
+              scheme = resolveEffectiveScheme(
+                doc,
+                operation as OperationObject,
+              )?.scheme;
             } catch {
               // An unusable scheme fails the read in walkPages below.
             }
-            const written = await wallClockQuery(
-              timeZoned,
-              query,
-              path,
-              zones.read,
-              {
-                ranges: rangeParameters(
-                  doc.paths[collection.url]?.['parameters'],
-                  operation as OperationObject,
-                ),
-                paging,
-                fixed: fixedQueries.get(collection.name) ?? {},
-              },
-            );
+            const others = {
+              ranges: rangeParameters(
+                doc.paths[collection.url]?.['parameters'],
+                operation as OperationObject,
+              ),
+              paging: pagingFields(scheme),
+              fixed: fixedQueries.get(collection.name) ?? {},
+            };
+            const windows =
+              range && scheme?.type === 'rangeWindow' && scheme.window
+                ? await wallClockWindows(
+                    timeZoned,
+                    windowFields(scheme).filter(
+                      (field) => field.location === 'queryParameters',
+                    ),
+                    scheme.window,
+                    range,
+                    query,
+                    path,
+                    zones.read,
+                    others,
+                  )
+                : undefined;
+            const written =
+              windows ??
+              (await wallClockQuery(
+                timeZoned,
+                query,
+                path,
+                zones.read,
+                others,
+              ));
+            if (windows) windowValue = windows.windowValue;
             query = written.query;
             if (written.coverage) {
               snapshot.coverage = written.coverage;
-              zoned.push({ snapshot, keys: written.keys });
+              zoned.push({
+                snapshot,
+                keys: written.keys,
+                windowed: windows !== undefined,
+              });
             }
           }
           const outcome: WalkOutcome = { complete: true };
-          const range = options.ranges?.(collection, path);
           for await (const page of walkPages({
             document: doc,
             operation: operation ?? { responses: {} },
@@ -327,6 +363,7 @@ export async function readCollections(
               : {}),
             ...(collection.emptyWhenAbsent ? { emptyWhenAbsent: true } : {}),
             ...(range ? { range } : {}),
+            ...(windowValue ? { windowValue } : {}),
             identity: (value) => asText(value[collection.idField]),
             outcome,
           })) {
@@ -393,12 +430,23 @@ export async function readCollections(
       changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
     }
     if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
-    for (const { snapshot, keys } of zoned) {
+    for (const { snapshot, keys, windowed } of zoned) {
       const coverage = snapshot.coverage as ReadCoverage;
-      if (!snapshot.complete)
+      // A read by range windows that finished is never complete
+      // (Pagination Schemes 0.5.0 §4.6.4) but asked for its whole range;
+      // any other read that is not complete (failed, or ended by a short
+      // page that is not documented as the last) covers nothing known.
+      const finishedWindows =
+        windowed &&
+        snapshot.error === undefined &&
+        snapshot.notComplete !== undefined;
+      if (!snapshot.complete && !finishedWindows)
         snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
       else if ([...keys].some((key) => changed.has(key)))
         snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
+      else if (finishedWindows && coverage.spans)
+        // The spans asked for stay, marked incomplete.
+        snapshot.coverage = { ...coverage, reason: 'incomplete' };
     }
   }
   if (!schemas.size) return { collections, errors };

@@ -166,9 +166,14 @@ describe('emptyWhenAbsent on a Collection Object envelope', () => {
     const scheme = tasksScheme();
     delete scheme.response!.envelope;
     expect(
-      await read(document(scheme, { itemsField: 'items', emptyWhenAbsent: true }), [EMPTY]),
+      await read(
+        document(scheme, { itemsField: 'items', emptyWhenAbsent: true }),
+        [EMPTY],
+      ),
     ).toEqual({ complete: true, items: 0, errors: [] });
-    const strict = await read(document(scheme, { itemsField: 'items' }), [EMPTY]);
+    const strict = await read(document(scheme, { itemsField: 'items' }), [
+      EMPTY,
+    ]);
     expect(strict.complete).toBe(false);
   });
 

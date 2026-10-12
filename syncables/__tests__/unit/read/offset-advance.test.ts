@@ -121,7 +121,12 @@ describe('advance: pageSize', () => {
     });
     const items = await read(scheme('pageSize'), transport);
     expect(offsets).toEqual([0, 4, 8]);
-    expect(items).toEqual([{ id: 'i0' }, { id: 'i1' }, { id: 'i8' }, { id: 'i9' }]);
+    expect(items).toEqual([
+      { id: 'i0' },
+      { id: 'i1' },
+      { id: 'i8' },
+      { id: 'i9' },
+    ]);
   });
 
   it('runs to a total_count above the entries', async () => {
@@ -168,7 +173,9 @@ describe('advance: itemCount (the default)', () => {
       constants: { folder_id: '0' },
     });
     expect(offsets.slice(0, 2)).toEqual([0, 2]);
-    expect(result.errors.join()).toMatch(/holds an item an earlier page returned/);
+    expect(result.errors.join()).toMatch(
+      /holds an item an earlier page returned/,
+    );
   });
 
   it('stops at an empty page before total_count, as before', async () => {

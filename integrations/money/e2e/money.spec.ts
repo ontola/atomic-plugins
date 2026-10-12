@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+const VERSION = '0.4.3';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -295,6 +295,17 @@ test.describe('money integration', () => {
     await expect(app.getByRole('status').first()).toContainText('Imported 2', {
       timeout: 60_000,
     });
+    // The shared sync-status card (Q-084) dates the import and stays
+    // read-only: there is no provider to send anything to.
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText(
+      '2 transactions from 1 statement; 2 arrived at the last sync',
+    );
+    await expect(syncCard).not.toContainText('Last sync:');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
     const lunch = app.getByRole('button', { name: /Fixture lunch/ });
     await expect(lunch).toBeVisible();
     await expect(
@@ -436,6 +447,19 @@ test.describe('money integration', () => {
       app.locator('table.m-ledger').getByText('Typed by hand'),
     ).toHaveCount(0);
     expect(await rowsOf(page, own)).toHaveLength(5);
+    // The sync-status card lists it as an ignored group by what it misses,
+    // names it under Which, and offers Open row (0.4.2).
+    const ignored = syncCard.locator('[data-key=ignored]');
+    await expect(ignored).toHaveCount(1);
+    await expect(ignored).toContainText(
+      '1 transaction is incomplete (missing Amount): shown above the ledger, in no balance, total or import check.',
+    );
+    await ignored.getByText('Which').click();
+    await expect(ignored.locator('.ss-items')).toHaveText('Typed by hand');
+    await expect(
+      ignored.getByRole('button', { name: 'Open row' }),
+    ).toBeVisible();
+    await expect(syncCard).toContainText('4 transactions from 2 statements');
     // "Open row" leaves the app for the row's page in the host.
     await incomplete
       .getByRole('button', { name: 'Open row Typed by hand' })
@@ -445,6 +469,54 @@ test.describe('money integration', () => {
         timeout: 30_000,
       })
       .toBe(stub);
+
+    // A load error (0.4.2's card): the host fails the app's first request,
+    // `getData`, as a lost connection would, by failing its read of the
+    // app's table (not of the app: the page needs that to mount the frame).
+    // Back in the same page, without a reload, so the stand-in stays armed.
+    await page.evaluate(subject => {
+      const store = window.store! as unknown as {
+        getResource: (s: string, ...rest: unknown[]) => Promise<unknown>;
+        __getResource?: (s: string, ...rest: unknown[]) => Promise<unknown>;
+      };
+      // Kept on the store, so the recovery below puts the very same method back.
+      const original = store.getResource;
+      store.__getResource = original;
+      store.getResource = (s, ...rest) =>
+        s === subject
+          ? Promise.reject(new Error('Simulated host failure'))
+          : original.call(store, s, ...rest);
+    }, own);
+    await page.goBack();
+    await expect(app.getByRole('status').first()).toContainText('Sync failed', {
+      timeout: 60_000,
+    });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).toContainText("Couldn't load the transactions.");
+    await expect(syncCard).toContainText('Simulated host failure');
+    await expect(syncCard).toContainText('Try again.');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    // The host recovers; Try again loads the rows, and the card says so.
+    await page.evaluate(() => {
+      const store = window.store! as unknown as {
+        getResource: unknown;
+        __getResource?: unknown;
+      };
+      store.getResource = store.__getResource;
+      delete store.__getResource;
+    });
+    await app.getByRole('button', { name: 'Try again' }).click();
+    await expect(
+      app.getByRole('button', { name: 'Fixture lunch', exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(syncCard.locator('[data-key=headline]')).not.toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).not.toContainText('Simulated host failure');
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
@@ -518,6 +590,15 @@ test.describe('money integration', () => {
     await expect(
       app.getByRole('heading', { name: 'Bring in your bank transactions' }),
     ).toBeVisible({ timeout: 45_000 });
+    // The sync-status card on the importer's table: read-only, and saving a
+    // category or note asks for editing first (0.4.2).
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    await expect(syncCard).toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
 
     // Import from inside the app: check, preview, then the host's own
     // review (#1774). Nothing is written before Apply.
@@ -554,6 +635,9 @@ test.describe('money integration', () => {
     await expect(
       app.getByText('−€12.34', { exact: true }).first(),
     ).toBeVisible();
+    // The card dates the importer's import like the app's own.
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('2 arrived at the last sync');
 
     // The statement row, with its balances: the strip and the Imports tab.
     await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
@@ -577,6 +661,10 @@ test.describe('money integration', () => {
     await allow.getByRole('button', { name: 'Allow editing' }).click();
     await expect(details).toContainText('Saved', { timeout: 30_000 });
     await page.keyboard.press('Escape');
+    // Editing allowed: the card no longer asks for it.
+    await expect(syncCard).not.toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
 
     // Stored on the row itself: after a reload the ledger shows it.
     await page.reload();
