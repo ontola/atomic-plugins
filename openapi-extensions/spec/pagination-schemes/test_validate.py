@@ -886,3 +886,43 @@ class OffsetAdvanceTests(unittest.TestCase):
         del scheme["response"]["bodyFields"]["limit"]
         with self.assertRaises(PageReadError):
             read_offsets(scheme, lambda values: {"entries": [{"id": "a"}], "total_count": 5})
+
+
+class OffsetAdvanceValueTests(unittest.TestCase):
+    """0.7.0 review: reported values are integers, read per response (§4.3.2)."""
+
+    def scheme(self):
+        return example("offset-advance.yaml")["components"]["paginationSchemes"]["limitPages"]
+
+    def test_a_reported_page_size_that_is_not_an_integer_of_at_least_1_is_not_used(self):
+        for reported in (2.5, "2", 0, -2, True):
+            with self.subTest(reported=reported):
+                offsets = []
+
+                def request(values):
+                    offset = values[("queryParameters", "offset")]
+                    offsets.append(offset)
+                    page = [{"id": str(i)} for i in range(offset, min(6, offset + 3))]
+                    return {"entries": page, "limit": reported, "total_count": 6}
+
+                read_offsets(self.scheme(), request, page_size=3)
+                self.assertEqual(offsets, [0, 3])
+
+    def test_a_total_count_that_is_not_an_integer_is_not_carried(self):
+        def request(values):
+            offset = values[("queryParameters", "offset")]
+            page = [{"id": str(i)} for i in range(offset, min(4, offset + 2))]
+            return {"entries": page, "limit": 2, "total_count": "4"}
+
+        result = read_offsets(self.scheme(), request)
+        self.assertEqual(result["offsets"], [0, 2, 4])
+
+    def test_a_server_that_ignores_the_offset_ends_the_read_under_either_rule(self):
+        for advance in ("pageSize", "itemCount"):
+            with self.subTest(advance=advance):
+                scheme = self.scheme()
+                scheme["request"]["queryParameters"]["offset"]["advance"] = advance
+                del scheme["response"]["bodyFields"]["total_count"]
+                with self.assertRaises(PageReadError):
+                    read_offsets(scheme, lambda values: {"entries": [{"id": "a"}, {"id": "b"}], "limit": 2},
+                                 max_pages=50)

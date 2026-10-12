@@ -597,8 +597,9 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
         items.extend(page)
         total_count = _count(_role_value(body, scheme, "totalCount"))
         if advance == "pageSize":
+            # A reported page size counts only as an integer of at least 1 (§4.3.2).
             reported = _count(_role_value(body, scheme, "pageSize"))
-            step = reported if reported else (page_size if size_fields else None)
+            step = reported if reported and reported >= 1 else (page_size if size_fields else None)
             if not step:
                 raise PageReadError(f"the page at offset {offset} gives no page size to advance by")
             following = offset + step
