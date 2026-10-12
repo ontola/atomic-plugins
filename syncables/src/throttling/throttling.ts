@@ -7,11 +7,12 @@
  * throttling) and the earliest retry time, after `classify()` in that
  * folder's `validate.py`. `limits` and `applies` are read only for the
  * bucket a `quotaExhausted` signal names (its window is the fallback when no
- * time is given) and for which buckets an operation selects. Pacing against
- * the announced quotas is not implemented.
+ * time is given), for which buckets an operation selects, and, where a
+ * Limit Object states `requests`, for pacing (`quotas`, `pacing.ts`).
  */
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import { isRecord } from '../read/model.js';
+import type { Quota } from './pacing.js';
 
 export type HeaderRole =
   | 'limit'
@@ -70,6 +71,12 @@ export interface SignalObject {
 export interface ThrottlingDeclaration {
   /** `limits[<bucket>].window.seconds`, per bucket identifier. */
   windows: Map<string, number>;
+  /**
+   * The buckets whose Limit Object states `requests`, for pacing. A window
+   * `kind` this consumer does not know is read as `sliding`, the stricter
+   * reading; an `anchor` that does not parse as a time is left out.
+   */
+  quotas: Map<string, Quota>;
   /** The default bucket selection (`applies`). */
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
@@ -153,11 +160,26 @@ export function declaredThrottling(
   const root = (document as Record<string, unknown>)['x-throttling'];
   if (!isRecord(root)) return undefined;
   const windows = new Map<string, number>();
+  const quotas = new Map<string, Quota>();
   if (isRecord(root['limits']))
     for (const [name, limit] of Object.entries(root['limits'])) {
       const window = isRecord(limit) ? limit['window'] : undefined;
       const seconds = isRecord(window) ? window['seconds'] : undefined;
-      if (isPositiveInteger(seconds)) windows.set(name, seconds);
+      if (!isPositiveInteger(seconds)) continue;
+      windows.set(name, seconds);
+      const requests = isRecord(limit) ? limit['requests'] : undefined;
+      if (!isPositiveInteger(requests)) continue;
+      const kind = (window as Record<string, unknown>)['kind'];
+      const anchor = (window as Record<string, unknown>)['anchor'];
+      const anchorMs = typeof anchor === 'string' ? Date.parse(anchor) : NaN;
+      quotas.set(name, {
+        requests,
+        seconds,
+        kind: kind === 'fixed' || kind === 'unspecified' ? kind : 'sliding',
+        ...(kind === 'fixed' && Number.isFinite(anchorMs)
+          ? { anchor: anchorMs }
+          : {}),
+      });
     }
   const applies = Array.isArray(root['applies'])
     ? root['applies'].filter((b): b is string => typeof b === 'string')
@@ -170,6 +192,7 @@ export function declaredThrottling(
   );
   const declaration: ThrottlingDeclaration = {
     windows,
+    quotas,
     applies,
     headers,
     bodyFields,

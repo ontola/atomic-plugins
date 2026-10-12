@@ -123,6 +123,8 @@ export type {
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { Pacer } from './throttling/pacing.js';
+export type { Quota } from './throttling/pacing.js';
 export { halves, WindowReadError } from './pagination/window.js';
 export type {
   RangeWindowObject,

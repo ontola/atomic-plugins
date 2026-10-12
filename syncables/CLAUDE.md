@@ -226,7 +226,15 @@ Data flows through four stages, each its own directory under `src/`:
    (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
    `pauseForOperation`, `operationBuckets`; the read transport waits within
    `limits.timeoutMs`), until the answer's time or else the write's backoff;
-   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain.
+   Pacing (K2, `throttling/pacing.ts`): `declaredThrottling`'s `quotas`
+   (Limit Objects with `requests`) feed a `Pacer` (`pace`, `paceFraction`,
+   default 0.8). The `baseTransport` wrapper counts every request when it
+   is sent (`take`), after waiting for room; it is not async, so a request
+   with room adds no tick. Reads wait first in `waitOutPacing` within their
+   limit (`RetryBeyondDeadline`). `drainQueue` holds a write for
+   `pacingDelay` without the `maxRetryAfterMs` failure or an attempt.
+   `pacingSleptUntil` takes a wait that did not move as waited out. For another
    retryable answer the delay is max(backoff, `Retry-After` capped at
    `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
    uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
@@ -638,6 +646,14 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
   rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
   `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
+- `unit/throttling/pacing.test.ts` covers `Pacer` (sliding, unspecified,
+  fixed with and without an anchor, several buckets, the minimum of one,
+  the fraction's range) and `declaredThrottling`'s `quotas`;
+  `unit/client/pacing.test.ts` the client: reads through the injected
+  sleep, a wait past the read limit, the Moneybird 120 of 150, `pace:
+  false` and `paceFraction`, a write held without failing or an attempt,
+  concurrent drains counted at send time, and an operation whose
+  selection leaves the bucket out.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus
