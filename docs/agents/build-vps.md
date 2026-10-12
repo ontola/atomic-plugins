@@ -53,9 +53,9 @@ node integrations/tooling/link-atomic-server.mjs --no-fetch
   on an unmerged PR, say) uses that SHA's directory, not main's. Pointing it
   at another pin's checkout makes `link-atomic-server.mjs` move that checkout
   under whoever else is using it, and their lanes then run one pin's
-  `browser/` against another pin's binary. `link-atomic-server.mjs` refuses
-  to move a checkout named after another commit (`<sha>` or
-  `<sha>-<variant>`, #460): it stops before fetching and prints this pin's
+  `browser/` against another pin's binary. `link-atomic-server.mjs` (without
+  `--no-fetch`, which skips this check) refuses to move a checkout named
+  after another commit (`<sha>` or `<sha>-<variant>`, #462): it stops before fetching and prints this pin's
   own `ATOMIC_SERVER_CHECKOUT` path. A checkout not named after a commit
   (`/tmp/atomic-server`, CI's) still moves.
 - **Read-only once built.** Never commit in it, check out another commit in
