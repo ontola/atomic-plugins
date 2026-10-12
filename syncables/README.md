@@ -1860,10 +1860,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     as an integer of at least 1, a `totalCount` of at least 0; with neither
     page size known the read ends with an error), the offset repeat check,
     an `itemCount` read without `totalCount` to the first empty page (#495),
-    validator rules 23–25. Known limit: a scheme with both an offset and a
-    `nextLink` field follows the link and does not advance the offset
-    meanwhile, so under `advance: pageSize` the read ends with an error
-    where the link ends rather than short. The page size capped at the
+    validator rules 23–25; Pagination Schemes 0.7.1: in a scheme with both
+    an offset and a `nextLink` field the link leads under either `advance`,
+    an absent, `null` or empty link ends the read, and a read that ends
+    there with `totalCount` above the items read is not complete. The page
+    size capped at the
     parameter's `maximum`; `paginate` takes `idField` for windowed reads;
     `walkPages` takes `windowValue`; incomplete reads applied by `sync()`
     (`SyncResult.incomplete`, `IncompleteRead`, `ApiClientOptions.ranges`);
@@ -1896,6 +1897,18 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     describer errors as `SyncResult.warnings` and offers
     `ApiClient.runtimeMembers()`. `RuntimeClass`, `RuntimeDescriber`,
     `RuntimeMembers` and `RuntimeProperty` are exported.
+  - Webhook inbox consumer (new, ontola/atomic-plugins#369 steps 4 and
+    4b; Webhook Subscriptions draft): `InboxClient` for the receiver's
+    consumer routes (it refuses a base URL that is not canonical),
+    `InboxConsumer.step()` (an event is appended to the caller's durable
+    `InboxJournal` before it is acknowledged; a gap, a new subscription or
+    an expiry is followed by the caller's full reconciliation;
+    `acknowledge: 'next-step'` acknowledges only on the step after the
+    writes landed), `InMemoryInboxJournal`, `scopedReads`, and
+    `parseRetryAfter` with the client's `Retry-After` rules. The main entry
+    also exports `signedTransport` (Atomic v2 signatures, `node:crypto`);
+    `syncables/browser` exports the rest, which needs no `URL`, `Buffer`
+    or `TextDecoder`, for atomic-server's QuickJS sandbox.
 - **0.21.0**: Consumer support for new extension revisions (Pagination
   Schemes 0.4.0 and 0.5.0, CRUD Causality 0.4.0, Throttling 0.2.0), and the
   pagination and envelope fixes their reviews found. Behaviour changes to
