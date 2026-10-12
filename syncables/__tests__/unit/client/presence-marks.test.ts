@@ -1,5 +1,5 @@
 // @wc-ignore-file
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   InMemoryStorageAdapter,
@@ -849,6 +849,66 @@ describe('presence marks: #466 second review', () => {
     ).toEqual([
       [{ listId: 'L1' }, 'deleted', false],
       [{ listId: 'L2' }, 'deleted', true],
+    ]);
+  });
+});
+
+describe('presence marks: #466 nits', () => {
+  it('drops an untold mark that a read settles, telling nothing', async () => {
+    let fail = true;
+    const told: PresenceChange[][] = [];
+    const { client, fake } = await setup(document(), {
+      onPresence: (changes) => {
+        if (fail && changes.length) throw new Error('app busy');
+        told.push(changes);
+      },
+    });
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await expect(client.sync()).rejects.toThrow('app busy');
+    fail = false;
+    // The next read returns the record: the app never heard of the mark.
+    fake.hidden.delete('2');
+    await client.sync();
+    expect(client.presence()).toEqual([]);
+    expect(told.flat().filter((c) => c.id === '2')).toEqual([]);
+  });
+
+  it('tells present when a read settles a mark the app was told', async () => {
+    const { client, fake, told } = await setup();
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await client.sync();
+    fake.hidden.delete('2');
+    await client.sync();
+    expect(told.flat().map((c) => [c.id, c.presence, c.pruned])).toEqual([
+      ['2', 'unconfirmed', false],
+      ['2', 'present', false],
+    ]);
+  });
+
+  it('tells present at the next sync when a write settles on a told mark (settled)', async () => {
+    const { client, fake, told } = await setup();
+    fake.hidden.add('2');
+    // 404 under notFound: unavailable: kept, marked unavailable.
+    await client.sync();
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unavailable' },
+    ]);
+    await client.update('/pets', '2', { name: 'Tom II' });
+    // The provider accepts the write after all.
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response({ ...tom, name: 'Tom II' }) : undefined;
+    await client.resolveWrite('/pets', '2', { action: 'retry' });
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    expect(client.presence()).toEqual([]);
+    // Held until the end of the next sync, which lists the record again.
+    expect(told.flat().map((c) => c.presence)).toEqual(['unavailable']);
+    fake.hidden.delete('2');
+    await client.sync();
+    expect(told.flat().map((c) => [c.id, c.presence, c.pruned])).toEqual([
+      ['2', 'unavailable', false],
+      ['2', 'present', false],
     ]);
   });
 });

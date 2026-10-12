@@ -101,3 +101,19 @@ untold `unconfirmed` mark, an update, the check finding the record: nothing
 told for it, `presence()` empty) and its told counterpart (`present`
 told); both fail before the fix. `rebuildTelling` reuses `stays`, and the
 comment names the `unconfirmed` case.
+
+## Turn 5
+
+**Human (via the coordinator session):** #466 nits, after it merged: the
+read path that settles a mark should call `dropMark` instead of telling
+`present` unconditionally, and add a test for the `settled()` path if it
+can be reached.
+
+**Assistant:** A read that returns a marked record now goes through
+`dropMark`: `present` is told only when the app was told a mark of the
+record; an untold mark's held change is just dropped. Tests: an untold
+`unconfirmed` mark that the next read settles tells nothing (fails before
+the change), a told one tells `present`, and the `settled()` path,
+reached by a `resolveWrite` `retry` of an update held on an `unavailable`
+record: the mark goes at once and `present` is told at the end of the
+next sync that lists the record.

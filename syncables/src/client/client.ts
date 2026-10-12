@@ -4831,22 +4831,12 @@ export function createApiClient(
         const id = String(item[idField]);
         ids.add(id);
         seenAt.set(keyFor(scope, id), readAt);
-        // A read that returns a marked record settles its mark: present.
-        const mark = keptMarks.get(keyFor(scope, id));
-        if (mark) {
-          keptMarks.delete(keyFor(scope, id));
+        // A read that returns a marked record settles its mark: told as
+        // `present` if the app was told a mark of it, else its held change
+        // is just dropped (`dropMark`).
+        if (keptMarks.has(keyFor(scope, id))) {
+          dropMark(keyFor(scope, id), item);
           keptSettled = true;
-          const change = presenceChange(
-            route,
-            mark.context,
-            id,
-            'present',
-            'read',
-            item,
-            false,
-          );
-          untoldMarks.delete(changeKey(change));
-          untoldMarks.set(changeKey(change), change);
         }
       }
       round.returned.set(scope, ids);

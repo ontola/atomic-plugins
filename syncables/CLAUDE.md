@@ -171,7 +171,8 @@ Data flows through four stages, each its own directory under `src/`:
    conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
    the removal is told, or keeps the mark (not clearing) when the handler
    throws, so the record is checked again. `dropMark` drops a mark outside
-   `tell`/`setMark` (`settled`, a clearing mark on a record that stays) and
+   `tell`/`setMark` (a read returning the record, `settled`, a clearing
+   mark on a record that stays) and
    its held change, replaced by `present` when the mark is `told` (set by
    a successful end tell, kept by `setMark`, and set on restored marks).
    `client.presence()` lists

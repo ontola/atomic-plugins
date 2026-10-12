@@ -631,8 +631,9 @@ call) are kept, the latest per record, and told at the end of a later
 sync; they are kept in memory only, so a restart loses them though not the
 marks. A removal the handler refused keeps the record and its mark; an
 `unconfirmed` one is checked again by a later sync. A mark dropped because
-a write to the record settled, or because a check found the record while a
-write or confirmed copy keeps it, drops its held change too; if the app had
+a read returned the record, a write to the record settled, or a check
+found the record while a write or confirmed copy keeps it, drops its held
+change too; if the app had
 been told a mark of the record (or the mark was restored from storage), it
 is told `present` instead (not after a delete the app made). The same changes are on
 `SyncResult.presence` (absent when there are none). If the handler throws
