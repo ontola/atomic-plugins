@@ -71,3 +71,70 @@ in the query, and returns early only when neither is. The JSDoc says the
 comparison assumes wall-clock digits with one fixed suffix, not each
 bound's own offset. Test: a query `start` with a header `x-end` sends the
 converted start and the end unchanged.
+
+## Turn 5
+
+**Human (via the coordinator session):** Wire `windowValue` in
+`readCollections`, stacked on the window-zone branch over #428: call the
+zone reader, the `date`-format check, narrowing the span to the outer range
+for an unknown zone, and the zone re-check. Build against coverage grouped
+by `x-filter` field.
+
+**Assistant:** `wallClockWindows` (in `time-zone.ts`) reads the zone of each
+`x-time-zone` parameter a window field names, refuses a window `format`
+other than `dateTime` for them, and returns the hook (wall-clock digits for
+those parameters, `undefined` for others) and the coverage: per `x-filter`
+field, the outer range written as wall-clock digits and read back with
+`coveredSpan` (with an unknown zone, UTC digits and 14 hours off the outer
+ends only), intersected across fields. `readCollections` calls it for a
+`rangeWindow` read with a range, passes the hook to `walkPages`, sets the
+snapshot's coverage and joins its zone keys to the re-check. At the end, a
+failed read gets `span: null, reason: 'incomplete'`, a changed zone
+`zoneChanged`, and a finished windowed read keeps its span with `reason:
+'incomplete'` (no `windowed` marker). `TimeZoneParameter` carries the
+`x-filter` field. Tests in `window-zone-read.test.ts`.
+
+## Turn 6
+
+**Human (via the coordinator session):** When #428 lands, update the
+wiring branch with the #433 fixes and #428's per-field coverage.
+
+**Assistant:** Merged main (with #428 and #433). `wallClockWindows` now
+builds on `wallClockQuery`: the query with the range's start in each
+`windowStart` parameter and its end in each `windowEnd` one gives the
+outer range's coverage in the per-field shape (`instants`, `spans`,
+`otherFilters`), and the hook writes each window bound in its
+parameter's zone from the same cached zone reads. A zoned `windowRange`
+parameter gives `noRangePredicate`. At the end a failed read gets
+`spans: null`, a changed zone `zoneChanged`, and a finished windowed read
+keeps its spans with `reason: incomplete`. Tests updated to the new shape,
+plus a failed windowed read and another narrowing query value.
+
+## Turn 7
+
+**Human (via the coordinator session):** Review findings on #465. A zoned
+`windowRange` parameter gives no coverage instead of `noRangePredicate`
+when it is the only zoned one. Spans are kept with `reason: incomplete`
+for any finished read that is not complete, including a `pageNumber` read
+ended by an `observed`/`assumed` short page, which got `spans: null` on
+main: restrict that to range windows. Merge main. Nits: a return type on
+the `windowValue` arrow; unzoned window fields in the outer query give
+`otherFilters` (exclude or document); a tighter failure regex; a DST-edge
+test.
+
+**Assistant:** `wallClockWindows` builds the `noRangePredicate` coverage
+for a zoned `windowRange` parameter itself (`parameters`: the template
+over the two wall-clock ends; `instants`: the outer range as an ISO 8601
+interval), whether or not `wallClockQuery` gave one. `readCollections`
+marks each zoned snapshot read through `wallClockWindows` as windowed;
+only those keep their spans when they finish, and every other read that is
+not complete gets `spans: null`, as on main. Unzoned window fields stay in
+the outer query, now documented: with a range `x-filter` they bound their
+field; without one, or as a `windowRange` field (now included too), they
+narrow the read in a way no span describes, so `otherFilters` (excluding
+them would claim spans the windows did not ask for). Tests: the zoned
+`windowRange` read, an unzoned `windowEnd` without `x-filter`, the
+Amsterdam windows across 2026-10-25 sent in order, an outer start in the
+repeated hour covering from the later instant, and a zoned read ended by an
+observed short page with `spans: null`. Merged main. README, CLAUDE.md and
+the `reason` doc comment follow.
