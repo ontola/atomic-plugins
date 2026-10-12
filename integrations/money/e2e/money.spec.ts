@@ -464,16 +464,15 @@ test.describe('money integration', () => {
     await page.evaluate(subject => {
       const store = window.store! as unknown as {
         getResource: (s: string, ...rest: unknown[]) => Promise<unknown>;
-        __getResource?: unknown;
-        __failApp?: boolean;
+        __getResource?: (s: string, ...rest: unknown[]) => Promise<unknown>;
       };
-      const original = store.getResource.bind(store);
+      // Kept on the store, so the recovery below puts the very same method back.
+      const original = store.getResource;
       store.__getResource = original;
-      store.__failApp = true;
       store.getResource = (s, ...rest) =>
-        s === subject && store.__failApp
+        s === subject
           ? Promise.reject(new Error('Simulated host failure'))
-          : original(s, ...rest);
+          : original.call(store, s, ...rest);
     }, own);
     await page.goBack();
     await expect(app.getByRole('status').first()).toContainText('Sync failed', {
@@ -490,7 +489,12 @@ test.describe('money integration', () => {
     );
     // The host recovers; Try again loads the rows, and the card says so.
     await page.evaluate(() => {
-      (window.store! as unknown as { __failApp?: boolean }).__failApp = false;
+      const store = window.store! as unknown as {
+        getResource: unknown;
+        __getResource?: unknown;
+      };
+      store.getResource = store.__getResource;
+      delete store.__getResource;
     });
     await app.getByRole('button', { name: 'Try again' }).click();
     await expect(

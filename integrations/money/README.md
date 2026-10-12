@@ -381,10 +381,14 @@ verified end to end: the card on the importer's table, on a table without
 import dates, after a stopped import, and with incomplete rows
 (`app/status.test.ts` and `app/view.test.ts` only). After a load error it
 is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
-app's `getData` once, by failing the page store's read of the app's table,
+app's `getData` until the host recovers, by failing the page store's read
+of the app's table,
 and checks the pill and the card's "Sync failed", "Couldn't load the
 transactions." with the error and "Try again.", then that Try again loads
-the rows and clears the failure.
+the rows and clears the failure. The five money e2e tests, this step
+included, passed on 2026-10-12 at the pin `e922179` (candidate21, the
+build VPS's source build) in 5.6 minutes, with the 120,413-byte 0.4.2
+module.
 
 At 0.4.1 (`plugin.js` sha256
 `b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
