@@ -65,12 +65,13 @@ Docker publishes the server on `127.0.0.1` only, so ufw's rules are not
 bypassed.
 
 From a checkout of this repo, with the layout from `AGENTS.md`
-(`node integrations/tooling/link-atomic-server.mjs`) and each app's
-dependencies installed:
+(`node integrations/tooling/link-atomic-server.mjs`). `catalog.mjs` first
+installs each app's plugin dependencies that have a lockfile and no
+`node_modules` yet (`pnpm install --frozen-lockfile`, as `run-lane.mjs`
+does; `--no-install` skips it). It does not notice a `node_modules` that is
+present but stale: run `pnpm install --frozen-lockfile` there by hand.
 
 ```sh
-for a in calendar money notion timesheets; do (cd integrations/$a && pnpm install); done
-(cd integrations/issue-tracker/app && pnpm install --frozen-lockfile)
 USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
 sh usertest/deploy.sh root@178.62.223.35
 ssh root@178.62.223.35 sh /opt/usertest/collector/run.sh
@@ -83,7 +84,14 @@ ssh root@178.62.223.35 sh /opt/usertest/server.sh 178-62-223-35.sslip.io
 1. Change the app, then bump its entry in `VERSIONS` in `catalog.mjs`.
    Its sample-data entry, if it has one, follows: its version is the app's
    plus `SAMPLE_VERSION`. A change to `sample-data/` or to a fixture it
-   imports bumps `SAMPLE_VERSION` instead.
+   imports bumps `SAMPLE_VERSION` instead. Then run
+   `node usertest/catalog.mjs --record` and commit `usertest/builds.json`,
+   the sha256 of each module's build (without the collector prelude) per
+   `<id>/<version>`. CI's tooling unit tests (`integrations/tooling/apps.test.mjs`)
+   rebuild every module and fail when one differs from what its version was
+   recorded with, or is not recorded: that is the forgotten bump.
+   `catalog.mjs` itself then exits 1 without writing `catalog.json`, and
+   `--record` refuses to overwrite a recorded hash.
 2. Run `USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs`,
    then `sh usertest/deploy.sh root@178.62.223.35`.
 3. On Integrations, testers who installed the old version see "Update to
@@ -384,6 +392,17 @@ listening (`[WAIT]`), no help unless the tester is stuck and asks. Each turn
 includes the collector's error, warning, feedback and sync lines since the
 previous turn. Measured on 2026-09-28: about 3 seconds per turn, and the
 script served from the prompt cache after the first turn.
+
+A turn with `[END]` ends the session once the page has spoken it, so
+`[END]` belongs only in the thank-you. An `[END]` in a turn whose spoken
+text ends with a question is refused, at most twice per session, and the
+session goes on so the tester can answer (`moderator/turn.mjs`,
+ontola/usertest-findings#21; the transcript marks such a turn
+`endRefused`). Its test needs only Node:
+
+```sh
+node --test usertest/moderator/turn.test.mjs
+```
 
 A turn only includes its own tester's log lines. The collector tags each
 line with `client`, a salted hash (`/etc/usertest-salt.env`) of the sender's

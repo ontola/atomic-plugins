@@ -74,6 +74,23 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
 
 ### Routes
 
+With `WEBHOOKS_ENABLED=true` only (Webhook Deliveries and Webhook
+Subscriptions, `openapi-extensions/spec/`):
+
+- `POST /webhooks/{endpointId}`: a provider's delivery. The body is capped
+  while it is read, and verified over its exact bytes before anything in it
+  is read. `204` only after it was stored (or recorded as a gap, or wanted
+  by nobody); `401` unverified, `413` over the cap, `503` not stored.
+- `POST /connections/{id}/subscriptions` `{source, parameters, events}`,
+  `GET` and `DELETE /subscriptions/{id}`, `POST /subscriptions/{id}/renew`,
+  `GET /subscriptions/{id}/events?after=&limit=&wait=` (long poll up to 25
+  seconds), `POST /subscriptions/{id}/ack` `{generation, cursor}`,
+  `POST /subscriptions/{id}/reconciled` `{generation, barrier}`: signed by
+  the subscription's consumer (the connection's owner, a delegate or a
+  runtime), checked on every request. Subscribing runs the source's access
+  check through the connection, and so do renewals, reconciliations and any
+  fetch whose last passing check is older than 12 hours.
+
 - `GET /` — a static landing page. `GET /catalog` lists the platforms;
   `GET /catalog/{platform}.yaml` returns a platform's composed OpenAPI
   document.
@@ -142,8 +159,20 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   `Authorization` and `x-atomic-*` headers are never forwarded: an
   `Authorization` other than `Capability …` is refused with
   `401 unsupported_authorization`, and a capability is consumed by the proxy.
-  `Link`,
-  `Retry-After`, `ETag`, `X-Total-Count` and `X-Next-Page` come back unchanged.
+  Of the caller's headers only `Content-Type`, `If-Match`, `If-None-Match` and
+  `If-Modified-Since` go upstream, plus `Idempotency-Key` where the operation
+  declares an `Idempotency-Key` header parameter (and the catalog sets no
+  fixed value for it). From the provider's response, `Content-Type`, `Link`,
+  `Retry-After`, `ETag`, `Last-Modified`, `X-Total-Count`, `X-Next-Page` and
+  the rate-limit headers `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
+  `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
+  `-Remaining` and `-Reset` come back unchanged, by exact name; every other
+  response header is dropped, and every `/proxy/…` response carries
+  `Cache-Control: no-store`. On a no-credential connection the
+  `Idempotency-Key` goes upstream namespaced per connection (an HMAC of the
+  connection id and the key; SECURITY.md), so tenants never share keys. A
+  value the catalog fixes for one of these request headers replaces the
+  caller's.
 - `GET /connections` — **signed**; the signer's connections with their
   delegations (`agent`, `label`, `created_at`, `last_used_at`), and the
   signer's runtimes. Never credentials. Shape:
@@ -247,7 +276,8 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `OPERATOR_NAME` | no | Who runs this proxy, as the landing and consent pages name them. Defaults to `this integration proxy`, and the pages then name no one. The consent page also shows the host of `BASE_URL`. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
-| `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables and runs its sweeper (ontola/atomic-plugins#369, step 2; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. No webhook route is mounted in this release either way. Unreleased. |
+| `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables, runs its sweeper and mounts the webhook routes below (ontola/atomic-plugins#369; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. Unreleased. |
+| `WEBHOOK_SECRET_<PLATFORM>` | with webhooks, per platform | The secret of a platform's shared application hook, as configured at the provider (`<PLATFORM>` is the catalog name, upper case, `-` as `_`). Read only with `WEBHOOKS_ENABLED=true`, for platforms whose composed document declares `x-webhook-deliveries`. Without it, every delivery to that platform is refused and no subscription to it is created. Unreleased. |
 | `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
 | `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
@@ -354,6 +384,14 @@ same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
 or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
+
+**Produced classes** (`x-produces`,
+[`openapi-extensions/spec/produced-classes`](../openapi-extensions/spec/produced-classes/README.md),
+docs/design/pieces.md D4): the shared classes a CRUD resource's objects can
+be represented as. An overlay sets it on a CRUD Resource Object, and it comes
+back unchanged in `/catalog/{platform}.yaml`. It has no place in a catalog
+entry's `selection`. The proxy never reads it: nothing it allows, forwards or
+asks consent for depends on it.
 
 ### Authentication profiles
 
@@ -610,9 +648,11 @@ describes the controls and what is not yet verified.
 ## Browser clients
 
 CORS allows any origin, including a plugin frame's `null` origin, to send
-`Authorization`, `Content-Type`, `If-Match` and the five `x-atomic-*` headers,
-and exposes `Content-Type`, `Link`, `Retry-After`, `ETag`, `X-Total-Count` and
-`X-Next-Page`. Cookie credentials are not enabled for CORS; consent remains a
+`Authorization`, `Content-Type`, `If-Match`, `If-None-Match`,
+`If-Modified-Since`, `Idempotency-Key` and the five `x-atomic-*` headers, and
+exposes the response headers the proxy forwards (above): `Content-Type`,
+`Link`, `Retry-After`, `ETag`, `Last-Modified`, `X-Total-Count`,
+`X-Next-Page` and the ten rate-limit headers. Cookie credentials are not enabled for CORS; consent remains a
 top-level browser navigation.
 
 ## Todoist

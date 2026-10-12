@@ -56,6 +56,20 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+Discord's guild list needs no pagination for these user tokens. Discord's
+reference for `GET /users/@me/guilds`
+(https://docs.discord.com/developers/resources/user, "Get Current User
+Guilds", checked 2026-10-09) says it "returns 200 guilds by default, which
+is the maximum number of guilds a non-bot user can join", and that
+pagination is not needed to list a user's guilds; `limit` is 1–200. The
+CRUD overlay's fixed `limit: 200` read of `myGuilds` therefore returns every
+guild of a `discordUser` connection, and a guild missing from it is one the
+user left. The comment in
+`APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+that Syncables "cannot derive a cursor" for `before`/`after` is moot for
+this read: no cursor is needed. It would matter only for a bot token (the
+`discordBot` profile), which no catalog selects.
+
 `catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
 platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
 the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
@@ -95,6 +109,59 @@ Airtable OAuth integrations without a support email, privacy-policy URL and
 terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
+
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
+## Read tombstones
+
+[Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
+`x-read-tombstone: { field: status, values: [cancelled] }` on the event read
+(`GET /calendars/{calendarId}/events/{eventId}`). The pinned document's
+`Event.status` says "cancelled" is "The event is cancelled (deleted)", that
+"The get method always returns them", and that on the organizer's calendar
+cancelled events "can be restored (undeleted)"; a consumer treats every
+read tombstone as restorable. The document sets cancelled exceptions of a
+recurring event apart: "Cancelled exceptions of an uncancelled recurring
+event indicate that this instance should no longer be presented to the
+user. Clients should store these events for the lifetime of the parent
+recurring event." They are declared too: the object is that one instance
+(its own event id), its status is the same "cancelled" defined as
+"(deleted)", and an instance that should no longer be presented is that
+occurrence's deletion, not an archived state of a live object; a consumer
+concludes about the instance it read, never about the series, and a read
+tombstone does not remove a stored exception. A consumer that lists events
+with `showDeleted=true`, or with `syncToken` or `updatedMin`, never hits
+this, because cancelled events then appear in the list itself; the Calendar
+drive app lists with `showDeleted=true`. It is declared on the operation, so it
+applies with either crud-causality overlay, and no dated catalog selects
+it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
+edit's event is missing from a complete read and its GET answers
+`status: cancelled`, the edit fails as `deleted` rather than `filtered`. No
+deletion feed over the event list is declared (Deletion Feeds §8).
+`tests/test_calendar_read_tombstone.py` composes it after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
 
 ## Directory layout and OAD revisions
 
@@ -223,12 +290,14 @@ place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
+- `.github/workflows/overlays-ci.yml` (PRs and pushes to main): all overlay paths, revision
   filenames and `extends` commits pass the full-history check, and every
   action target exists in its pinned OAD or in the catalog composition up to
   it; every catalog overlay URL, and
-  every OAD URL under the Pages base, maps to a file in this folder, and the
-  tests below pass (`tests/test_identity_overlays.py` also checks the pets
+  every OAD URL under the Pages base, maps to a file in this folder, and
+  every `tests/test_*.py` passes, discovered rather than listed; a test whose
+  source declares a `"--directory"` option gets the openapi-directory clone
+  (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
   Pages serves it.
@@ -283,6 +352,7 @@ directly.
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
+| [Box 2.0.0 v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 41 GET lists, each applied explicitly: 13 offset lists (`offset`, `limit`, `total_count`; folder items, trash and users too, whose marker paging needs `usemarker=true`) and 28 marker lists (`marker`, `next_marker`), all with the `entries` envelope. Replaces v1, whose `type: offset` and roles `currentOffset` and `pageTokenMode` the spec does not define. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based), [Marker-based](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
 | [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |
@@ -751,3 +821,58 @@ and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
 catalog. This twelve-entry option allows Tasks deployment independently when
 its OAuth client is ready and GitLab registration is still pending. It changes
 no existing pins or API metadata and does not activate itself.
+
+## Box onboarding catalogs
+
+`catalog/2026-10-11-box.json` preserves all twelve entries from the Google Tasks
+deployment catalog and adds Box 2.0.0 with its existing revision-pinned
+pagination overlay and `OAuth2Security` scheme. The combined
+`catalog/2026-10-11-gitlab-box.json` additionally preserves the GitLab entry
+from its published onboarding catalog. These options let either registration
+finish first without dropping an existing platform or changing its pins.
+
+Box's selected document describes the full API, including write operations;
+it is not a read-only authentication profile. Its OAuth scope list is empty.
+Box's [authorization reference](https://developer.box.com/reference/get-authorize)
+documents that an omitted scope parameter defaults to the permissions
+configured on the application. The current proxy sends an empty `scope`
+parameter for this document; verify that behavior against the registered
+client before activation. Configure the Local Thought application for
+the minimum useful read permissions and register the exact callback
+`https://localthought.io/oauth/box/callback`. Provider permissions must enforce
+that limit; this catalog does not restrict the proxy to GET requests.
+
+Publishing these catalogs does not create a Box account or OAuth client,
+configure `OAUTH_BOX_CLIENT_ID` / `OAUTH_BOX_CLIENT_SECRET`, or switch
+localthought.io. Client authentication and the document's default PKCE
+behavior still require registration and live verification before activation.
+Catalog composition and credential-scheme resolution do not certify a
+real-account OAuth grant, API read, or complete import.
+
+`catalog/2026-10-12-box-pagination-v2.json` is `catalog/2026-10-11-gitlab-box.json`
+with Box's v1 pagination overlay replaced by
+[v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml);
+every other entry is unchanged. The v1 composition fails the Pagination
+Schemes validator (`type: offset`, roles `currentOffset` and
+`pageTokenMode`). v1 applies its schemes by auto-detection only, and
+syncables leaves an invalid scheme out of auto-detection, so a syncables
+reader reads each Box list as one page and takes it as the whole list; v2
+applies its schemes explicitly and uses `pageNumber` with the `offset` role and
+`pageToken` with `cursor`/`nextCursor`. Box documents a maximum `offset` of
+9999, so an offset list longer than 10,000 entries ends with an error
+rather than early. Box also documents the next offset as
+`previous_offset + previous_limit`, "and not by the size of the entries in
+the response array, as this may be less than the limit", while syncables
+(0.21.0 and 0.22.0) advances by the entries returned and stops at the
+first empty page. So with syncables, an offset list whose page holds fewer
+entries than the limit before its end is read again from inside that page
+(the repeated entries fail a collection read), and an empty page before
+`total_count` ends the read as if complete, missing the entries after it
+without an error. Whether Box answers such pages is not verified. The
+marker lists do not have this risk. `GET /files/{file_id}/collaborations`
+is read by marker, as Box's reference says, although the pinned response
+schema shows offset fields; if Box answered it with offset fields and no
+`next_marker`, the read would end after one page and look complete. `tests/test_box_pagination_v2.py` checks the catalog
+against its base, and validates v2 and the Box platform composed from the
+catalog. Declared from Box's documentation and the pinned OAD; no Box
+request was made.

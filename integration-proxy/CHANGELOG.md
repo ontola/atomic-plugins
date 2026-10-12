@@ -18,6 +18,26 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
   jobs, with the limits the plan gives as pilot values. See SECURITY.md,
   "Webhook inbox".
+- Webhook receiver and consumer routes, step 3 of #369, mounted only with
+  `WEBHOOKS_ENABLED=true`: `POST /webhooks/{endpointId}` verifies a
+  delivery's HMAC over its raw bytes before reading it, routes it through
+  access-checked bindings and stores it in one transaction; signed
+  subscribe, get, delete, renew, events (long poll), ack and reconciled
+  routes. Shared-hook secrets come from `WEBHOOK_SECRET_<PLATFORM>`.
+  Deleting a connection ends its subscriptions in the same transaction.
+  Subscriptions use shared application hooks only; no provider hook is
+  created.
+- Rate-limit and conditional headers (docs/design/pieces.md P1-P3): the
+  provider's `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
+  `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
+  `-Remaining`, `-Reset` and `Last-Modified` now come back to the caller and
+  are CORS-exposed; the caller's `If-None-Match` and `If-Modified-Since` go
+  upstream, and `Idempotency-Key` where the operation declares that header
+  parameter, namespaced per connection on a no-credential connection. Every
+  list is exact names only, and every `/proxy/…` response is now
+  `Cache-Control: no-store`. A catalog-fixed value for a caller header now
+  replaces the caller's instead of being sent next to it. See SECURITY.md,
+  "Validating proxy".
 
 ## 0.3.0 (2026-10-06)
 

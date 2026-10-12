@@ -36,8 +36,10 @@ change to an app's source:
    ([Publishing a drive app](../../integrations/README.md#publishing-a-drive-app)).
    A file under `apps/` that is on `main` is never changed or deleted.
 2. **User-testing catalog.** Bump the app's entry in `VERSIONS` in
-   `usertest/catalog.mjs`. Otherwise the droplet serves new bytes under an
-   old version, and installed apps fail the host's integrity check.
+   `usertest/catalog.mjs`, run `node usertest/catalog.mjs --record` and
+   commit `usertest/builds.json`. Otherwise the droplet serves new bytes
+   under an old version, and installed apps fail the host's integrity
+   check; CI's tooling unit tests (`apps.test.mjs`) fail on it.
 
 ## The byte-for-byte checks
 

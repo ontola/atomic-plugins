@@ -20,6 +20,7 @@ import {
   moneybirdThrottling,
   responseSignals,
   throttledPets,
+  todoistThrottling,
 } from '../../fixtures/throttling.js';
 import { petsDocument } from '../../fixtures/pets.js';
 import { fixedReads } from '../../fixtures/fixed-reads.js';
@@ -326,6 +327,28 @@ describe('writes under declared signals (GitHub-shaped)', () => {
     expect(fake.writes).toHaveLength(3);
   });
 
+  it('pauses the bucket for a time-less quotaExhausted answer even when the write gives up at once (maxAttempts)', async () => {
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'quota' }, 429) : undefined,
+    );
+    const c = await client(
+      doc({ signals: [{ status: [429], meaning: 'quotaExhausted' }] }),
+      fake,
+      { retry: { baseDelayMs: 300, maxDelayMs: 300, maxAttempts: 1 } },
+    );
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ id: '1', state: 'failed' }]),
+    );
+    await c.update('/pets', '2', { name: 'Tom II' });
+    await settle(100);
+    // The failed write's answer still holds the bucket for the base backoff.
+    expect(fake.writes).toHaveLength(1);
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(2), {
+      timeout: 2000,
+    });
+  });
+
   it('fails other writes held by an exhausted bucket past retry.maxRetryAfterMs, with a lastError', async () => {
     const fake = provider((_r, n) =>
       n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
@@ -409,6 +432,34 @@ describe('reads and the exhausted buckets they share with writes', () => {
     expect(slept[0]).toBeGreaterThan(290_000);
     expect(slept[0]).toBeLessThanOrEqual(300_000);
     expect(fake.reads).toBe(2);
+  });
+
+  it('sleeps once for a pause however the clock ticks between readings (#480: was timing-sensitive)', async () => {
+    const slept: number[] = [];
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
+    );
+    const c = await client(doc(moneybirdThrottling), fake, {
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    // Every reading of the clock is later than the last, by a growing step,
+    // as under load: the pause's end must not look as if it moved.
+    const real = Date.now.bind(Date);
+    let tick = 0;
+    let step = 0;
+    const spy = vi
+      .spyOn(Date, 'now')
+      .mockImplementation(() => real() + (tick += ++step));
+    try {
+      await c.sync();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(slept).toHaveLength(1);
   });
 
   it("a read's quotaExhausted answer pauses writes on the bucket, and a pause past the read's time stops the read", async () => {
@@ -515,6 +566,68 @@ describe("a POST list read counts against its own operation's buckets", () => {
       /holds this request until .* longer than the read's remaining time/,
     );
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe('paginate() and the exhausted buckets', () => {
+  it("waits out a paused bucket within its own read limit, not a running sync's budget", async () => {
+    const slept: number[] = [];
+    let hold: Promise<void> | undefined;
+    let release: () => void = () => {};
+    let writes = 0;
+    const c = createApiClient(
+      doc({ signals: [{ status: [429], meaning: 'quotaExhausted' }] }),
+      {
+        transport: async (r) => {
+          if (r.method === 'GET') {
+            const held = hold;
+            hold = undefined;
+            if (held) await held;
+            return json([rex, tom]);
+          }
+          writes += 1;
+          return writes === 1
+            ? json({ error: 'quota' }, 429)
+            : json(JSON.parse(r.body ?? '{}'));
+        },
+        retry: { baseDelayMs: 700, maxDelayMs: 700 },
+        limits: { timeoutMs: 1000 },
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+      },
+    );
+    await c.sync();
+    // A sync whose list read hangs for a while: 600 ms into it, its budget
+    // has about 400 ms left.
+    hold = new Promise((resolve) => (release = resolve));
+    const syncing = c.sync();
+    await settle(600);
+    // A write exhausts the bucket for the base backoff (700 ms, no time).
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(writes).toBe(1));
+    // paginate() has its own 1000 ms: it waits the pause out.
+    expect(await c.paginate('/pets')).toEqual([rex, tom]);
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThan(500);
+    release();
+    await syncing;
+  });
+
+  it('stops when the pause is past its own read limit, before any request', async () => {
+    const fake = provider((_r, n) =>
+      n === 1 ? json({ error: 'Too many requests' }, 429) : undefined,
+    );
+    const c = await client(doc(moneybirdThrottling), fake, {
+      limits: { timeoutMs: 1000 },
+    });
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    const reads = fake.reads;
+    await expect(c.paginate('/pets')).rejects.toThrow(
+      /holds this request until .* longer than the read's remaining time \(\d+ ms\)/,
+    );
+    expect(fake.reads).toBe(reads);
   });
 });
 
@@ -724,6 +837,52 @@ describe('without signals, the 403 heuristic stays', () => {
     await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
     expect(fake.writes).toHaveLength(2);
     expect(c.authBlocked()).toBeUndefined();
+  });
+});
+
+describe("Todoist's error_extra.retry_after (bodyFields, Throttling 0.3.0)", () => {
+  const todoist429 = (retryAfter: unknown): TransportResponse =>
+    json(
+      {
+        error: 'Too many requests',
+        error_tag: 'TOO_MANY_REQUESTS',
+        http_code: 429,
+        error_extra: { retry_after: retryAfter, event_id: 'x' },
+      },
+      429,
+    );
+
+  it('retries a write no earlier than the body says', async () => {
+    const times: number[] = [];
+    const fake = provider((_r, n) => {
+      times.push(Date.now());
+      return n === 1 ? todoist429(1) : undefined;
+    });
+    const c = await client(doc(todoistThrottling), fake);
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 3000,
+    });
+    expect(fake.writes).toHaveLength(2);
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(990);
+  });
+
+  it('waits the body time on a read, through the injected sleep', async () => {
+    const slept: number[] = [];
+    const fake = provider(() => undefined, {
+      list: (_r, n) => (n === 1 ? todoist429(2) : undefined),
+    });
+    const result = await readCollections(doc(todoistThrottling), {
+      transport: fake.transport,
+      legacy: {},
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect(result.collections[0]).toMatchObject({ complete: true });
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThan(1900);
+    expect(slept[0]).toBeLessThanOrEqual(2000);
   });
 });
 

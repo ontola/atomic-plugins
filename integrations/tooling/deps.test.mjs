@@ -48,6 +48,27 @@ function recorder(base, status = 0) {
   };
 }
 
+test("a plugin's lockfile folders match the four globs ci.yml installs", () => {
+  assert.deepEqual(pluginDependencyDirs('notion'), [
+    'integrations/notion',
+    'integrations/notion/app',
+    'integrations/notion/e2e',
+    'integrations/notion/devonian',
+  ]);
+  const workflow = readFileSync(
+    join(import.meta.dirname, '../../.github/workflows/ci.yml'),
+    'utf8',
+  );
+  const loops = workflow.match(/for lock in [^;]*;/g) ?? [];
+  assert.equal(loops.length, 2, 'ci.yml has two plugin install loops');
+  const globs = pluginDependencyDirs('*').map(dir => `${dir}/pnpm-lock.yaml`);
+  for (const loop of loops)
+    assert.deepEqual(
+      loop.slice('for lock in '.length, -1).trim().split(/\s+/),
+      globs,
+    );
+});
+
 test('a lockfile without node_modules is installed, with one line each', () => {
   const base = fixture({
     'integrations/notion': {},
@@ -166,4 +187,29 @@ test('certify.mjs and run-lane.mjs both install before they run', () => {
     assert.match(source, /from '\.\/deps\.mjs'/, file);
     assert.match(source, /installMissing\(/, file);
   }
+});
+
+test('the Devonian lens folder of a plugin is one of its dependency folders', () => {
+  assert.deepEqual(pluginDependencyDirs('bookmarks'), [
+    'integrations/bookmarks',
+    'integrations/bookmarks/app',
+    'integrations/bookmarks/e2e',
+    'integrations/bookmarks/devonian',
+  ]);
+  const base = fixture({
+    'integrations/bookmarks/devonian': {},
+    'integrations/solid/devonian': { installed: true },
+  });
+  const { calls, install } = recorder(base);
+
+  try {
+    installMissing(
+      [...pluginDependencyDirs('bookmarks'), ...pluginDependencyDirs('solid')],
+      { base, install, log: () => {} },
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(calls, ['integrations/bookmarks/devonian']);
 });

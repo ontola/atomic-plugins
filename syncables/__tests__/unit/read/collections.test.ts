@@ -86,17 +86,15 @@ describe('the Collection Object envelope', () => {
       name: 'entries',
       itemsField: 'data.entries',
     });
-    for (const envelope of [
-      undefined,
-      {},
-      { itemsField: null },
-      { itemsField: '' },
-      { itemsField: 7 },
-      'data.entries',
-    ])
+    for (const envelope of [undefined, {}, { itemsField: 7 }, 'data.entries'])
       expect(
         discoverReadModel(document(envelope)).collections[0],
       ).not.toHaveProperty('itemsField');
+    // null or "" declare the body root (#384 item 7).
+    for (const envelope of [{ itemsField: null }, { itemsField: '' }])
+      expect(
+        discoverReadModel(document(envelope)).collections[0],
+      ).toMatchObject({ itemsField: '' });
   });
 
   it('reads the items at a nested dot-path', async () => {
@@ -144,7 +142,6 @@ describe('the Collection Object envelope', () => {
 
   for (const [label, envelope] of [
     ['omitted', undefined],
-    ['null (the body root is the array)', { itemsField: null }],
     ['not a string (ignored)', { itemsField: 7 }],
   ] as const)
     it(`locates the array as before when the envelope is ${label}: a top-level array, or a common envelope name`, async () => {

@@ -21,7 +21,15 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Datatype } from '../../browser/lib/src/index';
 import type { JSONValue } from '../../browser/lib/src/value';
 import { fixtures } from '../localthought/fixtures/index.mjs';
-import { args, redactor, scrub } from './fixtures/todoist/record.mjs';
+import {
+  arg,
+  args,
+  checkArgv,
+  positiveInteger,
+  redactor,
+  scrub,
+  valueless,
+} from './fixtures/todoist/record.mjs';
 import scenario, {
   completedAnswer,
   loadCompleted,
@@ -189,6 +197,61 @@ describe('todoist fixture: always-on checks', () => {
       ]),
     ).toEqual(['abc']);
     expect(args('completed-task', ['node', 'record.mjs'])).toEqual([]);
+  });
+
+  it('takes --limit and --max-pages only as integers of at least 1', () => {
+    expect(positiveInteger('limit', '3')).toBe(3);
+    expect(positiveInteger('max-pages', '200')).toBe(200);
+    for (const bad of ['0', '-1', '1.5', '2e1', 'abc', '', ' 3', '0x10'])
+      expect(() => positiveInteger('limit', bad), bad).toThrow(
+        `--limit must be an integer of at least 1, not ${bad}`,
+      );
+  });
+
+  it('refuses the --name=value form', () => {
+    expect(() =>
+      checkArgv([
+        'node',
+        'record.mjs',
+        '--limit',
+        '5',
+        '--completed-task',
+        'a',
+      ]),
+    ).not.toThrow();
+    expect(() => checkArgv(['node', 'record.mjs', '--limit=5'])).toThrow(
+      'write --limit 5 instead of --limit=5',
+    );
+  });
+
+  it('counts a repeatable option given without a value, so the recorder can warn', () => {
+    const argv = ['node', 'record.mjs', '--completed-task', 'abc'];
+    expect(valueless('completed-task', argv)).toBe(0);
+    // Trailing, and followed by another option.
+    expect(valueless('completed-task', [...argv, '--completed-task'])).toBe(1);
+    expect(
+      valueless('completed-task', [
+        'node',
+        'record.mjs',
+        '--completed-task',
+        '--limit',
+        '3',
+        '--completed-task',
+      ]),
+    ).toBe(2);
+  });
+
+  it('reads a single option without taking the next flag as its value', () => {
+    const argv = ['node', 'record.mjs', '--limit', '5', '--proxy', 'x'];
+    expect(arg('limit', '3', argv)).toBe('5');
+    expect(arg('proxy', 'default', argv)).toBe('x');
+    expect(arg('max-pages', '3', argv)).toBe('3');
+    expect(() =>
+      arg('limit', '3', ['node', 'record.mjs', '--limit', '--proxy', 'x']),
+    ).toThrow('--limit needs a value');
+    expect(() => arg('limit', '3', ['node', 'record.mjs', '--limit'])).toThrow(
+      '--limit needs a value',
+    );
   });
 });
 

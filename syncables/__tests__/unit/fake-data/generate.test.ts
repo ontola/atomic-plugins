@@ -3,7 +3,9 @@ import { generateFromSchema } from '../../../src/fake-data/generate.js';
 
 describe('generateFromSchema', () => {
   it('returns the schema example when present', () => {
-    expect(generateFromSchema({ type: 'string', example: 'fixed' })).toBe('fixed');
+    expect(generateFromSchema({ type: 'string', example: 'fixed' })).toBe(
+      'fixed',
+    );
   });
 
   it('returns the first enum value when present', () => {
@@ -40,7 +42,10 @@ describe('generateFromSchema', () => {
     const value = generateFromSchema({
       allOf: [
         { type: 'object', properties: { name: { type: 'string' } } },
-        { type: 'object', properties: { id: { type: 'string', format: 'uuid' } } },
+        {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
       ],
     });
 

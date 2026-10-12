@@ -1,0 +1,11 @@
+{
+  "calendar-sample/usertest-12-sample-3": "sha256-I6gMfXmg3OEskKtJCRc27DTczLGH3IjpbS2HybEgnBA=",
+  "calendar/usertest-12": "sha256-z5HhmfnYui6fLQ2YNNKhFyRWwPmlwQTitOWuhhlaXxc=",
+  "issue-tracker-sample/usertest-10-sample-3": "sha256-HWgwTchPcSGMcI0uVUxz0m2Ieuo6SwMnI8++TChe0y0=",
+  "issue-tracker/usertest-10": "sha256-P1jiQdDthdXJM6yo3U4qeTTYRN0DKMM95Q3eic93afA=",
+  "money/usertest-6": "sha256-oeHUVZ61yDZbhtLcET7oJJD4Dwl074OXDi5Z/ESOGxE=",
+  "notion-sample/usertest-11-sample-3": "sha256-lJQPbNQHvvIEhHIYA9MS4LwmAIPV/3ByPZkBXCBgThk=",
+  "notion/usertest-11": "sha256-WUurdw+EK/3bXa0A1GDEq9gkRkLRwqO90ZMQhhr4Ihs=",
+  "timesheets-sample/usertest-10-sample-3": "sha256-iFA+ufHtJILEeJ1ieuyWZCQyOssDlDv1LT3wnejrJoI=",
+  "timesheets/usertest-10": "sha256-m7Ut9eAoafIjOtmIhsoEfwvG1GMo6OPJopJfo9wykmg="
+}

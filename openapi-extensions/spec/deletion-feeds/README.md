@@ -42,7 +42,11 @@ The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs, and no overlay declares `x-deletion-feed` or `x-read-tombstone`.
+APIs. No overlay declares `x-deletion-feed`; one declares
+`x-read-tombstone`, Google Calendar's
+[`read-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`status: cancelled` on the event read, from the document's own
+description), which no dated catalog selects yet.
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
@@ -196,6 +200,13 @@ resource declares `x-read-tombstone`. A state in which the object's read
 still answers 2xx without a read tombstone (archived, in a trash it can be
 restored from) is not a deletion, and its marker MUST NOT be declared as a
 tombstone value.
+
+The converse does not hold everywhere: where a collection of a resource
+states `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
+0.2.0-draft, §4.3), a `404` or `410` from any read of that resource's objects,
+through whichever collection they were reached, is not evidence of deletion.
+Only a tombstone, a read tombstone, or a `404`/`410` under `notFound: deleted`
+or its default is.
 
 ### 4.4 Read Tombstones
 
