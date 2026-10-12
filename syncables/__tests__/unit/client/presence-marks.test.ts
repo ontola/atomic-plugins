@@ -568,6 +568,44 @@ describe('presence marks: #466 review', () => {
       { id: '2', presence: 'unavailable', record: tom },
     ]);
   });
+
+  it('drops an unknown stored source instead of passing it on', async () => {
+    const storage = new InMemoryStorageAdapter();
+    await storage.put('syncables:outbox', 'outbox', {
+      version: 1,
+      records: [],
+      rebuild: [],
+      unrestorable: [],
+      unavailable: [
+        {
+          resource: 'pets',
+          context: {},
+          unavailable: {
+            '2': {
+              record: tom,
+              detail: 'later',
+              presence: 'unavailable',
+              source: 'oracle',
+            },
+            '3': {
+              record: { id: '3', name: 'Kit' },
+              detail: 'kept',
+              presence: 'unavailable',
+              source: 'feed',
+            },
+          },
+        },
+      ],
+    });
+    const client = createApiClient(document(), {
+      storage,
+      transport: provider([rex]).transport,
+    });
+    await client.ready();
+    const marks = client.presence();
+    expect(marks.find((m) => m.id === '2')).not.toHaveProperty('source');
+    expect(marks.find((m) => m.id === '3')).toMatchObject({ source: 'feed' });
+  });
 });
 
 describe('presence marks: lastSeen', () => {
@@ -606,5 +644,172 @@ describe('presence marks: lastSeen', () => {
       { id: '2', presence: 'unavailable' },
     ]);
     expect(again.presence()[0]).not.toHaveProperty('lastSeen');
+  });
+});
+
+describe('presence marks: #466 second review', () => {
+  it('keeps mark changes the end tell could not give, and tells them next sync (the handler throws)', async () => {
+    let fail = true;
+    const told: PresenceChange[][] = [];
+    const fake = provider([rex, tom]);
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    const client = createApiClient(document(), {
+      transport: fake.transport,
+      onPresence: (changes) => {
+        if (fail && changes.length) throw new Error('app busy');
+        told.push(changes);
+      },
+    });
+    await client.sync();
+    fake.hidden.add('2');
+    await expect(client.sync()).rejects.toThrow('app busy');
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unconfirmed' },
+    ]);
+    fail = false;
+    await client.sync();
+    expect(told).toEqual([[change('unconfirmed', 'read', tom, false)]]);
+  });
+
+  it('keeps mark changes when the sync throws before its end tell (storage fails)', async () => {
+    let failPut = false;
+    class Failing extends InMemoryStorageAdapter {
+      override async put(
+        resource: string,
+        id: string,
+        value: Record<string, unknown>,
+      ): Promise<void> {
+        if (failPut && resource === 'pets') {
+          failPut = false;
+          throw new Error('disk full');
+        }
+        await super.put(resource, id, value);
+      }
+    }
+    const told: PresenceChange[][] = [];
+    const fake = provider([rex, tom]);
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    const client = createApiClient(document(), {
+      storage: new Failing(),
+      transport: fake.transport,
+      onPresence: (changes) => {
+        told.push(changes);
+      },
+    });
+    await client.sync();
+    fake.hidden.add('2');
+    failPut = true;
+    await expect(client.sync()).rejects.toThrow('disk full');
+    await client.sync();
+    expect(told.flat()).toEqual([change('unconfirmed', 'read', tom, false)]);
+  });
+
+  it('keeps the mark of a record whose removal the handler refused, and checks it again', async () => {
+    let fail = true;
+    const { client, fake } = await setup(document(), {
+      onPresence: (changes) => {
+        if (fail && changes.some((c) => c.pruned)) throw new Error('app busy');
+      },
+    });
+    fake.hidden.add('2');
+    fake.item = (): TransportResponse => response({ error: 'x' }, 500);
+    await client.sync();
+    // Now the check finds the record elsewhere: removed, but the app
+    // refuses to be told.
+    fake.item = (id): TransportResponse | undefined =>
+      id === '2' ? response(tom) : undefined;
+    await expect(client.sync()).rejects.toThrow('app busy');
+    expect(await client.get('/pets', '2')).toEqual(tom);
+    expect(client.presence()).toMatchObject([{ id: '2' }]);
+    fake.gets.length = 0;
+    fail = false;
+    await client.sync();
+    expect(fake.gets).toEqual(['2']);
+    expect(await client.get('/pets', '2')).toBeUndefined();
+  });
+
+  it('keeps a record of a collection without an item GET unconfirmed, without checks or reports', async () => {
+    const doc = document();
+    delete doc.paths['/pets/{petId}']!.get;
+    const reports: unknown[] = [];
+    const { client, fake } = await setup(doc, {
+      onMissingRecord: (r) => reports.push(r),
+    });
+    fake.hidden.add('2');
+    await client.sync();
+    await client.sync();
+    expect(fake.gets).toEqual([]);
+    expect(reports).toEqual([]);
+    expect(client.presence()).toMatchObject([
+      { id: '2', presence: 'unconfirmed' },
+    ]);
+  });
+
+  it('gives each of two records with the same id in two contexts its own pruned flag', async () => {
+    const doc = structuredClone(nestedTaskLists);
+    const tasks = (
+      doc.components!['crudResources'] as Record<
+        string,
+        { collections: Record<string, Record<string, unknown>> }
+      >
+    )['task']!.collections['listTasks']!;
+    tasks['x-deletion-feed'] = { operationId: 'listTaskDeletions' };
+    doc.paths['/lists/{listId}/task-deletions'] = {
+      get: {
+        operationId: 'listTaskDeletions',
+        parameters: [
+          {
+            name: 'listId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          },
+        ],
+        responses: { '200': { description: 'Deleted task ids' } },
+      },
+    };
+    const lists = [
+      { id: 'L1', title: 'Home' },
+      { id: 'L2', title: 'Work' },
+    ];
+    const x = { id: 'x', title: 'Same id' };
+    let listed = true;
+    const transport: Transport = async (r) => {
+      const path = r.url.pathname;
+      if (path === '/users/me/lists') return response(lists);
+      if (/^\/lists\/[^/]+\/tasks$/.test(path))
+        return response(listed ? [x] : []);
+      if (/^\/lists\/[^/]+\/task-deletions$/.test(path))
+        return response(listed ? [] : [{ id: 'x', deleted: true }]);
+      if (r.method === 'GET') return response({ error: 'gone' }, 404);
+      return response({ error: 'invented' }, 503);
+    };
+    let edit = false;
+    const client: ApiClient = createApiClient(prepareDocument(doc), {
+      transport,
+      retry: { baseDelayMs: 60_000 },
+      onPresence: async (changes) => {
+        if (!edit || !changes.some((c) => c.pruned)) return;
+        edit = false;
+        await client.update(
+          'listTasks',
+          'x',
+          { title: 'Mine' },
+          { listId: 'L1' },
+        );
+      },
+    });
+    await client.sync();
+    listed = false;
+    edit = true;
+    const result = await client.sync();
+    expect(
+      (result.presence ?? [])
+        .filter((c) => c.pruned !== undefined && c.id === 'x')
+        .map((c) => [c.context, c.presence, c.pruned]),
+    ).toEqual([
+      [{ listId: 'L1' }, 'deleted', false],
+      [{ listId: 'L2' }, 'deleted', true],
+    ]);
   });
 });

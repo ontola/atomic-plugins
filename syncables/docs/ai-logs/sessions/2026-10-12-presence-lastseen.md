@@ -23,3 +23,15 @@ mark keeps its own). The mark stores it in the outbox entry and
 time window of the first sync, unchanged by later syncs, kept across a
 restart, and absent for a record from earlier storage. README and changelog
 with the older-client note.
+
+## Turn 3
+
+**Human (via the coordinator session):** Merge #466's second review fixes
+in again, and check an unknown stored `source` on restore instead of
+casting it.
+
+**Assistant:** Merged `claude/syncables-presence` (the client-level
+`untoldMarks` next to `seenAt`; `currentRound` is gone on both). On
+restore, a `source` outside `declaration`, `feed`, `read`, `parent` and
+`none` (a later client's) is dropped (`isMissingSource`); a test stores one
+unknown and one known source.
