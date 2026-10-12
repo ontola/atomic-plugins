@@ -203,6 +203,16 @@
       "selection": {
         "authenticationProfile": "googleTasksReadOnly"
       }
+    },
+    {
+      "name": "box",
+      "openapi": "https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/box.com/2.0.0/openapi.yaml",
+      "overlays": [
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/box.com/2.0.0/pagination-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml"
+      ],
+      "selection": {
+        "oauthSecurityScheme": "OAuth2Security"
+      }
     }
   ]
 }

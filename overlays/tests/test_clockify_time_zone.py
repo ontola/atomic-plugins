@@ -106,7 +106,7 @@ class ClockifyTimeZoneTests(unittest.TestCase):
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
                 text = catalog.read_text(encoding="utf-8")
-                if catalog.name != "2026-10-09-syncables-0.22.json":
+                if catalog.name != "2026-10-12-syncables-0.22.json":
                     self.assertNotIn(OVERLAY, text)
                     continue
                 platform = next(p for p in json.loads(text)["platforms"] if p["name"] == "clockify")

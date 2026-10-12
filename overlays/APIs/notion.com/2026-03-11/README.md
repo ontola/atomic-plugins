@@ -22,7 +22,7 @@ live workspace.
 
 It must come after `crud-causality` in a catalog. Its second action targets
 `$.components` rather than the page resource, so that it also resolves
-against the bare document. [`catalog/2026-10-09-syncables-0.22.json`](../../../catalog/2026-10-09-syncables-0.22.json) is the first
+against the bare document. [`catalog/2026-10-12-syncables-0.22.json`](../../../catalog/2026-10-12-syncables-0.22.json) is the first
 catalog that selects it, for syncables 0.22.0, which reads
 `x-runtime-schema`; an older reader ignores it. Check it with:
 

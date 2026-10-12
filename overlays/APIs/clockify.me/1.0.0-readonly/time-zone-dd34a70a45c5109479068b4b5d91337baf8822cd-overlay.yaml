@@ -7,7 +7,7 @@ info:
 # x-time-zone for the time-entry list's `start` and `end`. Compose after
 # crud-causality-dd34a70a...-overlay.yaml, which adds GET /v1/user
 # (getClockifyCurrentUser) and the CurrentUser schema this overlay extends.
-# First selected by catalog/2026-10-09-syncables-0.22.json, for syncables 0.22.0, which
+# First selected by catalog/2026-10-12-syncables-0.22.json, for syncables 0.22.0, which
 # reads x-time-zone; an older reader ignores it.
 #
 # Basis: checked against a live account on 2026-09-24 (ontola/atomic-plugins

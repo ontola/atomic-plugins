@@ -48,7 +48,7 @@ inclusive (inferred from the documented example `20130101..20130131`), that
 a one-day period is accepted, which mutation field the period compares
 (`date` is likely, so the overlay names no `field`), and whose time zone the
 days are in (so it names no `timeZone`). The overlay goes after the
-`pagination` overlay in a catalog. [`catalog/2026-10-09-syncables-0.22.json`](../../../catalog/2026-10-09-syncables-0.22.json) is the
+`pagination` overlay in a catalog. [`catalog/2026-10-12-syncables-0.22.json`](../../../catalog/2026-10-12-syncables-0.22.json) is the
 first catalog that selects it, for syncables 0.22.0, the first release whose
 `sync()` applies a windowed read (by adding and updating records only). A
 syncables reader (0.21.0 or later) must pass a range for this collection

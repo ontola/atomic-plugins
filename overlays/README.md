@@ -143,8 +143,8 @@ provider was called.
 
 ## Syncables 0.22.0 catalog
 
-`catalog/2026-10-09-syncables-0.22.json` is `catalog/2026-10-08-gitlab-tasks.json`
-(the 13 platforms, entries, pins and selections unchanged) with the overlays a
+`catalog/2026-10-12-syncables-0.22.json` is `catalog/2026-10-11-gitlab-box.json`
+(the 14 platforms, entries, pins and selections unchanged) with the overlays a
 syncables 0.22.0 reader uses. It adds no platform. Per entry:
 
 | Platform | Change to the base entry | Read by |
@@ -168,9 +168,13 @@ release or deployment selects it, and moving one to it is a deployment
 decision. `tests/test_catalog_syncables_0_22.py` checks each entry against
 its base entry, composes every platform of both catalogs, runs the
 Pagination Schemes, CRUD Causality, Throttling, Filtering and Runtime
-Schemas validators on each composition, and checks that the compositions
-differ from the base ones only by the listed additions. No provider was
-called.
+Schemas validators on each changed composition, checks that no composition
+fails a validator its base composition passes, and checks that the
+compositions differ from the base ones only by the listed additions. No
+provider was called. The `box` entry, unchanged here, already fails the
+Pagination Schemes validator in its base catalog: its pagination overlay
+uses `type: offset` and the roles `currentOffset` and `pageTokenMode`, which
+the spec does not define.
 
 ## Directory layout and OAD revisions
 
