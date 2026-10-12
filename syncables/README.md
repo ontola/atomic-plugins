@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.2.0-draft | The root `x-throttling` (`headers`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -385,10 +385,12 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.2.0-draft) lets a document say, at the root `x-throttling`, which
+(0.3.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
-unit) and which responses are rate-limit refusals (`signals`: a status
+unit), which JSON body fields report the same roles (`bodyFields`, since
+0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
+which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
 `quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
@@ -402,8 +404,19 @@ declared, plus that window; else the client's own backoff. An absolute time
 is measured against both the client's clock and the response's `Date`
 header, taking the later, so neither a wrong clock nor a wrong `Date` makes
 it earlier; a header value that does not parse in its declared unit is
-ignored. When no `retryAfter` role is declared, the standard `Retry-After`
-header is read as RFC 9110 defines it, as before the extension.
+ignored. When no `retryAfter` header role is declared, the standard
+`Retry-After` header is read as RFC 9110 defines it, as before the
+extension. A body field is read only from a throttling response whose body
+is JSON: its dot-path's names are matched literally (a name holding a `.`
+cannot be addressed; `a..b`, `.a` and `a.` are left out of the
+declaration), a string is trimmed, a number counts only when it has no
+fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
+an object does not parse. A role read from both a header and a body field
+counts once: the later time for `retryAfter` and `reset`, and the bucket is
+exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
+that gives no wait (`0`, or a time not after the response) counts as
+absent, so `minDelaySeconds`, the bucket window or the backoff still
+applies; those are fallbacks, not floors.
 
 For a write, a throttling verdict means `retry`, sent again no earlier than
 that time and never below the backoff. The time is stored with the queued
@@ -1545,6 +1558,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   the outbox stores follow-ups as the write type `followUp` within version
   `1`. Behaviour change only for documents whose create declares
   `followUps`.
+- **Unreleased**: Throttling 0.3.0-draft `bodyFields` (#454, with #463's
+  follow-up rules): the header roles read from the JSON body of a throttling
+  response, by literal dot-path. A string is trimmed and an integral number
+  (`3.0`) reads as an integer; a body wait of `0`, or a time not after the
+  response, counts as absent; a role from both a header and a body field
+  takes the later time, and `remaining` is exhausted when either is `0`.
+  `ThrottlingDeclaration` gains `bodyFields`. Tested on the spec's cases and
+  the held Todoist overlay's `error_extra.retry_after`.
 - **Unreleased**: `readCollections` (and so `sync()`) sends a
   `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
   time in their zone, read once before and once after the read; a window
