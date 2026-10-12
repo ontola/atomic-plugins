@@ -70,3 +70,12 @@ read ends after the second page under either rule. A reported page size
 and a `totalCount` count only as integers (at least 1 and 0), read from
 the body per response. Tests for both advance modes, id-less pages and
 non-integer values.
+
+## Turn 5
+
+**Human (via the coordinator session):** Add a changelog line: with the
+repeat check on every offset read, `paginate`'s default `idField: 'id'` now
+fails offset lists whose items carry non-unique ids.
+
+**Assistant:** The Unreleased entry for `advance` names it as a behaviour
+change and says to pass an `idField` that is unique.

@@ -1672,7 +1672,11 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   only a collection read) now ends with `PageReadError` at a page holding an
   item an earlier page returned (by identity, else a page identical to the
   one before), so a server that ignores the offset is not asked again
-  without end. The scheme validator checks rule 24 and
+  without end. Behaviour change: `paginate` identifies items by its
+  `idField`, default `'id'`, so an offset list whose items carry
+  non-unique ids under that field (two rows with the same `id`) now fails
+  with `PageReadError` where it used to return both; pass the `idField`
+  that is unique. The scheme validator checks rule 24 and
   `resolveEffectiveScheme` rule 25.
 - **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
   record (the start of that sync), stored with the mark in the outbox
