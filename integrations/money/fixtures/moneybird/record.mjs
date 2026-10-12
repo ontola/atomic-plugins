@@ -220,9 +220,10 @@ export const REDACTIONS = [
     field: 'a KEEP string of the wrong shape',
     replace:
       '"redacted" and reported. Amounts must be decimal strings, dates and ' +
-      'timestamps ISO 8601, time_zone an IANA name, delivery_method one of ' +
-      "Moneybird's values, other KEEP fields short lowercase or uppercase " +
-      'tokens without digits',
+      'timestamps ISO 8601, currency [A-Z]{3}, country [A-Z]{2}, language ' +
+      "[a-z]{2}, time_zone one of Intl.supportedValuesOf('timeZone'), " +
+      "delivery_method one of Moneybird's values, other KEEP fields short " +
+      'lowercase or uppercase tokens without digits',
     reason: 'A KEEP field holding free text or a number fails closed too.',
   },
   {
@@ -272,9 +273,11 @@ const KEEP = new Set([
  * The shape a KEEP string must have to be kept; any other value is
  * "redacted" and reported, so a KEEP field holding free text (an amount
  * field with a name in it, say) fails closed. Amounts are decimal strings,
- * dates and timestamps ISO 8601, time_zone an IANA name, delivery_method one
- * of Moneybird's values, and every other KEEP field a short lowercase or
- * uppercase token without digits (`open`, `bank_account`, `EUR`, `NL`).
+ * dates and timestamps ISO 8601, currency three capitals (ISO 4217), country
+ * two (ISO 3166-1), language two lowercase letters (ISO 639-1), time_zone a
+ * name in this Node's `Intl.supportedValuesOf('timeZone')`, delivery_method
+ * one of Moneybird's values, and every other KEEP field a short lowercase or
+ * uppercase token without digits (`open`, `bank_account`).
  */
 const AMOUNT = /^-?\d{1,15}(\.\d{1,10})?$/;
 const ISO =
@@ -294,10 +297,16 @@ const KEEP_SHAPE = {
   tax_number_validated_at: ISO,
   period_locked_until: ISO,
   period_start_date: ISO,
-  time_zone: /^[A-Z][A-Za-z_]{1,30}(\/[A-Z][A-Za-z_]{1,30}){1,2}$/,
+  currency: /^[A-Z]{3}$/,
+  country: /^[A-Z]{2}$/,
+  language: /^[a-z]{2}$/,
   delivery_method: /^(Email|Simplerinvoicing|Peppol|Manual|Post)$/,
 };
-const keepable = (field, v) => (KEEP_SHAPE[field] ?? TOKEN).test(v);
+const TIME_ZONES = new Set(Intl.supportedValuesOf('timeZone'));
+const keepable = (field, v) =>
+  field === 'time_zone'
+    ? TIME_ZONES.has(v)
+    : (KEEP_SHAPE[field] ?? TOKEN).test(v);
 
 /**
  * Numbers kept verbatim: record versions and quantities the app reads. Any
@@ -631,6 +640,20 @@ export function checkArgv(argv = process.argv) {
 }
 
 /**
+ * `value` of option `--<name>` as an integer from 1 to `max`, digits only
+ * (as the Todoist recorder checks its options), or a throw.
+ */
+export function positiveInteger(name, value, max = Number.MAX_SAFE_INTEGER) {
+  const n = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(n) || n < 1 || n > max)
+    throw new Error(
+      `--${name} must be an integer from 1${max < Number.MAX_SAFE_INTEGER ? ` to ${max}` : ' up'}, not ${value}`,
+    );
+
+  return n;
+}
+
+/**
  * The value of a single `--<name> <value>` option, or `fallback` when it is
  * not given. A flag right after the option (`--per-page --max-pages 2`), or
  * nothing at all, is no value: that throws.
@@ -773,17 +796,14 @@ async function main() {
   checkArgv();
   const token = process.env.MONEYBIRD_TOKEN;
   if (!token) throw new Error('MONEYBIRD_TOKEN must be set');
-  const perPage = Number(arg('per-page', '2'));
-  const maxPages = Number(arg('max-pages', '3'));
+  // Moneybird's per_page is at most 100.
+  const perPage = positiveInteger('per-page', arg('per-page', '2'), 100);
+  const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
   const skipped = valueless('administration');
   if (skipped)
     console.warn(
       `record: ${skipped} --administration option(s) without a value (at the end, or followed by another --option) ignored.`,
     );
-  if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100)
-    throw new Error('--per-page must be an integer from 1 to 100');
-  if (!Number.isInteger(maxPages) || maxPages < 1)
-    throw new Error('--max-pages must be an integer of at least 1');
   const api = new URL('api/', dir);
   rmSync(api, { recursive: true, force: true });
   mkdirSync(api);

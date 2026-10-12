@@ -166,6 +166,13 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// The header values the catalog fixes for an operation: a header
+    /// parameter with a `schema.default`, or a `schema.enum` of exactly one
+    /// value, whether it is `required` or not (a required one with neither
+    /// refuses the operation: `None`). They are always sent, and since the
+    /// header allowlists of pieces.md P1-P3 a fixed value also replaces a
+    /// caller's header of the same name (`proxy::upstream_request`), so an
+    /// optional header with a default can no longer be chosen by the caller.
     pub fn required_headers(
         &self,
         platform: &str,
@@ -255,7 +262,11 @@ impl Catalog {
             let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
-            // A path item may itself be a local `$ref` (OpenAPI 3.1).
+            // A path item may itself be a local `$ref` (OpenAPI 3.1). Resolved
+            // here for consistency of the declaration check only: `allows`,
+            // `required_headers` and `validate_request` do not resolve one,
+            // so an operation under such a path item is refused as not in
+            // the catalog before this answer is used.
             let mut path_item = paths.get(template)?;
             if let Some(reference) = path_item.get("$ref") {
                 path_item = document.pointer(reference.as_str()?.strip_prefix('#')?)?;
@@ -1695,6 +1706,101 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
+    }
+
+    /// pieces.md D4: a Produced Classes declaration (`x-produces`,
+    /// openapi-extensions/spec/produced-classes) set by an overlay on a CRUD
+    /// Resource Object comes back unchanged from `/catalog/<name>.yaml`. The
+    /// proxy composes and serves it like any other member and never reads it.
+    #[tokio::test]
+    async fn a_produced_class_declaration_passes_through_unchanged() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let produces = serde_json::json!([
+            {
+                "class": "https://ontology.example/classes/time-entry-v1",
+                "lens": "https://ontology.example/lenses/example-time-entry-v1",
+                "description": "Een lopende timer heeft geen einde: \"end\" ontbreekt.",
+                "x-note": {"since": "2026-10-08", "weights": [1, 2.5, null, true]}
+            },
+            {"class": "urn:example:classes:cost-centre"}
+        ]);
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("openapi.yaml"),
+            "openapi: 3.0.3\ninfo: {title: Example, version: '1'}\nservers: [{url: 'https://api.example'}]\npaths: {}\ncomponents: {}\n",
+        )
+        .unwrap();
+        let resources = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "CRUD", "version": "1"},
+            "actions": [{"target": "$.components", "update": {"crudResources": {
+                "timeEntry": {"identity": {"urlTemplate": "/time-entries/{id}"}},
+                "project": {"identity": {"urlTemplate": "/projects/{id}"}}
+            }}}]
+        });
+        let classes = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "Produced classes", "version": "1"},
+            "actions": [{"target": "$.components.crudResources.timeEntry",
+                "update": {"x-produces": produces}}]
+        });
+        fs::write(
+            source.join("crud-overlay.yaml"),
+            serde_yaml::to_string(&resources).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            source.join("produces-overlay.yaml"),
+            serde_yaml::to_string(&classes).unwrap(),
+        )
+        .unwrap();
+        let catalog_file = mirror.join("catalog.json");
+        fs::write(
+            &catalog_file,
+            serde_json::json!({"platforms": [{
+                "name": "example",
+                "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                "overlays": [
+                    format!("{OVERLAYS_PAGES_BASE}example/crud-overlay.yaml"),
+                    format!("{OVERLAYS_PAGES_BASE}example/produces-overlay.yaml"),
+                ],
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load_with_mirror(
+            &catalog_file.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&mirror),
+        )
+        .await
+        .unwrap();
+        let mut state = crate::test_support::state(None);
+        state.catalog = catalog;
+        let app = crate::router(state);
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                to_bytes(response.into_body(), usize::MAX).await.unwrap()
+            }
+        };
+        let document: Value = serde_yaml::from_slice(&get("/catalog/example.yaml").await).unwrap();
+        assert_eq!(
+            document["components"]["crudResources"]["timeEntry"]["x-produces"],
+            produces
+        );
+        assert!(document["components"]["crudResources"]["project"]
+            .get("x-produces")
+            .is_none());
+        assert!(document.get("x-produces").is_none());
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

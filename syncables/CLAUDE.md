@@ -112,8 +112,15 @@ Data flows through four stages, each its own directory under `src/`:
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
    the same `walkPages` as the reader, including POST-body cursors, next-link
-   checks and budgets. Failed/incomplete collections do not replace or prune
-   stored records. GET validators reuse raw cached response bodies.
+   checks and budgets. Failed collections do not replace or prune stored
+   records. A snapshot that ended without an error but is not complete
+   (`notComplete`: range windows, an undocumented short-page end) goes to
+   `upsertIncomplete`: its records are merged into the confirmed copy and
+   rebuilt (per record, skipped when a write settled on it during the read;
+   whole scope skipped when one settled on the scope), `lastSyncedItems` is
+   dropped for the scope so a later complete read still prunes, and nothing
+   is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
+   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
@@ -132,8 +139,18 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   updates select declared PUT, otherwise PATCH, and currently send JSON
-   records rather than JSON Patch. Read-only operations fail before local edits.
+   updates select declared PUT, otherwise PATCH; the chosen operation's
+   `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
+   `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
+   RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
+   legacy documents) sends the full JSON record. Each update keeps its
+   format (`QueuedWrite.updateBody`, stored); `rebuild` and sending use the
+   write's, not the route's, and `restore` fails a mismatched update with
+   the writes before it (`bodyMismatch`; behind a create the entry is
+   unrestorable), and `resolveWrite` `retry` refuses it. On merge-patch
+   writes, `detectConflicts` compares with the field after the patches
+   (`patchedField`, in order) and `supersede`/`retry` strip nested members
+   (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -355,6 +372,21 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
+- Pagination Schemes 0.6.0: `request-builder.ts`'s `pageStart` is the
+  `page` field's `start` (default 1), used for the first page, the next
+  page and by the mock server. `walkPages` reads a `pageNumber` scheme's
+  `shortPage`: before a page is handed on it throws `PageReadError` for
+  more than the full size (`size`, or a reported `pageSize` field) or an
+  item identity an earlier page of the read returned; after it, a page
+  with fewer items ends the walk (`PageWalk.outcome` not complete unless
+  `assurance: documented`; an error under `documented` when `totalPages` or
+  `totalCount` says more follow, not complete otherwise), and a full page
+  goes on to the next page number unless `totalPages` (a count: the last
+  page is `start + totalPages − 1`) or `totalCount` ends it, which is
+  complete whatever the assurance. `currentPage` is numbered like the
+  `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
+  capped at the parameter's `maximum`. The validator checks §9 rules
+  19–21, `resolveEffectiveScheme` rule 22.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

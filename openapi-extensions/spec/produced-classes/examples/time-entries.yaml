@@ -1,0 +1,79 @@
+# Synthetic: an Example Timesheets API whose time entries are declared to
+# produce a shared time-entry class, with a lens, and whose projects produce
+# two classes without one. Not a real provider.
+openapi: 3.0.3
+info:
+  title: Example Timesheets
+  version: 1.0.0
+servers:
+  - url: https://timesheets.example/api
+paths:
+  /time-entries:
+    get:
+      operationId: listTimeEntries
+      x-crud: { resource: timeEntry, action: list, collection: entries }
+      responses:
+        '200':
+          description: Time entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimeEntry' }
+  /time-entries/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getTimeEntry
+      x-crud: { resource: timeEntry, action: read }
+      responses:
+        '200':
+          description: One time entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimeEntry' }
+  /projects:
+    get:
+      operationId: listProjects
+      x-crud: { resource: project, action: list, collection: projects }
+      responses:
+        '200':
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, properties: { id: { type: string }, name: { type: string } } }
+components:
+  schemas:
+    TimeEntry:
+      type: object
+      properties:
+        id: { type: string }
+        description: { type: string }
+        timeInterval:
+          type: object
+          properties:
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time, nullable: true }
+  crudResources:
+    timeEntry:
+      schema: { $ref: '#/components/schemas/TimeEntry' }
+      identity:
+        urlTemplate: /time-entries/{id}
+        bindings: { id: { field: id } }
+      collections:
+        entries: { urlTemplate: /time-entries }
+      x-produces:
+        - class: https://ontology.example/classes/time-entry-v1
+          lens: https://ontology.example/lenses/example-time-entry-v1
+          description: A running timer has no end.
+    project:
+      identity:
+        urlTemplate: /projects/{id}
+        bindings: { id: { field: id } }
+      collections:
+        projects: { urlTemplate: /projects }
+      x-produces:
+        - class: https://ontology.example/classes/work-project-v1
+        - class: urn:example:classes:cost-centre

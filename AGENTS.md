@@ -128,9 +128,13 @@ buildable and publishable TypeScript package (own `package.json`,
 `pnpm-lock.yaml`, `tsconfig.json`) migrated in from the standalone
 `localthought/devonian` repo, full commit history included via `git
 subtree`. It publishes to npm as `devonian`. Two plugins use it:
-`integrations/notion/` depends on the published npm version (exact version
-in its `package.json`), and `integrations/issue-tracker/devonian/github-issues/`
-imports this folder's source through a Vitest alias. A plugin's own lens lives in
+`integrations/notion/` and `integrations/issue-tracker/app/` depend on the
+published npm version (exact versions in their `package.json`), and the lens
+prototypes in `integrations/issue-tracker/devonian/` and
+`integrations/timesheets/devonian/` test against the npm version their
+plugin's `app/package.json` pins; those in `integrations/bookmarks/` and
+`integrations/solid/` still import this folder's source through a Vitest
+alias. A plugin's own lens lives in
 its plugin folder, at `integrations/<plugin>/devonian/<platform>/`, and
 imports `devonian` as a package, never by relative path into `devonian/src`;
 no lens is left inside the package. See [`devonian/AGENTS.md`](devonian/AGENTS.md)
