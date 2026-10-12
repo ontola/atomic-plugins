@@ -118,8 +118,13 @@ impl Store {
             .collect();
         let mut ended = 0;
         for id in &due {
-            if self.end_if_due(id, now).await? {
-                ended += 1;
+            // One failing row is logged and skipped, not the whole step.
+            match self.end_if_due(id, now).await {
+                Ok(true) => ended += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%error, "webhook sweep: ending one subscription failed")
+                }
             }
         }
         Ok(ended)
@@ -143,7 +148,12 @@ impl Store {
             .collect();
         let mut aged = 0;
         for id in &aging {
-            aged += self.age_out(id, now).await?;
+            match self.age_out(id, now).await {
+                Ok(evicted) => aged += evicted,
+                Err(error) => {
+                    tracing::error!(%error, "webhook sweep: ageing one subscription failed")
+                }
+            }
         }
         Ok(aged)
     }
@@ -172,8 +182,10 @@ impl Store {
             .collect();
         let mut retired = 0;
         for hook_id in &unused {
-            if self.retire_unused_hook(hook_id, unused_before, now).await? {
-                retired += 1;
+            match self.retire_unused_hook(hook_id, unused_before, now).await {
+                Ok(true) => retired += 1,
+                Ok(false) => {}
+                Err(error) => tracing::error!(%error, "webhook sweep: retiring one hook failed"),
             }
         }
         Ok(retired)
@@ -284,8 +296,12 @@ impl Store {
     }
 }
 
-/// Runs [`Store::sweep`] every `sweep_interval` until the process ends.
-pub fn spawn(store: std::sync::Arc<Store>) {
+/// Runs [`Store::sweep`] and the hook cleanup every `sweep_interval` until
+/// the process ends.
+pub fn spawn<D>(store: std::sync::Arc<Store>, deleter: D)
+where
+    D: super::cleanup::HookDeleter + Send + Sync + 'static,
+{
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(store.policy().sweep_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -300,6 +316,9 @@ pub fn spawn(store: std::sync::Arc<Store>) {
                 }
                 Ok(report) => tracing::debug!(?report, "webhook inbox swept"),
                 Err(error) => tracing::error!(%error, "webhook inbox sweep failed"),
+            }
+            if let Err(error) = store.run_cleanup(&deleter, SystemTime::now()).await {
+                tracing::error!(%error, "webhook hook cleanup failed");
             }
         }
     });

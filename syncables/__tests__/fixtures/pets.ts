@@ -21,14 +21,18 @@ export const petsDocument = {
       post: {
         requestBody: {
           content: {
-            'application/json': { schema: { $ref: '#/components/schemas/NewPet' } },
+            'application/json': {
+              schema: { $ref: '#/components/schemas/NewPet' },
+            },
           },
         },
         responses: {
           '201': {
             description: 'Created',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/Pet' } },
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Pet' },
+              },
             },
           },
         },
@@ -40,7 +44,9 @@ export const petsDocument = {
           '200': {
             description: 'A pet',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/Pet' } },
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Pet' },
+              },
             },
           },
           '404': { description: 'Not found' },
@@ -49,14 +55,18 @@ export const petsDocument = {
       put: {
         requestBody: {
           content: {
-            'application/json': { schema: { $ref: '#/components/schemas/NewPet' } },
+            'application/json': {
+              schema: { $ref: '#/components/schemas/NewPet' },
+            },
           },
         },
         responses: {
           '200': {
             description: 'Updated',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/Pet' } },
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Pet' },
+              },
             },
           },
         },

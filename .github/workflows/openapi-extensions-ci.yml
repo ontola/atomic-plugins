@@ -1,0 +1,161 @@
+name: OpenAPI extensions CI
+
+# openapi-extensions/ was migrated in from the standalone
+# pondersource/openapi-extensions repo (#115). Each spec under
+# openapi-extensions/spec/<extension>/ is prose plus, for some, a small Python
+# validator (validate.py), its unit tests (test_*.py), pinned requirements and
+# example documents. None has a build or a publish step.
+#
+# This workflow discovers those spec folders instead of listing them, so a
+# new spec is covered the moment it has a test file:
+#   - every spec folder with a test_*.py runs its tests (`python -m unittest
+#     discover`), in its own virtualenv with its own requirements.txt, so two
+#     specs can pin different versions;
+#   - every spec folder with a validate.py runs it over its top-level
+#     examples/*.yaml, *.yml and *.json. An example that is itself an OpenAPI
+#     Overlay (a top-level `overlay:` key) is skipped: it is a patch, not a
+#     document, and the spec's own tests apply it.
+#
+# A separate workflow, not a job in ci.yml: ci.yml's `changes` job and `CI`
+# gate are driven by integrations/lanes.json, and overlays/, devonian/,
+# syncables/, reflector/ and integration-proxy/ each have their own workflow
+# in the same way. Under #227's merge rules a PR merges only with no failing
+# check at all, so a red run here still blocks a merge.
+
+on:
+  pull_request:
+  # After a merge too, so main itself is known green.
+  push:
+    branches: [main]
+  # Required so the merge queue's temporary gh-readonly-queue/... commit gets
+  # a CI run at all: GitHub gates required checks on the merge_group event,
+  # not on the pull_request run from the PR head. See ci.yml, which has the
+  # same fix.
+  merge_group:
+  workflow_dispatch:
+
+# Every job reads the checkout only. The `changes` job widens this for itself
+# with `pull-requests: read`, which dorny/paths-filter needs on a PR.
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-extensions-ci-${{ github.ref }}
+  # A newer push to a PR supersedes the older run; runs on main each vouch for
+  # their own merge commit, so they are not cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Detect openapi-extensions changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      specs: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.specs }}
+    steps:
+      # dorny/paths-filter reads changed files from the pull_request API, which
+      # doesn't exist for a push, merge_group or workflow_dispatch event, so
+      # this step is skipped there and the output above is forced to 'true'
+      # instead: those runs always run the suite rather than misdetecting an
+      # empty diff and reporting a green run that tested nothing.
+      - name: Path filters
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            specs:
+              - 'openapi-extensions/**'
+              - '.github/workflows/openapi-extensions-ci.yml'
+
+  validate:
+    name: Spec validator tests and examples
+    needs: changes
+    if: needs.changes.outputs.specs == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openapi-extensions/spec
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+
+      - name: Create one virtualenv per spec with tests or a validator
+        run: |
+          set -eu
+          for dir in */; do
+            dir=${dir%/}
+            if ! compgen -G "$dir/test_*.py" > /dev/null && [ ! -e "$dir/validate.py" ]; then
+              continue
+            fi
+            echo "::group::$dir"
+            python -m venv "$RUNNER_TEMP/venv-$dir"
+            if [ -e "$dir/requirements.txt" ]; then
+              "$RUNNER_TEMP/venv-$dir/bin/pip" install -r "$dir/requirements.txt"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Run every spec's validator tests
+        run: |
+          set -u
+          status=0
+          ran=0
+          for dir in */; do
+            dir=${dir%/}
+            compgen -G "$dir/test_*.py" > /dev/null || continue
+            ran=$((ran + 1))
+            echo "::group::$dir"
+            if ! (cd "$dir" && "$RUNNER_TEMP/venv-$dir/bin/python" -m unittest discover -v -p 'test_*.py'); then
+              echo "::error file=openapi-extensions/spec/$dir::$dir tests failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          echo "ran the tests of $ran spec folders"
+          [ "$ran" -gt 0 ] || { echo "::error::no spec folder has a test_*.py"; exit 1; }
+          exit "$status"
+
+      - name: Every spec's examples pass its validator
+        run: |
+          set -u
+          shopt -s nullglob
+          status=0
+          for dir in */; do
+            dir=${dir%/}
+            [ -e "$dir/validate.py" ] || continue
+            examples=()
+            for example in "$dir"/examples/*.yaml "$dir"/examples/*.yml "$dir"/examples/*.json; do
+              if grep -q '^overlay:' "$example"; then
+                echo "$example: an Overlay, applied by the spec's tests; skipped"
+                continue
+              fi
+              examples+=("${example#"$dir"/}")
+            done
+            [ "${#examples[@]}" -gt 0 ] || continue
+            echo "::group::$dir"
+            if ! (cd "$dir" && "$RUNNER_TEMP/venv-$dir/bin/python" validate.py "${examples[@]}"); then
+              echo "::error file=openapi-extensions/spec/$dir::$dir examples failed its validator"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      # Authenticated Principal has a JSON Schema and tests but no validate.py,
+      # so the step above does not reach its examples. Kept from the staged
+      # workflow: its OpenAPI examples must be valid OpenAPI.
+      - name: Authenticated Principal examples are valid OpenAPI
+        run: |
+          "$RUNNER_TEMP/venv-authenticated-principal/bin/python" - <<'PY'
+          from pathlib import Path
+          import yaml
+          from openapi_spec_validator import validate
+          root = Path('authenticated-principal/examples')
+          for name in ('generic.yaml', 'google-userinfo.yaml'):
+              validate(yaml.safe_load((root / name).read_text()))
+              print(f'{root / name}: valid OpenAPI')
+          PY

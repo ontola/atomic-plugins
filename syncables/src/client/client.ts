@@ -4,6 +4,13 @@ import {
   createdIdentity,
   type CreateDeclaration,
 } from './created-identity.js';
+import {
+  followUpRequest,
+  missingValue,
+  NOTHING_MISSING,
+  parseFollowUps,
+  type FollowUp,
+} from './compound-create.js';
 import type { ReadCoverage } from '../read/time-zone.js';
 import { discoverResources } from '../resources/discover.js';
 import type {
@@ -91,6 +98,7 @@ import {
   type StoredRebuild,
   type StoredRecordWrites,
   type StoredThrottlingPause,
+  type StoredFollowUp,
   type StoredWrite,
 } from './outbox.js';
 
@@ -161,6 +169,12 @@ export interface WriteFailure {
    * 403. The client sets it on every failure it classifies.
    */
   signalsDeclared?: boolean;
+  /**
+   * Set when the write is a follow-up of a compound create (CRUD Causality
+   * 0.5.0 §4.7): its operation and the field it sets. `method` is then the
+   * follow-up operation's.
+   */
+  followUp?: { operation: string; field: string };
 }
 
 /**
@@ -173,7 +187,10 @@ export interface WriteFailure {
  *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
  *   GitHub sends); otherwise, and with signals declared, `permanent` when
  *   `afterRenewal` (a refusal that renewed credentials did not fix is a
- *   missing permission), and `auth` before that;
+ *   missing permission) or for a compound create's follow-up (the create
+ *   just succeeded with the same credentials, so the 403 refuses that
+ *   field, as GitHub does for labels without push access), and `auth`
+ *   otherwise;
  * - 408 and 425: `retry`;
  * - every other 4xx (400, 404 and 410 on a create or update, 405, 409, 413,
  *   415, 422, ...): `permanent`;
@@ -194,7 +211,7 @@ export function defaultWriteFailureClass(
         headers['x-ratelimit-remaining'] === '0')
     )
       return 'retry';
-    return failure.afterRenewal ? 'permanent' : 'auth';
+    return failure.afterRenewal || failure.followUp ? 'permanent' : 'auth';
   }
   if (status === 408 || status === 425 || status === 429) return 'retry';
   if (status >= 400 && status < 500) return 'permanent';
@@ -382,6 +399,77 @@ export interface ApiClientOptions {
    * (`filtered`).
    */
   onMissingRecord?: (record: MissingRecord) => void;
+  /**
+   * Told the presence changes of a sync: before the client removes records
+   * from its local copy (tell before prune; awaited, the records are
+   * removed only after it returns), and, at the end of the sync, the marks
+   * it set or cleared on records it keeps. If it throws or rejects, the
+   * records are not removed, `sync()` rejects with the error, and a later
+   * sync tells again. The same changes are on `SyncResult.presence`.
+   */
+  onPresence?: (changes: PresenceChange[]) => void | Promise<void>;
+  /**
+   * Keep a record a sync concludes deleted, marked `deleted`, instead of
+   * removing it from the local copy (it is told either way). Default false.
+   */
+  retainDeleted?: boolean;
+  /**
+   * How many records without writes a sync looks up (a GET of the record)
+   * to settle their presence; the others stay `unconfirmed` and are looked
+   * up first by the next sync. Records with queued writes are always
+   * checked. Default 50.
+   */
+  maxMissingRecordChecks?: number;
+}
+
+/** A mark on a record the local copy keeps although a read did not return it. */
+export type PresenceMarkValue = 'unconfirmed' | 'unavailable' | 'deleted';
+
+/** A record's current presence mark (`ApiClient.presence()`). */
+export interface PresenceMark {
+  collection: string;
+  context?: Record<string, string>;
+  id: string;
+  presence: PresenceMarkValue;
+  /** What set the mark, as on `MissingRecord`. */
+  source?: MissingRecord['source'];
+  /** Why, in words. */
+  detail: string;
+  /** The values the local copy keeps. */
+  record: Record<string, unknown>;
+  /**
+   * When a read last returned the record (ISO 8601, the start of that
+   * sync), as far as this client knows: absent when no read of this client
+   * returned it (a record from storage written before a restart).
+   */
+  lastSeen?: string;
+}
+
+/**
+ * A change of a record's presence in the local copy, and why.
+ * - `pruned: true`: the record is about to be removed. `presence` is
+ *   `deleted` when a declaration (`x-completeness: { absent: deleted }`) or
+ *   a check concluded it deleted, else `removed` (no longer returned by a
+ *   complete read, or present but no longer in the collection).
+ * - `pruned: false`: the record stays, with a new mark (`unconfirmed`,
+ *   `unavailable`, `deleted` under `retainDeleted`), or `present` when a
+ *   read returned a marked record again (the mark is dropped).
+ * `record`: its values in the local copy.
+ */
+export interface PresenceChange {
+  collection: string;
+  context?: Record<string, string>;
+  id: string;
+  presence: 'present' | 'removed' | PresenceMarkValue;
+  /**
+   * What concluded it: `declaration` (`absent: deleted`), `read` (a
+   * complete read no longer returned it, or the record's own read), `feed`,
+   * `parent` or `none` (no check made), as on `MissingRecord`.
+   */
+  source: MissingRecord['source'];
+  record?: Record<string, unknown>;
+  /** The record is removed from the local copy right after this is told. */
+  pruned: boolean;
 }
 
 export interface PaginateOptions {
@@ -396,6 +484,13 @@ export interface PaginateOptions {
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
+  /**
+   * The presence changes of this sync, as told to `onPresence`: records
+   * removed from the local copy (`pruned: true`, told before removal) and
+   * marks set or dropped on records it keeps (`pruned: false`, told at the
+   * end of the sync), one per record. Absent when there were none.
+   */
+  presence?: PresenceChange[];
   /**
    * Collections this sync read without error but not completely: a read by
    * range windows (Pagination Schemes 0.5.0 §4.6.4) or one ended by a short
@@ -562,6 +657,21 @@ export interface PendingWriteInfo {
    * `discard` settles it, and `retry` throws.
    */
   unbound?: true;
+  /**
+   * Set on an update that is a follow-up of a compound create (CRUD
+   * Causality 0.5.0 §4.7): the follow-up `operation`, the `field` it sets,
+   * and, once it did not apply, why: `refused` (its answer refused it; the
+   * create is partly applied), `unknown` (no usable answer; it waits for a
+   * read of the record, `awaitingRefresh`, before it is sent again) or
+   * `notSent` (an earlier follow-up of the same create did not apply, or
+   * its request could not be filled). The create itself is settled and is
+   * never sent again.
+   */
+  followUp?: {
+    operation: string;
+    field: string;
+    reason?: 'refused' | 'unknown' | 'notSent';
+  };
 }
 
 export interface ApiClient {
@@ -647,6 +757,12 @@ export interface ApiClient {
    * Includes writes restored from the durable outbox once `ready()` resolves.
    */
   pendingWrites(resource?: string): PendingWriteInfo[];
+  /**
+   * The presence marks of records the local copy keeps although a read did
+   * not return them (for `resource`, if given). A record without a mark is
+   * present as far as the client knows.
+   */
+  presence(resource?: string): PresenceMark[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
@@ -751,6 +867,8 @@ interface ClientRoute {
   updateContentType?: string;
   /** Why `update()` refuses: a `patchFormat` this client does not send. */
   updateRefused?: string;
+  /** Why `create()` refuses: a compound create's `followUps` this client cannot use. */
+  createRefused?: string;
   deletePath?: string;
   /**
    * The resource's declared `create` (`x-crud`, not in legacy documents):
@@ -762,6 +880,11 @@ interface ClientRoute {
   /** `x-completeness: { absent: deleted }`: absence from a complete read is deletion. */
   absentMeansDeleted?: boolean;
   /**
+   * `x-completeness: { absent: removed }`: a record a complete read lacks
+   * is kept, marked `unconfirmed`, until a check settles it.
+   */
+  absentRemoved?: boolean;
+  /**
    * The `notFound` the route's **resource** states (Collection
    * Completeness 0.2.0 §4.3): any of its collections, this one or not, set
    * on every route of the resource; `unavailable` when they differ or a
@@ -770,6 +893,19 @@ interface ClientRoute {
    * stated confirmation of a deletion.
    */
   notFound?: 'deleted' | 'unavailable';
+  /**
+   * The `gone` the route's resource states (Collection Completeness
+   * 0.3.0 §4.3), resource-wide like `notFound`: what a 410 means. Undefined:
+   * not stated, so a 410 means what `notFound` says.
+   */
+  gone?: 'deleted' | 'unavailable';
+  /**
+   * The route's own Completeness Object has an `absent` this client does
+   * not recognise: a 404, or a 410 that neither `gone` nor `notFound`
+   * classifies, then means `unavailable`, never the `deleted` default
+   * (Collection Completeness §7; the reference `classify_read`).
+   */
+  unrecognisedAbsent?: true;
   /**
    * `x-completeness: { parentAbsent }` on a nested collection, any value:
    * its members are unavailable once the parent object that supplies one
@@ -878,6 +1014,8 @@ interface QueuedWrite {
    * another format does not reinterpret its changes.
    */
   updateBody?: 'mergePatch';
+  /** A compound create's follow-up update (§4.7); stored. */
+  followUp?: StoredFollowUp;
   /**
    * In flight when a complete read lacked its record (`holdMissing` skipped
    * it): if it stays queued after its response, it is held. Not stored.
@@ -1091,7 +1229,8 @@ function declaredCompleteness(
 }
 
 /**
- * Internal, exported for tests: §4.3: the `notFound` a resource states, through any of its collections
+ * Internal, exported for tests: §4.3: the `notFound` (or, with `field`,
+ * the 0.3.0 `gone`) a resource states, through any of its collections
  * (after the reference `resource_not_found`): the one value they state,
  * `unavailable` when they state different ones or one this client does not
  * recognise, undefined when none states it. A `notFound` stated beside an
@@ -1101,6 +1240,7 @@ export function resourceNotFound(
   document: OpenApiDocument,
   collections: ReadCollection[],
   resource: string,
+  field: 'notFound' | 'gone' = 'notFound',
 ): 'deleted' | 'unavailable' | undefined {
   const stated = new Set<string>();
   for (const collection of collections) {
@@ -1109,10 +1249,8 @@ export function resourceNotFound(
     // fixed reads: it says what the resource's read means, and counting it
     // can only make a 404 `unavailable`, the safe reading.
     const raw = rawCompleteness(document, collection, true);
-    if (raw && raw.declared['notFound'] !== undefined)
-      stated.add(
-        raw.declared['notFound'] === 'deleted' ? 'deleted' : 'unavailable',
-      );
+    if (raw && raw.declared[field] !== undefined)
+      stated.add(raw.declared[field] === 'deleted' ? 'deleted' : 'unavailable');
   }
   if (!stated.size) return undefined;
   return stated.size === 1 && stated.has('deleted') ? 'deleted' : 'unavailable';
@@ -1258,6 +1396,20 @@ function clientRoutes(
             ? undefined
             : createDeclaration(document, crud);
           if (declared) route.create = declared;
+          // A compound create (CRUD Causality 0.5.0 §4.7): fail closed when
+          // its follow-ups cannot be made, rather than create without them.
+          if (!legacy && crud['followUps'] !== undefined) {
+            try {
+              const followUps = parseFollowUps(document, crud, path);
+              if (!declared)
+                throw new Error(
+                  'declares followUps on a create whose resource has no usable identity',
+                );
+              if (followUps) declared.followUps = followUps;
+            } catch (error) {
+              route.createRefused = `declares a compound create this client cannot make: ${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
         }
         if (method === 'delete' && crud['action'] === 'delete')
           route.deletePath = path;
@@ -1294,12 +1446,31 @@ function clientRoutes(
     }
     const completeness = declaredCompleteness(document, collection);
     if (completeness?.absent === 'deleted') route.absentMeansDeleted = true;
+    if (completeness?.absent === 'removed') route.absentRemoved = true;
     const notFound = resourceNotFound(
       document,
       collections,
       collection.resource,
     );
     if (notFound) route.notFound = notFound;
+    const gone = resourceNotFound(
+      document,
+      collections,
+      collection.resource,
+      'gone',
+    );
+    if (gone) route.gone = gone;
+    // §7: under an unrecognised `absent`, a 410 is classified by a
+    // recognised `gone`, then a recognised `notFound`, a 404 by a recognised
+    // `notFound`, else either is `unavailable`, never the `deleted` default.
+    // A declaration with no `absent` counts as unrecognised too. Unlike the
+    // reference `declarations_of`, the list operation's declaration counts
+    // even for a collection with fixed reads (as in resourceNotFound): it
+    // can only make a 404 `unavailable`, the safe reading.
+    const rawOwn = rawCompleteness(document, collection, true);
+    const ownAbsent = rawOwn?.declared['absent'];
+    if (rawOwn && ownAbsent !== 'deleted' && ownAbsent !== 'removed')
+      route.unrecognisedAbsent = true;
     if (completeness?.parentAbsent)
       route.parentAbsent = completeness.parentAbsent;
     const feed = declaredDeletionFeed(document, collection);
@@ -1378,6 +1549,19 @@ function withoutSetBy(
   const left = { ...changes };
   for (const field of Object.keys(set)) delete left[field];
   return left;
+}
+
+const missingSources: ReadonlySet<string> = new Set<MissingRecord['source']>([
+  'declaration',
+  'feed',
+  'read',
+  'parent',
+  'none',
+]);
+
+/** Whether a stored mark's `source` is one this client knows. */
+function isMissingSource(value: unknown): value is MissingRecord['source'] {
+  return typeof value === 'string' && missingSources.has(value);
 }
 
 /** A browser-safe local replica. Transport/auth/storage are supplied at its boundaries. */
@@ -1539,7 +1723,7 @@ export function createApiClient(
    * them, or evidence of deletion); a discard of their writes falls back to
    * them, and a new update or delete of them is held. Stored in the outbox.
    */
-  const unavailableKept = new Map<
+  const keptMarks = new Map<
     string,
     {
       scope: string;
@@ -1549,8 +1733,33 @@ export function createApiClient(
       record: Record<string, unknown>;
       detail: string;
       source?: MissingRecord['source'];
+      presence: PresenceMarkValue;
+      lastSeen?: string;
+      /**
+       * A check concluded the record deleted or present elsewhere: the mark
+       * goes once the removal is told (`rebuildTelling`), and stays if the
+       * handler throws, so the record is checked again.
+       */
+      clearing?: true;
+      /**
+       * The app has been told a mark of this record (or the mark was
+       * restored from storage, whose changes were told or lost with the
+       * process): dropping it is then told as `present` (`dropMark`).
+       */
+      told?: true;
     }
   >();
+  /**
+   * When a read last returned each record (the start of that sync), in
+   * memory; a mark takes it as `lastSeen` when it is set.
+   */
+  const seenAt = new Map<string, string>();
+  /**
+   * Mark changes not told yet, the latest per record (`changeKey`): told at
+   * the end of a sync, and kept for the next one when that does not happen
+   * (the sync throws, or the handler does), so none is lost.
+   */
+  const untoldMarks = new Map<string, PresenceChange>();
   /** Order in which writes were queued; stored, so it survives a restart. */
   let nextSeq = 0;
   /** Set while no write is sent because the credentials were refused; stored. */
@@ -1615,13 +1824,14 @@ export function createApiClient(
       ...(write.unbound ? { unbound: true as const } : {}),
       ...(write.updateBody ? { updateBody: write.updateBody } : {}),
       ...(write.notBefore !== undefined ? { notBefore: write.notBefore } : {}),
+      ...(write.followUp ? { type: 'followUp', followUp: write.followUp } : {}),
     };
   }
 
   /** The kept unavailable records, grouped by collection and context. */
   function storedUnavailable(): { unavailable?: StoredUnavailable[] } {
     const byScope = new Map<string, StoredUnavailable>();
-    for (const kept of unavailableKept.values()) {
+    for (const kept of keptMarks.values()) {
       let entry = byScope.get(kept.scope);
       if (!entry)
         byScope.set(
@@ -1632,7 +1842,13 @@ export function createApiClient(
             unavailable: {},
           }),
         );
-      entry.unavailable[kept.id] = { record: kept.record, detail: kept.detail };
+      entry.unavailable[kept.id] = {
+        record: kept.record,
+        detail: kept.detail,
+        ...(kept.presence !== 'unavailable' ? { presence: kept.presence } : {}),
+        ...(kept.source ? { source: kept.source } : {}),
+        ...(kept.lastSeen ? { lastSeen: kept.lastSeen } : {}),
+      };
     }
     return byScope.size ? { unavailable: [...byScope.values()] } : {};
   }
@@ -1768,7 +1984,8 @@ export function createApiClient(
       scope,
       context,
       id,
-      type: stored.type,
+      type: stored.type === 'followUp' ? 'update' : stored.type,
+      ...(stored.followUp ? { followUp: stored.followUp } : {}),
       attempts: stored.attempts,
       state: stored.state,
       durable: true,
@@ -1832,7 +2049,7 @@ export function createApiClient(
     confirmed.clear();
     feedCursors.clear();
     feedTombstones.clear();
-    unavailableKept.clear();
+    keptMarks.clear();
     unrestorable = outbox.unrestorable;
     for (const entry of outbox.unavailable) {
       const route = byResource.get(entry.resource);
@@ -1841,14 +2058,25 @@ export function createApiClient(
         continue;
       }
       const scope = scopeFor(route, entry.context);
-      for (const [id, { record, detail }] of Object.entries(entry.unavailable))
-        unavailableKept.set(keyFor(scope, id), {
+      for (const [id, mark] of Object.entries(entry.unavailable))
+        keptMarks.set(keyFor(scope, id), {
           scope,
           resource: entry.resource,
           context: entry.context,
           id,
-          record,
-          detail,
+          record: mark.record,
+          detail: mark.detail,
+          // An unknown value (a later client's) is read as unavailable, the
+          // safe reading: kept, writes held, not checked again by itself.
+          presence:
+            mark.presence === 'unconfirmed' || mark.presence === 'deleted'
+              ? mark.presence
+              : 'unavailable',
+          // A source this client does not know (a later client's) is
+          // dropped rather than passed on as one of ours.
+          ...(isMissingSource(mark.source) ? { source: mark.source } : {}),
+          ...(mark.lastSeen ? { lastSeen: mark.lastSeen } : {}),
+          told: true,
         });
     }
     for (const entry of outbox.feedTombstones) {
@@ -2066,7 +2294,7 @@ export function createApiClient(
   async function rebuild(scope: string, id: string): Promise<void> {
     const key = keyFor(scope, id);
     // An unavailable record keeps its last known values (§4.3).
-    let value = remote(scope).get(id) ?? unavailableKept.get(key)?.record;
+    let value = remote(scope).get(id) ?? keptMarks.get(key)?.record;
     const pending = [
       ...(gaveUpWrites.get(key) ?? []),
       ...(writeQueues.get(key) ?? []),
@@ -2087,7 +2315,10 @@ export function createApiClient(
       else value = undefined;
     }
     if (value) await storage.put(scope, id, value);
-    else await storage.delete(scope, id);
+    else {
+      await storage.delete(scope, id);
+      seenAt.delete(key);
+    }
   }
 
   function target(path: string, context: Record<string, string>): URL {
@@ -2166,7 +2397,8 @@ export function createApiClient(
       // is no longer kept as unavailable (a delete removed it; any other
       // 2xx showed it readable).
       feedTombstones.get(write.scope)?.ids.delete(id);
-      unavailableKept.delete(key);
+      // A delete the app made itself is not told back as `present`.
+      dropMark(key, remote(write.scope).get(id), write.type !== 'delete');
     }
     conditionalCache.clear();
     // Confirmed state moved on without a read: the next snapshot must be
@@ -2185,6 +2417,70 @@ export function createApiClient(
         records.set(resolvedId, { ...write.data, [idField]: resolvedId });
       if (resolvedId !== write.id) records.delete(write.id);
       return settled(write, resolvedId);
+    }
+    // A compound create's follow-up (§4.7.2 steps 4-6): what is still
+    // missing is worked out now, against the confirmed record (the create's
+    // answer, or what a later read showed), so one that already applied is
+    // settled without a request.
+    let followUp:
+      | { declared: FollowUp; url: URL; init: TransportRequest }
+      | undefined;
+    if (write.followUp) {
+      const declared = route.create?.followUps?.find(
+        (f) =>
+          f.operation === write.followUp!.operation &&
+          f.field === write.followUp!.field,
+      );
+      if (!declared) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `The document no longer declares follow-up ${write.followUp.operation} for ${write.followUp.field}; not sent`;
+        return { status: 'gaveUp' };
+      }
+      const created =
+        remote(write.scope).get(write.id) ??
+        write.lastKnown ??
+        lastKnownFor(write.scope, write.id);
+      const missing = missingValue(declared, write.followUp.planned, created);
+      if (missing === NOTHING_MISSING) return settled(write, write.id);
+      const request = followUpRequest(
+        declared,
+        write.followUp.planned,
+        created,
+        missing,
+        write.context,
+      );
+      if (!request) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `Follow-up ${declared.operation} for ${declared.field} could not be filled: a bound value resolves to nothing (CRUD Causality §4.7.2); not sent`;
+        return { status: 'gaveUp' };
+      }
+      let url: URL;
+      try {
+        url = target(declared.path, request.path);
+      } catch (error) {
+        write.followUp.reason = 'notSent';
+        write.lastError = `Follow-up ${declared.operation} for ${declared.field} could not be filled: ${error instanceof Error ? error.message : String(error)}; not sent`;
+        return { status: 'gaveUp' };
+      }
+      for (const [name, value] of Object.entries(request.query))
+        url.searchParams.set(name, value);
+      followUp = {
+        declared,
+        url,
+        init: {
+          url,
+          method: declared.method,
+          headers: {
+            ...(request.body !== undefined
+              ? { 'content-type': 'application/json' }
+              : {}),
+            ...request.header,
+          },
+          ...(request.body !== undefined
+            ? { body: JSON.stringify(request.body) }
+            : {}),
+        },
+      };
     }
     // Taken when the request leaves, after the store below.
     let epoch = authEpoch;
@@ -2213,7 +2509,12 @@ export function createApiClient(
       }
       epoch = authEpoch;
       sentAfterRenewal = afterRenewal;
-      if (write.type === 'delete') {
+      if (followUp) {
+        // The answer is not the record (GitHub's lists the issue's labels):
+        // nothing is merged; the next read shows the field.
+        await requestJson(followUp.init, { lenient: true });
+        delete write.followUp!.reason;
+      } else if (write.type === 'delete') {
         await requestJson({
           url: target(route.deletePath as string, {
             ...write.context,
@@ -2402,7 +2703,20 @@ export function createApiClient(
       write.lastError = message;
       if (status === undefined) delete write.lastStatus;
       else write.lastStatus = status;
-      if (failureClass === 'permanent') return { status: 'gaveUp' };
+      if (failureClass === 'permanent') {
+        // A refused follow-up leaves its create partly applied (§4.7.2 step 6).
+        if (write.followUp) write.followUp.reason = 'refused';
+        return { status: 'gaveUp' };
+      }
+      // A follow-up whose outcome is unknown is not sent again before the
+      // record is read back (§4.7.2 step 6): it waits for a complete read of
+      // its collection, and is sent then only if the field is still missing.
+      // A throttled answer is a refusal to wait out, not an unknown outcome.
+      if (write.followUp && !throttled && mayHaveApplied(error)) {
+        write.followUp.reason = 'unknown';
+        write.awaitingRefresh = true;
+        return { status: 'retry', delayMs: 0 };
+      }
       // An idempotency key makes a resend safe, except after a 2xx: the
       // create happened, and a replay would return the same unusable body.
       if (
@@ -2488,6 +2802,11 @@ export function createApiClient(
 
   /** How long a request to `operation` must wait for its exhausted buckets; 0 when none. */
   function pauseForOperation(operation: OperationObject | undefined): number {
+    return Math.max(0, pausedUntil(operation) - Date.now());
+  }
+
+  /** When the exhausted buckets `operation` counts against reset (ms since the epoch); 0 when none is paused. */
+  function pausedUntil(operation: OperationObject | undefined): number {
     if (!pausedBuckets.size) return 0;
     const now = Date.now();
     for (const [key, until] of pausedBuckets)
@@ -2497,7 +2816,7 @@ export function createApiClient(
       ? operationBuckets(throttling, operation)
       : [])
       until = Math.max(until, pausedBuckets.get(bucket) ?? 0);
-    return Math.max(0, until - now);
+    return until;
   }
 
   /** How long a write must wait for an exhausted bucket its operation counts against; 0 when none. */
@@ -2531,14 +2850,20 @@ export function createApiClient(
     sentAfterRenewal: boolean,
     throttled: ThrottlingVerdict | undefined,
   ): { result: WriteFailureClass; refused: boolean } {
+    const followUpMethod = write.followUp
+      ? write.route.create?.followUps?.find(
+          (f) => f.operation === write.followUp!.operation,
+        )?.method
+      : undefined;
     const failure: WriteFailure = {
       type: write.type,
       method:
-        write.type === 'create'
+        followUpMethod ??
+        (write.type === 'create'
           ? 'POST'
           : write.type === 'delete'
             ? 'DELETE'
-            : (write.route.updateMethod as 'PUT' | 'PATCH'),
+            : (write.route.updateMethod as 'PUT' | 'PATCH')),
       status: error.status,
       headers: { ...error.headers },
       body: error.body,
@@ -2547,6 +2872,14 @@ export function createApiClient(
       afterRenewal: sentAfterRenewal,
       ...(throttled ? { throttling: throttled } : {}),
       signalsDeclared: throttling?.signals !== undefined,
+      ...(write.followUp
+        ? {
+            followUp: {
+              operation: write.followUp.operation,
+              field: write.followUp.field,
+            },
+          }
+        : {}),
     };
     let result = classOf(failure);
     if (result === 'satisfied' && write.type !== 'delete') result = 'permanent';
@@ -2571,6 +2904,26 @@ export function createApiClient(
       }
     }
     return defaultWriteFailureClass(failure);
+  }
+
+  /** The follow-up writes of a settled compound create, in order (§4.7.2 step 4). */
+  function followUpWrites(create: QueuedWrite, id: string): QueuedWrite[] {
+    const planned = create.data ?? {};
+    return (create.route.create?.followUps ?? [])
+      .filter((f) => missingValue(f, planned, undefined) !== NOTHING_MISSING)
+      .map((f) => ({
+        route: create.route,
+        scope: create.scope,
+        context: create.context,
+        id,
+        type: 'update' as const,
+        changes: {},
+        attempts: 0,
+        state: 'pending' as const,
+        seq: nextSeq++,
+        followUp: { operation: f.operation, field: f.field, planned },
+        ...(create.confirmedId !== undefined ? { awaitingRefresh: true } : {}),
+      }));
   }
 
   async function drainQueue(initialKey: string): Promise<void> {
@@ -2687,9 +3040,27 @@ export function createApiClient(
         if (outcome.status === 'gaveUp') {
           write.state = 'failed';
           gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), write]);
+          // §4.7.2 step 6: the create is partly applied; the later
+          // follow-ups of the same create are not sent in this attempt (they
+          // may depend on this one). Writes the app queued after the create
+          // go on as usual.
+          if (write.followUp)
+            while (queue[0]?.followUp && queue[0].state === 'pending') {
+              const next = queue.shift() as QueuedWrite;
+              next.state = 'failed';
+              next.followUp!.reason = 'notSent';
+              next.lastError = `Not sent: follow-up ${write.followUp.operation} for ${write.followUp.field} of the same create did not apply`;
+              gaveUpWrites.set(key, [...(gaveUpWrites.get(key) ?? []), next]);
+            }
         } else {
           supersede(key, write);
           rebase(queue, write, outcome.resolvedId);
+          // A compound create that is bound (§4.7.2 step 3): its follow-ups go
+          // first, before writes the app queued after the create. After a
+          // resolveWrite confirm the created object is not known, so they
+          // wait for it to be read back.
+          if (write.type === 'create' && write.route.create?.followUps)
+            queue.unshift(...followUpWrites(write, outcome.resolvedId));
         }
         if (outcome.status === 'succeeded' && outcome.resolvedId !== write.id) {
           const oldId = write.id;
@@ -2704,7 +3075,13 @@ export function createApiClient(
           // Keep the array owned by an in-flight worker: replacing it would
           // leave that worker acknowledging a different queue and resend its head.
           const existing = writeQueues.get(key) ?? [];
-          existing.push(...rest);
+          // The create's follow-ups go first (§4.7.2 step 4), ahead of writes
+          // already queued under the server's id, but never ahead of a head
+          // another worker may have in flight.
+          const followUps = rest.filter((w) => w.followUp);
+          const at = existing.length && draining.has(key) ? 1 : 0;
+          existing.splice(at, 0, ...followUps);
+          existing.push(...rest.filter((w) => !w.followUp));
           writeQueues.set(key, existing);
           ownsQueue = !draining.has(key);
           if (ownsQueue) draining.add(key);
@@ -2746,11 +3123,36 @@ export function createApiClient(
    * writes lose those fields, and are dropped when nothing is left (always,
    * for a failed delete, or after a settled create or delete).
    */
+  /**
+   * Whether `later` (settled, or queued ahead) makes a failed follow-up
+   * moot: a delete of the record, or an app update that sets the
+   * follow-up's field. The match is on the field's first path segment, as
+   * updates change top-level fields: an update of `meta` supersedes a
+   * follow-up of `meta.tags`, which may drop a follow-up whose nested value
+   * the update left alone, the cautious direction (nothing sent over the
+   * app's edit).
+   */
+  function supersedesFollowUp(
+    followUp: QueuedWrite,
+    later: QueuedWrite,
+  ): boolean {
+    const top = followUp.followUp!.field.split('.')[0] as string;
+    return (
+      later.type === 'delete' ||
+      (later.type === 'update' &&
+        !later.followUp &&
+        Object.hasOwn(later.changes ?? {}, top))
+    );
+  }
+
   function supersede(key: string, settled: QueuedWrite): void {
     const failed = gaveUpWrites.get(key);
     if (!failed) return;
     const left = failed.filter((write) => {
       if (write.type !== 'update') return false;
+      // A failed follow-up has no changes of its own: it stays until a
+      // settled write sets its field (or deletes the record).
+      if (write.followUp) return !supersedesFollowUp(write, settled);
       write.changes = withoutSetBy(write, settled);
       return Object.keys(write.changes).length > 0;
     });
@@ -2946,9 +3348,11 @@ export function createApiClient(
   ): Promise<void> {
     let sleptUntil = 0;
     for (;;) {
-      const paused = pauseForOperation(operation);
+      // The pause's own end, not now plus what is left of it: a clock tick
+      // between two readings must not look like a pause that moved later.
+      const until = pausedUntil(operation);
+      const paused = until - Date.now();
       if (paused <= 0) return;
-      const until = Date.now() + paused;
       if (until <= sleptUntil) return;
       const remaining = remainingMs();
       if (paused > remaining)
@@ -3101,6 +3505,243 @@ export function createApiClient(
      * read returned it under the same identity, parent included.
      */
     returned: Map<string, Set<string>>;
+    /** Presence changes this sync told (`onPresence`). */
+    presence: PresenceChange[];
+    /** Records without writes looked up so far (`maxMissingRecordChecks`). */
+    lookups: number;
+    /** The first error a presence handler threw; `sync()` rejects with it. */
+    presenceError?: unknown;
+    /** Scopes whose read was not applied because the handler threw. */
+    skipped: Set<string>;
+  }
+
+  /** A record a sync may rebuild, with what it knows about why. */
+  interface RebuildTarget {
+    scope: string;
+    id: string;
+    route: ClientRoute;
+    context: Record<string, string>;
+    found?: Evidence;
+  }
+
+  /** A presence change's record identity, for keeping one per record. */
+  function changeKey(change: PresenceChange): string {
+    return JSON.stringify([change.collection, change.context, change.id]);
+  }
+
+  /**
+   * Tells the app `removing` (records about to be removed), or, called with
+   * none at the end of the sync, the mark changes held until then. Mark
+   * changes are held to the end so each record is told once per sync, with
+   * its latest change; a removal drops a held change of the same record. True
+   * when told: the caller may then remove them. On an error the changes are
+   * not recorded and the error is kept for `sync()`.
+   */
+  async function tell(
+    round: SyncRound,
+    removing: PresenceChange[],
+  ): Promise<boolean> {
+    // Removals are told at once and replace a held change of the same
+    // record; held mark changes (one per record, the latest: a record marked
+    // unconfirmed and settled in the same sync is told only as settled) are
+    // told at the end of the sync.
+    const changes = removing.length ? removing : [...untoldMarks.values()];
+    if (!changes.length) return true;
+    try {
+      await options.onPresence?.(changes.map((c) => structuredClone(c)));
+    } catch (error) {
+      round.presenceError ??= error;
+      return false;
+    }
+    if (removing.length)
+      for (const change of removing) untoldMarks.delete(changeKey(change));
+    else {
+      untoldMarks.clear();
+      for (const change of changes) {
+        const route = byResource.get(change.collection);
+        const mark =
+          route &&
+          keptMarks.get(
+            keyFor(scopeFor(route, change.context ?? {}), change.id),
+          );
+        if (mark && change.presence !== 'present') mark.told = true;
+      }
+    }
+    round.presence.push(...changes);
+    return true;
+  }
+
+  /** A presence change for a record of `route`'s collection. */
+  function presenceChange(
+    route: ClientRoute,
+    context: Record<string, string>,
+    id: string,
+    presence: PresenceChange['presence'],
+    source: MissingRecord['source'],
+    record: Record<string, unknown> | undefined,
+    pruned: boolean,
+  ): PresenceChange {
+    return {
+      collection: route.collection.name,
+      ...(Object.keys(context).length ? { context: { ...context } } : {}),
+      id,
+      presence,
+      source,
+      ...(record ? { record: structuredClone(record) } : {}),
+      pruned,
+    };
+  }
+
+  /**
+   * Marks a record the local copy keeps although a read did not return it;
+   * a new or changed mark is a presence change of the running sync.
+   */
+  function setMark(
+    route: ClientRoute,
+    context: Record<string, string>,
+    id: string,
+    presence: PresenceMarkValue,
+    record: Record<string, unknown>,
+    detail: string,
+    source: MissingRecord['source'],
+  ): void {
+    const scope = scopeFor(route, context);
+    const key = keyFor(scope, id);
+    const before = keptMarks.get(key);
+    const lastSeen = before?.lastSeen ?? seenAt.get(key);
+    keptMarks.set(key, {
+      scope,
+      resource: route.collection.name,
+      context: { ...context },
+      id,
+      record: structuredClone(record),
+      detail,
+      source,
+      presence,
+      ...(lastSeen ? { lastSeen } : {}),
+      ...(before?.told ? { told: true as const } : {}),
+    });
+    if (before?.presence !== presence) {
+      const change = presenceChange(
+        route,
+        context,
+        id,
+        presence,
+        source,
+        record,
+        false,
+      );
+      untoldMarks.delete(changeKey(change));
+      untoldMarks.set(changeKey(change), change);
+    }
+  }
+
+  /**
+   * Drops a record's mark outside `tell` and `setMark` (a write settled on
+   * it, or a check settled a clearing mark): a held change of it is dropped
+   * too, and, when the app has been told a mark of the record and
+   * `tellPresent` holds, replaced by a `present` change with `record`.
+   */
+  function dropMark(
+    key: string,
+    record: Record<string, unknown> | undefined,
+    tellPresent = true,
+  ): void {
+    const mark = keptMarks.get(key);
+    if (!mark) return;
+    keptMarks.delete(key);
+    const route = byResource.get(mark.resource);
+    if (!route) return;
+    const change = presenceChange(
+      route,
+      mark.context,
+      mark.id,
+      'present',
+      'read',
+      record ?? mark.record,
+      false,
+    );
+    untoldMarks.delete(changeKey(change));
+    if (mark.told && tellPresent) untoldMarks.set(changeKey(change), change);
+  }
+
+  /**
+   * Rebuilds records, telling the app first about each one the rebuild
+   * removes from the local copy (no confirmed copy, no kept mark, no stored
+   * write, but a stored record now). If the handler throws, those records
+   * are left as they are (the next complete read tells again) and the error
+   * is kept for `sync()`.
+   */
+  async function rebuildTelling(
+    targets: RebuildTarget[],
+    round: SyncRound,
+  ): Promise<void> {
+    const removing: PresenceChange[] = [];
+    // The scope of each change in `removing`, by position.
+    const removingScopes: string[] = [];
+    const held = new Set<string>();
+    for (const target of targets) {
+      const key = keyFor(target.scope, target.id);
+      const mark = keptMarks.get(key);
+      const stays =
+        remote(target.scope).has(target.id) ||
+        allWrites().some(
+          (w) =>
+            w.scope === target.scope &&
+            w.id === target.id &&
+            w.durable !== false,
+        );
+      // A clearing mark on a record that stays is settled.
+      if (mark?.clearing && stays)
+        dropMark(
+          key,
+          target.found?.record ?? remote(target.scope).get(target.id),
+        );
+      if (stays || (mark && !mark.clearing)) continue;
+      const stored = await storage.get(target.scope, target.id);
+      if (!stored) continue;
+      held.add(key);
+      removing.push({
+        collection: target.route.collection.name,
+        ...(Object.keys(target.context).length
+          ? { context: { ...target.context } }
+          : {}),
+        id: target.id,
+        presence: target.found?.evidence === 'deleted' ? 'deleted' : 'removed',
+        source: target.found?.source ?? 'read',
+        // A `filtered` check carries the record as just read; else the
+        // values the local copy held.
+        record: target.found?.record ?? stored,
+        pruned: true,
+      });
+      removingScopes.push(target.scope);
+    }
+    const told = removing.length ? await tell(round, removing) : true;
+    // Told: the clearing marks of the removed records go. Not told: they
+    // stay, not clearing any more: an `unconfirmed` mark is checked again
+    // by a later sync; an `unavailable` or `deleted` one stays until a read
+    // settles it.
+    for (const target of targets) {
+      const key = keyFor(target.scope, target.id);
+      const mark = keptMarks.get(key);
+      if (!mark?.clearing || !held.has(key)) continue;
+      if (told) keptMarks.delete(key);
+      else delete mark.clearing;
+    }
+    // A write queued, or a confirmed copy set, while the app was told keeps
+    // the record: told, but not removed after all.
+    if (told)
+      removing.forEach((change, at) => {
+        const scope = removingScopes[at] as string;
+        if (
+          remote(scope).has(change.id) ||
+          allWrites().some((w) => w.scope === scope && w.id === change.id)
+        )
+          change.pruned = false;
+      });
+    for (const target of targets)
+      if (told || !held.has(keyFor(target.scope, target.id)))
+        await rebuild(target.scope, target.id);
   }
 
   function feedEvidence(route: ClientRoute): Evidence {
@@ -3134,7 +3775,7 @@ export function createApiClient(
       // mark) release it, and `unavailable` fails it.
       if (
         head.type === 'delete' &&
-        unavailableKept.has(key) &&
+        keptMarks.has(key) &&
         found.evidence === 'unknown'
       )
         break;
@@ -3477,14 +4118,24 @@ export function createApiClient(
     if (status === 429) return undefined;
     // §4.3 of the Collection Completeness draft: what the status means is
     // the resource's stated `notFound`, through any collection, `deleted`
-    // by default.
+    // by default; since 0.3.0 a 410 means its stated `gone`, else the same.
+    // Under the route's own unrecognised `absent` (§7), what neither
+    // classifies is `unavailable`, not the `deleted` default.
+    const stated =
+      status === 410 ? (route.gone ?? route.notFound) : route.notFound;
+    const meaning =
+      stated ?? (route.unrecognisedAbsent ? 'unavailable' : undefined);
+    const named = status === 410 && route.gone ? 'gone' : 'notFound';
     if (status === 404 || status === 410)
-      return route.notFound === 'unavailable'
+      return meaning === 'unavailable'
         ? {
             evidence: 'unavailable',
             source: 'read',
             status,
-            detail: `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness notFound: unavailable), not that it was deleted`,
+            detail:
+              stated === undefined
+                ? `GET ${path} answered ${status}; the collection's x-completeness has no recognised absent value and the resource states no ${status === 410 ? 'gone or notFound' : 'notFound'}, so the record is unavailable, not deleted`
+                : `GET ${path} answered ${status}, which the API document declares means the record is unavailable to this caller (x-completeness ${named}: unavailable), not that it was deleted`,
           }
         : {
             evidence: 'deleted',
@@ -3552,20 +4203,36 @@ export function createApiClient(
       (found.evidence === 'unavailable' ? lastKnown : undefined);
     const scope = scopeFor(route, context);
     const key = keyFor(scope, id);
+    const kept = keptMarks.get(key);
+    const values = record ?? lastKnown ?? kept?.record;
     // §4.3: an unavailable record keeps its last known values, marked,
     // until a later read settles it; deletion or a 2xx read settles it.
-    if (found.evidence === 'unavailable' && record)
-      unavailableKept.set(key, {
-        scope,
-        resource: route.collection.name,
-        context: { ...context },
+    // Under retainDeleted a deleted record is kept too, marked deleted. An
+    // unknown answer leaves an unconfirmed mark as it is.
+    if (found.evidence === 'unavailable' && values)
+      setMark(
+        route,
+        context,
         id,
-        record: structuredClone(record),
-        detail: found.detail,
-        source: found.source,
-      });
-    else if (found.evidence === 'deleted' || found.evidence === 'filtered')
-      unavailableKept.delete(key);
+        'unavailable',
+        values,
+        found.detail,
+        found.source,
+      );
+    else if (found.evidence === 'deleted' && options.retainDeleted && values)
+      setMark(
+        route,
+        context,
+        id,
+        'deleted',
+        values,
+        found.detail,
+        found.source,
+      );
+    else if (found.evidence === 'deleted' || found.evidence === 'filtered') {
+      if (kept) kept.clearing = true;
+    } else if (kept && kept.presence === 'unconfirmed')
+      kept.detail = found.detail;
     try {
       options.onMissingRecord?.({
         resource: route.collection.name,
@@ -3622,6 +4289,28 @@ export function createApiClient(
   }
 
   /**
+   * Whether this sync checks record `id` of `route`, which a complete read
+   * lacks and which has no writes: never under `missingRecordChecks:
+   * 'none'` or without a way to check (no item GET, unless the declaration
+   * decides); else for `absent: removed` collections, under `'all'`, and
+   * for a record whose nested collections declare `parentAbsent`.
+   */
+  function lookupPlanned(route: ClientRoute, id: string): boolean {
+    if (options.missingRecordChecks === 'none') return false;
+    if (
+      !route.absentMeansDeleted &&
+      !(route.itemReadable && route.collection.itemUrl)
+    )
+      return false;
+    return (
+      Boolean(route.absentRemoved) ||
+      options.missingRecordChecks === 'all' ||
+      nestedUnder.has(route.collection.name) ||
+      nestedWritesUnder(route, id)
+    );
+  }
+
+  /**
    * Whether a nested collection declaring `parentAbsent` has unsettled
    * writes under record `id` of `route`: then the record's fate decides
    * theirs, so it is checked even without writes of its own.
@@ -3654,8 +4343,8 @@ export function createApiClient(
     found: Evidence,
     round: SyncRound,
     released: Set<QueuedWrite>,
-  ): { scope: string; id: string }[] {
-    const touched: { scope: string; id: string }[] = [];
+  ): RebuildTarget[] {
+    const touched: RebuildTarget[] = [];
     if (found.evidence !== 'deleted' && found.evidence !== 'unavailable')
       return touched;
     for (const { route: nested, param } of nestedUnder.get(
@@ -3687,7 +4376,13 @@ export function createApiClient(
             remote(scope).get(member) ?? lastKnownFor(scope, member);
           reportMissing(nested, context, member, conclusion, lastKnown);
           if (failMissing(scope, member, conclusion, lastKnown, released))
-            touched.push({ scope, id: member });
+            touched.push({
+              scope,
+              id: member,
+              route: nested,
+              context,
+              found: conclusion,
+            });
         }
       }
     }
@@ -3816,8 +4511,10 @@ export function createApiClient(
     }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
+    // What concluded each touched record, for telling before a removal.
+    const foundById = new Map<string, Evidence>();
     // Members of nested collections concluded with this read's records.
-    const nested: { scope: string; id: string }[] = [];
+    const nested: RebuildTarget[] = [];
     for (const [id, found] of evidence) {
       const key = keyFor(scope, id);
       // A write to the record settled while it was checked: a later sync
@@ -3835,6 +4532,7 @@ export function createApiClient(
       }
       if (failMissing(scope, id, found, previous.get(id), released))
         touchedIds.add(id);
+      foundById.set(id, found);
       nested.push(...applyParentAbsent(route, id, found, sync, released));
     }
     const taken = new Map<string, Record<string, unknown>>();
@@ -3852,13 +4550,21 @@ export function createApiClient(
     }
     // Records without writes: checked under 'all', or when the writes of a
     // nested collection declaring parentAbsent depend on their fate.
+    const limit = options.maxMissingRecordChecks ?? 50;
     for (const id of vanished) {
       if (writeQueues.has(keyFor(scope, id))) continue;
-      if (
-        options.missingRecordChecks !== 'all' &&
-        !nestedWritesUnder(route, id)
-      )
-        continue;
+      // Over this sync's limit: the record stays unconfirmed and is checked
+      // first by the next sync. A declaration decides without a request,
+      // and only a check that makes a request counts.
+      if (!route.absentMeansDeleted && lookupPlanned(route, id)) {
+        if (sync.lookups >= limit) {
+          const mark = keptMarks.get(keyFor(scope, id));
+          if (mark?.presence === 'unconfirmed')
+            mark.detail = `not checked yet: over this sync's limit of ${limit} checks (maxMissingRecordChecks)`;
+          continue;
+        }
+        sync.lookups += 1;
+      }
       const revision = recordRevisions.get(keyFor(scope, id)) ?? 0;
       const found = await findEvidence(route, context, id, budget);
       if (undecided(found))
@@ -3877,8 +4583,10 @@ export function createApiClient(
           continue;
         reportMissing(route, context, id, found, previous.get(id));
         // Kept with its last known values when unavailable (§4.3); a
-        // conclusion that clears a kept mark removes the record again.
+        // conclusion that clears a kept mark removes the record again
+        // (told first).
         touchedIds.add(id);
+        foundById.set(id, found);
         nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
     }
@@ -3891,8 +4599,16 @@ export function createApiClient(
       detectConflicts(scope, taken);
     }
     await persistLater();
-    for (const id of touchedIds) await rebuild(scope, id);
-    for (const member of nested) await rebuild(member.scope, member.id);
+    await rebuildTelling(
+      [
+        ...[...touchedIds].map((id): RebuildTarget => {
+          const found = foundById.get(id);
+          return { scope, id, route, context, ...(found ? { found } : {}) };
+        }),
+        ...nested,
+      ],
+      sync,
+    );
     const scopes = new Set([scope, ...nested.map((member) => member.scope)]);
     for (const [key, queue] of writeQueues)
       if (queue[0] && scopes.has(queue[0].scope) && !draining.has(key))
@@ -3914,7 +4630,7 @@ export function createApiClient(
     budget: Budget,
     released: Set<QueuedWrite>,
   ): Promise<void> {
-    const touched: { scope: string; id: string }[] = [];
+    const touched: RebuildTarget[] = [];
     for (const { route, scope, context } of round.feeds) {
       const feed = await readFeed(route, scope, context, budget, round);
       for (const record of round.undecided) {
@@ -3946,7 +4662,13 @@ export function createApiClient(
             failMissing(scope, record.id, found, record.previous, released)) ||
           record.vanished
         )
-          touched.push({ scope, id: record.id });
+          touched.push({
+            scope,
+            id: record.id,
+            route,
+            context: record.context,
+            found,
+          });
         touched.push(
           ...applyParentAbsent(route, record.id, found, round, released),
         );
@@ -3954,7 +4676,7 @@ export function createApiClient(
     }
     if (!touched.length && !round.tombstonesChanged) return;
     await persistLater();
-    for (const { scope, id } of touched) await rebuild(scope, id);
+    await rebuildTelling(touched, round);
     for (const [key, queue] of writeQueues)
       if (queue.length && !draining.has(key)) void drainQueue(key);
   }
@@ -3965,13 +4687,18 @@ export function createApiClient(
    * fails, so it is listed and can be retried or discarded.
    */
   const REFRESH_MISS_LIMIT = 3;
-  async function countRefreshMisses(released: Set<QueuedWrite>): Promise<void> {
+  async function countRefreshMisses(
+    released: Set<QueuedWrite>,
+    skipped: Set<string> = new Set(),
+  ): Promise<void> {
     // While blocked, no write could be sent anyway (and reads likely fail
     // for the same reason): waiting does not count.
     if (authBlock) return;
     let changed = false;
     for (const write of allWrites()) {
       if (!write.awaitingRefresh || released.has(write)) continue;
+      // Its collection's read was not applied (a presence handler threw).
+      if (skipped.has(write.scope)) continue;
       // Only the head: failing a write behind unsettled ones would make a
       // failed write newer than queued ones, which a settle then drops.
       if (writeQueues.get(keyFor(write.scope, write.id))?.[0] !== write)
@@ -4051,6 +4778,8 @@ export function createApiClient(
 
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
+    // The records this sync's reads return were seen at its start.
+    const readAt = new Date().toISOString();
     const started = new Map(revisions);
     const startedRecords = new Map(recordRevisions);
     const released = new Set<QueuedWrite>();
@@ -4082,6 +4811,9 @@ export function createApiClient(
       superseded: new Set(),
       startedRecords,
       returned: new Map(),
+      presence: [],
+      lookups: 0,
+      skipped: new Set(),
     };
     let keptSettled = false;
     for (const snapshot of result.collections) {
@@ -4092,8 +4824,24 @@ export function createApiClient(
       for (const item of snapshot.items) {
         const id = String(item[idField]);
         ids.add(id);
-        // A read that returns an unavailable record settles its mark.
-        if (unavailableKept.delete(keyFor(scope, id))) keptSettled = true;
+        seenAt.set(keyFor(scope, id), readAt);
+        // A read that returns a marked record settles its mark: present.
+        const mark = keptMarks.get(keyFor(scope, id));
+        if (mark) {
+          keptMarks.delete(keyFor(scope, id));
+          keptSettled = true;
+          const change = presenceChange(
+            route,
+            mark.context,
+            id,
+            'present',
+            'read',
+            item,
+            false,
+          );
+          untoldMarks.delete(changeKey(change));
+          untoldMarks.set(changeKey(change), change);
+        }
       }
       round.returned.set(scope, ids);
     }
@@ -4172,19 +4920,121 @@ export function createApiClient(
       let confirmedBefore = remote(scope);
       if (differs) {
         // A reused adapter can contain records from before this client instance.
+        const persistedById = new Map(
+          persisted.map((item) => [
+            String(item[route.collection.idField]),
+            item,
+          ]),
+        );
         const before = new Set([
           ...remote(scope).keys(),
-          ...persisted.map((item) => String(item[route.collection.idField])),
+          ...persistedById.keys(),
         ]);
-        confirmedBefore = new Map(remote(scope));
-        confirmed.set(scope, records);
         const written = new Set(
           allWrites()
             .filter((w) => w.scope === scope)
             .map((w) => w.id),
         );
-        for (const id of confirmedBefore.keys())
-          if (!records.has(id) && !written.has(id)) vanished.push(id);
+        // Tell before prune. A record this read lacks (no writes) is, by
+        // its collection's declaration: deleted (`absent: deleted`; removed,
+        // or kept marked under retainDeleted), kept marked `unconfirmed`
+        // until a check settles it (`absent: removed`, or wherever a check
+        // will be made), or removed. Removals are told first; if the app's
+        // handler fails, this read is not applied.
+        const pruning: PresenceChange[] = [];
+        const recheck: string[] = [];
+        const lookups: string[] = [];
+        for (const id of before) {
+          if (records.has(id) || written.has(id)) continue;
+          const mark = keptMarks.get(keyFor(scope, id));
+          if (mark) {
+            if (mark.presence === 'unconfirmed' && lookupPlanned(route, id))
+              recheck.push(id);
+            else if (remote(scope).has(id) && lookupPlanned(route, id))
+              lookups.push(id);
+            continue;
+          }
+          const last = remote(scope).get(id) ?? persistedById.get(id);
+          const planned = lookupPlanned(route, id);
+          if (route.absentMeansDeleted) {
+            if (planned) lookups.push(id);
+            if (options.retainDeleted && last) {
+              setMark(
+                route,
+                context,
+                id,
+                'deleted',
+                last,
+                `the API document declares that a record missing from a complete read of ${route.collection.name} was deleted`,
+                'declaration',
+              );
+              continue;
+            }
+            pruning.push(
+              presenceChange(
+                route,
+                context,
+                id,
+                'deleted',
+                'declaration',
+                last,
+                true,
+              ),
+            );
+          } else if (last && (planned || route.absentRemoved)) {
+            setMark(
+              route,
+              context,
+              id,
+              'unconfirmed',
+              last,
+              planned
+                ? 'not returned by a complete read; not checked yet'
+                : 'not returned by a complete read; the record cannot be checked',
+              'read',
+            );
+            if (planned) lookups.push(id);
+          } else
+            pruning.push(
+              presenceChange(route, context, id, 'removed', 'read', last, true),
+            );
+        }
+        vanished.push(...recheck, ...lookups);
+        if (pruning.length) {
+          if (!(await tell(round, pruning))) {
+            round.skipped.add(scope);
+            continue;
+          }
+          // A write that settled while the app was told is newer than this
+          // snapshot: take the stale path (records upserted, nothing
+          // removed); what was told and not removed is told again by a
+          // later read that still lacks it.
+          if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
+            // Told, but not removed by this read.
+            for (const change of pruning) change.pruned = false;
+            changed.add(route.collection.name);
+            await releaseRefreshed(
+              read,
+              records,
+              remote(scope),
+              isFresh,
+              true,
+              released,
+            );
+            continue;
+          }
+          // A write the app queued while it was told keeps its record: not
+          // removed, so not `pruned` after all.
+          for (const change of pruning)
+            if (
+              allWrites().some((w) => w.scope === scope && w.id === change.id)
+            ) {
+              change.pruned = false;
+              written.add(change.id);
+            }
+        }
+        confirmedBefore = new Map(remote(scope));
+        confirmed.set(scope, records);
         // The newest confirmed copy of each written record: from this read,
         // or, for a record the read lacks, from just before it.
         for (const write of allWrites()) {
@@ -4198,7 +5048,19 @@ export function createApiClient(
         for (const write of allWrites())
           if (write.scope === scope && write.durable !== false)
             before.add(write.id);
-        for (const id of before) await rebuild(scope, id);
+        for (const id of before) {
+          // A record whose writes are all still being stored was not told
+          // and is not removed here: its own enqueue rebuilds it.
+          if (
+            !records.has(id) &&
+            written.has(id) &&
+            allWrites().every(
+              (w) => w.scope !== scope || w.id !== id || w.durable === false,
+            )
+          )
+            continue;
+          await rebuild(scope, id);
+        }
         changed.add(route.collection.name);
         // A write that settled during the rebuild invalidated this snapshot.
         if ((started.get(scope) ?? 0) === (revisions.get(scope) ?? 0))
@@ -4206,6 +5068,18 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
+      // An unchanged read rebuilds nothing, but unconfirmed records are
+      // still checked.
+      if (!differs)
+        for (const mark of keptMarks.values())
+          if (
+            mark.scope === scope &&
+            mark.presence === 'unconfirmed' &&
+            !records.has(mark.id) &&
+            !writeQueues.has(keyFor(scope, mark.id)) &&
+            lookupPlanned(route, mark.id)
+          )
+            vanished.push(mark.id);
       // isFresh: a write that settled on a record during the rebuild above
       // makes this read too old to judge that record.
       await releaseRefreshed(
@@ -4219,7 +5093,13 @@ export function createApiClient(
       );
     }
     await finishFeeds(round, budget, released);
-    await countRefreshMisses(released);
+    await countRefreshMisses(released, round.skipped);
+    // The marks set or cleared on records the sync keeps, told at its end;
+    // not after the handler already threw in this sync (they wait, with any
+    // held from a sync that threw, for the next one).
+    if (round.presenceError === undefined) await tell(round, []);
+    if (keptMarks.size || round.presence.length) await persistLater();
+    if (round.presenceError !== undefined) throw round.presenceError;
     // A describer that could not be read (whatever the status: a 401 or
     // 403 here is not an auth block) or that the budget left unread leaves
     // its items without a class, not their collection incomplete: a
@@ -4251,6 +5131,7 @@ export function createApiClient(
       incomplete,
       ...(result.describers ? { describers: result.describers } : {}),
       ...(warnings.length ? { warnings } : {}),
+      ...(round.presence.length ? { presence: round.presence } : {}),
       ...(coverage.length ? { coverage } : {}),
     };
   }
@@ -4314,6 +5195,8 @@ export function createApiClient(
       const route = resolveRoute(resource);
       if (!route.createPath)
         throw new Error(`Resource ${resource} declares no create operation`);
+      if (route.createRefused)
+        throw new Error(`Resource ${resource} ${route.createRefused}`);
       const context = contextFor(route, supplied);
       const scope = scopeFor(route, context);
       target(route.createPath, context);
@@ -4376,7 +5259,7 @@ export function createApiClient(
       const gone = goneParents.get(scope);
       // A record kept as unavailable (§4.3; no writes left, or never had
       // any): the edit waits for the next refresh, which checks it again.
-      const kept = unavailableKept.has(key);
+      const kept = keptMarks.has(key);
       // The visible record carries failed changes; seeding from it would send
       // them implicitly. With failed writes, seed from their last known record.
       const seed = failed
@@ -4427,7 +5310,7 @@ export function createApiClient(
       // update is. Of a record kept as unavailable: held until the next
       // refresh checks it (§4.3: not sent without a decision).
       const gone = goneParents.get(scope);
-      const kept = unavailableKept.has(keyFor(scope, id));
+      const kept = keptMarks.has(keyFor(scope, id));
       await enqueue({
         route,
         scope,
@@ -4437,6 +5320,25 @@ export function createApiClient(
         ...(gone || kept ? { awaitingRefresh: true } : {}),
       });
       if (gone) await concludeNew(scope, id, gone);
+    },
+    presence(resource): PresenceMark[] {
+      const name = resource
+        ? resolveRoute(resource).collection.name
+        : undefined;
+      return [...keptMarks.values()]
+        .filter((mark) => !name || mark.resource === name)
+        .map((mark) => ({
+          collection: mark.resource,
+          ...(Object.keys(mark.context).length
+            ? { context: { ...mark.context } }
+            : {}),
+          id: mark.id,
+          presence: mark.presence,
+          ...(mark.source ? { source: mark.source } : {}),
+          detail: mark.detail,
+          record: structuredClone(mark.record),
+          ...(mark.lastSeen ? { lastSeen: mark.lastSeen } : {}),
+        }));
     },
     pendingWrites(resource): PendingWriteInfo[] {
       const name = resource
@@ -4466,6 +5368,17 @@ export function createApiClient(
             : {}),
           ...(write.unbound && write.state === 'uncertain'
             ? { unbound: true as const }
+            : {}),
+          ...(write.followUp
+            ? {
+                followUp: {
+                  operation: write.followUp.operation,
+                  field: write.followUp.field,
+                  ...(write.followUp.reason
+                    ? { reason: write.followUp.reason }
+                    : {}),
+                },
+              }
             : {}),
           ...(write.conflicts?.size
             ? {
@@ -4532,6 +5445,15 @@ export function createApiClient(
         // A restored update waiting for a refresh: send it now, or drop it.
         if (resolution.action === 'confirm')
           throw new Error('Only an uncertain create can be confirmed');
+        // A follow-up whose outcome is unknown is read back before it is
+        // sent again (§4.7.2 step 6): a retry would skip that.
+        if (
+          resolution.action === 'retry' &&
+          waiting.some((w) => w.followUp?.reason === 'unknown')
+        )
+          throw new Error(
+            `The follow-up of record ${id} of ${resource} has an unknown outcome and waits for a read of the record before it is sent again (CRUD Causality §4.7.2); sync() reads it, or discard it`,
+          );
         const sleeper = queue[0];
         // Retrying sends now: an in-flight write marked for holding is not
         // held after its response either.
@@ -4570,10 +5492,25 @@ export function createApiClient(
         const newer = queue ?? [];
         const retried = failed.flatMap((write): QueuedWrite[] => {
           if (newer.length && write.type === 'delete') return [];
+          // A follow-up has no changes for withoutSetBy to strip: a newer
+          // queued delete, or a newer update that sets its field, supersedes
+          // it, as supersede() does for settled writes (§4.7.2 step 6: the
+          // app's own edit of the field wins).
+          if (
+            write.followUp &&
+            newer.some((later) => supersedesFollowUp(write, later))
+          )
+            return [];
           let changes = { ...write.changes };
           for (const later of newer)
             changes = withoutSetBy({ ...write, changes }, later);
-          if (write.type === 'update' && !Object.keys(changes).length)
+          // A follow-up has no changes of its own: what it sends is worked
+          // out again when it is sent (§4.7.2 step 4).
+          if (
+            write.type === 'update' &&
+            !write.followUp &&
+            !Object.keys(changes).length
+          )
             return [];
           const again: QueuedWrite = {
             ...write,
@@ -4585,6 +5522,16 @@ export function createApiClient(
           };
           // Describes the failure, which this retry leaves behind.
           delete again.missingRecord;
+          if (again.followUp) {
+            again.followUp = { ...again.followUp };
+            // One whose outcome is unknown (failed later by the refresh-miss
+            // limit or a missing record) is still read back before it is
+            // sent again (§4.7.2 step 6).
+            if (again.followUp.reason === 'unknown') {
+              again.awaitingRefresh = true;
+              delete again.refreshMisses;
+            } else delete again.followUp.reason;
+          }
           return [again];
         });
         if (!retried.length)
@@ -4592,8 +5539,10 @@ export function createApiClient(
             `The failed writes for record ${id} of ${resource} are superseded by queued writes; discard them or wait for those to settle`,
           );
         const pending = queue ?? [];
-        // Retrying sends now: updates waiting for a refresh stop waiting.
+        // Retrying sends now: updates waiting for a refresh stop waiting,
+        // except a follow-up whose outcome is unknown, which is read back.
         for (const write of pending) {
+          if (write.followUp?.reason === 'unknown') continue;
           delete write.awaitingRefresh;
           delete write.refreshMisses;
           delete write.holdIfQueued;

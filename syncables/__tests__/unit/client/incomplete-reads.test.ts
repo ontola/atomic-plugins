@@ -76,7 +76,9 @@ function server(): {
   let total: number | undefined;
   const requests: string[] = [];
   const transport: Transport = (request) => {
-    requests.push(`${request.method} ${request.url.pathname}${request.url.search}`);
+    requests.push(
+      `${request.method} ${request.url.pathname}${request.url.search}`,
+    );
     const page = Number(request.url.searchParams.get('page') ?? '0');
     const items = current[page] ?? [];
     return Promise.resolve({
@@ -143,14 +145,26 @@ describe('sync() with a read that is not complete', () => {
       constants: { teamId: 'w1' },
     });
     // Complete: two full pages, ended by the total.
-    set([[{ id: 'a' }, { id: 'b' }], [{ id: 'c' }, { id: 'd' }]], 4);
+    set(
+      [
+        [{ id: 'a' }, { id: 'b' }],
+        [{ id: 'c' }, { id: 'd' }],
+      ],
+      4,
+    );
     expect((await client.sync()).incomplete).toEqual([]);
     // Not complete: a short page adds e.
     set([[{ id: 'e' }]]);
     await client.sync();
     expect(ids(await client.list('tasks'))).toEqual(['a', 'b', 'c', 'd', 'e']);
     // The same complete read as the first one: e, which it lacks, goes.
-    set([[{ id: 'a' }, { id: 'b' }], [{ id: 'c' }, { id: 'd' }]], 4);
+    set(
+      [
+        [{ id: 'a' }, { id: 'b' }],
+        [{ id: 'c' }, { id: 'd' }],
+      ],
+      4,
+    );
     const result = await client.sync();
     expect(result.incomplete).toEqual([]);
     expect(ids(await client.list('tasks'))).toEqual(['a', 'b', 'c', 'd']);
@@ -194,10 +208,18 @@ describe('sync() with a read that is not complete', () => {
           periodWindows: {
             type: 'rangeWindow',
             autoDetect: false,
-            window: { unit: 'day', format: 'basicDate', bounds: 'closed', cap: 100 },
+            window: {
+              unit: 'day',
+              format: 'basicDate',
+              bounds: 'closed',
+              cap: 100,
+            },
             request: {
               queryParameters: {
-                filter: { role: 'windowRange', template: 'period:{start}..{end}' },
+                filter: {
+                  role: 'windowRange',
+                  template: 'period:{start}..{end}',
+                },
               },
             },
           },
