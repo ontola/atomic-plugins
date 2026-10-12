@@ -570,6 +570,79 @@ that no longer returns the record at all is handled below.
 
 ### Records a refresh no longer returns
 
+**Presence: tell before prune, and marks.** When a complete `sync()` no
+longer returns a record that has no unsettled writes, the client either
+removes it from the local copy or keeps it with a presence mark, by the
+collection's declaration:
+
+| Collection | The record is |
+|---|---|
+| `x-completeness: { absent: deleted }` | `deleted` (`source: 'declaration'`): removed, or kept marked `deleted` under `retainDeleted: true` |
+| `x-completeness: { absent: removed }`, or wherever a check will be made (`missingRecordChecks: 'all'`, a parent whose nested collection declares `parentAbsent`) | kept, marked `unconfirmed`, until a check (a GET of the record) settles it |
+| no declaration, default checks | `removed` (no longer returned; whether it still exists is not known): removed |
+
+A check settles an `unconfirmed` record: a 404/410 under `notFound:
+unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
+default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
+it marked `deleted` under `retainDeleted`; the record found but not in the
+list (`filtered`) removes it from this collection (`removed`, with the
+record as that check read it); an error or no check leaves it
+`unconfirmed`. The marks persist in the outbox. A retained `deleted` mark
+stays until a read returns the record again or the app removes it (a
+`remove()` is held and checked like any write to a marked record); the
+client does not expire or cap them. A read
+that returns a marked record again drops the mark (`present`). Checks of
+records without writes are capped at `maxMissingRecordChecks` per sync
+(default 50), one limit shared by all collections, spent in the order the
+sync reads them (and within a collection, records left `unconfirmed` by an
+earlier sync before newly vanished ones); the rest stay `unconfirmed`, and
+the next sync checks `unconfirmed` records first, even when the list did
+not change. Only a check that makes a request counts. Records with writes
+are always checked. Under `missingRecordChecks: 'none'`, or without an item
+GET, nothing is checked, reported or counted, and an `absent: removed`
+record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
+`record`, and `lastSeen`: when a read last returned the record, the start
+of that sync, absent when no read of this client returned it, such as a
+record kept from storage written before a restart); a record without a mark
+is present as far as the client knows. The read times are kept in memory
+for every record read; only a mark stores its `lastSeen` (in the outbox).
+A new `update()` or `remove()` of a marked record is held for the next
+refresh, which checks it.
+
+**The app is told before anything is removed.** `onPresence(changes)` is
+called, and awaited, before a record is removed from the local copy, with
+one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
+`source`, `record`, `pruned: true`). Marks set or cleared on kept records
+(`pruned: false`; `present` when a mark is dropped) are held and told at
+the end of the sync. Each record is told once per sync, with its latest
+change (a record marked `unconfirmed` and settled in the same sync is told
+only as settled; a removal replaces a held mark change of the same
+record). Held changes that are not told (the sync throws, the handler
+throws at the end, or it threw earlier in the sync, which skips the end
+call) are kept, the latest per record, and told at the end of a later
+sync; they are kept in memory only, so a restart loses them though not the
+marks. A removal the handler refused keeps the record and its mark; an
+`unconfirmed` one is checked again by a later sync. A mark dropped because
+a write to the record settled, or because a check found the record while a
+write or confirmed copy keeps it, drops its held change too; if the app had
+been told a mark of the record (or the mark was restored from storage), it
+is told `present` instead (not after a delete the app made). The same changes are on
+`SyncResult.presence` (absent when there are none). If the handler throws
+or rejects, the records are not removed (for the read's own removals, that
+collection's read is not applied: its records do not replace the confirmed
+copy, though marks the read settles still clear), its held writes do not
+count a refresh miss, `sync()` rejects with the error, and a later sync
+tells again. A write that settles while the handler runs makes the read
+older than it: its records are then only added or updated and nothing is
+removed. A record that has a write when the handler returns (queued during
+the handler, or still being stored) is not removed: its change is listed
+with `pruned: false`, although the handler was told `pruned: true`. A
+removal after a check, for a record kept earlier (`unconfirmed`,
+`unavailable`) that a check, the deletion feed or its parent now settles,
+is told the same way, with that `source` (`read`, `feed`, `parent`). A
+read that fails or is incomplete removes nothing and tells nothing.
+
 A complete `sync()` of a collection (every page read, within the read budget)
 can lack a record that has queued updates. The provider may have deleted it,
 or the list may just not return it (a default filter, a view that depends on
@@ -1257,7 +1330,14 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). The version stays `1` because an older client can
+from its local copy). A client from before the presence marks, which already
+keeps unavailable records, keeps the kept records but not their `presence`
+or `source`: once it
+stores the outbox again, `unconfirmed` and retained `deleted` marks come
+back after an upgrade as `unavailable` for good (kept, not checked again by
+themselves). A `presence` value this client does not know is read as
+`unavailable` in the same way. A client from before `lastSeen` drops it
+the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1599,14 +1679,22 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     updating records only, listed in `SyncResult.incomplete`;
   - throttling roles are also read from `bodyFields`;
   - an `x-runtime-schema` the client cannot use fails that resource's
-    collections.
+    collections;
+  - a record a complete `sync()` removes is told to the new `onPresence`
+    handler, awaited, before it is removed (a failing handler applies
+    nothing of that read); under `missingRecordChecks: 'all'` a vanished
+    record is kept, marked, until its check instead of removed first; and a
+    vanished parent without writes under it is checked by default.
   Outbox changes within version `1` that matter for a downgrade: the write
   value `missingRecord: 'unavailable'` and the write type `followUp` (an
   older client keeps such a record's writes as unrestorable, neither sent
   nor lost); the top-level `unavailable` (dropped by an older client, so
   its next complete read removes those records locally); `updateBody` (an
   older client sends a merge-patch update as a full record); `unbound` (an
-  older client's `retry` would send the create again). Settle or discard
+  older client's `retry` would send the create again); the kept
+  `unavailable` entries' `presence` and `source` and the mark's `lastSeen`
+  (an older client drops them and reads every kept record as
+  unavailable). Settle or discard
   merge-patch updates, unbound creates, held unavailable writes and
   compound-create follow-ups before downgrading.
   - Writes (CRUD Causality 0.4.0 and 0.5.0): declared create results
@@ -1638,6 +1726,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     wall-clock values, coverage on `CollectionSnapshot.coverage` and
     `SyncResult.coverage`, also for `rangeWindow` reads; `wallClockParam`,
     `instantsOf` and `coveredSpan` exported).
+  - Presence (Collection Completeness K4/K5): tell before prune
+    (`onPresence`, `SyncResult.presence`, `PresenceChange` with `deleted`
+    or `removed` and the last values); presence marks under
+    `absent: removed` and wherever a check will be made (`unconfirmed`,
+    then `unavailable`, removed or left `unconfirmed`; `retainDeleted`;
+    `maxMissingRecordChecks`, default 50, unconfirmed records checked
+    first; `client.presence()`; `PresenceChange` gains `present`,
+    `unconfirmed`, `unavailable` and `pruned: false`); `PresenceMark.lastSeen`,
+    when a read last returned the record.
   - Throttling 0.3.0: `bodyFields` (roles read from a throttling response's
     JSON body by literal dot-path; a body wait of no time counts as absent;
     `ThrottlingDeclaration.bodyFields`). A read waiting out an exhausted
