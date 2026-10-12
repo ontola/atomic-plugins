@@ -80,7 +80,10 @@ export const BUILDS = resolve(here, 'builds.json');
 const A = 'https://atomicdata.dev/properties/';
 const I = 'https://atomicdata.dev/integrations/properties/';
 
-/** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
+/**
+ * Drive apps built here. `base` is the plugin: the catalog entry whose copy
+ * they reuse, and the folder `integrations/<base>/` whose app they build.
+ */
 export const VERSIONS = {
   calendar: 'usertest-12',
   'issue-tracker': 'usertest-10',
@@ -284,7 +287,9 @@ export async function buildCatalog(out, { logUrl } = {}) {
       id,
       () =>
         import(
-          pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+          pathToFileURL(
+            resolve(repo, 'integrations', app.base, 'app/build.mjs'),
+          ).href
         ),
     );
     const file = resolve(out, 'apps', id, version, 'ui.js');
