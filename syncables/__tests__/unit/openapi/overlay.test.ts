@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { applyOverlay, type OverlayDocument } from '../../../src/openapi/overlay.js';
+import {
+  applyOverlay,
+  type OverlayDocument,
+} from '../../../src/openapi/overlay.js';
 
 describe('applyOverlay', () => {
   it('deep-merges an update action onto the target', () => {
@@ -41,13 +44,19 @@ describe('applyOverlay', () => {
     const result = applyOverlay(document, {
       overlay: '1.0.0',
       info: { title: 'Test', version: '1.0.0' },
-      actions: [{ target: '$.components.schemas', update: { Pet: { type: 'object' } } }],
+      actions: [
+        { target: '$.components.schemas', update: { Pet: { type: 'object' } } },
+      ],
     });
-    expect(result).toEqual({ components: { schemas: { Pet: { type: 'object' } } } });
+    expect(result).toEqual({
+      components: { schemas: { Pet: { type: 'object' } } },
+    });
   });
 
   it('removes a key at the target when the action has remove: true', () => {
-    const document = { components: { schemas: { Pet: {} }, paginationSchemes: { offset: {} } } };
+    const document = {
+      components: { schemas: { Pet: {} }, paginationSchemes: { offset: {} } },
+    };
     const result = applyOverlay(document, {
       overlay: '1.0.0',
       info: { title: 'Test', version: '1.0.0' },
@@ -62,6 +71,8 @@ describe('applyOverlay', () => {
       info: { title: 'Test', version: '1.0.0' },
       actions: [{ target: '$.paths[*]', update: {} }],
     };
-    expect(() => applyOverlay({}, overlay)).toThrow(/Unsupported overlay target/);
+    expect(() => applyOverlay({}, overlay)).toThrow(
+      /Unsupported overlay target/,
+    );
   });
 });

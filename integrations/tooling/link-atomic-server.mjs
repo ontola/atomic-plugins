@@ -18,7 +18,10 @@
  * Steps, each idempotent:
  *   1. Clone (shallow, just the pinned commit) if the checkout is missing;
  *      otherwise fetch and check out the pinned commit if HEAD differs.
- *      Refuses to move a checkout that has uncommitted changes.
+ *      Refuses to move a checkout that has uncommitted changes, or one named
+ *      after another commit (`…/atomic-server/<sha>`, the per-SHA layout of
+ *      AGENTS.md and docs/agents/build-vps.md): that one belongs to the
+ *      branches pinned there, and the error names this pin's own path.
  *      --no-fetch skips this and only verifies HEAD (CI's mode).
  *   2. Symlink `browser` -> <checkout>/browser (replacing a stale symlink,
  *      never a real directory).
@@ -44,7 +47,7 @@ import {
   symlinkSync,
   unlinkSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { root } from './lanes.mjs';
 import { serverCheckout } from './serve.mjs';
@@ -106,6 +109,24 @@ export function layoutProblems(base = root) {
   return problems;
 }
 
+/**
+ * Why `checkout` must not be moved to `ref`, or undefined. A directory named
+ * after a commit (`<sha>`, or `<sha>-<variant>` such as `-plugin-routes`) is
+ * the checkout for that commit, shared by every branch pinned there: moving
+ * it to another pin pulls `browser/` out from under their lanes and leaves
+ * its binary built for the old commit (seen on the build VPS, 2026-10-09).
+ */
+export function movePinProblem(checkout, ref) {
+  const name = basename(checkout);
+  const named = /^([0-9a-f]{40})(-.*)?$/.exec(name);
+  if (!named || named[1] === ref) return undefined;
+
+  return (
+    `${checkout} is the checkout for ${named[1].slice(0, 12)}, not this branch's pin ${ref.slice(0, 12)}; other branches pinned there may be using it, so it is not moved. ` +
+    `Use this pin's own: ATOMIC_SERVER_CHECKOUT=${join(dirname(checkout), ref + (named[2] ?? ''))} (one checkout per SHA; docs/agents/build-vps.md).`
+  );
+}
+
 function ensureCheckout(checkout, ref) {
   if (!existsSync(checkout)) {
     console.log(`Cloning ${REPO_URL} @ ${ref.slice(0, 12)} into ${checkout}`);
@@ -118,6 +139,8 @@ function ensureCheckout(checkout, ref) {
     if (head === undefined)
       throw new Error(`${checkout} exists but is not a git checkout`);
     if (head === ref) return;
+    const named = movePinProblem(checkout, ref);
+    if (named) throw new Error(named);
 
     const dirty = git(
       checkout,
