@@ -15,15 +15,14 @@ New integrations can use `AtomicStore`, `AtomicIdentityMap`, and `AtomicLens` wi
 
 See the [Atomic Data guide](docs/atomic-data.md) for the API, supported JSON-AD profile, persistence, connector contracts, and limitations. The [Atomic Extract Entity example](examples/AtomicExtractEntity.ts) maps flattened orders to linked Order and Customer resources. The original row API remains available; existing applications are not automatically migrated. Signed Atomic Commits and live Atomic Server transport are follow-up work.
 
-## Value lens algebra (unreleased)
+## Value lens algebra
 
-The new `devonian/lenses` entry (also exported from the root) composes pure,
+The `devonian/lenses` entry (new in 0.9.0, and also exported from the root) composes pure,
 synchronous field and custom mappings. Explicit source ownership, unchanged-value
 preservation and executable round-trip checks let a provider expose an editable
 view while retaining fields and representations the view cannot express. GitHub
 and Clockify prototypes live in their integration folders and have deterministic
-contract tests; current production apps do not import them. npm 0.8.0 does not yet
-contain this entry. See [Value lenses](docs/value-lenses.md) for the API, examples,
+contract tests; current production apps do not import them yet. See [Value lenses](docs/value-lenses.md) for the API, examples,
 supported domains and adoption boundary.
 
 ## Reflection engine (`devonian/reflect`)
@@ -50,7 +49,7 @@ browser without Node built-ins or polyfills:
 | `devonian` | Everything below except `devonian/reflect`, plus the row API (`DevonianTable`, `DevonianLens`, `DevonianClient`, `DevonianIndex`), `effect` schemas and `reconcileRecord` |
 | `devonian/atomic` | Only the native Atomic Data API (`AtomicStore`, `AtomicIdentityMap`, `AtomicLens`, resource helpers). Runtime dependency: the optional `@tomic/lib` peer |
 | `devonian/background` | `BackgroundSync` and its service-worker helpers |
-| `devonian/lenses` (unreleased) | Dependency-free synchronous field, custom and composed value lenses, with contract checks |
+| `devonian/lenses` (0.9.0) | Dependency-free synchronous field, custom and composed value lenses, with contract checks |
 | `devonian/reflect` | The reflection engine; `FileIdMap`/`FileKvStore` only outside the `browser` condition (see above) |
 
 `DevonianClient` and `DevonianTable` extend `DevonianEventEmitter`, a small
@@ -172,8 +171,9 @@ git commit
 ## Publishing
 
 Publishing to npm is automated: bump `version` in `package.json` as part of a
-PR, and once that PR merges to `main`, [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
-runs the test suite and publishes the new version — nobody runs `npm publish`
+PR, and once that PR merges to `main`,
+[`devonian-publish.yml`](../.github/workflows/devonian-publish.yml) (in the
+repository root) runs lint, the format check and the test suite and publishes the new version — nobody runs `npm publish`
 by hand. `npm publish`'s own `prepublishOnly` script (`clean` then `build`)
 guarantees the published tarball's `build/` always matches the version being
 published, rather than whatever was left on disk from an earlier build.
@@ -181,7 +181,7 @@ published, rather than whatever was left on disk from an earlier build.
 Auth is npm [Trusted Publishing](https://docs.npmjs.com/trusted-publishers)
 (OIDC) rather than a stored token: the package's Settings → Trusted Publisher
 page on npmjs.com is configured to trust this exact repo and workflow
-filename (`publish.yml`), and the workflow's `id-token: write` permission
+filename (`devonian-publish.yml`), and the workflow's `id-token: write` permission
 lets GitHub Actions mint a short-lived, run-scoped publish credential — there
 is no long-lived secret to rotate or leak. If that trusted-publisher
 configuration is ever missing or points at the wrong workflow, publishing
@@ -203,6 +203,22 @@ reason).
 
 See [the platform lens boundaries](docs/atomic-data.md#passive-platform-lenses)
 for the forward and reverse mappings and their scope.
+
+## 0.9.0
+
+Added: the `devonian/lenses` entry point (also exported from the package
+root), a dependency-free, synchronous, browser-safe value lens algebra:
+`fieldLens`, `customLens`, `readOnlyLens`, `recordLens` and `composeLenses`,
+with declared source ownership, unchanged-value preservation, explicit
+removal (`unset`), detached copies, `lensEqual` and the example-based law
+checker `checkLensLaws` (GetPut, PutGet, stable put). See
+[Value lenses](docs/value-lenses.md), and
+[Devonian for Cambria users](docs/from-cambria.md) for how it relates to
+Cambria. No existing export changed; 0.8.0 code keeps working.
+
+The provider lenses that use it (GitHub issues, Clockify, Raindrop, Solid
+bookmarks, Todoist) live in their plugin folders in ontola/atomic-plugins and
+are not part of this package; no published drive app imports them yet.
 
 ## 0.8.0
 

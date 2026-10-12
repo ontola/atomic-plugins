@@ -8,6 +8,8 @@
  *   ontology/v<N>                     one release index (an Atomic Ontology)
  *   ontology/classes/<name>-v<N>      one Atomic Class per file
  *   ontology/properties/<shortname>   one Atomic Property per file
+ *   ontology/lenses/...               the lens catalog, from lenses.json
+ *                                     (lens-catalog.mjs, LENSES.md)
  *   ontology-kit/terms.mjs, terms.d.mts   the same subjects as constants
  *
  * The term files are JSON-AD with absolute subjects and no file extension:
@@ -48,6 +50,13 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  LENS_DIR,
+  generateLenses,
+  implementationProblems,
+  lensSourceProblems,
+  readLensSource,
+} from './lens-catalog.mjs';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -288,10 +297,16 @@ export const render = resource => `${JSON.stringify(resource, null, 2)}\n`;
 
 /**
  * Every file `build` writes, as a map from repository-relative path to its
- * text. Throws on a source problem.
+ * text. Throws on a source problem. `lensSource` is lenses.json, when the
+ * repository at `repo` has one.
  */
-export function generate(source, ontologyBase) {
-  const problems = sourceProblems(source);
+export function generate(source, ontologyBase, lensSource, repo = root) {
+  const problems = [
+    ...sourceProblems(source),
+    ...(sourceProblems(source).length
+      ? []
+      : lensSourceProblems(lensSource, source, ontologyBase, repo)),
+  ];
   if (problems.length) throw new Error(problems.join('\n'));
   const s = subjects(ontologyBase);
   const ref = (kind, value) =>
@@ -346,6 +361,12 @@ export function generate(source, ontologyBase) {
     if (p.classtype) doc[atomic.classtype] = ref('class', p.classtype);
     files.set(`${TERMS_DIR}/properties/${shortname}`, render(doc));
   }
+
+  for (const [path, text] of generateLenses(lensSource, source, ontologyBase, {
+    render,
+    termsDir: TERMS_DIR,
+  }))
+    files.set(path, text);
 
   files.set(`${KIT_DIR}/terms.mjs`, termsModule(source, ontologyBase));
   files.set(`${KIT_DIR}/terms.d.mts`, termsTypes(source));
@@ -497,7 +518,12 @@ function filesUnder(dir, base) {
  * were published).
  */
 export function build({ base = root } = {}) {
-  const files = generate(readSource(base), readBase(base));
+  const files = generate(
+    readSource(base),
+    readBase(base),
+    readLensSource(base),
+    base,
+  );
 
   for (const stale of filesUnder(resolve(base, TERMS_DIR), base))
     if (!files.has(stale)) rmSync(resolve(base, stale));
@@ -512,7 +538,12 @@ export function build({ base = root } = {}) {
 
 /** Generated files that differ from a fresh build, and stray term files. */
 export function freshnessProblems(base = root) {
-  const files = generate(readSource(base), readBase(base));
+  const files = generate(
+    readSource(base),
+    readBase(base),
+    readLensSource(base),
+    base,
+  );
   const problems = [];
   const fix =
     'run `node ontology-kit/ontology.mjs build` and commit the result';
@@ -527,7 +558,7 @@ export function freshnessProblems(base = root) {
   for (const path of filesUnder(resolve(base, TERMS_DIR), base))
     if (!files.has(path))
       problems.push(
-        `${path}: ${TERMS_DIR}/ holds only the build's term files (v<N>, classes/, properties/)`,
+        `${path}: ${TERMS_DIR}/ holds only the build's files (term files v<N>, classes/, properties/, and the lens catalog lenses/)`,
       );
 
   return problems;
@@ -555,6 +586,51 @@ export const blobId = bytes =>
     .update(`blob ${bytes.length}\0`)
     .update(bytes)
     .digest('hex');
+
+/**
+ * The commit where this branch and `ref` parted, or undefined when there is
+ * none (no HEAD yet, or unrelated histories).
+ */
+export function mergeBaseWith(ref, base = root) {
+  try {
+    return git(base, ['merge-base', 'HEAD', ref]).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `base` is a shallow clone (CI's checkout is). */
+export function isShallow(base = root) {
+  try {
+    return (
+      git(base, ['rev-parse', '--is-shallow-repository']).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one line for published files missing here because the branch is
+ * behind `ref`, naming the first few.
+ */
+export function behindLine(ref, paths) {
+  const shown = paths.slice(0, 3).join(', ');
+  const more = paths.length > 3 ? `, and ${paths.length - 3} more` : '';
+
+  return `${paths.length} file(s) published at ${ref} are not on this branch, which is behind it (${shown}${more}): merge ${ref} (never restore them by hand)`;
+}
+
+/** Whether `path` exists in the tree of commit `treeish`. */
+export function inTree(treeish, path, base = root) {
+  try {
+    git(base, ['cat-file', '-e', `${treeish}:${path}`]);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** The files under ontology/ at `ref`, as a map from path to git blob id. */
 export function publishedTerms(ref, base = root) {
@@ -600,14 +676,39 @@ export function publishedProblems(ref, base = root) {
   const oldBase = publishedBase(ref, base);
   const newBase = readBase(base);
   const moved = oldBase !== undefined && oldBase !== newBase;
+  const mergeBase = mergeBaseWith(ref, base);
+  // Behind only when the branch point is not `ref` itself.
+  // A shallow clone counts as having none: its merge-base may stop short of
+  // the real one, so it cannot tell "behind" from "deleted" either.
+  const shallow = isShallow(base);
+  const behindRef =
+    !shallow &&
+    mergeBase !== undefined &&
+    mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
+  // Term files `ref` published after this branch parted from it: missing
+  // here because the branch is behind, not deleted. Reported together, with
+  // the merge as the fix, since "restore it" is the one thing a stale
+  // branch must not do by hand.
+  const behind = [];
+  // Without a merge-base (unrelated histories, or a shallow clone such as
+  // CI's, where `git merge-base` fails or may stop short), a file main
+  // published since cannot be told from one this branch lost: say both.
+  const unsure =
+    mergeBase === undefined || shallow
+      ? ` (This ${shallow ? 'shallow clone' : 'checkout'} cannot tell whether the branch is behind ${ref}: if it is, merge ${ref} first instead.)`
+      : '';
 
   for (const [path, blob] of publishedTerms(ref, base)) {
     const file = resolve(base, path);
 
     if (!existsSync(file)) {
-      problems.push(
-        `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.`,
-      );
+      if (behindRef && !inTree(mergeBase, path, base)) behind.push(path);
+      else
+        problems.push(
+          path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`)
+            ? `${path} is published at ${ref} and was deleted. Published lenses and lens releases stay available: restore it, and withdraw a lens by leaving it out of a new release lenses/v<N+1>.${unsure}`
+            : `${path} is published at ${ref} and was deleted. Published terms stay available: restore it.${unsure}`,
+        );
       continue;
     }
 
@@ -621,9 +722,13 @@ export function publishedProblems(ref, base = root) {
     }
 
     problems.push(
-      `${path} is published at ${ref} and was changed. Published terms are immutable: restore it, and publish the change as a new term (a new property shortname, or <class>-v<N+1>).`,
+      path.startsWith(`${TERMS_DIR}/lenses/`)
+        ? `${path} is published at ${ref} and was changed. Published lenses and lens releases are immutable: restore it, and publish the change as <lens>-v<N+1> in a new release lenses/v<N+1>.`
+        : `${path} is published at ${ref} and was changed. Published terms are immutable: restore it, and publish the change as a new term (a new property shortname, or <class>-v<N+1>).`,
     );
   }
+
+  if (behind.length) problems.push(behindLine(ref, behind));
 
   return problems;
 }
@@ -757,6 +862,25 @@ export function gateProblems(base = root) {
 export function check({ base = root, published } = {}) {
   const problems = sourceProblems(readSource(base));
   if (problems.length) return problems;
+  problems.push(
+    ...lensSourceProblems(
+      readLensSource(base),
+      readSource(base),
+      readBase(base),
+      base,
+    ),
+  );
+  if (problems.length) return problems;
+  const publishedLenses = new Set(
+    published
+      ? [...publishedTerms(published, base).keys()]
+          .filter(path => path.startsWith(`${TERMS_DIR}/${LENS_DIR}/`))
+          .map(path => path.slice(`${TERMS_DIR}/${LENS_DIR}/`.length))
+      : [],
+  );
+  problems.push(
+    ...implementationProblems(readLensSource(base), base, publishedLenses),
+  );
   problems.push(...freshnessProblems(base));
   if (published) problems.push(...publishedProblems(published, base));
   problems.push(...literalProblems(base), ...gateProblems(base));
@@ -796,8 +920,10 @@ if (
     const problems = check({ published });
     for (const p of problems) console.error(p);
     if (problems.length) process.exit(1);
+    const all = filesUnder(resolve(root, TERMS_DIR), root);
+    const lenses = all.filter(p => p.startsWith(`${TERMS_DIR}/lenses/`));
     console.info(
-      `ontology: ${filesUnder(resolve(root, TERMS_DIR), root).length} term file(s) match a fresh build from ${readBase()}` +
+      `ontology: ${all.length - lenses.length} term file(s) and ${lenses.length} lens catalog file(s) match a fresh build from ${readBase()}` +
         (published ? `; none published at ${published} changed` : ''),
     );
   } else {

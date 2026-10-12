@@ -93,22 +93,23 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,712 bytes for
-  0.5.0 (115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 125,914 bytes for
+  0.5.1, with devonian 0.9.0 (125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
   `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
-- Dependencies: `syncables@0.19.0` and `devonian@0.6.1` from npm, exact
+- Dependencies: `syncables@0.19.0` and `devonian@0.9.0` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
   folder's `node_modules/` (`pnpm install --frozen-lockfile` here; CI's
   "Install plugin npm dependencies" step does it for every
   `integrations/*/pnpm-lock.yaml`). This repo's `syncables/` and `devonian/`
-  sources are not used. Only devonian's `src/atomic/` is imported, by path
-  (`devonian/notion/lens/devonian-atomic.ts`): the package root also exports
-  `DevonianClient`/`DevonianTable`, which import `node:events` and Automerge
-  and cannot go into the bundle, and 0.6.1's `exports` has no subpath for
-  `src/atomic/`.
+  sources are not used. Only devonian's `devonian/atomic` entry point is
+  imported (`devonian/notion/lens/devonian-atomic.ts`), not the package root,
+  which also exports the row API and its Automerge storage. Until 0.5.1 the
+  app used devonian 0.6.1 and reached `src/atomic/` by path, because 0.6.1
+  had no `devonian/atomic` subpath; from 0.6.1 to 0.9.0 that API only gained
+  `AtomicIdentityMap.unbind`, which this app does not call.
 - `catalog/`: the composed catalog document, its provenance and
   `generate.py`. The overlays themselves are in
   `overlays/APIs/notion.com/2026-03-11/`; see [`catalog/README.md`](catalog/README.md).

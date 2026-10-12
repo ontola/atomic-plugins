@@ -999,3 +999,232 @@ group('issue-tracker controller: GitHub rate limits', () => {
     );
   });
 });
+
+group('issue-tracker controller: writes GitHub refused (#357)', () => {
+  /** The next write answers 422 with a GitHub-shaped validation body. */
+  const refuse = (
+    store: FakeStore,
+    over: Partial<NonNullable<FakeStore['refuse']>> = {},
+  ) => {
+    store.refuse = {
+      status: 422,
+      remaining: 1,
+      message: 'Validation Failed',
+      errors: [
+        {
+          resource: 'Issue',
+          field: 'title',
+          code: 'custom',
+          message: 'title is too long (maximum is 256 characters)',
+        },
+      ],
+      ...over,
+    };
+  };
+
+  const DETAIL =
+    'Validation Failed; title is too long (maximum is 256 characters)';
+  const writes = (store: FakeStore) =>
+    store.calls.filter(c => (c.method ?? 'GET') !== 'GET').length;
+  const issues = (store: FakeStore) =>
+    store.github.snapshot(SEEDED_REPOSITORY).issues as {
+      number: number;
+      title: string;
+      labels: (string | { name: string })[];
+    }[];
+
+  it('a 422 on an update applies nothing; the change is held again, not uncertain, and its approval is not carried', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store);
+    const before = writes(store);
+
+    const failed = ready(await controller.send());
+    expect(failed.problem).toEqual({
+      kind: 'refused',
+      message: `GitHub refused update_issue (HTTP 422: ${DETAIL}). Nothing was applied.`,
+      status: 422,
+      detail: DETAIL,
+    });
+    expect(failed.failedAt).toBeGreaterThan(0);
+    expect(writes(store)).toBe(before + 1);
+    expect(issues(store)[0].title).toBe(
+      'Keep the selected calendar after refresh',
+    );
+
+    // The next pass holds it for review again, as a plain pending change:
+    // nothing is sent on its own, nothing is uncertain.
+    const sentBefore = writes(store);
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: title “Keep the selected calendar after refresh” → “Renamed here”',
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(writes(store)).toBe(sentBefore);
+
+    // Edited and approved, it goes through.
+    await controller.edit(subject, { title: 'Shorter' });
+    const sent = ready(await controller.send());
+    expect(sent.problem).toBeUndefined();
+    expect(sent.last!.result.held).toEqual([]);
+    expect(issues(store)[0].title).toBe('Shorter');
+  });
+
+  it('the same across a reload: never "Uncertain GitHub write", never "may already be there"', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store);
+    expect(ready(await controller.send()).problem).toMatchObject({
+      kind: 'refused',
+    });
+
+    const reloaded = createController(store);
+    await reloaded.load();
+    const state = ready(await reloaded.sync());
+    expect(state.problem).toBeUndefined();
+    expect(state.last!.result.uncertain).toEqual([]);
+    expect(state.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: title “Keep the selected calendar after refresh” → “Renamed here”',
+    ]);
+    expect(state.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(issues(store)[0].title).toBe(
+      'Keep the selected calendar after refresh',
+    );
+  });
+
+  it('a refused create stays a local row and is held as a create again', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Too long',
+      body: '',
+      status: 'Todo',
+    });
+    refuse(store);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'refused', status: 422 });
+    expect(issues(store).filter(i => i.title === 'Too long')).toEqual([]);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      'Create issue “Too long” (Todo)',
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // Still unbound: no issue number, nothing on GitHub.
+    expect(
+      after.last!.result.rows.find(r => r.subject === subject)!.number,
+    ).toBeUndefined();
+    expect(issues(store).filter(i => i.title === 'Too long')).toEqual([]);
+  });
+
+  it('a create applied in part (issue made, its label refused) binds the row to the issue it made and holds the label as a plain update', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Doing',
+    });
+    refuse(store, {
+      skip: 1,
+      errors: [{ resource: 'Label', code: 'invalid', field: 'labels' }],
+    });
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({
+      kind: 'refused',
+      status: 422,
+      detail: 'Validation Failed; labels invalid',
+    });
+    const made = issues(store).filter(i => i.title === 'Half-made');
+    expect(made).toHaveLength(1);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // Bound to the issue it made: the rest is a plain update to review.
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      `Update #${made[0].number}: status Todo → Doing (add the atomic:doing label)`,
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    // Approved, it completes: one issue, one row, with its number.
+    const sent = ready(await controller.send());
+    expect(sent.problem).toBeUndefined();
+    expect(
+      issues(store)
+        .find(i => i.title === 'Half-made')!
+        .labels.map(l => (typeof l === 'string' ? l : l.name)),
+    ).toEqual(['atomic:doing']);
+    const settled = ready(await controller.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+    const row = settled.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made[0].number);
+    expect(row.status).toBe('Doing');
+  });
+
+  it('a 403 that is not a rate limit keeps the write uncertain, as before: the boundary of NOT_APPLIED', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store, {
+      status: 403,
+      message: 'Resource not accessible by personal access token',
+      errors: undefined,
+    });
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({
+      kind: 'failed',
+      message: 'GitHub update_issue returned 403',
+    });
+    // The saved operation resumes next pass and is flagged for a person.
+    const after = ready(await controller.sync());
+    expect(after.last!.result.held).toHaveLength(1);
+    expect(after.last!.result.held[0].unconfirmed).toBe(true);
+  });
+
+  it('describes the refusal with GitHub’s words and the way out', () => {
+    const problem = classify(
+      Object.assign(
+        new Error(
+          'GitHub refused update_issue (HTTP 404: Not Found). Nothing was applied.',
+        ),
+        { notSent: true, refused: true, status: 404, detail: 'Not Found' },
+      ),
+    );
+    expect(problem).toEqual({
+      kind: 'refused',
+      message:
+        'GitHub refused update_issue (HTTP 404: Not Found). Nothing was applied.',
+      status: 404,
+      detail: 'Not Found',
+    });
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem,
+      }),
+    ).toBe(
+      'GitHub refused a change and applied nothing (HTTP 404: Not Found). The change is held for review again: edit it here, then Review and send. Nothing is resent on its own.',
+    );
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem: { kind: 'refused', message: 'm', status: 410, detail: '' },
+      }),
+    ).toMatch(/^GitHub refused a change and applied nothing \(HTTP 410\)\./);
+  });
+});

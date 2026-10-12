@@ -452,6 +452,47 @@ describe('problems keep the gap visible', () => {
     expect(scheduled.problems![0].lead).toBe(rateLimitLead(NOW + 60 * MIN));
   });
 
+  it('a refused write (#357): GitHub’s words, nothing applied, and the way out', () => {
+    const detail =
+      'Validation Failed; title is too long (maximum is 256 characters)';
+    const status = syncStatusFor({
+      state: failed(
+        {
+          kind: 'refused',
+          message: `GitHub refused update_issue (HTTP 422: ${detail}). Nothing was applied.`,
+          status: 422,
+          detail,
+        },
+        {
+          last: {
+            at: NOW - 10 * MIN,
+            result: result({ held: [held('a')] }),
+          },
+        },
+      ),
+      now: NOW,
+      retryAt: NOW + 4 * MIN,
+    });
+    expect(status.last).toEqual({
+      ok: false,
+      at: NOW - 2 * MIN,
+      error: `GitHub refused a change and applied nothing (HTTP 422: ${detail}).`,
+      nextStep:
+        'Edit the change here, then Review and send it again; nothing is resent on its own.',
+      lastGood: NOW - 10 * MIN,
+    });
+    // No retry time is promised: the same request would be refused again.
+    expect(status.problems).toBeUndefined();
+    expect(status.writeBackNote).toBeUndefined();
+    // The change waits as pending; nothing may have landed.
+    expect(status.writes).toMatchObject({ pending: 1 });
+    expect(status.writes?.uncertain).toBeUndefined();
+    expect(
+      lines(failed({ kind: 'refused', message: 'x', status: 410, detail: '' }))
+        .headline,
+    ).toBe('Sync failed 2 min ago');
+  });
+
   it('a short limit a running pass waits out', () => {
     const status = syncStatusFor({
       state: ready({ busy: 'sending', limited: { until: NOW + 15_000 } }),

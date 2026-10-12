@@ -10,6 +10,15 @@
  *   api/GET__api__v1__tasks__page-<n>.json
  *                   { status, headers, body } per page of Todoist API v1,
  *                   body redacted per REDACTIONS below.
+ *   api/GET__api__v1__tasks__completed-<n>.json
+ *                   { status, headers, body } of `GET /tasks/{id}` for each
+ *                   `--completed-task <id>`: a task the account's owner
+ *                   completed by hand before recording. This is #46's open
+ *                   question (does Todoist answer a completed task with
+ *                   `checked: true`, or 404?), recorded as seen; scenario.mjs
+ *                   then models its `completeTask` driver on the answer.
+ *                   Redacted like the lists; a 404 body keeps its status and
+ *                   has every string redacted.
  *   api/meta.json   when and how the recording was made, and every field the
  *                   redactor did not recognise (redacted to "redacted").
  *
@@ -32,11 +41,24 @@
  *                      (default https://localthought.io)
  *   --limit <n>        page size sent as `limit` (default 3)
  *   --max-pages <n>    stop after this many pages per collection (default 3)
+ *   --completed-task <id>
+ *                      record `GET /tasks/<id>` for a task completed by hand
+ *                      in the account (repeatable). Without it the script
+ *                      warns: the recording then leaves #46's completed-task
+ *                      question open and scenario.mjs keeps its assumption.
+ *                      The id is the one Todoist shows in the task's URL.
+ *                      Given without a value (last, or before another
+ *                      --option) it is ignored, with a warning.
+ *
+ * --proxy, --limit and --max-pages without a value (last, or before another
+ * --option), a --limit or --max-pages that is not an integer of at least 1,
+ * and the --name=value form stop the script before anything is fetched.
  *
  * Use an account with at least limit+1 active tasks, so the recording has a
  * second page (next_cursor) to exercise pagination; the script warns if not.
  * For todoist.ts coverage, include a task with `due.date`, one with
- * `due.datetime`, one with no due date, and several priorities.
+ * `due.datetime`, one with no due date, and several priorities. Complete one
+ * more task by hand first and pass its id as --completed-task.
  *
  * The fixture (scenario.mjs) is already registered in
  * integrations/localthought/fixtures/index.mjs. Until api/ exists it serves
@@ -209,11 +231,121 @@ export function redactor() {
   };
 }
 
-const arg = (name, fallback) => {
-  const i = process.argv.indexOf(`--${name}`);
+/** Whether `argv[i + 1]` is no value for the option at `argv[i]`. */
+const noValue = (argv, i) =>
+  argv[i + 1] === undefined || argv[i + 1].startsWith('--');
 
-  return i === -1 ? fallback : process.argv[i + 1];
+/**
+ * Refuses the `--<name>=<value>` form, which `arg` and `args` would not see
+ * (the option would silently keep its default).
+ */
+export function checkArgv(argv = process.argv) {
+  const joined = argv.find(a => /^--[^=]+=/.test(a));
+  if (joined)
+    throw new Error(
+      `write ${joined.replace('=', ' ')} instead of ${joined}: options take their value as the next argument`,
+    );
+}
+
+/** `value` of option `--<name>` as an integer of at least 1, or a throw. */
+export function positiveInteger(name, value) {
+  const n = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(n) || n < 1)
+    throw new Error(`--${name} must be an integer of at least 1, not ${value}`);
+
+  return n;
+}
+
+/**
+ * The value of a single `--<name> <value>` option, or `fallback` when it is
+ * not given. A flag right after the option (`--limit --proxy x`), or
+ * nothing at all, is no value: that throws, rather than recording with
+ * `limit` "--proxy".
+ */
+export const arg = (name, fallback, argv = process.argv) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i === -1) return fallback;
+  if (noValue(argv, i)) throw new Error(`--${name} needs a value`);
+
+  return argv[i + 1];
 };
+
+/**
+ * Every value of a repeatable `--<name> <value>` option, in order. A flag
+ * right after the option (`--completed-task --limit 3`) is not its value,
+ * and neither is the end of the line; `valueless` counts those.
+ */
+export const args = (name, argv = process.argv) =>
+  argv.flatMap((a, i) =>
+    a === `--${name}` && !noValue(argv, i) ? [argv[i + 1]] : [],
+  );
+
+/** How many times a `--<name>` option is given without a value. */
+export const valueless = (name, argv = process.argv) =>
+  argv.filter((a, i) => a === `--${name}` && noValue(argv, i)).length;
+
+/**
+ * Every string in `body` replaced with "redacted", numbers, booleans and
+ * null kept: for an error answer (404), whose fields are no task fields.
+ * Nothing in it is reported as unrecognised, so an error body never lands
+ * in meta.json's "add to KEEP" list.
+ */
+export const scrub = body =>
+  Array.isArray(body)
+    ? body.map(scrub)
+    : body !== null && typeof body === 'object'
+      ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, scrub(v)]))
+      : typeof body === 'string'
+        ? 'redacted'
+        : body;
+
+/**
+ * Records `GET /tasks/{id}` for one task completed by hand (#46). The file
+ * holds whatever Todoist answered, 404 included: scenario.mjs reads the
+ * status and `checked` of these files to model its completeTask driver, and
+ * todoist-fixture.test.ts fails when the answer is neither 404 nor a row with
+ * `checked: true`, so an unexpected shape is noticed, not assumed away.
+ */
+async function recordCompleted({ dir, token, redact, id, n }) {
+  const url = new URL(`${API}/tasks/${encodeURIComponent(id)}`);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  let body;
+
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    body = {};
+  const file = `GET__api__v1__tasks__completed-${n}.json`;
+  writeFileSync(
+    new URL(`api/${file}`, dir),
+    `${JSON.stringify(
+      {
+        status: res.status,
+        headers: {},
+        // A task row is redacted as one; an error body (404) is scrubbed
+        // whole, its fields being no task fields to learn from.
+        body: res.status === 200 ? redact.row('task', body) : scrub(body),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  if (res.status === 200 && body.checked === true)
+    console.info(`record: completed task ${n}: 200 with checked: true`);
+  else if (res.status === 404) console.info(`record: completed task ${n}: 404`);
+  else
+    console.warn(
+      `record: completed task ${n}: ${res.status} with checked: ${body.checked}; neither 404 nor checked: true. Is the task really completed? todoist-fixture.test.ts will fail on it.`,
+    );
+
+  return res.status;
+}
 
 async function recordDocument(dir, proxy) {
   const res = await fetch(new URL('/catalog/todoist.yaml', proxy));
@@ -306,7 +438,12 @@ function format(dir) {
 
 async function main() {
   const dir = new URL('./', import.meta.url);
+  // Every option is read before anything is fetched, so one without a
+  // value stops the script first.
+  checkArgv();
   const proxy = arg('proxy', 'https://localthought.io');
+  const limit = positiveInteger('limit', arg('limit', '3'));
+  const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
   await recordDocument(dir, proxy);
   console.info(`record: wrote document.yaml from ${proxy}`);
   if (process.argv.includes('--document-only')) return format(dir);
@@ -314,8 +451,6 @@ async function main() {
   const token = process.env.TODOIST_TOKEN;
   if (!token)
     throw new Error('TODOIST_TOKEN must be set (or pass --document-only)');
-  const limit = Number(arg('limit', '3'));
-  const maxPages = Number(arg('max-pages', '3'));
   const api = new URL('api/', dir);
   rmSync(api, { recursive: true, force: true });
   mkdirSync(api);
@@ -336,6 +471,20 @@ async function main() {
       maxPages,
     });
 
+  const completedIds = args('completed-task');
+  const skipped = valueless('completed-task');
+  if (skipped)
+    console.warn(
+      `record: ${skipped} --completed-task option(s) without a value (at the end, or followed by another --option) ignored.`,
+    );
+  const completed = [];
+  for (const [i, id] of completedIds.entries())
+    completed.push(await recordCompleted({ dir, token, redact, id, n: i + 1 }));
+  if (completed.length === 0)
+    console.warn(
+      'record: no --completed-task given; what GET /tasks/{id} answers for a completed task (#46) stays unrecorded, and scenario.mjs keeps assuming checked: true.',
+    );
+
   writeFileSync(
     new URL('meta.json', api),
     `${JSON.stringify(
@@ -345,6 +494,8 @@ async function main() {
         document_source: `${proxy}/catalog/todoist.yaml`,
         limit,
         pages,
+        completed_tasks: completed.length,
+        completed_task_statuses: completed,
         unrecognised_fields_redacted: redact.unknown(),
       },
       null,

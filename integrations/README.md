@@ -287,7 +287,13 @@ node integrations/tooling/apps.mjs check --published origin/main
   merge queue. Locally it defaults to `origin/main` when that ref exists.
 
 Builds pin esbuild's `absWorkingDir` to the repository root, so the bytes do
-not depend on the directory the build ran from.
+not depend on the directory the build ran from. Before building an app,
+`check` and `write` run `pnpm install --frozen-lockfile` in its plugin folder
+and its own folder when either has a `pnpm-lock.yaml` and no `node_modules`
+yet (one `apps: Installing …` line each, through `tooling/deps.mjs`, as
+`run-lane.mjs` does for a lane); CI installs every lockfile first, so there
+nothing happens. `--no-install` skips that, and a missing package then fails
+the build with esbuild's "Could not resolve".
 
 ### Bundle size
 

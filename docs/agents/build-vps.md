@@ -35,7 +35,7 @@ disk and ports. This page is true as of 2026-10-02.
 | `/home/claude/work/atomic-plugins` | the repo checkout; workers use worktrees under `.claude/worktrees/` |
 | `/home/claude/work/atomic-server-pin` | atomic-server at the pinned SHA (`.atomic-server-ref`), already `pnpm install`ed with `@tomic/lib` built and Playwright Chromium installed. It is `ATOMIC_SERVER_CHECKOUT`. Read-only: never commit in it or move it by hand |
 | `/home/claude/work/atomic-server` | a full clone of ontola/atomic-server, for `git worktree add` and for `server-build.mjs`'s `ATOMIC_SERVER_REPO` |
-| `/home/claude/work/atomic-server-pin/target/e2e/atomic-server` | the e2e binary; `.built-for-atomic-plugins` next to it exists once it is built for the current pin |
+| `/home/claude/work/atomic-server-pin/target/e2e/atomic-server` | the e2e binary; `.built-for-atomic-plugins` next to it holds the commit it was built from. After a pin bump moves the checkout, that stamp is stale until someone rebuilds: `serve.mjs` then refuses to run the binary and prints the full build lines (WASM bundle, cargo, stamp). Rebuild under the heavy lock, from the coordinator, not from several workers at once |
 | `~/.cache/atomic-plugins/atomic-server/<sha>-plugin-routes` | the plugin-routes build, where `server-build.mjs` looks (AGENTS.md, "The plugin-routes feature build") |
 | `/home/claude/.cache/atomic-plugins/heavy.lock` | the lock for heavy runs |
 

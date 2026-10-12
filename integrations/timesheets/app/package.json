@@ -3,5 +3,8 @@
   "private": true,
   "version": "0.7.1",
   "type": "module",
-  "description": "Clockify timesheets drive app. Records only the version its catalog entry and apps/timesheets/<version>/ui.js carry (integrations/tooling/apps.mjs); no npm dependencies. Not a certified sandbox package (no atomicCertification)."
+  "description": "Clockify timesheets drive app. Records the version its catalog entry and apps/timesheets/<version>/ui.js carry (integrations/tooling/apps.mjs). Its one npm dependency, devonian, is for the Clockify lens prototype's tests in ../devonian/clockify/; the app's bundle does not import it. Not a certified sandbox package (no atomicCertification).",
+  "dependencies": {
+    "devonian": "0.9.0"
+  }
 }

@@ -281,11 +281,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is not imported, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "notion database table rows pages two-way review sync status drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.5.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.5.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-ImBCQKWLeSJOT2SumM7X3LN9vhdaG3iQOudeGxOOpwuSt1vNqzLThEroDKX5ggBC"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-rymegsVFZvt2r0qwzdQNS+XJH2GiN1E9U547HYDvKcNzra4+sOzfWciOnPk7xRck"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",
@@ -393,11 +393,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect GitHub through the host's consent bar and choose a repository. It syncs when opened, on Sync now and after each edit made in the app; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "One repository per table: the app's own table, and each other Issue table it was asked to sync. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it, so Remove from board isn't offered there), the table itself is never written, and syncing pauses when the grant is taken back. A row added to the table outside the app stays local until you choose Publish to GitHub on it. A status other than exactly one of Todo, Doing, Blocked and Done is shown as it is and not synced. Labels and assignees are shown read-only; milestones and pull requests are not synced, and deletions are never sent to GitHub. One syncing view per app is assumed: two tabs or devices are not guarded. A new issue or comment whose send got no answer is never sent twice: you link it to the issue it became on GitHub, or send it again once GitHub shows no match. Waits for the stable ontology domain. Mock-tested only: not yet verified against live GitHub or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "github issues board kanban tracker two-way review drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.4.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.4.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.4.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-5xyXS9k7ZOudcuUHglh1O9AeK8Yh4+caLPUiIsoXOLV6ubNSD2+dKQBGqWSvrKgz"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/issue-tracker/0.4.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-flaeAZJjYfy4KuB+gVHclMYlCG0+JObPv+lhiHX/z617bpSkagznLeaGddfWOIZj"
   },
   {
     "https://atomicdata.dev/properties/localId": "open-cloud-mesh",

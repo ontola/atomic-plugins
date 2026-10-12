@@ -29,7 +29,12 @@ import type {
   Problem,
   SyncStatus,
 } from '../../sync-status/card.js';
-import { OTHER_NOTE, PAUSED_NOTE, type ViewState } from './controller.js';
+import {
+  OTHER_NOTE,
+  PAUSED_NOTE,
+  refusalText,
+  type ViewState,
+} from './controller.js';
 import { clock } from './rateLimit.js';
 import type { IssueRow } from './sync.js';
 
@@ -291,6 +296,8 @@ function failureText(p: Trouble): string {
             : `Sync paused: ${p.message}`;
     case 'rate-limited':
       return `GitHub is rate-limiting requests (${p.message.replace(/^GitHub is rate-limiting requests \(|\);.*$/g, '')}).`;
+    case 'refused':
+      return refusalText(p);
     case 'failed':
       return p.message;
   }
@@ -309,6 +316,8 @@ function nextStep(p: Trouble, input: StatusInput): string {
         : 'Check GitHub, then sync again; nothing is resent on its own.';
     case 'rate-limited':
       return `Wait; it retries at ${clock(input.retryAt ?? p.until)}.`;
+    case 'refused':
+      return 'Edit the change here, then Review and send it again; nothing is resent on its own.';
     case 'failed':
       return input.retryAt
         ? `It retries at ${clock(input.retryAt)}; Sync now to retry at once.`

@@ -128,9 +128,13 @@ buildable and publishable TypeScript package (own `package.json`,
 `pnpm-lock.yaml`, `tsconfig.json`) migrated in from the standalone
 `localthought/devonian` repo, full commit history included via `git
 subtree`. It publishes to npm as `devonian`. Two plugins use it:
-`integrations/notion/` depends on the published npm version (exact version
-in its `package.json`), and `integrations/issue-tracker/devonian/github-issues/`
-imports this folder's source through a Vitest alias. A plugin's own lens lives in
+`integrations/notion/` and `integrations/issue-tracker/app/` depend on the
+published npm version (exact versions in their `package.json`), and the lens
+prototypes in `integrations/issue-tracker/devonian/` and
+`integrations/timesheets/devonian/` test against the npm version their
+plugin's `app/package.json` pins; those in `integrations/bookmarks/` and
+`integrations/solid/` still import this folder's source through a Vitest
+alias. A plugin's own lens lives in
 its plugin folder, at `integrations/<plugin>/devonian/<platform>/`, and
 imports `devonian` as a package, never by relative path into `devonian/src`;
 no lens is left inside the package. See [`devonian/AGENTS.md`](devonian/AGENTS.md)
@@ -277,15 +281,19 @@ limit and its comment in the same commit. See
 The shared row classes of [#177](https://github.com/ontola/atomic-plugins/issues/177)
 (event, issue, time entry, bank transaction), which several plugins sync into
 so that a plugin's view works on any table of that class. `ontology/` holds
-only the generated term files, which the same Pages publish serves at
-`https://ontola.github.io/atomic-plugins/ontology/<path>`, each file at its
-own subject. `ontology-kit/` holds everything else: `base.json` (the one place
-the base URL is written), `source.json`, `ontology.mjs` (`build` and `check`),
-the generated subject constants `terms.mjs`, and the strict field resolver
-`resolver.mjs` that plugin views bundle. Never edit `ontology/` or
-`terms.mjs` by hand: edit `source.json` or `base.json` and run
-`node ontology-kit/ontology.mjs build`. A term file that is on `main` is never
-changed or deleted, apart from a base move; CI's
+only generated files: the term files, and the shared lens catalog under
+`ontology/lenses/` (Q-089; decided by Michiel in Decision Inbox Q-106,
+2026-10-08, see [`ontology-kit/LENSES.md`](ontology-kit/LENSES.md)). The same
+Pages publish
+serves them at `https://ontola.github.io/atomic-plugins/ontology/<path>`, each
+file at its own subject. `ontology-kit/` holds everything else: `base.json`
+(the one place the base URL is written), `source.json`, `lenses.json`,
+`ontology.mjs` (`build` and `check`), the generated subject constants
+`terms.mjs`, the strict field resolver `resolver.mjs` and the lens
+interpreter `lens.mjs` that plugins bundle. Never edit `ontology/` or
+`terms.mjs` by hand: edit `source.json`, `lenses.json` or `base.json` and run
+`node ontology-kit/ontology.mjs build`. A file under `ontology/` that is on
+`main` is never changed or deleted, apart from a base move; CI's
 `ontology.mjs check --published origin/main` enforces that. While the base is
 on github.io, every catalog entry that uses it must be `enabled: false`, which
 the same check enforces. See [`ontology-kit/README.md`](ontology-kit/README.md).
@@ -373,8 +381,10 @@ below and #227 disagree, #227 is newer.
   `integrations/README.md`). Moving shared code out of plugin folders needs
   the user's decision. `ontology/` and `ontology-kit/` are such shared code,
   approved by Michiel on #177: shared-class terms, subject constants, the
-  field resolver and class-to-class lenses belong there, while a plugin's
-  provider-specific terms and code stay in its own folder.
+  field resolver and the shared lens catalog belong there. The catalog may
+  hold declarative provider-record-to-class lenses as well as class-to-class
+  ones (Decision Inbox Q-106, 2026-10-08); a plugin's provider-specific
+  terms and code, code lenses included, stay in its own folder.
   `integrations/sync-status/` is the other approved shared code (Decision
   Inbox Q-084, status-only): the sync-status card a drive app renders above
   its data (`card.ts`, `card.css`, with their tests and the `sync-status`
