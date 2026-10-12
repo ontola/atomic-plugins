@@ -138,7 +138,41 @@ await Promise.all([
 
 There are no revision clocks, stale-event rejection, cross-system conflict resolution, signed Atomic Commits, Atomic Server transport, permissions, or Automerge integration in the resource API yet. Ingest applies events in call order; it can restore an earlier-deleted resource, so the application must order or filter delayed webhooks. Native data alone does not supply distributed convergence.
 
-The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the concurrency contract above.
+### Event ordering
+
+`__tests__/atomic/ordering.test.ts` pins the default: a lens keeps no revisions. A delayed update ingested after `ingestDelete` brings the resource back under its old subject; an older update that arrives after a newer one overwrites it; replaying the same record is a no-op (same subject, same state).
+
+A platform's ordering information is connector-specific (an `updated_at`, a version, a webhook sequence number), so it stays with the host. The recipe the same test file exercises: keep the newest revision applied per external id, deletions included as tombstones; drop any event whose revision is not newer; record the revision only after the lens call succeeded, so a failed event can be retried; and run the check and the lens call in one promise chain, so two events for one id cannot interleave.
+
+```ts
+const revisions = new Map<ExternalId, number>(); // persist with the snapshot
+let tail: Promise<unknown> = Promise.resolve();
+const run = <T>(operation: () => Promise<T>): Promise<T> => {
+  const result = tail.then(operation);
+  tail = result.catch(() => undefined);
+  return result;
+};
+const stale = (id: ExternalId, revision: number) =>
+  (revisions.get(id) ?? -Infinity) >= revision;
+
+const onUpdate = (record: Platform, revision: number) =>
+  run(async () => {
+    if (stale(record.id, revision)) return undefined;
+    const subject = await lens.ingest(record);
+    revisions.set(record.id, revision);
+    return subject;
+  });
+const onDelete = (id: ExternalId, revision: number) =>
+  run(async () => {
+    if (stale(id, revision)) return;
+    await lens.ingestDelete(id);
+    revisions.set(id, revision); // the tombstone
+  });
+```
+
+Write `revisions` atomically with the store snapshot, in the same file or the same transaction. If they diverge after a crash, neither direction is safe: with `revisions` ahead of the store, events the store never applied are dropped as stale and their data is lost; with `revisions` behind it, a redelivered event older than the store's real state passes the check and rolls the record back. Every ingest path for the lens, full re-fetches and backfills included, must go through the same host chain; a direct `lens.ingest` call skips the revision check. The recipe does not resolve competing edits made on both sides (that needs `reconcileRecord` or connector logic), and whether the library should offer this as an opt-in hook is still open (#259).
+
+The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, the concurrency contract, and the default event ordering with the host ordering recipe above.
 
 Specification references: [JSON-AD](https://docs.atomicdata.dev/core/json-ad.html), [Atomic Schema](https://docs.atomicdata.dev/schema/intro.html), [Atomic Commits](https://docs.atomicdata.dev/commits/intro.html), [TypeScript SDK](https://atomicdata-dev.github.io/atomic-data-browser/docs/modules/_tomic_lib.html).
 
