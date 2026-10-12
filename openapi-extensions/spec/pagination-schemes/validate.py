@@ -264,6 +264,7 @@ def validate(document):
             if found:
                 continue
             errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
+            errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
             if merged.get("type") == "rangeWindow":
                 problem = _window_carrier_problem(merged)
                 if problem:
@@ -421,6 +422,23 @@ def _short_page_problems(scheme, applied):
     return problems
 
 
+def _advance_problems(scheme):
+    """Rule 25, for a scheme applied to an operation."""
+    advances = [
+        scheme["request"][location][name].get("advance", "itemCount")
+        for location, name in _role_fields(scheme, "offset")
+    ]
+    if "pageSize" not in advances:
+        return []
+    responds = any(
+        isinstance(field, dict) and field.get("role") == "pageSize"
+        for field in scheme.get("response", {}).get("bodyFields", {}).values()
+    )
+    if _role_fields(scheme, "pageSize") or responds:
+        return []
+    return ["request: advance 'pageSize' needs a request or response field with role pageSize (rule 25)"]
+
+
 class PageReadError(RuntimeError):
     """A page-number read that ended with an error (§4.4.5 step 3)."""
 
@@ -536,6 +554,64 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         if ended:
             return {"items": items, "pages": pages, "complete": True}
         number += 1
+
+
+def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+    """An offset read with the offset field's `advance` (§4.3.2).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `offset` field (and the `pageSize` field, when `page_size` is
+    given) to their values, and returns the response body. Under
+    `itemCount` the next offset adds the items the page held, and the read
+    ends at an empty page or once the next offset reaches a `totalCount`
+    field. Under `pageSize` it adds a reported `pageSize` field (at least 1),
+    else `page_size`, and ends once the next offset reaches `totalCount`, or
+    at an empty page when the response has no `totalCount` field.
+
+    Returns {"items", "pages", "offsets"}. Raises PageReadError when, under
+    `pageSize`, neither page size is known, for a page holding an item an
+    earlier page returned, or after `max_pages` pages without reaching the
+    end.
+    """
+    offset_fields = _role_fields(scheme, "offset")
+    if len(offset_fields) != 1:
+        raise ValueError("an offset read has exactly one offset field")
+    [offset_field] = offset_fields
+    location, name = offset_field
+    advance = scheme["request"][location][name].get("advance", "itemCount")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    items, seen, offsets = [], set(), []
+    offset = 0
+    while True:
+        if max_pages is not None and len(offsets) >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {offset_field: offset}
+        values.update({field: page_size for field in size_fields})
+        body = request(values)
+        offsets.append(offset)
+        page = page_items(body, scheme)
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"the page at offset {offset} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        if advance == "pageSize":
+            reported = _count(_role_value(body, scheme, "pageSize"))
+            step = reported if reported else (page_size if size_fields else None)
+            if not step:
+                raise PageReadError(f"the page at offset {offset} gives no page size to advance by")
+            following = offset + step
+            if total_count is not None:
+                if following >= total_count:
+                    return {"items": items, "pages": len(offsets), "offsets": offsets}
+            elif not page:
+                return {"items": items, "pages": len(offsets), "offsets": offsets}
+        else:
+            following = offset + len(page)
+            if not page or (total_count is not None and following >= total_count):
+                return {"items": items, "pages": len(offsets), "offsets": offsets}
+        offset = following
 
 
 def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):

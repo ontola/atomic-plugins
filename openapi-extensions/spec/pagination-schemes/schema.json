@@ -159,6 +159,7 @@
         },
         "required": { "type": "boolean" },
         "start": { "description": "Rule 19.", "type": "integer", "minimum": 0 },
+        "advance": { "description": "Rule 24.", "enum": ["itemCount", "pageSize"] },
         "template": {
           "description": "Rule 15: {start} and {end} once each, no other braces.",
           "type": "string",
@@ -171,7 +172,8 @@
       "then": { "required": ["template"] },
       "else": { "not": { "required": ["template"] } },
       "dependentSchemas": {
-        "start": { "required": ["role"], "properties": { "role": { "const": "page" } } }
+        "start": { "required": ["role"], "properties": { "role": { "const": "page" } } },
+        "advance": { "required": ["role"], "properties": { "role": { "const": "offset" } } }
       }
     },
     "response": {
