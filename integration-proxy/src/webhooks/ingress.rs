@@ -212,9 +212,26 @@ async fn receive_checked(
     }
     let gate = &webhooks.gate;
     let hook = {
-        let Some(_slot) = slot(&gate.lookups, gate.wait).await else {
-            return answer(StatusCode::SERVICE_UNAVAILABLE);
+        // A network over its refusal limit never queues for the lookup slot:
+        // it takes the slot only when it is free right now, and otherwise
+        // gets `429` at once. The semaphore is fair, so a slot released while
+        // other requests wait goes to them, never to such a request: a flood
+        // from blocked networks cannot keep real deliveries waiting.
+        let blocked = webhooks
+            .limits
+            .ingress_per_network
+            .blocked(network, std::time::Instant::now());
+        let permit = match blocked {
+            Some(retry) => match gate.lookups.try_acquire() {
+                Ok(permit) => permit,
+                Err(_) => return super::limits::too_many(retry),
+            },
+            None => match slot(&gate.lookups, gate.wait).await {
+                Some(permit) => permit,
+                None => return answer(StatusCode::SERVICE_UNAVAILABLE),
+            },
         };
+        let _slot = permit;
         match webhooks.store.hook_by_endpoint(&endpoint_id).await {
             Ok(Some(hook)) => hook,
             Ok(None) => return no_endpoint(webhooks, network),

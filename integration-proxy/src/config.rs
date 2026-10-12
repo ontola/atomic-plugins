@@ -64,12 +64,16 @@ pub struct WebhookConfig {
     /// payloads plus the stated per-row overhead. Defaults to
     /// [`DEFAULT_WEBHOOK_INBOX_MAX_BYTES`] (1 GiB).
     pub inbox_max_bytes: i64,
-    /// `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`: deliveries one endpoint accepts
-    /// for verification per minute, per instance. Default 600.
+    /// `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`: failed verifications one
+    /// existing endpoint counts per minute, per instance; over it, further
+    /// ones get `429` instead of `401`. A delivery that verifies is never
+    /// refused for it. Default 600.
     pub ingress_per_endpoint_per_minute: u32,
-    /// `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`: deliveries one client network
-    /// (as `TRUST_FORWARDED_FOR` finds it) may send per minute, per
-    /// instance. Default 120.
+    /// `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`: refusals one client network (as
+    /// `TRUST_FORWARDED_FOR` finds it) may cause per minute, per instance
+    /// (not `400` or `408`). Over it, its requests for ids that name no
+    /// endpoint get `429`, and it never queues for the lookup slot. Default
+    /// 120.
     pub ingress_per_network_per_minute: u32,
     /// `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`: subscription requests per
     /// connection owner per hour, per instance, counted before the access

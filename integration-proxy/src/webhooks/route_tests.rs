@@ -1576,6 +1576,92 @@ async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
     env.drop_schema().await;
 }
 
+/// Re-review of the rate-limits PR: a blocked network never queues for the
+/// one lookup slot. While the slot is busy it gets `429` at once, and a
+/// flood of its requests cannot hold up a delivery from another network.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_blocked_network_never_queues_for_the_lookup_slot() {
+    let mut env = env(small()).await;
+    let alice = Agent::new(99);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    env.state.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+    let state = with_limits(&env, 600, 2, 20);
+    let from = |network: &str, request: Request<Body>| {
+        let mut request = request;
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", network.parse().unwrap());
+        request
+    };
+    let junk = |n: usize| {
+        Request::post(format!("/webhooks/{:0>43}", n))
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    let attacker = "198.51.100.7";
+    for n in 0..3 {
+        send(from(attacker, junk(n))).await;
+    }
+    assert_eq!(
+        send(from(attacker, junk(9))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the attacker's network is blocked"
+    );
+
+    // The lookup slot is busy: the blocked network is answered at once, while
+    // a delivery from another network waits for the slot and gets it.
+    let webhooks = state.webhooks.clone().unwrap();
+    let held = webhooks.gate.lookups.acquire().await.unwrap();
+    let waiting = tokio::spawn(send(from(
+        "192.0.2.1",
+        env.signed_delivery(&endpoint, "real-1", &task("p-100", "real-1")),
+    )));
+    let started = std::time::Instant::now();
+    for n in 0..20 {
+        assert_eq!(
+            send(from(attacker, junk(100 + n))).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "no request queued"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(held);
+    assert_eq!(waiting.await.unwrap().status(), StatusCode::NO_CONTENT);
+
+    // A flood from the blocked network alongside real deliveries: none of
+    // those waits out the slot and fails.
+    let flood: Vec<_> = (0..200)
+        .map(|n| tokio::spawn(send(from(attacker, junk(1000 + n)))))
+        .collect();
+    for id in ["real-2", "real-3", "real-4"] {
+        assert_eq!(
+            send(from(
+                "192.0.2.1",
+                env.signed_delivery(&endpoint, id, &task("p-100", id)),
+            ))
+            .await
+            .status(),
+            StatusCode::NO_CONTENT,
+            "{id}"
+        );
+    }
+    for request in flood {
+        let status = request.await.unwrap().status();
+        assert!(matches!(status, StatusCode::TOO_MANY_REQUESTS), "{status}");
+    }
+    env.drop_schema().await;
+}
+
 /// Subscription requests are limited per owner before the access check
 /// reaches the provider.
 #[tokio::test]

@@ -610,6 +610,16 @@ generic code.
   and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
   Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
   set (`heroku`), or every sender is one network: the router's.
+  A network over its limit never queues for the one endpoint-lookup slot:
+  it takes the slot only when it is free at that moment and otherwise gets
+  `429` at once, and the slot's semaphore is fair, so a released slot goes
+  to the requests already waiting. What remains: many networks that each
+  stay under the limit (120 refusals a minute each, for example a client
+  rotating IPv6 /64s) can still keep the slot busy, and a delivery that
+  waits 3 s for it gets `503`, which GitHub does not retry; the periodic
+  full reads are the fallback. A provider network that junk has pushed over
+  the limit gets `429` for a real delivery only while the slot is busy at
+  that moment.
 
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and how the limits behave across several instances (each counts
