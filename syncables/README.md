@@ -464,9 +464,19 @@ anything is removed, with one `PresenceChange` per record (`collection`,
 `pruned: true`). `presence` is `deleted` when the collection declares
 `x-completeness: { absent: deleted }` (`source: 'declaration'`), else
 `removed`: no longer returned by a complete read, whether or not it still
-exists (`source: 'read'`). If the handler throws or rejects, nothing of
-that collection's read is applied, `sync()` rejects with the error, and the
-next sync tells again. The same changes are on `SyncResult.presence` (absent
+exists (`source: 'read'`). If the handler throws or rejects, that
+collection's read is not applied (nothing is removed, and its records do not
+replace the confirmed copy; marks the read settles, such as a kept
+unavailable record it returns, still clear), its held writes do not count a
+refresh miss, `sync()` rejects with the error, and the next sync tells
+again. A write that settles while the handler runs makes the read older
+than it: the read's records are then only added or updated, nothing is
+removed, and a record told but not removed is told again by a later read
+that still lacks it. A record whose only writes are still being stored is
+neither told nor removed. A removal after a check is told the same way: a
+record kept as unavailable that a later check finds deleted (`source:
+'feed'` or `'read'`) or present but filtered (`removed`) is told before it
+is removed. The same changes are on `SyncResult.presence` (absent
 when there are none). This applies under every `missingRecordChecks`; a
 lookup of the record, when one is made, comes after it and is reported to
 `onMissingRecord` as before (so a record later found `unavailable` is

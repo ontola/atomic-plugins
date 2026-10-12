@@ -35,3 +35,23 @@ the record still local while the handler runs, an asynchronous handler, a
 failing handler, nothing removed, a record with writes, a reused storage.
 Retention, `retainDeleted`, presence marks, lookups and the cap come in the
 next PRs.
+
+## Turn 2 (2026-10-12): review blocker and points
+
+**Human (via the coordinator session):** Blocker: the awaited handler sits
+between the stale-snapshot check and `confirmed.set`, so a write that
+settles while it runs is overwritten (a delete brings the record back, and
+the next sync reports the app's own delete as `removed`; an update is
+reverted). Also: a kept unavailable record later concluded `filtered` or
+`deleted` is removed silently; a record whose only write is not durable yet
+is not told but still dropped; the README's "nothing is applied" is not
+literally true; a throwing handler lets held updates count refresh misses.
+
+**Assistant:** After the handler, the scope's revision is checked again
+and a newer write sends the snapshot down the stale path. Removals after a
+check go through `rebuildTelling`, which tells before removing (in
+`releaseRefreshed`, `finishFeeds` and for parent members). A record whose
+writes are all still being stored is not rebuilt by the read. A scope whose
+handler threw is skipped by `countRefreshMisses`. README reworded.
+`PresenceChange.source` takes `MissingRecord`'s values. Tests for each
+probe, all failing before the fix.

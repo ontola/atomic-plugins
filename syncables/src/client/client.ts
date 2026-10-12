@@ -398,7 +398,12 @@ export interface PresenceChange {
   context?: Record<string, string>;
   id: string;
   presence: 'deleted' | 'removed';
-  source: 'declaration' | 'read';
+  /**
+   * What concluded it: `declaration` (`absent: deleted`), `read` (a
+   * complete read no longer returned it, or the record's own read), `feed`,
+   * `parent` or `none` (no check made), as on `MissingRecord`.
+   */
+  source: MissingRecord['source'];
   record?: Record<string, unknown>;
   /** The record is removed from the local copy right after this is told. */
   pruned: true;
@@ -3026,6 +3031,77 @@ export function createApiClient(
      * read returned it under the same identity, parent included.
      */
     returned: Map<string, Set<string>>;
+    /** Removals this sync told (`onPresence`) before making them. */
+    presence: PresenceChange[];
+    /** The first error a presence handler threw; `sync()` rejects with it. */
+    presenceError?: unknown;
+    /** Scopes whose read was not applied because the handler threw. */
+    skipped: Set<string>;
+  }
+
+  /** A record a sync may rebuild, with what it knows about why. */
+  interface RebuildTarget {
+    scope: string;
+    id: string;
+    route: ClientRoute;
+    context: Record<string, string>;
+    found?: Evidence;
+  }
+
+  /**
+   * Rebuilds records, telling the app first about each one the rebuild
+   * removes from the local copy (no confirmed copy, no kept mark, no stored
+   * write, but a stored record now). If the handler throws, those records
+   * are left as they are (the next complete read tells again) and the error
+   * is kept for `sync()`.
+   */
+  async function rebuildTelling(
+    targets: RebuildTarget[],
+    round: SyncRound,
+  ): Promise<void> {
+    const removing: PresenceChange[] = [];
+    const held = new Set<string>();
+    for (const target of targets) {
+      const key = keyFor(target.scope, target.id);
+      if (
+        remote(target.scope).has(target.id) ||
+        unavailableKept.has(key) ||
+        allWrites().some(
+          (w) =>
+            w.scope === target.scope &&
+            w.id === target.id &&
+            w.durable !== false,
+        )
+      )
+        continue;
+      const stored = await storage.get(target.scope, target.id);
+      if (!stored) continue;
+      held.add(key);
+      removing.push({
+        collection: target.route.collection.name,
+        ...(Object.keys(target.context).length
+          ? { context: { ...target.context } }
+          : {}),
+        id: target.id,
+        presence: target.found?.evidence === 'deleted' ? 'deleted' : 'removed',
+        source: target.found?.source ?? 'read',
+        record: stored,
+        pruned: true,
+      });
+    }
+    let told = true;
+    if (removing.length) {
+      try {
+        await options.onPresence?.(removing.map((c) => structuredClone(c)));
+        round.presence.push(...removing);
+      } catch (error) {
+        round.presenceError ??= error;
+        told = false;
+      }
+    }
+    for (const target of targets)
+      if (told || !held.has(keyFor(target.scope, target.id)))
+        await rebuild(target.scope, target.id);
   }
 
   function feedEvidence(route: ClientRoute): Evidence {
@@ -3579,8 +3655,8 @@ export function createApiClient(
     found: Evidence,
     round: SyncRound,
     released: Set<QueuedWrite>,
-  ): { scope: string; id: string }[] {
-    const touched: { scope: string; id: string }[] = [];
+  ): RebuildTarget[] {
+    const touched: RebuildTarget[] = [];
     if (found.evidence !== 'deleted' && found.evidence !== 'unavailable')
       return touched;
     for (const { route: nested, param } of nestedUnder.get(
@@ -3612,7 +3688,13 @@ export function createApiClient(
             remote(scope).get(member) ?? lastKnownFor(scope, member);
           reportMissing(nested, context, member, conclusion, lastKnown);
           if (failMissing(scope, member, conclusion, lastKnown, released))
-            touched.push({ scope, id: member });
+            touched.push({
+              scope,
+              id: member,
+              route: nested,
+              context,
+              found: conclusion,
+            });
         }
       }
     }
@@ -3741,8 +3823,10 @@ export function createApiClient(
     }
     const fresh = new Map<string, Record<string, unknown>>();
     const touchedIds = new Set<string>();
+    // What concluded each touched record, for telling before a removal.
+    const foundById = new Map<string, Evidence>();
     // Members of nested collections concluded with this read's records.
-    const nested: { scope: string; id: string }[] = [];
+    const nested: RebuildTarget[] = [];
     for (const [id, found] of evidence) {
       const key = keyFor(scope, id);
       // A write to the record settled while it was checked: a later sync
@@ -3760,6 +3844,7 @@ export function createApiClient(
       }
       if (failMissing(scope, id, found, previous.get(id), released))
         touchedIds.add(id);
+      foundById.set(id, found);
       nested.push(...applyParentAbsent(route, id, found, sync, released));
     }
     const taken = new Map<string, Record<string, unknown>>();
@@ -3802,8 +3887,10 @@ export function createApiClient(
           continue;
         reportMissing(route, context, id, found, previous.get(id));
         // Kept with its last known values when unavailable (§4.3); a
-        // conclusion that clears a kept mark removes the record again.
+        // conclusion that clears a kept mark removes the record again
+        // (told first).
         touchedIds.add(id);
+        foundById.set(id, found);
         nested.push(...applyParentAbsent(route, id, found, sync, released));
       }
     }
@@ -3816,8 +3903,16 @@ export function createApiClient(
       detectConflicts(scope, taken);
     }
     await persistLater();
-    for (const id of touchedIds) await rebuild(scope, id);
-    for (const member of nested) await rebuild(member.scope, member.id);
+    await rebuildTelling(
+      [
+        ...[...touchedIds].map((id): RebuildTarget => {
+          const found = foundById.get(id);
+          return { scope, id, route, context, ...(found ? { found } : {}) };
+        }),
+        ...nested,
+      ],
+      sync,
+    );
     const scopes = new Set([scope, ...nested.map((member) => member.scope)]);
     for (const [key, queue] of writeQueues)
       if (queue[0] && scopes.has(queue[0].scope) && !draining.has(key))
@@ -3839,7 +3934,7 @@ export function createApiClient(
     budget: Budget,
     released: Set<QueuedWrite>,
   ): Promise<void> {
-    const touched: { scope: string; id: string }[] = [];
+    const touched: RebuildTarget[] = [];
     for (const { route, scope, context } of round.feeds) {
       const feed = await readFeed(route, scope, context, budget, round);
       for (const record of round.undecided) {
@@ -3871,7 +3966,13 @@ export function createApiClient(
             failMissing(scope, record.id, found, record.previous, released)) ||
           record.vanished
         )
-          touched.push({ scope, id: record.id });
+          touched.push({
+            scope,
+            id: record.id,
+            route,
+            context: record.context,
+            found,
+          });
         touched.push(
           ...applyParentAbsent(route, record.id, found, round, released),
         );
@@ -3879,7 +3980,7 @@ export function createApiClient(
     }
     if (!touched.length && !round.tombstonesChanged) return;
     await persistLater();
-    for (const { scope, id } of touched) await rebuild(scope, id);
+    await rebuildTelling(touched, round);
     for (const [key, queue] of writeQueues)
       if (queue.length && !draining.has(key)) void drainQueue(key);
   }
@@ -3890,13 +3991,18 @@ export function createApiClient(
    * fails, so it is listed and can be retried or discarded.
    */
   const REFRESH_MISS_LIMIT = 3;
-  async function countRefreshMisses(released: Set<QueuedWrite>): Promise<void> {
+  async function countRefreshMisses(
+    released: Set<QueuedWrite>,
+    skipped: Set<string> = new Set(),
+  ): Promise<void> {
     // While blocked, no write could be sent anyway (and reads likely fail
     // for the same reason): waiting does not count.
     if (authBlock) return;
     let changed = false;
     for (const write of allWrites()) {
       if (!write.awaitingRefresh || released.has(write)) continue;
+      // Its collection's read was not applied (a presence handler threw).
+      if (skipped.has(write.scope)) continue;
       // Only the head: failing a write behind unsettled ones would make a
       // failed write newer than queued ones, which a settle then drops.
       if (writeQueues.get(keyFor(write.scope, write.id))?.[0] !== write)
@@ -4007,11 +4113,10 @@ export function createApiClient(
       superseded: new Set(),
       startedRecords,
       returned: new Map(),
+      presence: [],
+      skipped: new Set(),
     };
     let keptSettled = false;
-    // Records removed from the local copy, told before removal.
-    const presence: PresenceChange[] = [];
-    let presenceError: unknown;
     for (const snapshot of result.collections) {
       const route = byResource.get(snapshot.collection.name) as ClientRoute;
       const scope = scopeFor(route, contextFor(route, snapshot.pathParams));
@@ -4141,10 +4246,27 @@ export function createApiClient(
           try {
             await options.onPresence?.(pruning.map((c) => structuredClone(c)));
           } catch (error) {
-            presenceError ??= error;
+            round.presenceError ??= error;
+            round.skipped.add(scope);
             continue;
           }
-          presence.push(...pruning);
+          // A write that settled while the app was told is newer than this
+          // snapshot: take the stale path (records upserted, nothing
+          // removed); what was told and not removed is told again by a
+          // later read that still lacks it.
+          if ((started.get(scope) ?? 0) !== (revisions.get(scope) ?? 0)) {
+            changed.add(route.collection.name);
+            await releaseRefreshed(
+              read,
+              records,
+              remote(scope),
+              isFresh,
+              true,
+              released,
+            );
+            continue;
+          }
+          round.presence.push(...pruning);
         }
         confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
@@ -4163,7 +4285,19 @@ export function createApiClient(
         for (const write of allWrites())
           if (write.scope === scope && write.durable !== false)
             before.add(write.id);
-        for (const id of before) await rebuild(scope, id);
+        for (const id of before) {
+          // A record whose writes are all still being stored was not told
+          // and is not removed here: its own enqueue rebuilds it.
+          if (
+            !records.has(id) &&
+            written.has(id) &&
+            allWrites().every(
+              (w) => w.scope !== scope || w.id !== id || w.durable === false,
+            )
+          )
+            continue;
+          await rebuild(scope, id);
+        }
         changed.add(route.collection.name);
         // A write that settled during the rebuild invalidated this snapshot.
         if ((started.get(scope) ?? 0) === (revisions.get(scope) ?? 0))
@@ -4184,8 +4318,8 @@ export function createApiClient(
       );
     }
     await finishFeeds(round, budget, released);
-    await countRefreshMisses(released);
-    if (presenceError !== undefined) throw presenceError;
+    await countRefreshMisses(released, round.skipped);
+    if (round.presenceError !== undefined) throw round.presenceError;
     // A describer that could not be read (whatever the status: a 401 or
     // 403 here is not an auth block) or that the budget left unread leaves
     // its items without a class, not their collection incomplete: a
@@ -4203,7 +4337,7 @@ export function createApiClient(
       incomplete,
       ...(result.describers ? { describers: result.describers } : {}),
       ...(warnings.length ? { warnings } : {}),
-      ...(presence.length ? { presence } : {}),
+      ...(round.presence.length ? { presence: round.presence } : {}),
     };
   }
 
