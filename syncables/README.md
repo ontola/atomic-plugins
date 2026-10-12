@@ -1225,10 +1225,10 @@ page number, so a zero-based `page` (ClickUp's) starts at 0; the default
 stays 1, and the mock server honours it too. A `pageNumber` scheme with a
 `shortPage` (§4.4.5) ends at the first page with fewer than `size` items
 (`size: request` takes `pageSize`, else the pageSize parameter's documented
-`default`), or at the end
-another declared field shows on a full page. A page with more than `size`
-items, or one that repeats the page before it, ends the read with
-`PageReadError` before its items are taken. A read ended by a short page is
+`default`), or at the end another declared field shows on a full page. A
+page with more than `size` items, or with an item that an earlier page of
+the read returned, ends the read with `PageReadError` before its items are
+taken. A read ended by a short page is
 complete only when the `assurance` is `documented`; with `observed` or
 `assumed` its snapshot has `complete: false` and `notComplete`, with no
 error.

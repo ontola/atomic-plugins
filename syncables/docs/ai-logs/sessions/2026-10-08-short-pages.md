@@ -90,3 +90,11 @@ pages.
 `pageSize` body field now counts only on a POST walk. Test: a GET scheme
 whose `pageSize` field is a body field, `pageSize: 50` passed, reads 250
 items in three full pages of 100.
+
+**User:** After #424 merges, fix the README wording in a small docs PR: the
+read ends on an item any earlier page returned, not only on a repeat of the
+page before.
+
+**Assistant:** The README's short-page paragraph now says a page with an
+item that an earlier page of the read returned ends the read with
+`PageReadError`, as `walkPages` and CLAUDE.md already do.
