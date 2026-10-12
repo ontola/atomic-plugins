@@ -56,6 +56,8 @@ def validate(document):
             validate_headers(root["headers"])
         if "bodyFields" in root:
             validate_roles(root["bodyFields"], "bodyFields", case_insensitive=False)
+            for path in root["bodyFields"]:
+                require(all(path.split(".")), f"bodyFields.{path}: invalid dot-path (empty name)")
         if "signals" in root:
             signals = root["signals"]
             require(isinstance(signals, list) and signals, "signals: expected nonempty array")
@@ -291,7 +293,9 @@ def _body_text(body, path):
         return None
     if isinstance(value, int):
         return str(value)
-    return value if isinstance(value, str) else None
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() and value >= 0 else None
+    return value.strip() if isinstance(value, str) else None
 
 
 def classify(document, status, headers, body, received_at):
@@ -326,20 +330,27 @@ def classify(document, status, headers, body, received_at):
         value = single_header(headers, name)
         if value is not None and value is not _REPEATED:
             roles.setdefault(header["role"], []).append((value, header.get("unit")))
+    body_values = set()
     for path, field in root.get("bodyFields", {}).items():
         value = _body_text(body, path)
         if value is not None:
-            roles.setdefault(field["role"], []).append((value, field.get("unit")))
+            entry = (value, field.get("unit"))
+            roles.setdefault(field["role"], []).append(entry)
+            body_values.add((field["role"], entry))
     date_header = single_header(headers, "date")
     date_header = date_header if isinstance(date_header, str) else None
-    times = []
-    for value, unit in roles.get("retryAfter", []):
-        times.append(parse_time(value, unit, received_at, date_header))
-    remaining = next((n for n in (_integer(v) for v, _ in roles.get("remaining", [])) if n is not None), None)
-    exhausted = matched["meaning"] == "quotaExhausted" or remaining == 0
+    def timed(role):
+        for value, unit in roles.get(role, []):
+            time = parse_time(value, unit, received_at, date_header)
+            # A body field that gives no wait counts as absent, so the fallbacks still apply.
+            if time is not None and (role, (value, unit)) in body_values and time <= received_at:
+                continue
+            yield time
+
+    times = list(timed("retryAfter"))
+    exhausted = matched["meaning"] == "quotaExhausted" or any(_integer(v) == 0 for v, _ in roles.get("remaining", []))
     if exhausted:
-        for value, unit in roles.get("reset", []):
-            times.append(parse_time(value, unit, received_at, date_header))
+        times.extend(timed("reset"))
     times = [t for t in times if t is not None]
     bucket = matched.get("bucket")
     if times:
