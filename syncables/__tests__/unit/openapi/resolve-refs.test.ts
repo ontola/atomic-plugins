@@ -50,7 +50,10 @@ describe('resolveRefs', () => {
     };
 
     const resolved = resolveRefs(document);
-    const category = resolved.components.schemas.Category as Record<string, unknown>;
+    const category = resolved.components.schemas.Category as Record<
+      string,
+      unknown
+    >;
     const properties = category['properties'] as Record<string, unknown>;
 
     expect(properties['name']).toEqual({ type: 'string' });

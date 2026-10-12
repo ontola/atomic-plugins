@@ -136,9 +136,66 @@ Whether Devonian should ship this as an adapter is still open (#259).
 
 The queue serializes calls to one lens instance. It is not a distributed lock and does not serialize direct store edits or other lens instances. Coordinate writes to shared resources at the application level. Transformations should return projections rather than mutate the store while awaiting work. A connector write and local identity persistence are not a distributed transaction; stable idempotency keys are necessary for retry recovery.
 
+What that means in practice, as `__tests__/atomic/concurrency.test.ts` pins it with deterministic fakes:
+
+- **One lens.** Calls run one after another in call order. Two `publish(subject)` calls for a resource with no platform identity create it once, then update it.
+- **Two lenses on the same store, scope and entity.** Nothing coordinates them. When their publishes overlap, both see no identity and both call `create`, with the same idempotency key. A connector that honours the key returns the same record twice and both publishes succeed. One that ignores it creates a duplicate: the second publish then rejects with `Conflicting identity mapping`, the identity stays with the first record, and the duplicate stays on the platform for the host to find and remove.
+- **Edits during a publish.** `publish` reads the resource when its turn in the queue starts, before any connector call. An edit made after `publish()` is called but before its turn is sent. An edit to the resource itself while the publish awaits the platform (`get`, `create`, `update`) is not; the next publish sends it. A linked resource that `write` reads from the store (the example's customer) is read inside `write`. On an update that is after `connector.get`, so an edit to it made during that await is sent; on a create, `write` runs before `create` and there is no `get`.
+
+Host locking recipe: run every lens call that can touch the same resources, from every lens instance in this process, through one shared promise chain, the way a lens queues its own work:
+
+```ts
+let tail: Promise<unknown> = Promise.resolve();
+const locked = <T>(operation: () => Promise<T>): Promise<T> => {
+  const result = tail.then(operation);
+  tail = result.catch(() => undefined); // a failure does not block later work
+  return result;
+};
+await Promise.all([
+  locked(() => first.publish(subject)),
+  locked(() => second.publish(subject)),
+]); // one create, then an update, even when the connector ignores the key
+```
+
+`locked` is not re-entrant: calling it from inside a locked operation deadlocks. That covers one JavaScript process only. Separate tabs, workers or processes need a lock they share (the background scheduler's `withLock` uses Web Locks where available; see the README). Whether the library should ship a shared coordinator is still open (#259); it does not today.
+
 There are no revision clocks, stale-event rejection, cross-system conflict resolution, signed Atomic Commits, Atomic Server transport, permissions, or Automerge integration in the resource API yet. Ingest applies events in call order; it can restore an earlier-deleted resource, so the application must order or filter delayed webhooks. Native data alone does not supply distributed convergence.
 
-The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, and the crash recovery recipe above.
+### Event ordering
+
+`__tests__/atomic/ordering.test.ts` pins the default: a lens keeps no revisions. A delayed update ingested after `ingestDelete` brings the resource back under its old subject; an older update that arrives after a newer one overwrites it; replaying the same record is a no-op (same subject, same state).
+
+A platform's ordering information is connector-specific (an `updated_at`, a version, a webhook sequence number), so it stays with the host. The recipe the same test file exercises: keep the newest revision applied per external id, deletions included as tombstones; drop any event whose revision is not newer; record the revision only after the lens call succeeded, so a failed event can be retried; and run the check and the lens call in one promise chain, so two events for one id cannot interleave.
+
+```ts
+const revisions = new Map<ExternalId, number>(); // persist with the snapshot
+let tail: Promise<unknown> = Promise.resolve();
+const run = <T>(operation: () => Promise<T>): Promise<T> => {
+  const result = tail.then(operation);
+  tail = result.catch(() => undefined);
+  return result;
+};
+const stale = (id: ExternalId, revision: number) =>
+  (revisions.get(id) ?? -Infinity) >= revision;
+
+const onUpdate = (record: Platform, revision: number) =>
+  run(async () => {
+    if (stale(record.id, revision)) return undefined;
+    const subject = await lens.ingest(record);
+    revisions.set(record.id, revision);
+    return subject;
+  });
+const onDelete = (id: ExternalId, revision: number) =>
+  run(async () => {
+    if (stale(id, revision)) return;
+    await lens.ingestDelete(id);
+    revisions.set(id, revision); // the tombstone
+  });
+```
+
+Write `revisions` atomically with the store snapshot, in the same file or the same transaction. If they diverge after a crash, neither direction is safe: with `revisions` ahead of the store, events the store never applied are dropped as stale and their data is lost; with `revisions` behind it, a redelivered event older than the store's real state passes the check and rolls the record back. Every ingest path for the lens, full re-fetches and backfills included, must go through the same host chain; a direct `lens.ingest` call skips the revision check. The recipe does not resolve competing edits made on both sides (that needs `reconcileRecord` or connector logic), and whether the library should offer this as an opt-in hook is still open (#259).
+
+The behavioral tests cover distinct identical records, scoped identities, round-trip snapshots, malformed input rollback, linked entity extraction, reverse updates, field preservation/removal, replay, queued creates, lost responses, deletion failures, the crash recovery recipe, the concurrency contract, and the default event ordering with the host ordering recipe above.
 
 Specification references: [JSON-AD](https://docs.atomicdata.dev/core/json-ad.html), [Atomic Schema](https://docs.atomicdata.dev/schema/intro.html), [Atomic Commits](https://docs.atomicdata.dev/commits/intro.html), [TypeScript SDK](https://atomicdata-dev.github.io/atomic-data-browser/docs/modules/_tomic_lib.html).
 

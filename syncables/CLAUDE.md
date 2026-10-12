@@ -72,7 +72,15 @@ Data flows through four stages, each its own directory under `src/`:
    source once per `readCollections` through its budget and re-checks it at
    the end, `wallClockQuery` rewrites the query and computes the
    `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
-   `SyncResult.coverage`).
+   `SyncResult.coverage`). For a `rangeWindow` read with a range whose
+   window fields include such parameters, `wallClockWindows` gives
+   `walkPages` the `windowValue` hook (wall-clock digits per zoned window
+   parameter, from the same cached zone reads) and the outer range's
+   coverage (`wallClockQuery` on the query with the range's ends in the
+   window fields; a zoned `windowRange` field gives `noRangePredicate`);
+   a finished windowed read keeps its spans with reason `incomplete`,
+   while any other read that is not complete (failed, or an undocumented
+   short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
@@ -187,7 +195,9 @@ Data flows through four stages, each its own directory under `src/`:
    `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
    throttling under the document's root `x-throttling`, draft Throttling
    extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
-   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   `headers` (roles and time units), `bodyFields` (0.3.0: the same roles by
+   literal JSON dot-path, read from a throttling JSON body; a body wait of
+   no time counts as absent) and `signals`, `classifyThrottling`
    gives the verdict the client attaches as `WriteFailure.throttling`, a
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
@@ -258,7 +268,8 @@ Data flows through four stages, each its own directory under `src/`:
    GETs the item through the sync's shared `Budget` (passed to
    `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
    the record's resource states `notFound: unavailable` through any
-   collection (`route.notFound`, resource-wide, from `resourceNotFound`
+   collection (a 410: its `gone`, `route.gone`, Collection Completeness
+   0.3.0, when stated; `route.notFound`, resource-wide, from `resourceNotFound`
    over every collection's `rawCompleteness`, after the reference
    `resource_not_found`; conflicting or unrecognised values are
    `unavailable`, a value beside an unrecognised `absent` counts; undefined
@@ -595,6 +606,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
   userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
   dot-paths).
+- `unit/throttling/body-fields.test.ts` mirrors the Throttling spec's
+  `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
+  rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
+  `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus

@@ -297,6 +297,7 @@ directly.
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
+| [Box 2.0.0 v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 41 GET lists, each applied explicitly: 13 offset lists (`offset`, `limit`, `total_count`; folder items, trash and users too, whose marker paging needs `usemarker=true`) and 28 marker lists (`marker`, `next_marker`), all with the `entries` envelope. Replaces v1, whose `type: offset` and roles `currentOffset` and `pageTokenMode` the spec does not define. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based), [Marker-based](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
 | [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |
@@ -792,3 +793,31 @@ localthought.io. Client authentication and the document's default PKCE
 behavior still require registration and live verification before activation.
 Catalog composition and credential-scheme resolution do not certify a
 real-account OAuth grant, API read, or complete import.
+
+`catalog/2026-10-12-box-pagination-v2.json` is `catalog/2026-10-11-gitlab-box.json`
+with Box's v1 pagination overlay replaced by
+[v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml);
+every other entry is unchanged. The v1 composition fails the Pagination
+Schemes validator (`type: offset`, roles `currentOffset` and
+`pageTokenMode`). v1 applies its schemes by auto-detection only, and
+syncables leaves an invalid scheme out of auto-detection, so a syncables
+reader reads each Box list as one page and takes it as the whole list; v2
+applies its schemes explicitly and uses `pageNumber` with the `offset` role and
+`pageToken` with `cursor`/`nextCursor`. Box documents a maximum `offset` of
+9999, so an offset list longer than 10,000 entries ends with an error
+rather than early. Box also documents the next offset as
+`previous_offset + previous_limit`, "and not by the size of the entries in
+the response array, as this may be less than the limit", while syncables
+(0.21.0 and 0.22.0) advances by the entries returned and stops at the
+first empty page. So with syncables, an offset list whose page holds fewer
+entries than the limit before its end is read again from inside that page
+(the repeated entries fail a collection read), and an empty page before
+`total_count` ends the read as if complete, missing the entries after it
+without an error. Whether Box answers such pages is not verified. The
+marker lists do not have this risk. `GET /files/{file_id}/collaborations`
+is read by marker, as Box's reference says, although the pinned response
+schema shows offset fields; if Box answered it with offset fields and no
+`next_marker`, the read would end after one page and look complete. `tests/test_box_pagination_v2.py` checks the catalog
+against its base, and validates v2 and the Box platform composed from the
+catalog. Declared from Box's documentation and the pinned OAD; no Box
+request was made.
