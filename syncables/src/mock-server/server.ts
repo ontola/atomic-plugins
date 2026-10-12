@@ -25,6 +25,7 @@ import {
   locateItemsField,
 } from '../pagination/items.js';
 import { setNestedField } from '../pagination/response-parser.js';
+import { pageStart } from '../pagination/request-builder.js';
 import { ResourceStore } from './store.js';
 
 export interface MockServer {
@@ -328,16 +329,21 @@ function handlePaginatedListRequest(
   const pageTokenParam =
     fieldNameForRole(scheme, 'pageToken') ?? fieldNameForRole(scheme, 'cursor');
 
+  // A shortPage's numeric size is the full page the server answers.
+  const shortSize = scheme.response?.shortPage?.size;
+  const defaultSize =
+    typeof shortSize === 'number' ? shortSize : DEFAULT_PAGE_SIZE;
   const pageSize = pageSizeParam
-    ? Number(url.searchParams.get(pageSizeParam) ?? DEFAULT_PAGE_SIZE)
-    : DEFAULT_PAGE_SIZE;
+    ? Number(url.searchParams.get(pageSizeParam) ?? defaultSize)
+    : defaultSize;
 
   let offset = 0;
   if (offsetParam) {
     offset = Number(url.searchParams.get(offsetParam) ?? '0');
   } else if (pageParam) {
-    const page = Number(url.searchParams.get(pageParam) ?? '1');
-    offset = (page - 1) * pageSize;
+    const start = pageStart(scheme);
+    const page = Number(url.searchParams.get(pageParam) ?? String(start));
+    offset = (page - start) * pageSize;
   } else if (pageTokenParam) {
     const token = url.searchParams.get(pageTokenParam);
     offset = token ? Number(token) : 0;

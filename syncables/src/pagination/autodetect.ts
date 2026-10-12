@@ -61,7 +61,9 @@ function autoDetectMatches(
   scheme: PaginationSchemeObject,
   operation: OperationObject,
 ): boolean {
-  if (scheme.autoDetect === false) {
+  // A rangeWindow scheme is never auto-detected (spec 0.5.0 §4.6): its
+  // window field is often a filter parameter other operations share.
+  if (scheme.autoDetect === false || scheme.type === 'rangeWindow') {
     return false;
   }
   const options =
@@ -162,6 +164,35 @@ export function resolveEffectiveScheme(
     if (afterMerge.length) {
       throw new PaginationSchemeError(
         `x-pagination's overrides make the pagination scheme "${name}" invalid: ${afterMerge.join('; ')}`,
+      );
+    }
+    // Rule 17: an operation that applies a rangeWindow scheme, after
+    // overrides, applies no other scheme.
+    const windowed = explicit.some((entry) => {
+      if (!isPlainObject(entry)) return false;
+      const overrides = entry['overrides'];
+      const type =
+        isPlainObject(overrides) && 'type' in overrides
+          ? overrides['type']
+          : document.components?.paginationSchemes?.[String(entry['scheme'])]
+              ?.type;
+      return type === 'rangeWindow';
+    });
+    if (windowed && explicit.length > 1) {
+      throw new PaginationSchemeError(
+        'x-pagination applies a rangeWindow scheme together with another scheme',
+      );
+    }
+    // Rule 22: a scheme with a Short Page Object pages by exactly one page field.
+    const pageFields = (['queryParameters', 'bodyFields'] as const).flatMap(
+      (location) =>
+        Object.values(scheme.request?.[location] ?? {}).filter(
+          (field) => field.role === 'page',
+        ),
+    );
+    if (scheme.response?.shortPage !== undefined && pageFields.length !== 1) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose shortPage needs exactly one request field with role page`,
       );
     }
     return { schemeName: name, scheme };

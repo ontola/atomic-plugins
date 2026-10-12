@@ -24,7 +24,9 @@ describe('Notion drive-plugin bundle', async () => {
     // syncables 0.19.0's read path, the catalog document, devonian's Atomic
     // Data API, the sync-status view of #177 Q9, #8's compare-on-open,
     // review and send, the option Tags of options.ts and #303's retirement
-    // of stray columns; JS and embedded CSS minified by esbuild). 0.4.2
+    // of stray columns; JS and embedded CSS minified by esbuild). 0.5.1
+    // measured 125 914 on 2026-10-08, with devonian 0.9.0's compiled
+    // devonian/atomic in place of 0.6.1's TypeScript sources. 0.4.2
     // measured 115 818; 0.4.1 113 988 with syncables 0.18.0; 0.4.0 113 536;
     // 0.3.0 107 509; 0.2.0 133 028 with the #89 browsing views; 0.1.0
     // 117 969. A change that needs more should say why and re-measure.

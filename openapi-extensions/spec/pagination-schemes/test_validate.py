@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.4.0: schema, document validator, examples and link resolution."""
+"""Pagination Schemes 0.6.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, resolve_link, rfc3986_resolve, validate
+from validate import LinkRefused, PageReadError, WindowReadError, halves, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml")
 
 
 def example(name):
@@ -234,6 +234,516 @@ class ResolveLinkTests(unittest.TestCase):
         # An absolute-path reference replaces the server path; the origin rule still allows it (§4.4.3, last paragraph).
         self.assertEqual(self.resolve("/items?cursor=b", {"base": "server"}, server, server + "/items"),
                          "https://api.example.com/items?cursor=b")
+
+
+TRANSACTIONS = "/ledgers/{ledgerId}/transactions"
+
+
+class RangeWindowSchemaTests(unittest.TestCase):
+    def document(self):
+        return example("range-window.yaml")
+
+    def scheme(self, document, name="periodWindows"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_window_is_required_for_range_window_and_refused_elsewhere(self):
+        document = self.document()
+        del self.scheme(document)["window"]
+        self.assertInvalid(document, "periodWindows")
+        document = example("relative-next-link.yaml")
+        document["components"]["paginationSchemes"]["linkedCollections"]["window"] = {
+            "unit": "day", "format": "date", "bounds": "closed", "cap": 100}
+        self.assertInvalid(document, "linkedCollections")
+
+    def test_window_fields_and_values(self):
+        for mutate in (lambda w: w.pop("bounds"), lambda w: w.pop("cap"), lambda w: w.pop("unit"),
+                       lambda w: w.pop("format"), lambda w: w.update(cap=0), lambda w: w.update(cap="100"),
+                       lambda w: w.update(minimumWidth=0), lambda w: w.update(bounds="open"),
+                       lambda w: w.update(unit="month"), lambda w: w.update(field="date"),
+                       lambda w: w.update(format="dateTime"), lambda w: w.update(split="halve")):
+            document = self.document()
+            mutate(self.scheme(document)["window"])
+            self.assertInvalid(document, "periodWindows")
+
+    def test_format_fits_unit(self):
+        fits = {"day": ("date", "basicDate"), "second": ("dateTime", "unixSeconds"), "integer": ("integer",)}
+        for unit in fits:
+            for form in ("date", "basicDate", "dateTime", "unixSeconds", "integer"):
+                document = self.document()
+                window = self.scheme(document, "changedWindows")["window"]
+                window.update(unit=unit, format=form)
+                with self.subTest(unit=unit, format=form):
+                    if form in fits[unit]:
+                        validate(document)
+                    else:
+                        self.assertInvalid(document, "changedWindows")
+
+    def test_time_zone_only_for_days(self):
+        document = self.document()
+        self.scheme(document, "changedWindows")["window"]["timeZone"] = "UTC"
+        self.assertInvalid(document, "changedWindows")
+
+    def test_window_roles_only_in_range_window_schemes(self):
+        for role in ("windowStart", "windowEnd", "windowRange"):
+            document = example("relative-next-link.yaml")
+            document["components"]["paginationSchemes"]["linkedCollections"]["request"]["queryParameters"]["PageSize"]["role"] = role
+            with self.subTest(role=role):
+                self.assertInvalid(document, "linkedCollections")
+
+    def test_one_way_of_carrying_the_window(self):
+        document = self.document()
+        fields = self.scheme(document)["request"]["queryParameters"]
+        fields["from"] = {"role": "windowStart"}
+        self.assertInvalid(document, "needs one windowRange field")
+        document = self.document()
+        fields = self.scheme(document, "changedWindows")["request"]["queryParameters"]
+        del fields["updatedBefore"]
+        self.assertInvalid(document, "needs one windowRange field")
+        fields["updatedBefore"] = {"role": "windowStart"}
+        self.assertInvalid(document, "needs one windowRange field")
+        fields["updatedBefore"] = {"role": "pageSize"}
+        self.assertInvalid(document, "needs one windowRange field")
+
+    def test_template_rules(self):
+        for template in ("period:{start}", "period:{end}..{end}", "period:{start}..{end}..{start}",
+                         "period:{start}..{end},x:{other}", "period:{start}..{end}}", ""):
+            document = self.document()
+            self.scheme(document)["request"]["queryParameters"]["filter"]["template"] = template
+            with self.subTest(template=template):
+                self.assertInvalid(document, "periodWindows")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["filter"]["template"] = "{end}/{start}"
+        validate(document)
+        del self.scheme(document)["request"]["queryParameters"]["filter"]["template"]
+        self.assertInvalid(document, "periodWindows")
+        document = self.document()
+        self.scheme(document, "changedWindows")["request"]["queryParameters"]["updatedFrom"]["template"] = "{start}{end}"
+        self.assertInvalid(document, "changedWindows")
+
+    def test_never_auto_detected(self):
+        document = self.document()
+        self.scheme(document)["autoDetect"] = True
+        self.assertInvalid(document, "periodWindows")
+        self.scheme(document)["autoDetect"] = {"matchQueryParams": True}
+        self.assertInvalid(document, "periodWindows")
+        del self.scheme(document)["autoDetect"]
+        validate(document)
+
+    def test_applied_alone(self):
+        document = self.document()
+        document["components"]["paginationSchemes"]["pages"] = {
+            "type": "pageNumber", "request": {"queryParameters": {"page": {"role": "page"}}}}
+        document["paths"][TRANSACTIONS]["get"]["x-pagination"].append({"scheme": "pages"})
+        self.assertInvalid(document, "applies no other scheme")
+
+    def test_applied_alone_after_overrides(self):
+        # A pageNumber scheme overridden into a rangeWindow counts as one (review of #397).
+        document = self.document()
+        document["components"]["paginationSchemes"]["pages"] = {
+            "type": "pageNumber", "request": {"queryParameters": {"page": {"role": "page"}}}}
+        document["paths"][TRANSACTIONS]["get"]["x-pagination"] = [
+            {"scheme": "pages"},
+            {"scheme": "pages", "overrides": {"type": "rangeWindow", "autoDetect": False,
+                                              "window": copy.deepcopy(self.scheme(document)["window"]),
+                                              "request": {"queryParameters": {
+                                                  "page": {"role": "x-unused"},
+                                                  "filter": {"role": "windowRange", "template": "{start}..{end}"}}}}}]
+        self.assertInvalid(document, "applies no other scheme")
+
+    def test_window_parameters_exist_on_the_operation(self):
+        document = self.document()
+        parameters = document["paths"][TRANSACTIONS]["get"]["parameters"]
+        parameters[0]["name"] = "filters"
+        self.assertInvalid(document, "no query parameter 'filter'")
+        # A path-item parameter reached through $ref counts.
+        del parameters[0]
+        document["components"]["parameters"]["filter"] = {"name": "filter", "in": "query", "schema": {"type": "string"}}
+        document["paths"][TRANSACTIONS]["parameters"].append({"$ref": "#/components/parameters/filter"})
+        validate(document)
+        # Overrides are merged before the check.
+        document["paths"]["/entries"]["get"]["x-pagination"][0]["overrides"] = {"request": {"queryParameters": {
+            "updatedBefore": {"role": "x-unused"}, "before": {"role": "windowEnd"}}}}
+        self.assertInvalid(document, "no query parameter 'before'")
+
+    def test_header_parameters_match_case_insensitively(self):
+        document = self.document()
+        scheme = self.scheme(document, "changedWindows")
+        scheme["request"] = {"headerFields": {"X-From": {"role": "windowStart"}, "X-Before": {"role": "windowEnd"}}}
+        document["paths"]["/entries"]["get"]["parameters"] = [
+            {"name": "x-from", "in": "header", "schema": {"type": "string"}},
+            {"name": "X-BEFORE", "in": "header", "schema": {"type": "string"}}]
+        validate(document)
+        document["paths"]["/entries"]["get"]["parameters"][1]["in"] = "query"
+        self.assertInvalid(document, "no header parameter 'X-Before'")
+
+    def test_0_4_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml"):
+            validate(example(name))
+
+
+class ReadRangeTests(unittest.TestCase):
+    def setUp(self):
+        self.document = example("range-window.yaml")
+        self.period = self.document["components"]["paginationSchemes"]["periodWindows"]
+        self.changed = self.document["components"]["paginationSchemes"]["changedWindows"]
+
+    def provider(self, dates, cap):
+        """A fake financial_mutations list: items {id, date YYYYMMDD}, answers truncated at cap."""
+        calls = []
+
+        def request(values):
+            filter_value = values[("queryParameters", "filter")]
+            calls.append(filter_value)
+            self.assertTrue(filter_value.startswith("period:") and filter_value.endswith(",state:all"))
+            low, high = filter_value[len("period:"):-len(",state:all")].split("..")
+            selected = [{"id": str(i), "date": d} for i, d in enumerate(dates) if low <= d <= high]
+            return selected[:cap]
+
+        return request, calls
+
+    def test_one_request_when_below_the_cap(self):
+        request, calls = self.provider(["20260105"] * 99, 100)
+        result = read_range(self.period, "20260101", "20261231", request)
+        self.assertEqual((result["requests"], len(result["items"])), (1, 99))
+        self.assertEqual(calls, ["period:20260101..20261231,state:all"])
+
+    def test_full_answers_are_halved_like_the_money_app(self):
+        dates = ["20260310"] * 60 + ["20261120"] * 60
+        request, calls = self.provider(dates, 100)
+        result = read_range(self.period, "20260101", "20261231", request)
+        self.assertEqual(len(result["items"]), 120)
+        self.assertEqual(calls[:3], ["period:20260101..20261231,state:all",
+                                     "period:20260101..20260702,state:all",
+                                     "period:20260703..20261231,state:all"])
+        self.assertEqual(result["windows"], [("20260101", "20260702"), ("20260703", "20261231")])
+
+    def test_windows_partition_the_range_down_to_days(self):
+        dates = [f"202602{d:02d}" for d in range(1, 29) for _ in range(4)]  # 112 items, 4 a day
+        request, _ = self.provider(dates, 100)
+        result = read_range(self.period, "20260201", "20260228", request)
+        self.assertEqual(len(result["items"]), 112)
+        windows = result["windows"]
+        self.assertEqual(windows[0][0], "20260201")
+        self.assertEqual(windows[-1][1], "20260228")
+        for (_, end), (start, _) in zip(windows, windows[1:]):
+            self.assertEqual(int(start) - int(end), 1)  # adjacent days within February
+
+    def test_a_full_single_day_is_an_error_not_a_complete_read(self):
+        request, _ = self.provider(["20260415"] * 100, 100)
+        with self.assertRaises(WindowReadError) as raised:
+            read_range(self.period, "20260101", "20261231", request)
+        self.assertIn("20260415..20260415", str(raised.exception))
+
+    def test_exactly_cap_items_counts_as_full(self):
+        request, calls = self.provider(["20260101", "20260102"] * 50, 100)
+        result = read_range(self.period, "20260101", "20260102", request)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result["items"]), 100)
+
+    def test_request_budget_ends_the_read_incomplete(self):
+        request, _ = self.provider(["20260310"] * 60 + ["20261120"] * 60, 100)
+        with self.assertRaises(WindowReadError):
+            read_range(self.period, "20260101", "20261231", request, max_requests=2)
+
+    def test_minimum_width(self):
+        window = dict(self.period["window"], minimumWidth=7)
+        self.assertIsNone(halves("20260101", "20260113", window))  # 13 days < 14
+        self.assertEqual(halves("20260101", "20260114", window),
+                         (("20260101", "20260107"), ("20260108", "20260114")))
+
+    def test_half_open_seconds(self):
+        window = self.changed["window"]
+        self.assertEqual(halves("2026-01-01T00:00:00Z", "2026-01-01T00:00:10Z", window),
+                         (("2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z"),
+                          ("2026-01-01T00:00:05Z", "2026-01-01T00:00:10Z")))
+        self.assertIsNone(halves("2026-01-01T00:00:00Z", "2026-01-01T00:00:01Z", window))
+        self.assertEqual(window_request(self.changed, "a", "b"),
+                         {("queryParameters", "updatedFrom"): "a", ("queryParameters", "updatedBefore"): "b"})
+
+    def test_odd_widths_put_the_extra_unit_first(self):
+        window = {"unit": "integer", "format": "integer", "bounds": "closed", "cap": 1}
+        self.assertEqual(halves("1", "5", window), (("1", "3"), ("4", "5")))
+        self.assertEqual(halves("-2", "-1", window), (("-2", "-2"), ("-1", "-1")))
+        window["bounds"] = "halfOpen"
+        self.assertEqual(halves("0", "5", window), (("0", "3"), ("3", "5")))
+
+    def test_dates_cross_month_and_leap_days(self):
+        window = {"unit": "day", "format": "date", "bounds": "closed", "cap": 1}
+        self.assertEqual(halves("2028-02-28", "2028-03-01", window),
+                         (("2028-02-28", "2028-02-29"), ("2028-03-01", "2028-03-01")))
+
+    def test_bounds_must_be_in_the_format(self):
+        for start in ("2026-01-01", "2026011", 20260101, "20261301"):
+            with self.subTest(start=start), self.assertRaises(ValueError):
+                read_range(self.period, start, "20261231", lambda values: [])
+        with self.assertRaises(ValueError):
+            read_range(self.period, "20260102", "20260101", lambda values: [])
+
+    def test_duplicates_across_windows_are_kept_once(self):
+        answers = iter([[{"id": "1"}] * 2, [{"id": "1", "v": 1}], [{"id": "1", "v": 2}]])
+        window = {"unit": "integer", "format": "integer", "bounds": "closed", "cap": 2}
+        scheme = {"type": "rangeWindow", "window": window,
+                  "request": {"queryParameters": {"n": {"role": "windowRange", "template": "{start}:{end}"}}}}
+        result = read_range(scheme, "1", "2", lambda values: next(answers))
+        self.assertEqual(result["items"], [{"id": "1", "v": 2}])
+
+
+class ShortPageSchemaTests(unittest.TestCase):
+    def document(self):
+        return example("short-page.yaml")
+
+    def scheme(self, document, name="zeroBasedPages"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_start_only_on_page_and_not_negative(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = -1
+        self.assertInvalid(document, "zeroBasedPages")
+        document = self.document()
+        self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]["start"] = 0
+        self.assertInvalid(document, "sizedPages")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["start"] = 1
+        validate(document)
+
+    def test_short_page_fields(self):
+        for mutate in (lambda s: s.pop("size"), lambda s: s.pop("assurance"), lambda s: s.update(size=0),
+                       lambda s: s.update(size="response"), lambda s: s.update(assurance="likely"),
+                       lambda s: s.update(extra=True)):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["shortPage"])
+            self.assertInvalid(document, "zeroBasedPages")
+
+    def test_short_page_only_on_page_number_schemes(self):
+        document = self.document()
+        self.scheme(document)["type"] = "pageToken"
+        self.assertInvalid(document, "zeroBasedPages")
+
+    def test_request_size_needs_a_page_size_field(self):
+        document = self.document()
+        del self.scheme(document, "sizedPages")["request"]["queryParameters"]["per_page"]
+        self.assertInvalid(document, "needs a request field with role pageSize")
+
+    def test_applied_scheme_needs_a_page_field(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["page"]["role"] = "x-page"
+        del self.scheme(document)["request"]["queryParameters"]["page"]["start"]
+        self.assertInvalid(document, "needs exactly one request field with role page")
+
+    def test_0_5_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml"):
+            validate(example(name))
+
+
+class ReadPagesTests(unittest.TestCase):
+    def setUp(self):
+        self.document = example("short-page.yaml")
+        self.zero = self.document["components"]["paginationSchemes"]["zeroBasedPages"]
+        self.sized = self.document["components"]["paginationSchemes"]["sizedPages"]
+
+    def provider(self, total, size, first=0, envelope="tasks"):
+        calls = []
+
+        def request(values):
+            calls.append(values)
+            number = values[("queryParameters", "page")] - first
+            page = [{"id": str(i)} for i in range(number * size, min(total, (number + 1) * size))]
+            return {envelope: page} if envelope else page
+
+        return request, calls
+
+    def test_zero_based_pages_start_at_zero_and_end_on_a_short_page(self):
+        request, calls = self.provider(250, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+        self.assertFalse(result["complete"])  # assurance: assumed
+
+    def test_a_full_last_page_needs_one_more_empty_page(self):
+        request, calls = self.provider(200, 100)
+        result = read_pages(self.zero, request)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result["items"]), 200)
+
+    def test_documented_short_page_makes_the_read_complete(self):
+        request, calls = self.provider(120, 50, first=1, envelope=None)
+        result = read_pages(self.sized, request, page_size=50)
+        self.assertTrue(result["complete"])
+        self.assertEqual([c[("queryParameters", "page")] for c in calls], [1, 2, 3])
+        self.assertEqual({c[("queryParameters", "per_page")] for c in calls}, {50})
+
+    def test_request_size_needs_the_page_size(self):
+        with self.assertRaises(ValueError):
+            read_pages(self.sized, lambda values: [])
+
+    def test_an_oversized_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(101)]})
+
+    def test_a_server_that_ignores_the_page_ends_with_an_error(self):
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(self.zero, lambda values: {"tasks": [{"id": str(i)} for i in range(100)]})
+        self.assertIn("earlier page", str(raised.exception))
+
+    def test_page_budget_ends_the_read_incomplete(self):
+        request, _ = self.provider(1000, 100)
+        with self.assertRaises(PageReadError):
+            read_pages(self.zero, request, max_pages=3)
+
+
+class ReadPagesReviewTests(unittest.TestCase):
+    """Review of #415: page size maximum, end signals that disagree, zero-based totalPages."""
+
+    def setUp(self):
+        document = example("short-page.yaml")
+        self.zero = document["components"]["paginationSchemes"]["zeroBasedPages"]
+        self.sized = document["components"]["paginationSchemes"]["sizedPages"]
+
+    def pages(self, total, size, first=0, extra=lambda number: {}):
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append(number)
+            n = number - first
+            tasks = [{"id": str(i)} for i in range(n * size, min(total, (n + 1) * size))]
+            return {"tasks": tasks, **extra(number)}
+
+        return request, calls
+
+    def with_fields(self, scheme, **fields):
+        scheme = copy.deepcopy(scheme)
+        scheme["response"]["bodyFields"] = {name: {"role": role} for name, role in fields.items()}
+        return scheme
+
+    def test_page_size_above_the_documented_maximum_is_refused(self):
+        with self.assertRaises(ValueError):
+            read_pages(self.sized, lambda values: [], page_size=500, maximum=50)
+        request, _ = self.pages(30, 50, first=1)
+        result = read_pages(self.sized, lambda v: request(v)["tasks"], page_size=50, maximum=50)
+        self.assertTrue(result["complete"])
+
+    def test_total_pages_counts_from_start(self):
+        # Zero-based: totalPages 3 means pages 0, 1 and 2; a full page 2 ends the read.
+        scheme = self.with_fields(self.zero, total_pages="totalPages")
+        request, calls = self.pages(300, 100, extra=lambda number: {"total_pages": 3})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertTrue(result["complete"])  # a totalPages end is complete whatever the assurance
+
+    def test_total_count_end_on_a_full_page_is_complete(self):
+        scheme = self.with_fields(self.zero, total="totalCount")
+        request, calls = self.pages(200, 100, extra=lambda number: {"total": 200})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1])
+        self.assertTrue(result["complete"])
+
+    def test_short_page_contradicted_by_the_total(self):
+        request, _ = self.pages(150, 100, extra=lambda number: {"total": 300})
+        documented = self.with_fields(self.zero, total="totalCount")
+        documented["response"]["shortPage"]["assurance"] = "documented"
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(documented, request)
+        self.assertIn("more pages follow", str(raised.exception))
+        result = read_pages(self.with_fields(self.zero, total="totalCount"), request)
+        self.assertFalse(result["complete"])
+
+    def test_reported_page_size_is_the_full_size(self):
+        scheme = self.with_fields(self.zero, limit="pageSize")
+        request, calls = self.pages(120, 60, extra=lambda number: {"limit": 60})
+        result = read_pages(scheme, request)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(len(result["items"]), 120)
+
+    def test_an_item_seen_on_any_earlier_page_ends_the_read(self):
+        answers = iter([
+            {"tasks": [{"id": str(i)} for i in range(100)]},
+            {"tasks": [{"id": str(i)} for i in range(100, 200)]},
+            {"tasks": [{"id": "5"}]},
+        ])
+        with self.assertRaises(PageReadError) as raised:
+            read_pages(self.zero, lambda values: next(answers))
+        self.assertIn("earlier page", str(raised.exception))
+
+    def test_exactly_one_page_field(self):
+        scheme = copy.deepcopy(self.zero)
+        scheme["request"]["queryParameters"]["p2"] = {"role": "page"}
+        with self.assertRaises(ValueError):
+            read_pages(scheme, lambda values: {"tasks": []})
+        document = example("short-page.yaml")
+        document["components"]["paginationSchemes"]["zeroBasedPages"] = scheme
+        document["paths"]["/team/{teamId}/task"]["get"]["parameters"].append({"name": "p2", "in": "query", "schema": {"type": "integer"}})
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("exactly one request field with role page", str(raised.exception))
+
+
+class ReadPagesSmallerPageSizeTests(unittest.TestCase):
+    """Second review of #415: a whole-number size with a smaller page size sent."""
+
+    def test_the_smaller_page_size_sent_is_the_full_size(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["request"]["queryParameters"]["limit"] = {"role": "pageSize"}
+        scheme["response"]["shortPage"]["assurance"] = "documented"
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append((number, values[("queryParameters", "limit")]))
+            return {"tasks": [{"id": str(i)} for i in range(number * 50, min(250, (number + 1) * 50))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(len(result["items"]), 250)
+        self.assertEqual([n for n, _ in calls], [0, 1, 2, 3, 4, 5])
+        self.assertTrue(result["complete"])
+
+    def test_a_page_size_without_a_page_size_field_changes_nothing(self):
+        document = example("short-page.yaml")
+        scheme = document["components"]["paginationSchemes"]["zeroBasedPages"]  # no pageSize field
+        calls = []
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            calls.append(number)
+            return {"tasks": [{"id": str(i)} for i in range(number * 100, min(250, (number + 1) * 100))]}
+
+        result = read_pages(scheme, request, page_size=50)
+        self.assertEqual(calls, [0, 1, 2])
+        self.assertEqual(len(result["items"]), 250)
+
+    def test_a_reported_page_size_of_zero_is_absent(self):
+        document = example("short-page.yaml")
+        scheme = copy.deepcopy(document["components"]["paginationSchemes"]["zeroBasedPages"])
+        scheme["response"]["bodyFields"] = {"limit": {"role": "pageSize"}}
+
+        def request(values):
+            number = values[("queryParameters", "page")]
+            return {"limit": 0, "tasks": [{"id": str(i)} for i in range(number * 100, min(150, (number + 1) * 100))]}
+
+        self.assertEqual(len(read_pages(scheme, request)["items"]), 150)
+
+    def test_rule_21_is_checked_after_overrides_only(self):
+        document = example("short-page.yaml")
+        sized = document["components"]["paginationSchemes"]["sizedPages"]
+        del sized["request"]["queryParameters"]["per_page"]
+        # The bare scheme is not checked; its application is.
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("(merged)", str(raised.exception))
+        document["paths"]["/projects"]["get"]["x-pagination"][0]["overrides"] = {
+            "request": {"queryParameters": {"per_page": {"role": "pageSize"}}}}
+        validate(document)
 
 
 if __name__ == "__main__":

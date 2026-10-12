@@ -154,6 +154,15 @@ function resolveLens(name, lens, termsSource, ontologyBase) {
       source: ref('source', f.source),
       target: ref('target', f.target),
     })),
+    ...(Array.isArray(lens.mapping?.guards)
+      ? {
+          guards: lens.mapping.guards.map(g =>
+            g && typeof g.at === 'string'
+              ? { ...g, at: ref('source', g.at) }
+              : g,
+          ),
+        }
+      : {}),
   };
 
   const row = (side, value) => {
@@ -167,11 +176,17 @@ function resolveLens(name, lens, termsSource, ontologyBase) {
 
   const examples = (lens.examples ?? []).map(e => ({
     source: row('source', e.source),
-    target: row('target', e.target),
+    ...(e.target !== undefined ? { target: row('target', e.target) } : {}),
+    ...(e.error !== undefined ? { error: e.error } : {}),
     ...(e.edits
       ? {
           edits: e.edits.map(edit => ({
-            target: row('target', edit.target),
+            ...(edit.direction !== undefined
+              ? { direction: edit.direction }
+              : {}),
+            ...(edit.target !== undefined
+              ? { target: row('target', edit.target) }
+              : {}),
             ...(edit.source !== undefined
               ? { source: row('source', edit.source) }
               : {}),
@@ -341,6 +356,41 @@ export function lensSourceProblems(
       problems.push(
         `${at}: needs at least one example: the evidence its laws are checked on`,
       );
+    else
+      lens.examples.forEach((e, i) => {
+        const where = `${at}: example ${i + 1}`;
+        if (!e || typeof e !== 'object' || e.source === undefined)
+          problems.push(`${where} needs a source`);
+        else if ((e.target === undefined) === (e.error === undefined))
+          problems.push(
+            `${where} has either a target (what get gives) or an error (the code get refuses with)`,
+          );
+        else if (e.error !== undefined && e.edits !== undefined)
+          problems.push(`${where}: an example get refuses has no edits`);
+
+        for (const [j, edit] of (e?.edits ?? []).entries()) {
+          const what = `${where}, edit ${j + 1}`;
+          const backward = edit?.direction === 'backward';
+          if (edit?.direction !== undefined && !backward)
+            problems.push(`${what}: direction is "backward" or left out`);
+          else if (
+            backward &&
+            (edit.source === undefined ||
+              (edit.target === undefined) === (edit.error === undefined))
+          )
+            problems.push(
+              `${what}: a backward edit has a source (the view) and either a target (the row it gives) or an error`,
+            );
+          else if (
+            !backward &&
+            (edit?.target === undefined ||
+              (edit.source === undefined) === (edit.error === undefined))
+          )
+            problems.push(
+              `${what}: an edit has a target and either a source (what put gives) or an error`,
+            );
+        }
+      });
   }
 
   if (problems.length) return problems;
@@ -373,16 +423,21 @@ export function lensSourceProblems(
       continue;
     }
 
-    if (parsed.version !== 2)
-      problems.push(`${at}: catalog lenses use mapping version 2`);
+    if (parsed.version < 2)
+      problems.push(`${at}: catalog lenses use mapping version 2 or 3`);
 
     for (const side of ['source', 'target']) {
       const want = sides[side].kind === 'class' ? 'key' : 'pointer';
 
-      for (const f of parsed.fields)
-        if (referenceKind(f[side]) !== want)
+      const refs = [
+        ...parsed.fields.map(f => f[side]),
+        ...(side === 'source' ? parsed.guards.map(g => g.at) : []),
+      ];
+
+      for (const ref of refs)
+        if (referenceKind(ref) !== want)
           problems.push(
-            `${at}: ${side} "${f[side]}" must be ${want === 'key' ? 'a property (shortname or absolute URL) on a class endpoint' : 'a JSON Pointer on a record or rdf endpoint'}`,
+            `${at}: ${side} "${ref}" must be ${want === 'key' ? 'a property (shortname or absolute URL) on a class endpoint' : 'a JSON Pointer on a record or rdf endpoint'}`,
           );
 
       const shared = sides[side].shared;
@@ -409,16 +464,30 @@ export function lensSourceProblems(
         ['target', 'target', example.target],
         ...(example.edits ?? []).flatMap((edit, j) => [
           ['target', `edit ${j + 1} target`, edit.target],
-          ...(edit.source !== undefined
-            ? [['source', `edit ${j + 1} source`, edit.source]]
-            : []),
+          ['source', `edit ${j + 1} source`, edit.source],
         ]),
-      ];
+      ].filter(([, , row]) => row !== undefined);
 
       for (const [side, label, row] of rows)
         if (sides[side].kind === 'class')
           for (const p of rowDatatypeProblems(row, termsSource, ontologyBase))
             problems.push(`${where}: ${label}: ${p}`);
+
+      if (example.error !== undefined) {
+        try {
+          lensGet(parsed, example.source);
+          problems.push(
+            `${where}: expected get to refuse with ${example.error}`,
+          );
+        } catch (error) {
+          if (!(error instanceof LensError) || error.code !== example.error)
+            problems.push(
+              `${where}: expected get to refuse with ${example.error}, got ${error.message}`,
+            );
+        }
+
+        return;
+      }
 
       try {
         const got = lensGet(parsed, example.source);
@@ -438,6 +507,43 @@ export function lensSourceProblems(
 
         for (const [j, edit] of (example.edits ?? []).entries()) {
           const what = `${where}, edit ${j + 1}`;
+
+          if (edit.direction === 'backward') {
+            if (edit.error !== undefined) {
+              try {
+                lensPut(parsed, edit.source, example.target, 'backward');
+                problems.push(
+                  `${what} (backward): expected a ${edit.error} refusal`,
+                );
+              } catch (error) {
+                if (!(error instanceof LensError) || error.code !== edit.error)
+                  problems.push(
+                    `${what} (backward): expected a ${edit.error} refusal, got ${error.message}`,
+                  );
+              }
+
+              continue;
+            }
+
+            const put = lensPut(
+              parsed,
+              edit.source,
+              example.target,
+              'backward',
+            );
+            if (!deepEqual(put, edit.target))
+              problems.push(
+                `${what} (backward): put gives ${JSON.stringify(put)}, the example says ${JSON.stringify(edit.target)}`,
+              );
+            for (const p of lawProblems(
+              parsed,
+              example.target,
+              edit.source,
+              'backward',
+            ))
+              problems.push(`${what}: ${p}`);
+            continue;
+          }
 
           if (edit.error !== undefined) {
             try {

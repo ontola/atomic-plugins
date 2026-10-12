@@ -1,7 +1,8 @@
 // @wc-ignore-file
-// The catalog entry ontology/lenses/raindrop-bookmark-v1 is a declarative
-// subset of this code lens (ontology-kit/LENSES.md): on every example the
-// catalog publishes, the code lens must give the same rows.
+// The catalog entries ontology/lenses/raindrop-bookmark-v<N> are declarative
+// subsets of this code lens (ontology-kit/LENSES.md): on every example the
+// catalog publishes, the code lens must give the same rows, and refuse what
+// the catalog refuses.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { IS_A, type AtomicResource } from 'devonian/atomic';
@@ -12,38 +13,60 @@ import {
   type RaindropRecord,
 } from './index.js';
 
+type Row = Record<string, unknown>;
 interface Example {
   source: RaindropRecord;
-  target: Record<string, unknown>;
+  target?: Row;
+  error?: string;
   edits?: {
-    target: Record<string, unknown>;
+    direction?: 'backward';
+    target?: Row;
     source?: RaindropRecord;
     error?: string;
   }[];
 }
-const lens = JSON.parse(
-  readFileSync(
-    new URL(
-      '../../../../../ontology/lenses/raindrop-bookmark-v1',
-      import.meta.url,
+const LENSES = ['raindrop-bookmark-v1', 'raindrop-bookmark-v2'];
+const load = (name: string) =>
+  JSON.parse(
+    readFileSync(
+      new URL(`../../../../../ontology/lenses/${name}`, import.meta.url),
+      'utf8',
     ),
-    'utf8',
-  ),
-) as { target: { class: string }; examples: Example[] };
+  ) as { target: { class: string }; examples: Example[] };
 /**
- * The code lens's message for each refusal code this catalog entry's
- * examples use. An edit with an error code not listed here fails the test,
- * so a new refusal in the catalog needs a matching one in the code lens.
+ * The code lens's message for each refusal code the catalog entries'
+ * examples use. A code not listed here fails the test, so a new refusal in
+ * the catalog needs a matching one in the code lens.
  */
-const refusals: Record<string, RegExp> = {};
-const resource = (row: Record<string, unknown>) =>
+const refusals: Record<string, RegExp> = {
+  'out-of-domain': /^Raindrop requires a positive safe integer ID$/,
+};
+
+const refused = (code: string, run: () => unknown) => {
+  expect(Object.keys(refusals)).toContain(code);
+  expect(run).toThrow(refusals[code]);
+};
+
+const resource = (row: Row) =>
   ({
     '@id': 'https://atomic.example/bookmarks/one',
     [IS_A]: [t.class],
     ...row,
   }) as AtomicResource;
+/** The table row the code lens writes from a record, onto a previous row. */
 
-describe('catalog lens raindrop-bookmark-v1 agrees with the code lens', () => {
+function written(record: RaindropRecord, previous: Row): Row {
+  const patch = raindropToAtomic(record);
+  const { [IS_A]: _isA, ...set } = patch.set!;
+  const row: Row = { ...previous, ...set };
+  for (const key of patch.unset ?? []) delete row[key];
+
+  return row;
+}
+
+describe.each(LENSES)('catalog lens %s agrees with the code lens', name => {
+  const lens = load(name);
+
   it('targets the class the code lens writes', () => {
     expect(lens.target.class).toBe(t.class);
   });
@@ -51,20 +74,32 @@ describe('catalog lens raindrop-bookmark-v1 agrees with the code lens', () => {
   it.each(lens.examples.map((e, i) => [i + 1, e] as const))(
     'example %i',
     (_, example) => {
-      const { [IS_A]: _isA, ...set } = raindropToAtomic(example.source).set!;
-      expect(set).toEqual(example.target);
+      if (example.error !== undefined) {
+        refused(example.error, () => raindropToAtomic(example.source));
+
+        return;
+      }
+
+      expect(written(example.source, {})).toEqual(example.target);
 
       for (const edit of example.edits ?? []) {
-        const row = resource({ ...example.target, ...edit.target });
-
-        if (edit.error === undefined)
-          expect(raindropFromAtomic(row, example.source)).toEqual(edit.source);
-        else {
-          expect(Object.keys(refusals)).toContain(edit.error);
-          expect(() => raindropFromAtomic(row, example.source)).toThrow(
-            refusals[edit.error],
+        if (edit.direction === 'backward')
+          if (edit.error === undefined)
+            expect(written(edit.source!, example.target!)).toEqual(edit.target);
+          else refused(edit.error, () => raindropToAtomic(edit.source!));
+        else if (edit.error === undefined)
+          // A forward edit's target is the whole row; a missing field is a
+          // removal, which the code lens reads the same way.
+          expect(
+            raindropFromAtomic(resource(edit.target), example.source),
+          ).toEqual(edit.source);
+        else
+          refused(edit.error, () =>
+            raindropFromAtomic(
+              resource({ ...example.target, ...edit.target }),
+              example.source,
+            ),
           );
-        }
       }
     },
   );
