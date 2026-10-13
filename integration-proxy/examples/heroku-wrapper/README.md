@@ -10,7 +10,7 @@ cannot silently break.
 
 | File | Purpose |
 | --- | --- |
-| `Cargo.toml` | Package/binary named `auth-proxy`, depending on `atomic-integration-proxy = "0.3"`. |
+| `Cargo.toml` | Package/binary named `auth-proxy`, depending on `atomic-integration-proxy = "0.4"`. |
 | `src/main.rs` | `atomic_integration_proxy::run().await`. |
 | `Procfile` | `web: target/release/auth-proxy` — identical to the current production Procfile. |
 | `rust-toolchain` | `stable`. Read by the `emk/rust` Heroku buildpack (it `cat`s a plain `rust-toolchain` file; it does not read `rust-toolchain.toml`). |

@@ -6,9 +6,9 @@ CLI to use an existing Atomic owner's selected provider connections. Provider
 OAuth and credentials remain at the proxy. The CLI needs outbound HTTPS, no
 callback listener, no client secret, and no Atomic signing key.
 
-This document describes the implementation in this branch. It does not claim
-a crates.io release, a localthought.io deployment, an integrated production
-owner hub, or verified live GitHub access. The separate Syncables scaffold is
+This document describes the device/auth implementation in 0.4.0. Publishing
+the crate does not establish a localthought.io deployment, an integrated
+production owner hub, or verified live GitHub access. The separate Syncables scaffold is
 [#567](https://github.com/ontola/atomic-plugins/pull/567), for #566.
 
 ## Operator configuration and public clients
@@ -33,7 +33,7 @@ query or fragment; loopback HTTP is allowed for local development.
 
 Configuration is also available as the public `Config::device: DeviceConfig`.
 The proxy validates it when building the app. This adds a public `Config`
-field and therefore belongs in the next 0.4.0 release, alongside `webhooks`.
+field in the 0.4.0 release, alongside `webhooks`.
 Device/session tables are initialized with the existing security schema; API
 routes refuse device authentication when no client is registered.
 
