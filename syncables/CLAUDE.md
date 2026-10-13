@@ -82,7 +82,7 @@ Data flows through four stages, each its own directory under `src/`:
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
-   `read/produced-classes.ts` reads Produced Classes 0.1.0-draft
+   `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
    `validate.py` (keep them in step), `parseProduces` reads nothing from a
@@ -708,6 +708,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   three ways, `gone` over `notFound`, an update stopped), source objects
   (refused, unreadable then sent), `kind: none`, an unusable declaration
   and an unknown stored state.
+- `unit/client/calendar-recurring-refuse.test.ts` reads the repository's
+  Calendar write-preconditions overlay from `../overlays/` and applies its
+  operation updates to a Calendar-shaped document (K18 part 2): the
+  declarations parse under the placement rules, a series' master event
+  (`recurrence`) is refused for update and delete without a request, and a
+  single event and an exception are sent with `If-Match`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored

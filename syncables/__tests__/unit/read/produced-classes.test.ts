@@ -180,6 +180,19 @@ describe('checkProduces (ValidationTests, rules 2-6)', () => {
     );
   });
 
+  it.each([
+    ['U+0085', '\u0085'],
+    ['U+0080', '\u0080'],
+    ['U+009F', '\u009f'],
+    ['U+FEFF', '\ufeff'],
+    ['U+00A0', '\u00a0'],
+    ['U+2028', '\u2028'],
+    ['U+3000', '\u3000'],
+    ['DEL', '\u007f'],
+  ])('rule 4: refuses %s inside an IRI (0.1.1 §3)', (_label, char) => {
+    expect(absoluteIri(`https://o.example/a${char}b`)).toBe(false);
+  });
+
   it('rule 4: a lens must be an absolute IRI too, and these are', () => {
     expect(errorsOf((l) => void (l[0]!['lens'] = 'lenses/x'))).toContain(
       'x-produces[0].lens: expected an absolute IRI',
@@ -315,6 +328,11 @@ describe('the read model and the client', () => {
     classes.pop();
     expect(client.produces('entries')).toHaveLength(1);
     expect(client.produces('projects')).toEqual([]);
+    // A CRUD resource key names the same classes; an unknown name nothing.
+    expect(client.produces('timeEntry').map((p) => p.class)).toEqual([
+      TIME_ENTRY,
+    ]);
+    expect(client.produces('nothing')).toEqual([]);
   });
 });
 
