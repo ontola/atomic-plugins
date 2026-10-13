@@ -288,8 +288,9 @@ const normalizeUuid = (value: unknown): string =>
  * - The record name is the plain-text title (`Untitled` when empty).
  * - Archived or trashed pages are left out and listed in `errors`. A page
  *   missing from a fetch never means it should be deleted.
- * - Formatted rich text and malformed option values are left unprojected, and
- *   each one is listed in `errors`. The raw `properties` object passes through
+ * - Formatted rich text is projected as its words without the formatting
+ *   (`notionFormattedText`, from 0.5.3) and listed in `errors`; malformed
+ *   option values are left unprojected and listed too. The raw `properties` object passes through
  *   untouched, as do unsupported types (formula, relation, date, people, files,
  *   ...), so nothing provider-side is lost.
  * - A property id whose type differs between pages in one fetch (the schema

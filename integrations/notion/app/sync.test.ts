@@ -445,6 +445,30 @@ describe('syncNotion', () => {
     expect(retro()[notes]).toBe('Mine');
   });
 
+  it('fills a formatted cell on a row synced by 0.5.2, which never held the words (#536 review)', async () => {
+    const { store, transport } = await run();
+    const find = (shortname: string) =>
+      [...store.resources].find(
+        ([, p]) => p[atomic.shortname] === shortname,
+      )![0];
+    const notes = find(notionFieldShortname('Nt0s'));
+    const baseline = find('notion-sync-baseline');
+    const retro = () =>
+      [...store.resources.values()].find(
+        p => p[PARENT] === TABLE && p[atomic.name] === 'Retrospective',
+      )!;
+    // As 0.5.2 left it: no Notes on the row, none in its baseline.
+    delete retro()[notes];
+    const stored = JSON.parse(retro()[baseline] as string) as {
+      fields: Record<string, unknown>;
+    };
+    delete stored.fields[notionFieldShortname('Nt0s')];
+    retro()[baseline] = JSON.stringify(stored);
+
+    await syncNotion(store, transport);
+    expect(retro()[notes]).toBe('Keep this bold');
+  });
+
   it('keeps a formatted cell cleared here cleared, rather than refilling it (#536 review)', async () => {
     const { store, transport } = await run();
     const notes = [...store.resources].find(

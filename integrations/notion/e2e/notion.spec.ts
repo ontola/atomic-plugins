@@ -103,7 +103,7 @@ test.describe('notion drive plugin', () => {
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
     ).toContainText(
-      "1 page has formatting in Notes: Notes was copied as plain text, without the formatting, and an edit to it here is not sent to Notion; while such an edit is kept, that row's other edits are held at Send too.",
+      "1 page has formatting in Notes: Notes was copied as plain text, without the formatting, and an edit to it here is not sent to Notion; while such an edit is kept, Send refuses that row's other edits too.",
     );
     await page.keyboard.press('Escape');
 
