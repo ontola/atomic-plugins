@@ -8,6 +8,7 @@
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/pagination-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/repositories-read-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/canonical-paths-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/identity-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"
@@ -204,6 +205,7 @@
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/auth-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml"
       ],
       "selection": {

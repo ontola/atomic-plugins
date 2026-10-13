@@ -12,6 +12,7 @@ are downloaded.
 """
 import argparse
 import copy
+import json
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -103,12 +104,20 @@ class CompletenessOverlayTests(unittest.TestCase):
         self.assertEqual(completeness.classify_read(declaration, task["x-read-tombstone"], "id", "t1", 410, None),
                          "unavailable")
 
-    def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test.
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # catalog/2026-10-12-syncables-0.22.json selects it after the
+        # crud-causality overlay; no earlier catalog does.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn("completeness-7ca47c73cf2308c9812692b482b3713b397bc88c",
-                                 catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-12-syncables-0.22.json":
+                    self.assertNotIn("completeness-7ca47c73cf2308c9812692b482b3713b397bc88c", text)
+                    continue
+                names = [url.rsplit("/", 1)[1] for p in json.loads(text)["platforms"]
+                         for url in p["overlays"] if "7ca47c73cf2308c9812692b482b3713b397bc88c" in url]
+                completeness = names.index("completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml")
+                crud = next(i for i, n in enumerate(names) if n.startswith("crud-causality"))
+                self.assertLess(crud, completeness)
 
     def test_only_completeness_and_read_tombstones_are_added_in_any_order(self):
         for name, overlays in COMPOSITIONS.items():

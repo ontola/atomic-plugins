@@ -20,7 +20,9 @@ overlays that a syncables 0.22.0 reader uses:
   0.2.0-draft x-read-tombstone) and Throttling 0.2.0-draft limits and
   signals, last;
 * Notion (after its runtime schema), Spotify, Airtable and Asana:
-  Throttling, last.
+  Throttling, last;
+* Google Tasks and GitHub Issues: Collection Completeness (after their
+  crud-causality overlay).
 
 Every update in every composition must also name a CRUD Causality rule-5
 `mode`, and a §4.6 `patchFormat` when the mode is `patch`.
@@ -66,7 +68,10 @@ def url(template, kind):
 # Each change to the base's overlay list: ("replace", old, new),
 # ("after", anchor, new) or ("append", new), applied in this order.
 CHANGES = {
-    "github-issues": [("append", url(GITHUB, "throttling"))],
+    "github-issues": [
+        ("after", url(GITHUB, "crud-causality"), url(GITHUB, "completeness")),
+        ("append", url(GITHUB, "throttling")),
+    ],
     "google-calendar": [
         ("replace", url(CALENDAR, "app-crud-causality"), url(CALENDAR, "app-crud-causality-v2")),
         ("append", url(CALENDAR, "read-tombstone")),
@@ -86,6 +91,7 @@ CHANGES = {
     "asana": [("append", url(ASANA, "throttling"))],
     "google-tasks": [
         ("replace", url(TASKS, "crud-causality"), url(TASKS, "crud-causality-v2")),
+        ("after", url(TASKS, "crud-causality-v2"), url(TASKS, "completeness")),
         ("append", url(TASKS, "throttling")),
     ],
 }
@@ -93,7 +99,11 @@ CHANGES = {
 # Where each composition may differ from the base one: added keys only, named
 # by their path cut at four keys. Platforms not listed must not differ.
 ADDED = {
-    "github-issues": {("x-throttling",)},
+    "github-issues": {
+        ("x-throttling",),
+        ("components", "crudResources", "issue", "collections"),
+        ("components", "crudResources", "issueComment", "collections"),
+    },
     "google-calendar": {
         ("components", "crudResources", "event", "collections"),
         ("paths", "/calendars/{calendarId}/events/{eventId}", "patch", "x-crud"),
@@ -134,6 +144,7 @@ ADDED = {
     "google-tasks": {
         ("components", "crudResources", "task", "collections"),
         ("components", "crudResources", "task", "description"),
+        ("components", "crudResources", "task", "x-read-tombstone"),
         ("components", "crudResources", "taskList", "collections"),
         ("components", "crudResources", "taskList", "description"),
         ("paths", "/tasks/v1/users/@me/lists/{tasklist}", "get", "x-crud"),
@@ -165,7 +176,8 @@ def validator(spec):
 
 
 VALIDATORS = {spec: validator(spec) for spec in (
-    "pagination-schemes", "crud-causality", "throttling", "filtering", "runtime-schemas")}
+    "pagination-schemes", "crud-causality", "throttling", "filtering", "runtime-schemas",
+    "collection-completeness")}
 
 
 def problems(spec, document):
