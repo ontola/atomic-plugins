@@ -133,6 +133,48 @@ describe('a list-only resource (no identity) is read-only', () => {
       .toEqual(['POST /rates']);
   });
 
+  it('keeps a create that was in flight at the stop uncertain, with its error, and never sends it', async () => {
+    const storage = new InMemoryStorageAdapter();
+    // The POST never answers: the outbox holds the create as in flight.
+    const log: string[] = [];
+    const first = createApiClient(document({ identity: true }), {
+      transport: async (r): Promise<TransportResponse> => {
+        log.push(`${r.method} ${r.url.pathname}`);
+        if (r.method === 'POST') return new Promise(() => undefined);
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify([{ id: 'a', v: 1 }]),
+        };
+      },
+      storage,
+      idempotencyKeyHeader: 'Idempotency-Key',
+    });
+    await first.sync();
+    await first.create('rates', { id: 'r1', v: 2 });
+    await expect.poll(() => log).toContain('POST /rates');
+    // A new process on the same storage, with the resource now list-only.
+    const after = provider();
+    const second = createApiClient(document({}), {
+      transport: after.transport,
+      storage,
+      idempotencyKeyHeader: 'Idempotency-Key',
+    });
+    await second.ready();
+    expect(second.pendingWrites()).toMatchObject([
+      {
+        id: 'r1',
+        type: 'create',
+        state: 'uncertain',
+        lastError: expect.stringMatching(
+          /^The process stopped while this write may have been in flight\. Resource rates declares no create operation; not sent again: confirm it with the server's id if it applied, or discard it$/,
+        ),
+      },
+    ]);
+    await second.sync();
+    expect(after.log.filter((l) => l.startsWith('POST'))).toEqual([]);
+  });
+
   it('parks a create queued before the resource became list-only, and never sends it', async () => {
     const storage = new InMemoryStorageAdapter();
     // Queued under a document that allowed the create; the POST answers 503,
@@ -160,7 +202,7 @@ describe('a list-only resource (no identity) is read-only', () => {
         type: 'create',
         state: 'failed',
         lastError: expect.stringMatching(
-          /declares no create operation; not sent: discard it/,
+          /declares no create operation; not sent again: discard it/,
         ),
       },
     ]);

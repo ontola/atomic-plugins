@@ -38,3 +38,20 @@ operation; not sent: discard it"; `resolveWrite` `retry` throws and
 `discard` drops it. The new restore test fails on the code before (it sent
 the POST). The changelog names collections read by GET and the `idField`
 documentation; main was already merged.
+
+## Turn 3
+
+**Human (via the coordinator session):** Delta review: a create in flight
+at the stop with a usable idempotency key becomes `failed` and loses its
+"may have been in flight" error, though it may have applied; keep it
+`uncertain` with its error and append the note, with a test. Mention the
+rule-25 message in the changelog; wrap CLAUDE.md. Merge main, keeping
+#525's Produced Classes bullet first.
+
+**Assistant:** On restore, a parked create that was in flight at the stop
+(or already uncertain) stays `uncertain`, its error kept and "declares no
+create operation; not sent again: confirm it with the server's id if it
+applied, or discard it" appended; any other is `failed` ("…; not sent
+again: discard it"). Test: a POST that never answers, then a new client on
+the same storage with the resource list-only (fails on the previous code).
+Changelog and CLAUDE.md updated; main merged with the bullets in order.

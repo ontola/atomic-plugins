@@ -36,7 +36,7 @@ The extension versions this source reads, against the specifications in
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
-| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.1-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 | [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
 | [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
 
@@ -1809,15 +1809,18 @@ class or lens, and maps no record.
   case-insensitively, the rest exactly): the resources to offer for a table
   of that class.
 - `ReadCollection.produces` carries a resource's classes on each of its
-  collections, and `ApiClient.produces(resource)` returns them (a copy;
-  empty when none are declared or the declaration does not parse).
+  collections, and `ApiClient.produces(name)` returns them for a collection
+  name, a legacy collection path or a CRUD resource key (a copy; empty when
+  none are declared, the declaration does not parse, or the name names
+  nothing).
 - `lensFits(produced, lens, { provider, resource })` checks a lens document
   the caller fetched itself (§4.2): when it names a target, that must be a
   `target.class` that is the entry's class; when it names a source, that
   must be the provider record `source.record.provider` and `.resource`
   (`provider` is the openapi-directory key, `clockify.me`, as the catalog
   lenses under `ontology/lenses/` name it). An entry whose lens does not fit
-  is to be treated as having none.
+  is to be treated as having none. The lens document's `@id` is not compared
+  with the entry's `lens`.
 - `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
   spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
 
@@ -1825,18 +1828,28 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
+  control character (U+0080–U+009F) or U+FEFF is not absolute, as the
+  spec's validator now says too (U+FEFF was refused before and U+0085 was
+  accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
+  takes a CRUD resource key, and returns nothing for an unknown name
+  instead of throwing.
 - **Unreleased**: A resource without `identity` in a CRUD Causality
   document is read-only (CRUD Causality 0.6.0 §4.1). `create()` no longer
   sends a POST to its collection's URL, which the client took as the create
-  of any collection read by GET whose URL has a POST operation, and an
-  `x-crud` create of it is refused (rule 25); `create()` throws, as
-  `update()` and `remove()` already did. A create queued by 0.22.0 for such
-  a resource is parked on restore (`failed`, or still `uncertain`, with
-  "declares no create operation; not sent: discard it"), never sent;
-  `resolveWrite` `retry` throws and `discard` drops it. A resource with an
-  `identity`, and legacy documents (without `crudResources`), create as
-  before. The `idField` option's documentation now says it must be unique
-  across a list's pages (the offset and short-page repeat checks).
+  of any collection read by GET whose URL has a POST operation; it throws
+  "declares no create operation", as `update()` and `remove()` already did.
+  An `x-crud` create of such a resource is refused too: `create()` throws
+  "declares a create but no identity (CRUD Causality 0.6.0 rule 25): a
+  list-only resource is read-only". A create queued by 0.22.0 for such a
+  resource is never sent: on restore it is `failed` ("declares no create
+  operation; not sent again: discard it"), or, when it may have applied (in
+  flight at the stop, or already `uncertain`), stays `uncertain` with its
+  error and the note appended, to confirm or discard; `resolveWrite`
+  `retry` throws. A resource with an `identity`, and legacy documents
+  (without `crudResources`), create as before. The `idField` option's
+  documentation now says it must be unique across a list's pages (the
+  offset and short-page repeat checks).
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0
