@@ -34,6 +34,7 @@ The extension versions this source reads, against the specifications in
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 
 The other specifications there (Filtering, the authentication and webhook
 extensions) are not read by Syncables.
@@ -230,9 +231,12 @@ changes within two days are not told apart.
 immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
-replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
-`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+replacing newer local edits. Updates use the item path's operation that
+declares CRUD Causality `x-crud: { action: update }` for the record's
+resource: when exactly one of its PUT and PATCH does, that one; when both
+do, the PUT; when neither does (or in a legacy document, without
+`components.crudResources`), the PUT, or the PATCH when there is no PUT.
+The chosen operation's `x-crud` (§4.3 `mode`, §4.6 `patchFormat`) sets the
 body:
 
 - `mode: replace`, no `x-crud`, or a legacy document (no
@@ -254,9 +258,11 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
-A declared PUT is chosen even when the item's PATCH is declared as a merge
-patch, so such a document still sends full records; preferring the merge
-patch there is a possible follow-up, not done.
+With both declared, the PUT is chosen even when the PATCH is declared as a
+merge patch, so such a document still sends full records; preferring the
+merge patch there is a possible follow-up, not done. A PATCH declared with
+`patchFormat: jsonPatch` beside an undeclared PUT is followed: `update()`
+throws.
 
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
@@ -1780,8 +1786,56 @@ collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
+### Produced classes (`x-produces`)
+
+A CRUD resource may declare the shared classes its objects can be
+represented as, by subject IRI, each with an optional lens IRI (the draft
+[Produced Classes extension](../openapi-extensions/spec/produced-classes/README.md)
+0.1.0). Syncables reads the declaration as metadata only: it fetches no
+class or lens, and maps no record.
+
+- `producedClasses(document)` lists each resource that declares
+  `x-produces` (in `components.crudResources`, or a Swagger 2.0 document's
+  root `x-crudResources`) with its `classes` (`class`, `lens`?,
+  `description`?; `x-*` fields left out), or, when the declaration breaks
+  §7 rules 2–6, its `errors` and no classes. A declaration anywhere else is
+  not read.
+- `resourcesProducing(document, classIri)` gives the resources whose
+  declaration names that class, compared as §3 says (the scheme and host
+  case-insensitively, the rest exactly): the resources to offer for a table
+  of that class.
+- `ReadCollection.produces` carries a resource's classes on each of its
+  collections, and `ApiClient.produces(resource)` returns them (a copy;
+  empty when none are declared or the declaration does not parse).
+- `lensFits(produced, lens, { provider, resource })` checks a lens document
+  the caller fetched itself (§4.2): when it names a target, that must be a
+  `target.class` that is the entry's class; when it names a source, that
+  must be the provider record `source.record.provider` and `.resource`
+  (`provider` is the openapi-directory key, `clockify.me`, as the catalog
+  lenses under `ontology/lenses/` name it). An entry whose lens does not fit
+  is to be treated as having none.
+- `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
+  spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
+
+Not verified against a real provider: no overlay declares `x-produces` yet.
+
 ## Changelog
 
+- **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
+  PUT or PATCH that declares it for the record's resource is used over one
+  that does not (before, any PUT on the item path was used). With both
+  declared the PUT is kept; with neither, the PUT, else the PATCH, as
+  before; legacy documents are unchanged. Behaviour change for a document
+  whose PATCH alone declares the update while the path also has a PUT, such
+  as Google Calendar's events with the catalog's `app-crud-causality`
+  overlay (PATCH, with the full record, instead of PUT); a PATCH declared
+  with `patchFormat: jsonPatch` there now makes `update()` throw.
+- **Unreleased**: Produced Classes 0.1.0-draft (`x-produces`), read-only:
+  `producedClasses`, `resourcesProducing`, `ReadCollection.produces`,
+  `ApiClient.produces`, `lensFits`, and the spec's checks (`checkProduces`,
+  `parseProduces`, `absoluteIri`, `sameSubject`), from both entries. A
+  declaration that does not parse is reported and read as none. Nothing is
+  fetched or mapped.
 - **Unreleased**: Pacing under the quotas `x-throttling` announces
   (pieces.md K2). Where a Limit Object states `requests`, the client sends
   at most `paceFraction` (default 0.8) of them per window of each bucket a

@@ -8,6 +8,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 `Config` gains a public field (`webhooks`), a breaking change under Cargo's
 0.x semver rules, so the next release is 0.4.0.
 
+- Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
+  buckets partitioned by `sourceIp` or by nothing, with at most 10,000
+  requests per window, the proxy keeps a sliding log per platform and bucket
+  and refuses a request that would exceed one with `429 provider_quota` and
+  `Retry-After`, without calling the provider. In memory, per instance. See
+  README, "Pacing under provider quotas".
+
 - Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
   `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless
   `WEBHOOKS_ENABLED=true` (new `Config::webhooks`, `WebhookConfig`,
