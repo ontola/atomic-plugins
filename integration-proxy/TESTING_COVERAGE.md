@@ -99,7 +99,9 @@ explicit selections; single approval/redemption across two PostgreSQL stores;
 pending/slow polling, denial and expiry; rotating refresh families and concurrent
 reuse revocation; per-session logout/owner revocation; scoped discovery and
 read-only proxy requests; canonical owner/AccessPolicy/connection checks; and
-provider token isolation. `complete_http_contract_supports_the_cli_and_refresh_logout`
+provider token isolation. A separate process captures TRACE output and checks
+that device/user codes, approval challenges, bearer/refresh tokens and provider
+credentials never appear. `complete_http_contract_supports_the_cli_and_refresh_logout`
 checks the public routes against `tests/fixtures/device-contract.json`.
 `browser_owner_bridge_approves_an_outbound_only_client` is opt-in with
 `DEVICE_BROWSER_TEST=1`, Node and Playwright: actual local owner bridge, browser

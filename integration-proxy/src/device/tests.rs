@@ -918,3 +918,152 @@ async fn expiry_is_rechecked_after_waiting_for_another_instance_row_lock() {
     tx.commit().await.unwrap();
     assert_eq!(poll.await.unwrap().unwrap_err().code, "expired_token");
 }
+
+#[derive(Clone, Default)]
+struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn device_and_bearer_secrets_do_not_reach_trace_logs() {
+    // Isolate the tracing callsite cache from concurrently running tests.
+    const CHILD: &str = "DEVICE_LOG_CAPTURE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "device::tests::device_and_bearer_secrets_do_not_reach_trace_logs",
+                "--include-ignored",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "device log isolation test failed");
+        return;
+    }
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let f = Fixture::new(213).await;
+    let post = |path: &str, fields: &[(&str, &str)]| {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields.iter().copied())
+            .finish();
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let response = f
+        .send(post(
+            "/oauth/device/code",
+            &[("client_id", "syncables-cli")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let device = body_json(response).await;
+    let code = device["user_code"].as_str().unwrap();
+    let device_code = device["device_code"].as_str().unwrap();
+    let response = f
+        .send(
+            Request::builder()
+                .uri(format!("/device?user_code={code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = f
+        .send(f.signed("/device/challenge", json!({"user_code":code})))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let challenge = body_json(response).await;
+    let response = f
+        .send(f.signed(
+            "/device/approve",
+            json!({"challenge":challenge["challenge"],"approve":true,"connections":[f.connection]}),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    f.ready(device_code).await;
+    let response = f
+        .send(post(
+            "/oauth/device/token",
+            &[
+                ("client_id", "syncables-cli"),
+                ("grant_type", DEVICE_GRANT),
+                ("device_code", device_code),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let token = body_json(response).await;
+    assert_eq!(
+        f.bearer(
+            token["access_token"].as_str().unwrap(),
+            "GET",
+            "/connections"
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let response = f
+        .send(post(
+            "/oauth/device/token",
+            &[
+                ("client_id", "syncables-cli"),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", token["refresh_token"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let rotated = body_json(response).await;
+    let response = f
+        .send(post(
+            "/oauth/device/revoke",
+            &[
+                ("client_id", "syncables-cli"),
+                ("token", rotated["refresh_token"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        captured.contains("http_request"),
+        "router tracing was captured"
+    );
+    for secret in [
+        code,
+        device_code,
+        challenge["challenge"].as_str().unwrap(),
+        token["access_token"].as_str().unwrap(),
+        token["refresh_token"].as_str().unwrap(),
+        rotated["access_token"].as_str().unwrap(),
+        rotated["refresh_token"].as_str().unwrap(),
+        "invented-provider-value",
+    ] {
+        assert!(
+            !captured.contains(secret),
+            "sensitive authentication material reached logs"
+        );
+    }
+}
