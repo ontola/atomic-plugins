@@ -108,6 +108,11 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.invalid(lambda d: produces(d)[0].update({"class": bad}), "x-produces[0].class: expected an absolute IRI")
         self.invalid(lambda d: produces(d)[0].update({"lens": "lenses/x"}), "x-produces[0].lens: expected an absolute IRI")
+        for bad in ["https://o.example/a\x85b", "https://o.example/a\x80b", "https://o.example/a\x9fb",
+                    "https://o.example/a\ufeffb", "https://o.example/a\u00a0b", "https://o.example/a\u2028b",
+                    "https://o.example/a\u3000b", "https://o.example/a\x7fb"]:
+            with self.subTest(bad=bad):
+                self.assertFalse(absolute_uri(bad))
         for good in ["https://o.example/c", "http://o.example/c#Thing", "urn:example:c", "did:web:o.example",
                      "https://ontologie.example/klassen/tijdregistratie-ü", "https://例え.example/クラス"]:
             with self.subTest(good=good):

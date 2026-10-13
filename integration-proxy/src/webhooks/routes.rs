@@ -206,6 +206,14 @@ pub async fn subscribe(
     if let Err(error) = crate::check_access(&state, &owner).await {
         return no_store(error.into_response());
     }
+    // Before anything reaches the provider.
+    if let Err(retry) = webhooks
+        .limits
+        .subscribe_per_owner
+        .take(owner.as_str(), std::time::Instant::now())
+    {
+        return super::limits::too_many(retry);
+    }
     let Ok(request) = serde_json::from_slice::<SubscribeBody>(&body) else {
         return bad_request("expected {source, parameters, events}");
     };
