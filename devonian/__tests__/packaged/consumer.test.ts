@@ -53,8 +53,10 @@ describe.runIf(enabled)('the packed devonian, as an npm consumer', () => {
     const modules = join(consumer, 'node_modules');
     mkdirSync(modules, { recursive: true });
     cpSync(unpacked, join(modules, 'devonian'), { recursive: true });
-    // Runtime dependencies, and the optional @tomic/lib peer the native API
-    // uses, from this package's own install: what `npm install` would add.
+    // Runtime dependencies from this package's own install: what `npm
+    // install` would add. Plus @tomic/lib, an optional peer the native API
+    // needs, which npm does not install: a consumer installs it themselves,
+    // as the README's Usage says.
     for (const name of [...Object.keys(pkg.dependencies), '@tomic/lib']) {
       const target = join(modules, name);
       mkdirSync(dirname(target), { recursive: true });
@@ -87,7 +89,20 @@ describe.runIf(enabled)('the packed devonian, as an npm consumer', () => {
         );
     }
 
-    expect(existsSync(join(unpacked, '__tests__'))).toBe(false);
+    // `tsc` compiles __tests__ and examples into build/ too; `files` ships
+    // only build/src.
+    const shipped = ['__tests__', 'examples', 'build/__tests__', 'build/examples'];
+    expect(shipped.filter((dir) => existsSync(join(unpacked, dir)))).toEqual([]);
+    expect(readdirSync(join(unpacked, 'build'))).toEqual(['src']);
+    const tests = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? tests(join(dir, e.name))
+          : /\.(test|spec)\.[cm]?[jt]s$/.test(e.name)
+            ? [join(dir, e.name)]
+            : [],
+      );
+    expect(tests(unpacked)).toEqual([]);
   });
 
   it('runs ingest, edit, publish, failure, checkpoint and restart', () => {

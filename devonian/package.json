@@ -38,7 +38,7 @@
   "sideEffects": false,
   "files": [
     "docs",
-    "build",
+    "build/src",
     "vocab",
     "src"
   ],

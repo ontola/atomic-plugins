@@ -9,7 +9,13 @@
 //
 // __tests__/packaged/consumer.test.ts runs it against the packed tarball
 // (`pnpm pack`), installed the way npm would, with no network (#259).
-import { mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -114,8 +120,12 @@ function check(condition, message) {
   }
 }
 
+// Without an argument the checkpoint goes to a temporary directory, removed
+// on exit.
 const dir =
   process.argv[2] ?? mkdtempSync(join(tmpdir(), 'devonian-consumer-'));
+if (!process.argv[2])
+  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
 const file = join(dir, 'state.json');
 const platform = new Platform();
 platform.records.set('t0', {
