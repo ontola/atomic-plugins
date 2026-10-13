@@ -218,6 +218,24 @@ it yet. `tests/test_spotify_throttling.py` composes it alone and after the
 catalog's Spotify overlays and classifies synthetic responses. No provider
 was called.
 
+## GitLab throttling
+
+[GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the read-only GitLab.com document: GitLab.com's
+[authenticated API limit](https://docs.gitlab.com/user/gitlab_com/rate_limits/)
+of "2,000 requests each minute" per user (the limit in effect; the page's
+tier-aware limits are proposed, not in effect), the documented
+[response headers](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/)
+`RateLimit-Limit`, `RateLimit-Observed`, `RateLimit-Remaining`,
+`RateLimit-Reset` (Unix time) and, on a 429, `Retry-After` (seconds), and a
+429 as `throttled` with no bucket named, since GitLab.com has several
+throttles. Not declared: `RateLimit-ResetTime` (the same moment as
+`RateLimit-Reset`), `RateLimit-Name`, and the unauthenticated limit. No
+dated catalog selects it yet. `tests/test_gitlab_throttling.py` composes it
+alone and after the catalog's GitLab overlays and classifies synthetic
+responses. No provider was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
