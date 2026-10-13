@@ -29,6 +29,12 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `Cache-Control: no-store`. A catalog-fixed value for a caller header now
   replaces the caller's instead of being sent next to it. See SECURITY.md,
   "Validating proxy".
+- Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
+  a proof by the new one, moves the old agent's connections and runtimes to
+  the new id in one statement and retires the old id (new `retired_agents`
+  table). Planned rotation only; a lost or compromised key is out of scope
+  (SECURITY.md, "Key rotation"). New errors `invalid_transfer_proof`,
+  `agent_retired`, `transfer_blocked`, `transfer_conflict`.
 
 ## 0.3.0 (2026-10-06)
 

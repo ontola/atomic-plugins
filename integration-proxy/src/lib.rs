@@ -56,6 +56,7 @@ mod signature;
 mod templates;
 #[cfg(test)]
 mod test_support;
+mod transfer;
 // Step 2 of #369: the store's operations have no caller outside the tests
 // until step 3 mounts the routes.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -101,6 +102,9 @@ struct AppState {
     key_check_window: std::time::Duration,
     /// `TRUST_FORWARDED_FOR`: where that limit finds the client address.
     trust_forwarded_for: config::TrustForwardedFor,
+    /// Whether an owner still has open webhook subscriptions, which block a
+    /// key transfer (#410).
+    subscriptions: Arc<dyn transfer::OpenSubscriptions>,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
@@ -129,6 +133,18 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// Asks the access policy about `owner`.
+/// Refuses an agent that a key transfer retired (#410) as an owner.
+pub(crate) async fn refuse_retired(
+    security: &security::Security,
+    agent: &AgentId,
+) -> Result<(), api_error::ApiError> {
+    match security.is_retired(agent.as_str()).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(api_error::ApiError::AgentRetired),
+        Err(_) => Err(api_error::ApiError::Unavailable),
+    }
+}
+
 pub(crate) async fn check_access(
     state: &AppState,
     owner: &AgentId,
@@ -262,6 +278,7 @@ pub async fn build_app_with_access(
         key_check_limit: config.key_check_limit_per_hour,
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
+        subscriptions: Arc::new(transfer::NoSubscriptions),
         #[cfg(test)]
         test_upstream: None,
     };
@@ -372,6 +389,7 @@ fn router(state: AppState) -> Router {
             delete(connections::remove_agent),
         )
         .route("/runtimes", post(connections::add_runtime))
+        .route("/agents/transfer", post(transfer::transfer))
         .route("/runtimes/:agent", delete(connections::remove_runtime))
         .route(
             "/proxy/:connection_id/:platform/*path",

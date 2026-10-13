@@ -407,6 +407,44 @@ heuristically.
   connection the key is namespaced per connection, above). None of them
   widens what the catalog allows or which credential is sent.
 
+## Key rotation (#410, unreleased)
+
+`POST /agents/transfer` moves an owner's connections and runtimes to a new
+agent id and retires the old one (README, routes).
+
+- **Scope: planned rotation only.** The user holds both keys: the old one
+  signs the request, the new one signs the proof. **A lost or compromised
+  key is out of scope.** If the old key is lost, nothing can sign a
+  transfer; if it is compromised, its holder can already use, delegate and
+  delete its connections, and could transfer them first. In both cases:
+  delete the connections (while the key still works) and connect again with
+  the new key. Recovery without the old key is to go through the SaaS
+  account (atomic-saas#138), not through this route.
+- **Both keys agree.** The proof binds the old id, the new id, this proxy's
+  origin and the outer request's timestamp. The outer request is v2 signed,
+  accepted once and within five minutes, so a proof cannot be replayed,
+  used at another proxy, or attached to another request.
+- **Admission.** The old agent passes the access policy as any signer
+  does, and so must the new one before anything moves.
+- **All or nothing.** One SQL statement retires the old id and moves its
+  connections and runtimes; a collision (the new agent already has a runtime
+  with the same agent) undoes all of it, the retirement included.
+- **Afterwards.** The old id is refused as the signer of management calls,
+  `/connect/redeem` and transfers, and as a transfer target. Capabilities it
+  signed fail at once, because the connections' owner key changed.
+  Delegated app agents keep working: delegations name the connection and the
+  app, not the owner.
+- **Webhooks.** While the old agent has open webhook subscriptions (keyed
+  by owner) the transfer is refused with `409 transfer_blocked`. The check
+  sits behind `transfer::OpenSubscriptions`; until the webhooks store
+  exposes its owner query, it answers "none".
+- **Not covered.** A connection redeemed by the old key in the same instant
+  as its transfer can still end up owned by the retired id (the redeem's
+  retired check and the move are not serialized); such a connection can no
+  longer be managed and idles out after 90 days. The audit trail is the
+  `retired_agents` row (old id, successor, time) and a log line with the
+  counts moved, not the ids.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic

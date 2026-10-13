@@ -41,6 +41,7 @@ async fn signed<'a>(
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let signer =
         crate::signature::authenticate(state, security, method, uri, headers, body).await?;
+    crate::refuse_retired(security, &signer).await?;
     crate::check_access(state, &signer).await?;
     Ok(Signed { security, signer })
 }

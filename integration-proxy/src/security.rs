@@ -112,7 +112,29 @@ CREATE TABLE IF NOT EXISTS key_check_limits (
   PRIMARY KEY (bucket, slot)
 );
 CREATE INDEX IF NOT EXISTS key_check_limits_expires_at_idx ON key_check_limits (expires_at);
+CREATE TABLE IF NOT EXISTS retired_agents (
+  agent TEXT PRIMARY KEY,
+  successor TEXT NOT NULL,
+  retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ";
+
+/// Why [`Security::transfer_owner`] moved nothing.
+#[derive(Debug)]
+pub enum TransferError {
+    /// The old or the new id is already retired.
+    Retired,
+    /// The move would collide with something the new id already holds (a
+    /// runtime with the same agent); the whole statement was undone.
+    Conflict,
+    Database(String),
+}
+
+/// What a transfer moved.
+pub struct Transferred {
+    pub connections: i64,
+    pub runtimes: i64,
+}
 
 /// A pending provider authorization, from `/connect/authorize` to the
 /// provider's callback.
@@ -568,6 +590,65 @@ impl Security {
             .await
             .map_err(db_error)?;
         Ok(connection_id)
+    }
+
+    /// Whether `agent` was retired by a transfer (#410).
+    pub async fn is_retired(&self, agent: &str) -> Result<bool, String> {
+        self.client()
+            .await
+            .query_opt("SELECT 1 FROM retired_agents WHERE agent = $1", &[&agent])
+            .await
+            .map(|row| row.is_some())
+            .map_err(db_error)
+    }
+
+    /// Moves `from`'s connections and runtimes to `to` and retires `from`,
+    /// in one statement, so either all of it happens or none: a collision
+    /// (a runtime `to` already has) undoes the retirement too. Refused when
+    /// either id is retired. Delegations are keyed by connection and app
+    /// agent and need no change.
+    pub async fn transfer_owner(&self, from: &str, to: &str) -> Result<Transferred, TransferError> {
+        let row = self
+            .client()
+            .await
+            .query_one(
+                "WITH retired AS (
+                   INSERT INTO retired_agents (agent, successor)
+                   SELECT $1, $2
+                   WHERE NOT EXISTS (SELECT 1 FROM retired_agents WHERE agent = $2)
+                   ON CONFLICT (agent) DO NOTHING
+                   RETURNING agent
+                 ),
+                 connections AS (
+                   UPDATE agent_connections SET owner = $2
+                   WHERE owner = $1 AND EXISTS (SELECT 1 FROM retired)
+                   RETURNING connection_id
+                 ),
+                 runtimes AS (
+                   UPDATE app_runtimes SET owner = $2
+                   WHERE owner = $1 AND EXISTS (SELECT 1 FROM retired)
+                   RETURNING agent
+                 )
+                 SELECT (SELECT COUNT(*) FROM retired),
+                        (SELECT COUNT(*) FROM connections),
+                        (SELECT COUNT(*) FROM runtimes)",
+                &[&from, &to],
+            )
+            .await
+            .map_err(|error| {
+                if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                    TransferError::Conflict
+                } else {
+                    TransferError::Database(db_error(error))
+                }
+            })?;
+        if row.get::<_, i64>(0) == 0 {
+            return Err(TransferError::Retired);
+        }
+        Ok(Transferred {
+            connections: row.get(1),
+            runtimes: row.get(2),
+        })
     }
 
     /// Reads a live connection without marking it used; the caller has not

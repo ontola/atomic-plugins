@@ -998,6 +998,7 @@ async fn redeem_inner(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let owner = crate::signature::authenticate(state, security, method, uri, headers, body).await?;
+    crate::refuse_retired(security, &owner).await?;
     crate::check_access(state, &owner).await?;
     let request: Redemption = serde_json::from_slice(body)
         .map_err(|_| ApiError::BadRequest("body must be {\"code\", \"code_verifier\"}"))?;

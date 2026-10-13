@@ -25,6 +25,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         key_check_limit: 0,
         key_check_window: crate::KEY_CHECK_WINDOW,
         trust_forwarded_for: crate::config::TrustForwardedFor::None,
+        subscriptions: std::sync::Arc::new(crate::transfer::NoSubscriptions),
         test_upstream: None,
     }
 }
@@ -99,7 +100,7 @@ fn build(
 
 /// Distinct per call, so two otherwise identical requests signed in the same
 /// millisecond are not mistaken for a replay of each other.
-fn unique_now_ms() -> u64 {
+pub fn unique_now_ms() -> u64 {
     static OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     crate::now_ms() - 60_000 + OFFSET.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 60_000
 }

@@ -171,6 +171,20 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
   `agent` (a node's app agent) as a runtime of installation `app` for the
   signer. `DELETE /runtimes/{agent}` removes it. A runtime can use every
   connection its app is delegated.
+- `POST /agents/transfer` — **signed by the old agent**; body `{"to",
+  "proof"}` moves the signer's connections and runtimes to the agent `to`
+  and retires the signer (key rotation, #410). `proof` is `to`'s Ed25519
+  signature (base64, either alphabet) over
+  `integration-proxy-agent-transfer-v1\n{old id}\n{new id}\n{proxy origin}\n{this request's x-atomic-timestamp}`,
+  ids canonical. `to` must pass the access policy and must not be retired.
+  Delegations stay as they are. Afterwards the old id is refused
+  (`403 agent_retired`) as the signer of management calls, of
+  `/connect/redeem` and of another transfer, and capabilities it signed no
+  longer verify. `409 transfer_blocked` while the old agent has open
+  webhook subscriptions; `409 transfer_conflict`, with nothing moved, when
+  the new agent already has a runtime with the same agent. `200`
+  `{"from", "to", "connections", "runtimes"}` (the counts moved). Only for a
+  key the user still holds: see SECURITY.md, "Key rotation".
 - `GET /healthz` — `200 ok` when the database answers.
 
 Delegations and runtimes are read on every proxied request, so removing one
@@ -205,8 +219,9 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 
 | Status | `error` |
 | --- | --- |
-| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again) |
-| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
+| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again), `invalid_transfer_proof` |
+| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied`, `agent_retired` |
+| 409 | `transfer_blocked`, `transfer_conflict` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
 
