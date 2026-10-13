@@ -107,7 +107,9 @@ test('binaryWarning: only a stampless binary is warned about, with how to stamp 
     const warning = binaryWarning({ checkout, head });
     assert.match(warning, /has no stamp/);
     assert.match(warning, /the checkout is at bbbbbbbbbbbb/);
-    assert.ok(warning.includes(`git -C "${checkout}" rev-parse HEAD > "${stamp}"`));
+    assert.ok(
+      warning.includes(`git -C "${checkout}" rev-parse HEAD > "${stamp}"`),
+    );
     // Without a readable HEAD it still warns, without naming a commit.
     assert.doesNotMatch(
       binaryWarning({ checkout, head: undefined }),
