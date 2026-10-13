@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1686,6 +1686,24 @@ const { records, ontology, errors } = await readPlatform(document, {
   same read stops the collection with an error (rule 5). The value is
   resolved with the WHATWG URL parser once rule 2 has removed the inputs
   parsers disagree on. `resolveLink` (exported) is this rule set on its own.
+- **A result the server marks incomplete** (Pagination Schemes 0.8.0
+  §4.4.6): a scheme's `response.incomplete` names a body value (`field`, a
+  dot-path, with `equals` or `in`, compared by JSON equality, so `"0"` is
+  not `0`) that marks the result as cut short, as Notion's Query a data
+  source does past 10,000 results: `has_more` turns `false` and every page
+  carries `request_status: { type: incomplete }`. The walk pages as the
+  scheme says, but a read with any marked response is not complete:
+  `readCollections` reports it (`complete: false`, `notComplete` naming the
+  field), `readPlatform` lists it in `ReadResult.incomplete` with its
+  records, `paginate` fills an `outcome` passed in, and `sync()` applies it
+  as an incomplete read (added and updated records only; nothing removed,
+  checked or concluded from absence, whatever `absent` or `notFound` say),
+  listed in `SyncResult.incomplete`. `responseIncomplete` (exported) is the
+  test on its own. A declaration the validator refuses (rule 26: a `field`
+  with an empty segment, not exactly one of `equals` and `in`, a value
+  that is not a JSON scalar, or a `rangeWindow` scheme) makes the scheme
+  invalid, so a read that applies it explicitly fails rather than being
+  taken as complete.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -1825,6 +1843,20 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased** (for 0.23.0): Pagination Schemes 0.8.0 `response.incomplete`
+  (§4.4.6): a response body value that marks a capped result (Notion's
+  `request_status.type: incomplete` past 10,000 results). A read in which
+  any response is marked is not complete: it pages on as before, but
+  `sync()` applies it as an incomplete read (nothing removed, checked or
+  concluded from absence) and lists it in `SyncResult.incomplete`.
+  `readPlatform` gains `ReadResult.incomplete`, which lists every
+  collection read without an error but not completely (range windows,
+  undocumented short pages, and now marked results), and `paginate` takes
+  an `outcome` to fill. The validator checks rule 26; a scheme it refuses
+  is invalid, so an explicit application fails the read.
+  `responseIncomplete` and the `IncompleteObject` type are exported.
+  Behaviour change only for documents whose scheme declares
+  `response.incomplete`, apart from the additive `ReadResult.incomplete`.
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0

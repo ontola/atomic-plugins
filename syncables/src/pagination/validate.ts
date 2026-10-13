@@ -418,9 +418,7 @@ function checkIncomplete(
       m['in'].length === 0 ||
       !m['in'].every(isJsonScalar))
   )
-    errors.push(
-      `${at}.in must be a nonempty array of JSON scalars (rule 26)`,
-    );
+    errors.push(`${at}.in must be a nonempty array of JSON scalars (rule 26)`);
   if ('description' in m && typeof m['description'] !== 'string')
     errors.push(`${at}.description must be a string`);
 }
