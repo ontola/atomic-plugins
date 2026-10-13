@@ -215,7 +215,7 @@ RUST_LOG=info
 | `OPERATOR_NAME` | no, recommended | Who runs this proxy, as the landing page and the consent page name them ("Use Example Org to sync …", "run by Example Org"). The consent page also shows the host of `BASE_URL`. Defaults to `this integration proxy`, and the pages then name no one. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Link for `OPERATOR_NAME` on those pages: an absolute `http(s)` URL without credentials. Anything else stops the proxy at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit, at most `10000`. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
-| `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Same section. Unreleased. |
+| `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Used by the key-check limit and by the webhook inbox's per-network limit (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`). Same section. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `_CLIENT_SECRET`, `_CLIENT_AUTH_METHOD` | per OAuth platform | See [Registering OAuth apps](#registering-oauth-apps). |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
@@ -423,7 +423,8 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
-        # For TRUST_FORWARDED_FOR=rightmost (key-check limit).
+        # For TRUST_FORWARDED_FOR=rightmost (key-check limit, webhook
+        # per-network limit).
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 60s;
     }
