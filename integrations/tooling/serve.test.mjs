@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
   binaryProblem,
+  binaryWarning,
   bindAddress,
   bringUp,
   BUILD_STAMP,
@@ -87,6 +88,36 @@ test('binaryProblem: a missing binary gets the full build lines, a stale stamp i
     // An empty stamp says nothing.
     writeFileSync(stamp, '\n');
     assert.equal(binaryProblem({ checkout, head }), undefined);
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
+
+test('binaryWarning: only a stampless binary is warned about, with how to stamp it', () => {
+  const checkout = mkdtempSync(join(tmpdir(), 'atomic-checkout-'));
+  const binary = join(checkout, 'target/e2e/atomic-server');
+  const stamp = join(checkout, BUILD_STAMP);
+  const head = 'b'.repeat(40);
+
+  try {
+    // No binary: binaryProblem's business, not a warning.
+    assert.equal(binaryWarning({ checkout, head }), undefined);
+    mkdirSync(join(checkout, 'target/e2e'), { recursive: true });
+    writeFileSync(binary, '');
+    const warning = binaryWarning({ checkout, head });
+    assert.match(warning, /has no stamp/);
+    assert.match(warning, /the checkout is at bbbbbbbbbbbb/);
+    assert.ok(
+      warning.includes(`git -C "${checkout}" rev-parse HEAD > "${stamp}"`),
+    );
+    // Without a readable HEAD it still warns, without naming a commit.
+    assert.doesNotMatch(
+      binaryWarning({ checkout, head: undefined }),
+      /the checkout is at/,
+    );
+    // Any stamp (judged by binaryProblem): no warning.
+    writeFileSync(stamp, `${head}\n`);
+    assert.equal(binaryWarning({ checkout, head }), undefined);
   } finally {
     rmSync(checkout, { recursive: true, force: true });
   }

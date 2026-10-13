@@ -49,6 +49,7 @@ mod connections;
 #[cfg(test)]
 mod identity_catalog_tests;
 mod oauth;
+mod pacing;
 mod providers;
 mod proxy;
 mod security;
@@ -100,6 +101,9 @@ struct AppState {
     trust_forwarded_for: config::TrustForwardedFor,
     /// The webhook inbox and its routes, only with `WEBHOOKS_ENABLED=true`.
     webhooks: Option<Arc<webhooks::Webhooks>>,
+    /// The sliding logs pacing this instance's requests under providers'
+    /// `x-throttling` quotas on the proxy's own address (pieces.md P4).
+    pacer: Arc<pacing::Pacer>,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
@@ -262,6 +266,7 @@ pub async fn build_app_with_access(
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
         webhooks,
+        pacer: Arc::default(),
         #[cfg(test)]
         test_upstream: None,
     };

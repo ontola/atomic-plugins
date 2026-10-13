@@ -64,7 +64,7 @@ mkdir -p /var/lib/usertest-logs
 Docker publishes the server on `127.0.0.1` only, so ufw's rules are not
 bypassed.
 
-From a checkout of this repo, with the layout from `AGENTS.md`
+Run these from a checkout of this repo, with the layout from `AGENTS.md`
 (`node integrations/tooling/link-atomic-server.mjs`). `catalog.mjs` first
 installs each app's plugin dependencies that have a lockfile and no
 `node_modules` yet (`pnpm install --frozen-lockfile`, as `run-lane.mjs`
