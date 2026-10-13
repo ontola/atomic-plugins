@@ -36,9 +36,10 @@ The extension versions this source reads, against the specifications in
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 
-The other specifications there (Produced Classes, the authentication and
-webhook extensions) are not read by Syncables.
+The other specifications there (the authentication and webhook extensions)
+are not read by Syncables.
 
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
@@ -232,9 +233,12 @@ changes within two days are not told apart.
 immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
-replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
-`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+replacing newer local edits. Updates use the item path's operation that
+declares CRUD Causality `x-crud: { action: update }` for the record's
+resource: when exactly one of its PUT and PATCH does, that one; when both
+do, the PUT; when neither does (or in a legacy document, without
+`components.crudResources`), the PUT, or the PATCH when there is no PUT.
+The chosen operation's `x-crud` (§4.3 `mode`, §4.6 `patchFormat`) sets the
 body:
 
 - `mode: replace`, no `x-crud`, or a legacy document (no
@@ -256,9 +260,11 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
-A declared PUT is chosen even when the item's PATCH is declared as a merge
-patch, so such a document still sends full records; preferring the merge
-patch there is a possible follow-up, not done.
+With both declared, the PUT is chosen even when the PATCH is declared as a
+merge patch, so such a document still sends full records; preferring the
+merge patch there is a possible follow-up, not done. A PATCH declared with
+`patchFormat: jsonPatch` beside an undeclared PUT is followed: `update()`
+throws.
 
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
@@ -1782,12 +1788,46 @@ collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
+### Produced classes (`x-produces`)
+
+A CRUD resource may declare the shared classes its objects can be
+represented as, by subject IRI, each with an optional lens IRI (the draft
+[Produced Classes extension](../openapi-extensions/spec/produced-classes/README.md)
+0.1.0). Syncables reads the declaration as metadata only: it fetches no
+class or lens, and maps no record.
+
+- `producedClasses(document)` lists each resource that declares
+  `x-produces` (in `components.crudResources`, or a Swagger 2.0 document's
+  root `x-crudResources`) with its `classes` (`class`, `lens`?,
+  `description`?; `x-*` fields left out), or, when the declaration breaks
+  §7 rules 2–6, its `errors` and no classes. A declaration anywhere else is
+  not read.
+- `resourcesProducing(document, classIri)` gives the resources whose
+  declaration names that class, compared as §3 says (the scheme and host
+  case-insensitively, the rest exactly): the resources to offer for a table
+  of that class.
+- `ReadCollection.produces` carries a resource's classes on each of its
+  collections, and `ApiClient.produces(resource)` returns them (a copy;
+  empty when none are declared or the declaration does not parse).
+- `lensFits(produced, lens, { provider, resource })` checks a lens document
+  the caller fetched itself (§4.2): when it names a target, that must be a
+  `target.class` that is the entry's class; when it names a source, that
+  must be the provider record `source.record.provider` and `.resource`
+  (`provider` is the openapi-directory key, `clockify.me`, as the catalog
+  lenses under `ontology/lenses/` name it). An entry whose lens does not fit
+  is to be treated as having none.
+- `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
+  spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
+
+Not verified against a real provider: no overlay declares `x-produces` yet.
+
 ## Changelog
 
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0 and 0.7.0, Throttling 0.3.0, Filtering 0.2.0 `x-time-zone`, Runtime
-  Schemas 0.1.0, Write Preconditions 0.1.0). Behaviour changes to know
+  Schemas 0.1.0, Write Preconditions 0.1.0, Produced Classes 0.1.0).
+  Behaviour changes to know
   before upgrading, each only
   for documents that declare the field named:
   - a create whose `x-crud` declares `addedFields: generated` leaves those
@@ -1797,6 +1837,12 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     `followUps` the client cannot use makes `create()` throw;
   - an update operation declaring `jsonMergePatch` sends a merge patch, and
     one declaring `jsonPatch` makes `update()` throw;
+  - updates use the item-path PUT or PATCH whose `x-crud` declares
+    `action: update` for the resource, over an undeclared one (before, any
+    PUT on the item path); with both declared, the PUT; with neither, the
+    PUT, else the PATCH. Google Calendar's events under the catalog's
+    `app-crud-causality` overlay are now updated by PATCH (the full
+    record), not PUT;
   - a 404 or 410 of a missing record's read is `unavailable`, not
     `deleted`, under `notFound: unavailable` or `gone: unavailable`, under
     an unrecognised `notFound`, `gone` or `absent` (a Completeness Object
@@ -1869,7 +1915,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     does not show; a refused follow-up leaves the create partly applied,
     later ones `notSent`; an unknown outcome is read back before it is sent
     again; a follow-up's 403 refuses that follow-up, not the credentials;
-    `PendingWriteInfo.followUp`, `WriteFailure.followUp`).
+    `PendingWriteInfo.followUp`, `WriteFailure.followUp`); the update
+    operation follows `x-crud: { action: update }` (§4.3; both declared:
+    PUT).
   - Write Preconditions 0.1.0-draft (`x-write-precondition`, on create,
     update and delete operations): `ifMatch` sends the version (from the
     record, or an item GET when it is a header) and stops on a
@@ -1940,6 +1988,14 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     describer errors as `SyncResult.warnings` and offers
     `ApiClient.runtimeMembers()`. `RuntimeClass`, `RuntimeDescriber`,
     `RuntimeMembers` and `RuntimeProperty` are exported.
+  - Produced Classes 0.1.0-draft (new, read-only metadata): `x-produces`
+    per CRUD resource through `producedClasses`, `resourcesProducing`
+    (the resources for a class, compared as the spec's §3 says),
+    `ReadCollection.produces` and `ApiClient.produces`, and `lensFits` for a
+    lens document the caller fetched (`target.class`,
+    `source.record.provider` and `.resource`); `checkProduces`,
+    `parseProduces`, `absoluteIri` and `sameSubject` are the spec's checks.
+    Nothing is fetched or mapped.
   - Webhook inbox consumer (new, ontola/atomic-plugins#369 steps 4 and
     4b; Webhook Subscriptions draft): `InboxClient` for the receiver's
     consumer routes (it refuses a base URL that is not canonical),

@@ -233,5 +233,10 @@ python3 validate.py examples/time-entries.yaml
 ## Reference Implementation
 
 ontola/atomic-plugins' `integration-proxy` passes the declaration through
-unchanged (§4.3) in `/catalog/<name>.yaml`, and tests that it does. No
-consumer reads it yet.
+unchanged (§4.3) in `/catalog/<name>.yaml`, and tests that it does.
+[`syncables`](../../../syncables/README.md#produced-classes-x-produces)
+reads it as metadata: rules 2–6 as `validate.py` checks them (a declaration
+that breaks one is reported and read as none), the classes per resource and
+the resources for a class (§3's comparison), and §4.2's check of a lens
+document the caller fetched (`target.class`, `source.record.provider` and
+`.resource`). It fetches no class or lens and maps no record.
