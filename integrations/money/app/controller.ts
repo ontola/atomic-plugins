@@ -158,11 +158,13 @@ export interface State {
   selected?: string;
   /**
    * Rows that arrived in the latest refresh through the table subscription
-   * since the last load, and when (epoch ms, from `Options.now`). They may
-   * come from this view's import or from any other writer to the table (the
-   * importer's review, another tab), so the card says "arrived", not "added".
+   * since the last load, and when (epoch ms, from `Options.now`). `source`
+   * is `import` for the refreshes just after an import this view applied
+   * (its own writes, or the host importer it ran), else `elsewhere`: any
+   * other writer to the table (the importer's review in another tab,
+   * another device). The pill and the card word the two apart.
    */
-  arrived?: { count: number; at: number };
+  arrived?: { count: number; at: number; source: 'import' | 'elsewhere' };
   /** When the last load failed (epoch ms), while `view` is the error. */
   failedAt?: number;
   /** Saves of the open row's annotations, by field. */
@@ -283,6 +285,11 @@ export function createController(
   let unsubscribe: (() => void) | undefined;
   let refreshing: Promise<void> | undefined;
   let again = false;
+  /**
+   * Until when (epoch ms) a refresh's new rows count as this view's import:
+   * set when an import applies, for the refreshes that follow it.
+   */
+  let importedUntil = 0;
 
   const update = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -333,7 +340,15 @@ export function createController(
       rows,
       incomplete,
       view: settled(rows, incomplete),
-      ...(arrived ? { arrived: { count: arrived, at: now() } } : {}),
+      ...(arrived
+        ? {
+            arrived: {
+              count: arrived,
+              at: now(),
+              source: now() < importedUntil ? 'import' : 'elsewhere',
+            },
+          }
+        : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -768,6 +783,7 @@ export function createController(
           // writes made while the host's socket reconnects.
           update({ importing: undefined });
 
+          if (outcome.status === 'applied') importedUntil = now() + 15_000;
           if (outcome.status === 'applied')
             for (const delay of [0, 1000, 4000])
               setTimeout(() => {

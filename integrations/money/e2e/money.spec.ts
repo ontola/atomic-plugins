@@ -43,7 +43,7 @@ import {
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 /** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -300,7 +300,7 @@ test.describe('money integration', () => {
     const syncCard = app.getByRole('region', { name: 'Sync status' });
     await expect(syncCard).toContainText('Synced just now');
     await expect(syncCard).toContainText(
-      '2 transactions from 1 statement; 2 arrived at the last sync',
+      '2 transactions from 1 statement; 2 imported here at the last sync',
     );
     await expect(syncCard).not.toContainText('Last sync:');
     await expect(syncCard).toContainText(
@@ -637,7 +637,7 @@ test.describe('money integration', () => {
     ).toBeVisible();
     // The card dates the importer's import like the app's own.
     await expect(syncCard).toContainText('Synced just now');
-    await expect(syncCard).toContainText('2 arrived at the last sync');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
 
     // The statement row, with its balances: the strip and the Imports tab.
     await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(

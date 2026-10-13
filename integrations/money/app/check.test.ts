@@ -329,6 +329,8 @@ describe('importing through the host (atomic-server#1774)', () => {
     expect(controller.state().arrived).toEqual({
       count: 2,
       at: 1_790_000_000_000,
+      // This view ran the import (0.4.4: "Imported 2", not "2 arrived").
+      source: 'import',
     });
     expect(controller.state().statements).toHaveLength(1);
   });
