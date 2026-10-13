@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1825,11 +1825,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
-  Schemes 0.6.0 and 0.7.0, Throttling 0.3.0, Filtering 0.2.0 `x-time-zone`, Runtime
-  Schemas 0.1.0, Write Preconditions 0.1.0, Produced Classes 0.1.0).
-  Behaviour changes to know
-  before upgrading, each only
-  for documents that declare the field named:
+  Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0
+  `x-time-zone`, Runtime Schemas 0.1.0, Write Preconditions 0.1.0,
+  Produced Classes 0.1.0). Behaviour changes to know before upgrading, each
+  only for documents that declare the field named:
   - a create whose `x-crud` declares `addedFields: generated` leaves those
     fields out of its body and reads the created identity as declared; a
     2xx it cannot bind is `uncertain` and `unbound`, never sent again;
