@@ -421,6 +421,20 @@ failed line and next step show, nothing reaches the fixture, and the comment
 is sent after a second review. No real GitHub refusal has been observed
 through the drive app.
 
+**Pruning the write journal (0.4.2, `app/sync.ts` `pruneJournal`).** Every
+write is journalled before it leaves, and GitHub's answer is kept with it so
+a resumed operation reads the answer instead of sending again. Before 0.4.2
+nothing ever left the journal, so the sync state grew with every send by
+GitHub's full response. Now a pass that completed with no saved operation
+on any record (held ones included) drops every entry that has an answer: no
+operation will be resumed, an update's id derives from its finished
+operation's random id, and a create's from a record that is bound to the
+issue it made by then. Entries without an answer (a write whose response was
+lost) stay: they are what keeps an uncertain write from being sent twice.
+A pass that fails, or leaves anything pending, prunes nothing. Tested in
+`app/sync.test.ts` (a reviewed send leaves an empty journal; a lost create's
+entry survives the passes after it).
+
 **The last sync, across reloads (0.4.0).** Each completed pass stamps the
 sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
 date and time, as Todoist's `todoist-last-sync` does), so after a reload the
@@ -647,7 +661,10 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   state syncs with the drive and `/app-write` has no compare-and-swap. One
   syncing view per app is assumed. (The design's alternative, a per-browser
   host storage op, needs atomic-server work.)
-- The sync state grows with the write journal; it is not pruned.
+- The sync state's write journal is pruned only after a pass that leaves no
+  saved operation (0.4.2, see "Pruning the write journal" above); a write whose answer was lost stays in it
+  until a person settles it. While writes keep being held for review, the
+  answered ones stay too.
 - Comments made in the data-browser's own comment panel on a row are not
   synced: they live outside the app's subtree, which the app cannot write.
 - The repository picker's `GET /user/repos` is not in the proxy's GitHub
