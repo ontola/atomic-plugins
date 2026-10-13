@@ -48,6 +48,7 @@ import {
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
+import type { ProducedClass } from '../read/produced-classes.js';
 import {
   mergePatchRecord,
   patchedField,
@@ -821,6 +822,14 @@ export interface ApiClient {
    */
   presence(resource?: string): PresenceMark[];
   /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's records
+   * can be represented as, from `x-produces` on its CRUD Resource Object
+   * (each with its lens IRI, if declared). Empty when the resource declares
+   * none, or the declaration does not parse. Metadata only: nothing is
+   * fetched or mapped.
+   */
+  produces(resource: string): ProducedClass[];
+  /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
    * `blocked` write (`discard` only; the client stays blocked). Throws if
@@ -1453,7 +1462,23 @@ function clientRoutes(
     ) {
       route.createPath = collection.url;
     }
-    if (item?.put) route.updateMethod = 'PUT';
+    // CRUD Causality §4.3: an item-path operation declared
+    // `x-crud: { action: update }` for this resource wins over one that is
+    // not; with both declared, or neither, PUT before PATCH, as before. A
+    // legacy document ignores `x-crud` here.
+    const declaresUpdate = (method: 'put' | 'patch'): boolean => {
+      const crud = item?.[method]?.['x-crud'];
+      return (
+        isRecord(crud) &&
+        crud['action'] === 'update' &&
+        crud['resource'] === collection.resource
+      );
+    };
+    const declaredPut = !legacy && declaresUpdate('put');
+    const declaredPatch = !legacy && declaresUpdate('patch');
+    if (declaredPatch && !declaredPut) route.updateMethod = 'PATCH';
+    else if (declaredPut) route.updateMethod = 'PUT';
+    else if (item?.put) route.updateMethod = 'PUT';
     else if (item?.patch) route.updateMethod = 'PATCH';
     else if (legacy)
       route.updateMethod = paired.get(collection.url)?.updateMethod ?? 'PUT';
@@ -6133,6 +6158,9 @@ export function createApiClient(
         ...(gone || kept ? { awaitingRefresh: true } : {}),
       });
       if (gone) await concludeNew(scope, id, gone);
+    },
+    produces(resource): ProducedClass[] {
+      return structuredClone(resolveRoute(resource).collection.produces ?? []);
     },
     presence(resource): PresenceMark[] {
       const name = resource

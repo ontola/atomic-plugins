@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -125,17 +125,84 @@ impl Drop for EndpointRead<'_> {
     }
 }
 
+/// The rate limits count refusals only (see [`super::limits`]). A network
+/// over its limit gets `429` for ids that are malformed or name no endpoint,
+/// after the lookup, and may have at most `INGRESS_BLOCKED_WAITERS`
+/// requests waiting for the lookup slot; beyond that its requests get `429`
+/// at once, a real delivery included. A sender that points a provider's
+/// hooks at junk URLs makes the provider's own addresses collect refusals,
+/// so that queue is where the provider's real deliveries can still lose
+/// (SECURITY.md, rate limits). The per-endpoint limit counts that endpoint's
+/// failed verifications.
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
     let Some(webhooks) = state.webhooks.clone() else {
         return answer(StatusCode::NOT_FOUND);
     };
+    let network = crate::client_addr::client_network(
+        state.trust_forwarded_for,
+        &headers,
+        peer.map(|ConnectInfo(peer)| peer),
+    );
+    let mut verified = false;
+    let response = receive_checked(
+        &state,
+        &webhooks,
+        &network,
+        endpoint_id,
+        headers,
+        body,
+        &mut verified,
+    )
+    .await;
+    let status = response.status();
+    // A refusal the sender caused counts against its network. Not 429 (a
+    // limit already answered), and not 400 or 408, which a provider's own
+    // broken or slow upload causes.
+    if !verified
+        && status.is_client_error()
+        && !matches!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::BAD_REQUEST | StatusCode::REQUEST_TIMEOUT
+        )
+    {
+        let _ = webhooks
+            .limits
+            .ingress_per_network
+            .take(&network, std::time::Instant::now());
+    }
+    response
+}
+
+/// `404` for an id that names no endpoint, or `429` once its network has
+/// been refused too often.
+fn no_endpoint(webhooks: &super::Webhooks, network: &str) -> Response {
+    match webhooks
+        .limits
+        .ingress_per_network
+        .blocked(network, std::time::Instant::now())
+    {
+        Some(retry) => super::limits::too_many(retry),
+        None => answer(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn receive_checked(
+    state: &AppState,
+    webhooks: &std::sync::Arc<super::Webhooks>,
+    network: &str,
+    endpoint_id: String,
+    headers: HeaderMap,
+    body: Body,
+    verified: &mut bool,
+) -> Response {
     if !endpoint_shaped(&endpoint_id) {
-        return answer(StatusCode::NOT_FOUND);
+        return no_endpoint(webhooks, network);
     }
     let cap = webhooks.store.policy().max_verified_bytes as usize;
     let declared = headers
@@ -147,16 +214,35 @@ pub async fn receive(
     }
     let gate = &webhooks.gate;
     let hook = {
-        let Some(_slot) = slot(&gate.lookups, gate.wait).await else {
-            return answer(StatusCode::SERVICE_UNAVAILABLE);
+        // A network over its refusal limit may queue for the lookup slot
+        // only while fewer than `INGRESS_BLOCKED_WAITERS` of its kind wait;
+        // beyond that it gets `429` at once. The lookup semaphore is fair, so
+        // those few cannot jump ahead of other networks' requests, and a
+        // real delivery from a blocked network (a provider whose addresses
+        // also carry junk) can still wait for the slot like any other.
+        let blocked = webhooks
+            .limits
+            .ingress_per_network
+            .blocked(network, std::time::Instant::now());
+        let _queued = match blocked {
+            Some(retry) => match gate.blocked_waiters.try_acquire() {
+                Ok(permit) => Some(permit),
+                Err(_) => return super::limits::too_many(retry),
+            },
+            None => None,
         };
+        let permit = match slot(&gate.lookups, gate.wait).await {
+            Some(permit) => permit,
+            None => return answer(StatusCode::SERVICE_UNAVAILABLE),
+        };
+        let _slot = permit;
         match webhooks.store.hook_by_endpoint(&endpoint_id).await {
             Ok(Some(hook)) => hook,
-            Ok(None) => return answer(StatusCode::NOT_FOUND),
+            Ok(None) => return no_endpoint(webhooks, network),
             Err(_) => return answer(StatusCode::SERVICE_UNAVAILABLE),
         }
     };
-    let Some(deliveries) = super::provider::deliveries(&state, &hook.platform) else {
+    let Some(deliveries) = super::provider::deliveries(state, &hook.platform) else {
         return answer(StatusCode::NOT_FOUND);
     };
     let profile_name = if hook.dedicated {
@@ -209,10 +295,20 @@ pub async fn receive(
             },
             &hook.platform,
         );
+        // Only an endpoint's failed verifications count against it, and
+        // only after verifying: a delivery that verifies is never refused.
+        if let Err(retry) = webhooks
+            .limits
+            .ingress_per_endpoint
+            .take(&endpoint_id, std::time::Instant::now())
+        {
+            return super::limits::too_many(retry);
+        }
         return answer(StatusCode::UNAUTHORIZED);
     }
 
     // Verified. Only now is anything in the request read.
+    *verified = true;
     let Some(delivery_id) = single_header(&headers, &deliveries.delivery_id_header)
         .filter(|id| {
             !id.is_empty() && id.len() <= 255 && id.bytes().all(|b| (0x21..=0x7e).contains(&b))
@@ -242,8 +338,8 @@ pub async fn receive(
         return answer(StatusCode::SERVICE_UNAVAILABLE);
     };
     if let Err(status) = revoke(
-        &state,
-        &webhooks,
+        state,
+        webhooks,
         &hook.platform,
         &deliveries,
         &event_type,
