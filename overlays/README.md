@@ -945,6 +945,7 @@ Box does not say whether upload, search and Sign requests also count against
 the general 1000 per minute; keeping that bucket on them is the conservative
 choice, not a documented one, and makes the Sign read bucket duplicate it.
 No dated catalog selects the overlay. `tests/test_box_throttling.py` composes
-it with its pinned OAD, in either order with the pagination overlay of the
-newest catalog (v2), checks the buckets and their operations, and classifies
+it with its pinned OAD, in either order with each Box pagination overlay a
+dated catalog selects (v3 in the newest, `catalog/2026-10-12-tasks-box-pages.json`;
+v2 and v1 in older ones), checks the buckets and their operations, and classifies
 a synthetic `429`. No provider was called.

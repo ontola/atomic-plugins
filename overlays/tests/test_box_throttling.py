@@ -1,7 +1,7 @@
 """Check the Box Throttling overlay against its exact source OAD.
 
 The overlay is composed with its pinned OAD and, in the other order too, with
-each Box pagination overlay a dated catalog selects (v2 in the newest). The result must pass the
+each Box pagination overlay a dated catalog selects (v3 in the newest). The result must pass the
 throttling validator, each documented limit must sit on the operations it
 names, and a synthetic 429 in Box's documented form must classify with its
 retry-after delay. No provider is called. Use --directory for a full-history
@@ -32,8 +32,10 @@ DIRECTORY = None
 NOW = 1_800_000_000
 BOX = "APIs/box.com/2.0.0/"
 OVERLAY = BOX + "throttling-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml"
-# v2 is what the newest catalog selects (catalog/2026-10-12-box-pagination-v2.json); v1 is checked too.
-PAGINATIONS = [BOX + "pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
+# v3 is what the newest catalog selects (catalog/2026-10-12-tasks-box-pages.json); v2
+# (catalog/2026-10-12-box-pagination-v2.json) and v1 are checked too.
+PAGINATIONS = [BOX + "pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
+               BOX + "pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml",
                BOX + "pagination-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml"]
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
