@@ -112,8 +112,9 @@ into the view root.
   day totals, each day's billable time and the week's
   (ontola/usertest-findings#13: a tester asked for yesterday's billable
   hours did not find the week's totals under the grid); the narrow day
-  strip is unchanged and still marks billable entries one by one. Below 560px of frame width the week becomes a strip of day
-  tabs. `app/ui/theme.ts` maps every `--pl-*` token from the host's
+  strip is unchanged and still marks billable entries one by one. Below
+  560px of frame width the week becomes a strip of day tabs.
+  `app/ui/theme.ts` maps every `--pl-*` token from the host's
   `--t-*` theme variables, so dark mode is the host's. `app/ui/theme.ts`,
   `components.ts` and `dom.ts` know nothing of Clockify: shared-kit
   candidates. View, week and open entry live in memory only.
